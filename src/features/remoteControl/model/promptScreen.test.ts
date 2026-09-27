@@ -290,6 +290,33 @@ describe("text the CLI paints into the composer that nobody typed", () => {
     expect(buffer.lines()[1]).toBe("❯ evet ikisini de yap");
   });
 
+  it("reads a near-grey and a cube-grey as muted too", () => {
+    // The suggestion's shade is not captured. A grey that is not exactly
+    // equal in its channels, or one from the 256-colour cube's diagonal, is
+    // still nothing a user typed.
+    const near = createScreenBuffer(SIZE);
+    near.write(composerWith("\x1b[38;2;150;153;156mpush et\x1b[39m"));
+    expect(near.lines()[1]).toBe("❯");
+
+    const cube = createScreenBuffer(SIZE);
+    cube.write(composerWith("\x1b[38;5;145mpush et\x1b[39m"));
+    expect(cube.lines()[1]).toBe("❯");
+  });
+
+  it("reports how the composer's content was painted", () => {
+    const grey = createScreenBuffer(SIZE);
+    grey.write(composerWith("\x1b[38;2;153;153;153mpush et\x1b[39m"));
+    expect(grey.composerPaint()).toBe("38;2;153;153;153");
+
+    const typed = createScreenBuffer(SIZE);
+    typed.write(composerWith("push et"));
+    expect(typed.composerPaint()).toBe("default");
+
+    const empty = createScreenBuffer(SIZE);
+    empty.write(composerWith(""));
+    expect(empty.composerPaint()).toBeNull();
+  });
+
   it("leaves grey text elsewhere on the screen alone", () => {
     // The trust dialog's hints are grey, and the parser needs to read them.
     const screen = readPromptScreen(TRUST_DIALOG_BYTES, TRUST_DIALOG_SIZE);

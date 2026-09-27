@@ -215,6 +215,14 @@ export type ScreenBuffer = {
   lines(): string[];
   /** What is on screen now. */
   screen(): PromptScreen;
+  /**
+   * How the composer's content is painted: the distinct SGR foreground and
+   * intensity settings behind its non-blank cells, or `null` for an empty or
+   * absent composer. Diagnostic — the thing to quote when text the composer
+   * "still holds" turns out to be something nobody typed, so the next
+   * placeholder can be recognised by its paint rather than guessed at.
+   */
+  composerPaint(): string | null;
 };
 
 /** A screen of `size`, blank, waiting to be written into. */
@@ -234,20 +242,25 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
    * captured, so anything grey or dim counts.
    */
   const muted: boolean[][] = [];
+  /** The SGR settings each cell was painted under — see `composerPaint`. */
+  const paint: string[][] = [];
   for (let i = 0; i < rows; i += 1) {
     grid.push(new Array<string>(cols).fill(" "));
     muted.push(new Array<boolean>(cols).fill(false));
+    paint.push(new Array<string>(cols).fill(""));
   }
   let row = 0;
   let col = 0;
   let saved = { row: 0, col: 0 };
   let dim = false;
   let greyFg = false;
+  let fg = "";
 
   const clear = (target: number, from: number, to: number) => {
     for (let x = from; x <= to && x < cols; x += 1) {
       grid[target][x] = " ";
       muted[target][x] = false;
+      paint[target][x] = "";
     }
   };
   const lineFeed = () => {
@@ -259,25 +272,43 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     grid.push(new Array<string>(cols).fill(" "));
     muted.shift();
     muted.push(new Array<boolean>(cols).fill(false));
+    paint.shift();
+    paint.push(new Array<string>(cols).fill(""));
   };
+  /** Whether a 256-colour index is a grey: the ramp, or the cube's diagonal. */
+  const greyIndex = (n: number) =>
+    n === 7 ||
+    n === 8 ||
+    n >= 232 ||
+    [16, 59, 102, 145, 188, 231].includes(n);
   const setGraphics = (params: number[]) => {
     for (let i = 0; i < params.length; i += 1) {
       const p = params[i];
       if (p === 0) {
         dim = false;
         greyFg = false;
+        fg = "";
       } else if (p === 2) dim = true;
       else if (p === 22) dim = false;
-      else if (p === 39 || (p >= 30 && p <= 37) || (p >= 91 && p <= 97)) {
+      else if (p === 39) {
         greyFg = false;
-      } else if (p === 90) greyFg = true;
-      else if (p === 38 && params[i + 1] === 2) {
+        fg = "";
+      } else if ((p >= 30 && p <= 37) || (p >= 91 && p <= 97)) {
+        greyFg = false;
+        fg = String(p);
+      } else if (p === 90) {
+        greyFg = true;
+        fg = "90";
+      } else if (p === 38 && params[i + 1] === 2) {
         const [r, g, b] = params.slice(i + 2, i + 5);
-        greyFg = r === g && g === b;
+        const spread = Math.max(r, g, b) - Math.min(r, g, b);
+        greyFg = spread <= 10;
+        fg = `38;2;${r};${g};${b}`;
         i += 4;
       } else if (p === 38 && params[i + 1] === 5) {
         const n = params[i + 2] ?? 0;
-        greyFg = n === 7 || n === 8 || n >= 232;
+        greyFg = greyIndex(n);
+        fg = `38;5;${n}`;
         i += 2;
       }
     }
@@ -407,6 +438,7 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
       }
       grid[row][col] = glyph;
       muted[row][col] = dim || greyFg;
+      paint[row][col] = dim ? `2${fg ? `;${fg}` : ""}` : fg;
       col += 1;
       i += glyph.length;
     }
@@ -443,7 +475,26 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     return text;
   };
 
-  return { write, lines, screen: () => readRenderedScreen(lines()) };
+  const composerPaint = () => {
+    const text = grid.map((line) => line.join("").replace(/\s+$/u, ""));
+    const composer = findComposer(text.map((line) => line.trim()));
+    if (!composer) return null;
+    const at = composer.top + 1;
+    const marker = grid[at].indexOf("❯");
+    if (marker < 0) return null;
+    const seen = new Set<string>();
+    for (let x = marker + 1; x < cols; x += 1) {
+      if (grid[at][x] !== " ") seen.add(paint[at][x] || "default");
+    }
+    return seen.size > 0 ? [...seen].join(" | ") : null;
+  };
+
+  return {
+    write,
+    lines,
+    screen: () => readRenderedScreen(lines()),
+    composerPaint,
+  };
 }
 
 /**

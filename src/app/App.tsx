@@ -1351,6 +1351,8 @@ export default function App({
         chunks: string[];
         /** A holder, so the parser can own it without the map in the way. */
         screen: { screen: PromptScreen | null };
+        /** How the composer's content is painted — quoted when it is refused. */
+        composerPaint: () => string | null;
         /**
          * When the pty last produced output, and `null` until it ever has.
          * Silence is the only trace an interrupt leaves, and it cannot be seen
@@ -1642,8 +1644,14 @@ export default function App({
         .then((outcome) => {
           if (outcome.kind === "refused") {
             unregister();
+            // The paint is quoted because the last two texts a composer
+            // "still held" were a hint and a suggested prompt, neither typed
+            // by anyone, and both were told apart from typing by colour alone.
+            const paint = outcome.reason.includes("still holds")
+              ? ` (painted: ${entry.composerPaint() ?? "default"})`
+              : "";
             note(
-              `Nothing was sent: ${outcome.reason}. Close Remote Control to send this here, or continue on your phone.`,
+              `Nothing was sent: ${outcome.reason}${paint}. Close Remote Control to send this here, or continue on your phone.`,
             );
             flushHarnessEvents();
             // The composer marked the session busy before the send; with no
@@ -1660,7 +1668,7 @@ export default function App({
             // day the user does submit it by hand.
             unregister();
             note(
-              `The message was typed into the terminal, but its composer is still holding "${outcome.held}" instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
+              `The message was typed into the terminal, but its composer is still holding "${outcome.held}" (painted: ${entry.composerPaint() ?? "default"}) instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
             );
             flushHarnessEvents();
             remoteSentAt.current.delete(sessionId);
@@ -2027,6 +2035,7 @@ export default function App({
         pending: new Set<string>(),
         chunks,
         screen: state,
+        composerPaint: () => painted.composerPaint(),
         spoke,
         followTurn,
         clearBusyIfIdle,
