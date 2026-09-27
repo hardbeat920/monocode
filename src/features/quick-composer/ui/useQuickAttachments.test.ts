@@ -23,6 +23,8 @@ let nativeEvent: (event: {
   payload: { type: string; paths?: string[] };
 }) => void;
 const onError = vi.fn();
+/** What a file manager would have put on the native clipboard. */
+let clipboardPaths: string[];
 function Harness() {
   api = useQuickAttachments(supported, onError);
   return null;
@@ -32,8 +34,10 @@ beforeEach(() => {
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   supported = true;
+  clipboardPaths = [];
   vi.mocked(pickFiles).mockResolvedValue(["/tmp/image.png"]);
   vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+    if (cmd === "clipboard_file_paths") return clipboardPaths;
     if (cmd === "inspect_paths")
       return (args as { paths: string[] }).paths.map((path) => ({
         path,
@@ -94,6 +98,38 @@ it("pastes an image into a portable file while retaining its thumbnail", async (
   });
   act(() => api.clear());
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+});
+
+it("attaches a copied file instead of leaving its URI in the prompt", async () => {
+  clipboardPaths = ["/tmp/image.png"];
+  const preventDefault = vi.fn();
+  await act(async () => {
+    api.onPaste({
+      clipboardData: {
+        files: [],
+        getData: () => "file:///tmp/image.png",
+      },
+      preventDefault,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  // The chip stands in for the URI, so the prompt is not given both.
+  expect(preventDefault).toHaveBeenCalled();
+  expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
+});
+
+it("leaves a whitespace-only paste to the webview", async () => {
+  const preventDefault = vi.fn();
+  await act(async () => {
+    api.onPaste({
+      clipboardData: { files: [], getData: () => "   " },
+      preventDefault,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  // A space is text a person meant to paste, so it costs no clipboard read.
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 it("accepts a native drop and suppresses its duplicate DOM drop", async () => {

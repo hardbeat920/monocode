@@ -31,6 +31,22 @@ function releaseCaptures(files: Attachment[]) {
     );
 }
 
+/**
+ * Insert text the webview was told not to insert, at the caret. The `input`
+ * event is what React listens for, so the prompt stays in step.
+ */
+function setPromptText(target: EventTarget | null, text: string) {
+  if (
+    !(target instanceof HTMLTextAreaElement) &&
+    !(target instanceof HTMLInputElement)
+  )
+    return;
+  const start = target.selectionStart ?? 0;
+  const end = target.selectionEnd ?? start;
+  target.setRangeText(text, start, end, "end");
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 export function useQuickAttachments(
   supported: boolean,
   onError: (message: string | null) => void,
@@ -134,15 +150,23 @@ export function useQuickAttachments(
     if (!pasted.length) {
       // A webview reports a paste as text only, so a screenshot or a file
       // copied in a file manager arrives with nothing to attach; both live on
-      // the native clipboard. A genuine text paste is left to the webview and
-      // costs no clipboard read, spinner, or cleared error.
+      // the native clipboard.
       if (!supported) return;
       const text = event.clipboardData.getData("text/plain");
-      if (text.trim() && !isFileReferenceText(text)) return;
-      if (!text.trim()) event.preventDefault();
+      // Prose and whitespace alike are the webview's to insert, and cost no
+      // clipboard read, spinner, or cleared error.
+      if (text && !isFileReferenceText(text)) return;
+      // A file URI reaches us as text but becomes a chip, so it is kept out of
+      // the prompt; with no text at all the paste carried an image the webview
+      // cannot see. Either way the prompt takes nothing by default.
+      event.preventDefault();
+      const field = event.target;
+      const restore = isFileReferenceText(text);
       void collect(async () => {
         const { files, warning } = await nativeClipboardAttachments(text);
         if (warning) onError(warning);
+        // A file URI that turned into no attachment was the user's text.
+        if (!files.length && restore) setPromptText(field, text);
         return files;
       });
       return;

@@ -160,7 +160,7 @@ it("attaches an image the paste event reports as neither file nor text", async (
   ]);
 });
 
-it("attaches a file copied in a file manager, leaving its text to the webview", async () => {
+it("attaches a file copied in a file manager instead of inserting its URI", async () => {
   clipboardPaths = ["/home/dev/report.pdf"];
   const event = paste(render(), "file:///home/dev/report.pdf");
   await waitForAttachments(1);
@@ -168,7 +168,8 @@ it("attaches a file copied in a file manager, leaving its text to the webview", 
 
   // A file copy is not a screenshot, so the image read is never reached.
   expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
-  expect(event.defaultPrevented).toBe(false);
+  // The chip replaces the URI, so the draft must not also carry it.
+  expect(event.defaultPrevented).toBe(true);
   expect(submit.mock.calls[0][1]).toEqual([
     expect.objectContaining({
       name: "report.pdf",
@@ -176,6 +177,30 @@ it("attaches a file copied in a file manager, leaving its text to the webview", 
       mimeType: "application/pdf",
     }),
   ]);
+});
+
+it("keeps a file URI as draft text when the native read finds no copied path", async () => {
+  clipboardPaths = [];
+  const field = render("");
+  const event = paste(field, "file:///home/dev/report.pdf");
+  await settleUntil(
+    () => field.value === "file:///home/dev/report.pdf",
+    "the URI back in the draft",
+  );
+
+  // Nothing attachable, so the text the webview was denied is restored.
+  expect(event.defaultPrevented).toBe(true);
+  expect(chipCount()).toBe(0);
+  expect(alert()).toBeNull();
+});
+
+it("leaves a whitespace-only paste to the webview", async () => {
+  const event = paste(render(), "   ");
+  await settle();
+
+  // A space or a newline is text a person meant to paste, not a lost paste.
+  expect(event.defaultPrevented).toBe(false);
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 it("attaches a copied file even when the webview sees no text at all", async () => {
@@ -230,6 +255,27 @@ it("attaches what fits and says how many copies it left out", async () => {
   expect(submit.mock.calls[0][1]).toHaveLength(MAX_ATTACHMENTS);
 });
 
+it("fills the turn from later paths when an early one cannot be attached", async () => {
+  clipboardPaths = [
+    "/home/dev/.DS_Store",
+    ...Array.from(
+      { length: MAX_ATTACHMENTS },
+      (_, index) => `/home/dev/file-${index}.txt`,
+    ),
+  ];
+  paste(render(), "file:///home/dev/.DS_Store");
+  await waitForAttachments(MAX_ATTACHMENTS);
+  await send();
+
+  // The .DS_Store is skipped, so the quota is filled from the paths behind it
+  // rather than leaving a slot empty.
+  expect(alert()).toBeNull();
+  const attached = submit.mock.calls[0][1] as { name: string }[];
+  expect(attached).toHaveLength(MAX_ATTACHMENTS);
+  expect(attached.map((file) => file.name)).not.toContain(".DS_Store");
+  expect(attached.at(-1)!.name).toBe(`file-${MAX_ATTACHMENTS - 1}.txt`);
+});
+
 it("leaves a text paste to the webview without reading the native clipboard", async () => {
   const event = paste(render(), "pasted words");
   await settle();
@@ -253,7 +299,8 @@ it("reports a clipboard it could not read instead of trying the image", async ()
   expect(alert()).toBe("The clipboard could not be read on this system.");
   // A failed read must not be mistaken for an empty clipboard.
   expect(invoke).not.toHaveBeenCalledWith("clipboard_image");
-  expect(event.defaultPrevented).toBe(false);
+  // The URI is still withheld, so the error is what the user is left with.
+  expect(event.defaultPrevented).toBe(true);
 });
 
 it("reports why a clipboard image could not be attached", async () => {

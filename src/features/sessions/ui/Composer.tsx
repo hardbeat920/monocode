@@ -1610,13 +1610,7 @@ export function Composer({
     if (messageFiles) {
       e.preventDefault();
       const el = e.currentTarget;
-      el.setRangeText(
-        e.clipboardData.getData("text/plain"),
-        el.selectionStart,
-        el.selectionEnd,
-        "end",
-      );
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      setDraftText(el, e.clipboardData.getData("text/plain"));
       if (attachmentsSupported)
         void attachmentsFromFiles(messageFiles).then(addAttachments);
       return;
@@ -1625,15 +1619,23 @@ export function Composer({
     if (files.length === 0) {
       // A webview reports a paste as text only, so a screenshot or a file
       // copied in a file manager arrives with nothing to attach; both live on
-      // the native clipboard. A genuine text paste is left to the webview and
-      // costs no clipboard read.
+      // the native clipboard.
       if (!attachmentsSupported) return;
       const text = e.clipboardData.getData("text/plain");
-      if (text.trim() && !isFileReferenceText(text)) return;
-      if (!text.trim()) e.preventDefault();
+      // Prose and whitespace alike are the webview's to insert; a lone space or
+      // newline is text a person meant to paste.
+      if (text && !isFileReferenceText(text)) return;
+      // A file URI reaches us as text but becomes a chip, so the URI is kept
+      // out of the draft; with no text at all the paste carried an image the
+      // webview cannot see. Either way the draft takes nothing by default.
+      e.preventDefault();
+      const field = e.currentTarget;
+      const restore = isFileReferenceText(text);
       void nativeClipboardAttachments(text)
         .then(({ files: pasted, warning }) => {
           if (pasted.length) addAttachments(pasted);
+          // A file URI that turned into no attachment was the user's text.
+          else if (restore) setDraftText(field, text);
           if (warning) setPasteError(warning);
         })
         .catch((reason: unknown) =>
@@ -2441,4 +2443,13 @@ function hasFiles(data: DataTransfer | null): data is DataTransfer {
   return [...data.types].some(
     (type) => type === "Files" || type === "application/x-moz-file",
   );
+}
+
+/**
+ * Insert text the webview was told not to insert, at the caret. The `input`
+ * event is what React listens for, so the draft stays in step.
+ */
+function setDraftText(field: HTMLTextAreaElement, text: string) {
+  field.setRangeText(text, field.selectionStart, field.selectionEnd, "end");
+  field.dispatchEvent(new Event("input", { bubbles: true }));
 }
