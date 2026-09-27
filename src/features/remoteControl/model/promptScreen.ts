@@ -222,14 +222,33 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
   const cols = Math.max(1, Math.trunc(size.cols));
   const rows = Math.max(1, Math.trunc(size.rows));
   const grid: string[][] = [];
-  for (let i = 0; i < rows; i += 1)
+  /**
+   * Whether each cell was painted muted — dim, or in a grey foreground.
+   *
+   * Kept for one reader: the composer. The CLI paints text the user did not
+   * type into the composer row in grey — the queued-message hint, and a
+   * suggested next prompt it offers for Tab — and text alone cannot tell that
+   * from typed content. Colour can: typed text is painted in the default
+   * foreground. Measured for the hint from the trust dialog's own hints,
+   * which are `38;2;153;153;153`; the suggestion's exact shade has not been
+   * captured, so anything grey or dim counts.
+   */
+  const muted: boolean[][] = [];
+  for (let i = 0; i < rows; i += 1) {
     grid.push(new Array<string>(cols).fill(" "));
+    muted.push(new Array<boolean>(cols).fill(false));
+  }
   let row = 0;
   let col = 0;
   let saved = { row: 0, col: 0 };
+  let dim = false;
+  let greyFg = false;
 
   const clear = (target: number, from: number, to: number) => {
-    for (let x = from; x <= to && x < cols; x += 1) grid[target][x] = " ";
+    for (let x = from; x <= to && x < cols; x += 1) {
+      grid[target][x] = " ";
+      muted[target][x] = false;
+    }
   };
   const lineFeed = () => {
     if (row + 1 < rows) {
@@ -238,6 +257,30 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     }
     grid.shift();
     grid.push(new Array<string>(cols).fill(" "));
+    muted.shift();
+    muted.push(new Array<boolean>(cols).fill(false));
+  };
+  const setGraphics = (params: number[]) => {
+    for (let i = 0; i < params.length; i += 1) {
+      const p = params[i];
+      if (p === 0) {
+        dim = false;
+        greyFg = false;
+      } else if (p === 2) dim = true;
+      else if (p === 22) dim = false;
+      else if (p === 39 || (p >= 30 && p <= 37) || (p >= 91 && p <= 97)) {
+        greyFg = false;
+      } else if (p === 90) greyFg = true;
+      else if (p === 38 && params[i + 1] === 2) {
+        const [r, g, b] = params.slice(i + 2, i + 5);
+        greyFg = r === g && g === b;
+        i += 4;
+      } else if (p === 38 && params[i + 1] === 5) {
+        const n = params[i + 2] ?? 0;
+        greyFg = n === 7 || n === 8 || n >= 232;
+        i += 2;
+      }
+    }
   };
   /**
    * An escape cut in half by the end of a chunk, held for the next one.
@@ -308,6 +351,9 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
                 for (let y = row + 1; y < rows; y += 1) clear(y, 0, cols - 1);
               }
               break;
+            case "m":
+              setGraphics(params);
+              break;
             default:
               break;
           }
@@ -360,6 +406,7 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
         lineFeed();
       }
       grid[row][col] = glyph;
+      muted[row][col] = dim || greyFg;
       col += 1;
       i += glyph.length;
     }
@@ -369,7 +416,32 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     if (pending.length > 4096) pending = "";
   };
 
-  const lines = () => grid.map((line) => line.join("").replace(/\s+$/u, ""));
+  /**
+   * The rows as text, with one edit: a composer whose content was painted
+   * entirely muted is returned as the bare marker.
+   *
+   * Placeholders are removed here and nowhere else, so every reader — the
+   * send gate, the clear and submit checks, the silence rule — sees the same
+   * empty composer without each having to know about colour. The rest of
+   * the screen keeps its muted text: the trust dialog's hints are grey too,
+   * and the parser needs them.
+   */
+  const lines = () => {
+    const text = grid.map((line) => line.join("").replace(/\s+$/u, ""));
+    const composer = findComposer(text.map((line) => line.trim()));
+    if (!composer) return text;
+    const at = composer.top + 1;
+    const marker = grid[at].indexOf("❯");
+    if (marker < 0) return text;
+    let painted = false;
+    for (let x = marker + 1; x < cols; x += 1) {
+      if (grid[at][x] === " ") continue;
+      if (!muted[at][x]) return text;
+      painted = true;
+    }
+    if (painted) text[at] = grid[at].slice(0, marker + 1).join("");
+    return text;
+  };
 
   return { write, lines, screen: () => readRenderedScreen(lines()) };
 }

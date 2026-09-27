@@ -241,6 +241,62 @@ describe("a permission prompt on screen", () => {
   });
 });
 
+describe("text the CLI paints into the composer that nobody typed", () => {
+  // Assembled, not captured: the marker's colour and the rule are from the
+  // idle capture, the grey is the shade the trust capture paints its hints in
+  // (`38;2;153;153;153`). What was measured live is the effect — a suggested
+  // prompt nobody typed, found in no history, reported as text the composer
+  // "still holds" and not removed by Ctrl-U.
+  const RULE_LINE = "\x1b[38;2;177;185;249m" + "─".repeat(20) + "\x1b[39m";
+  const composerWith = (content: string) =>
+    [
+      RULE_LINE,
+      "\x1b[38;2;177;185;249m❯\x1b[39m " + content,
+      RULE_LINE,
+      "  ⏸ plan mode on",
+    ].join("\r\n");
+  const SIZE = { cols: 40, rows: 6 };
+
+  it("reads a grey suggestion as an empty composer", () => {
+    const buffer = createScreenBuffer(SIZE);
+    buffer.write(
+      composerWith("\x1b[38;2;153;153;153mevet ikisini de yap\x1b[39m"),
+    );
+
+    expect(buffer.lines()[1]).toBe("❯");
+    expect(readRenderedScreen(buffer.lines()).kind).toBe("idle");
+  });
+
+  it("reads a dim suggestion the same way", () => {
+    const buffer = createScreenBuffer(SIZE);
+    buffer.write(composerWith("\x1b[2mevet ikisini de yap\x1b[22m"));
+
+    expect(buffer.lines()[1]).toBe("❯");
+  });
+
+  it("keeps text painted in the default colour, which is what typing looks like", () => {
+    const buffer = createScreenBuffer(SIZE);
+    buffer.write(composerWith("evet ikisini de yap"));
+
+    expect(buffer.lines()[1]).toBe("❯ evet ikisini de yap");
+  });
+
+  it("keeps typed text that a muted tail follows", () => {
+    // Not all of it is placeholder, so none of it is treated as one; the
+    // safe direction for a composer this module cannot fully read.
+    const buffer = createScreenBuffer(SIZE);
+    buffer.write(composerWith("evet \x1b[2mikisini de yap\x1b[22m"));
+
+    expect(buffer.lines()[1]).toBe("❯ evet ikisini de yap");
+  });
+
+  it("leaves grey text elsewhere on the screen alone", () => {
+    // The trust dialog's hints are grey, and the parser needs to read them.
+    const screen = readPromptScreen(TRUST_DIALOG_BYTES, TRUST_DIALOG_SIZE);
+    expect(screen.kind).toBe("modal");
+  });
+});
+
 describe("a modal on screen", () => {
   it("blocks injection and is never answered for the user", () => {
     const screen = readPromptScreen(TRUST_DIALOG_BYTES, TRUST_DIALOG_SIZE);
