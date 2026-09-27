@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import {
   ArrowUp,
   AiIdea,
@@ -540,6 +541,7 @@ export function Composer({
   onEditingLastTurnChange,
   children,
 }: Props) {
+  const { t } = useTranslation();
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
@@ -1965,9 +1967,10 @@ export function Composer({
                       : handoffCard
                         ? "Add context, or send to continue…"
                         : (placeholder ??
-                          (shell
-                            ? "Ask, build, / for commands, @ for references... "
-                            : "Ask, build, / for commands, @ for references... "))
+                          t(
+                            "composer.placeholder",
+                            "Ask, build, / for commands, @ for references... ",
+                          ))
               }
               aria-label={inputAriaLabel}
               disabled={disabled}

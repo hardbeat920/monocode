@@ -1,3 +1,4 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -46,7 +47,10 @@ import {
   type SidebarTabId,
 } from "../../features/settings/model/appearance";
 import { formatInteger } from "../../shared/lib/numbers";
-import { type GitFileDiffKind, type GitHistoryCommit } from "../../platform/tauri/fs";
+import {
+  type GitFileDiffKind,
+  type GitHistoryCommit,
+} from "../../platform/tauri/fs";
 import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { resolveModel } from "../../features/sessions/model/models";
 import type { OpenFileFn } from "../../features/search/model/search";
@@ -58,7 +62,10 @@ import {
   pruneSessionSelection,
   toggleSessionSelection,
 } from "../../features/sessions/model/sessionSelection";
-import { paneDropFromPoint, setExternalPaneDrop } from "../../features/workspace/model/paneDrop";
+import {
+  paneDropFromPoint,
+  setExternalPaneDrop,
+} from "../../features/workspace/model/paneDrop";
 import type { PaneEdge } from "../../features/workspace/model/layout";
 import { suppressTextSelection } from "../../shared/lib/drag";
 import {
@@ -106,7 +113,10 @@ import {
   saveSessionSidebarFilters,
   type SessionSidebarFilters,
 } from "../../features/sessions/model/sessionFilters";
-import type { HarnessId, LinkedWorkItem } from "../../features/sessions/model/session";
+import type {
+  HarnessId,
+  LinkedWorkItem,
+} from "../../features/sessions/model/session";
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import type { SessionSummary } from "../../features/sessions/data/sessionStore";
 import type { SettingsSectionId } from "../../features/settings/model/settings";
@@ -125,8 +135,14 @@ import {
   sameProjectPath,
   type RecentProject,
 } from "../../features/projects/model/recents";
-import { ColorPickerPopover, ColorSwatchRow } from "../../shared/ui/ColorPickerPopover";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import {
+  ColorPickerPopover,
+  ColorSwatchRow,
+} from "../../shared/ui/ColorPickerPopover";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../features/files/ui/ExplorerMenu";
 import { FileTree } from "../../features/files/ui/FileTree";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { LiveAgentsPreview } from "../../features/sessions/ui/LiveAgentsPreview";
@@ -577,6 +593,7 @@ function SidebarComponent({
   const compactRailVisible =
     compactProjectRail && showProjectRail && !railVisible;
   const inProject = looksLikeProject(cwd);
+  const { t } = useTranslation();
   const showSidebarFooter = !projectRailOpen;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
@@ -1286,8 +1303,8 @@ function SidebarComponent({
       ref={searchInputRef}
       type="text"
       value={searchQuery}
-      placeholder="Search conversations..."
-      aria-label="Search conversations"
+      placeholder={t("sessions.searchConversations", "Search conversations...")}
+      aria-label={t("sessions.searchConversations", "Search conversations...")}
       spellCheck={false}
       autoComplete="off"
       autoCorrect="off"
@@ -1520,7 +1537,7 @@ function SidebarComponent({
               {pendingFirstLoad ? null : status === "error" &&
                 sessions.length === 0 ? (
                 <p className="px-3 py-2 text-[12px] text-content/50">
-                  Couldn’t load sessions
+                  {t("sessions.couldNotLoadSessions", "Couldn’t load sessions")}
                 </p>
               ) : visibleSessions.length === 0 ? (
                 // A narrowed-down result is a transient answer to what the user
@@ -1529,11 +1546,19 @@ function SidebarComponent({
                 narrowedByUser ? (
                   <p className="px-3 py-2 text-[12px] text-content/50">
                     {searchNarrowed
-                      ? "No matching sessions"
-                      : "No sessions match these filters"}
+                      ? t("sessions.noMatchingSessions", "No matching sessions")
+                      : t(
+                          "sessions.noSessionsFilter",
+                          "No sessions match these filters",
+                        )}
                   </p>
                 ) : (
-                  <SessionsEmpty message="Sessions you start will show up here" />
+                  <SessionsEmpty
+                    message={t(
+                      "sessions.sessionsEmpty",
+                      "Sessions you start will show up here",
+                    )}
+                  />
                 )
               ) : (
                 <ul className="flex flex-col gap-0.5 p-1.5">
@@ -1739,8 +1764,14 @@ function SidebarComponent({
                                       type="button"
                                       data-no-drag
                                       data-tauri-drag-region="false"
-                                      title="New session"
-                                      aria-label="New session"
+                                      title={t(
+                                        "sessions.newSession",
+                                        "New session",
+                                      )}
+                                      aria-label={t(
+                                        "sessions.newSession",
+                                        "New session",
+                                      )}
                                       onClick={() =>
                                         onNewInFolder(entry.folder.id)
                                       }
@@ -1751,7 +1782,10 @@ function SidebarComponent({
                                         strokeWidth={1.75}
                                       />
                                       <span className="text-[13px] font-semibold leading-snug">
-                                        New session
+                                        {t(
+                                          "sessions.newSession",
+                                          "New session",
+                                        )}
                                       </span>
                                     </button>
                                   </div>
@@ -2410,6 +2444,7 @@ function WorkspaceTitleActions({
   onSearch?: () => void;
   onNew?: () => void;
 }) {
+  const { t } = useTranslation();
   if (!onSearch && !onNew) return null;
   return (
     <div
@@ -2417,12 +2452,18 @@ function WorkspaceTitleActions({
       data-tauri-drag-region="false"
     >
       {onSearch ? (
-        <IconButton label={`Go to File (${MOD}P)`} onClick={onSearch}>
+        <IconButton
+          label={`${t("sessions.goToFile", "Go to File")} (${MOD}P)`}
+          onClick={onSearch}
+        >
           <Search className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onNew ? (
-        <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+        <IconButton
+          label={`${t("sessions.newSession", "New session")} (${MOD}T)`}
+          onClick={onNew}
+        >
           <Plus className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}

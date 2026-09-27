@@ -1,3 +1,4 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import {
   formatReleaseDate,
   presentReleaseNotes,
@@ -33,13 +34,14 @@ export function WhatsNewBody({ version }: { version: string }) {
 }
 
 export function WhatsNewDialog({ version, onClose }: Props) {
+  const { t } = useTranslation();
   const notes = presentReleaseNotes(version);
   const date = notes?.date ? formatReleaseDate(notes.date) : null;
 
   return (
     <Modal
       onClose={onClose}
-      title="What's new"
+      title={t("dialogs.whatsNewTitle", "What's new")}
       description={`MonoCode ${version}${date ? ` · ${date}` : ""}`}
       size="md"
       className="h-[min(72vh,640px)]"

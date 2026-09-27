@@ -1,3 +1,4 @@
+import { useTranslation, type LanguagePreference } from "../../i18n/model/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -419,6 +420,7 @@ export function SettingsView({
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [revealed, setRevealed] = useState<string | null>(anchor);
+  const { t } = useTranslation();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const appearance = useAppearanceSettings(
@@ -475,12 +477,14 @@ export function SettingsView({
       >
         {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
         <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
-          <span className="shrink-0 text-content/45">Settings</span>
+          <span className="shrink-0 text-content/45">
+            {t("settings.title", "Settings")}
+          </span>
           <span aria-hidden className="shrink-0 text-content/25">
             /
           </span>
           <span className="min-w-0 truncate text-content">
-            {settingsSectionLabel(section)}
+            {t(`nav.${section}`, settingsSectionLabel(section))}
           </span>
         </div>
         <div
@@ -494,7 +498,7 @@ export function SettingsView({
               className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
             >
               <RotateCcw className="size-3.5" strokeWidth={1.75} />
-              Restore defaults
+              {t("common.reset", "Restore defaults")}
             </button>
           ) : null}
           <SettingsSearch onReveal={onReveal} />
@@ -521,8 +525,14 @@ export function SettingsView({
           >
             <div className="mx-auto w-full max-w-5xl px-5 py-6 pb-16 @min-[560px]/settings:px-8 @min-[560px]/settings:py-8">
               <PageHeader
-                title={settingsSectionLabel(section)}
-                description={settingsSectionDescription(section)}
+                title={t(
+                  `settings.${section}.title`,
+                  settingsSectionLabel(section),
+                )}
+                description={t(
+                  `settings.${section}.description`,
+                  settingsSectionDescription(section),
+                )}
               />
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
@@ -699,6 +709,7 @@ function GeneralPage({
 }: {
   onOpenWhatsNew: (version: string) => void;
 }) {
+  const { t, languagePreference, setLanguage } = useTranslation();
   const [soundsEnabled, setSoundsEnabled] = useState(loadSoundsEnabled);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     loadNotificationsEnabled,
@@ -784,13 +795,50 @@ function GeneralPage({
   return (
     <>
       <Group
-        title="Alerts"
-        description="How MonoCode reaches you while you are looking somewhere else."
+        title={t("settings.language.groupTitle", "Language")}
+        description={t(
+          "settings.language.groupDesc",
+          "Choose the display language for MonoCode.",
+        )}
+      >
+        <Row
+          id="language"
+          label={t("settings.language.label", "Language")}
+          description={t(
+            "settings.language.description",
+            "Interface language for menus, dialogs, and controls.",
+          )}
+        >
+          <Segmented
+            label="Language"
+            value={languagePreference}
+            options={[
+              {
+                value: "system",
+                label: t("settings.language.system", "System Default"),
+              },
+              { value: "zh-CN", label: "简体中文" },
+              { value: "en", label: "English" },
+            ]}
+            onChange={(next) => setLanguage(next as LanguagePreference)}
+          />
+        </Row>
+      </Group>
+
+      <Group
+        title={t("settings.general.alertsTitle", "Alerts")}
+        description={t(
+          "settings.general.alertsDesc",
+          "How MonoCode reaches you while you are looking somewhere else.",
+        )}
       >
         <Row
           id="sounds"
-          label="Sounds"
-          description="Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play."
+          label={t("settings.general.soundsLabel", "Sounds")}
+          description={t(
+            "settings.general.soundsDesc",
+            "Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play.",
+          )}
         >
           <Toggle
             label="Sounds"
@@ -800,8 +848,11 @@ function GeneralPage({
         </Row>
         <Row
           id="notifications"
-          label="Notifications"
-          description="Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
+          label={t("settings.general.notificationsLabel", "Notifications")}
+          description={t(
+            "settings.general.notificationsDesc",
+            "Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session.",
+          )}
         >
           {notificationsEnabled && notificationPermission === "denied" ? (
             <NotificationsBlocked />
@@ -840,8 +891,11 @@ function GeneralPage({
         </Row>
         <Row
           id="tab-animations"
-          label="Tab animations"
-          description="Animate tabs as they open and close. Turn this off for instant tab changes."
+          label={t("settings.general.tabAnimationsLabel", "Tab animations")}
+          description={t(
+            "settings.general.tabAnimationsDesc",
+            "Animate tabs as they open and close. Turn this off for instant tab changes.",
+          )}
         >
           <Toggle
             label="Tab animations"
@@ -2017,14 +2071,18 @@ function useAppearanceSettings(
 }
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
+  const { t } = useTranslation();
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
 
   return (
     <>
       <Group
-        title="Theme"
-        description="Dark and light share the same tint, so the color settings below apply to both."
+        title={t("settings.appearance.themeTitle", "Theme")}
+        description={t(
+          "settings.appearance.themeDesc",
+          "Dark and light share the same tint, so the color settings below apply to both.",
+        )}
       >
         <Row
           id="theme"
@@ -2035,16 +2093,19 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             label="Theme"
             value={appearance.themePreference}
             options={[
-              { value: "system", label: "System" },
-              { value: "dark", label: "Dark" },
-              { value: "light", label: "Light" },
+              { value: "system", label: t("common.system", "System") },
+              { value: "dark", label: t("settings.appearance.dark", "Dark") },
+              {
+                value: "light",
+                label: t("settings.appearance.light", "Light"),
+              },
             ]}
             onChange={appearance.onThemePreference}
           />
         </Row>
         <Row
           id="accent-color"
-          label="Accent color"
+          label={t("settings.appearance.accentColor", "Accent color")}
           description="Used for the composer send button and your message bubbles."
         >
           <AccentColorPicker
@@ -2709,7 +2770,10 @@ function binaryInspectionError(
   inspection: HarnessBinaryInspection,
 ): string | null {
   if (inspection.error) return inspection.error;
-  if (provider === "codex" && !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")) {
+  if (
+    provider === "codex" &&
+    !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")
+  ) {
     return "Codex CLI returned an invalid version.";
   }
   if (provider === "opencode") {
@@ -2844,7 +2908,9 @@ function ProviderBinaryControl({
           setEditing(false);
         }}
         className={`grid size-6 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
-          restartRequired ? "text-amber-300" : "text-content/35 hover:text-content"
+          restartRequired
+            ? "text-amber-300"
+            : "text-content/35 hover:text-content"
         }`}
       >
         <FolderOpen className="size-3.5" strokeWidth={1.75} />
@@ -2921,7 +2987,8 @@ function ProviderBinaryControl({
                 className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
               />
               <p className="mt-1.5 text-[10px] text-content/40">
-                Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.
+                Enter the absolute path to the CLI executable. Changes apply
+                after restarting MonoCode.
               </p>
               {error ? (
                 <span
@@ -2960,31 +3027,33 @@ function ProviderBinaryControl({
               <div className="mt-2 rounded-md border border-content/10 bg-content/[0.03] px-2.5 py-2">
                 <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
                   {inspection?.path ??
-                    (error ? "CLI could not be resolved" : "Checking the selected CLI…")}
+                    (error
+                      ? "CLI could not be resolved"
+                      : "Checking the selected CLI…")}
                 </span>
                 <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
                   {inspection?.version ??
                     (error ? "Retry to check this CLI" : "Checking version…")}
                 </span>
               </div>
-               {error ? (
-                 <span
-                   role="alert"
-                   title={error}
-                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
-                 >
-                   {error}
-                 </span>
-               ) : null}
-               {revealError ? (
-                 <span
-                   role="alert"
-                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
-                 >
-                   Could not open the CLI location: {revealError}
-                 </span>
-               ) : null}
-               <div className="mt-3 flex justify-end gap-2">
+              {error ? (
+                <span
+                  role="alert"
+                  title={error}
+                  className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                >
+                  {error}
+                </span>
+              ) : null}
+              {revealError ? (
+                <span
+                  role="alert"
+                  className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                >
+                  Could not open the CLI location: {revealError}
+                </span>
+              ) : null}
+              <div className="mt-3 flex justify-end gap-2">
                 {error ? (
                   <SecondaryButton
                     disabled={working}
@@ -3006,7 +3075,9 @@ function ProviderBinaryControl({
                     if (inspection) {
                       void revealPath(inspection.path).catch((cause) => {
                         setRevealError(
-                          cause instanceof Error ? cause.message : String(cause),
+                          cause instanceof Error
+                            ? cause.message
+                            : String(cause),
                         );
                       });
                     }
