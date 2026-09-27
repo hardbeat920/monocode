@@ -498,11 +498,32 @@ mod tests {
         let dir = tmp("scan-files-cancelled");
         std::fs::write(dir.0.join("app.ts"), "const needle = 1;\n").unwrap();
 
-        let cancel = AtomicBool::new(true);
-        let result = scan_files(&dir.0, &options(&dir.0, "needle"), "needle", &cancel).unwrap();
-
+        // Cancelled before the scan starts: the up-front guard in
+        // `scan_files` answers, and the listing is never touched.
+        let cancelled = AtomicBool::new(true);
+        let result = scan_files(&dir.0, &options(&dir.0, "needle"), "needle", &cancelled).unwrap();
         assert!(result.matches.is_empty());
         assert!(!result.truncated);
+
+        // Same tree, not cancelled: the scan does find the match, so the
+        // assertions above are about cancellation and not an empty directory.
+        let live = AtomicBool::new(false);
+        let found = scan_files(&dir.0, &options(&dir.0, "needle"), "needle", &live).unwrap();
+        assert_eq!(found.matches.len(), 1);
+        assert!(!found.truncated);
+    }
+
+    #[test]
+    fn the_cancellable_listing_reports_nothing_once_cancelled() {
+        let dir = tmp("listing-cancelled");
+        std::fs::write(dir.0.join("app.ts"), "x\n").unwrap();
+        let cancel = AtomicBool::new(true);
+
+        let files =
+            crate::fs::list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&cancel))
+                .unwrap();
+
+        assert!(files.is_empty());
     }
 
     #[test]

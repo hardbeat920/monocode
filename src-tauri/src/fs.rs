@@ -547,9 +547,12 @@ pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, Str
     list_project_files_sync_cancellable(cwd, None)
 }
 
-/// Same listing, but aborts the walk as soon as `cancel` is set. A repository
-/// without a git index falls back to enumerating the tree, and that walk can
-/// outlast a cancelled search on its own.
+/// Same listing, but aborts as soon as `cancel` is set.
+///
+/// Both halves of the enumeration can outlast a cancelled search on their own,
+/// so both take the flag: `git ls-files` and the walk it falls back to. The
+/// walk is the one that can run for minutes, but the listing is the one that
+/// can hold a hundred megabytes, so neither is left uninterruptible.
 pub(crate) fn list_project_files_sync_cancellable(
     cwd: &str,
     cancel: Option<&AtomicBool>,
@@ -564,10 +567,10 @@ pub(crate) fn list_project_files_sync_cancellable(
     if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
         return Ok(Vec::new());
     }
-    if let Some(files) = git_ls_files(&root) {
+    if let Some(files) = git_ls_files(&root, cancel) {
         return Ok(files);
     }
-    Ok(walk_project_files(&root, cancel))
+    Ok(walk_project_files(&root, cancel.into()))
 }
 
 const CHECK_IGNORE_SOME_MATCHED: i32 = 0;
@@ -617,19 +620,32 @@ fn git_ignored_names(dir: &Path, names: &[&str]) -> Option<HashSet<String>> {
     )
 }
 
-fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
-    let output = git_cmd()
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+/// Ceiling for one `git ls-files` listing. A 2M-file monorepo emits roughly
+/// 120 MB of NUL-separated paths; past this the walk takes over, which is
+/// bounded by `MAX_PROJECT_FILES` and cancellable.
+const MAX_LS_FILES_BYTES: usize = 8 * 1024 * 1024;
+
+fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectFile>> {
+    // Routed through the bounded reader rather than `Command::output()`: this
+    // is the path a cancelled search actually takes, because a repository with
+    // a git index never reaches the walk. `output()` buffers the whole listing
+    // before anything can look at it, so on a large monorepo it held ~100 MB
+    // and ran to completion with no way to interrupt it — the exact cost the
+    // walk's cancel check was added to avoid, one function earlier.
+    let (raw, truncated) = git_output_capped(
+        root,
+        &["ls-files", "-co", "--exclude-standard", "-z"],
+        MAX_LS_FILES_BYTES,
+        cancel,
+    )?;
+    if truncated {
+        // A partial listing would silently hide files from search. Fall back to
+        // the walk, which is bounded by its own budget.
         return None;
     }
 
     let mut files = Vec::new();
-    for rel in output.stdout.split(|b| *b == 0) {
+    for rel in raw.split(|b| *b == 0) {
         if rel.is_empty() {
             continue;
         }
@@ -4027,9 +4043,13 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
 /// `max_bytes` caps the buffer being built, not what the reader can run ahead:
 /// with an unbounded channel a slow or descheduled consumer lets the reader
 /// queue output with no limit at all. A small bound instead lets git's own
-/// 64 KiB stdout pipe fill and stall the child, so the cap is the only place
-/// output is ever held. Cancelling is unaffected — the receiver is dropped on
-/// return, which unblocks a reader parked in `send`.
+/// stdout pipe (16 KiB on macOS, 64 KiB on Linux) fill and stall the child, so
+/// a read now holds `max_bytes` plus this queue, one scratch chunk, and the
+/// kernel's pipe — not `max_bytes` alone.
+///
+/// Cancelling is unaffected: the receiver is dropped on return, which unblocks
+/// a reader parked in `send`. A reader parked in `read` instead is a different
+/// case, and `stop` explains why that one is left detached.
 const GIT_OUTPUT_QUEUE_CHUNKS: usize = 16;
 
 pub(crate) fn git_output_capped(
@@ -4486,14 +4506,50 @@ fn file_name(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn walk_project_files(root: &Path, cancel: Option<&AtomicBool>) -> Vec<ProjectFile> {
+/// When a file walk should stop early.
+///
+/// The flag variant is what a search uses. `AfterEntries` exists so the
+/// per-entry check can be tested without a thread and a sleep: setting the flag
+/// from outside only proves the walk stops *somewhere*, which the up-front
+/// check would satisfy on its own, and timing a real cancellation is flaky on
+/// loaded CI.
+#[derive(Clone, Copy)]
+enum WalkStop<'a> {
+    Never,
+    Flag(&'a AtomicBool),
+    #[cfg(test)]
+    AfterEntries(usize),
+}
+
+impl<'a> WalkStop<'a> {
+    fn stopped(&self, _entries: usize) -> bool {
+        match self {
+            WalkStop::Never => false,
+            WalkStop::Flag(flag) => flag.load(Ordering::Acquire),
+            #[cfg(test)]
+            WalkStop::AfterEntries(limit) => _entries >= *limit,
+        }
+    }
+}
+
+impl<'a> From<Option<&'a AtomicBool>> for WalkStop<'a> {
+    fn from(cancel: Option<&'a AtomicBool>) -> Self {
+        match cancel {
+            Some(flag) => WalkStop::Flag(flag),
+            None => WalkStop::Never,
+        }
+    }
+}
+
+fn walk_project_files(root: &Path, stop: WalkStop<'_>) -> Vec<ProjectFile> {
     let ignore = Ignore::load(root);
     let mut files = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
     let mut visited = 0usize;
+    let mut seen = 0usize;
 
     while let Some(dir) = dirs.pop() {
-        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+        if stop.stopped(seen) {
             break;
         }
         visited += 1;
@@ -4504,7 +4560,8 @@ fn walk_project_files(root: &Path, cancel: Option<&AtomicBool>) -> Vec<ProjectFi
             continue;
         };
         for ent in reader {
-            if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
+            seen += 1;
+            if stop.stopped(seen) {
                 return files;
             }
             let Ok(ent) = ent else { continue };
@@ -5867,7 +5924,7 @@ mod tests {
         std::fs::write(dir.0.join(".gitignore"), "secret.txt\n").unwrap();
         std::fs::write(dir.0.join("secret.txt"), "nope\n").unwrap();
 
-        let files = walk_project_files(&dir.0, None);
+        let files = walk_project_files(&dir.0, WalkStop::Never);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(paths.contains(&"src/main.ts"));
@@ -5883,11 +5940,39 @@ mod tests {
             std::fs::create_dir_all(dir.0.join(format!("dir{index}"))).unwrap();
             std::fs::write(dir.0.join(format!("dir{index}")).join("app.ts"), "x\n").unwrap();
         }
-        let uncancelled = walk_project_files(&dir.0, None);
+        let uncancelled = walk_project_files(&dir.0, WalkStop::Never);
         assert_eq!(uncancelled.len(), 64);
 
         let cancel = AtomicBool::new(true);
-        assert!(walk_project_files(&dir.0, Some(&cancel)).is_empty());
+        assert!(walk_project_files(&dir.0, WalkStop::Flag(&cancel)).is_empty());
+        // The same walk when nothing is cancelled must still see every file.
+        let live = AtomicBool::new(false);
+        assert_eq!(walk_project_files(&dir.0, WalkStop::Flag(&live)).len(), 64);
+    }
+
+    #[test]
+    fn walk_stops_between_entries_not_only_before_the_first_directory() {
+        let dir = tmp("index-walk-midway");
+        // Flat, so the entries the walk accepts are files: a tree of
+        // directories would be pushed, not collected, and stopping midway would
+        // still look empty.
+        for index in 0..64 {
+            std::fs::write(dir.0.join(format!("file{index}.ts")), "x\n").unwrap();
+        }
+        let all = walk_project_files(&dir.0, WalkStop::Never);
+        assert_eq!(all.len(), 64);
+
+        // Stopping partway through the first directory's entries is the only
+        // outcome that distinguishes the per-entry check from the up-front one:
+        // no up-front check yields all 64, a check that fires on the first
+        // directory yields 0.
+        let midway = walk_project_files(&dir.0, WalkStop::AfterEntries(5));
+        assert!(
+            !midway.is_empty() && midway.len() < all.len(),
+            "expected a partial listing, got {} of {}",
+            midway.len(),
+            all.len()
+        );
     }
 
     #[test]
@@ -5898,7 +5983,7 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("Info.plist"), "x\n").unwrap();
 
-        let files = walk_project_files(&dir.0, None);
+        let files = walk_project_files(&dir.0, WalkStop::Never);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(!paths.iter().any(|r| r.contains("Some.app")));
@@ -7801,6 +7886,31 @@ mod tests {
         assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_none());
         ensure_git_commit(&local.0, &oid).unwrap();
         assert!(git_output(&local.0, &["cat-file", "-e", &spec]).is_some());
+    }
+
+    #[test]
+    fn git_output_capped_keeps_queued_chunks_complete_and_ordered() {
+        let dir = tmp("git-output-bounded-queue");
+        // ~200 KiB, comfortably past the 128 KiB the reader queue can hold, so
+        // the reader is guaranteed to park in `send` while the consumer is
+        // behind. Every other cap test here uses a cap below a single 8 KiB
+        // chunk, which never fills one queue slot and so cannot catch a lost,
+        // duplicated, or reordered chunk.
+        let body: String = (0..12_000).map(|index| format!("line {index}\n")).collect();
+        if !init_git_commit(&dir.0, &[("many.txt", &body)]) {
+            return;
+        }
+
+        let (full, truncated) =
+            git_output_capped(&dir.0, &["show", ":many.txt"], 1 << 20, None).unwrap();
+        assert!(!truncated);
+        assert_eq!(full, body.as_bytes(), "queued chunks lost or reordered");
+
+        // Spans several chunks and lands mid-line.
+        let (capped, truncated) =
+            git_output_capped(&dir.0, &["show", ":many.txt"], 24_576, None).unwrap();
+        assert!(truncated);
+        assert_eq!(capped, body.as_bytes()[..24_576]);
     }
 
     #[test]
