@@ -279,6 +279,7 @@ static SESSION_SEARCH_TOKENS: Mutex<Option<HashMap<String, Arc<AtomicU64>>>> = M
 
 #[derive(Clone)]
 struct SessionSearchToken {
+    owner: String,
     counter: Arc<AtomicU64>,
     generation: u64,
 }
@@ -301,9 +302,43 @@ fn begin_session_search(owner: &str) -> Option<SessionSearchToken> {
         .clone();
     let generation = counter.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     Some(SessionSearchToken {
+        owner: owner.to_string(),
         counter,
         generation,
     })
+}
+
+/// Release the entry a finished search was holding.
+///
+/// Every search runs under a fresh `searchOwner` (`SearchView` mints a UUID per
+/// keystroke), so an entry left behind is never reused or overwritten — it just
+/// accumulates for the life of the process. Only the current generation may
+/// release it: a search that has already been superseded must leave the newer
+/// counter in place, or it would hand the next search a fresh generation and
+/// silently un-cancel itself.
+fn end_session_search(token: Option<&SessionSearchToken>) {
+    let Some(token) = token.filter(|token| token.is_current()) else {
+        return;
+    };
+    let Ok(mut tokens) = SESSION_SEARCH_TOKENS.lock() else {
+        return;
+    };
+    if let Some(registered) = tokens.as_ref().and_then(|tokens| tokens.get(&token.owner)) {
+        if Arc::ptr_eq(registered, &token.counter) {
+            if let Some(tokens) = tokens.as_mut() {
+                tokens.remove(&token.owner);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn session_search_token_registered(owner: &str) -> bool {
+    SESSION_SEARCH_TOKENS
+        .lock()
+        .ok()
+        .and_then(|tokens| tokens.as_ref().map(|tokens| tokens.contains_key(owner)))
+        .unwrap_or(false)
 }
 
 fn cancel_owned_session_search(owner: &str) {
@@ -361,6 +396,13 @@ pub fn session_search(
     store: State<'_, SessionStore>,
     options: SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
+    search_store(&store, &options)
+}
+
+fn search_store(
+    store: &SessionStore,
+    options: &SessionSearchOptions,
+) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
     let result = {
         let read_conn = store
@@ -368,12 +410,13 @@ pub fn session_search(
             .lock()
             .map_err(|_| "Session read store is locked")?;
         if let Some(conn) = read_conn.as_ref() {
-            search_sessions_with_connection(conn, &options, token.as_ref())?
+            search_sessions_with_connection(conn, options, token.as_ref())?
         } else {
             let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-            search_sessions_with_connection(&conn, &options, token.as_ref())?
+            search_sessions_with_connection(&conn, options, token.as_ref())?
         }
     };
+    end_session_search(token.as_ref());
     if session_search_is_current(token.as_ref()) {
         Ok(result)
     } else {
@@ -3070,6 +3113,46 @@ mod tests {
         assert!(second.is_current());
         cancel_owned_session_search(owner);
         assert!(!second.is_current());
+    }
+
+    #[test]
+    fn a_completed_session_search_releases_its_token() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("s1", "/tmp/a", "Needle title")).unwrap();
+        drop(conn);
+        let owner = "completed-session-search-owner";
+
+        let result = search_store(
+            &store,
+            &SessionSearchOptions {
+                query: "Needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: owner.into(),
+            },
+        )
+        .unwrap();
+
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        assert!(!session_search_token_registered(owner));
+    }
+
+    #[test]
+    fn a_superseded_session_search_does_not_release_the_newer_token() {
+        let owner = "superseded-release-owner";
+        let first = begin_session_search(owner).unwrap();
+        let second = begin_session_search(owner).unwrap();
+
+        end_session_search(Some(&first));
+
+        assert!(session_search_token_registered(owner));
+        assert!(!first.is_current());
+        assert!(second.is_current());
+        cancel_owned_session_search(owner);
     }
 
     #[test]
