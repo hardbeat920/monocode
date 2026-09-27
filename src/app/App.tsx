@@ -1357,11 +1357,16 @@ export default function App({
          */
         spoke: { at: number | null };
         /**
-         * Bring the session's `busy` in line with the mirror's turn. Called on
-         * every record and every liveness tick; also by a send that was
-         * refused, since nothing else would ever clear the busy it set.
+         * Move `busy` on a transition of the mirror's turn. Called after every
+         * transcript record and on every liveness tick.
          */
         followTurn: () => void;
+        /**
+         * Clear `busy` when neither the mirror nor an owed echo says the
+         * session is working. For a send that was refused: the composer marked
+         * the session busy before the send, and nothing else would clear it.
+         */
+        clearBusyIfIdle: () => void;
         /**
          * The one subscription's readers. The parser is built into it and cannot
          * be detached; see `createPtyFanout`.
@@ -1634,7 +1639,7 @@ export default function App({
             flushHarnessEvents();
             // The composer marked the session busy before the send; with no
             // echo owed and no turn opened, this is what clears it.
-            entry.followTurn();
+            entry.clearBusyIfIdle();
             return;
           }
           if (outcome.kind === "stuck") {
@@ -1647,7 +1652,7 @@ export default function App({
               `The message was typed into the terminal, but its composer is still holding "${outcome.held}" instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
             );
             flushHarnessEvents();
-            entry.followTurn();
+            entry.clearBusyIfIdle();
             return;
           }
           if (hasAttachments) {
@@ -1796,9 +1801,12 @@ export default function App({
               // identically.
               enqueueHarnessEvent(sessionId, event);
             }
+            // After this record's events, so an echo it carried has already
+            // been taken, and per record, so a turn that opens and closes
+            // inside one batch is seen doing both.
+            remoteControl.current.get(sessionId)?.followTurn();
           }
           flushHarnessEvents();
-          remoteControl.current.get(sessionId)?.followTurn();
         },
         // `mirror.bridge` carries `{active, url}` from the `bridge_status`
         // record; `RemoteControlLink` renders it for the focused session (§6).
@@ -1842,28 +1850,61 @@ export default function App({
        * marked done. Transitions only — a session sent to locally is busy
        * before any record exists, and the owed echo is what says so.
        */
-      let shownBusy = false;
-      const followTurn = () => {
-        const busy = remoteTurnBusy(
-          mirror.turn.active,
-          (remoteEcho.current.get(sessionId)?.length ?? 0) > 0,
-        );
-        if (busy === shownBusy) return;
-        shownBusy = busy;
-        setSessions((prev) =>
-          prev.map((session) => {
-            if (session.id !== sessionId) return session;
-            if (busy) return session.busy ? session : { ...session, busy: true };
-            return session.busy ? stopStreaming(session) : session;
-          }),
-        );
-        if (!busy) {
-          const session = sessionsRef.current.find((s) => s.id === sessionId);
-          notifyReviewChanged(sessionId);
-          notifyGitChanged();
-          if (session) nudgeWorkspace(sessionWorkCwd(session));
-          nudgeWatchedFiles();
+      /**
+       * Clear `busy` if nothing says the session is working.
+       *
+       * Nothing, not "the mirror": a message just typed into the pty has no
+       * record yet, so the mirror reads idle while the turn is about to start,
+       * and the owed echo is what says so. Called on the mirror's turn closing
+       * and by a send that was refused — never from a clock, because between
+       * the composer marking the session busy and the echo being registered
+       * there are real awaits, and a tick in that gap would stop a turn that
+       * has not been sent yet.
+       */
+      const clearBusyIfIdle = () => {
+        if (
+          remoteTurnBusy(
+            mirror.turn.active,
+            (remoteEcho.current.get(sessionId)?.length ?? 0) > 0,
+          )
+        ) {
+          return;
         }
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === sessionId && session.busy
+              ? stopStreaming(session)
+              : session,
+          ),
+        );
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        notifyReviewChanged(sessionId);
+        notifyGitChanged();
+        if (session) nudgeWorkspace(sessionWorkCwd(session));
+        nudgeWatchedFiles();
+      };
+      // Transitions of the *mirror's* turn, not a copy of `busy`. The composer
+      // sets `busy` on its own before any record exists, so a copy kept here
+      // would read "already idle" on a refused send and never clear it — and
+      // a turn whose user record and `turn_duration` land in one batch opens
+      // and closes between two looks. Hence per record, and against the
+      // mirror.
+      let mirrorWasActive = mirror.turn.active;
+      const followTurn = () => {
+        const active = mirror.turn.active;
+        if (active === mirrorWasActive) return;
+        mirrorWasActive = active;
+        if (active) {
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionId && !session.busy
+                ? { ...session, busy: true }
+                : session,
+            ),
+          );
+          return;
+        }
+        clearBusyIfIdle();
       };
       const settleTurn = () => {
         const ended = resolveTurnFromScreen(
@@ -1925,6 +1966,7 @@ export default function App({
         screen: state,
         spoke,
         followTurn,
+        clearBusyIfIdle,
         fanout,
         approval: emptyApprovalProgress(),
         stop: () => {
