@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
-import { projectName } from "../../../shared/lib/paths";
+import { prettyCwd, projectName } from "../../../shared/lib/paths";
 import { clearInboxCache } from "../../inbox/model/githubTasks";
 import {
   ASANA_CHANGE_EVENT,
@@ -230,11 +230,13 @@ export function AsanaSettings({
                 className="h-7 max-w-[45%] shrink-0 rounded-md border border-content/10 bg-transparent px-1.5 text-[12px] text-content outline-none focus:border-content/20"
               >
                 <option value="">Not linked</option>
-                {linkOptions(localProjects, links[project.id]).map((path) => (
-                  <option key={path} value={path}>
-                    {projectName(path)}
-                  </option>
-                ))}
+                {linkOptions(localProjects, links[project.id]).map(
+                  ({ path, label }) => (
+                    <option key={path} value={path}>
+                      {label}
+                    </option>
+                  ),
+                )}
               </select>
             </div>
           ))}
@@ -248,13 +250,19 @@ export function AsanaSettings({
 function linkOptions(
   localProjects: readonly string[],
   linked: string | undefined,
-): string[] {
-  const options: string[] = [];
+): { path: string; label: string }[] {
+  const paths: string[] = [];
   for (const path of [...localProjects, ...(linked ? [linked] : [])]) {
     const normalized = normalizeProjectPath(path);
-    if (!options.some((option) => sameProjectPath(option, normalized))) {
-      options.push(normalized);
+    if (!paths.some((option) => sameProjectPath(option, normalized))) {
+      paths.push(normalized);
     }
   }
-  return options;
+  return paths.map((path) => {
+    const name = projectName(path);
+    const shared = paths.some(
+      (other) => other !== path && projectName(other) === name,
+    );
+    return { path, label: shared ? prettyCwd(path) : name };
+  });
 }

@@ -179,3 +179,24 @@ it("clears a project loading error after a successful refresh", async () => {
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.textContent).toContain("Acme");
 });
+
+it("shows the full path for MonoCode projects that share a name", async () => {
+  await act(async () =>
+    root.render(
+      createElement(AsanaSettings, {
+        localProjects: ["/work/a/app", "/work/b/app", "/work/site"],
+      }),
+    ),
+  );
+  await input("Asana personal access token", "secret");
+  await submit();
+  const select = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="MonoCode project for Launch"]',
+  )!;
+  expect([...select.options].map((option) => option.textContent)).toEqual([
+    "Not linked",
+    "/work/a/app",
+    "/work/b/app",
+    "site",
+  ]);
+});

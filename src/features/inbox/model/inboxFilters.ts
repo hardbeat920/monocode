@@ -421,6 +421,18 @@ export function filterInboxByProvider(
   return items.filter((item) => item.provider === source);
 }
 
+/** A source's items in the selected project, before the user's own filters. */
+export function inboxSourceItems(
+  items: readonly InboxItem[],
+  source: InboxSource,
+  projectPath: string,
+): InboxItem[] {
+  return filterInboxByProvider(
+    filterAsanaByLocalProject(items, projectPath),
+    source,
+  );
+}
+
 export function applyInboxFilters(
   items: readonly InboxItem[],
   filters: InboxFilters,

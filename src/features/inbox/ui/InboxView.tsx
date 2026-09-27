@@ -84,8 +84,8 @@ import {
 import {
   applyInboxFilters,
   connectableInboxSources,
-  filterAsanaByLocalProject,
   hasActiveInboxFilters,
+  inboxSourceItems,
   loadInboxConnections,
   linearProjectOptions,
   inboxFetchState,
@@ -800,7 +800,7 @@ export function InboxView({
   const visibleItems = useMemo(() => {
     if (!sourceAvailable) return [];
     const visible = applyInboxFilters(
-      source === "asana" ? filterAsanaByLocalProject(items, cwd) : items,
+      inboxSourceItems(items, source, cwd),
       activeFilters,
       searchInput,
       Date.now(),
@@ -836,14 +836,12 @@ export function InboxView({
   const sourceEntries = useMemo(
     () =>
       sourceAvailable
-        ? items
-            .filter((item) => item.provider === source)
-            .map((item) => ({
-              key: inboxItemKey(item),
-              updatedAt: item.updatedAt,
-            }))
+        ? inboxSourceItems(items, source, cwd).map((item) => ({
+            key: inboxItemKey(item),
+            updatedAt: item.updatedAt,
+          }))
         : [],
-    [items, source, sourceAvailable],
+    [cwd, items, source, sourceAvailable],
   );
   const sourceHasUnseen = useMemo(
     () => sourceEntries.some(isInboxEntryUnseen),

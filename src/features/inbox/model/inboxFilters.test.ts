@@ -12,6 +12,7 @@ import {
   filterInboxByTime,
   hasActiveInboxFilters,
   inboxFetchState,
+  inboxSourceItems,
   isTrackerSource,
   LINEAR_NO_PROJECT,
   linearProjectOptions,
@@ -491,6 +492,25 @@ describe("filterAsanaByLocalProject", () => {
       linked,
       unlinked,
     ]);
+  });
+});
+
+describe("inboxSourceItems", () => {
+  const github = item({ number: 1, updatedAt: "2026-08-27T10:00:00Z" });
+  const linked = item({
+    number: 2,
+    kind: "asana",
+    provider: "asana",
+    projectPath: "/work/app",
+    updatedAt: "2026-08-27T10:00:00Z",
+  });
+  const elsewhere = { ...linked, number: 3, projectPath: "/work/other" };
+  const unlinked = { ...linked, number: 4, projectPath: "" };
+
+  it("keeps a source's items and scopes Asana to the selected project", () => {
+    const items = [github, linked, elsewhere, unlinked];
+    expect(inboxSourceItems(items, "asana", "/work/app")).toEqual([linked]);
+    expect(inboxSourceItems(items, "github", "/work/app")).toEqual([github]);
   });
 });
 
