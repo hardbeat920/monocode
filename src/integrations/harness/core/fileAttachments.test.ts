@@ -25,6 +25,15 @@ const image: Attachment = {
   path: "/tmp/screenshot.png",
 };
 
+const folder: Attachment = {
+  id: "folder",
+  name: "reports",
+  mimeType: "inode/directory",
+  kind: "file",
+  size: 4096,
+  path: "/tmp/reports",
+};
+
 function claudeContent(text: string, attachments: Attachment[]) {
   const result = buildClaudeUserMessage({ text, attachments });
   return (result.message as { content: unknown[] }).content;
@@ -49,6 +58,30 @@ describe("native file attachment formats", () => {
       mimeType: "image/png",
       data: "YWJj",
     });
+  });
+
+  it("sends a folder as its path, never as a resource link", () => {
+    const expected = [
+      {
+        type: "text",
+        text: 'Attached folder (list or read the files inside from this path): "/tmp/reports"',
+      },
+    ];
+    for (const build of [promptBlocks, grokPromptBlocks]) {
+      expect(build("", [folder])).toEqual(expected);
+    }
+  });
+
+  it("gives a folder to Claude and OpenCode as a path they can read", () => {
+    const folderText = expect.stringContaining("Attached folder");
+    expect(claudeContent("look", [folder])).toEqual([
+      { type: "text", text: "look" },
+      { type: "text", text: folderText },
+    ]);
+    // OpenCode joins the prompt and the path into one text part.
+    expect(toOpenCodePromptParts("look", [folder])).toEqual([
+      { type: "text", text: folderText },
+    ]);
   });
 
   it("keeps OpenCode's native file parts for supported text and images", () => {

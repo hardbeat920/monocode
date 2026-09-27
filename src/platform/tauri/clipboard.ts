@@ -179,7 +179,7 @@ export async function nativeClipboardAttachments(
     throw new Error(
       `Nothing to attach in ${
         paths.length === 1 ? "that path" : "those paths"
-      }. Folders and hidden files cannot be attached.`,
+      }. Hidden system files are skipped.`,
     );
   }
   if (text) return [];

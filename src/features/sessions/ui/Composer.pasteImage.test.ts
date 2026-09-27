@@ -63,9 +63,13 @@ function paste(target: HTMLTextAreaElement, text = "") {
   return event;
 }
 
+/** Wait for the async clipboard read and the attachments it adds. */
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
@@ -157,14 +161,29 @@ it("attaches a copied file even when the webview sees no text at all", async () 
   ]);
 });
 
-it("reports a copy that has no attachable file in it", async () => {
+it("attaches a copied folder so its path reaches the agent", async () => {
   clipboardPaths = ["/home/dev/reports"];
   clipboardPathsAreDirs = true;
   paste(render(), "reports");
   await settle();
+  await send();
+
+  expect(submit.mock.calls[0][1]).toEqual([
+    expect.objectContaining({
+      name: "reports",
+      path: "/home/dev/reports",
+      mimeType: "inode/directory",
+    }),
+  ]);
+});
+
+it("reports a copy that holds nothing attachable", async () => {
+  clipboardPaths = ["/home/dev/.DS_Store"];
+  paste(render(), ".DS_Store");
+  await settle();
 
   expect(alert()).toBe(
-    "Nothing to attach in that path. Folders and hidden files cannot be attached.",
+    "Nothing to attach in that path. Hidden system files are skipped.",
   );
 });
 

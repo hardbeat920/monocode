@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "../../../shared/ui/icons";
-import { attachmentPreviewSrc } from "../model/attachments";
+import { attachmentPreviewSrc, isAttachmentFolder } from "../model/attachments";
 import type { Attachment } from "../model/session";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
@@ -44,7 +44,11 @@ export function AttachmentChip({ attachment, onRemove }: Props) {
         ) : (
           <>
             <span className="grid size-5 shrink-0 place-items-center">
-              <FileTypeIcon name={attachment.name} isDir={false} size={16} />
+              <FileTypeIcon
+                name={attachment.name}
+                isDir={isAttachmentFolder(attachment)}
+                size={16}
+              />
             </span>
             <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-none text-content/80">
               {attachment.name}
