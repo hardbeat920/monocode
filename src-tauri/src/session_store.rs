@@ -1209,6 +1209,7 @@ fn search_sessions(
     options: &SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
     let token = begin_session_search(&options.search_owner);
+    let _release = SessionSearchRelease(token.clone());
     search_sessions_with_connection(conn, options, token.as_ref())
 }
 
@@ -3233,6 +3234,31 @@ mod tests {
         );
 
         assert!(error.is_err(), "a search with no schema must fail");
+        assert!(!session_search_token_registered(owner));
+    }
+
+    #[test]
+    fn a_test_helper_session_search_releases_its_token() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("s1", "/tmp/a", "Needle title")).unwrap();
+        let owner = "helper-session-search-owner";
+
+        let result = search_sessions(
+            &conn,
+            &SessionSearchOptions {
+                query: "Needle".into(),
+                cwd: None,
+                include_archived: false,
+                search_owner: owner.into(),
+            },
+        )
+        .unwrap();
+
+        assert!(result
+            .hits
+            .iter()
+            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
         assert!(!session_search_token_registered(owner));
     }
 
