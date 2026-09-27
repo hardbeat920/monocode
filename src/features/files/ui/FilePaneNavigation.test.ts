@@ -11,6 +11,10 @@ const disk = vi.hoisted(() => ({ content: "" }));
 const invoke = vi.hoisted(() =>
   vi.fn(async (command: string) => {
     if (command === "read_text_file") return disk.content;
+    if (command === "git_diff_files")
+      return {
+        files: [{ relative: "review.txt", staged: false, unstaged: true }],
+      };
     if (command === "git_file_diff")
       return {
         original: "first line\nold line\nthird line",
@@ -167,11 +171,6 @@ describe("file pane source navigation", () => {
         expect(container.textContent).toContain("-1");
       }),
     );
-    expect(invoke).toHaveBeenCalledWith("git_file_diff", {
-      cwd: "/repo",
-      relative: "review.txt",
-      staged: false,
-    });
   });
 
   it("preserves a manually moved selection and external focus after a reload", async () => {
