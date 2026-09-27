@@ -996,6 +996,9 @@ function scriptedPty(screens: (PromptScreen | null)[]) {
 
 const MESSAGE = "\x1b[200~say OK\x1b[201~\r";
 
+/** The screen a moment after the paste: the message painted, the CR not acted on. */
+const TYPED_COMPOSER = ["\u2500".repeat(20), "\u276f say OK", "\u2500".repeat(20)];
+
 describe("typing a message into the pty", () => {
   it("sends straight away when the composer is empty", async () => {
     const pty = scriptedPty([idleWith(IDLE_COMPOSER)]);
@@ -1046,8 +1049,53 @@ describe("typing a message into the pty", () => {
     expect(outcome.kind).toBe("refused");
     if (outcome.kind !== "refused") return;
     expect(outcome.reason).toContain("abacus");
-    expect(pty.written).toEqual([COMPOSER_CLEAR]);
     expect(pty.written).not.toContain(MESSAGE);
+  });
+
+  it("retries the clear keystroke rather than only re-reading", async () => {
+    // A composer that needs more than one Ctrl-U used to be polled twenty times
+    // against a stroke already spent, which left the session refusing every
+    // send until someone cleared it by hand.
+    const pty = scriptedPty([idleWith(AFTER_INTERRUPT)]);
+
+    await injectRemoteText("say OK", false, pty.ports);
+
+    expect(pty.written).toEqual([
+      COMPOSER_CLEAR,
+      COMPOSER_CLEAR,
+      COMPOSER_CLEAR,
+    ]);
+  });
+
+  it("waits for the composer to let go before calling it sent", async () => {
+    // The message is painted into the composer before the CR is acted on, so
+    // the first frames after the write still hold it. That is a slow send, not
+    // a stuck one.
+    const pty = scriptedPty([
+      idleWith(IDLE_COMPOSER),
+      idleWith(TYPED_COMPOSER),
+      idleWith(TYPED_COMPOSER),
+      idleWith(IDLE_COMPOSER),
+    ]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome).toEqual({ kind: "sent", queued: "unknown" });
+    expect(pty.written).toEqual([MESSAGE]);
+  });
+
+  it("reports a message the composer never let go of as stuck", async () => {
+    // What the user hit: every byte written, the CR never acted on, and the
+    // report read "Sent" anyway — while the held composer refused every send
+    // after it.
+    const pty = scriptedPty([idleWith(IDLE_COMPOSER), idleWith(TYPED_COMPOSER)]);
+
+    const outcome = await injectRemoteText("say OK", false, pty.ports);
+
+    expect(outcome).toEqual({ kind: "stuck", held: "say OK" });
+    // Not a refusal: the bytes did go out, and saying otherwise would send the
+    // user looking for a message that is on their screen.
+    expect(pty.written).toEqual([MESSAGE]);
   });
 
   it("writes nothing at all when the parser refuses the screen", async () => {
@@ -1091,7 +1139,7 @@ describe("describing where a sent message went", () => {
   });
 
   it("says it was queued when the screen knows a turn is running", () => {
-    expect(queuedNotice(true)).toMatch(/Queued/);
+    expect(queuedNotice(true)).toMatch(/queued/);
   });
 
   it("hedges when the screen cannot tell", () => {
@@ -1100,8 +1148,8 @@ describe("describing where a sent message went", () => {
     // answer either way would be a guess.
     const notice = queuedNotice("unknown");
 
-    expect(notice).toMatch(/may be queued/);
-    expect(notice).not.toMatch(/^Queued/);
+    expect(notice).toMatch(/If a turn is still running/);
+    expect(notice).not.toMatch(/queued/);
   });
 });
 

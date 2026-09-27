@@ -670,16 +670,35 @@ export function createPtyFanout(parser: (chunk: string) => void): PtyFanout {
  * TUI queues it is genuinely unknowable from a frame. Nothing is lost either
  * way: a mid-turn send was measured to queue cleanly. So the only wrong answer
  * here is a confident one.
+ *
+ * Worded as a status and not a warning. The composer has been seen to let the
+ * message go by the time this is shown (`confirmSubmitted`), so what remains
+ * unknown is only *when* the TUI acts on it — and an earlier wording that led
+ * with a dash and a hedge was read as an error twice over by the one person
+ * it was written for.
  */
 export function queuedNotice(queued: boolean | "unknown"): string | null {
   if (queued === "unknown") {
-    return "Sent — it may be queued in the terminal until the current turn ends; the screen cannot tell while a turn is streaming";
+    return "Delivered to the terminal. If a turn is still running there, it will be picked up when that turn ends.";
   }
-  return queued ? "Queued in the terminal until the current turn ends" : null;
+  return queued
+    ? "Delivered to the terminal, queued until the current turn ends."
+    : null;
 }
 
 export type InjectOutcome =
   | { kind: "sent"; queued: boolean | "unknown" }
+  /**
+   * Every byte was written and the composer kept the text anyway.
+   *
+   * Neither `sent` nor `refused`, because both would be false: a refusal says
+   * nothing reached the pty, and this wrote the whole message. What it says is
+   * that the CR did not submit — measured from a real send, where the message
+   * stayed painted in the composer and the report still read "Sent". That state
+   * also wedges every later send, since `remoteSendGate` stops a send onto a
+   * held composer, so it has to be named rather than rounded to success.
+   */
+  | { kind: "stuck"; held: string }
   | { kind: "refused"; reason: string };
 
 /** The impure edges of typing into a TUI, so the sequence can be asserted. */
@@ -690,6 +709,17 @@ export type InjectPorts = {
   settle: () => Promise<void>;
   /** Polls before giving up on a clear. */
   attempts?: number;
+  /**
+   * Polls before giving up on the message having been submitted.
+   *
+   * Wider than `attempts` by default, and deliberately: a clear is one
+   * keystroke against a composer already on screen, while a send is a paste the
+   * CLI parses and then a CR it acts on, in a terminal that was measured to
+   * repaint in 4KB bursts. The expensive mistake here is crying wolf — calling a
+   * send stuck that was merely slow — so this waits about four times as long
+   * before it does.
+   */
+  sendAttempts?: number;
 };
 
 /**
@@ -702,6 +732,11 @@ export type InjectPorts = {
  * `…Think carefully first.say OK`. A composer that will not come back empty
  * therefore ends in a refusal. Not knowing what is in the composer stops a send;
  * it never permits one.
+ *
+ * The message's own keystrokes are checked too, by `confirmSubmitted`. A send
+ * that reported success on the strength of the bytes having left is how a
+ * message came to sit unsubmitted in the composer while the user was told it was
+ * sent — and then wedged every send after it.
  */
 export async function injectRemoteText(
   text: string,
@@ -718,9 +753,14 @@ export async function injectRemoteText(
   if (gate.kind === "refuse") return { kind: "refused", reason: gate.reason };
 
   if (gate.kind === "clear") {
-    await ports.write(COMPOSER_CLEAR);
+    // One Ctrl-U per attempt, not one before the loop. The loop used to only
+    // re-read the screen, so a composer that needed a second keystroke — a
+    // wrapped or multi-line message is the case to beat — was polled twenty
+    // times against a stroke that had already done all it was going to do, and
+    // the session stayed wedged for every send after it.
     let cleared = false;
     for (let attempt = 0; attempt < (ports.attempts ?? 20); attempt += 1) {
+      await ports.write(COMPOSER_CLEAR);
       await ports.settle();
       const lines = ports.screen()?.lines;
       if (lines && !composerHeld(lines)) {
@@ -746,7 +786,41 @@ export async function injectRemoteText(
     };
   }
   await ports.write(plan.bytes);
-  return { kind: "sent", queued: plan.queued };
+  return await confirmSubmitted(plan.queued, ports);
+}
+
+/**
+ * Watch the composer let go of the message, or say that it did not.
+ *
+ * The clear half of this function has always been written and then checked,
+ * never trusted; the send half was written and trusted, and that asymmetry is
+ * the whole bug. `planInjection` ends in `\r`, and whether the CLI acts on that
+ * CR is no more knowable from the write than a clear is — so it is read off the
+ * screen the same way.
+ *
+ * An empty composer is the success signal for both of the two things that CR can
+ * do. A send that runs now empties it, and so does one the TUI queues: a
+ * mid-turn send was measured as `queue-operation:enqueue` followed by a `user`
+ * record with `promptSource:"queued"`, which is the composer handing the text
+ * over rather than keeping it. A composer that still holds text has done
+ * neither.
+ */
+async function confirmSubmitted(
+  queued: boolean | "unknown",
+  ports: InjectPorts,
+): Promise<InjectOutcome> {
+  const budget = ports.sendAttempts ?? (ports.attempts ?? 20) * 4;
+  let held: string | null = null;
+  for (let attempt = 0; attempt < budget; attempt += 1) {
+    await ports.settle();
+    const lines = ports.screen()?.lines;
+    // No screen is not evidence of a stuck composer, so it is not read as one:
+    // only a composer seen holding text ends this as `stuck`.
+    if (!lines) continue;
+    held = composerHeld(lines);
+    if (!held) return { kind: "sent", queued };
+  }
+  return held ? { kind: "stuck", held } : { kind: "sent", queued };
 }
 
 // ------------------------------------------------------- raising an approval

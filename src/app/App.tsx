@@ -1627,6 +1627,18 @@ export default function App({
             flushHarnessEvents();
             return;
           }
+          if (outcome.kind === "stuck") {
+            // The echo is taken back even though the bytes went out, because no
+            // transcript record is coming for a message that was never
+            // submitted — and an echo left owed swallows this same text on the
+            // day the user does submit it by hand.
+            unregister();
+            note(
+              `The message was typed into the terminal, but its composer is still holding "${outcome.held}" instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
+            );
+            flushHarnessEvents();
+            return;
+          }
           if (hasAttachments) {
             // The TUI takes typed text. `@file` mentions in it resolve as usual,
             // but a pasted attachment has no keystroke to become.
