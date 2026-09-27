@@ -1057,6 +1057,9 @@ export default function App({
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const linkedWorkItemEditRevisions = useRef(new Map<string, number>());
+  const lastPersistedLinkedWorkItems = useRef(
+    new Map<string, LinkedWorkItem[]>(),
+  );
   const linkedSessionUpdatesRef = useRef<
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
@@ -4575,6 +4578,9 @@ export default function App({
         sessionsRef.current.find((session) => session.id === sessionId) ??
           history.find((session) => session.id === sessionId),
       );
+      if (!lastPersistedLinkedWorkItems.current.has(sessionId)) {
+        lastPersistedLinkedWorkItems.current.set(sessionId, [...previousItems]);
+      }
       invalidateLoadedSession(sessionId);
       loadedSessionCache.current.delete(sessionId);
 
@@ -4611,39 +4617,45 @@ export default function App({
       void setSessionLinkedWorkItem(
         sessionId,
         nextItems.length ? nextItems : undefined,
-      ).catch((error) => {
-        if (linkedWorkItemEditRevisions.current.get(sessionId) !== revision) {
-          return;
-        }
-        const rolledBackSessions = sessionsRef.current.map((session) =>
-          session.id === sessionId
-            ? withLinkedWorkItems(session, previousItems)
-            : session,
-        );
-        sessionsRef.current = rolledBackSessions;
-        setSessions(rolledBackSessions);
-        setHistory((current) =>
-          current.map((session) =>
+      )
+        .then(() => {
+          lastPersistedLinkedWorkItems.current.set(sessionId, [...nextItems]);
+        })
+        .catch((error) => {
+          if (linkedWorkItemEditRevisions.current.get(sessionId) !== revision) {
+            return;
+          }
+          const rollbackItems =
+            lastPersistedLinkedWorkItems.current.get(sessionId) ?? previousItems;
+          const rolledBackSessions = sessionsRef.current.map((session) =>
             session.id === sessionId
-              ? withLinkedWorkItems(session, previousItems)
+              ? withLinkedWorkItems(session, rollbackItems)
               : session,
-          ),
-        );
-        setStoredLinkedSessions((current) =>
-          previousItems.length
-            ? current.map((session) =>
-                session.id === sessionId
-                  ? withLinkedWorkItems(session, previousItems)
-                  : session,
-              )
-            : current.filter((session) => session.id !== sessionId),
-        );
-        void refreshHistory(sidebarCwd);
-        void message(
-          `Could not update this conversation's GitHub link.\n\n${String(error)}`,
-          { title: "MonoCode", kind: "error" },
-        );
-      });
+          );
+          sessionsRef.current = rolledBackSessions;
+          setSessions(rolledBackSessions);
+          setHistory((current) =>
+            current.map((session) =>
+              session.id === sessionId
+                ? withLinkedWorkItems(session, rollbackItems)
+                : session,
+            ),
+          );
+          setStoredLinkedSessions((current) =>
+            rollbackItems.length
+              ? current.map((session) =>
+                  session.id === sessionId
+                    ? withLinkedWorkItems(session, rollbackItems)
+                    : session,
+                )
+              : current.filter((session) => session.id !== sessionId),
+          );
+          void refreshHistory(sidebarCwd);
+          void message(
+            `Could not update this conversation's GitHub link.\n\n${String(error)}`,
+            { title: "MonoCode", kind: "error" },
+          );
+        });
     },
     [history, invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
