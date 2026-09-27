@@ -438,6 +438,14 @@ export function remoteApprovalView({
   terminalOpen,
 }: ApprovalInputs): RemoteApprovalView {
   if (terminalOpen) return { kind: "none" };
+  // Before the pending gate, because a modal is the one thing that waits with
+  // no tool call behind it: the trust check is the first screen a fresh pty
+  // paints, ahead of any turn. Gated on `pending` it was never surfaced —
+  // every send was refused as "a dialog is waiting" and nothing put the dialog
+  // in front of the user to answer.
+  if (screen.kind === "modal") {
+    return { kind: "raw", lines: screen.lines, reason: "modal" };
+  }
   // No outstanding tool call means nothing is waiting on an answer, whatever the
   // screen happens to look like.
   if (!pending) return { kind: "none" };
@@ -451,14 +459,10 @@ export function remoteApprovalView({
   }
   // An outstanding call is equally the ordinary state of a tool that is simply
   // running, so an unreadable screen is not on its own evidence of a question.
-  // These two kinds are: `unknown-dialog` means numbered options are painted
-  // inside a dialog the parser does not know, and a modal is deliberately parsed
-  // without keystrokes so that MonoCode cannot answer it. Both mean something is
-  // asking and we cannot read it, which is when the raw pty goes in front of the
-  // user rather than a guess.
-  if (screen.kind === "modal") {
-    return { kind: "raw", lines: screen.lines, reason: "modal" };
-  }
+  // This kind is: `unknown-dialog` means numbered options are painted inside
+  // a dialog the parser does not know. Something is asking and we cannot read
+  // it, which is when the raw pty goes in front of the user rather than a
+  // guess. (A modal is handled above, before the pending gate.)
   if (screen.kind === "unrecognised" && screen.reason === "unknown-dialog") {
     return { kind: "raw", lines: screen.lines, reason: screen.reason };
   }
@@ -577,7 +581,8 @@ export function pendingAfter(
 export const REMOTE_REFUSALS: Record<InjectionRefusal, string> = {
   empty: "there was nothing to send",
   "permission-prompt": "the terminal is waiting on a permission prompt",
-  modal: "a dialog in the terminal is waiting to be dismissed",
+  modal:
+    "the terminal is showing a dialog only you can answer (the folder trust check) — open the terminal and answer it",
   "unrecognised-screen": "the terminal is showing something unrecognised",
   "command-prefix":
     "a message starting with /, ! or # drives the terminal's own menus instead of being sent",

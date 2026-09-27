@@ -722,6 +722,29 @@ describe("what a remote session shows for a pending prompt", () => {
     expect(view.lines).toBe(screen.lines);
   });
 
+  it("surfaces a modal even when no tool is pending", () => {
+    // The trust check is the first screen a fresh pty paints, before any
+    // turn, so there is never a tool call behind it. Gated on `pending` it was
+    // never put in front of the user: every send was refused as "a dialog is
+    // waiting" with nothing to answer it on.
+    const view = remoteApprovalView({
+      pending: false,
+      terminalOpen: false,
+      screen: {
+        lines: ["Is this a project you created or one you trust?"],
+        turn: "unknown",
+        kind: "modal",
+        modal: {
+          modal: "trust-folder",
+          title: "Is this a project you created or one you trust?",
+          options: ["1. Yes, I trust this folder", "2. No, exit"],
+        },
+      },
+    });
+
+    expect(view.kind).toBe("raw");
+  });
+
   it("does not raise a partial repaint as a question", () => {
     const view = remoteApprovalView({
       pending: true,
