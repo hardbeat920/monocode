@@ -50,6 +50,7 @@ type Live = {
   approvals: Map<number, (decision: ApprovalDecision) => void>;
   turns: Promise<void>;
   activePrompt: Promise<unknown> | null;
+  wakePrompt: (() => void) | null;
 };
 
 type Resume = { acpSessionId: string; cwd: string };
@@ -306,6 +307,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       approvals: new Map(),
       turns: Promise.resolve(),
       activePrompt: null,
+      wakePrompt: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -364,6 +366,7 @@ function startPrompt(
     PROMPT_TIMEOUT_MS,
   );
   live.activePrompt = pending;
+  live.wakePrompt?.();
   // A replacement can fail before the superseded prompt settles.
   void pending.catch(() => undefined);
   return true;
@@ -374,13 +377,18 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (!startPrompt(live, input)) return;
     while (live.activePrompt) {
       const pending = live.activePrompt;
+      const replaced = new Promise<void>((resolve) => {
+        live.wakePrompt = resolve;
+      });
       let result: unknown;
       try {
-        result = await pending;
+        result = await Promise.race([pending, replaced]);
       } catch (error) {
         if (live.cancelled) return;
         if (live.activePrompt !== pending) continue;
         throw error;
+      } finally {
+        live.wakePrompt = null;
       }
       if (live.cancelled) return;
       if (live.activePrompt !== pending) continue;
@@ -403,6 +411,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     throw error;
   } finally {
     live.activePrompt = null;
+    live.wakePrompt = null;
   }
 }
 

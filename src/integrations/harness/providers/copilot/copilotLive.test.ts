@@ -94,9 +94,13 @@ describe("Copilot live ACP sequence", () => {
     kill.mockClear();
   });
 
-  it.each(["success", "failure", "cancel"] as const)("keeps the send lifecycle through rapid steering: %s", async (outcome) => {
+  it.each(
+    (["success", "failure", "cancel"] as const).flatMap((outcome) =>
+      (["old-first", "latest-first"] as const).map((order) => ({ outcome, order })),
+    ),
+  )("keeps the send lifecycle through rapid steering: $outcome, $order", async ({ outcome, order }) => {
     const events: HarnessEvent[] = [];
-    const sessionId = `copilot-steer-${outcome}`;
+    const sessionId = `copilot-steer-${outcome}-${order}`;
     let settled = false;
     const turn = start(sessionId, events).then(
       () => { settled = true; },
@@ -116,23 +120,30 @@ describe("Copilot live ACP sequence", () => {
       const prompts = parse().filter((message) => message.method === "session/prompt");
       expect(prompts).toHaveLength(3);
       expect(prompts[2].params.prompt).toEqual([{ type: "text", text: "latest follow up" }]);
-      if (outcome === "failure") {
-        onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[2].id, error: { code: -32000, message: "latest failed" } }));
+      const settleOld = () => {
+        reply(first.id, { stopReason: "cancelled" });
+        onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[1].id, error: { code: -32000, message: "superseded" } }));
+      };
+      if (order === "old-first") {
+        settleOld();
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(settled).toBe(false);
-      }
-      reply(first.id, { stopReason: "cancelled" });
-      onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[1].id, error: { code: -32000, message: "superseded" } }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      if (outcome !== "failure") {
         expect(settled).toBe(false);
         expect(events.some((event) => event.type === "message.completed" || event.type === "session.error")).toBe(false);
       }
 
       if (outcome === "success") {
         reply(prompts[2].id, { stopReason: "end_turn", usage: { inputTokens: 20, outputTokens: 5 } });
-      } else if (outcome === "cancel") {
+      } else if (outcome === "failure") {
+        onLine!(JSON.stringify({ jsonrpc: "2.0", id: prompts[2].id, error: { code: -32000, message: "latest failed" } }));
+      } else {
         await cancelCopilotTurn(sessionId);
+      }
+      await vi.waitFor(() => expect(settled).toBe(true));
+      if (order === "latest-first") {
+        const completedEvents = [...events];
+        settleOld();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(events).toEqual(completedEvents);
       }
       const result = await turn;
       expect(events.filter((event) => event.type === "message.completed")).toHaveLength(outcome === "success" ? 1 : 0);
