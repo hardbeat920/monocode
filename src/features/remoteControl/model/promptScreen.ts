@@ -412,10 +412,23 @@ export function readRenderedScreen(lines: readonly string[]): PromptScreen {
   if (prompt)
     return { kind: "permission-prompt", prompt, lines, turn: "in-progress" };
 
-  const modal = readTrustModal(trimmed);
+  const composer = findComposer(trimmed);
+
+  // The composer comes first now, because the modal check has to know about it.
+  // The trust dialog is painted at the top of a fresh pty, and measured from a
+  // live session its three markers were still on the grid with the conversation
+  // and the composer painted below them — on a 40-row grid the dialog's
+  // seventeen rows stay put until that much output has scrolled past. Read
+  // without regard to the composer, those rows kept the screen `modal` for the
+  // whole start of a session: every
+  // send refused as "a dialog is waiting to be dismissed", every pending tool
+  // surfaced as unreadable, and closing Remote Control "fixed" it because the
+  // harness path never looks at the pty. The `unknown-dialog` branch below has
+  // always been guarded on the composer; this is the same guard, for the same
+  // reason, on the one dialog check that lacked it.
+  const modal = readTrustModal(trimmed, composer);
   if (modal) return { kind: "modal", modal, lines, turn: "unknown" };
 
-  const composer = findComposer(trimmed);
   const turn = readTurn(trimmed, composer);
 
   // Numbered options with no composer and no modal we know: something is asking
@@ -551,11 +564,30 @@ function promptDetail(
   return detail;
 }
 
+/**
+ * The trust dialog, when it is the live thing on screen and not a leftover.
+ *
+ * Its three markers are looked for anywhere on the grid, which is right for a
+ * dialog the CLI hard-wraps at whatever width it has, and wrong the moment the
+ * dialog has been answered: nothing erases it, so the same three lines are
+ * still there with the conversation painted underneath. What tells the two
+ * apart is the composer. A live dialog has none — the captured pending screen
+ * has one rule at its top and an option cursor, not a box — while a dismissed
+ * one has the composer painted *below* it. So a composer whose box starts under
+ * the question row means the dialog is scrollback. A composer above it is left
+ * alone: that would mean the dialog was painted last, and reading it as idle
+ * would inject into a modal, which swallows the text silently (§5).
+ *
+ * Last match rather than first, as `readPermissionPrompt` does, so an older
+ * copy higher in scrollback cannot stand in for a newer one lower down.
+ */
 function readTrustModal(
   trimmed: readonly string[],
+  composer: Composer | undefined,
 ): RecognisedModal | undefined {
-  const at = trimmed.findIndex((line) => TRUST_QUESTION.test(line));
+  const at = lastIndexMatching(trimmed, TRUST_QUESTION);
   if (at < 0) return undefined;
+  if (composer && composer.top > at) return undefined;
   if (!trimmed.some((line) => TRUST_HEADER.test(line))) return undefined;
   if (!trimmed.some((line) => TRUST_FOOTER.test(line))) return undefined;
   const options = trimmed

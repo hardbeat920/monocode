@@ -263,6 +263,48 @@ describe("a modal on screen", () => {
     });
     expect(JSON.stringify(screen)).not.toContain("keystroke");
   });
+
+  /** The dialog's painted rows, with the blank grid below them dropped. */
+  const trustDialogRows = () => {
+    const rows = renderScreen(TRUST_DIALOG_BYTES, TRUST_DIALOG_SIZE);
+    while (rows.length > 0 && !rows[rows.length - 1]) rows.pop();
+    return rows;
+  };
+
+  it("is scrollback once the composer is painted below it", () => {
+    // Composed from two measured parts rather than captured whole: the CLI
+    // does not erase the dialog when it is answered, it paints the session
+    // underneath, so the answered screen is the pending one with a composer
+    // after it. On a 40-row grid the dialog's rows stay put until that much
+    // output scrolls them off — and read without regard to the composer they
+    // kept every send refused as "a dialog is waiting to be dismissed" for the
+    // whole start of a session.
+    const screen = readRenderedScreen([...trustDialogRows(), ...IDLE_COMPOSER]);
+
+    expect(screen.kind).toBe("idle");
+    expect(planInjection(screen, "hello from MonoCode").allowed).toBe(true);
+  });
+
+  it("stays a modal while nothing has been painted below it", () => {
+    // The pending capture, byte for byte, still reads as the dialog: the guard
+    // is the composer's position, not its mere presence anywhere on screen.
+    const screen = readRenderedScreen(trustDialogRows());
+
+    expect(screen.kind).toBe("modal");
+  });
+
+  it("stays a modal when it is painted below a composer", () => {
+    // The defensive direction. A dialog under the composer was painted after
+    // it, so it is live — and reading it as idle would inject into a modal,
+    // which swallows the text silently. Here the dialog's own top rule is the
+    // last rule on screen and breaks the composer box, so this passes through
+    // the no-composer path; the ordering comparison is belt and braces for a
+    // screen no capture has shown.
+    const screen = readRenderedScreen([...IDLE_COMPOSER, ...trustDialogRows()]);
+
+    expect(screen.kind).toBe("modal");
+    expect(planInjection(screen, "hello from MonoCode").allowed).toBe(false);
+  });
 });
 
 describe("an idle composer", () => {
