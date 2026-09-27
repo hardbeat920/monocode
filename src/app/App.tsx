@@ -11254,26 +11254,39 @@ export default function App({
                   />
                 ) : null}
 
-                {remoteTerminal &&
-                !remoteTerminalMinimizedIds.has(remoteTerminal.sessionId) ? (
-                  <RemoteControlTerminal
-                    key={remoteTerminal.ptyId}
-                    ptyId={remoteTerminal.ptyId}
-                    replay={remoteTerminal.replay}
-                    attach={remoteTerminal.attach}
-                    cols={REMOTE_CONTROL_COLS}
-                    rows={REMOTE_CONTROL_ROWS}
-                    onClose={() => {
-                      // Minimized, not unmounted: the pty stays subscribed and
-                      // `remoteTerminals` keeps the session, so nothing about
-                      // remote control's own state changes. An unreadable
-                      // screen never repaints on its own, so unmounting here
-                      // left no event left to reopen it on.
-                      setRemoteTerminalMinimizedIds(
-                        (ids) => new Set(ids).add(remoteTerminal.sessionId),
-                      );
-                    }}
-                  />
+                {remoteTerminal ? (
+                  // `hidden`, not unmounted: `replay` is a memo of
+                  // `entry.chunks` that does not depend on the minimized set,
+                  // so a remount here would reopen the terminal seeded from
+                  // whatever `replay` was the last time some *other* dependency
+                  // changed — not what is actually on screen now — while xterm's
+                  // own accumulated grid (cursor, scrollback) is discarded
+                  // outright. `attach`'s live feed has to keep painting into the
+                  // same instance the whole time this session's pty exists.
+                  <div
+                    hidden={remoteTerminalMinimizedIds.has(
+                      remoteTerminal.sessionId,
+                    )}
+                  >
+                    <RemoteControlTerminal
+                      key={remoteTerminal.ptyId}
+                      ptyId={remoteTerminal.ptyId}
+                      replay={remoteTerminal.replay}
+                      attach={remoteTerminal.attach}
+                      cols={REMOTE_CONTROL_COLS}
+                      rows={REMOTE_CONTROL_ROWS}
+                      onClose={() => {
+                        // Minimized, not unmounted: `remoteTerminals` keeps the
+                        // session, so nothing about remote control's own state
+                        // changes. An unreadable screen never repaints on its
+                        // own, so unmounting here left no event left to reopen
+                        // it on.
+                        setRemoteTerminalMinimizedIds(
+                          (ids) => new Set(ids).add(remoteTerminal.sessionId),
+                        );
+                      }}
+                    />
+                  </div>
                 ) : null}
                 {remoteTerminal &&
                 remoteTerminalMinimizedIds.has(remoteTerminal.sessionId) ? (
