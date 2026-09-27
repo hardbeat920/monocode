@@ -303,14 +303,30 @@ describe("text the CLI paints into the composer that nobody typed", () => {
     expect(cube.lines()[1]).toBe("❯");
   });
 
+  it("reads a dim suggestion with one plain cell as empty", () => {
+    // Measured: `painted: default | 2`. Dim throughout but for one cell, and
+    // "muted from end to end" missed it.
+    const buffer = createScreenBuffer(SIZE);
+    buffer.write(
+      composerWith("e\x1b[2mvet, o adresler de değişti, güncelle\x1b[22m"),
+    );
+
+    expect(buffer.lines()[1]).toBe("❯");
+  });
+
   it("reports how the composer's content was painted", () => {
     const grey = createScreenBuffer(SIZE);
     grey.write(composerWith("\x1b[38;2;153;153;153mpush et\x1b[39m"));
-    expect(grey.composerPaint()).toBe("38;2;153;153;153");
+    expect(grey.composerPaint()).toBe("38;2;153;153;153×6@1");
 
     const typed = createScreenBuffer(SIZE);
     typed.write(composerWith("push et"));
-    expect(typed.composerPaint()).toBe("default");
+    expect(typed.composerPaint()).toBe("default×6@1");
+
+    const mixed = createScreenBuffer(SIZE);
+    mixed.write(composerWith("e\x1b[2mvet\x1b[22m"));
+    // Offsets count from the marker, so the space after it is 0.
+    expect(mixed.composerPaint()).toBe("default×1@1 | 2×3@2");
 
     const empty = createScreenBuffer(SIZE);
     empty.write(composerWith(""));

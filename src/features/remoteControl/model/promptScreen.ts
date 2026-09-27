@@ -465,13 +465,24 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     const at = composer.top + 1;
     const marker = grid[at].indexOf("❯");
     if (marker < 0) return text;
-    let painted = false;
+    // Measured on a live suggestion: `painted: default | 2` — dim throughout
+    // but for one cell painted in the default. Which cell is not known yet
+    // (the report now says where); what is known is that "muted from end to
+    // end" missed it. So a single default cell among muted ones is allowed.
+    // Typed text with a muted tail — "evet " followed by a dim suggestion —
+    // still has several default cells and is still kept whole. That state
+    // needs someone typing into the terminal while Remote Control sends,
+    // which the terminal-open gate rules out.
+    let mutedCells = 0;
+    let plainCells = 0;
     for (let x = marker + 1; x < cols; x += 1) {
       if (grid[at][x] === " ") continue;
-      if (!muted[at][x]) return text;
-      painted = true;
+      if (muted[at][x]) mutedCells += 1;
+      else plainCells += 1;
     }
-    if (painted) text[at] = grid[at].slice(0, marker + 1).join("");
+    if (mutedCells > 0 && plainCells <= 1) {
+      text[at] = grid[at].slice(0, marker + 1).join("");
+    }
     return text;
   };
 
@@ -482,11 +493,20 @@ export function createScreenBuffer(size: ScreenSize): ScreenBuffer {
     const at = composer.top + 1;
     const marker = grid[at].indexOf("❯");
     if (marker < 0) return null;
-    const seen = new Set<string>();
+    // Each distinct paint with how many cells carry it and where the first
+    // one sits, so a report can say which cell breaks the pattern.
+    const seen = new Map<string, { count: number; first: number }>();
     for (let x = marker + 1; x < cols; x += 1) {
-      if (grid[at][x] !== " ") seen.add(paint[at][x] || "default");
+      if (grid[at][x] === " ") continue;
+      const key = paint[at][x] || "default";
+      const entry = seen.get(key);
+      if (entry) entry.count += 1;
+      else seen.set(key, { count: 1, first: x - marker - 1 });
     }
-    return seen.size > 0 ? [...seen].join(" | ") : null;
+    if (seen.size === 0) return null;
+    return [...seen]
+      .map(([key, { count, first }]) => `${key}×${count}@${first}`)
+      .join(" | ");
   };
 
   return {
