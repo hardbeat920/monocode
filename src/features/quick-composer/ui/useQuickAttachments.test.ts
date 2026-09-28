@@ -6,7 +6,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { pickFiles } from "../../../platform/tauri/fs";
 import { useQuickAttachments } from "./useQuickAttachments";
 
-
 const native = vi.hoisted(() => ({ listen: vi.fn(), stop: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -68,7 +67,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-
 it("chooses files, deduplicates repeat selections, and removes attachments", async () => {
   await act(async () => {
     await api.chooseFiles();
@@ -81,7 +79,6 @@ it("chooses files, deduplicates repeat selections, and removes attachments", asy
   act(() => api.remove(api.files[0].id));
   expect(api.files).toEqual([]);
 });
-
 
 it("pastes an image into a portable file while retaining its thumbnail", async () => {
   const preventDefault = vi.fn();
@@ -103,7 +100,6 @@ it("pastes an image into a portable file while retaining its thumbnail", async (
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
 });
 
-
 it("attaches a copied file instead of leaving its URI in the prompt", async () => {
   clipboardPaths = ["/tmp/image.png"];
   const preventDefault = vi.fn();
@@ -121,7 +117,6 @@ it("attaches a copied file instead of leaving its URI in the prompt", async () =
   expect(preventDefault).toHaveBeenCalled();
   expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
 });
-
 
 it("takes a file URI back out when the webview inserted it and the file attached", async () => {
   let release: (() => void) | undefined;
@@ -154,19 +149,16 @@ it("takes a file URI back out when the webview inserted it and the file attached
   });
   expect(field.value).toBe("keepfile:///tmp/image.png");
 
-
   await act(async () => {
     release?.();
     await new Promise((resolve) => setTimeout(resolve, 30));
   });
-
 
   expect(preventDefault).toHaveBeenCalled();
   expect(api.files[0]).toMatchObject({ path: "/tmp/image.png" });
   expect(field.value).toBe("keep");
   field.remove();
 });
-
 
 it("captures a screenshot pasted while a collection is still running", async () => {
   let release: (() => void) | undefined;
@@ -239,7 +231,6 @@ it("leaves a file URI to the webview while a collection is running", async () =>
     return [];
   });
 
-
   let pending: Promise<void>;
   act(() => {
     pending = api.chooseFiles();
@@ -252,18 +243,15 @@ it("leaves a file URI to the webview while a collection is running", async () =>
     } as never);
   });
 
-
   // A withheld paste would have nowhere to go while the collection runs, so
   // the webview is left to insert it rather than dropping it.
   expect(preventDefault).not.toHaveBeenCalled();
-
 
   await act(async () => {
     release?.();
     await pending;
   });
 });
-
 
 it("leaves a whitespace-only paste to the webview", async () => {
   const preventDefault = vi.fn();
@@ -278,7 +266,6 @@ it("leaves a whitespace-only paste to the webview", async () => {
   expect(preventDefault).not.toHaveBeenCalled();
   expect(invoke).not.toHaveBeenCalled();
 });
-
 
 it("accepts a native drop and suppresses its duplicate DOM drop", async () => {
   await act(async () => {
@@ -305,7 +292,6 @@ it("accepts a native drop and suppresses its duplicate DOM drop", async () => {
   );
 });
 
-
 it("attaches a screenshot and preserves the draft on cancellation or failure", async () => {
   await act(async () => {
     await api.takeScreenshot();
@@ -325,7 +311,6 @@ it("attaches a screenshot and preserves the draft on cancellation or failure", a
   expect(api.loading).toBe(false);
 });
 
-
 it("retains attachments when switching to an unsupported provider", async () => {
   await act(async () => {
     await api.chooseFiles();
@@ -338,7 +323,6 @@ it("retains attachments when switching to an unsupported provider", async () => 
   expect(pickFiles).toHaveBeenCalledTimes(1);
   expect(api.files).toHaveLength(1);
 });
-
 
 it("shows a recoverable error when persisting a pasted image fails", async () => {
   vi.mocked(invoke).mockRejectedValueOnce(new Error("Disk full"));
@@ -357,7 +341,6 @@ it("shows a recoverable error when persisting a pasted image fails", async () =>
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
 });
 
-
 it("releases discarded screenshots without releasing the remaining draft", async () => {
   await act(async () => {
     await api.takeScreenshot();
@@ -369,7 +352,6 @@ it("releases discarded screenshots without releasing the remaining draft", async
   });
   expect(api.files).toHaveLength(0);
 });
-
 
 it("releases a capture when image inspection fails", async () => {
   const impl = vi.mocked(invoke).getMockImplementation()!;
