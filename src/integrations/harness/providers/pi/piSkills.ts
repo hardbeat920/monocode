@@ -9,13 +9,7 @@ import {
 import { PiRpc } from "./piClient";
 import { PI_FLAVOR, OMP_FLAVOR, type PiFlavor } from "./piFlavor";
 import { nativeCommandInvocation, type NativeCommand } from "../../core/nativeCommands";
-import {
-  asRecord,
-  buildPiSpawnArgs,
-  extensionUiResponse,
-  needsExtensionUiReply,
-  parseExtensionUiRequest,
-} from "./piProtocol";
+import { asRecord, autoDenyExtensionUi, buildPiSpawnArgs } from "./piProtocol";
 
 const REQUEST_TIMEOUT_MS = 45_000;
 
@@ -48,15 +42,11 @@ async function discoverCommands(
   const { path } = await flavor.resolveBinary();
   const releaseBridge = await acquireHarnessBridge();
   const childId = `monocode-${flavor.id}-skills-${crypto.randomUUID()}`;
-  const replyToUi = (record: Record<string, unknown>) => {
-    const request = parseExtensionUiRequest(record);
-    if (!request || !needsExtensionUiReply(request)) return;
-    void writeChild(
-      childId,
-      JSON.stringify(extensionUiResponse(request, "deny")),
-    ).catch(() => undefined);
-  };
-  const rpc = new PiRpc(childId, replyToUi, flavor.label);
+  const rpc = new PiRpc(
+    childId,
+    autoDenyExtensionUi(childId, writeChild),
+    flavor.label,
+  );
 
   try {
     watchChild(

@@ -356,6 +356,25 @@ export function needsExtensionUiReply(request: PiExtensionUiRequest): boolean {
   );
 }
 
+/**
+ * `onFrame` handler for probes that load extensions but have no UI attached.
+ * Answers every extension dialog with "deny" so a startup dialog cannot hold
+ * the process until the probe times out.
+ */
+export function autoDenyExtensionUi(
+  childId: string,
+  write: (childId: string, line: string) => Promise<void>,
+): (record: Record<string, unknown>) => void {
+  return (record) => {
+    const request = parseExtensionUiRequest(record);
+    if (!request || !needsExtensionUiReply(request)) return;
+    void write(
+      childId,
+      JSON.stringify(extensionUiResponse(request, "deny")),
+    ).catch(() => undefined);
+  };
+}
+
 export function sessionFromState(data: unknown): {
   sessionId?: string;
   sessionFile?: string;
