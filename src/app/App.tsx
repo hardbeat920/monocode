@@ -1496,7 +1496,9 @@ export default function App({
     if (
       active?.harness === "claude" ||
       active?.harness === "codex" ||
-      active?.harness === "opencode"
+      active?.harness === "opencode" ||
+      active?.harness === "droid" ||
+      active?.harness === "grok"
     ) {
       return [active.harness];
     }
