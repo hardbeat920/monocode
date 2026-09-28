@@ -28,6 +28,7 @@ type Props = {
   id: string;
   onDismiss: (reason: PopoverDismissReason) => void;
   onReveal: () => void;
+  onFocusEnter: () => void;
   onFocusLeave: (next: EventTarget | null) => void;
   onReturnFocus: () => void;
   onTabForward: () => boolean;
@@ -86,6 +87,7 @@ export function CommitHoverCard({
   id,
   onDismiss,
   onReveal,
+  onFocusEnter,
   onFocusLeave,
   onReturnFocus,
   onTabForward,
@@ -152,6 +154,11 @@ export function CommitHoverCard({
       }}
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
+      // `onFocus` bubbles as focusin, so this also fires when focus lands on one
+      // of the card's own actions. The row uses it to tell a keyboard dismissal
+      // from a pointer one: only a card that actually held focus has focus to
+      // give back.
+      onFocus={onFocusEnter}
     >
       <CommitHeader author={commit.author} timestamp={timestamp} />
 

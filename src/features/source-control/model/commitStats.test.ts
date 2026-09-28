@@ -9,6 +9,7 @@ import {
   type GitChangedFile,
 } from "../../../platform/tauri/fs";
 import {
+  clearCommitStatsCache,
   loadCommitStats,
   MAX_CACHED_COMMIT_STATS,
   peekCommitStats,
@@ -35,6 +36,10 @@ function file(
 
 beforeEach(() => {
   mockFiles.mockReset();
+  // The cache is a module singleton that outlives the test, so a test that
+  // reused an earlier test's repo path would be served its cached stats and
+  // assert nothing about Git.
+  clearCommitStatsCache();
 });
 
 describe("summarizeCommitFiles", () => {

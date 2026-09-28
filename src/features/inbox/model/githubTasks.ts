@@ -813,9 +813,7 @@ async function fetchRepositoryInboxItems(
         state: query.state,
         limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
       });
-      return items.map((item) =>
-        toInboxItem(item, project.path, project.repo),
-      );
+      return items.map((item) => toInboxItem(item, project.path, project.repo));
     }),
   );
   return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);

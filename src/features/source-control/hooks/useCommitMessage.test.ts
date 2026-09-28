@@ -8,7 +8,10 @@ vi.mock("../../../platform/tauri/fs", () => ({
 }));
 
 import { gitCommitMessage } from "../../../platform/tauri/fs";
-import type { CommitMessage } from "../model/commitMessage";
+import {
+  clearCommitMessageCache,
+  type CommitMessage,
+} from "../model/commitMessage";
 import { useCommitMessage } from "./useCommitMessage";
 
 const mockMessage = vi.mocked(gitCommitMessage);
@@ -36,6 +39,7 @@ async function flush() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mockMessage.mockReset();
+  clearCommitMessageCache();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

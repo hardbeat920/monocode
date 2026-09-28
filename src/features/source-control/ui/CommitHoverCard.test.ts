@@ -19,6 +19,8 @@ import {
   type GitHistoryCommit,
 } from "../../../platform/tauri/fs";
 import type { GraphRef } from "../model/gitGraph";
+import { clearCommitMessageCache } from "../model/commitMessage";
+import { clearCommitStatsCache } from "../model/commitStats";
 import { CommitHoverCard, REVEAL_BUDGET_MS } from "./CommitHoverCard";
 
 const mockFiles = vi.mocked(gitCommitFiles);
@@ -71,6 +73,7 @@ function render(cwd: string, overrides: Record<string, unknown> = {}) {
         id: "commit-tooltip",
         onDismiss: () => undefined,
         onReveal: () => undefined,
+        onFocusEnter: () => undefined,
         onFocusLeave: () => undefined,
         onReturnFocus: () => undefined,
         onTabForward: () => false,
@@ -113,6 +116,9 @@ beforeEach(() => {
   mockMessage.mockReset();
   mockMessage.mockResolvedValue(commit.subject);
   mockCopy.mockClear();
+  // Both caches are module singletons that outlive the test.
+  clearCommitMessageCache();
+  clearCommitStatsCache();
   container = document.createElement("div");
   anchor = document.createElement("button");
   container.append(anchor);
@@ -236,6 +242,7 @@ describe("CommitHoverCard", () => {
           id: "header-card",
           onDismiss: () => undefined,
           onReveal: () => undefined,
+          onFocusEnter: () => undefined,
           onFocusLeave: () => undefined,
           onReturnFocus: () => undefined,
           onTabForward: () => false,
@@ -309,6 +316,7 @@ describe("CommitHoverCard", () => {
             id,
             onDismiss: () => undefined,
             onReveal: () => undefined,
+            onFocusEnter: () => undefined,
             onFocusLeave: () => undefined,
             onReturnFocus: () => undefined,
             onTabForward: () => false,

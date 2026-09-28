@@ -11,7 +11,7 @@ import {
   gitCommitFiles,
   type GitChangedFile,
 } from "../../../platform/tauri/fs";
-import type { CommitStats } from "../model/commitStats";
+import { clearCommitStatsCache, type CommitStats } from "../model/commitStats";
 import { useCommitStats } from "./useCommitStats";
 
 const mockFiles = vi.mocked(gitCommitFiles);
@@ -51,6 +51,7 @@ async function flush() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mockFiles.mockReset();
+  clearCommitStatsCache();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

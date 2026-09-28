@@ -14,6 +14,8 @@ vi.mock("../../../platform/tauri/clipboard", () => ({
 }));
 
 import { gitHistory, type GitHistoryCommit } from "../../../platform/tauri/fs";
+import { clearCommitMessageCache } from "../model/commitMessage";
+import { clearCommitStatsCache } from "../model/commitStats";
 import { GitHistoryGraph } from "./GitHistoryGraph";
 
 const commits: GitHistoryCommit[] = [
@@ -149,6 +151,11 @@ beforeEach(() => {
   window.innerHeight = VIEWPORT.height;
   anchorTop = 300;
   observers = [];
+  // The card reads the real message and stats modules, whose caches are
+  // singletons that outlive the test, so a shared repo path between two tests
+  // would leave the second one reading the first one's cached commit.
+  clearCommitMessageCache();
+  clearCommitStatsCache();
   // happy-dom has no IntersectionObserver, so stand one in that records what
   // it was asked to watch and lets the test report visibility.
   vi.stubGlobal(
@@ -185,7 +192,6 @@ afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
 });
-
 it("follows its row down the list exactly while the card fits", async () => {
   await mount("/repo/scroll-follow");
   const row = container.querySelector<HTMLButtonElement>("[data-history-row]")!;

@@ -6,6 +6,7 @@ vi.mock("../../../platform/tauri/fs", () => ({
 
 import { gitCommitMessage } from "../../../platform/tauri/fs";
 import {
+  clearCommitMessageCache,
   loadCommitMessage,
   MAX_CACHED_COMMIT_MESSAGES,
   peekCommitMessage,
@@ -16,6 +17,10 @@ const mockMessage = vi.mocked(gitCommitMessage);
 
 beforeEach(() => {
   mockMessage.mockReset();
+  // The cache is a module singleton that outlives the test, so a test that
+  // reused an earlier test's repo path would be served its cached message and
+  // assert nothing about Git.
+  clearCommitMessageCache();
 });
 
 describe("splitCommitMessage", () => {

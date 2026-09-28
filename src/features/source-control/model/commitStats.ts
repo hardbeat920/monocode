@@ -2,6 +2,7 @@ import {
   gitCommitFiles,
   type GitChangedFile,
 } from "../../../platform/tauri/fs";
+import { createCommitCache, MAX_CACHED_COMMITS } from "./commitCache";
 
 export type CommitStats = {
   filesChanged: number;
@@ -9,33 +10,16 @@ export type CommitStats = {
   deletions: number;
 };
 
+/** Alias kept so the cap reads as being about stats at the call site. */
+export const MAX_CACHED_COMMIT_STATS = MAX_CACHED_COMMITS;
+
 /**
- * Commits are immutable, so a successful lookup is cached for the session.
- * Failures are not cached: the next hover retries rather than pinning a
- * transient Git error.
- *
- * The map is capped rather than cleared per project, which bounds it no matter
- * how many repositories a session visits without needing call sites to tell it
- * when the project changed. Map iteration is insertion-ordered, so the oldest
- * entries are the ones dropped.
+ * Module-level so every card for the same commit shares one Git call, and so
+ * the identity is stable for the hook's dependency list.
  */
-const cache = new Map<string, CommitStats>();
-const inFlight = new Map<string, Promise<CommitStats | null>>();
-
-/** Roughly a full page of history per repository, several projects over. */
-export const MAX_CACHED_COMMIT_STATS = 256;
-
-function cacheKey(cwd: string, sha: string): string {
-  return `${cwd}\u0000${sha}`;
-}
-
-function remember(key: string, value: CommitStats): void {
-  cache.set(key, value);
-  for (const stale of cache.keys()) {
-    if (cache.size <= MAX_CACHED_COMMIT_STATS) break;
-    cache.delete(stale);
-  }
-}
+export const commitStatsCache = createCommitCache<CommitStats>(
+  async (cwd, sha) => summarizeCommitFiles(await gitCommitFiles(cwd, sha)),
+);
 
 /** Changed-file counts for the commit summary line. */
 export function summarizeCommitFiles(files: GitChangedFile[]): CommitStats {
@@ -53,35 +37,18 @@ export function peekCommitStats(
   cwd: string,
   sha: string,
 ): CommitStats | undefined {
-  return cache.get(cacheKey(cwd, sha));
+  return commitStatsCache.peek(cwd, sha);
 }
 
-/**
- * Load a commit's changed-file summary, deduping concurrent requests for the
- * same commit. Resolves to null when Git cannot report the commit.
- */
+/** Load a commit's summary. Resolves to null when Git cannot report it. */
 export function loadCommitStats(
   cwd: string,
   sha: string,
 ): Promise<CommitStats | null> {
-  const key = cacheKey(cwd, sha);
-  const cached = cache.get(key);
-  if (cached) return Promise.resolve(cached);
+  return commitStatsCache.load(cwd, sha);
+}
 
-  const pending = inFlight.get(key);
-  if (pending) return pending;
-
-  const request = gitCommitFiles(cwd, sha)
-    .then((files) => {
-      const stats = summarizeCommitFiles(files);
-      remember(key, stats);
-      return stats;
-    })
-    .catch(() => null)
-    .finally(() => {
-      inFlight.delete(key);
-    });
-
-  inFlight.set(key, request);
-  return request;
+/** Drop the cache, so one test cannot be served stats loaded by another. */
+export function clearCommitStatsCache(): void {
+  commitStatsCache.clear();
 }
