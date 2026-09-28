@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronRight, GitBranch } from "../../../shared/ui/icons";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { useHoverCard } from "../../../shared/hooks/useHoverCard";
 import { suppressTextSelection } from "../../../shared/lib/drag";
 import {
   gitHistory,
@@ -21,6 +23,7 @@ import {
   type GraphRef,
   type HistoryItemViewModel,
 } from "../model/gitGraph";
+import { CommitHoverCard } from "./CommitHoverCard";
 
 type Props = {
   cwd: string;
@@ -77,9 +80,13 @@ export function GitHistoryGraph({
           className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none"
         >
           {!cwd || cwd === "~" ? (
-            <p className="px-3 py-2 text-[12px] text-content/45">No project folder</p>
+            <p className="px-3 py-2 text-[12px] text-content/45">
+              No project folder
+            </p>
           ) : commits.length === 0 ? (
-            <p className="px-3 py-2 text-[12px] text-content/45">No commits yet</p>
+            <p className="px-3 py-2 text-[12px] text-content/45">
+              No commits yet
+            </p>
           ) : (
             <ul className="min-w-0 max-w-full">
               {commits.map((commit, index) => {
@@ -88,6 +95,7 @@ export function GitHistoryGraph({
                 return (
                   <HistoryRow
                     key={commit.sha}
+                    cwd={cwd}
                     commit={commit}
                     row={row}
                     active={selectedSha === commit.sha}
@@ -104,11 +112,13 @@ export function GitHistoryGraph({
 }
 
 function HistoryRow({
+  cwd,
   commit,
   row,
   active,
   onOpen,
 }: {
+  cwd: string;
   commit: GitHistoryCommit;
   row: HistoryItemViewModel;
   active: boolean;
@@ -116,14 +126,43 @@ function HistoryRow({
 }) {
   const graph = historyItemGraph(row);
   const badge = row.refs.find((ref) => ref.color) ?? row.refs[0];
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const cardId = useId();
+  const hover = useHoverCard({ openDelayMs: 600 });
   return (
     <li className="min-w-0 overflow-visible" style={{ height: GRAPH_ROW_PX }}>
       <button
+        ref={anchorRef}
         type="button"
-        title={`${commit.shortSha} ${commit.subject}${commit.author ? ` — ${commit.author}` : ""}`}
         onClick={() => onOpen()}
         onDoubleClick={() => onOpen(true)}
+        onMouseEnter={hover.openAfterDelay}
+        onMouseLeave={hover.closeAfterDelay}
+        onFocus={hover.openNow}
+        onKeyDown={(event) => {
+          if (event.key !== "Tab" || event.shiftKey) return;
+          const firstButton = document
+            .getElementById(cardId)
+            ?.querySelector("button");
+          if (firstButton) {
+            event.preventDefault();
+            firstButton.focus();
+          }
+        }}
+        onBlur={(event) => {
+          const next = event.relatedTarget;
+          if (
+            next instanceof Node &&
+            document.getElementById(cardId)?.contains(next)
+          ) {
+            return;
+          }
+          hover.closeNow();
+        }}
         aria-pressed={active}
+        aria-haspopup="dialog"
+        aria-expanded={hover.open}
+        aria-controls={hover.open ? cardId : undefined}
         className={`git-history-item flex h-[22px] min-w-0 w-full items-stretch overflow-visible pr-2 text-left ${
           row.kind === "HEAD" ? "is-head" : ""
         } ${
@@ -176,6 +215,32 @@ function HistoryRow({
         </span>
         {badge ? <RefPill refInfo={badge} /> : null}
       </button>
+      {hover.open ? (
+        <CommitHoverCard
+          cwd={cwd}
+          commit={commit}
+          refs={row.refs}
+          anchor={anchorRef}
+          id={cardId}
+          onDismiss={(reason) => {
+            if (reason === "escape") anchorRef.current?.focus();
+            hover.closeNow();
+          }}
+          onFocusLeave={(next) => {
+            if (next !== anchorRef.current) hover.closeNow();
+          }}
+          onReturnFocus={() => anchorRef.current?.focus()}
+          onTabForward={() => {
+            const next = anchorRef.current
+              ?.closest("li")
+              ?.nextElementSibling?.querySelector<HTMLButtonElement>("button");
+            next?.focus();
+            return !!next;
+          }}
+          onPointerEnter={hover.cancelClose}
+          onPointerLeave={hover.closeAfterDelay}
+        />
+      ) : null}
     </li>
   );
 }
@@ -184,6 +249,7 @@ function RefPill({ refInfo }: { refInfo: GraphRef }) {
   const local = refInfo.kind === "local";
   return (
     <span
+      title={refInfo.name}
       className={`ml-1 flex h-3.5 min-w-0 max-w-[6.5rem] shrink-0 self-center items-center gap-0.5 truncate rounded-full px-1.5 text-[10px] leading-none ${
         refInfo.color ? "" : "bg-content/10 text-content/55"
       }`}
