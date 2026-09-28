@@ -51,20 +51,19 @@
     color-mix(in srgb, var(--codex-effort-color) 32%, transparent);
 }
 
-.codex-effort-option:hover > .codex-effort-tiles,
-.codex-effort-option:focus-visible > .codex-effort-tiles {
+.codex-effort-option:is(:hover, :focus-visible, .bg-selection)
+  > .codex-effort-tiles {
   animation: codex-effort-tiles-clear 5000ms linear 1 both;
 }
 
-.codex-effort-option:hover .codex-effort-tile--filled,
-.codex-effort-option:focus-visible .codex-effort-tile--filled {
+.codex-effort-option:is(:hover, :focus-visible, .bg-selection)
+  .codex-effort-tile--filled {
   animation: codex-effort-tile-fill 1400ms ease-out 3 both;
   animation-delay: calc(var(--tile-distance) * 420ms);
   will-change: background-color;
 }
 
-.codex-effort-option:hover::after,
-.codex-effort-option:focus-visible::after {
+.codex-effort-option:is(:hover, :focus-visible, .bg-selection)::after {
   animation: codex-effort-edge-ripple 5000ms ease-in-out 1 both;
   will-change: border-width, box-shadow, opacity;
 }
@@ -137,15 +136,14 @@
     transition: none;
   }
 
-  .codex-effort-option:hover > .codex-effort-tiles,
-  .codex-effort-option:focus-visible > .codex-effort-tiles {
+  .codex-effort-option:is(:hover, :focus-visible, .bg-selection)
+    > .codex-effort-tiles {
     animation: none;
     opacity: 0.72;
     visibility: visible;
   }
 
-  .codex-effort-option:hover::after,
-  .codex-effort-option:focus-visible::after {
+  .codex-effort-option:is(:hover, :focus-visible, .bg-selection)::after {
     animation: none;
     border-width: 1px;
     opacity: 0.42;
@@ -153,8 +151,8 @@
     will-change: auto;
   }
 
-  .codex-effort-option:hover .codex-effort-tile--filled,
-  .codex-effort-option:focus-visible .codex-effort-tile--filled {
+  .codex-effort-option:is(:hover, :focus-visible, .bg-selection)
+    .codex-effort-tile--filled {
     animation: none;
     background-color: var(--codex-effort-color);
     will-change: auto;
