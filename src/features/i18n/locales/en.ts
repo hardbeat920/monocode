@@ -567,6 +567,7 @@ export const en = {
     relatedThreads: "Related threads",
     sendToAgent: "Send to agent",
     sending: "Sending...",
+    ask: "Ask",
     summary: "Summary",
     code: "Code",
     checks: "Checks",

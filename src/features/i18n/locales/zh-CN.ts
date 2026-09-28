@@ -558,6 +558,7 @@ export const zhCN: TranslationDict = {
     relatedThreads: "相关会话",
     sendToAgent: "发送给智能体",
     sending: "发送中...",
+    ask: "提问",
     summary: "概览",
     code: "代码",
     checks: "检查",

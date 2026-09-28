@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   INBOX_SOURCE_LABELS,
   type ConnectableInboxSource,
@@ -25,12 +26,12 @@ export function InboxConnectMenu({
       width={WIDTH}
       onDismiss={onClose}
       role="menu"
-      aria-label="Connect an inbox source"
+      aria-label={t("inbox.connectSource", "Connect an inbox source")}
       onContextMenu={(event) => event.preventDefault()}
       className="p-1"
     >
       <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-content/40">
-        Not connected
+        {t("inbox.notConnected", "Not connected")}
       </div>
       {sources.map((source) => (
         <button

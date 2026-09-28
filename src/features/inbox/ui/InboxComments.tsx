@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { t } from "../../i18n/model/i18n";
 import {
   useEffect,
   useRef,
@@ -181,12 +182,12 @@ export function InboxCommentForm({
       {replyTo ? (
         <div className="flex items-center gap-2 text-[12px] text-content/50">
           <span className="min-w-0 truncate">
-            Replying to {replyTo.author || "comment"}
+            {t("inbox.replyingTo", "Replying to {author}", { author: replyTo.author || "comment" })}
           </span>
           <button
             type="button"
-            title="Cancel reply"
-            aria-label="Cancel reply"
+            title={t("inbox.cancelReply", "Cancel reply")}
+            aria-label={t("inbox.cancelReply", "Cancel reply")}
             onClick={onCancelReply}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -201,7 +202,9 @@ export function InboxCommentForm({
           value={draft}
           disabled={posting}
           placeholder={
-            replyTo ? `Write a reply (${MOD}↩)` : `Leave a comment (${MOD}↩)`
+            replyTo
+              ? t("inbox.writeReplyPlaceholder", `Write a reply (${MOD}↩)`, { mod: MOD })
+              : t("inbox.leaveCommentPlaceholder", `Leave a comment (${MOD}↩)`, { mod: MOD })
           }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
@@ -213,7 +216,7 @@ export function InboxCommentForm({
             disabled={!canPost}
             className="inline-flex h-7 items-center rounded-md bg-content px-3 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
           >
-            {posting ? "Posting..." : replyTo ? "Reply" : "Comment"}
+            {posting ? t("inbox.posting", "Posting...") : replyTo ? t("inbox.reply", "Reply") : t("inbox.comment", "Comment")}
           </button>
         </div>
       </div>
@@ -226,7 +229,7 @@ function CommentsPending() {
   return (
     <div className="flex items-center gap-2 border-t border-stroke pt-5 text-[12px] text-content/45">
       <LoaderCircle className="size-3.5 animate-spin" strokeWidth={1.75} />
-      Loading comments
+      {t("inbox.loadingComments", "Loading comments")}
     </div>
   );
 }
@@ -333,7 +336,7 @@ function InboxComment({
               }
               className="hover:text-content"
             >
-              Reply
+              {t("inbox.reply", "Reply")}
             </button>
           </span>
         ) : null}

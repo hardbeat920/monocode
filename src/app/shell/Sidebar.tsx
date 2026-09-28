@@ -1,4 +1,4 @@
-import { useTranslation } from "../../features/i18n/model/i18n";
+import { useTranslation, t } from "../../features/i18n/model/i18n";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -2832,22 +2832,22 @@ const SessionCard = memo(function SessionCard({
       {needsApproval ? (
         <>
           <CircleAlert className="size-3" strokeWidth={1.75} />
-          <span>{orchestration ? "Needs input" : "Need approval"}</span>
+          <span>{orchestration ? t("shell.needsInput", "Needs input") : t("shell.needApproval", "Need approval")}</span>
         </>
       ) : busy ? (
         <>
           <TerminalSpinner className="inline-block w-3 select-none text-center text-[11px] leading-none text-accent" />
-          <span>Working...</span>
+          <span>{t("common.working", "Working...")}</span>
         </>
       ) : done ? (
         <>
           <Check className="size-3" strokeWidth={2.25} />
-          <span>Done</span>
+          <span>{t("common.done", "Done")}</span>
         </>
       ) : draft ? (
         <>
           <CircleDashed className="size-3" strokeWidth={1.75} />
-          <span>Draft</span>
+          <span>{t("composer.draft", "Draft")}</span>
         </>
       ) : (
         <span>{time}</span>
@@ -3254,10 +3254,10 @@ const SessionCard = memo(function SessionCard({
         >
           <div className="flex items-center justify-between gap-3">
             <span className="text-[11px] font-semibold text-content/85">
-              Subagents
+              {t("liveAgents.subagents", "Subagents")}
             </span>
             <span className="shrink-0 text-[10px] tabular-nums text-content/45">
-              {orchestrationDone}/{orchestration.tasks.length} done
+              {t("liveAgents.subagentsDone", "{done}/{total} done", { done: orchestrationDone, total: orchestration.tasks.length })}
             </span>
           </div>
           <div className="mt-1.5 flex flex-col gap-0.5">

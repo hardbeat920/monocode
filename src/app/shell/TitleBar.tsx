@@ -764,7 +764,7 @@ function TitleBarComponent({
         {
           kind: "item",
           id: "close",
-          label: "Close Tab",
+          label: t("shell.closeTab", "Close Tab"),
           shortcut: `${MOD}W`,
           disabled: !titleTabClosable(contextTab, tabs.length),
         },
@@ -772,19 +772,19 @@ function TitleBarComponent({
         {
           kind: "item",
           id: "others",
-          label: "Close Other Tabs",
+          label: t("shell.closeOtherTabs", "Close Other Tabs"),
           disabled: contextCloseIds?.others.length === 0,
         },
         {
           kind: "item",
           id: "right",
-          label: "Close Tabs to the Right",
+          label: t("shell.closeTabsToRight", "Close Tabs to the Right"),
           disabled: contextCloseIds?.right.length === 0,
         },
         {
           kind: "item",
           id: "left",
-          label: "Close Tabs to the Left",
+          label: t("shell.closeTabsToLeft", "Close Tabs to the Left"),
           disabled: contextCloseIds?.left.length === 0,
         },
         ...(contextTab.sessionCount > 0 && (onArchiveTab || onDeleteTab)
@@ -795,7 +795,7 @@ function TitleBarComponent({
                     {
                       kind: "item" as const,
                       id: "archive",
-                      label: "Archive",
+                      label: t("common.archive", "Archive"),
                       description:
                         contextTab.sessionCount > 1
                           ? `All ${contextTab.sessionCount} conversations in this tab`
@@ -808,7 +808,7 @@ function TitleBarComponent({
                     {
                       kind: "item" as const,
                       id: "delete",
-                      label: "Delete",
+                      label: t("common.delete", "Delete"),
                       description:
                         contextTab.sessionCount > 1
                           ? `Permanently delete all ${contextTab.sessionCount} conversations in this tab`
@@ -862,12 +862,12 @@ function TitleBarComponent({
         {showTrailingActions ? (
           <div className="flex items-center gap-0.5 px-2">
             {projectless && railClosed && onOpenInbox ? (
-              <IconButton label="Inbox" onClick={onOpenInbox}>
+              <IconButton label={t("nav.inbox", "Inbox")} onClick={onOpenInbox}>
                 <Inbox className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
             {projectless && railClosed && onOpenNotes ? (
-              <IconButton label="Notes" onClick={onOpenNotes}>
+              <IconButton label={t("nav.notes", "Notes")} onClick={onOpenNotes}>
                 <StickyNote className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
@@ -928,7 +928,7 @@ function TitleBarComponent({
           <div className="w-[78px] shrink-0" />
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
-              label={`Toggle Sidebar (${MOD}B)`}
+              label={`${t("shell.toggleSidebar", "Toggle Sidebar")} (${MOD}B)`}
               onClick={onToggleSidebar}
             >
               <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -942,7 +942,7 @@ function TitleBarComponent({
             <div className="w-[70px] shrink-0" />
           ) : null}
           <IconButton
-            label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
+            label={`${t("shell.toggleSessionSidebar", "Toggle Session Sidebar")} (${MOD}${SHIFT}B)`}
             onClick={onToggleSessionSidebar}
           >
             <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -958,7 +958,7 @@ function TitleBarComponent({
           onNewTerminal={onNewTerminal}
           buttonClassName="flex h-full min-w-0 max-w-64 shrink items-center gap-2 px-6 text-left text-sm font-medium leading-tight"
         >
-          <span className="min-w-0 truncate text-content/50">No project</span>
+          <span className="min-w-0 truncate text-content/50">{t("shell.noProject", "No project")}</span>
         </CwdPicker>
       ) : null}
 

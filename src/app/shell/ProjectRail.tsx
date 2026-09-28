@@ -320,7 +320,7 @@ export function ProjectRail({
   return (
     <nav
       ref={resize.setPaneRef}
-      aria-label="Projects"
+      aria-label={t("nav.projects", "Projects")}
       className="sidebar-glass relative flex shrink-0 flex-col border-r border-stroke"
     >
       <div
@@ -379,7 +379,7 @@ export function ProjectRail({
                 icon={File}
                 onClick={onOpenNotes}
                 active={notesActive}
-                ariaLabel="Notes"
+                ariaLabel={t("nav.notes", "Notes")}
               />
             ) : null}
             <RailAction
@@ -387,7 +387,7 @@ export function ProjectRail({
               icon={Zap}
               onClick={onOpenAutomations}
               active={automationsActive}
-              ariaLabel="Automations"
+              ariaLabel={t("nav.automations", "Automations")}
             />
           </div>
 
@@ -516,11 +516,11 @@ export function ProjectRail({
           <div className="flex shrink-0 flex-col gap-px p-2">
             <GithubStarPrompt />
             <RailAction
-              label="Settings"
+              label={t("nav.settings", "Settings")}
               icon={Settings}
               onClick={onOpenSettings}
               shortcut={`${MOD},`}
-              ariaLabel={`Settings (${MOD},)`}
+              ariaLabel={`${t("nav.settings", "Settings")} (${MOD},)`}
             />
           </div>
         </>
@@ -640,6 +640,7 @@ function ProjectSectionHeader({
   onAdd?: () => void;
   onAddGroup?: (x: number, y: number) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
       <span className="min-w-0 flex-1 truncate px-1 text-xs text-content/50">
@@ -648,8 +649,8 @@ function ProjectSectionHeader({
       {onAddGroup ? (
         <button
           type="button"
-          title="New project group"
-          aria-label="New project group"
+          title={t("nav.newGroup", "New project group")}
+          aria-label={t("nav.newGroup", "New project group")}
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             onAddGroup(rect.left, rect.bottom);
@@ -662,8 +663,8 @@ function ProjectSectionHeader({
       {onAdd ? (
         <button
           type="button"
-          title="Open project"
-          aria-label="Open project"
+          title={t("nav.openProject", "Open project")}
+          aria-label={t("nav.openProject", "Open project")}
           onClick={onAdd}
           className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
         >
@@ -862,6 +863,7 @@ function ProjectCard({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
+  const { t } = useTranslation();
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
   const seed = projectName(item.path);
@@ -967,8 +969,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title="Project options"
-        aria-label="Project options"
+        title={t("nav.projectOptions", "Project options")}
+        aria-label={t("nav.projectOptions", "Project options")}
         aria-haspopup="menu"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {

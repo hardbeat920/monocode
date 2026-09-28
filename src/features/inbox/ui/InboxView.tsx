@@ -2,6 +2,7 @@ import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { t } from "../../i18n/model/i18n";
 import {
   Check,
   CheckCheck,
@@ -915,10 +916,10 @@ export function InboxView({
           <button
             ref={connectButtonRef}
             type="button"
-            aria-label="Connect an inbox source"
+            aria-label={t("inbox.connectSource", "Connect an inbox source")}
             aria-haspopup="menu"
             aria-expanded={connectMenuOpen}
-            title="Connect an inbox source"
+            title={t("inbox.connectSource", "Connect an inbox source")}
             onClick={() => setConnectMenuOpen((open) => !open)}
             className={`flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
               connectMenuOpen
@@ -927,7 +928,7 @@ export function InboxView({
             }`}
           >
             <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">Add connection</span>
+            <span className="min-w-0 truncate">{t("inbox.addConnection", "Add connection")}</span>
           </button>
         ) : null}
       </div>
@@ -938,8 +939,8 @@ export function InboxView({
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Filter inbox"
-              aria-label="Filter inbox"
+              placeholder={t("inbox.filterInbox", "Filter inbox")}
+              aria-label={t("inbox.filterInbox", "Filter inbox")}
               spellCheck={false}
               autoComplete="off"
               className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
@@ -947,8 +948,8 @@ export function InboxView({
           </div>
           <button
             type="button"
-            title="Filter inbox"
-            aria-label="Filter inbox"
+            title={t("inbox.filterInbox", "Filter inbox")}
+            aria-label={t("inbox.filterInbox", "Filter inbox")}
             aria-expanded={!!filterMenu}
             aria-haspopup="menu"
             onClick={onFilterButtonClick}
@@ -960,13 +961,13 @@ export function InboxView({
           </button>
           <button
             type="button"
-            title="Mark all as read"
-            aria-label="Mark all as read"
+            title={t("inbox.markAllAsRead", "Mark all as read")}
+            aria-label={t("inbox.markAllAsRead", "Mark all as read")}
             disabled={!sourceHasUnseen}
             onClick={() => setReadStatusError(
               markInboxItemsSeen(sourceEntries)
                 ? null
-                : "Could not save read status. Please try again.",
+                : t("inbox.readStatusError", "Could not save read status. Please try again."),
             )}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-content/45"
           >
@@ -974,7 +975,7 @@ export function InboxView({
           </button>
           <button
             type="button"
-            aria-label="Refresh"
+            aria-label={t("common.refresh", "Refresh")}
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1000,7 +1001,7 @@ export function InboxView({
       >
         {noSourcesConnected ? (
           <p className="px-3 py-3 text-[12px] text-content/50">
-            Add a connection to start using the Inbox.
+            {t("inbox.noSourcesConnected", "Add a connection to start using the Inbox.")}
           </p>
         ) : sourceError && visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">{sourceError}</p>
@@ -1121,7 +1122,7 @@ export function InboxView({
   return (
     <div
       role="region"
-      aria-label="Inbox"
+      aria-label={t("nav.inbox", "Inbox")}
       data-app-inbox
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -1139,7 +1140,7 @@ export function InboxView({
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
-          <span className="min-w-0 truncate text-content">Inbox</span>
+          <span className="min-w-0 truncate text-content">{t("nav.inbox", "Inbox")}</span>
         </div>
         {IS_MAC ? null : <WindowControls />}
       </div>
@@ -1379,7 +1380,7 @@ function InboxDetailBody({
     return (
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
         <Inbox className="mb-3 size-6 text-content/30" strokeWidth={1.75} />
-        <p className="text-[13px] text-content/45">Select an inbox item</p>
+        <p className="text-[13px] text-content/45">{t("inbox.selectItem", "Select an inbox item")}</p>
       </div>
     );
   }
@@ -2645,7 +2646,7 @@ export function InboxDetail({
                         ))}
                       </span>
                     ) : (
-                      <span>Unassigned</span>
+                      <span>{t("inbox.unassigned", "Unassigned")}</span>
                     )}
                   </>
                 ) : null}
@@ -2692,8 +2693,7 @@ export function InboxDetail({
                 <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                   <span className="mr-0.5 inline-flex shrink-0 items-center gap-1 text-[11px] text-content/45">
                     <MessageMultiple className="size-3.5" strokeWidth={1.75} />
-                    Related{" "}
-                    {relatedSessions.length === 1 ? "thread" : "threads"}
+                    {relatedSessions.length === 1 ? t("inbox.relatedThread", "Related thread") : t("inbox.relatedThreads", "Related threads")}
                   </span>
                   {relatedSessions.map((session) => {
                     const title = sessionDisplayTitle(
@@ -2711,7 +2711,7 @@ export function InboxDetail({
                         <span className="truncate">{title}</span>
                         {session.archived ? (
                           <span className="shrink-0 text-content/40">
-                            Archived
+                            {t("common.archived", "Archived")}
                           </span>
                         ) : null}
                       </button>
@@ -2754,7 +2754,7 @@ export function InboxDetail({
                       }}
                       className={`${ACTION_FILLED} disabled:cursor-default disabled:opacity-40`}
                     >
-                      {starting ? "Sending..." : "Send to agent"}
+                      {starting ? t("inbox.sending", "Sending...") : t("inbox.sendToAgent", "Send to agent")}
                     </button>
                     {chooseStartProject ? (
                       <InboxProjectPicker
@@ -2780,7 +2780,7 @@ export function InboxDetail({
                     className={ACTION_OUTLINE}
                   >
                     <MessageSquare className="size-3.5" strokeWidth={1.75} />{" "}
-                    Ask
+                    {t("inbox.ask", "Ask")}
                   </button>
                 ) : null}
                 {panel ? null : (
@@ -2810,12 +2810,12 @@ export function InboxDetail({
                   className="flex items-stretch gap-4"
                 >
                   <InboxDetailTab
-                    label="Summary"
+                    label={t("inbox.summary", "Summary")}
                     selected={tab === "summary"}
                     onSelect={() => setTab("summary")}
                   />
                   <InboxDetailTab
-                    label="Code"
+                    label={t("inbox.code", "Code")}
                     selected={tab === "code"}
                     onSelect={() => setTab("code")}
                   />
@@ -2843,7 +2843,7 @@ export function InboxDetail({
                           : "text-content/45 hover:text-content/70"
                       }`}
                     >
-                      Hunks
+                      {t("inbox.hunks", "Hunks")}
                     </button>
                     <button
                       type="button"
@@ -2855,7 +2855,7 @@ export function InboxDetail({
                           : "text-content/45 hover:text-content/70"
                       }`}
                     >
-                      Full file
+                      {t("inbox.fullFile", "Full file")}
                     </button>
                   </div>
                 ) : null}
@@ -2901,7 +2901,7 @@ export function InboxDetail({
                   fullFile={fullFile}
                 />
               ) : (
-                <p className="text-[13px] text-content/45">No file changes</p>
+                <p className="text-[13px] text-content/45">{t("inbox.noFileChanges", "No file changes")}</p>
               )
             ) : isPr && tab === "checks" ? (
               <InboxPrChecks
@@ -2946,7 +2946,7 @@ export function InboxDetail({
                     allowRemoteMedia
                   />
                 ) : (
-                  <p className="text-[13px] text-content/45">No description</p>
+                  <p className="text-[13px] text-content/45">{t("inbox.noDescription", "No description")}</p>
                 )}
                 <InboxComments
                   thread={thread}
