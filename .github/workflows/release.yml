@@ -361,9 +361,12 @@ jobs:
   linux-rpm:
     name: Linux rpm package
     runs-on: ubuntu-latest
-    container: fedora:43
+    # Build on EL 10 so the published rpm's glibc requirement matches the
+    # oldest advertised target. Fedora 43 is newer and would install on EL 10
+    # while failing to load.
+    container: almalinux:10
     steps:
-      # fedora:43 ships no git, which actions/checkout otherwise has to work
+      # almalinux:10 ships no git, which actions/checkout otherwise has to work
       # around with a REST API tarball download.
       - name: Install git
         run: dnf install -y git
@@ -379,7 +382,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Fedora system dependencies
+      - name: Install Enterprise Linux system dependencies
         run: bash scripts/install-linux-deps-fedora.sh
 
       - run: npm ci

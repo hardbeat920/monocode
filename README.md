@@ -91,7 +91,7 @@ sudo dnf install -y epel-release   # RHEL: sudo dnf install -y https://dl.fedora
 sudo dnf install ./MonoCode-*.rpm
 ```
 
-The `.rpm` declares its own runtime dependencies, so `dnf` pulls the WebKitGTK stack for you. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
+The `.rpm` declares its own runtime dependencies, so `dnf` pulls the WebKitGTK stack for you. GitHub Releases builds that package on Enterprise Linux 10 so it loads on Fedora and EL 10. Building natively links the system WebKitGTK instead of the Ubuntu-built libraries shipped in the AppImage, which avoids graphics issues (e.g. `Could not create default EGL display`) on newer Mesa/Wayland systems.
 
 To build it yourself instead — which also enables EPEL 10 and CRB automatically, since the -devel packages need CRB:
 
