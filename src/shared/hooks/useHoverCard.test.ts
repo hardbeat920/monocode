@@ -122,6 +122,19 @@ describe("useHoverCard", () => {
     expect(controller.open).toBe(true);
   });
 
+  it("delays closing by VS Code's default 300ms", () => {
+    // `editor.hover.hidingDelay` is 300 in VS Code, with `editor.hover.sticky`
+    // on. Held here so the default cannot quietly drift to something tighter.
+    mount();
+    act(() => controller.openNow());
+    act(() => controller.closeAfterDelay());
+
+    advance(299);
+    expect(controller.open).toBe(true);
+    advance(1);
+    expect(controller.open).toBe(false);
+  });
+
   it("clears pending timers on unmount", () => {
     mount({ openDelayMs: 200, closeDelayMs: 100 });
     act(() => controller.openAfterDelay());

@@ -129,7 +129,11 @@ function HistoryRow({
   const badge = row.refs.find((ref) => ref.color) ?? row.refs[0];
   const anchorRef = useRef<HTMLButtonElement>(null);
   const cardId = useId();
-  const hover = useHoverCard({ openDelayMs: 600 });
+  // `editor.hover.delay`, which defaults to 300. Long enough that sweeping the
+  // pointer down the list does not flash a card on every row it passes; VS Code
+  // uses a long *hide* delay rather than a long open delay to settle that
+  // trade, and the close delay below is the other half of it.
+  const hover = useHoverCard({ openDelayMs: 300 });
   // Focus always opens the card, so putting focus back on the row after a
   // dismissal would immediately reopen what the user just closed. This guard
   // makes the dismissal win without depending on the order of the two calls.

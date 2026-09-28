@@ -21,8 +21,14 @@ export type HoverCardController = {
   cancelClose: () => void;
 };
 
+/**
+ * VS Code's hover timings, from `editorOptions.ts`: `editor.hover.delay`
+ * defaults to 300 and `editor.hover.hidingDelay` to 300, with
+ * `editor.hover.sticky` on. Both are settings there; here they are the
+ * defaults a caller can still override.
+ */
 const DEFAULT_OPEN_DELAY_MS = 200;
-const DEFAULT_CLOSE_DELAY_MS = 120;
+const DEFAULT_CLOSE_DELAY_MS = 300;
 
 /**
  * Hover/focus visibility for an anchored card (tooltips, previews). Timers are

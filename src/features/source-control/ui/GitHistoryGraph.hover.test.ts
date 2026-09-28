@@ -108,6 +108,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -245,6 +246,32 @@ it("marks the open commit as the current one, not a pressed toggle", async () =>
   expect(rows[0]!.getAttribute("aria-expanded")).toBe("true");
   const controlled = rows[0]!.getAttribute("aria-controls");
   expect(controlled).toBe(card()!.id);
+});
+
+it("waits VS Code's 300ms before opening on hover", async () => {
+  await mount("/repo/hover-delay");
+  const row = historyRows()[0]!;
+
+  // Mounted and fetched with real timers, so only the hover is on a fake
+  // clock. `editor.hover.delay` is 300 in VS Code; this row used to wait 600,
+  // which made a deliberate hover feel sluggish.
+  vi.useFakeTimers();
+  act(() => {
+    row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  });
+
+  act(() => {
+    vi.advanceTimersByTime(299);
+  });
+  expect(card()).toBeNull();
+
+  act(() => {
+    vi.advanceTimersByTime(1);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(card()).not.toBeNull();
 });
 
 it("reports the row as expanded before the card has painted", async () => {
