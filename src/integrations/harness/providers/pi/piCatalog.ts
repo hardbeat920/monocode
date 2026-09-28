@@ -5,10 +5,17 @@ import {
   spawnChild,
   unwatchChild,
   watchChild,
+  writeChild,
 } from "../../core/child";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
-import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
+import {
+  buildPiSpawnArgs,
+  extensionUiResponse,
+  modelsFromRpcData,
+  needsExtensionUiReply,
+  parseExtensionUiRequest,
+} from "./piProtocol";
 
 const DISCOVERY_TIMEOUT_MS = 45_000;
 
@@ -35,7 +42,18 @@ async function discoverModels(flavor: PiFlavor) {
   const { path } = await flavor.resolveBinary();
   const cwd = await homeDir();
   const probeId = flavor.probeChildId;
-  const rpc = new PiRpc(probeId, () => undefined, flavor.label);
+  // Discovery loads extensions because custom providers are registered by
+  // them. A startup dialog then has no UI to answer it and would hold the
+  // probe until the discovery timeout.
+  const replyToUi = (record: Record<string, unknown>) => {
+    const request = parseExtensionUiRequest(record);
+    if (!request || !needsExtensionUiReply(request)) return;
+    void writeChild(
+      probeId,
+      JSON.stringify(extensionUiResponse(request, "deny")),
+    ).catch(() => undefined);
+  };
+  const rpc = new PiRpc(probeId, replyToUi, flavor.label);
 
   const stop = async () => {
     rpc.close();
@@ -53,7 +71,7 @@ async function discoverModels(flavor: PiFlavor) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
+      buildPiSpawnArgs(flavor, { noSession: true }),
       cwd,
       undefined,
       flavor.id,

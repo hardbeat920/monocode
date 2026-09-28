@@ -132,9 +132,10 @@ export function parsePiVersion(output: string): string | null {
 }
 
 /**
- * Spawn args for a live session. Intentionally omits `--no-extensions` so the
- * user's global Pi packages (todos, subagents, custom tools) still load.
- * Project-local `.pi` resources follow Pi's saved trust.json; RPC never prompts.
+ * Spawn args for live sessions and catalog probes. Extensions stay on so the
+ * user's global Pi packages (todos, subagents, custom providers) load. Only
+ * isolated one-shot jobs strip them. Project-local `.pi` resources follow Pi's
+ * saved trust.json; RPC never prompts.
  */
 export function buildPiSpawnArgs(
   flavor: PiFlavor,
@@ -143,7 +144,7 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Catalog probes and throwaway text jobs — never for live chat. */
+    /** One-shot isolated jobs: skip extension discovery. Never for chat or discovery. */
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
