@@ -28,7 +28,6 @@ import {
   insertRestoredText,
 } from "../../../shared/lib/draftRestore";
 
-
 function releaseCaptures(files: Attachment[]) {
   const paths = files.flatMap((file) => (file.path ? [file.path] : []));
   if (paths.length)
@@ -61,7 +60,6 @@ export function useQuickAttachments(
   const supportedRef = useRef(supported);
   supportedRef.current = supported;
 
-
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -74,13 +72,11 @@ export function useQuickAttachments(
     };
   }, []);
 
-
   /** `collect` bails on the same conditions, so a paste must ask first. */
   const canCollect = useCallback(
     () => supportedRef.current && !loadingRef.current,
     [],
   );
-
 
   const collect = useCallback(
     async (read: () => Promise<Attachment[]>) => {
@@ -147,7 +143,6 @@ export function useQuickAttachments(
     [onError, canCollect],
   );
 
-
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | undefined;
@@ -173,7 +168,6 @@ export function useQuickAttachments(
       stop?.();
     };
   }, [collect]);
-
 
   const onPaste = (event: ClipboardEvent) => {
     const pasted = filesFromClipboard(event.clipboardData);
@@ -259,7 +253,6 @@ export function useQuickAttachments(
     filesRef.current = [];
     setFiles([]);
   };
-
 
   return {
     files,
