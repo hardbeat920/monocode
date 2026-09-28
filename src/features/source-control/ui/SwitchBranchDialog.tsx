@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { generateCommitMessage } from "../../../integrations/harness";
 import { LAYER } from "../../../shared/lib/layers";
 import { MOD } from "../../../platform/tauri/platform";
+import { useTranslation } from "../../i18n/model/i18n";
 
 type Busy = "stash" | "commit" | null;
 
@@ -29,6 +30,7 @@ export function SwitchBranchDialog({
   onCommit,
   onCancel,
 }: Props) {
+  const { t } = useTranslation();
   const host = useContext(NativePopupHost);
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -71,6 +73,11 @@ export function SwitchBranchDialog({
     }
   };
 
+  const generateTitle = t(
+    "dialogs.switchBranchGenerateCommitMessage",
+    "Generate commit message",
+  );
+
   return createPortal(
     <div
       className={host ? "relative" : "fixed inset-0"}
@@ -92,12 +99,20 @@ export function SwitchBranchDialog({
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">
-            Uncommitted changes
+            {t("dialogs.switchBranchTitle", "Uncommitted changes")}
           </h2>
           <p className="text-[12px] leading-snug text-content/55">
             {creating
-              ? `Creating “${branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.`
-              : `Switching to “${branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.`}
+              ? t(
+                  "dialogs.switchBranchCreatingConflict",
+                  "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+                  { branch },
+                )
+              : t(
+                  "dialogs.switchBranchSwitchingConflict",
+                  "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+                  { branch },
+                )}
           </p>
         </div>
 
@@ -106,7 +121,11 @@ export function SwitchBranchDialog({
             ref={messageRef}
             rows={1}
             value={message}
-            placeholder={`Message (${MOD}↩ to commit)`}
+            placeholder={t(
+              "dialogs.switchBranchMessagePlaceholder",
+              "Message ({mod}↩ to commit)",
+              { mod: MOD },
+            )}
             disabled={Boolean(busy) || generating}
             aria-label="Commit message"
             className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
@@ -124,8 +143,8 @@ export function SwitchBranchDialog({
           />
           <button
             type="button"
-            title="Generate commit message"
-            aria-label="Generate commit message"
+            title={generateTitle}
+            aria-label={generateTitle}
             disabled={Boolean(busy) || generating}
             onClick={() => void generate()}
             className="absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 hover:text-content disabled:opacity-40"
@@ -151,7 +170,7 @@ export function SwitchBranchDialog({
             onClick={onCancel}
             className="rounded-md px-3 py-1.5 text-[12px] text-content/70 hover:bg-content/8 hover:text-content disabled:opacity-40"
           >
-            Cancel
+            {t("common.cancel", "Cancel")}
           </button>
           <button
             type="button"
@@ -162,7 +181,7 @@ export function SwitchBranchDialog({
             {busy === "commit" ? (
               <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
             ) : null}
-            Commit & switch
+            {t("dialogs.switchBranchCommitAndSwitch", "Commit & switch")}
           </button>
           <button
             type="button"
@@ -173,7 +192,7 @@ export function SwitchBranchDialog({
             {busy === "stash" ? (
               <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
             ) : null}
-            Stash & switch
+            {t("dialogs.switchBranchStashAndSwitch", "Stash & switch")}
           </button>
         </div>
       </div>

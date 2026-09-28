@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -28,6 +29,7 @@ export function QuickWorkspaceControls({
   onClose: () => void;
   onError?: (error: string) => void;
 }) {
+  const { t } = useTranslation();
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState<QuickGitKind | null>(null);
   const activeKind = useRef<QuickGitKind | null>(null);
@@ -143,13 +145,13 @@ export function QuickWorkspaceControls({
   };
   const disabled = !enabled || !ready || !branches?.current;
   const Icon = value.mode === "worktree" ? FolderTree : Folder;
-  const label = value.mode === "worktree" ? "New worktree" : "Current checkout";
+  const label = value.mode === "worktree" ? t("quickComposer.newWorktree", "New worktree") : t("quickComposer.currentCheckout", "Current checkout");
   return (
     <div className="flex min-w-0 items-center gap-2 pl-1.5">
       <button
         type="button"
         disabled={disabled}
-        aria-label={`Workspace ${label}`}
+        aria-label={t("quickComposer.workspaceAriaLabel", `Workspace ${label}`, { label })}
         aria-haspopup="dialog"
         aria-expanded={open === "workspace"}
         onMouseDown={(event) => {
@@ -165,13 +167,13 @@ export function QuickWorkspaceControls({
       <GitPickerTrigger
         label={
           value.mode === "worktree"
-            ? `From ${base}`
-            : branches?.current || (settled ? "No repo" : "Loading…")
+            ? t("quickComposer.fromBase", `From ${base}`, { base })
+            : branches?.current || (settled ? t("quickComposer.noRepo", "No repo") : t("quickComposer.loading", "Loading…"))
         }
         aria-label={
           value.mode === "worktree"
-            ? `Create worktree from ${base}`
-            : "Choose branch"
+            ? t("quickComposer.createWorktreeFromBase", `Create worktree from ${base}`, { base })
+            : t("quickComposer.chooseBranch", "Choose branch")
         }
         aria-haspopup="dialog"
         aria-expanded={open === "branch" || open === "base"}

@@ -1,3 +1,4 @@
+import { t } from "../features/i18n/model/i18n";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import {
   handleAgentApp,
@@ -1673,7 +1674,7 @@ export default function App({
           projectTerminalsRef.current,
           lastDockSideRef.current ?? undefined,
         ).finally(() => {
-          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
+          void (toTray || IS_MAC ? hideCurrentWindow() : closeCurrentWindow());
         });
       })
       .then((fn) => {
@@ -4656,7 +4657,11 @@ export default function App({
       if (sessionIds.length === 0) return;
       if (
         !window.confirm(
-          `Delete ${sessionIds.length} selected conversations? This can’t be undone.`,
+          t(
+            "dialogs.confirmDeleteHistorySessions",
+            `Delete ${sessionIds.length} selected conversations? This can’t be undone.`,
+            { count: sessionIds.length },
+          ),
         )
       )
         return;

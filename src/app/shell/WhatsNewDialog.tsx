@@ -13,6 +13,7 @@ type Props = {
 };
 
 export function WhatsNewBody({ version }: { version: string }) {
+  const { t } = useTranslation();
   const notes = presentReleaseNotes(version);
   const title = releaseNotesTitle(version);
 
@@ -26,7 +27,10 @@ export function WhatsNewBody({ version }: { version: string }) {
         />
       ) : (
         <p className="text-[13px] text-content/60">
-          Release notes for this version are not available in this build.
+          {t(
+            "dialogs.whatsNewNoNotes",
+            "Release notes for this version are not available in this build.",
+          )}
         </p>
       )}
     </article>

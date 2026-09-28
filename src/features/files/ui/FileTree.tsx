@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   ChevronDown,
   ChevronRight,
@@ -533,8 +534,16 @@ export const FileTree = memo(function FileTree({
     const label = basename(path);
     const ok = window.confirm(
       isDir
-        ? `Delete folder “${label}” and everything inside it?`
-        : `Delete “${label}”?`,
+        ? t(
+            "dialogs.confirmDeleteFolder",
+            `Delete folder “${label}” and everything inside it?`,
+            { name: label },
+          )
+        : t(
+            "dialogs.confirmDeleteFile",
+            `Delete “${label}”?`,
+            { name: label },
+          ),
     );
     if (!ok) return;
     await deletePath(path);

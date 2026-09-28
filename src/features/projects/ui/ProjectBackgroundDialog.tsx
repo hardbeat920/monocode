@@ -12,8 +12,6 @@ import {
   loadChatBackgroundScope,
   loadNewThreadBackgroundEffect,
   NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
-  NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS,
-  NEW_THREAD_BACKGROUND_EFFECT_LABELS,
   NEW_THREAD_BACKGROUND_EFFECTS,
   type ChatBackgroundScope,
   type NewThreadBackgroundEffect,
@@ -31,6 +29,7 @@ import {
 } from "../model/projectChatBackground";
 import { useProjectBackgroundEffect } from "./useProjectBackgroundEffect";
 import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground";
+import { useTranslation } from "../../i18n/model/i18n";
 
 type Props = {
   project: string;
@@ -39,6 +38,41 @@ type Props = {
 };
 
 export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
+  const { t } = useTranslation();
+
+  const getEffectLabel = (eff: NewThreadBackgroundEffect) => {
+    switch (eff) {
+      case "none":
+        return t("dialogs.projectBackgroundEffectNone", "None");
+      case "dither":
+        return t("dialogs.projectBackgroundEffectDither", "Dither");
+      case "ascii":
+        return t("dialogs.projectBackgroundEffectAscii", "ASCII");
+      case "halftone":
+        return t("dialogs.projectBackgroundEffectHalftone", "Halftone");
+      case "scanlines":
+        return t("dialogs.projectBackgroundEffectScanlines", "Scanlines");
+      case "gradient-blur":
+        return t("dialogs.projectBackgroundEffectGradientBlur", "Haze");
+    }
+  };
+
+  const getEffectDesc = (eff: NewThreadBackgroundEffect) => {
+    switch (eff) {
+      case "none":
+        return t("dialogs.projectBackgroundEffectDescNone", "Shows the original artwork.");
+      case "dither":
+        return t("dialogs.projectBackgroundEffectDescDither", "Rebuilds the artwork with a dithered color palette.");
+      case "ascii":
+        return t("dialogs.projectBackgroundEffectDescAscii", "Recreates the artwork with colored characters on black.");
+      case "halftone":
+        return t("dialogs.projectBackgroundEffectDescHalftone", "Recreates the artwork with colored print dots on black.");
+      case "scanlines":
+        return t("dialogs.projectBackgroundEffectDescScanlines", "Adds a pronounced horizontal display-line texture.");
+      case "gradient-blur":
+        return t("dialogs.projectBackgroundEffectDescGradientBlur", "Soft colors with dynamic blur glow.");
+    }
+  };
   const initial = loadProjectChatBackgroundSettings(project);
   const [path, setPath] = useState(initial?.path ?? null);
   const [emptyOpacity, setEmptyOpacity] = useState(
@@ -143,8 +177,12 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
 
   return (
     <Modal
-      title="Background Image"
-      description={`Choose a background image for ${name}`}
+      title={t("dialogs.projectBackgroundTitle", "Background Image")}
+      description={t(
+        "dialogs.projectBackgroundDescription",
+        `Choose a background image for ${name}`,
+        { name },
+      )}
       size="sm"
       fitViewport
       onClose={onClose}
@@ -178,7 +216,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
               )
             ) : (
               <div className="grid h-40 place-items-center text-[12px] text-content/40">
-                No background selected
+                {t("dialogs.projectBackgroundNoImage", "No background selected")}
               </div>
             )}
           </div>
@@ -191,12 +229,20 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
             {busy ? (
               <Loader className="size-3.5 animate-spin" aria-hidden />
             ) : null}
-            {path ? "Change image" : "Choose image"}
+            {path
+              ? t("dialogs.projectBackgroundChangeImage", "Change image")
+              : t("dialogs.projectBackgroundChooseImage", "Choose image")}
           </button>
           <p className="mt-1.5 text-[11px] leading-relaxed text-content/45">
             {path
-              ? "This image overrides the global background for this project."
-              : "This project currently follows the global Appearance setting."}
+              ? t(
+                  "dialogs.projectBackgroundOverrideNotice",
+                  "This image overrides the global background for this project.",
+                )
+              : t(
+                  "dialogs.projectBackgroundFollowNotice",
+                  "This project currently follows the global Appearance setting.",
+                )}
           </p>
           {error ? (
             <p className="mt-1.5 text-[12px] text-red-400">{error}</p>
@@ -208,20 +254,23 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <span className="text-[13px] font-medium text-content">
-                  Background effect
+                  {t("dialogs.projectBackgroundEffect", "Background effect")}
                 </span>
                 <p className="text-[11px] text-content/45 line-clamp-1">
-                  {NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[effect]}
+                  {getEffectDesc(effect)}
                 </p>
               </div>
               <div className="w-36 shrink-0">
                 <SearchableSelect
-                  label="Project background effect"
+                  label={t(
+                    "dialogs.projectBackgroundEffectLabel",
+                    "Project background effect",
+                  )}
                   variant="transparent"
                   value={effect}
                   options={NEW_THREAD_BACKGROUND_EFFECTS.map((option) => ({
                     value: option,
-                    label: NEW_THREAD_BACKGROUND_EFFECT_LABELS[option],
+                    label: getEffectLabel(option),
                   }))}
                   onChange={(next) =>
                     updateEffect(next as NewThreadBackgroundEffect)
@@ -234,15 +283,21 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
           </div>
         ) : null}
 
-        <ProjectBackgroundRow label="Show on">
+        <ProjectBackgroundRow label={t("dialogs.projectBackgroundShowOn", "Show on")}>
           <div
             role="radiogroup"
             aria-label="Show project background on"
             className="grid w-44 grid-cols-2 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
           >
             {[
-              { value: "empty" as const, label: "Empty only" },
-              { value: "all" as const, label: "All sessions" },
+              {
+                value: "empty" as const,
+                label: t("dialogs.projectBackgroundScopeEmpty", "Empty only"),
+              },
+              {
+                value: "all" as const,
+                label: t("dialogs.projectBackgroundScopeAll", "All sessions"),
+              },
             ].map((option) => (
               <button
                 key={option.value}
@@ -262,7 +317,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
           </div>
         </ProjectBackgroundRow>
 
-        <ProjectBackgroundRow label="Empty chat visibility">
+        <ProjectBackgroundRow label={t("dialogs.projectBackgroundEmptyVisibility", "Empty chat visibility")}>
           <div className="flex w-56 items-center gap-3">
             <input
               type="range"
@@ -281,7 +336,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
           </div>
         </ProjectBackgroundRow>
 
-        <ProjectBackgroundRow label="Session visibility">
+        <ProjectBackgroundRow label={t("dialogs.projectBackgroundSessionVisibility", "Session visibility")}>
           <div className="flex w-56 items-center gap-3">
             <input
               type="range"
@@ -307,7 +362,7 @@ export function ProjectBackgroundDialog({ project, name, onClose }: Props) {
             disabled={busy}
             className="w-full rounded-md border border-content/10 px-2.5 py-1.5 text-[12px] text-red-400 hover:border-red-400/40 hover:bg-red-400/10 disabled:opacity-40"
           >
-            Remove background image
+            {t("dialogs.projectBackgroundRemoveImage", "Remove background image")}
           </button>
         ) : null}
       </div>

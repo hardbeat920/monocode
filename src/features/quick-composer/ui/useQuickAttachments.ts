@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import {
   useCallback,
   useEffect,
@@ -31,6 +32,7 @@ export function useQuickAttachments(
   supported: boolean,
   onError: (message: string | null) => void,
 ) {
+  const { t } = useTranslation();
   const [files, setFiles] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -78,7 +80,7 @@ export function useQuickAttachments(
           incoming.length > accepted.length &&
           next.length + accepted.length >= MAX_ATTACHMENTS
         )
-          onError(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+          onError(t("quickComposer.maxAttachmentsError", `You can attach up to ${MAX_ATTACHMENTS} files.`, { max: MAX_ATTACHMENTS }));
         const stored = await storeQuickAttachments(accepted);
         if (!alive.current) {
           stored.forEach(revokeAttachment);
