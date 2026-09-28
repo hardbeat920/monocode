@@ -35,6 +35,7 @@ import {
   isTodoTool,
   normalizeClaudeCliEffort,
   parseBackgroundAgentTasks,
+  parseBackgroundTaskIds,
   parseControlCancelId,
   parseControlRequest,
   parseJsonLine,
@@ -128,6 +129,12 @@ type Live = {
   toolsByIndex: Map<number, InFlightTool>;
   toolsById: Map<string, InFlightTool>;
   agentTasks: Map<string, LiveAgentTask>;
+  /** Background tasks of any type (agents, shells) still running. */
+  backgroundTasks: Set<string>;
+  /** A background task finished and no tool result has carried its news yet,
+   *  so Claude Code will run another query to deliver it. */
+  followUpPending: boolean;
+  followUpTimer?: ReturnType<typeof setTimeout>;
   turnResultSeen: boolean;
   cancelled: boolean;
   muteUpdates: boolean;
@@ -151,6 +158,10 @@ type Resume = {
 };
 
 const INIT_TIMEOUT_MS = 8_000;
+// Claude Code starts the follow-up query as soon as a background task's
+// notification lands. If none starts within this window, the guess that one
+// was coming was wrong, so the turn ends instead of hanging.
+const FOLLOW_UP_WAIT_MS = 10_000;
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
@@ -304,6 +315,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
       pending.resolve({ kind: "skipped" });
     live.questions.clear();
     live.activeTurn = false;
+    clearFollowUpTimer(live);
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
@@ -391,6 +403,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     toolsByIndex: new Map(),
     toolsById: new Map(),
     agentTasks: new Map(),
+    backgroundTasks: new Set(),
+    followUpPending: false,
     turnResultSeen: false,
     cancelled: false,
     muteUpdates: false,
@@ -546,6 +560,8 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     );
     return;
   }
+
+  trackBackgroundTasks(live, rec);
 
   if (live.muteUpdates) return;
 
@@ -737,7 +753,11 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
     noteSubagentResults(live, rec);
     return;
   }
-  for (const result of toolResultsFromUserMessage(rec)) {
+  const results = toolResultsFromUserMessage(rec);
+  // Claude Code attaches finished-task notices to the next tool result, so the
+  // model has read them and no follow-up query is coming for them.
+  if (results.length > 0) live.followUpPending = false;
+  for (const result of results) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
     if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
@@ -1303,6 +1323,10 @@ function maybeFinishTurn(live: Live): void {
   if (!live.turnResultSeen) return;
   if (live.agentTasks.size > 0) return;
   if (!live.activeTurn && !live.turnDone) return;
+  if (live.followUpPending) {
+    awaitFollowUp(live);
+    return;
+  }
   finishActiveTurn(live, [
     { type: "message.completed" },
     { type: "reasoning.completed" },
@@ -1310,6 +1334,7 @@ function maybeFinishTurn(live: Live): void {
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
+  clearFollowUpTimer(live);
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
@@ -1322,6 +1347,78 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
     return;
   }
   if (!failed) live.turnEndPending = true;
+}
+
+/**
+ * Claude Code reports a finished background task to the model. If the model
+ * already gave its last reply, Claude Code runs one more query for it, opening
+ * with `system init` and closing with its own `result`. The turn stays open for
+ * that query so its thinking does not land in a session that reads as done.
+ */
+function trackBackgroundTasks(live: Live, rec: Record<string, unknown>): void {
+  if (isSubagentMessage(rec)) return;
+  const type = stringField(rec, "type");
+  const subtype = stringField(rec, "subtype");
+  if (type === "system" && subtype === "init") {
+    clearFollowUpTimer(live);
+    live.followUpPending = false;
+    // The query that just opened must reach its own result before the turn
+    // can end; the earlier result no longer counts.
+    if (live.activeTurn) live.turnResultSeen = false;
+    return;
+  }
+
+  const started = parseTaskStarted(rec);
+  if (started) {
+    if (started.backgrounded && !started.ambient) {
+      live.backgroundTasks.add(started.taskId);
+    }
+    return;
+  }
+
+  const updated = parseTaskUpdated(rec);
+  if (updated) {
+    if (updated.backgrounded === true) live.backgroundTasks.add(updated.taskId);
+    if (isTerminalAgentTaskStatus(updated.status)) {
+      noteBackgroundTaskDone(live, updated.taskId);
+    }
+    return;
+  }
+
+  const notice = parseTaskNotification(rec);
+  if (notice) {
+    noteBackgroundTaskDone(live, notice.taskId);
+    return;
+  }
+
+  const running = parseBackgroundTaskIds(rec);
+  if (!running) return;
+  const next = new Set(running);
+  for (const id of [...live.backgroundTasks]) {
+    if (!next.has(id)) noteBackgroundTaskDone(live, id);
+  }
+  for (const id of next) live.backgroundTasks.add(id);
+}
+
+function noteBackgroundTaskDone(live: Live, taskId: string): void {
+  // Several lines report the same finish; only the first one counts.
+  if (live.backgroundTasks.delete(taskId)) live.followUpPending = true;
+}
+
+/** Bounds the wait in case Claude Code never starts the expected query. */
+function awaitFollowUp(live: Live): void {
+  if (live.followUpTimer) return;
+  live.followUpTimer = setTimeout(() => {
+    live.followUpTimer = undefined;
+    live.followUpPending = false;
+    maybeFinishTurn(live);
+  }, FOLLOW_UP_WAIT_MS);
+}
+
+function clearFollowUpTimer(live: Live): void {
+  if (!live.followUpTimer) return;
+  clearTimeout(live.followUpTimer);
+  live.followUpTimer = undefined;
 }
 
 function settlePendingTurn(live: Live): void {

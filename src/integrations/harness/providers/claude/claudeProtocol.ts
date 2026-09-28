@@ -722,6 +722,28 @@ export function parseBackgroundAgentTasks(
   });
 }
 
+/**
+ * Every running background task, shells included. Claude Code wakes the model
+ * again when any of them finishes, so the turn needs all ids, not just agents.
+ */
+export function parseBackgroundTaskIds(
+  rec: Record<string, unknown>,
+): string[] | null {
+  if (
+    stringField(rec, "type") !== "system" ||
+    stringField(rec, "subtype") !== "background_tasks_changed"
+  ) {
+    return null;
+  }
+  const tasks = Array.isArray(rec.tasks) ? rec.tasks : [];
+  return tasks.flatMap((item) => {
+    const row = asRecord(item);
+    if (!row || row.ambient === true) return [];
+    const taskId = stringField(row, "task_id");
+    return taskId ? [taskId] : [];
+  });
+}
+
 export type ClaudeToolProgress = {
   toolUseId: string;
   parentToolUseId?: string;

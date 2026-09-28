@@ -17,6 +17,7 @@ import {
   listModelsFromControlResponse,
   normalizeClaudeCliEffort,
   parseBackgroundAgentTasks,
+  parseBackgroundTaskIds,
   parseClaudeVersion,
   parseControlRequest,
   parseControlResponse,
@@ -849,6 +850,20 @@ describe("subagent messages", () => {
     ).toEqual([
       { taskId: "t1", taskType: "local_agent", description: "Explore" },
     ]);
+    expect(
+      parseBackgroundTaskIds({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          { task_id: "t1", task_type: "local_agent" },
+          { task_id: "bash_1", task_type: "local_bash" },
+          { task_id: "watch", task_type: "local_agent", ambient: true },
+        ],
+      }),
+    ).toEqual(["t1", "bash_1"]);
+    expect(parseBackgroundTaskIds({ type: "system", subtype: "init" })).toBe(
+      null,
+    );
     expect(
       parseToolProgress({
         type: "tool_progress",

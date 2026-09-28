@@ -58,6 +58,69 @@ const waitFor = async (pred: () => boolean, label: string) => {
   );
 };
 
+/** A backgrounded task as Claude Code reports it, launched by the parent. */
+function launchBackgroundTask(taskId: string, toolUseId: string, taskType: string) {
+  emit({
+    type: "assistant",
+    session_id: "sess_1",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: toolUseId,
+          name: taskType === "local_bash" ? "Bash" : "Agent",
+          input:
+            taskType === "local_bash"
+              ? { command: "npm test", run_in_background: true }
+              : { description: "Explore", run_in_background: true },
+        },
+      ],
+    },
+  });
+  emit({
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [{ task_id: taskId, task_type: taskType, description: "Background" }],
+  });
+  emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: taskId,
+    tool_use_id: toolUseId,
+    description: "Background",
+    task_type: taskType,
+    is_backgrounded: true,
+  });
+  emit({
+    type: "user",
+    session_id: "sess_1",
+    message: {
+      content: [
+        { type: "tool_result", tool_use_id: toolUseId, content: "Backgrounded" },
+      ],
+    },
+  });
+}
+
+/** The line order Claude Code 2.1 sends when a background task finishes. */
+function finishBackgroundTask(taskId: string, toolUseId: string) {
+  emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+  emit({
+    type: "system",
+    subtype: "task_updated",
+    task_id: taskId,
+    patch: { status: "completed" },
+  });
+  emit({
+    type: "system",
+    subtype: "task_notification",
+    task_id: taskId,
+    tool_use_id: toolUseId,
+    status: "completed",
+    summary: "Done",
+  });
+}
+
 async function startTurn(
   sessionId: string,
   options: {
@@ -457,11 +520,130 @@ describe("claude subagents", () => {
       status: "completed",
       summary: "Found the tokens",
     });
+    // Claude Code now runs a follow-up query to read the subagent's report.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      origin: { kind: "task-notification" },
+    });
     await turn;
     expect(settled).toBe(true);
     expect(events.some((event) => event.type === "message.completed")).toBe(
       true,
     );
+  });
+
+  it("waits for the follow-up query when a background agent finishes before the parent result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    launchBackgroundTask("t1", "toolu_agent", "local_agent");
+    finishBackgroundTask("t1", "toolu_agent");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      origin: { kind: "task-notification" },
+    });
+    await turn;
+  });
+
+  it("waits for the follow-up query when a background shell finishes before the parent result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    launchBackgroundTask("b1", "toolu_bash", "local_bash");
+    finishBackgroundTask("b1", "toolu_bash");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("ends at the result while a background shell is still running", async () => {
+    const { turn } = await startTurn("s1");
+
+    launchBackgroundTask("b1", "toolu_bash", "local_bash");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("ends at the result when a later tool result already carried the finished task", async () => {
+    const { turn } = await startTurn("s1");
+
+    launchBackgroundTask("t1", "toolu_agent", "local_agent");
+    finishBackgroundTask("t1", "toolu_agent");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_sleep",
+            name: "Bash",
+            input: { command: "sleep 20" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_sleep", content: "" },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("ends the turn if the expected follow-up query never starts", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    vi.useFakeTimers();
+    try {
+      launchBackgroundTask("t1", "toolu_agent", "local_agent");
+      finishBackgroundTask("t1", "toolu_agent");
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    await turn;
   });
 
   it("does not end the turn on a subagent result", async () => {
