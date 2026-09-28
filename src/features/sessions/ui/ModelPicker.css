@@ -1,0 +1,162 @@
+.codex-effort-option {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.codex-effort-option > .codex-effort-tiles {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: repeat(32, minmax(0, 1fr));
+  grid-template-rows: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms var(--motion-ease-out);
+}
+
+.codex-effort-option::after {
+  box-sizing: border-box;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 1px solid var(--codex-effort-color);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  opacity: 0;
+}
+
+.codex-effort-option > :not(.codex-effort-tiles) {
+  position: relative;
+  z-index: 1;
+}
+
+.codex-effort-option[data-effort-tone="ultra"] {
+  --codex-effort-color: #a855f7;
+}
+
+.codex-effort-option[data-effort-tone="max"] {
+  --codex-effort-color: #f4b942;
+}
+
+.codex-effort-tile {
+  box-sizing: border-box;
+  background-color: transparent;
+  box-shadow: inset -1px -1px 0
+    color-mix(in srgb, var(--codex-effort-color) 32%, transparent);
+}
+
+.codex-effort-option:hover > .codex-effort-tiles,
+.codex-effort-option:focus-visible > .codex-effort-tiles {
+  animation: codex-effort-tiles-clear 5000ms linear 1 both;
+}
+
+.codex-effort-option:hover .codex-effort-tile--filled,
+.codex-effort-option:focus-visible .codex-effort-tile--filled {
+  animation: codex-effort-tile-fill 1400ms ease-out 3 both;
+  animation-delay: calc(var(--tile-distance) * 420ms);
+  will-change: background-color;
+}
+
+.codex-effort-option:hover::after,
+.codex-effort-option:focus-visible::after {
+  animation: codex-effort-edge-ripple 5000ms ease-in-out 1 both;
+  will-change: border-width, box-shadow, opacity;
+}
+
+@keyframes codex-effort-tiles-clear {
+  0%,
+  92% {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes codex-effort-tile-fill {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+
+  26% {
+    background-color: var(--codex-effort-color);
+  }
+
+  52% {
+    background-color: color-mix(
+      in srgb,
+      var(--codex-effort-color) 18%,
+      transparent
+    );
+  }
+}
+
+@keyframes codex-effort-edge-ripple {
+  0%,
+  12%,
+  26%,
+  40%,
+  54%,
+  68%,
+  82% {
+    border-width: 1px;
+    opacity: 0.22;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+
+  19%,
+  47%,
+  75% {
+    border-width: 3px;
+    opacity: 0.9;
+    box-shadow:
+      inset 0 0 0 1px
+        color-mix(in srgb, var(--codex-effort-color) 65%, transparent),
+      0 0 8px color-mix(in srgb, var(--codex-effort-color) 60%, transparent);
+  }
+
+  100% {
+    border-width: 1px;
+    opacity: 0;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-effort-option > .codex-effort-tiles {
+    transition: none;
+  }
+
+  .codex-effort-option:hover > .codex-effort-tiles,
+  .codex-effort-option:focus-visible > .codex-effort-tiles {
+    animation: none;
+    opacity: 0.72;
+    visibility: visible;
+  }
+
+  .codex-effort-option:hover::after,
+  .codex-effort-option:focus-visible::after {
+    animation: none;
+    border-width: 1px;
+    opacity: 0.42;
+    box-shadow: none;
+    will-change: auto;
+  }
+
+  .codex-effort-option:hover .codex-effort-tile--filled,
+  .codex-effort-option:focus-visible .codex-effort-tile--filled {
+    animation: none;
+    background-color: var(--codex-effort-color);
+    will-change: auto;
+  }
+}
