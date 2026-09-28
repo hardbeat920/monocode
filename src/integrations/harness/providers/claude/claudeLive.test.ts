@@ -412,6 +412,58 @@ describe("claude task tools", () => {
       ),
     ).toBe(false);
   });
+
+  it("keeps earlier tasks updatable after a restart resumes the conversation", async () => {
+    const first = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests", description: "Cover the parser" },
+      "Task #1 created successfully: Write tests",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    const events: HarnessEvent[] = [...first.events];
+    const userCount = parse().filter(
+      (message) => message.type === "user",
+    ).length;
+    const second = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:opus-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "finish it",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(() => spawned.length === 2, "replacement Claude process");
+    expect(spawned[1]).toEqual(expect.arrayContaining(["--resume", "sess_1"]));
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    await waitFor(
+      () =>
+        parse().filter((message) => message.type === "user").length > userCount,
+      "follow-up prompt",
+    );
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const lists = session.blocks.filter((block) => block.role === "tasks");
+    expect(lists.at(-1)?.taskList?.items).toEqual([
+      { id: "1", text: "Write tests", status: "completed" },
+    ]);
+  });
 });
 
 describe("claude assistant message boundaries", () => {

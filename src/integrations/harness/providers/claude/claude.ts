@@ -190,6 +190,11 @@ const RESUME_GRACE_MS = 15_000;
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+/**
+ * Claude task lists outlive a Live: a restart that resumes the conversation
+ * keeps its task ids, so later TaskUpdate calls must find earlier tasks.
+ */
+const tasksByThread = new Map<string, Map<string, TaskListItem>>();
 const cancelledThreads = new Set<string>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
@@ -363,6 +368,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
 
 export async function forgetClaudeSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
+  tasksByThread.delete(sessionId);
   await stopClaudeSession(sessionId);
 }
 
@@ -411,6 +417,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   ) {
     resumeByThread.delete(input.sessionId);
   }
+  const claudeTasks =
+    (canResume && tasksByThread.get(input.sessionId)) ||
+    new Map<string, TaskListItem>();
+  tasksByThread.set(input.sessionId, claudeTasks);
 
   const { path } = await resolveClaudeBinaryImpl();
   const liveRef: { current: Live | null } = { current: null };
@@ -443,7 +453,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     awaitingResume: null,
     backgroundKey: "",
     taskNotes: [],
-    claudeTasks: new Map(),
+    claudeTasks,
     turnResultSeen: false,
     usageLimit: null,
     cancelled: false,
@@ -1735,5 +1745,6 @@ function launchOptions(
 export function __claudeTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
+  tasksByThread.clear();
   cancelledThreads.clear();
 }
