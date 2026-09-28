@@ -1,6 +1,9 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
-import type { RuntimeMode } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TaskListItem,
+} from "../../../../features/sessions/model/session";
 import { loadClaudeHooks } from "../../../../features/settings/model/settings";
 import {
   killChild,
@@ -33,6 +36,7 @@ import {
   isSubagentMessage,
   isTerminalAgentTaskStatus,
   isTodoTool,
+  applyClaudeTaskTool,
   isUsageLimitResult,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
@@ -150,6 +154,8 @@ type Live = {
   backgroundKey: string;
   /** Finished-subagent notes held until Claude picks the thread back up. */
   taskNotes: string[];
+  /** TaskCreate/TaskUpdate items, keyed by Claude's task id. */
+  claudeTasks: Map<string, TaskListItem>;
   turnResultSeen: boolean;
   /** Latest `rate_limit_event` refused requests; reported when the turn ends. */
   usageLimit: { resetsAt?: number } | null;
@@ -437,6 +443,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     awaitingResume: null,
     backgroundKey: "",
     taskNotes: [],
+    claudeTasks: new Map(),
     turnResultSeen: false,
     usageLimit: null,
     cancelled: false,
@@ -854,6 +861,16 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
       detail: result.text || undefined,
       preview: previewFromTool(tool.name, tool.input, result.text),
     });
+    if (
+      !result.isError &&
+      applyClaudeTaskTool(live.claudeTasks, tool.name, tool.input, result.text)
+    ) {
+      live.onEvent({
+        type: "tasks.updated",
+        key: "claude-tasks",
+        items: [...live.claudeTasks.values()],
+      });
+    }
     // What a subagent hands back is the last thing it said, so it closes out
     // that agent's own trail rather than sitting on the parent row as detail.
     if (isAgentToolName(tool.name) && result.text.trim() && !result.isError) {

@@ -346,6 +346,74 @@ describe("claude streamed tool inputs", () => {
   });
 });
 
+describe("claude task tools", () => {
+  function emitTaskTool(
+    id: string,
+    name: string,
+    input: Record<string, unknown>,
+    result: string,
+  ) {
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: { content: [{ type: "tool_use", id, name, input }] },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: id, content: result }],
+      },
+    });
+  }
+
+  it("builds the task list from TaskCreate and TaskUpdate, not subagent rows", async () => {
+    const { events, turn } = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests", description: "Cover the parser" },
+      "Task #1 created successfully: Write tests",
+    );
+    emitTaskTool(
+      "toolu_c2",
+      "TaskCreate",
+      { subject: "Ship it", description: "Open the PR" },
+      "Task #2 created successfully: Ship it",
+    );
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "in_progress" },
+      "Updated task #1 status",
+    );
+    emitTaskTool(
+      "toolu_u2",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const lists = session.blocks.filter((block) => block.role === "tasks");
+    expect(lists).toHaveLength(1);
+    expect(lists[0].taskList?.items).toEqual([
+      { id: "1", text: "Write tests", status: "completed" },
+      { id: "2", text: "Ship it", status: "pending" },
+    ]);
+    expect(
+      session.blocks.some(
+        (block) => block.tool?.kind === "agent" || block.agent !== undefined,
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("claude assistant message boundaries", () => {
   it("keeps a follow-up paragraph separate and does not replay its snapshot", async () => {
     const { events, turn } = await startTurn("s1");
