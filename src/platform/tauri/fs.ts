@@ -232,6 +232,10 @@ export function gitCommitFiles(
   return invoke<GitChangedFile[]>("git_commit_files", { cwd, sha });
 }
 
+export function gitCommitMessage(cwd: string, sha: string): Promise<string> {
+  return invoke<string>("git_commit_message", { cwd, sha });
+}
+
 export function gitCommitFileDiff(
   cwd: string,
   sha: string,

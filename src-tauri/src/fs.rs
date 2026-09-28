@@ -1074,6 +1074,14 @@ pub async fn git_head_message(cwd: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Full message (subject and body) of one commit, for the history hover card.
+#[tauri::command]
+pub async fn git_commit_message(cwd: String, sha: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_commit_message_for(&expand_home(&cwd), &sha))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Push the current branch to its upstream, or set upstream on first push.
 #[tauri::command]
 pub async fn git_push(cwd: String) -> Result<(), String> {
@@ -2305,34 +2313,13 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         return Err("Not a git repository".into());
     }
     let sha = git_peel_commit(root, sha)?;
+    let parent = git_stdout(root, &["rev-parse", "--verify", &format!("{sha}^")]);
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     let mut statuses: HashMap<String, &'static str> = HashMap::new();
-    if let Some(text) = git_run(
-        root,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--numstat",
-            &sha,
-        ],
-    ) {
+    if let Some(text) = git_commit_diff_tree(root, &sha, parent.as_deref(), "--numstat") {
         add_numstat_map(&text, &mut files);
     }
-    if let Some(names) = git_run(
-        root,
-        &[
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--name-status",
-            &sha,
-        ],
-    ) {
+    if let Some(names) = git_commit_diff_tree(root, &sha, parent.as_deref(), "--name-status") {
         add_name_status(&names, &mut statuses);
     }
     let mut out = Vec::with_capacity(files.len().max(statuses.len()));
@@ -2366,6 +2353,27 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
     }
     out.sort_by(|a, b| a.relative.cmp(&b.relative));
     Ok(out)
+}
+
+fn git_commit_diff_tree(
+    root: &Path,
+    sha: &str,
+    parent: Option<&str>,
+    format: &str,
+) -> Option<String> {
+    let mut args = vec![
+        "diff-tree",
+        "--no-commit-id",
+        "-r",
+        "--root",
+        "--no-renames",
+        format,
+    ];
+    if let Some(parent) = parent {
+        args.push(parent);
+    }
+    args.push(sha);
+    git_run(root, &args)
 }
 
 fn git_commit_file_diff_for(root: &Path, sha: &str, relative: &str) -> Result<GitFileDiff, String> {
@@ -2579,6 +2587,19 @@ fn with_signing_hint(error: String) -> String {
 
 fn git_head_message_for(root: &Path) -> Result<String, String> {
     git_stdout(root, &["log", "-1", "--pretty=%B"]).ok_or_else(|| "No commits yet".to_string())
+}
+
+fn git_commit_message_for(root: &Path, sha: &str) -> Result<String, String> {
+    if !git_is_work_tree(root) {
+        return Err("Not a git repository".into());
+    }
+    let sha = git_peel_commit(root, sha)?;
+    let commit =
+        git_run(root, &["cat-file", "-p", &sha]).ok_or_else(|| "Unknown commit".to_string())?;
+    commit
+        .split_once("\n\n")
+        .map(|(_, message)| message.to_string())
+        .ok_or_else(|| "Invalid commit".to_string())
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
@@ -6839,6 +6860,10 @@ mod tests {
             .find(|commit| commit.subject == "Merge feature")
             .unwrap();
         assert_eq!(merge.parents.len(), 2);
+        let files = git_commit_files_for(&dir.0, &merge.sha).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative, "feat.txt");
+        assert_eq!(files[0].additions, 1);
     }
 
     #[test]
@@ -7090,6 +7115,28 @@ mod tests {
             return;
         }
         assert!(git_head_message_for(&dir.0).is_err());
+    }
+
+    #[test]
+    fn git_commit_message_returns_subject_and_body_for_a_sha() {
+        let dir = tmp("git-commit-message");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        git_stage_file_for(&dir.0, "a.txt").unwrap();
+        git_commit_for(&dir.0, "Subject line\n\nBody text").unwrap();
+        let sha = git_stdout(&dir.0, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            git_commit_message_for(&dir.0, &sha).unwrap(),
+            "Subject line\n\nBody text\n"
+        );
+        assert_eq!(
+            git_commit_message_for(&dir.0, &sha[..7]).unwrap(),
+            "Subject line\n\nBody text\n"
+        );
+        assert!(git_commit_message_for(&dir.0, "../oops").is_err());
+        assert!(git_commit_message_for(&dir.0, "not-hex!").is_err());
     }
 
     #[test]
