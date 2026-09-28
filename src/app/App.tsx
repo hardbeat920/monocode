@@ -3834,7 +3834,7 @@ export default function App({
         const imagePaths = stopped.blocks.flatMap((block) =>
           block.role === "image" && block.image ? [block.image.path] : [],
         );
-        await deleteSession(id, imagePaths).catch(() => undefined);
+        await deleteSession(id, imagePaths);
         const fresh = {
           ...newSession(
             stopped.harness,
