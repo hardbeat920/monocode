@@ -28,12 +28,21 @@ import {
   insertRestoredText,
 } from "../../../shared/lib/draftRestore";
 
+
 function releaseCaptures(files: Attachment[]) {
   const paths = files.flatMap((file) => (file.path ? [file.path] : []));
   if (paths.length)
     void invoke("quick_composer_release_capture", { paths }).catch(
       () => undefined,
     );
+}
+
+type CapturedClipboardPaste =
+  | { files: Attachment[]; warning?: string }
+  | { error: unknown };
+
+function discardCapturedPaste(paste: CapturedClipboardPaste) {
+  if ("files" in paste) paste.files.forEach(revokeAttachment);
 }
 
 export function useQuickAttachments(
@@ -47,25 +56,31 @@ export function useQuickAttachments(
   const loadingRef = useRef(false);
   const alive = useRef(true);
   const nativeDropAt = useRef(0);
-  /** A screenshot pasted while a collection is still running. */
-  const queuedScreenshot = useRef(false);
+  /** Clipboard contents captured while another collection is still running. */
+  const queuedScreenshot = useRef<Promise<CapturedClipboardPaste> | null>(null);
   const supportedRef = useRef(supported);
   supportedRef.current = supported;
+
 
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      const queued = queuedScreenshot.current;
+      queuedScreenshot.current = null;
+      if (queued) void queued.then(discardCapturedPaste);
       filesRef.current.forEach(revokeAttachment);
       releaseCaptures(filesRef.current);
     };
   }, []);
+
 
   /** `collect` bails on the same conditions, so a paste must ask first. */
   const canCollect = useCallback(
     () => supportedRef.current && !loadingRef.current,
     [],
   );
+
 
   const collect = useCallback(
     async (read: () => Promise<Attachment[]>) => {
@@ -111,24 +126,27 @@ export function useQuickAttachments(
       } finally {
         loadingRef.current = false;
         if (alive.current) setLoading(false);
-        // A screenshot has no text for the webview to keep, so it waits out
-        // the collection that was already running instead of being dropped.
-        if (
-          queuedScreenshot.current &&
-          alive.current &&
-          supportedRef.current
-        ) {
-          queuedScreenshot.current = false;
-          void collect(async () => {
-            const { files, warning } = await nativeClipboardAttachments("");
-            if (warning) onError(warning);
-            return files;
-          });
+        // The clipboard read started when Paste was pressed. Queue only the
+        // captured result so a later clipboard change cannot replace it.
+        const queued = queuedScreenshot.current;
+        queuedScreenshot.current = null;
+        if (queued) {
+          if (!alive.current || !supportedRef.current) {
+            void queued.then(discardCapturedPaste);
+          } else {
+            void collect(async () => {
+              const result = await queued;
+              if ("error" in result) throw result.error;
+              if (result.warning) onError(result.warning);
+              return result.files;
+            });
+          }
         }
       }
     },
     [onError, canCollect],
   );
+
 
   useEffect(() => {
     let disposed = false;
@@ -156,6 +174,7 @@ export function useQuickAttachments(
     };
   }, [collect]);
 
+
   const onPaste = (event: ClipboardEvent) => {
     const pasted = filesFromClipboard(event.clipboardData);
     if (!pasted.length) {
@@ -168,11 +187,16 @@ export function useQuickAttachments(
       // clipboard read, spinner, or cleared error.
       if (text && !isFileReferenceText(text)) return;
       // A file URI can still be inserted by the webview. A screenshot cannot,
-      // so it waits until the collection in flight finishes.
+      // so capture it now even when attachment processing must wait.
       if (!canCollect()) {
         if (!text) {
           event.preventDefault();
-          queuedScreenshot.current = true;
+          if (!queuedScreenshot.current) {
+            queuedScreenshot.current = nativeClipboardAttachments("").then(
+              ({ files, warning }) => ({ files, warning }),
+              (error: unknown) => ({ error }),
+            );
+          }
         }
         return;
       }
@@ -235,6 +259,7 @@ export function useQuickAttachments(
     filesRef.current = [];
     setFiles([]);
   };
+
 
   return {
     files,
