@@ -546,28 +546,28 @@ function ProviderAccountPicker({
                     </span>
                   ) : null}
                 </span>
-                <span
-                  id={`${statusId}-${account.id}`}
-                  className="mt-1 flex min-w-0 items-center gap-2 text-[10px]"
-                >
-                  <AccountStatusLabel
-                    status={accountStatus(usage, now)}
-                    className="min-w-0"
-                  />
-                </span>
-                {meters.length > 0 ? (
-                  <span className="mt-2 flex gap-3">
-                    {meters.map((entry) => (
-                      <UsageMeter
-                        key={entry.title}
-                        title={entry.title}
-                        window={entry.window}
-                        now={now}
-                        className="min-w-0 flex-1"
-                      />
-                    ))}
+                <span className="mt-1 flex min-w-0 items-center gap-3 text-[10px]">
+                  <span id={`${statusId}-${account.id}`} className="min-w-0">
+                    <AccountStatusLabel
+                      status={accountStatus(usage, now)}
+                      className="min-w-0"
+                    />
                   </span>
-                ) : null}
+                  {meters.length > 0 ? (
+                    <span className="ml-auto flex w-44 shrink-0 gap-2.5">
+                      {meters.map((entry) => (
+                        // Short "5h" / "wk" titles, as on the footer chip.
+                        <UsageMeter
+                          key={entry.title}
+                          title={formatWindowLabel(entry.window.windowMinutes)}
+                          window={entry.window}
+                          now={now}
+                          className="min-w-0 flex-1"
+                        />
+                      ))}
+                    </span>
+                  ) : null}
+                </span>
               </span>
               {selected ? (
                 <Check
