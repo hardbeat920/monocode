@@ -117,4 +117,37 @@ describe("project background dialog", () => {
       "ascii",
     );
   });
+
+  it("previews a project Haze background with its own image and visibility", async () => {
+    saveProjectChatBackgroundSettings("/work/alpha", {
+      path: "/backgrounds/alpha.png",
+      emptyOpacity: 0.35,
+      sessionOpacity: 0.55,
+      scope: "empty",
+      effect: "gradient-blur",
+    });
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "/work/alpha",
+          name: "Alpha",
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+
+    const preview = document.querySelector<HTMLElement>(
+      ".gradient-blur-background",
+    )!;
+    expect(preview.style.opacity).toBe("0.35");
+    expect(preview.style.getPropertyValue("--chat-background-image")).toContain(
+      "alpha.png",
+    );
+    expect(loadProjectChatBackgroundSettings("/work/alpha")?.effect).toBe(
+      "gradient-blur",
+    );
+    expect(
+      document.querySelector('[aria-label="Project background effect: Haze"]'),
+    ).not.toBeNull();
+  });
 });

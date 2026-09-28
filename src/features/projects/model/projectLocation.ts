@@ -4,7 +4,7 @@ import {
 } from "../../../platform/tauri/fs";
 import { pathKey } from "../../../shared/lib/paths";
 import {
-  looksLikeProject,
+  isLocalProject,
   normalizeProjectPath,
   sameProjectPath,
 } from "./recents";
@@ -69,7 +69,7 @@ function remember(
 /** Capture an identity without searching for a moved folder. */
 export async function rememberProjectLocation(path: string): Promise<void> {
   const normalized = normalizeProjectPath(path);
-  if (!looksLikeProject(normalized)) return;
+  if (!isLocalProject(normalized)) return;
   const location = await resolveProjectLocation(normalized);
   if (!location) return;
   remember(read(), location);
@@ -80,7 +80,7 @@ export async function synchronizeProjectLocation(
   path: string,
 ): Promise<ProjectLocationSync | null> {
   const normalized = normalizeProjectPath(path);
-  if (!looksLikeProject(normalized)) {
+  if (!isLocalProject(normalized)) {
     return { path: normalized, identity: "", moved: false };
   }
   const locations = read();

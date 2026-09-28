@@ -82,6 +82,58 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
+const APP_ACTIONS: [&str; 10] = [
+    "models.list",
+    "sessions.list",
+    "sessions.read",
+    "sessions.send",
+    "sessions.draft",
+    "sessions.start",
+    "folders.list",
+    "folders.move",
+    "notes.list",
+    "notes.read",
+];
+const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
+
+Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
+
+Actions:
+  models.list    {}  Available providers, models, settings and permission modes.
+  sessions.list  {}  Project sessions with IDs, busy status and hasDraft.
+  sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
+                  Read up to 3 recent user/assistant exchanges. Tools and
+                  reasoning are omitted. Omit before for the newest page;
+                  pass nextBefore from a result for older exchanges. maxChars
+                  caps each message (200-6000, default 1200).
+  sessions.send  {"sessionId":"...","prompt":"..."}
+                  Submit a follow-up to an idle session in this project.
+                  A busy session is rejected. Reuse --request-id on retries.
+  sessions.draft {"sessionId":"...","prompt":"..."}
+                  Save an unsent draft in an idle project session. Existing
+                  drafts are preserved; send or remove one in MonoCode first.
+                  Reuse --request-id on retries.
+  sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
+                  "effort":"high","reveal":false,
+                  "workspaceMode":"current","draft":false}
+                  Create a tab with the prompt. Set draft:true to save it
+                  unsent; no agent turn runs. Otherwise the turn is submitted.
+                  Returns after creation/acceptance, not agent completion;
+                  use its ID with folders.move immediately. Optional model,
+                  effort, modelSettings, permission mode and workspace choice
+                  use composer values. Omit runtimeMode to inherit this
+                  session's permission mode; set it to override. Run
+                  models.list for allowed IDs. cwd is your project; no attachments.
+  folders.list   {}  Folders in your current project.
+  folders.move   {"sessionId":"...","folderId":"..."}
+                  Or use "newFolderName":"Research" to create a folder.
+  notes.list     {"limit":30,"offset":0}  Titles and short previews only.
+  notes.read     {"id":"..."}  Full body of one note.
+
+The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
+Use --input - to pass JSON on stdin. Never print MonoCode credentials.
+Keep the same --request-id when retrying a call after an uncertain result.
+"#;
 
 /// Quote for the shell the lead agent actually runs commands in, and only when
 /// the path needs it. The path is absolute, so a leading slash means a POSIX
@@ -112,13 +164,28 @@ pub fn help() -> String {
     USAGE.replace("{exe}", &exe)
 }
 
+pub fn app_help() -> String {
+    let exe = std::env::current_exe()
+        .map(|path| quoted(&path.to_string_lossy()))
+        .unwrap_or_else(|_| "monocode".into());
+    APP_USAGE.replace("{exe}", &exe)
+}
+
 enum Parsed {
     Help,
     Call(String, Value, String),
 }
 
 pub fn run(args: Vec<String>) -> i32 {
-    let parsed = match parse_args(&args) {
+    run_mode(args, false)
+}
+
+pub fn run_app(args: Vec<String>) -> i32 {
+    run_mode(args, true)
+}
+
+fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
+    let parsed = match parse_args_for(&args, app_mode) {
         Ok(parsed) => parsed,
         Err(error) => {
             println!("{}", json!({"ok": false, "error": error}));
@@ -127,27 +194,18 @@ pub fn run(args: Vec<String>) -> i32 {
     };
     let (action, input, request_id) = match parsed {
         Parsed::Help => {
-            println!("{}", help());
+            println!("{}", if app_mode { app_help() } else { help() });
             return 0;
         }
         Parsed::Call(action, input, request_id) => (action, input, request_id),
     };
-    match send(&action, &input, &request_id) {
+    match send(&action, &input, &request_id, app_mode) {
         Ok(mut value) => {
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
                 println!("{value}");
                 return 0;
             }
-            // MonoCode may have timed out waiting on its own executor, so a
-            // failure here is not proof the call was rejected either.
-            if let Some(object) = value.as_object_mut() {
-                object
-                    .entry("requestId")
-                    .or_insert_with(|| json!(request_id));
-                object
-                    .entry("retryWith")
-                    .or_insert_with(|| json!(format!("--request-id {request_id}")));
-            }
+            value = with_retry_hint(value, &request_id);
             println!("{value}");
             1
         }
@@ -163,6 +221,23 @@ pub fn run(args: Vec<String>) -> i32 {
             1
         }
     }
+}
+
+fn with_retry_hint(mut value: Value, request_id: &str) -> Value {
+    // A denied app call never reached the executor. Repeating the same ID
+    // cannot grant access, and suggesting it sends agents in loops.
+    if value.get("retryable").and_then(Value::as_bool) == Some(false) {
+        return value;
+    }
+    if let Some(object) = value.as_object_mut() {
+        object
+            .entry("requestId")
+            .or_insert_with(|| json!(request_id));
+        object
+            .entry("retryWith")
+            .or_insert_with(|| json!(format!("--request-id {request_id}")));
+    }
+    value
 }
 
 struct Failure {
@@ -183,12 +258,26 @@ fn sent(error: impl Into<String>) -> Failure {
     }
 }
 
-fn send(action: &str, input: &Value, request_id: &str) -> Result<Value, Failure> {
-    let endpoint = std::env::var("MONOCODE_CONTROL_ENDPOINT").map_err(|_| {
-        unsent("No MonoCode connection. Confirm the Orchestrator proposal in MonoCode first.")
+fn send(action: &str, input: &Value, request_id: &str, app_mode: bool) -> Result<Value, Failure> {
+    let endpoint_key = if app_mode {
+        "MONOCODE_APP_ENDPOINT"
+    } else {
+        "MONOCODE_CONTROL_ENDPOINT"
+    };
+    let token_key = if app_mode {
+        "MONOCODE_APP_TOKEN"
+    } else {
+        "MONOCODE_CONTROL_TOKEN"
+    };
+    let endpoint = std::env::var(endpoint_key).map_err(|_| {
+        unsent(if app_mode {
+            "No MonoCode app connection. Start this agent turn in MonoCode."
+        } else {
+            "No MonoCode connection. Confirm the Orchestrator proposal in MonoCode first."
+        })
     })?;
-    let token = std::env::var("MONOCODE_CONTROL_TOKEN")
-        .map_err(|_| unsent("No MonoCode session credential. Start the lead from MonoCode."))?;
+    let token = std::env::var(token_key)
+        .map_err(|_| unsent("No MonoCode session credential. Start the agent from MonoCode."))?;
     let address: SocketAddr = endpoint
         .parse()
         .map_err(|_| unsent("Invalid MonoCode endpoint"))?;
@@ -196,7 +285,11 @@ fn send(action: &str, input: &Value, request_id: &str) -> Result<Value, Failure>
         return Err(unsent("MonoCode control only connects to localhost"));
     }
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))
-        .map_err(|_| unsent("MonoCode is not running or this connection has expired."))?;
+        .map_err(|error| {
+            unsent(format!(
+                "Cannot connect to MonoCode at {address}: {error}. The app may have restarted, or this agent's sandbox may be blocking localhost."
+            ))
+        })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(40)))
         .map_err(|e| unsent(e.to_string()))?;
@@ -206,15 +299,16 @@ fn send(action: &str, input: &Value, request_id: &str) -> Result<Value, Failure>
     writeln!(
         stream,
         "{}",
-        json!({"token":token,"action":action,"input":input,"requestId":request_id})
+        json!({"token":token,"action":action,"input":input,"requestId":request_id,"namespace":if app_mode { "app" } else { "control" }})
     )
     .map_err(|e| sent(e.to_string()))?;
     let mut line = String::new();
+    let max_response: u64 = if app_mode { 4_000_000 } else { 2_000_000 };
     BufReader::new(stream)
-        .take(2_000_001)
+        .take(max_response + 1)
         .read_line(&mut line)
         .map_err(|e| sent(format!("No reply from MonoCode: {e}")))?;
-    if line.len() > 2_000_000 {
+    if line.len() > max_response as usize {
         return Err(sent("MonoCode response is too large"));
     }
     serde_json::from_str(&line).map_err(|_| sent("MonoCode returned an invalid response"))
@@ -233,7 +327,12 @@ fn read_capped(mut source: impl Read) -> Result<String, String> {
     Ok(raw)
 }
 
+#[cfg(test)]
 fn parse_args(args: &[String]) -> Result<Parsed, String> {
+    parse_args_for(args, false)
+}
+
+fn parse_args_for(args: &[String], app_mode: bool) -> Result<Parsed, String> {
     let is_help = |value: &str| matches!(value, "help" | "--help" | "-h");
     let Some(action) = args.first() else {
         return Ok(Parsed::Help);
@@ -242,10 +341,20 @@ fn parse_args(args: &[String]) -> Result<Parsed, String> {
         return Ok(Parsed::Help);
     }
     let action = action.clone();
-    if !ACTIONS.contains(&action.as_str()) {
-        return Err(format!(
-            "Unknown action: {action}. Use one of: {}. Run control --help.",
+    let allowed = if app_mode {
+        APP_ACTIONS.contains(&action.as_str())
+    } else {
+        ACTIONS.contains(&action.as_str())
+    };
+    if !allowed {
+        let names = if app_mode {
+            APP_ACTIONS.join(", ")
+        } else {
             ACTIONS.join(", ")
+        };
+        return Err(format!(
+            "Unknown action: {action}. Use one of: {names}. Run {} --help.",
+            if app_mode { "app" } else { "control" }
         ));
     }
     let mut input = None;
@@ -298,6 +407,13 @@ fn parse_args(args: &[String]) -> Result<Parsed, String> {
     }
     if request_id.is_empty() || request_id.len() > 128 {
         return Err("Invalid request ID".into());
+    }
+    if app_mode
+        && !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("App request IDs may contain only letters, digits, - and _".into());
     }
     Ok(Parsed::Call(
         action,
@@ -378,5 +494,35 @@ mod tests {
         // A backslash escapes in a POSIX shell, so bare would rewrite the path.
         assert_eq!(quoted("/Users/a\\b/MonoCode"), "'/Users/a\\b/MonoCode'");
         assert_eq!(quoted("/Users/it's/MonoCode"), r"'/Users/it'\''s/MonoCode'");
+    }
+    #[test]
+    fn app_mode_exposes_only_app_actions_and_safe_request_ids() {
+        assert!(matches!(
+            parse_args_for(&args(&["notes.list"]), true),
+            Ok(Parsed::Call(_, _, _))
+        ));
+        for action in ["sessions.read", "sessions.send", "sessions.draft"] {
+            assert!(matches!(
+                parse_args_for(&args(&[action, "--json", r#"{"sessionId":"other"}"#]), true),
+                Ok(Parsed::Call(_, _, _))
+            ));
+            assert!(app_help().contains(action));
+        }
+        assert!(app_help().contains("draft:true"));
+        assert!(app_help().contains("inherit this"));
+        assert!(parse_args_for(&args(&["delegate"]), true).is_err());
+        assert!(
+            parse_args_for(&args(&["sessions.start", "--request-id", "bad/id"]), true).is_err()
+        );
+        assert!(app_help().contains("notes.read"));
+    }
+
+    #[test]
+    fn inactive_app_turn_does_not_suggest_retries() {
+        let denied = with_retry_hint(json!({"ok":false,"retryable":false}), "id-1");
+        assert!(denied.get("retryWith").is_none());
+        assert!(denied.get("requestId").is_none());
+        let uncertain = with_retry_hint(json!({"ok":false,"error":"timeout"}), "id-1");
+        assert_eq!(uncertain["retryWith"], "--request-id id-1");
     }
 }

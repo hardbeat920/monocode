@@ -497,11 +497,11 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   const remoteMedia = !!allowRemoteMedia;
   const paced = usePacedText(text, !!streaming);
   const fading = useWordFading(!!streaming || paced.revealing);
-  // Once a reply has streamed its words stay spans: dropping them would swap
-  // every word's element and could catch the last few mid-fade.
-  const streamed = useRef(!!streaming);
-  if (streaming) streamed.current = true;
-  const rehypePlugins = streamed.current
+  // Spans stay while words are fading so a word already on screen keeps its
+  // element. Dropping one mid-fade would remount it and fade it again. Once
+  // the fade is over they come off, or a finished reply would keep a span per
+  // word for as long as this transcript stays mounted.
+  const rehypePlugins = fading
     ? remoteMedia
       ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
       : FADING_MARKDOWN_REHYPE_PLUGINS
@@ -551,6 +551,9 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <FileOpenContext.Provider value={fileOpen}>
         <>
           <Streamdown
+            // Streamdown keeps a parsed tree while the text is unchanged, so
+            // the plugin swap has to remount it once the fade is over.
+            key={fading ? "fade" : "plain"}
             className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
             components={MARKDOWN_COMPONENTS}
             controls={false}

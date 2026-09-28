@@ -37,7 +37,7 @@ import {
 } from "../../files/model/fileIndex";
 import { prettyCwd, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
-import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import { isLocalProject, type RecentProject } from "../../projects/model/recents";
 import { searchProject, type OpenFileFn } from "../model/search";
 import { type Session } from "../../sessions/model/session";
 import { searchSessions, type SessionSummary } from "../../sessions/data/sessionStore";
@@ -127,7 +127,7 @@ export function SearchView({
 
   useEffect(() => {
     if (!open) return;
-    if (!looksLikeProject(cwd)) {
+    if (!isLocalProject(cwd)) {
       setFiles([]);
       return;
     }
@@ -148,7 +148,7 @@ export function SearchView({
   );
   const fileHits = useMemo(
     () =>
-      trimmed && looksLikeProject(cwd)
+      trimmed && isLocalProject(cwd)
         ? hitsFromFileRanks(
             rankProjectFiles(files, trimmed, recentOpenedFiles(cwd), 40),
           )
@@ -211,7 +211,7 @@ export function SearchView({
         setRemoteHits([]);
       }
 
-      if (wantFiles && looksLikeProject(cwd)) {
+      if (wantFiles && isLocalProject(cwd)) {
         setLoading(true);
         jobs.push(
           searchProject({ cwd, query: trimmed })

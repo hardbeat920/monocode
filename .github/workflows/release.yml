@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    needs: [linux, windows]
+    needs: [linux, windows, host]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,6 +146,12 @@ jobs:
         with:
           name: windows-packages
           path: target/release/bundle/nsis
+
+      - name: Download host packages
+        uses: actions/download-artifact@v4
+        with:
+          name: host-packages
+          path: build/host-packages
 
       - name: Upload to R2
         env:
@@ -302,7 +308,37 @@ jobs:
             --notes "See CHANGELOG.md for details." \
             "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
             "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
-            "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"
+            "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG" \
+            build/host-packages/*.tar.gz build/host-packages/*.zip build/host-packages/*.sha256
+
+  host:
+    name: Standalone host packages
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:host
+      - run: npm run host:package -- --all
+        if: runner.os == 'Linux'
+      - run: npm run host:package
+        if: runner.os != 'Linux'
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: host-packages
+          path: |
+            build/host-packages/*.tar.gz
+            build/host-packages/*.zip
+            build/host-packages/*.sha256
+          if-no-files-found: error
 
   linux:
     name: Linux packages

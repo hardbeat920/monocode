@@ -88,7 +88,8 @@ import { formatRelativeTime, githubStatus } from "../../inbox/model/githubTasks"
 import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
-import { defaultSessionChoice, modelsFor, resolveModel } from "../../sessions/model/models";
+import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
+import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
@@ -257,14 +258,18 @@ function AutomationsContent({
   const selected = automations.find((entry) => entry.id === selectedId) ?? null;
 
   const defaultDraftTarget = () => {
-    const preferred = defaultSessionChoice();
-    const harness = selected?.harness ?? preferred.harness;
-    const model =
-      (selected?.harness === harness ? selected.model : undefined) ??
-      modelsFor(harness)[0]?.id ??
-      preferred.model;
     const project =
       cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
+    const preferred = defaultSessionChoice(project);
+    const harness = firstEnabledHarness(
+      project,
+      selected?.harness ?? preferred.harness,
+    );
+    const model =
+      (selected?.harness === harness ? selected.model : undefined) ??
+      (preferred.harness === harness ? preferred.model : undefined) ??
+      modelsFor(harness)[0]?.id ??
+      preferredModelId(harness);
     return { project, harness, model };
   };
 
@@ -830,6 +835,7 @@ function AutomationEditor({
   const [providerConnected, setProviderConnected] = useState({
     github: false,
     linear: false,
+    jira: false,
     gitlab: false,
     azuredevops: false,
   });
@@ -847,25 +853,30 @@ function AutomationEditor({
         linearConnected()
           .then((status) => status.connected)
           .catch(() => false),
+        jiraConnected()
+          .then((status) => status.connected)
+          .catch(() => false),
         gitlabConnected()
           .then((status) => status.connected)
           .catch(() => false),
         azureDevOpsConnected()
           .then((status) => status.connected)
           .catch(() => false),
-      ]).then(([github, linear, gitlab, azuredevops]) => {
+      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
         if (!cancelled) {
-          setProviderConnected({ github, linear, gitlab, azuredevops });
+          setProviderConnected({ github, linear, jira, gitlab, azuredevops });
         }
       });
     };
     load();
     window.addEventListener(LINEAR_CHANGE_EVENT, load);
+    window.addEventListener(JIRA_CHANGE_EVENT, load);
     window.addEventListener(GITLAB_CHANGE_EVENT, load);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, load);
+      window.removeEventListener(JIRA_CHANGE_EVENT, load);
       window.removeEventListener(GITLAB_CHANGE_EVENT, load);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     };
@@ -1318,6 +1329,7 @@ function AutomationEditor({
                         harness={draft.harness}
                         model={draft.model}
                         values={draft.modelSettings}
+                        project={draft.cwd}
                         hideSettings={controlsBeside}
                         onChange={(harness, model) =>
                           onChange({ ...draft, harness, model })
@@ -1654,6 +1666,7 @@ const TRIGGER_CATEGORIES: readonly {
   { value: "time", label: "Scheduled" },
   { value: "github", label: "GitHub" },
   { value: "linear", label: "Linear" },
+  { value: "jira", label: "Jira" },
   { value: "gitlab", label: "GitLab" },
   { value: "azuredevops", label: "Azure DevOps" },
 ];
@@ -1676,6 +1689,7 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
     { value: "issue_opened", label: "Issue opened" },
   ],
   linear: [{ value: "issue_created", label: "Issue created" }],
+  jira: [{ value: "issue_created", label: "Issue appeared" }],
   gitlab: [
     { value: "merge_request_opened", label: "Merge request opened" },
     { value: "issue_opened", label: "Issue opened" },

@@ -82,11 +82,13 @@ export function InboxComments({
   const moreOn =
     provider === "linear"
       ? "Linear"
-      : provider === "gitlab"
-        ? "GitLab"
-        : provider === "azuredevops"
-          ? "ADO"
-          : "GitHub";
+      : provider === "jira"
+        ? "Jira"
+        : provider === "gitlab"
+          ? "GitLab"
+          : provider === "azuredevops"
+            ? "ADO"
+            : "GitHub";
 
   return (
     <section className="flex flex-col gap-3 border-t border-stroke pt-5">
@@ -287,11 +289,13 @@ function InboxComment({
                 title={
                   provider === "linear"
                     ? "Open in Linear"
-                    : provider === "gitlab"
-                      ? "Open on GitLab"
-                      : provider === "azuredevops"
-                        ? "Open on ADO"
-                        : "Open on GitHub"
+                    : provider === "jira"
+                      ? "Open in Jira"
+                      : provider === "gitlab"
+                        ? "Open on GitLab"
+                        : provider === "azuredevops"
+                          ? "Open on ADO"
+                          : "Open on GitHub"
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"

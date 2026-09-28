@@ -4,7 +4,6 @@ import {
   FilePlus,
   FolderPlus,
   FoldVertical,
-  GitCompare,
   Search,
 } from "../../../shared/ui/icons";
 import {
@@ -27,7 +26,6 @@ import {
   type NameIssue,
 } from "../model/fileName";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
-import { formatInteger } from "../../../shared/lib/numbers";
 import {
   loadShowExcludedFiles,
   subscribeShowExcludedFiles,
@@ -48,6 +46,7 @@ import {
   subscribeDirsChanged,
 } from "../model/fileTree";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
 import { dragPointToClient } from "../../../shared/lib/dragPoint";
 import {
   basename,
@@ -64,7 +63,6 @@ import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN, MOD } from "../../../platform/tauri/platform";
 import type { OpenFileFn } from "../../search/model/search";
 import type { GitStatusMap } from "../../source-control/hooks/useGitFileStatuses";
-import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
 import {
   emitExplorerFilePointerDrag,
   setGrabbing,
@@ -90,8 +88,6 @@ type Props = {
   onFileDeleted?: (path: string) => void;
   onSearch?: () => void;
   gitStatuses?: GitStatusMap;
-  onShowSourceControl?: () => void;
-  sourceControlActive?: boolean;
 };
 
 type Creating = { id: number; parent: string; isDir: boolean };
@@ -248,8 +244,6 @@ export const FileTree = memo(function FileTree({
   onFileDeleted,
   onSearch,
   gitStatuses,
-  sourceControlActive = false,
-  onShowSourceControl,
 }: Props) {
   const [expanded, setExpanded] = useState(() => loadExpanded(cwd));
   const [selectedPath, setSelectedPath] = useState(() => loadSelected(cwd));
@@ -810,6 +804,14 @@ export const FileTree = memo(function FileTree({
   }, []);
 
   useEffect(() => {
+    if (!cwd.startsWith(REMOTE_PATH_PREFIX)) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) notifyDirsChanged();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [cwd]);
+
+  useEffect(() => {
     const hit = peekDir(cwd);
     if (hit) {
       setChildren(hit);
@@ -894,13 +896,6 @@ export const FileTree = memo(function FileTree({
             >
               <Search className="size-3.5" strokeWidth={1.75} />
             </HeaderIcon>
-          ) : null}
-          {onShowSourceControl ? (
-            <FileTreeDiffButton
-              cwd={cwd}
-              active={sourceControlActive}
-              onClick={onShowSourceControl}
-            />
           ) : null}
         </div>
         <div className="flex h-8 shrink-0 items-center">
@@ -1002,60 +997,6 @@ function HeaderIcon({
       }`}
     >
       {children}
-    </button>
-  );
-}
-
-function FileTreeDiffButton({
-  cwd,
-  active,
-  onClick,
-}: {
-  cwd: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const enabled = Boolean(cwd) && cwd !== "~";
-  const stats = useProjectDiffStats(cwd, enabled);
-  const files = stats?.files ?? 0;
-  const additions = stats?.additions ?? 0;
-  const deletions = stats?.deletions ?? 0;
-  const empty = files <= 0 && additions <= 0 && deletions <= 0;
-  const label = empty
-    ? active
-      ? "Hide changes"
-      : "Show changes"
-    : [
-        `${files} ${files === 1 ? "file" : "files"} changed`,
-        additions > 0 ? `+${formatInteger(additions)}` : "",
-        deletions > 0 ? `-${formatInteger(deletions)}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-  const badge = files > 99 ? "99+" : String(files);
-
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={onClick}
-      className={`relative flex h-6 min-w-0 flex-1 items-center justify-center self-center rounded-md ${
-        active
-          ? "bg-selection text-content"
-          : "text-content/50 hover:bg-content/5 hover:text-content"
-      }`}
-    >
-      <span className="relative">
-        <GitCompare className="size-3.5" strokeWidth={1.75} />
-        {files > 0 ? (
-          <span className="pointer-events-none absolute -top-1.5 -right-2 grid min-h-3.5 min-w-3.5 place-items-center rounded-full bg-accent px-0.5 text-[7px] font-semibold leading-none text-white tabular-nums">
-            {badge}
-          </span>
-        ) : null}
-      </span>
     </button>
   );
 }
@@ -1205,6 +1146,11 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           title={entry.path}
           aria-expanded={entry.isDir ? open : undefined}
           onClick={onClick}
+          onDoubleClick={() => {
+            if (!entry.isDir) {
+              onOpenFile(entry.path, undefined, { exact: true, pin: true });
+            }
+          }}
           onPointerDown={(event) => {
             if (!entry.isDir) onFilePointerDown(entry.path, event);
           }}
@@ -1252,7 +1198,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
   );
 }
 
-function NameRow({
+export function NameRow({
   depth,
   isDir,
   initial = "",

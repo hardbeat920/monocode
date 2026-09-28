@@ -58,7 +58,7 @@ async function discoverHermesModels(): Promise<AgentModel[]> {
   );
 
   try {
-    await spawnChild(PROBE_ID, path, ["acp"], cwd);
+    await spawnChild(PROBE_ID, path, ["acp"], cwd, undefined, "hermes");
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

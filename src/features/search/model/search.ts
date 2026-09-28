@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeWorkspace } from "../../../platform/tauri/fs";
 import { pathKey, slash } from "../../../shared/lib/paths";
 
 export type ProjectSearchMatch = {
@@ -37,6 +37,8 @@ export type EditorNavigationTarget = EditorNavigation & {
 export type FileOpenOptions = {
   /** The caller obtained this concrete path from the filesystem or file index. */
   exact?: boolean;
+  /** Open as a permanent tab instead of the pane's preview tab. */
+  pin?: boolean;
 };
 
 export type OpenFileFn = (
@@ -56,5 +58,5 @@ export function editorPathsEqual(a: string, b: string): boolean {
 export function searchProject(
   options: ProjectSearchOptions,
 ): Promise<ProjectSearchResult> {
-  return invoke<ProjectSearchResult>("search_project", { options });
+  return invokeWorkspace<ProjectSearchResult>("search_project", { options });
 }

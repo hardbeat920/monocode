@@ -12,6 +12,12 @@ use tauri::window::{Effect, EffectsBuilder};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WebviewWindowBuilder};
 
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
+
+/// The floating quick composer. It is a webview window but not a workspace:
+/// it has no sessions, takes no part in quitting, and is never shown by the
+/// paths that bring workspace windows back.
+pub const QUICK_COMPOSER_LABEL: &str = "quick-composer";
+pub const QUICK_COMPOSER_GIT_LABEL: &str = "quick-composer-git";
 static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
 
 const QUIT_POLL: &str = "quit_poll";
@@ -62,6 +68,15 @@ struct QuitConfirm {
 }
 
 pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
+    open_session_window(app, true).map(|_| ())
+}
+
+fn configure_session_window(config: &mut tauri::utils::config::WindowConfig, reveal: bool) {
+    config.visible = reveal;
+    config.focus = reveal;
+}
+
+pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindow, String> {
     let mut config = app
         .config()
         .app
@@ -71,13 +86,28 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
         .ok_or("missing main window config")?
         .clone();
 
+    configure_session_window(&mut config, reveal);
     let id = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
-    config.label = format!("window-{id}");
+    config.label = if reveal {
+        format!("window-{id}")
+    } else {
+        format!("quick-session-{}", uuid::Uuid::new_v4())
+    };
 
-    let window = WebviewWindowBuilder::from_config(app, &config)
-        .map_err(|err| err.to_string())?
-        .build()
-        .map_err(|err| err.to_string())?;
+    let build = || {
+        WebviewWindowBuilder::from_config(app, &config)
+            .map_err(|err| err.to_string())?
+            .build()
+            .map_err(|err| err.to_string())
+    };
+    #[cfg(target_os = "macos")]
+    let window = if reveal {
+        build()?
+    } else {
+        crate::macos_background::without_activation(build)?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let window = build()?;
 
     #[cfg(target_os = "macos")]
     crate::macos::install(&window);
@@ -88,8 +118,10 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), String> {
         let _ = window.set_shadow(true);
     }
 
-    let _ = window.set_focus();
-    Ok(())
+    if reveal {
+        let _ = window.set_focus();
+    }
+    Ok(window)
 }
 
 /// Desktop blur goes on after the first UI paint and only in dark mode.
@@ -133,13 +165,34 @@ pub fn destroy_window(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|err| err.to_string())
 }
 
+pub fn is_workspace_window(label: &str) -> bool {
+    label != QUICK_COMPOSER_LABEL && label != QUICK_COMPOSER_GIT_LABEL
+}
+
+/// Every workspace window, sorted by label.
+pub fn workspace_windows(app: &AppHandle) -> Vec<WebviewWindow> {
+    let mut windows: Vec<WebviewWindow> = app
+        .webview_windows()
+        .into_values()
+        .filter(|window| is_workspace_window(window.label()))
+        .collect();
+    windows.sort_by(|a, b| a.label().cmp(b.label()));
+    windows
+}
+
+fn workspace_labels(app: &AppHandle) -> Vec<String> {
+    workspace_windows(app)
+        .iter()
+        .map(|window| window.label().to_string())
+        .collect()
+}
+
 /// Dock click / Cmd-click with no visible windows: bring hidden ones back.
 pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
-    let mut windows: Vec<WebviewWindow> = app.webview_windows().into_values().collect();
+    let windows = workspace_windows(app);
     if windows.is_empty() {
         return open_new_window(app);
     }
-    windows.sort_by(|a, b| a.label().cmp(b.label()));
     for window in &windows {
         let _ = window.unminimize();
         let _ = window.show();
@@ -153,7 +206,7 @@ pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
 
 /// window-state can restore a window as hidden after a quit-while-hidden.
 pub fn ensure_launch_window_visible(app: &AppHandle) {
-    let windows: Vec<WebviewWindow> = app.webview_windows().into_values().collect();
+    let windows = workspace_windows(app);
     if windows.is_empty() {
         return;
     }
@@ -276,7 +329,7 @@ fn drop_window(slot: &mut Option<QuitRun>, label: &str) -> Next {
 
 /// Ask every window what it has running, then decide once for all of them.
 pub fn request_quit(app: &AppHandle) {
-    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let labels = workspace_labels(app);
     if labels.is_empty() {
         confirm_quit(app.clone());
         return;
@@ -385,7 +438,7 @@ fn start_confirm(app: &AppHandle, id: u32) {
         start_commit(app, id);
         return;
     }
-    if app.webview_windows().is_empty() {
+    if workspace_windows(app).is_empty() {
         clear_run(id);
         confirm_quit(app.clone());
         return;
@@ -423,7 +476,7 @@ fn start_confirm(app: &AppHandle, id: u32) {
 }
 
 fn start_commit(app: &AppHandle, id: u32) {
-    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let labels = workspace_labels(app);
     let empty = labels.is_empty();
     if !open_commit(&mut QUIT_RUN.lock().unwrap(), id, labels) {
         return;
@@ -445,8 +498,7 @@ fn start_commit(app: &AppHandle, id: u32) {
 /// confirming has nothing to time out on.
 fn prompt_window(app: &AppHandle, replied: &HashSet<String>) -> Option<String> {
     let windows = app.webview_windows();
-    let mut labels: Vec<String> = windows.keys().cloned().collect();
-    labels.sort();
+    let labels = workspace_labels(app);
     let answered: Vec<String> = labels
         .iter()
         .filter(|label| replied.contains(*label))
@@ -508,7 +560,7 @@ fn clear_run(id: u32) {
 pub fn confirm_quit(app: AppHandle) {
     *QUIT_RUN.lock().unwrap() = None;
     ALLOW_EXIT.store(true, Ordering::SeqCst);
-    for window in app.webview_windows().values() {
+    for window in workspace_windows(&app) {
         let _ = window.show();
     }
     // Belt and braces. `RunEvent::Exit` reaps too, and it also runs before the
@@ -526,6 +578,30 @@ pub fn confirm_quit(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_session_creation_overrides_main_windows_visible_and_focus_defaults() {
+        let mut config = tauri::utils::config::WindowConfig {
+            visible: true,
+            focus: true,
+            ..Default::default()
+        };
+        configure_session_window(&mut config, false);
+        assert!(!config.visible);
+        assert!(!config.focus);
+    }
+
+    #[test]
+    fn explicit_reveal_creates_a_visible_focused_session_window() {
+        let mut config = tauri::utils::config::WindowConfig {
+            visible: false,
+            focus: false,
+            ..Default::default()
+        };
+        configure_session_window(&mut config, true);
+        assert!(config.visible);
+        assert!(config.focus);
+    }
 
     fn polling(labels: &[&str]) -> Option<QuitRun> {
         let mut slot = None;

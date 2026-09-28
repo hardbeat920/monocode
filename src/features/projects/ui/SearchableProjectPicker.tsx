@@ -11,6 +11,7 @@ import {
   looksLikeProject,
   projectRailItems,
   sameProjectPath,
+  subscribeProjectPathsChanged,
   type RecentProject,
 } from "../model/recents";
 import {
@@ -28,6 +29,15 @@ import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
 
+function loadAppearance() {
+  return {
+    groupLabels: loadTabGroupLabels(),
+    groupColors: loadTabGroupColors(),
+    groupCustomColors: loadTabGroupCustomColors(),
+    groupMascots: loadTabGroupMascots(),
+  };
+}
+
 type Props = {
   cwd: string;
   recents: RecentProject[];
@@ -41,6 +51,15 @@ type Props = {
   compact?: boolean;
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
+  /** Opens the project's context menu; the search input receives focus back. */
+  onProjectContextMenu?: (
+    path: string,
+    x: number,
+    y: number,
+    trigger: HTMLElement | null,
+  ) => void;
+  /** Keeps the dropdown open while the project's context menu or its dialogs show. */
+  projectMenuActive?: boolean;
 };
 
 export function SearchableProjectPicker({
@@ -55,16 +74,21 @@ export function SearchableProjectPicker({
   compact = false,
   onSelectProject,
   onOpenProject,
+  onProjectContextMenu,
+  projectMenuActive = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const pickerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const [groupLabels] = useState(loadTabGroupLabels);
-  const [groupColors] = useState(loadTabGroupColors);
-  const [groupCustomColors] = useState(loadTabGroupCustomColors);
-  const [groupMascots] = useState(loadTabGroupMascots);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [{ groupLabels, groupColors, groupCustomColors, groupMascots }, setAppearance] =
+    useState(loadAppearance);
+  useEffect(
+    () => subscribeProjectPathsChanged(() => setAppearance(loadAppearance())),
+    [],
+  );
   const groupLogos = useTabGroupLogos();
   const inProject = looksLikeProject(cwd);
   const seed = projectName(cwd);
@@ -125,7 +149,27 @@ export function SearchableProjectPicker({
   };
 
   const onPickerKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (!(event.target instanceof HTMLInputElement)) return;
+    const target = event.target;
+    const rows = listRef.current?.children;
+    if (
+      onProjectContextMenu &&
+      rows &&
+      (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))
+    ) {
+      // A Tab-focused row opens its own menu; the search input opens the highlighted one.
+      const index =
+        target instanceof HTMLInputElement
+          ? active
+          : Array.prototype.indexOf.call(rows, target);
+      const project = filteredProjects[index];
+      const row = rows[index];
+      if (!project || !row) return;
+      event.preventDefault();
+      const rect = row.getBoundingClientRect();
+      onProjectContextMenu(project.path, rect.left, rect.bottom, searchRef.current);
+      return;
+    }
+    if (!(target instanceof HTMLInputElement)) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (filteredProjects.length === 0) return;
@@ -221,7 +265,7 @@ export function SearchableProjectPicker({
           maxHeight={380}
           role="dialog"
           aria-label="Project picker"
-          onDismiss={() => closePicker()}
+          onDismiss={projectMenuActive ? undefined : closePicker}
           onKeyDown={onPickerKeyDown}
           className="flex flex-col overflow-hidden"
         >
@@ -239,7 +283,10 @@ export function SearchableProjectPicker({
               className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
             />
           </label>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1.5">
+          <div
+            ref={listRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1.5"
+          >
             {filteredProjects.length > 0 ? (
               filteredProjects.map((item, index) => {
                 const current = sameProjectPath(item.path, cwd);
@@ -264,6 +311,20 @@ export function SearchableProjectPicker({
                     title={item.path}
                     onMouseEnter={() => setActive(index)}
                     onClick={() => pickProject(item.path)}
+                    onContextMenu={
+                      onProjectContextMenu
+                        ? (event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onProjectContextMenu(
+                              item.path,
+                              event.clientX,
+                              event.clientY,
+                              searchRef.current,
+                            );
+                          }
+                        : undefined
+                    }
                     className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left ${
                       active === index
                         ? "bg-selection text-content"

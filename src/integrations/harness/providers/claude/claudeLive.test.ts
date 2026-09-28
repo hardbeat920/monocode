@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import {
+  foldableWork,
+  foldedBlocks,
+  groupTurnItems,
+  workSummaryLine,
+} from "../../../../features/sessions/model/transcriptActivity";
 
 const sent: string[] = [];
 const spawned: string[][] = [];
@@ -30,6 +36,7 @@ vi.mock("../../core/child", () => ({
 
 const {
   bindClaudeSession,
+  cancelClaudeTurn,
   compactClaudeContext,
   respondClaudeApproval,
   respondClaudeQuestion,
@@ -57,69 +64,6 @@ const waitFor = async (pred: () => boolean, label: string) => {
     `timed out waiting for ${label}; sent=${JSON.stringify(parse())}`,
   );
 };
-
-/** A backgrounded task as Claude Code reports it, launched by the parent. */
-function launchBackgroundTask(taskId: string, toolUseId: string, taskType: string) {
-  emit({
-    type: "assistant",
-    session_id: "sess_1",
-    message: {
-      content: [
-        {
-          type: "tool_use",
-          id: toolUseId,
-          name: taskType === "local_bash" ? "Bash" : "Agent",
-          input:
-            taskType === "local_bash"
-              ? { command: "npm test", run_in_background: true }
-              : { description: "Explore", run_in_background: true },
-        },
-      ],
-    },
-  });
-  emit({
-    type: "system",
-    subtype: "background_tasks_changed",
-    tasks: [{ task_id: taskId, task_type: taskType, description: "Background" }],
-  });
-  emit({
-    type: "system",
-    subtype: "task_started",
-    task_id: taskId,
-    tool_use_id: toolUseId,
-    description: "Background",
-    task_type: taskType,
-    is_backgrounded: true,
-  });
-  emit({
-    type: "user",
-    session_id: "sess_1",
-    message: {
-      content: [
-        { type: "tool_result", tool_use_id: toolUseId, content: "Backgrounded" },
-      ],
-    },
-  });
-}
-
-/** The line order Claude Code 2.1 sends when a background task finishes. */
-function finishBackgroundTask(taskId: string, toolUseId: string) {
-  emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-  emit({
-    type: "system",
-    subtype: "task_updated",
-    task_id: taskId,
-    patch: { status: "completed" },
-  });
-  emit({
-    type: "system",
-    subtype: "task_notification",
-    task_id: taskId,
-    tool_use_id: toolUseId,
-    status: "completed",
-    summary: "Done",
-  });
-}
 
 async function startTurn(
   sessionId: string,
@@ -160,6 +104,118 @@ async function startTurn(
   return { events, turn };
 }
 
+/** What Claude streams when a finished task wakes it for another turn. */
+function emitFollowUpTurn(text: string) {
+  emit({ type: "system", subtype: "init", session_id: "sess_1" });
+  emit({
+    type: "stream_event",
+    session_id: "sess_1",
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text },
+    },
+  });
+  emit({
+    type: "assistant",
+    session_id: "sess_1",
+    message: { content: [{ type: "text", text }] },
+  });
+  emit({ type: "result", subtype: "success", session_id: "sess_1" });
+}
+
+function emitBackgroundBashLaunch(taskId = "b1") {
+  emit({
+    type: "assistant",
+    session_id: "sess_1",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_bash",
+          name: "Bash",
+          input: { command: "sleep 30 && echo done", run_in_background: true },
+        },
+      ],
+    },
+  });
+  emit({
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [
+      {
+        task_id: taskId,
+        task_type: "local_bash",
+        description: "Wait 30 seconds then print done",
+      },
+    ],
+  });
+  emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: taskId,
+    tool_use_id: "toolu_bash",
+    description: "Wait 30 seconds then print done",
+    task_type: "local_bash",
+  });
+  emit({
+    type: "user",
+    session_id: "sess_1",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_bash",
+          content: `Command running in background with ID: ${taskId}`,
+        },
+      ],
+    },
+  });
+}
+
+function emitBackgroundBash(taskId = "b1") {
+  emitBackgroundBashLaunch(taskId);
+  emit({
+    type: "stream_event",
+    session_id: "sess_1",
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "waiting" },
+    },
+  });
+  emit({
+    type: "assistant",
+    session_id: "sess_1",
+    message: { content: [{ type: "text", text: "waiting" }] },
+  });
+  emit({ type: "result", subtype: "success", session_id: "sess_1" });
+}
+
+function emitBashFinished(taskId = "b1") {
+  emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+  emit({
+    type: "system",
+    subtype: "task_updated",
+    task_id: taskId,
+    patch: { status: "completed" },
+  });
+  emit({
+    type: "system",
+    subtype: "task_notification",
+    task_id: taskId,
+    tool_use_id: "toolu_bash",
+    status: "completed",
+    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+  });
+}
+
+function backgroundUpdates(events: HarnessEvent[]): string[][] {
+  return events.flatMap((event) =>
+    event.type === "background.updated" ? [event.tasks] : [],
+  );
+}
+
 beforeEach(() => {
   sent.length = 0;
   spawned.length = 0;
@@ -172,6 +228,124 @@ beforeEach(() => {
 afterEach(async () => {
   await stopClaudeSession("s1");
   __claudeTestReset();
+});
+
+describe("claude streamed tool inputs", () => {
+  it("replaces an empty Shell row with the complete assistant tool input", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_shell",
+          name: "Bash",
+          input: {},
+        },
+      },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: '{"command":"git status',
+        },
+      },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_shell",
+            name: "Bash",
+            input: {
+              command: "git status --short",
+              description: "Check changes",
+            },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_shell", content: "clean" },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool.updated",
+        callId: "toolu_shell",
+        title: "git status --short",
+        status: "pending",
+      }),
+    );
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const tool = session.blocks.find(
+      (block) => block.tool?.callId === "toolu_shell",
+    );
+    expect(tool?.text).toBe("git status --short");
+    expect(tool?.tool?.status).toBe("completed");
+  });
+});
+
+describe("claude assistant message boundaries", () => {
+  it("keeps a follow-up paragraph separate and does not replay its snapshot", async () => {
+    const { events, turn } = await startTurn("s1");
+    const progress = "- update the notes and commit";
+    const update =
+      "Connect returned an empty file for one image on one post. The catch-up skips it and carries on, and I'll include it in the final tally.";
+    for (const text of [progress, update]) {
+      emit({
+        type: "stream_event",
+        session_id: "sess_1",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text },
+        },
+      });
+      emit({
+        type: "assistant",
+        session_id: "sess_1",
+        message: { content: [{ type: "text", text }] },
+      });
+    }
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      progress,
+      update,
+    ]);
+    expect(events.filter((event) => event.type === "message.delta")).toEqual([
+      { type: "message.delta", text: progress },
+      { type: "message.delta", text: update },
+    ]);
+  });
 });
 
 describe("claude model switching", () => {
@@ -520,130 +694,16 @@ describe("claude subagents", () => {
       status: "completed",
       summary: "Found the tokens",
     });
-    // Claude Code now runs a follow-up query to read the subagent's report.
+    // The notification wakes Claude for a follow-up turn; that turn's result
+    // is what ends the MonoCode turn.
     await new Promise((r) => setTimeout(r, 30));
     expect(settled).toBe(false);
-
-    emit({ type: "system", subtype: "init", session_id: "sess_1" });
-    emit({
-      type: "result",
-      subtype: "success",
-      session_id: "sess_1",
-      origin: { kind: "task-notification" },
-    });
+    emitFollowUpTurn("The explorer found the tokens.");
     await turn;
     expect(settled).toBe(true);
     expect(events.some((event) => event.type === "message.completed")).toBe(
       true,
     );
-  });
-
-  it("waits for the follow-up query when a background agent finishes before the parent result", async () => {
-    const { turn } = await startTurn("s1");
-    let settled = false;
-    void turn.then(() => {
-      settled = true;
-    });
-
-    launchBackgroundTask("t1", "toolu_agent", "local_agent");
-    finishBackgroundTask("t1", "toolu_agent");
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
-
-    await new Promise((r) => setTimeout(r, 30));
-    expect(settled).toBe(false);
-
-    emit({ type: "system", subtype: "init", session_id: "sess_1" });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(settled).toBe(false);
-    emit({
-      type: "result",
-      subtype: "success",
-      session_id: "sess_1",
-      origin: { kind: "task-notification" },
-    });
-    await turn;
-  });
-
-  it("waits for the follow-up query when a background shell finishes before the parent result", async () => {
-    const { turn } = await startTurn("s1");
-    let settled = false;
-    void turn.then(() => {
-      settled = true;
-    });
-
-    launchBackgroundTask("b1", "toolu_bash", "local_bash");
-    finishBackgroundTask("b1", "toolu_bash");
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
-
-    await new Promise((r) => setTimeout(r, 30));
-    expect(settled).toBe(false);
-
-    emit({ type: "system", subtype: "init", session_id: "sess_1" });
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
-    await turn;
-  });
-
-  it("ends at the result while a background shell is still running", async () => {
-    const { turn } = await startTurn("s1");
-
-    launchBackgroundTask("b1", "toolu_bash", "local_bash");
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
-    await turn;
-  });
-
-  it("ends at the result when a later tool result already carried the finished task", async () => {
-    const { turn } = await startTurn("s1");
-
-    launchBackgroundTask("t1", "toolu_agent", "local_agent");
-    finishBackgroundTask("t1", "toolu_agent");
-    emit({
-      type: "assistant",
-      session_id: "sess_1",
-      message: {
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_sleep",
-            name: "Bash",
-            input: { command: "sleep 20" },
-          },
-        ],
-      },
-    });
-    emit({
-      type: "user",
-      session_id: "sess_1",
-      message: {
-        content: [
-          { type: "tool_result", tool_use_id: "toolu_sleep", content: "" },
-        ],
-      },
-    });
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
-    await turn;
-  });
-
-  it("ends the turn if the expected follow-up query never starts", async () => {
-    const { turn } = await startTurn("s1");
-    let settled = false;
-    void turn.then(() => {
-      settled = true;
-    });
-
-    vi.useFakeTimers();
-    try {
-      launchBackgroundTask("t1", "toolu_agent", "local_agent");
-      finishBackgroundTask("t1", "toolu_agent");
-      emit({ type: "result", subtype: "success", session_id: "sess_1" });
-
-      await vi.advanceTimersByTimeAsync(9_000);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(settled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-    await turn;
   });
 
   it("does not end the turn on a subagent result", async () => {
@@ -866,6 +926,195 @@ describe("claude subagents", () => {
       type: "session.error",
       message: "Claude Code exited",
     });
+  });
+});
+
+describe("claude background tasks", () => {
+  it("keeps the turn working through a background command and Claude's follow-up", async () => {
+    const { events, turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    emitBackgroundBash();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+    expect(events.some((event) => event.type === "message.completed")).toBe(
+      false,
+    );
+    expect(backgroundUpdates(events)).toEqual([
+      ["Wait 30 seconds then print done"],
+    ]);
+
+    emitBashFinished();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emitFollowUpTurn("It finished and printed done.");
+    await turn;
+    expect(backgroundUpdates(events)).toEqual([
+      ["Wait 30 seconds then print done"],
+      [],
+    ]);
+    // The command waited on sits under the message Claude left off with as
+    // a row of its own, and the reply is a new message after it, once.
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const turn1 = session.blocks.slice(1);
+    const background = turn1.find((block) => block.tool?.background);
+    expect(background?.tool).toMatchObject({
+      callId: "background:b1",
+      status: "completed",
+      detail:
+        'Background command "sleep 30 && echo done" completed (exit code 0)',
+    });
+    expect(background?.text).toContain("sleep 30");
+    expect(
+      turn1
+        .filter((block) => block.role === "assistant" || block.tool?.background)
+        .map((block) => (block.tool?.background ? "[background]" : block.text)),
+    ).toEqual(["waiting", "[background]", "It finished and printed done."]);
+    const items = groupTurnItems(turn1, { settled: true });
+    const fold = foldableWork(items);
+    const answer = items.at(-1);
+    expect(answer?.type === "block" && answer.block.text).toBe(
+      "It finished and printed done.",
+    );
+    // What Claude yielded with is its answer; the follow-up does not fold it.
+    expect(
+      (fold ? foldedBlocks(items, fold) : []).map((block) => block.text),
+    ).not.toContain("waiting");
+  });
+
+  it("shows the waited-on command as a live row under Claude's last message", async () => {
+    const { events } = await startTurn("s1");
+    emitBackgroundBash();
+    await new Promise((r) => setTimeout(r, 10));
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const last = session.blocks.at(-1);
+    expect(session.blocks.at(-2)?.text).toBe("waiting");
+    expect(last?.tool).toMatchObject({
+      background: true,
+      status: "in_progress",
+      kind: "execute",
+    });
+    const items = groupTurnItems(session.blocks.slice(1));
+    const group = items.at(-1);
+    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
+      "Running in background",
+    );
+  });
+
+  it("lets the turn go if a finished task never wakes Claude", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBash();
+
+    vi.useFakeTimers();
+    try {
+      emitBashFinished();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for Claude's follow-up when a command finishes before the result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    emitBackgroundBashLaunch();
+    emitBashFinished();
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emitFollowUpTurn("It finished and printed done.");
+    await turn;
+  });
+
+  it("ends at the result when a later tool result already carried the notice", async () => {
+    const { turn } = await startTurn("s1");
+
+    emitBackgroundBashLaunch();
+    emitBashFinished();
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_ls",
+            name: "Bash",
+            input: { command: "ls" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "toolu_ls", content: "" }],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("lets the turn go if a command finished before the result never wakes Claude", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBashLaunch();
+
+    vi.useFakeTimers();
+    try {
+      emitBashFinished();
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops background commands when the turn is stopped", async () => {
+    const { events, turn } = await startTurn("s1");
+    emitBackgroundBash("b7");
+
+    await cancelClaudeTurn("s1");
+    await turn;
+    const requests = parse().flatMap((m) => {
+      const request = m.request as Record<string, unknown> | undefined;
+      return request ? [request] : [];
+    });
+    expect(requests).toContainEqual({ subtype: "stop_task", task_id: "b7" });
+    expect(requests.at(-1)).toEqual({ subtype: "interrupt" });
+    expect(events.some((event) => event.type === "message.completed")).toBe(
+      true,
+    );
   });
 });
 

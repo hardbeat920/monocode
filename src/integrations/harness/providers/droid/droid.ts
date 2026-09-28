@@ -253,7 +253,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, DROID_ACP_ARGS, input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    DROID_ACP_ARGS,
+    input.cwd,
+    undefined,
+    "droid",
+  );
 
   try {
     try {

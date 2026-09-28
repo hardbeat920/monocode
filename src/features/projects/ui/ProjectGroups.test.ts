@@ -140,7 +140,7 @@ it("creates, styles, assigns, and deletes a group from the rail", async () => {
   ).toBeNull();
 
   const personal = button("personal");
-  act(() =>
+  await act(async () => {
     personal.dispatchEvent(
       new MouseEvent("contextmenu", {
         bubbles: true,
@@ -148,8 +148,8 @@ it("creates, styles, assigns, and deletes a group from the rail", async () => {
         clientX: 20,
         clientY: 40,
       }),
-    ),
-  );
+    );
+  });
   act(() => button("Move to group").click());
   const moveMenu = document.querySelector(
     '[role="menu"][aria-label="Move to group"]',

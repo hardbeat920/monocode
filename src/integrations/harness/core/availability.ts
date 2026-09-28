@@ -14,8 +14,21 @@ import {
   resolvePiBinary,
 } from "./child";
 import { isLiveHarness } from "./registry";
+import {
+  emitHarnessAvailability,
+  harnessAvailabilityProbedAt,
+  markHarnessAvailabilityProbed,
+  setHarnessAvailability,
+  type HarnessAvailability,
+} from "./availabilityState";
 
-export type HarnessAvailability = Record<HarnessId, boolean>;
+export type { HarnessAvailability } from "./availabilityState";
+export {
+  getHarnessAvailabilitySnapshot,
+  hasProbedHarnessAvailability,
+  isHarnessAvailable,
+  subscribeHarnessAvailability,
+} from "./availabilityState";
 
 /**
  * We only ever check whether the binary exists, never whether it is
@@ -45,23 +58,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
 };
 
-let availability: HarnessAvailability = {
-  claude: false,
-  codex: false,
-  cursor: false,
-  grok: false,
-  opencode: false,
-  pi: false,
-  omp: false,
-  fx: false,
-  hermes: false,
-  droid: false,
-  antigravity: false,
-};
-let version = 0;
 let inflight: Promise<void> | null = null;
-let probedAt = 0;
-const listeners = new Set<() => void>();
 
 /**
  * A probe stats ~100 paths across the resolvers. The model picker and the
@@ -70,30 +67,6 @@ const listeners = new Set<() => void>();
  * and `force` covers it.
  */
 const PROBE_TTL_MS = 30_000;
-
-function emit() {
-  version += 1;
-  for (const listener of listeners) listener();
-}
-
-export function subscribeHarnessAvailability(onStoreChange: () => void): () => void {
-  listeners.add(onStoreChange);
-  return () => {
-    listeners.delete(onStoreChange);
-  };
-}
-
-export function getHarnessAvailabilitySnapshot(): number {
-  return version;
-}
-
-export function hasProbedHarnessAvailability(): boolean {
-  return probedAt > 0;
-}
-
-export function isHarnessAvailable(id: HarnessId): boolean {
-  return availability[id];
-}
 
 export function harnessUnavailableHint(id: HarnessId): string {
   const { name, install } = CLI[id];
@@ -105,7 +78,8 @@ export function probeHarnessAvailability(
   options?: { force?: boolean },
 ): Promise<void> {
   if (inflight) return inflight;
-  if (!options?.force && probedAt > 0 && Date.now() - probedAt < PROBE_TTL_MS) {
+  const lastProbe = harnessAvailabilityProbedAt();
+  if (!options?.force && lastProbe > 0 && Date.now() - lastProbe < PROBE_TTL_MS) {
     return Promise.resolve();
   }
   inflight = Promise.all(
@@ -203,13 +177,13 @@ export function probeHarnessAvailability(
     }),
   )
     .then((entries) => {
-      const next = { ...availability };
+      const next = {} as HarnessAvailability;
       for (const [id, ok] of entries) next[id] = ok;
-      availability = next;
-      emit();
+      setHarnessAvailability(next);
+      emitHarnessAvailability();
     })
     .finally(() => {
-      probedAt = Date.now();
+      markHarnessAvailabilityProbed();
       inflight = null;
     });
   return inflight;

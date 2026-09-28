@@ -1,6 +1,7 @@
 import { pathKey } from "../../../shared/lib/paths";
 import { PROJECT_MASCOTS } from "./projectMascots";
-import { TAB_GROUP_COLORS } from "../../workspace/model/tabGroups";
+import { TAB_GROUP_COLORS, tabGroupColor } from "../../workspace/model/tabGroups";
+import { notifyProjectPathsChanged } from "./recents";
 
 const GROUPS_KEY = "monocode.projectGroups";
 const ASSIGNMENTS_KEY = "monocode.projectGroupAssignments";
@@ -79,6 +80,7 @@ export function saveProjectGroups(groups: ProjectGroup[]): boolean {
   });
   try {
     localStorage.setItem(GROUPS_KEY, JSON.stringify(normalized));
+    notifyProjectPathsChanged();
     return true;
   } catch {
     return false;
@@ -113,6 +115,7 @@ export function saveProjectGroupAssignments(
 ): boolean {
   try {
     localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments));
+    notifyProjectPathsChanged();
     return true;
   } catch {
     return false;
@@ -152,6 +155,37 @@ export function rebaseProjectGroupAssignment(from: string, to: string): void {
   if (!(newKey in next)) next[newKey] = next[oldKey];
   delete next[oldKey];
   saveProjectGroupAssignments(next);
+}
+
+export function updateProjectGroup(
+  id: string,
+  update: (group: ProjectGroup) => ProjectGroup,
+): void {
+  const current = loadProjectGroups();
+  if (!current.some((group) => group.id === id)) return;
+  saveProjectGroups(
+    current.map((group) => (group.id === id ? update(group) : group)),
+  );
+}
+
+/** Removes the group; its projects become ungrouped. */
+export function deleteProjectGroup(id: string): boolean {
+  const nextGroups = loadProjectGroups().filter((group) => group.id !== id);
+  if (!saveProjectGroups(nextGroups)) return false;
+  saveProjectGroupAssignments(loadProjectGroupAssignments(nextGroups));
+  return true;
+}
+
+export function projectGroupColor(group: ProjectGroup): string {
+  if (group.customColor) return group.customColor;
+  if (
+    group.colorIndex != null &&
+    group.colorIndex >= 0 &&
+    group.colorIndex < TAB_GROUP_COLORS.length
+  ) {
+    return TAB_GROUP_COLORS[group.colorIndex];
+  }
+  return tabGroupColor(group.id);
 }
 
 export function nextProjectGroupName(groups: ProjectGroup[]): string {

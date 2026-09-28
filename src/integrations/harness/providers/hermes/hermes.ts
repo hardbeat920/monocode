@@ -250,7 +250,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["acp"], input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["acp"],
+    input.cwd,
+    undefined,
+    "hermes",
+  );
 
   try {
     try {

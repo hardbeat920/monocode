@@ -47,7 +47,14 @@ async function discoverModels() {
     () => acp.close(new Error("Antigravity probe exited")),
   );
   try {
-    await spawnChild(PROBE_ID, path, args, antigravitySpawnCwd(path, cwd));
+    await spawnChild(
+      PROBE_ID,
+      path,
+      args,
+      antigravitySpawnCwd(path, cwd),
+      undefined,
+      "antigravity",
+    );
     await acp.request(
       "initialize",
       {

@@ -20,6 +20,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("background work", () => {
+  it("tracks what a yielded turn waits on and drops it when the turn ends", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "hi");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm test"],
+    });
+    expect(session.backgroundTasks).toEqual(["npm test"]);
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: [],
+    });
+    expect(session.backgroundTasks).toBeUndefined();
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm run dev"],
+    });
+    session = stopStreaming(session);
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+});
+
 describe("turn duration", () => {
   it("records the selected provider and model on a user turn", () => {
     const session = appendUser(
@@ -196,6 +220,34 @@ describe("streamed markdown", () => {
     expect(session.blocks[2]).toMatchObject({ role: "assistant", text: "Next message." });
   });
 
+  it("keeps adjacent completed assistant messages in separate blocks", () => {
+    let session = newSession("codex", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "- update the notes and commit",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Connect returned an empty file for one image.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "assistant",
+        text: "- update the notes and commit",
+        streaming: false,
+      },
+      {
+        role: "assistant",
+        text: "Connect returned an empty file for one image.",
+        streaming: false,
+      },
+    ]);
+    expect(session.blocks[0].id).not.toBe(session.blocks[1].id);
+  });
+
   it.each([false, true])("seals open prose at an interjection, with preceding status: %s", status => {
     let session = newSession("omp", "/tmp");
     session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
@@ -311,6 +363,20 @@ describe("appendSteerUser", () => {
       text: "hi",
       noteCard: { id: "n1", slug: "overview", title: "Overview" },
     });
+  });
+});
+
+describe("usage limits", () => {
+  it("records when a limited turn can resume", () => {
+    const limited = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "usage.limited",
+      resetsAt: 5_000,
+    });
+    expect(limited.usageLimit).toEqual({ resetsAt: 5_000 });
+    expect(
+      applyHarnessEvent(newSession("codex", "/tmp"), { type: "usage.limited" })
+        .usageLimit,
+    ).toEqual({});
   });
 });
 
@@ -781,6 +847,32 @@ describe("tool enrichment", () => {
       (block) => block.tool?.callId === "call_1",
     );
     expect(tool?.text).toBe("ls");
+  });
+
+  it("keeps a long shell command instead of the earlier Shell placeholder", () => {
+    const command = `npm run check:web 2>&1 | grep -E "${"test output".repeat(28)}"`;
+    expect(command.length).toBeGreaterThan(240);
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "call_1",
+      title: "Shell",
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      title: command,
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      status: "completed",
+    });
+    expect(session.blocks[0].text).toBe(command);
+    expect(session.blocks[0].tool?.status).toBe("completed");
   });
 });
 

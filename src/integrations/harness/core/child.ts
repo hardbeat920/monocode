@@ -1,5 +1,43 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  runtimeProviderBinaryPath,
+  type ConfigurableBinaryProvider,
+} from "../../../features/providers/model/providerBinaryPaths";
+
+/** Process I/O is supplied by the desktop or a headless host. Provider
+ * protocols never need to know which process owns their children. */
+export interface ChildBackend {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  listen<T>(
+    event: string,
+    handler: (event: { payload: T }) => void,
+  ): Promise<UnlistenFn>;
+}
+
+let backend: ChildBackend | undefined;
+
+export function configureChildBackend(next: ChildBackend): void {
+  if (bridge || users)
+    throw new Error("Configure the child backend before starting the bridge");
+  backend = next;
+}
+
+function invoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  return backend
+    ? backend.invoke<T>(command, args)
+    : tauriInvoke<T>(command, args);
+}
+
+function listen<T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+): Promise<UnlistenFn> {
+  return backend ? backend.listen(event, handler) : tauriListen(event, handler);
+}
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
@@ -147,9 +185,7 @@ function teardownBridge() {
   sseBuffer.clear();
   livePid.clear();
   pendingExit.clear();
-  void pending
-    ?.then((fns) => fns.forEach((fn) => fn()))
-    .catch(() => undefined);
+  void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
 
 export function startHarnessBridge(): () => void {
@@ -239,15 +275,21 @@ export async function spawnChild(
   args: string[],
   cwd: string,
   account?: { provider: "claude" | "codex"; id: string },
+  binaryProvider?: ConfigurableBinaryProvider,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
+  const binaryPath = binaryProvider
+    ? runtimeProviderBinaryPath(binaryProvider)
+    : undefined;
   const pid = await invoke<number>("harness_spawn", {
     sessionId,
     command,
     args,
     cwd,
     account,
+    binaryProvider,
+    binaryPath,
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
@@ -283,51 +325,105 @@ export function killAllChildren(): Promise<void> {
   return invoke("harness_kill_all");
 }
 
-export function resolveCursorBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_cursor");
+type ResolvedHarnessBinary = { path: string; args?: string[] };
+
+async function resolveHarnessBinary(
+  provider: ConfigurableBinaryProvider,
+  binaryPath?: string | null,
+): Promise<ResolvedHarnessBinary> {
+  const configuredPath =
+    binaryPath === undefined
+      ? runtimeProviderBinaryPath(provider)
+      : binaryPath?.trim();
+  if (configuredPath) {
+    return invoke("harness_resolve_configured", {
+      provider,
+      binaryPath: configuredPath,
+    });
+  }
+  const command: Record<ConfigurableBinaryProvider, string> = {
+    claude: "harness_resolve_claude",
+    codex: "harness_resolve_codex",
+    cursor: "harness_resolve_cursor",
+    grok: "harness_resolve_grok",
+    opencode: "harness_resolve_opencode",
+    pi: "harness_resolve_pi",
+    omp: "harness_resolve_omp",
+    fx: "harness_resolve_fx",
+    hermes: "harness_resolve_hermes",
+    droid: "harness_resolve_droid",
+    antigravity: "harness_resolve_antigravity",
+  };
+  return invoke(command[provider]);
 }
 
-export function resolveCodexBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_codex");
+export function resolveCursorBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("cursor", binaryPath);
 }
 
-export function resolveOpenCodeBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_opencode");
+export function resolveCodexBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("codex", binaryPath);
 }
 
-export function resolveClaudeBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_claude");
+export function resolveOpenCodeBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("opencode", binaryPath);
 }
 
-export function resolvePiBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_pi");
+export function resolveClaudeBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("claude", binaryPath);
 }
 
-export function resolveOmpBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_omp");
+export function resolvePiBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("pi", binaryPath);
 }
 
-export function resolveFxBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_fx");
+export function resolveOmpBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("omp", binaryPath);
 }
 
-export function resolveGrokBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_grok");
+export function resolveFxBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("fx", binaryPath);
 }
 
-export function resolveHermesBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_hermes");
+export function resolveGrokBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("grok", binaryPath);
 }
 
-export function resolveDroidBinary(): Promise<{ path: string }> {
-  return invoke("harness_resolve_droid");
+export function resolveHermesBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("hermes", binaryPath);
 }
 
-export function resolveAntigravityBinary(): Promise<{
-  path: string;
-  args: string[];
-}> {
-  return invoke("harness_resolve_antigravity");
+export function resolveDroidBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("droid", binaryPath);
+}
+
+export function resolveAntigravityBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string; args: string[] }> {
+  return resolveHarnessBinary("antigravity", binaryPath) as Promise<{
+    path: string;
+    args: string[];
+  }>;
 }
 
 export function freeHarnessPort(): Promise<number> {
@@ -357,10 +453,58 @@ export function closeHarnessSse(sessionId: string): Promise<void> {
   return invoke("harness_sse_close", { sessionId });
 }
 
+export type HarnessBinaryInspection = {
+  path: string;
+  version?: string;
+  error?: string;
+};
+
+export function inspectHarnessBinary(
+  provider: ConfigurableBinaryProvider,
+  binaryPath?: string | null,
+): Promise<HarnessBinaryInspection> {
+  return resolveHarnessBinary(provider, binaryPath).then(async (resolved) => {
+    if (provider === "antigravity") {
+      return { path: resolved.path, version: "ACP server" };
+    }
+    try {
+      const version = (
+        await execChild(
+          resolved.path,
+          ["--version"],
+          undefined,
+          provider,
+          binaryPath,
+        )
+      ).trim();
+      return /\d+\.\d+\.\d+/.test(version)
+        ? { path: resolved.path, version }
+        : { path: resolved.path, error: "CLI returned no valid version." };
+    } catch (error) {
+      return {
+        path: resolved.path,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+}
+
 export function execChild(
   command: string,
   args: string[],
   cwd?: string,
+  binaryProvider?: ConfigurableBinaryProvider,
+  binaryPathOverride?: string | null,
 ): Promise<string> {
-  return invoke("harness_exec", { command, args, cwd });
+  const binaryPath =
+    binaryPathOverride === undefined && binaryProvider
+      ? runtimeProviderBinaryPath(binaryProvider)
+      : binaryPathOverride;
+  return invoke("harness_exec", {
+    command,
+    args,
+    cwd,
+    binaryProvider,
+    binaryPath,
+  });
 }

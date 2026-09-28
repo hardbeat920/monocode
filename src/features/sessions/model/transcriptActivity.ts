@@ -8,10 +8,15 @@ import {
   isWeakToolTitle,
 } from "../../../integrations/harness/core/preview";
 import { leafName } from "../../files/model/fileName";
-import { displayPath } from "../../../shared/lib/paths";
+import {
+  displayPath,
+  pathKey,
+  resolveWorkspacePath,
+} from "../../../shared/lib/paths";
 import { INTERRUPT_MESSAGE } from "./inFlight";
-import type { Block } from "./session";
+import type { Block, ToolPreview } from "./session";
 import { allModels } from "./models";
+import { monoCodeWorkSummary } from "./monocodeToolCall";
 
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
@@ -199,6 +204,115 @@ export function editVerb(label: string): string {
   if (/^(create|created|add|added|new)$/.test(word)) return "Create";
   if (/^(write|wrote|writing)$/.test(word)) return "Write";
   return "Edit";
+}
+
+export type ToolCallDisplay = {
+  action?: string;
+  target?: string;
+  fileName: string;
+  filePath?: string;
+  isFile: boolean;
+  /**
+   * False when a write preview's own path resolves to a different file than
+   * `filePath` - the label showed one file, but the preview would diff
+   * another. A row like this must fall back to the plain file control rather
+   * than a diff for the wrong file.
+   */
+  previewMatchesFile: boolean;
+};
+
+/**
+ * Parses a tool call row's label into the action/target shown on screen, and
+ * resolves the file path a click should open. The opened path is always
+ * derived from `target` (what the user reads), never from `preview.path` on
+ * its own - those two can disagree (e.g. two files sharing a SKILL.md name,
+ * one under the project and one under a provider's own skills folder), and
+ * opening a path the label never showed is confusing at best.
+ */
+export function resolveToolCallDisplay(
+  label: string,
+  preview: ToolPreview | undefined,
+  cwd: string | undefined,
+): ToolCallDisplay {
+  const parts = label.match(/^(Read|Find|Skill|List|Edit|Write)\s+(.+)$/);
+  const labelVerb = parts?.[1];
+  const labelTarget = parts?.[2];
+  // A write preview carries the path itself, so edits get the same verb + file
+  // chip as reads rather than falling through to a raw label.
+  const writeTarget =
+    preview?.kind === "write"
+      ? preview.path
+        ? displayPath(preview.path, cwd)
+        : preview.fileName
+      : undefined;
+  const isFileVerb = (verb: string | undefined) =>
+    verb === "Read" || verb === "List" || verb === "Edit" || verb === "Write";
+  // A file-verb's captured target is only trustworthy as a path when it
+  // looks like one. Harnesses sometimes phrase these in plain English (e.g.
+  // "Edit dependency versions"), and treating that phrase itself as a
+  // filename both fails to resolve and shoulders out a real path the write
+  // preview already has.
+  const trustedLabelTarget =
+    labelTarget &&
+    (!isFileVerb(labelVerb) || !!resolveWorkspacePath(labelTarget, cwd))
+      ? labelTarget
+      : undefined;
+  const action =
+    labelVerb ??
+    (writeTarget ? editVerb(label) : undefined) ??
+    (/^read$/i.test(label.trim()) && (preview?.path || preview?.fileName)
+      ? "Read"
+      : /^find$/i.test(label.trim()) && preview?.query
+        ? "Find"
+        : /^list$/i.test(label.trim()) && (preview?.path || preview?.fileName)
+          ? "List"
+          : /^skill$/i.test(label.trim())
+            ? "Skill"
+            : undefined);
+  const target =
+    trustedLabelTarget ??
+    writeTarget ??
+    (action === "Read" ||
+    action === "List" ||
+    action === "Edit" ||
+    action === "Write"
+      ? preview?.path
+        ? displayPath(preview.path, cwd)
+        : preview?.fileName
+      : action === "Find"
+        ? preview?.query
+        : undefined);
+  if (!action || !target) {
+    return { fileName: "file", isFile: false, previewMatchesFile: true };
+  }
+  const isFile = action !== "Find" && action !== "Skill";
+  const fileName =
+    preview?.fileName ||
+    target
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .filter(Boolean)
+      .pop() ||
+    "file";
+  // Resolve from `target`, not `preview.path`, so the file that opens always
+  // matches the path the row displays.
+  const filePath = resolveWorkspacePath(target, cwd);
+  // A write preview's own path can still disagree with `target` (e.g. two
+  // files sharing a SKILL.md name). When it does, the preview would render a
+  // diff for a file other than the one the row opens, so callers must not
+  // show it as this row's diff.
+  const hasWritePreviewPath = preview?.kind === "write" && !!preview.path;
+  const previewPath = hasWritePreviewPath
+    ? resolveWorkspacePath(displayPath(preview.path as string, cwd), cwd)
+    : undefined;
+  // A write preview with a path that failed to resolve, or a target that
+  // failed to resolve, is not a confirmed match - it is unknown, and an
+  // unknown match must not render as if it were one. Only "no write preview
+  // path at all" defaults to true, since there is then nothing to disagree.
+  const previewMatchesFile = !hasWritePreviewPath
+    ? true
+    : !!previewPath && !!filePath && pathKey(previewPath) === pathKey(filePath);
+  return { action, target, fileName, filePath, isFile, previewMatchesFile };
 }
 
 /**
@@ -603,6 +717,9 @@ type PhaseTally = {
   edits: Set<string>;
   searches: number;
   runs: number;
+  /** Commands the agent left running when it yielded, and how many still are. */
+  background: number;
+  backgroundLive: number;
   agents: number;
   others: number;
   /** Interjections the turn absorbed. Status rows count nowhere. */
@@ -616,6 +733,8 @@ function tallySteps(steps: Block[]): PhaseTally {
     edits: new Set(),
     searches: 0,
     runs: 0,
+    background: 0,
+    backgroundLive: 0,
     agents: 0,
     others: 0,
     notes: 0,
@@ -645,7 +764,12 @@ function tallySteps(steps: Block[]): PhaseTally {
         tally.agents += 1;
         break;
       case "run":
-        tally.runs += 1;
+        // A background row is the same command again, waited on. It says
+        // what the wait is, not one more command run.
+        if (block.tool?.background) {
+          tally.background += 1;
+          if (toolCallState(block) === "pending") tally.backgroundLive += 1;
+        } else tally.runs += 1;
         break;
       case "research":
         if (/^Find\b/i.test(label) || isSearchTool(kind, title, preview)) {
@@ -683,6 +807,10 @@ function workSummary(
       }
       return live ? "Exploring the project" : "Explored the project";
     case "run":
+      if (tally.backgroundLive > 0) return "Running in background";
+      if (tally.runs === 0 && tally.background > 0) {
+        return "Finished in background";
+      }
       return tally.runs === 1
         ? live
           ? "Running a command"
@@ -719,6 +847,8 @@ function currentWorkKind(steps: Block[]): ActivityWorkKind | undefined {
  * "N notes" clause; a group holding nothing but notes is just that clause.
  */
 export function workSummaryLine(steps: Block[], live = false): string {
+  const appSummary = monoCodeWorkSummary(steps, live);
+  if (appSummary) return appSummary;
   const tally = tallySteps(steps);
   const notes =
     tally.notes === 1
@@ -782,11 +912,15 @@ export type WorkFold = { start: number; end: number };
  * the fold: an answer the harness already showed never folds behind an
  * interjection that arrived after it. A settled turn groups them into the
  * trail itself, where the fold simply spans them.
+ *
+ * The message the agent yielded with, while work it left in the background
+ * was still running, is its answer to the prompt. Whatever a finished task
+ * wakes it up to say afterwards comes below that answer, not in its place.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
   let answered = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  for (let index = yieldedAt(items) - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
       if (answered && isFoldableItem(item)) {
@@ -803,6 +937,24 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let start = end;
   while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
   return { start, end };
+}
+
+/**
+ * Where the fold has to stop: the first group of background rows, which sits
+ * right under the message the agent yielded with. The whole turn when there
+ * is none.
+ */
+function yieldedAt(items: TurnItem[]): number {
+  const index = items.findIndex((item, at) => {
+    const before = items[at - 1];
+    return (
+      item.type === "activity" &&
+      item.blocks.some((block) => !!block.tool?.background) &&
+      before?.type === "block" &&
+      isProseBlock(before.block)
+    );
+  });
+  return index < 0 ? items.length : index;
 }
 
 function isFoldableItem(item: TurnItem): boolean {

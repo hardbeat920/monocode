@@ -71,9 +71,9 @@ it("paces a burst of tool calls so each enters after the one before it", () => {
   render([...head, tool("second"), tool("third"), tool("fourth")]);
   expect(stages()).toEqual(["settled", "entering", "waiting", "waiting"]);
 
-  act(() => vi.advanceTimersByTime(320));
+  act(() => vi.advanceTimersByTime(480));
   expect(stages()).toEqual(["settled", "entering", "entering", "waiting"]);
 
-  act(() => vi.advanceTimersByTime(320));
+  act(() => vi.advanceTimersByTime(480));
   expect(stages()).toEqual(["settled", "entering", "entering", "entering"]);
 });

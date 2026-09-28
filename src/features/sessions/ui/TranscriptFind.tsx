@@ -8,6 +8,7 @@ import {
 import { ChevronDown, ChevronUp, Search, X } from "../../../shared/ui/icons";
 import type { Block } from "../model/session";
 import { findTranscriptBlocks } from "../model/transcriptFind";
+import { keybindingPressed } from "../../settings/model/settings";
 
 type Props = {
   blocks: Block[];
@@ -68,15 +69,18 @@ export function TranscriptFind({
       )
         return;
       const mod = event.metaKey || event.ctrlKey;
-      if (
+      const defaultFind =
         mod &&
         !event.altKey &&
         !event.shiftKey &&
-        event.key.toLowerCase() === "f"
-      ) {
+        event.key.toLowerCase() === "f";
+      if (keybindingPressed("Editor: Find", event, defaultFind)) {
         event.preventDefault();
         event.stopPropagation();
         openFind();
+      } else if (defaultFind) {
+        event.preventDefault();
+        event.stopPropagation();
       } else if (
         open &&
         (event.key === "F3" ||

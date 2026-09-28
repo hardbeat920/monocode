@@ -1,5 +1,6 @@
+import { NativePopupHost } from "./NativePopupHost";
 import { X } from "./icons";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
@@ -41,6 +42,7 @@ export function ModalPanel({
   fitViewport = false,
   children,
 }: Props) {
+  const popupHost = useContext(NativePopupHost);
   const closeRef = useRef<HTMLButtonElement>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const uid = useId();
@@ -70,7 +72,11 @@ export function ModalPanel({
 
   return (
     <div
-      className={`absolute left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2`}
+      className={
+        popupHost
+          ? "relative w-full"
+          : `absolute left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2`
+      }
     >
       <div
         role="dialog"
@@ -130,6 +136,8 @@ export function ModalPanel({
 }
 
 export function Modal(props: Props) {
+  const host = useContext(NativePopupHost);
+  if (host) return createPortal(<ModalPanel {...props} />, host);
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
       <div

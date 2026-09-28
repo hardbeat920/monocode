@@ -1,5 +1,7 @@
+import { NativePopupHost } from "./NativePopupHost";
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -127,7 +129,89 @@ function samePosition(a: PopoverPosition | null, b: PopoverPosition): boolean {
  * no local stacking context can paint over it, placed against its anchor with
  * viewport flipping, and animated in from the anchored edge.
  */
-export function Popover({
+export function Popover(props: Props) {
+  const host = useContext(NativePopupHost);
+  return host ? (
+    <NativePopover {...props} host={host} />
+  ) : (
+    <WebPopover {...props} />
+  );
+}
+
+function NativePopover({
+  host,
+  children,
+  className,
+  maxHeight,
+  onDismiss,
+  ignore,
+  ref,
+  style,
+  autoFocus,
+  dismissOnEscape = true,
+  ...props
+}: Props & { host: HTMLElement }) {
+  const surface = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (autoFocus) surface.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
+  useEffect(() => {
+    if (!onDismiss) return;
+    const key = (event: KeyboardEvent) => {
+      if (!dismissOnEscape || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss("escape");
+    };
+    const outside = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        surface.current?.contains(target) ||
+        (ignore && target.closest(ignore))
+      )
+        return;
+      onDismiss("outside");
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", outside);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", outside);
+    };
+  }, [onDismiss, dismissOnEscape, ignore]);
+  // These position the ordinary web popover; the OS positions this surface.
+  const {
+    anchor: _anchor,
+    side: _side,
+    align: _align,
+    gap: _gap,
+    padding: _padding,
+    width: _width,
+    minHeight: _minHeight,
+    constrainHeight: _constrainHeight,
+    layer: _layer,
+    bare: _bare,
+    ...rest
+  } = props;
+  return createPortal(
+    <div
+      {...rest}
+      ref={(el) => {
+        surface.current = el;
+        if (typeof ref === "function") ref(el);
+        else if (ref) ref.current = el;
+      }}
+      style={{ maxHeight: maxHeight ?? 400, ...style }}
+      className={`relative w-full outline-none ${className ?? ""}`}
+    >
+      {children}
+    </div>,
+    host,
+  );
+}
+
+function WebPopover({
   anchor,
   side = "bottom",
   align = "start",

@@ -158,6 +158,11 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { json } = await import("@codemirror/lang-json");
     return json();
   }
+  if (extension === ".jsonc") {
+    // Lezer's JSON grammar rejects comments; the legacy JS-based mode tokenizes them.
+    const { json } = await import("@codemirror/legacy-modes/mode/javascript");
+    return legacyLanguage(json);
+  }
   if (extension === ".css") {
     const { css } = await import("@codemirror/lang-css");
     return css();

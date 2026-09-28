@@ -298,7 +298,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["acp"], input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["acp"],
+    input.cwd,
+    undefined,
+    "cursor",
+  );
 
   try {
     await acp.request("initialize", {

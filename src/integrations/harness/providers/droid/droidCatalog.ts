@@ -79,7 +79,7 @@ async function discoverDroidModels(
   );
 
   try {
-    await spawnChild(PROBE_ID, path, DROID_ACP_ARGS, cwd);
+    await spawnChild(PROBE_ID, path, DROID_ACP_ARGS, cwd, undefined, "droid");
     await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

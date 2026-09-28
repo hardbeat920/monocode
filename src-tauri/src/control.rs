@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
+
 #[derive(Clone)]
 struct Grant {
     window: String,
@@ -26,16 +28,47 @@ struct Pending {
 struct ActiveTurn {
     window: String,
     cwd: String,
+    app_allowed: bool,
 }
 #[derive(Default)]
 struct Inner {
     grants: HashMap<String, Grant>,
+    app_grants: HashMap<String, Grant>,
     pending: HashMap<String, Pending>,
     workers: HashMap<String, String>,
     scratch: HashMap<String, PathBuf>,
     active: HashMap<String, ActiveTurn>,
 }
 impl Inner {
+    // Provider processes can stay alive between turns, so install the token
+    // before their first spawn. request_grant still requires an opted-in turn.
+    fn prepare_app_grant(&mut self, session: &str, window: &str, cwd: &str) -> bool {
+        if self.workers.contains_key(session) || self.grants.contains_key(session) {
+            return false;
+        }
+        let token = self
+            .app_grants
+            .get(session)
+            .map(|grant| grant.token.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                )
+            });
+        self.app_grants.insert(
+            session.to_string(),
+            Grant {
+                window: window.to_string(),
+                session: session.to_string(),
+                cwd: cwd.to_string(),
+                token,
+            },
+        );
+        true
+    }
+
     fn window_sessions(&self, label: &str) -> Vec<String> {
         let leads: Vec<String> = self
             .grants
@@ -44,6 +77,12 @@ impl Inner {
             .map(|grant| grant.session.clone())
             .collect();
         let mut ids = leads.clone();
+        ids.extend(
+            self.app_grants
+                .values()
+                .filter(|grant| grant.window == label)
+                .map(|grant| grant.session.clone()),
+        );
         ids.extend(
             self.workers
                 .iter()
@@ -63,6 +102,7 @@ impl Inner {
     fn close_window(&mut self, label: &str) -> Vec<String> {
         let ids = self.window_sessions(label);
         self.grants.retain(|id, _| !ids.contains(id));
+        self.app_grants.retain(|id, _| !ids.contains(id));
         self.workers.retain(|id, _| !ids.contains(id));
         self.scratch.retain(|id, _| !ids.contains(id));
         self.active.retain(|id, _| !ids.contains(id));
@@ -101,6 +141,7 @@ fn comparison_path(path: &Path) -> String {
 #[serde(rename_all = "camelCase")]
 struct Request {
     token: String,
+    namespace: String,
     action: String,
     input: Value,
     request_id: String,
@@ -110,10 +151,32 @@ struct Request {
 #[serde(rename_all = "camelCase")]
 struct Event {
     id: String,
+    namespace: String,
     session_id: String,
     request_id: String,
     action: String,
     input: Value,
+}
+
+fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
+    let grant = match namespace {
+        "control" => host.grants.values().find(|grant| grant.token == token),
+        "app" => host.app_grants.values().find(|grant| grant.token == token),
+        _ => return Err("Unknown control namespace".into()),
+    }
+    .cloned()
+    .ok_or("Connection revoked or unauthorized")?;
+    if namespace == "app"
+        && (host.grants.contains_key(&grant.session)
+            || host.workers.contains_key(&grant.session)
+            || !host
+                .active
+                .get(&grant.session)
+                .is_some_and(|turn| turn.window == grant.window && turn.app_allowed))
+    {
+        return Err(APP_TURN_INACTIVE.into());
+    }
+    Ok(grant)
 }
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
@@ -175,12 +238,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         let (tx, rx) = mpsc::channel();
         let grant = {
             let mut host = inner.lock().map_err(|_| "Control service unavailable")?;
-            let grant = host
-                .grants
-                .values()
-                .find(|g| g.token == request.token)
-                .cloned()
-                .ok_or("Connection revoked or unauthorized")?;
+            let grant = request_grant(&host, &request.namespace, &request.token)?;
             if host.pending.len() >= 24 {
                 return Err("Too many pending control requests".into());
             }
@@ -195,6 +253,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         };
         let event = Event {
             id: id.clone(),
+            namespace: request.namespace,
             session_id: grant.session,
             request_id: request.request_id,
             action: request.action,
@@ -212,7 +271,13 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         }
         result
     })();
-    let response = result.unwrap_or_else(|error| json!({"ok": false, "error": error}));
+    let response = result.unwrap_or_else(|error| {
+        if error == APP_TURN_INACTIVE {
+            json!({"ok": false, "error": error, "retryable": false})
+        } else {
+            json!({"ok": false, "error": error})
+        }
+    });
     let _ = writeln!(stream, "{response}");
 }
 
@@ -246,11 +311,14 @@ pub fn control_enable(
     }) {
         return Err("This checkout already has an orchestrator in another session".into());
     }
+    // A lead may return to ordinary chat without respawning its provider.
+    // Keep its app token installed but unusable until a later opted-in turn.
+    inner.prepare_app_grant(&session_id, window.label(), &cwd);
     inner.grants.insert(
         session_id.clone(),
         Grant {
             window: window.label().into(),
-            session: session_id,
+            session: session_id.clone(),
             cwd,
             token: format!(
                 "{}{}",
@@ -309,6 +377,7 @@ pub fn control_attach_worker(
         _ => create_worker_scratch()?,
     };
     inner.workers.insert(session_id.clone(), lead_id);
+    inner.app_grants.remove(&session_id);
     inner.scratch.insert(session_id, scratch.clone());
     Ok(scratch.to_string_lossy().into_owned())
 }
@@ -339,6 +408,7 @@ pub fn control_authorize_turn(
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
+    app_access: bool,
 ) -> Result<(), String> {
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
@@ -357,11 +427,14 @@ pub fn control_authorize_turn(
             return Err("This checkout is controlled by an orchestrator. Stop that run before starting independent work.".into());
         }
     }
+    let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
+    let app_allowed = app_access && eligible;
     inner.active.insert(
         session_id,
         ActiveTurn {
             window: window.label().to_string(),
             cwd,
+            app_allowed,
         },
     );
     Ok(())
@@ -390,7 +463,9 @@ pub fn window_closed(app: &AppHandle, label: &str) {
 
 pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
-        .env_remove("MONOCODE_CONTROL_TOKEN");
+        .env_remove("MONOCODE_CONTROL_TOKEN")
+        .env_remove("MONOCODE_APP_ENDPOINT")
+        .env_remove("MONOCODE_APP_TOKEN");
     let Some(host) = app.try_state::<ControlHost>() else {
         return;
     };
@@ -399,10 +474,21 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)
                 .env("MONOCODE_CONTROL_TOKEN", &grant.token);
         }
+        if let Some(grant) = inner.app_grants.get(session_id) {
+            cmd.env("MONOCODE_APP_ENDPOINT", &host.endpoint)
+                .env("MONOCODE_APP_TOKEN", &grant.token);
+        }
         if let Some(scratch) = inner.scratch.get(session_id) {
             configure_worker_scratch(cmd, scratch);
         }
     };
+}
+
+#[tauri::command]
+pub fn app_cli_path() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -536,6 +622,73 @@ pub fn control_scopes(cwd: String, files: Vec<String>) -> Result<Vec<String>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn app_tokens_are_bound_to_active_turns_and_cannot_control_orchestration() {
+        let mut inner = Inner::default();
+        inner.app_grants.insert(
+            "ordinary".into(),
+            Grant {
+                window: "main".into(),
+                session: "ordinary".into(),
+                cwd: "/repo".into(),
+                token: "app-token".into(),
+            },
+        );
+        assert!(matches!(
+            request_grant(&inner, "app", "app-token"),
+            Err(error) if error == APP_TURN_INACTIVE
+        ));
+        inner.active.insert(
+            "ordinary".into(),
+            ActiveTurn {
+                window: "main".into(),
+                cwd: "/repo".into(),
+                app_allowed: true,
+            },
+        );
+        assert!(request_grant(&inner, "app", "app-token").is_ok());
+        assert!(request_grant(&inner, "control", "app-token").is_err());
+        inner.active.get_mut("ordinary").unwrap().app_allowed = false;
+        assert!(request_grant(&inner, "app", "app-token").is_err());
+        inner.active.remove("ordinary");
+        assert!(request_grant(&inner, "app", "app-token").is_err());
+    }
+    #[test]
+    fn app_token_survives_normal_turns_but_only_works_when_opted_in() {
+        let mut inner = Inner::default();
+        assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
+        let token = inner.app_grants["ordinary"].token.clone();
+        inner.active.insert(
+            "ordinary".into(),
+            ActiveTurn {
+                window: "main".into(),
+                cwd: "/repo".into(),
+                app_allowed: false,
+            },
+        );
+        assert!(request_grant(&inner, "app", &token).is_err());
+        assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
+        assert_eq!(inner.app_grants["ordinary"].token, token);
+        inner.grants.insert(
+            "ordinary".into(),
+            Grant {
+                window: "main".into(),
+                session: "ordinary".into(),
+                cwd: "/repo".into(),
+                token: "control-token".into(),
+            },
+        );
+        assert!(!inner.prepare_app_grant("ordinary", "main", "/repo"));
+        inner.active.get_mut("ordinary").unwrap().app_allowed = true;
+        assert!(request_grant(&inner, "app", &token).is_err());
+        inner.grants.remove("ordinary");
+        assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
+        assert_eq!(inner.app_grants["ordinary"].token, token);
+        inner.active.get_mut("ordinary").unwrap().app_allowed = true;
+        assert!(request_grant(&inner, "app", &token).is_ok());
+        inner.active.remove("ordinary");
+        assert!(request_grant(&inner, "app", &token).is_err());
+    }
     #[cfg(not(windows))]
     #[test]
     fn comparison_keys_preserve_posix_case() {
@@ -610,6 +763,7 @@ mod tests {
                 ActiveTurn {
                     window: window.into(),
                     cwd: format!("/{id}"),
+                    app_allowed: false,
                 },
             );
         }

@@ -247,6 +247,18 @@ export function rateLimitWindowTooltip(
   return `${used} · ${formatResetCountdown(window.resetsAt - now)}`;
 }
 
+/** When a used-up window resets; the later one when several are spent. */
+export function exhaustedWindowResetAt(
+  limits: ProviderRateLimits,
+): number | null {
+  let latest: number | null = null;
+  for (const window of [limits.session, limits.weekly, limits.monthly]) {
+    if (!window || window.usedPercent < 100 || window.resetsAt == null) continue;
+    latest = Math.max(latest ?? 0, window.resetsAt);
+  }
+  return latest;
+}
+
 export function parseResetTimestamp(value: unknown): number | null {
   if (typeof value === "number") {
     return normalizeEpochMs(value);

@@ -28,8 +28,8 @@ async function discoverFxModels() {
   const { path } = await resolveFxBinary();
   const cwd = await homeDir();
   const [modelsOutput, statusOutput] = await Promise.all([
-    execChild(path, ["models", "--json"], cwd),
-    execChild(path, ["status", "--json"], cwd).catch(() => ""),
+    execChild(path, ["models", "--json"], cwd, "fx"),
+    execChild(path, ["status", "--json"], cwd, "fx").catch(() => ""),
   ]);
   return mergeFxCatalogModels(
     modelsFromFxOutput(modelsOutput),

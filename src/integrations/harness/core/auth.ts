@@ -136,8 +136,8 @@ async function runHarnessLogin(
         ? { provider: harness, id: accountId }
         : undefined;
     const spawn = account
-      ? child.spawnChild(childId, path, [...args], cwd, account)
-      : child.spawnChild(childId, path, [...args], cwd);
+      ? child.spawnChild(childId, path, [...args], cwd, account, harness)
+      : child.spawnChild(childId, path, [...args], cwd, undefined, harness);
     void spawn.catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       finish(

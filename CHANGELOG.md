@@ -11,6 +11,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
 
+### Fixed
+
+- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
+- Opening a file with CRLF line endings no longer doubles every line in the editor, preview, and diff view. Saving and staging keep the file's original line endings, and staged-only changes under `core.autocrlf` are shown instead of an empty diff. Fixes #411.
+
+## [0.2.0] - 2026-09-25
+
+### Added
+
+- **BTW** opens a read-only side conversation on a completed agent response without changing the main thread. Use the response's BTW control or `/btw` in the composer. Side conversations support Claude, Codex, Cursor, Grok, OpenCode, Pi, and omp, retain their threads and model settings, and use the provider that produced the original turn even after a handoff. In #353.
+- `/operator` gives an agent opt-in access to MonoCode in that thread through a local `app` CLI. It can inspect models, start or draft sessions, read and message project sessions, organize folders, and read notes. App access lasts for that thread; `/mono` and `/monocode` remain supported aliases. See [Agent access to MonoCode](README.md#agent-access-to-monocode). In #423.
+- Claude and Codex account controls show the cached account's plan, email, and organization in Settings, the account picker, and the usage popover. Identity refreshes after reconnecting. In #372.
+- A usage-limit notice shows the provider's reset time and countdown, pauses queued messages, and offers manual resume or automatic resume after the limit resets.
+- The macOS Quick composer global shortcut can be changed in Settings → Keybindings. The default remains Command+Shift+Space.
+
+### Changed
+
+- The selected Workspace sidebar tab is remembered separately for each project, including when a project is renamed.
+- BTW controls and turn metrics sit with the transcript's response metadata; their hover and focus styles and the BTW popover spacing have been refined.
+- Source-control diff utilities now cover reusing unchanged items and pruning stale entries, with tests for both behaviors.
+- Composer controls fit better in narrow layouts. In #414 by @sambhavthakkar.
+
+### Fixed
+
+- Resuming an interrupted Codex session preserves its saved model and settings while the model catalog loads, instead of temporarily selecting another provider's model. In #422.
+- Closing the last window quits the app on Linux, as it already does on Windows. In #419 by @sambhavthakkar.
+- Escape handling waits for later keydown listeners, so controls can prevent the window-level Escape action when they handle the key themselves.
+
+## [0.1.56] - 2026-09-24
+
+### Added
+
+- On macOS, Quick composer opens a floating prompt over any app with Command+Shift+Space. Choose a project, provider, model, permissions, and working copy; attach files or capture a screenshot; then press Return to start a session in the background or Command+Return to open it. Enable it in Settings → General. In #398.
+- GitHub pull requests in the Inbox show check results, expandable GitHub Actions jobs and steps, and failure details. Failed checks can be sent individually or together to an agent for repair, with progress and the linked conversation tracked in the pull request. In #364.
+- Single-clicking a file, diff, or search result opens a reusable preview tab. Double-clicking its tab or source item, or editing the file, makes it permanent. Preview state survives workspace restoration. In #385.
+- Settings → Providers can set default providers, models, and picker visibility globally or for a selected project. Project defaults apply when opening or moving a blank session into that project. In #395.
+- Settings → Editor has a **Format on save** toggle for Prettier-supported files; it is enabled by default. Turn it off to save the text as typed, including quote style. In #396.
+- Background effects include **Haze**, available globally and per project with a live preview. In #390.
+- When the project rail is compact, its sidebar opens temporarily as a drawer and closes on Escape, an outside click, or session selection. Project menus are available from the project picker even while the rail is hidden, including by right-click or keyboard. In #389.
+
+### Changed
+
+- The collapsed project rail defaults to icon mode for new settings; the hidden rail remains available.
+- Compact-rail live-agent cards have more bottom spacing, and empty sidebar action groups no longer take up space.
+
+### Fixed
+
+- Non-plan Full Access Codex turns now accept supported MCP elicitation confirmations without an additional approval prompt.
+- Claude tool rows reconcile complete streamed input, keep consecutive assistant messages separate, and show background tasks while Claude yields and later resumes.
+- Codex streamed assistant and reasoning text is deduplicated per item instead of repeating completed content.
+- Pi and omp ignore late tool-progress updates after a tool finishes, so completed cards do not return to a running state. In #391.
+- The terminal dock keeps its last chosen side across projects, restarts, and reloads. In #400.
+- Clicking a file in the activity log opens the path shown in its label; mismatched preview paths no longer show an unrelated diff, and home-relative paths resolve correctly. In #330.
+
+## [0.1.55] - 2026-09-23
+
+### Added
+
+- Jira Cloud joins the Inbox with site, email, and API-token connection settings; issue browsing; descriptions and comment threads; comment posting; and shared project filters. **Ask** and **Start work** include the ticket's description and Jira identifier, and Start work lets you choose a local project. This integration uses API tokens without scopes; scoped tokens and Jira Data Center are not supported. See [Jira setup](https://github.com/hardbeat920/monocode/blob/v0.1.55/docs/jira.md).
+- Jira issues support background activity notifications, project-level mute controls scoped to each Jira site, and **Issue appeared** automation triggers that run in the automation's selected workspace. Project lists follow pagination, connection failures remain isolated from other Inbox providers, and disconnecting clears saved credentials and cached Jira content.
+- Conversations have in-transcript Find with match highlighting, previous/next navigation, and Command/Ctrl+F, F3, and Command/Ctrl+G shortcuts. Global conversation-search results now jump to the matching transcript block.
+- Command/Ctrl+Up and Command/Ctrl+Down switch to the previous or next session inside the focused tab. Sessions already visible elsewhere swap panes instead of mounting twice.
+- The session sidebar can be shown or hidden independently through the title bar, View menu, or Command/Ctrl+Shift+B, with the choice remembered across launches.
+- Background artwork supports Dither, ASCII, Halftone, and Scanlines effects, processed in a worker and cached by image revision and theme. Effects can be selected globally or overridden per project with a live preview. Initial background-effect support in #347 by @404khai.
+- Claude Opus 5.5 sessions have a dedicated animated welcome scene that adapts to the available space around the Composer, alongside the existing Astra welcome screen.
+
+### Changed
+
+- Chat is the default transcript layout; saved choices of chat or full-width layout remain unchanged.
+- Sent prompts rise into the transcript, and the Composer moves into its dock on the first message without changing width. Streaming replies reveal words progressively, while tool steps use paced, masked entrance animations to smooth bursts of updates. Motion respects reduced-motion preferences.
+- Switching sessions preserves recently rendered transcripts and scroll positions, prefetches neighboring sessions, and avoids redundant transcript saves. Deferred cleanup, memoized sidebar cards, and staged initial transcript rendering reduce work during navigation and improve first paint.
+- Sidebar diff statistics use tighter spacing around thousands separators.
+- The project background dialog stays within the viewport with scrollable content and updated effect controls.
+
+### Fixed
+
+- Explorer sorts numbered files and folders naturally, placing names such as `chapter-2` before `chapter-10` while keeping folders first. In #356 by @404khai.
+- Opening a file in its default application validates the path and reports launch failures. File and tab context-menu actions show actionable errors instead of silently failing.
+
 ## [0.1.54] - 2026-09-22
 
 ### Added
@@ -970,7 +1049,10 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.1.54...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0
+[0.1.56]: https://github.com/hardbeat920/monocode/compare/v0.1.55...v0.1.56
+[0.1.55]: https://github.com/hardbeat920/monocode/compare/v0.1.54...v0.1.55
 [0.1.54]: https://github.com/hardbeat920/monocode/compare/v0.1.53...v0.1.54
 [0.1.53]: https://github.com/hardbeat920/monocode/compare/v0.1.52...v0.1.53
 [0.1.52]: https://github.com/hardbeat920/monocode/compare/v0.1.51...v0.1.52

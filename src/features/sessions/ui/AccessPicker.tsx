@@ -1,4 +1,10 @@
-import { ChevronDown, Lock, LockOpen, Pencil, Sparkles } from "../../../shared/ui/icons";
+import {
+  ChevronDown,
+  Lock,
+  Pencil,
+  Shield,
+  Sparkles,
+} from "../../../shared/ui/icons";
 import {
   useEffect,
   useRef,
@@ -26,7 +32,7 @@ const ICONS: Record<RuntimeMode, typeof Lock> = {
   supervised: Lock,
   "auto-accept-edits": Pencil,
   auto: Sparkles,
-  "full-access": LockOpen,
+  "full-access": Shield,
 };
 
 export function AccessPicker({
@@ -81,6 +87,7 @@ export function AccessPicker({
     <div ref={root} className="relative">
       <button
         type="button"
+        data-access-picker-trigger
         title={`${RUNTIME_MODE_HINT[value]}${busy ? " Changes apply to the next turn." : ""}`}
         aria-label={RUNTIME_MODE_LABEL[value]}
         aria-expanded={open}
@@ -99,7 +106,10 @@ export function AccessPicker({
             : "bg-selection text-content hover:bg-selection-hover"
         }`}
       >
-        <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
+        <Icon
+          className={`size-3.5 shrink-0 ${value === "full-access" ? "text-amber-400/90" : ""}`}
+          strokeWidth={1.75}
+        />
         <span className="min-w-0 truncate text-[11px]">
           {RUNTIME_MODE_LABEL[value]}
         </span>
@@ -142,7 +152,7 @@ export function AccessPicker({
                 }`}
               >
                 <ModeIcon
-                  className="mt-0.5 size-3.5 shrink-0 text-content/70"
+                  className={`mt-0.5 size-3.5 shrink-0 ${mode === "full-access" ? "text-amber-400/90" : "text-content/70"}`}
                   strokeWidth={1.75}
                 />
                 <span className="min-w-0">

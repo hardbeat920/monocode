@@ -44,6 +44,7 @@ import {
   subscribeLinkedSessionSeen,
 } from "../model/linkedSessionSeen";
 import { loadHiddenLinearTeamIds } from "../model/linear";
+import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { playCue } from "../../settings/model/sounds";
@@ -221,6 +222,7 @@ export function useInboxActivity(
         state: inboxFetchState(filters),
         search: "",
         linearHiddenTeamIds: loadHiddenLinearTeamIds(),
+        jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
       };
       try {
         const listed = await listInboxItems(projects, query, { force });
@@ -265,7 +267,10 @@ export function useInboxActivity(
           markInboxItemsSeen(selfAuthoredEntries);
         }
         for (const item of selfAuthored) {
-          if (item.provider !== "github" || item.kind === "linear") continue;
+          if (
+            item.provider !== "github" ||
+            (item.kind !== "issue" && item.kind !== "pr")
+          ) continue;
           const updatedAt = Date.parse(item.updatedAt);
           if (!Number.isFinite(updatedAt)) continue;
           const key = linkedWorkItemUpdateKey({
@@ -345,10 +350,13 @@ export function useInboxActivity(
       if (!document.hidden) void pull(true);
     };
     document.addEventListener("visibilitychange", onVis);
+    const onJiraChange = () => void pull(true);
+    window.addEventListener(JIRA_CHANGE_EVENT, onJiraChange);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener(JIRA_CHANGE_EVENT, onJiraChange);
       stopSelfActivity();
     };
   }, [applyUnseen, cwd, recents, targetKey]);

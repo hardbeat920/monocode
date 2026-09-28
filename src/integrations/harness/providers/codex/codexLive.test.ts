@@ -69,6 +69,7 @@ async function startTurn(
     expectResume?: boolean;
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
+    controlsAgents?: boolean;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -87,6 +88,7 @@ async function startTurn(
     modelSettings: {},
     providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
+    controlsAgents: options.controlsAgents,
     intent: options.intent,
     text: "summarize the changelog",
     attachments: [],
@@ -143,6 +145,178 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("reopens a thread when app access changes its network policy", async () => {
+    const first = await startTurn("codex-live", { runtimeMode: "auto" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+
+    sent.length = 0;
+    const appTurn = await startTurn("codex-live", {
+      runtimeMode: "auto",
+      controlsAgents: true,
+      expectResume: true,
+    });
+    expect(parse().find((message) => message.method === "thread/resume")?.params)
+      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    expect(parse().find((message) => message.method === "turn/start")?.params)
+      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await appTurn.turn;
+
+    sent.length = 0;
+    const ordinaryTurn = await startTurn("codex-live", {
+      runtimeMode: "auto",
+      expectResume: true,
+    });
+    expect(parse().find((message) => message.method === "thread/resume")?.params)
+      .toMatchObject({ sandboxPolicy: { type: "workspaceWrite" } });
+    expect(
+      (parse().find((message) => message.method === "thread/resume")?.params as {
+        sandboxPolicy: Record<string, unknown>;
+      }).sandboxPolicy,
+    ).not.toHaveProperty("networkAccess");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await ordinaryTurn.turn;
+  });
+
+  it.each([
+    { name: "fully streamed", chunks: ["Here is the ", "final answer."] },
+    { name: "partially streamed", chunks: ["Here is the "] },
+    { name: "completion only", chunks: [] },
+  ])("emits a $name final answer once after commentary", async ({ chunks }) => {
+    const { events, turn } = await startTurn("codex-live");
+    const commentary = "I'll inspect the workspace first.\n\n";
+    const answer = "Here is the final answer.";
+    notify("item/agentMessage/delta", {
+      itemId: "commentary",
+      delta: commentary,
+    });
+    notify("item/completed", {
+      item: { id: "commentary", type: "agentMessage", text: commentary },
+    });
+    for (const delta of chunks) {
+      notify("item/agentMessage/delta", { itemId: "final", delta });
+    }
+    // A repeated completion must also be harmless.
+    for (let i = 0; i < 2; i++) {
+      notify("item/completed", {
+        item: { id: "final", type: "agentMessage", text: answer },
+      });
+    }
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe(commentary + answer);
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("codex", "/repo"),
+    );
+    expect(session.blocks).toMatchObject([
+      { role: "assistant", text: commentary, streaming: false },
+      { role: "assistant", text: answer, streaming: false },
+    ]);
+  });
+
+  it("keeps completion history for separate items and preserves repeated tokens", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    const complete = (id: string, text: string) =>
+      notify("item/completed", {
+        item: { id, type: "agentMessage", text },
+      });
+    complete("first", "Earlier commentary.\n\n");
+    for (const delta of ["very ", "very ", "good."]) {
+      notify("item/agentMessage/delta", { itemId: "second", delta });
+    }
+    complete("first", "Earlier commentary.\n\n");
+    complete("second", "very very good.");
+    // The same text in a different item is real new output.
+    complete("third", "Earlier commentary.\n\n");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text),
+    ).toEqual([
+      "Earlier commentary.\n\n",
+      "very ",
+      "very ",
+      "good.",
+      "Earlier commentary.\n\n",
+    ]);
+  });
+
+  it("deduplicates reasoning completions per item", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const [itemId, text] of [
+      ["reason_1", "First thought."],
+      ["reason_2", "Next thought."],
+    ]) {
+      notify("item/reasoning/summaryTextDelta", {
+        itemId,
+        summaryIndex: 0,
+        delta: text,
+      });
+      notify("item/completed", {
+        item: {
+          id: itemId,
+          type: "reasoning",
+          summary: [{ type: "summary_text", text }],
+        },
+      });
+    }
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    expect(
+      events
+        .filter((event) => event.type === "reasoning.delta")
+        .map((event) => event.text),
+    ).toEqual(["First thought.", "Next thought."]);
+  });
+
+  it("resets text tracking between turns when an item id is reused", async () => {
+    const itemId = "reused_item";
+    const { events, turn } = await startTurn("codex-live");
+    const text = "The answer.";
+    const complete = () =>
+      notify("item/completed", {
+        item: { id: itemId, type: "agentMessage", text },
+      });
+    notify("item/agentMessage/delta", { itemId, delta: text });
+    complete();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const nextTurn = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Repeat the answer",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().filter((m) => m.method === "turn/start").length === 2,
+      "next turn",
+    );
+    const request = parse().filter((m) => m.method === "turn/start")[1];
+    reply(request.id as number, { turn: { id: "turn_2" } });
+    notify("turn/started", { turn: { id: "turn_2" } });
+    complete();
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await nextTurn;
+    expect(
+      events
+        .filter((event) => event.type === "message.delta")
+        .map((event) => event.text),
+    ).toEqual([text, text]);
   });
 
   it("keeps retries and HTTP fallback out of a successful turn's transcript", async () => {
@@ -852,14 +1026,9 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
-  it.each([
-    { decision: "allow", boolean: false },
-    { decision: "deny", boolean: false },
-    { decision: "allow", boolean: true },
-    { decision: "deny", boolean: true },
-  ] as const)(
-    "shows other MCP confirmation in Full Access and sends $decision, boolean=$boolean",
-    async ({ decision, boolean }) => {
+  it.each([false, true])(
+    "auto-approves supported MCP confirmations in Full Access, boolean=%s",
+    async (boolean) => {
       const { events, turn } = await startTurn("codex-live", {
         runtimeMode: "full-access",
       });
@@ -881,52 +1050,56 @@ describe("codex live turn sequence", () => {
           },
         }),
       );
-      await waitFor(
-        () => events.some((e) => e.type === "approval.requested"),
-        "MCP approval UI",
-      );
-      expect(parse().some((m) => m.id === 91)).toBe(false);
-      const approval = events.find((e) => e.type === "approval.requested")!;
-      respondCodexApproval("codex-live", approval.requestId, decision);
       await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
       expect(parse().find((m) => m.id === 91)?.result).toEqual({
-        action: decision === "allow" ? "accept" : "decline",
-        content:
-          decision === "allow" ? (boolean ? { approved: true } : {}) : null,
+        action: "accept",
+        content: boolean ? { approved: true } : {},
         _meta: null,
       });
+      expect(events.some((e) => e.type === "approval.requested")).toBe(false);
       notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
       await turn;
     },
   );
 
-  it("auto-approves computer-use app access in Full Access", async () => {
+  it("keeps plan MCP confirmations explicit in Full Access", async () => {
     const { events, turn } = await startTurn("codex-live", {
       runtimeMode: "full-access",
+      intent: "plan",
     });
     onLine!(
       JSON.stringify({
         id: 91,
         method: "mcpServer/elicitation/request",
         params: {
-          serverName: "cua_repl",
+          serverName: "example",
           mode: "form",
-          message: 'Allow Computer Use to use "QuickTime Player"?',
+          message: "Read this source?",
           requestedSchema: {
             type: "object",
-            properties: {},
-            required: [],
+            properties: { approved: { type: "boolean" } },
+            required: ["approved"],
           },
         },
       }),
     );
-    await waitFor(() => parse().some((m) => m.id === 91), "MCP response");
-    expect(parse().find((m) => m.id === 91)?.result).toEqual({
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "plan MCP approval UI",
+    );
+    const approval = events.find(
+      (event) => event.type === "approval.requested",
+    )!;
+    respondCodexApproval("codex-live", approval.requestId, "allow");
+    await waitFor(
+      () => parse().some((message) => message.id === 91),
+      "MCP response",
+    );
+    expect(parse().find((message) => message.id === 91)?.result).toEqual({
       action: "accept",
-      content: {},
+      content: { approved: true },
       _meta: null,
     });
-    expect(events.some((e) => e.type === "approval.requested")).toBe(false);
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
   });

@@ -77,6 +77,8 @@ describe("harness login", () => {
       "/bin/claude",
       ["auth", "login"],
       "/home/alice",
+      undefined,
+      "claude",
     );
 
     const onExit = child.watchChild.mock.calls[0]?.[2] as
@@ -94,6 +96,7 @@ describe("harness login", () => {
       ["login"],
       "/home/alice",
       { provider: "codex", id: "account-work" },
+      "codex",
     );
 
     const onExit = child.watchChild.mock.calls[0]?.[2] as
