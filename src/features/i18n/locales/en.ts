@@ -68,6 +68,113 @@ export const en = {
     noProjectsYet: "No projects yet",
   },
   settings: {
+    workspace: {
+      title: "Workspace",
+      description: "How project navigation and workspace tabs behave.",
+      fileTabsLabel: "File tabs",
+      fileTabsDesc:
+        "Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes.",
+      besideChat: "Beside chat",
+      topBar: "Top bar",
+      notesLabel: "Notes",
+      notesDesc:
+        "A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat.",
+      quickComposerLabel: "Quick composer",
+      quickComposerDesc:
+        "Float a prompt over any app to start a session without switching to MonoCode.",
+      workingAgentsLabel: "Working agents",
+      workingAgentsDesc:
+        "When two or more chats are in flight, a card on the project rail lists them so you can jump across projects.",
+      closeToTrayLabel: "Close to tray",
+      closeToTrayDesc:
+        "Closing a window hides it to the system tray instead of quitting.",
+      aboutTitle: "About",
+    },
+    chatPage: {
+      transcriptTitle: "Transcript",
+      transcriptDesc: "How a conversation reads as it grows.",
+      transcriptLayout: "Transcript layout",
+      transcriptLayoutDesc:
+        "Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app.",
+      fullWidth: "Full width",
+      chatBubble: "Chat",
+      anchorPrompts: "Anchor prompts to top",
+      anchorPromptsDesc:
+        "When you send, the new prompt sits at the top of the transcript and the reply grows into the space below.",
+      composerTitle: "Composer",
+      composerDesc: "What the composer does with what you type.",
+      followUpBehavior: "Follow-up behavior",
+      followUpDesc:
+        "Queue follow-ups until the active turn finishes, or steer the active turn immediately.",
+      queue: "Queue",
+      steer: "Steer",
+      modelControls: "Model controls",
+      modelControlsDesc:
+        "Show model options beside the picker instead of inside the model menu.",
+      menu: "Menu",
+      beside: "Beside",
+      editorTitle: "Editor",
+      editorDesc: "What happens when you save a file in the workspace editor.",
+      formatOnSave: "Format on save",
+      formatOnSaveDesc:
+        "Run Prettier on supported files before writing. Off keeps the text you typed, including quote style.",
+      codeReviewTitle: "Code review",
+      codeReviewDesc: "Where a turn's changes open when you go to read them.",
+      diffView: "Diff view",
+      diffViewDesc:
+        "Editor keeps working-tree changes in the file. Unified stacks every changed file in one review.",
+      editor: "Editor",
+      unified: "Unified",
+      extrasTitle: "Extras",
+      extrasDesc:
+        "Idle animation, and nothing else. Turn both off for a still workspace.",
+      composerMascot: "Composer mascot",
+      composerMascotDesc:
+        "When a turn is running, the project mascot runs along the composer.",
+      emptySessionGames: "Empty session games",
+      emptySessionGamesDesc:
+        "Pac-man and snake idle on the empty-session grid.",
+    },
+    providersPage: {
+      globalScope: "Global",
+      defaultsScope: "Provider defaults scope",
+      scopeDesc:
+        "A provider is listed as installed once its CLI is found on your PATH.",
+      defaultBadge: "Default",
+      useByDefault: "Use by default",
+      showInPicker: "Show in picker",
+      hiddenGlobally: "Hidden globally",
+      modelsAvailable: "{count} models available.",
+      claudeHooks: "Claude Code hooks",
+      claudeHooksDesc: "Run the hooks configured in your settings.json files.",
+      accountsTitle: "Accounts",
+      accountsDesc:
+        "Create isolated sign-ins for providers that support account profiles.",
+      addAccount: "Add account",
+    },
+    keybindingsPage: {
+      shortcutsTitle: "Shortcuts",
+      shortcutsDesc:
+        "Click a shortcut to record new keys. Press Delete while recording to disable it.",
+      filter: "Filter",
+      commandHeader: "Command",
+      keybindingHeader: "Keybinding",
+      whenHeader: "When",
+      noMatching: "No matching bindings",
+    },
+    archivePage: {
+      projectsTitle: "Archived projects",
+      projectsDesc:
+        "Archive a project from the rail to keep its chats without listing it in the sidebar.",
+      showArchived: "Show archived in the sidebar",
+      showArchivedDesc:
+        "Keep archived conversations listed alongside the active ones.",
+      restore: "Restore",
+      delete: "Delete",
+      noProjects: "No archived projects.",
+      noConversations: "No archived conversations in this project.",
+    },
+
     title: "Settings",
     language: {
       groupTitle: "Language",

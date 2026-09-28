@@ -70,6 +70,112 @@ export const zhCN: TranslationDict = {
     noProjectsYet: "暂无项目",
   },
   settings: {
+    workspace: {
+      title: "工作区",
+      description: "项目导航与工作区标签页的行为模式。",
+      fileTabsLabel: "文件标签页",
+      fileTabsDesc:
+        "在当前聊天旁以分栏打开文件，或在顶栏作为独立标签页展示。顶部标签同样支持组合为分栏。",
+      besideChat: "聊天旁分栏",
+      topBar: "顶部标签栏",
+      notesLabel: "随手笔记 (Notes)",
+      notesDesc:
+        "在项目导轨上展示全局 Markdown 笔记本。可从会话记录中保存，并在需要时通过 @note 引用到对话中。",
+      quickComposerLabel: "全局快捷输入框",
+      quickComposerDesc:
+        "在任意应用程序中呼出悬浮输入框，无需切换到 MonoCode 即可直接向项目发起新会话。",
+      workingAgentsLabel: "后台运行中智能体",
+      workingAgentsDesc:
+        "当有两个或更多会话在执行时，在项目导轨卡片中列出它们以便跨项目快速跳转查看。",
+      closeToTrayLabel: "关闭至托盘",
+      closeToTrayDesc:
+        "关闭主窗口时将其隐藏至系统托盘而不是完全退出，保持后台运行中的智能体继续工作。",
+      aboutTitle: "关于 MonoCode",
+    },
+    chatPage: {
+      transcriptTitle: "对话时间线",
+      transcriptDesc: "会话增长过程中的呈现与排版方式。",
+      transcriptLayout: "对话布局",
+      transcriptLayoutDesc:
+        "全宽平铺模式将提示词展开为全宽卡片；居中气泡模式将用户消息右对齐并限制最大宽度，类似即时通讯聊天软件。",
+      fullWidth: "全宽平铺",
+      chatBubble: "居中气泡",
+      anchorPrompts: "提示词固定置顶",
+      anchorPromptsDesc:
+        "发送后新提示词固定在对话时间线顶部，回复在下方展开。关闭此项可保持经典底部吸附模式。",
+      composerTitle: "输入框行为",
+      composerDesc: "输入框对你输入的文字的处理行为。",
+      followUpBehavior: "追加提示词行为",
+      followUpDesc:
+        "在当前回合完成前将追加消息加入排队等待，或立即引导智能体插话执行。",
+      queue: "排队等待",
+      steer: "立即插话",
+      modelControls: "模型控制项展示",
+      modelControlsDesc:
+        "在选择器旁平铺显示模型控制选项，而不是收进下拉菜单内。",
+      menu: "收进菜单",
+      beside: "平铺在旁",
+      editorTitle: "代码编辑器",
+      editorDesc: "在工作区编辑器中保存文件时的触发行为。",
+      formatOnSave: "保存时格式化",
+      formatOnSaveDesc:
+        "在写入前对支持的文件类型执行 Prettier 格式化。关闭则保留原始输入的文本与引号格式。",
+      codeReviewTitle: "代码审查",
+      codeReviewDesc: "智能体执行修改后查看代码变更的方式。",
+      diffView: "代码对比视图",
+      diffViewDesc:
+        "原生编辑器视图在文件中展示工作树更改；统一视图则将所有修改的文件堆叠在一个连续的审查流中展示。",
+      editor: "原生编辑器",
+      unified: "统一审查流",
+      extrasTitle: "趣味与动效",
+      extrasDesc: "空闲时的趣味动效。关闭两者可保持工作区完全静止。",
+      composerMascot: "输入框小吉祥物",
+      composerMascotDesc:
+        "当任务执行时，项目小吉祥物会在输入框上奔跑、跳跃并拾取金币。",
+      emptySessionGames: "空会话复古小游戏",
+      emptySessionGamesDesc:
+        "在空白会话网格上闲逛的吃豆人与贪吃蛇。鼠标悬停即可接管操作。",
+    },
+    providersPage: {
+      globalScope: "全局设置",
+      defaultsScope: "默认服务生效范围",
+      scopeDesc:
+        "一旦在 PATH 环境变量中检测到 CLI，该服务即标记为已安装。未安装或关闭显示的服务不会出现在选择器中。服务旁选中的模型为新会话的默认模型；设为默认可将该服务设为主平台。",
+      defaultBadge: "默认",
+      useByDefault: "设为默认",
+      showInPicker: "在选择器中显示",
+      hiddenGlobally: "全局隐藏",
+      modelsAvailable: "{count} 个可用模型",
+      claudeHooks: "Claude Code 钩子支持",
+      claudeHooksDesc:
+        "执行 settings.json 中配置的钩子（PreToolUse 命令重写、拦截、通知等）。在下一回合生效。",
+      accountsTitle: "多账户管理",
+      accountsDesc:
+        "为支持多身份的服务创建隔离的登录账户，可在底部用量控制栏中快速切换。",
+      addAccount: "添加账户",
+    },
+    keybindingsPage: {
+      shortcutsTitle: "快捷键映射",
+      shortcutsDesc:
+        "点击快捷键以录制新按键。录制过程中按 Delete 可禁用该快捷键。",
+      filter: "筛选快捷键...",
+      commandHeader: "功能命令",
+      keybindingHeader: "按键组合",
+      whenHeader: "触发时机",
+      noMatching: "未找到匹配的快捷键",
+    },
+    archivePage: {
+      projectsTitle: "已归档项目",
+      projectsDesc:
+        "从项目导轨归档项目以保留其历史会话，但不在侧边栏常驻展示。",
+      showArchived: "在侧边栏显示已归档会话",
+      showArchivedDesc: "将已归档的会话与当前活跃会话并列展示。",
+      restore: "恢复",
+      delete: "彻底删除",
+      noProjects: "暂无归档项目。",
+      noConversations: "当前项目中暂无已归档会话。",
+    },
+
     title: "设置",
     language: {
       groupTitle: "语言设置",

@@ -871,20 +871,32 @@ function GeneralPage({
       </Group>
 
       <Group
-        title="Workspace"
-        description="How project navigation and workspace tabs behave."
+        title={t("settings.workspace.title", "Workspace")}
+        description={t(
+          "settings.workspace.description",
+          "How project navigation and workspace tabs behave.",
+        )}
       >
         <Row
           id="file-tabs"
-          label="File tabs"
-          description="Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes."
+          label={t("settings.workspace.fileTabsLabel", "File tabs")}
+          description={t(
+            "settings.workspace.fileTabsDesc",
+            "Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes.",
+          )}
         >
           <Segmented
             label="File tabs"
             value={fileTabMode}
             options={[
-              { value: "pane", label: "Beside chat" },
-              { value: "workspace", label: "Top bar" },
+              {
+                value: "pane",
+                label: t("settings.workspace.besideChat", "Beside chat"),
+              },
+              {
+                value: "workspace",
+                label: t("settings.workspace.topBar", "Top bar"),
+              },
             ]}
             onChange={onFileTabMode}
           />
@@ -930,8 +942,11 @@ function GeneralPage({
         )}
         <Row
           id="working-agents"
-          label="Working agents"
-          description="When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session."
+          label={t("settings.workspace.workingAgentsLabel", "Working agents")}
+          description={t(
+            "settings.workspace.workingAgentsDesc",
+            "When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session.",
+          )}
         >
           <Toggle
             label="Working agents"
@@ -954,7 +969,7 @@ function GeneralPage({
         )}
       </Group>
 
-      <Group title="About">
+      <Group title={t("settings.workspace.aboutTitle", "About")}>
         <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
       </Group>
     </>
@@ -962,6 +977,7 @@ function GeneralPage({
 }
 
 function ChatPage() {
+  const { t } = useTranslation();
   const [transcriptLayout, setTranscriptLayout] =
     useState<TranscriptLayout>(loadTranscriptLayout);
   const [transcriptAnchor, setTranscriptAnchor] =
@@ -1030,28 +1046,43 @@ function ChatPage() {
   return (
     <>
       <Group
-        title="Transcript"
-        description="How a conversation reads as it grows."
+        title={t("settings.chatPage.transcriptTitle", "Transcript")}
+        description={t(
+          "settings.chatPage.transcriptDesc",
+          "How a conversation reads as it grows.",
+        )}
       >
         <Row
           id="transcript-layout"
-          label="Transcript layout"
-          description="Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app."
+          label={t("settings.chatPage.transcriptLayout", "Transcript layout")}
+          description={t(
+            "settings.chatPage.transcriptLayoutDesc",
+            "Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app.",
+          )}
         >
           <Segmented
             label="Transcript layout"
             value={transcriptLayout}
             options={[
-              { value: "full", label: "Full width" },
-              { value: "chat", label: "Chat" },
+              {
+                value: "full",
+                label: t("settings.chatPage.fullWidth", "Full width"),
+              },
+              {
+                value: "chat",
+                label: t("settings.chatPage.chatBubble", "Chat"),
+              },
             ]}
             onChange={onTranscriptLayout}
           />
         </Row>
         <Row
           id="anchor-prompts"
-          label="Anchor prompts to top"
-          description="When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer."
+          label={t("settings.chatPage.anchorPrompts", "Anchor prompts to top")}
+          description={t(
+            "settings.chatPage.anchorPromptsDesc",
+            "When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer.",
+          )}
         >
           <Toggle
             label="Anchor prompts to top"
@@ -1062,35 +1093,47 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Composer"
-        description="What the composer does with what you type."
+        title={t("settings.chatPage.composerTitle", "Composer")}
+        description={t(
+          "settings.chatPage.composerDesc",
+          "What the composer does with what you type.",
+        )}
       >
         <Row
           id="follow-up"
-          label="Follow-up behavior"
-          description="Queue follow-ups until the active turn finishes, or steer the active turn immediately."
+          label={t("settings.chatPage.followUpBehavior", "Follow-up behavior")}
+          description={t(
+            "settings.chatPage.followUpDesc",
+            "Queue follow-ups until the active turn finishes, or steer the active turn immediately.",
+          )}
         >
           <Segmented
             label="Follow-up behavior"
             value={followUpBehavior}
             options={[
-              { value: "queue", label: "Queue" },
-              { value: "steer", label: "Steer" },
+              { value: "queue", label: t("settings.chatPage.queue", "Queue") },
+              { value: "steer", label: t("settings.chatPage.steer", "Steer") },
             ]}
             onChange={onFollowUpBehavior}
           />
         </Row>
         <Row
           id="model-controls"
-          label="Model controls"
-          description="Show model options beside the picker instead of inside the model menu."
+          label={t("settings.chatPage.modelControls", "Model controls")}
+          description={t(
+            "settings.chatPage.modelControlsDesc",
+            "Show model options beside the picker instead of inside the model menu.",
+          )}
         >
           <Segmented
             label="Model controls"
             value={modelControls}
             options={[
-              { value: "menu", label: "Menu" },
-              { value: "beside", label: "Beside" },
+              { value: "menu", label: t("settings.chatPage.menu", "Menu") },
+              {
+                value: "beside",
+                label: t("settings.chatPage.beside", "Beside"),
+              },
             ]}
             onChange={onModelControls}
           />
@@ -1098,13 +1141,19 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Editor"
-        description="What happens when you save a file in the workspace editor."
+        title={t("settings.chatPage.editorTitle", "Editor")}
+        description={t(
+          "settings.chatPage.editorDesc",
+          "What happens when you save a file in the workspace editor.",
+        )}
       >
         <Row
           id="format-on-save"
-          label="Format on save"
-          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+          label={t("settings.chatPage.formatOnSave", "Format on save")}
+          description={t(
+            "settings.chatPage.formatOnSaveDesc",
+            "Run Prettier on supported files before writing. Off keeps the text you typed, including quote style.",
+          )}
         >
           <Toggle
             label="Format on save"
@@ -1115,20 +1164,32 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Code review"
-        description="Where a turn's changes open when you go to read them."
+        title={t("settings.chatPage.codeReviewTitle", "Code review")}
+        description={t(
+          "settings.chatPage.codeReviewDesc",
+          "Where a turn's changes open when you go to read them.",
+        )}
       >
         <Row
           id="diff-view"
-          label="Diff view"
-          description="Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines."
+          label={t("settings.chatPage.diffView", "Diff view")}
+          description={t(
+            "settings.chatPage.diffViewDesc",
+            "Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines.",
+          )}
         >
           <Segmented
             label="Diff view"
             value={diffViewer}
             options={[
-              { value: "editor", label: "Editor" },
-              { value: "unified", label: "Unified" },
+              {
+                value: "editor",
+                label: t("settings.chatPage.editor", "Editor"),
+              },
+              {
+                value: "unified",
+                label: t("settings.chatPage.unified", "Unified"),
+              },
             ]}
             onChange={onDiffViewer}
           />
@@ -1136,13 +1197,19 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Extras"
-        description="Idle animation, and nothing else. Turn both off for a still workspace."
+        title={t("settings.chatPage.extrasTitle", "Extras")}
+        description={t(
+          "settings.chatPage.extrasDesc",
+          "Idle animation, and nothing else. Turn both off for a still workspace.",
+        )}
       >
         <Row
           id="composer-mascot"
-          label="Composer mascot"
-          description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
+          label={t("settings.chatPage.composerMascot", "Composer mascot")}
+          description={t(
+            "settings.chatPage.composerMascotDesc",
+            "When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin.",
+          )}
         >
           <Toggle
             label="Composer mascot"
@@ -1152,8 +1219,14 @@ function ChatPage() {
         </Row>
         <Row
           id="empty-session-games"
-          label="Empty session games"
-          description="Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still."
+          label={t(
+            "settings.chatPage.emptySessionGames",
+            "Empty session games",
+          )}
+          description={t(
+            "settings.chatPage.emptySessionGamesDesc",
+            "Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still.",
+          )}
         >
           <Toggle
             label="Empty session games"
@@ -2679,6 +2752,7 @@ function KeybindingShortcutEditor({
 }
 
 function KeybindingsPage() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [overrides, setOverrides] = useState(loadKeybindingOverrides);
   useEffect(
@@ -2697,8 +2771,11 @@ function KeybindingsPage() {
 
   return (
     <Group
-      title="Shortcuts"
-      description="Click a shortcut to record new keys. Press Delete while recording to disable it."
+      title={t("settings.keybindingsPage.shortcutsTitle", "Shortcuts")}
+      description={t(
+        "settings.keybindingsPage.shortcutsDesc",
+        "Click a shortcut to record new keys. Press Delete while recording to disable it.",
+      )}
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2709,7 +2786,7 @@ function KeybindingsPage() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter"
+              placeholder={t("settings.keybindingsPage.filter", "Filter")}
               aria-label="Filter keybindings"
               spellCheck={false}
               autoComplete="off"
@@ -2720,13 +2797,19 @@ function KeybindingsPage() {
       }
     >
       <div className="flex items-center border-b border-stroke bg-content/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
-        <span className="min-w-0 flex-1">Command</span>
-        <span className="w-40 shrink-0">Keybinding</span>
-        <span className="w-28 shrink-0">When</span>
+        <span className="min-w-0 flex-1">
+          {t("settings.keybindingsPage.commandHeader", "Command")}
+        </span>
+        <span className="w-40 shrink-0">
+          {t("settings.keybindingsPage.keybindingHeader", "Keybinding")}
+        </span>
+        <span className="w-28 shrink-0">
+          {t("settings.keybindingsPage.whenHeader", "When")}
+        </span>
       </div>
       {rows.length === 0 ? (
         <p className="px-4 py-3 text-[12px] text-content/45">
-          No matching bindings
+          {t("settings.keybindingsPage.noMatching", "No matching bindings")}
         </p>
       ) : (
         rows.map((row) => {
@@ -3126,6 +3209,7 @@ function ProvidersPage({
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
+  const { t } = useTranslation();
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
   );
@@ -3134,7 +3218,7 @@ function ProvidersPage({
     const options: { value: string; label: string; icon?: ReactNode }[] = [
       {
         value: GLOBAL_PROVIDER_SCOPE,
-        label: "Global",
+        label: t("settings.providersPage.globalScope", "Global"),
         icon: (
           <Globe
             className="size-3.5 shrink-0 text-content/60"
@@ -3229,7 +3313,10 @@ function ProvidersPage({
         title="Agent CLIs"
         action={
           <Select
-            label="Provider defaults scope"
+            label={t(
+              "settings.providersPage.defaultsScope",
+              "Provider defaults scope",
+            )}
             value={scope}
             options={scopeOptions}
             onChange={setScope}
@@ -3285,8 +3372,11 @@ function ProvidersPage({
       <Group title="Advanced">
         <Row
           id="claude-hooks"
-          label="Claude Code hooks"
-          description="Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn."
+          label={t("settings.providersPage.claudeHooks", "Claude Code hooks")}
+          description={t(
+            "settings.providersPage.claudeHooksDesc",
+            "Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn.",
+          )}
         >
           <Toggle
             label="Claude Code hooks"
@@ -3656,6 +3746,7 @@ function ProviderRow({
   onModelChange: (harness: HarnessId, model: string) => void;
   onPickerVisible: (visible: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const models = modelsFor(harness);
   const available = isHarnessAvailable(harness);
   const current =
@@ -3701,12 +3792,16 @@ function ProviderRow({
         onClick={() => current && onDefault(harness, current.id)}
         disabled={isDefault || !current}
       >
-        {isDefault ? "Default" : "Use by default"}
+        {isDefault
+          ? t("settings.providersPage.defaultBadge", "Default")
+          : t("settings.providersPage.useByDefault", "Use by default")}
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-content/50">
-            {pickerLocked ? "Hidden globally" : "Show in picker"}
+            {pickerLocked
+              ? t("settings.providersPage.hiddenGlobally", "Hidden globally")
+              : t("settings.providersPage.showInPicker", "Show in picker")}
           </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
@@ -3756,6 +3851,7 @@ function ArchivePage({
 }) {
   const [filters, setFilters] = useState(loadSessionSidebarFilters);
   const [deleting, setDeleting] = useState<ArchivedProject | null>(null);
+  const { t } = useTranslation();
   const archivedProjects = useArchivedProjects();
   const archived = useMemo(
     () =>
@@ -3774,12 +3870,15 @@ function ArchivePage({
   return (
     <>
       <Group
-        title="Archived projects"
-        description="Archive a project from the rail to keep its chats without listing it in the sidebar."
+        title={t("settings.archivePage.projectsTitle", "Archived projects")}
+        description={t(
+          "settings.archivePage.projectsDesc",
+          "Archive a project from the rail to keep its chats without listing it in the sidebar.",
+        )}
       >
         {archivedProjects.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived projects.
+            {t("settings.archivePage.noProjects", "No archived projects.")}
           </p>
         ) : (
           archivedProjects.map((project) => (
@@ -3819,8 +3918,14 @@ function ArchivePage({
       >
         <Row
           id="show-archived"
-          label="Show archived in the sidebar"
-          description="Keep archived conversations listed alongside the active ones."
+          label={t(
+            "settings.archivePage.showArchived",
+            "Show archived in the sidebar",
+          )}
+          description={t(
+            "settings.archivePage.showArchivedDesc",
+            "Keep archived conversations listed alongside the active ones.",
+          )}
         >
           <Toggle
             label="Show archived in the sidebar"
@@ -3834,7 +3939,10 @@ function ArchivePage({
           </p>
         ) : archived.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived conversations in this project.
+            {t(
+              "settings.archivePage.noConversations",
+              "No archived conversations in this project.",
+            )}
           </p>
         ) : (
           archived.map((session) => (
