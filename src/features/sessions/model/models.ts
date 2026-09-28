@@ -201,7 +201,7 @@ export const MODELS: AgentModel[] = [
   {
     id: "opencrabs:default",
     harness: "opencrabs",
-    name: "Default",
+    name: "Configured model",
     nativeId: "",
   },
 ];
