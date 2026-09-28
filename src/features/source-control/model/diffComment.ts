@@ -1,3 +1,4 @@
+import type { ChatContextItem } from "../../sessions/model/chatContext";
 import type { UnifiedLine } from "./unifiedDiff";
 
 export type DiffCommentTarget = {
@@ -5,28 +6,35 @@ export type DiffCommentTarget = {
   line: UnifiedLine;
 };
 
-export function diffCommentLocation({ path, line }: DiffCommentTarget): string {
-  const number = line.kind === "del" ? line.oldNumber : line.newNumber;
-  return number == null ? path : `${path}:${number}`;
+function diffCommentLine({ line }: DiffCommentTarget): number | null {
+  return line.kind === "del" ? line.oldNumber : line.newNumber;
 }
 
-export function formatDiffComment(
+export function diffCommentLocation(target: DiffCommentTarget): string {
+  const number = diffCommentLine(target);
+  return number == null ? target.path : `${target.path}:${number}`;
+}
+
+/** A context chip for a comment on one diff line, or null for an empty comment. */
+export function diffCommentContext(
   target: DiffCommentTarget,
   comment: string,
-): string {
+): ChatContextItem | null {
   const body = comment.replace(/\r\n?/g, "\n").trim();
-  if (!body) return "";
+  if (!body) return null;
 
-  const marker =
-    target.line.kind === "add" ? "+" : target.line.kind === "del" ? "-" : " ";
-  const deleted = target.line.kind === "del" ? " (deleted line)" : "";
-  const location = diffCommentLocation(target).replace(/`/g, "\\`");
-
-  return [
-    `Diff comment on \`${location}\`${deleted}:`,
-    "",
-    `> ${marker}${target.line.text}`,
-    "",
-    body,
-  ].join("\n");
+  const line = diffCommentLine(target);
+  return {
+    kind: "comment",
+    path: target.path.replace(/\\/g, "/"),
+    ...(line != null ? { line } : {}),
+    change:
+      target.line.kind === "add"
+        ? "added"
+        : target.line.kind === "del"
+          ? "removed"
+          : "unchanged",
+    code: target.line.text.replace(/\r$/, ""),
+    comment: body,
+  };
 }

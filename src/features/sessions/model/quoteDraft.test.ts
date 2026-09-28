@@ -1,41 +1,42 @@
 import { describe, expect, it } from "vitest";
 import {
-  acknowledgeQuoteRequest,
-  appendSelectionQuote,
+  acknowledgeComposerInsert,
+  appendComposerInsert,
   composerSeedForAddToChat,
-  consumeQuoteRequest,
+  consumeComposerInsert,
   isMarkdownBlockquotePosition,
-  type QuoteRequest,
+  type ComposerInsertRequest,
 } from "./quoteDraft";
+import { splitChatContext, type ChatContextItem } from "./chatContext";
 
-describe("appendSelectionQuote", () => {
-  it("formats a multiline selection and leaves room for a reply", () => {
-    expect(appendSelectionQuote("", " line one\r\nline two ")).toBe(
-      "> line one\n> line two\n\n",
-    );
-  });
+const code: ChatContextItem = {
+  kind: "code",
+  path: "src/value.ts",
+  startLine: 3,
+  endLine: 5,
+};
 
-  it("preserves intentional blank lines inside a quote", () => {
-    expect(appendSelectionQuote("", "one\n\ntwo")).toBe("> one\n>\n> two\n\n");
-  });
-
+describe("appendComposerInsert", () => {
   it.each([
-    ["draft", "draft\n\n> quote\n\n"],
-    ["draft\n", "draft\n\n> quote\n\n"],
-    ["draft\n\n", "draft\n\n> quote\n\n"],
+    ["", "Comment\n\n"],
+    ["draft", "draft\n\nComment\n\n"],
+    ["draft\n", "draft\n\nComment\n\n"],
+    ["draft\n\n", "draft\n\nComment\n\n"],
   ])("separates an existing draft %#", (draft, expected) => {
-    expect(appendSelectionQuote(draft, "quote")).toBe(expected);
+    expect(appendComposerInsert(draft, " Comment\r\n")).toBe(expected);
   });
 
-  it("ignores whitespace-only selections", () => {
-    expect(appendSelectionQuote("draft", "  \n ")).toBe("draft");
+  it("ignores whitespace-only text", () => {
+    expect(appendComposerInsert("draft", "  \n ")).toBe("draft");
   });
 });
 
 describe("composerSeedForAddToChat", () => {
-  it("preserves the requested insertion mode for a new composer", () => {
-    expect(composerSeedForAddToChat("selected")).toBe("> selected\n\n");
-    expect(composerSeedForAddToChat("Comment", "plain")).toBe("Comment\n\n");
+  it("seeds a new composer with the chip and no typed text", () => {
+    expect(splitChatContext(composerSeedForAddToChat(code))).toEqual({
+      text: "",
+      items: [code],
+    });
   });
 });
 
@@ -52,47 +53,54 @@ describe("isMarkdownBlockquotePosition", () => {
   });
 });
 
-describe("consumeQuoteRequest", () => {
-  const request: QuoteRequest = { id: 1, text: "selected" };
+describe("consumeComposerInsert", () => {
+  const request: ComposerInsertRequest = {
+    id: 1,
+    kind: "context",
+    item: code,
+  };
 
-  it("consumes a request once", () => {
-    expect(consumeQuoteRequest("draft", null, request)).toEqual({
-      draft: "draft\n\n> selected\n\n",
+  it("adds a context chip once and leaves the draft alone", () => {
+    expect(consumeComposerInsert("draft", [], null, request)).toEqual({
+      draft: "draft",
+      context: [code],
       consumedId: 1,
       changed: true,
     });
-    expect(consumeQuoteRequest("draft", 1, request)).toEqual({
+    expect(consumeComposerInsert("draft", [], 1, request)).toEqual({
       draft: "draft",
+      context: [],
       consumedId: 1,
       changed: false,
     });
   });
 
-  it("accepts a new id even when the text is identical", () => {
+  it("does not attach the same chip twice", () => {
     expect(
-      consumeQuoteRequest("", 1, { id: 2, text: "selected" }),
-    ).toMatchObject({ consumedId: 2, changed: true });
+      consumeComposerInsert("", [code], 1, { ...request, id: 2 }),
+    ).toMatchObject({ context: [code], consumedId: 2, changed: false });
   });
 
-  it("inserts plain text without quoting", () => {
+  it("inserts text into the draft", () => {
     expect(
-      consumeQuoteRequest("draft", null, {
+      consumeComposerInsert("draft", [code], null, {
         id: 3,
+        kind: "text",
         text: "Note: Auth\n\nUse a cookie.",
-        mode: "plain",
       }),
     ).toEqual({
       draft: "draft\n\nNote: Auth\n\nUse a cookie.\n\n",
+      context: [code],
       consumedId: 3,
       changed: true,
     });
   });
 });
 
-describe("acknowledgeQuoteRequest", () => {
+describe("acknowledgeComposerInsert", () => {
   it("clears only the request that was acknowledged", () => {
-    const current: QuoteRequest = { id: 2, text: "newer" };
-    expect(acknowledgeQuoteRequest(current, 2)).toBeUndefined();
-    expect(acknowledgeQuoteRequest(current, 1)).toBe(current);
+    const current: ComposerInsertRequest = { id: 2, kind: "text", text: "x" };
+    expect(acknowledgeComposerInsert(current, 2)).toBeUndefined();
+    expect(acknowledgeComposerInsert(current, 1)).toBe(current);
   });
 });

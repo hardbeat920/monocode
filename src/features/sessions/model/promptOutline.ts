@@ -1,3 +1,4 @@
+import { chatContextSummary, splitChatContext } from "./chatContext";
 import type { Block } from "./session";
 
 /** A vertical span in viewport coordinates. */
@@ -51,7 +52,10 @@ export function barWindow(
 export function promptLabel(block: Block): string {
   const card = block.secondOpinion;
   const textShown = !card || card.kind === "handoff";
-  const text = textShown ? firstLine(block.text) : "";
+  const prompt = textShown
+    ? splitChatContext(block.text)
+    : { text: "", items: [] };
+  const text = firstLine(prompt.text);
   if (text) return text;
   if (card) {
     if (card.kind === "handoff") return "Handoff";
@@ -59,6 +63,7 @@ export function promptLabel(block: Block): string {
     return request ? `Second opinion: ${request}` : "Second opinion";
   }
   if (block.noteCard?.title) return block.noteCard.title;
+  if (prompt.items.length > 0) return chatContextSummary(prompt.items);
   const files = block.attachments ?? [];
   if (files.length > 0) {
     const [first] = files;

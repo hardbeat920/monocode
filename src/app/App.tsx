@@ -315,10 +315,8 @@ import {
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
-import {
-  ADD_TO_CHAT_EVENT,
-  type AddToChatRequest,
-} from "../features/sessions/model/quoteDraft";
+import { ADD_TO_CHAT_EVENT } from "../features/sessions/model/quoteDraft";
+import type { ChatContextItem } from "../features/sessions/model/chatContext";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
@@ -1220,8 +1218,8 @@ export default function App({
 
   useEffect(() => {
     const openSessionForAddToChat = (event: Event) => {
-      const detail = (event as CustomEvent<AddToChatRequest>).detail;
-      if (!detail?.text) return;
+      const item = (event as CustomEvent<ChatContextItem>).detail;
+      if (!item) return;
 
       const result = applyAddToChatRequest({
         sessions: sessionsRef.current,
@@ -1230,8 +1228,7 @@ export default function App({
         projectCwd: projectCwdRef.current,
         fallbackCwd: sessionDefaults?.cwd,
         defaultRuntimeMode: sessionDefaults?.runtimeMode,
-        text: detail.text,
-        mode: detail.mode,
+        item,
       });
       if (!result) return;
 

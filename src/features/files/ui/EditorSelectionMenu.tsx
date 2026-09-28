@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { MessageSquarePlus } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import {
-  formatEditorSelectionReference,
+  editorSelectionContext,
   type EditorCodeSelection,
 } from "../model/editorSelection";
 import { requestAddToChat } from "../../sessions/model/quoteDraft";
@@ -51,7 +51,7 @@ export function EditorSelectionMenu({
         type="button"
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
-          requestAddToChat(formatEditorSelectionReference(selection), "plain");
+          requestAddToChat(editorSelectionContext(selection));
           onDismiss();
         }}
         className="flex h-7 items-center gap-1.5 rounded-lg px-2 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"

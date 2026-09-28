@@ -1176,6 +1176,23 @@ header[data-tauri-drag-region] button {
   }
 }
 
+@keyframes chat-context-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.96);
+  }
+}
+
+.chat-context-chip-enter {
+  animation: chat-context-chip-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-context-chip-enter {
+    animation: none;
+  }
+}
+
 .shimmer-text {
   background-image:
     linear-gradient(

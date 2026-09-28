@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { diffCommentLocation, formatDiffComment } from "./diffComment";
+import { diffCommentContext, diffCommentLocation } from "./diffComment";
 
 describe("diff comments", () => {
-  it("formats a comment on a current line for the composer", () => {
+  it("turns a comment on a current line into a context chip", () => {
     const target = {
       path: "src/auth.ts",
       line: {
@@ -14,37 +14,38 @@ describe("diff comments", () => {
     };
 
     expect(diffCommentLocation(target)).toBe("src/auth.ts:42");
-    expect(formatDiffComment(target, " Please handle a missing cookie. ")).toBe(
-      [
-        "Diff comment on `src/auth.ts:42`:",
-        "",
-        "> +const token = readCookie();",
-        "",
-        "Please handle a missing cookie.",
-      ].join("\n"),
+    expect(diffCommentContext(target, " Please handle a missing cookie. ")).toEqual(
+      {
+        kind: "comment",
+        path: "src/auth.ts",
+        line: 42,
+        change: "added",
+        code: "const token = readCookie();",
+        comment: "Please handle a missing cookie.",
+      },
     );
   });
 
-  it("uses the old line number and labels deleted lines", () => {
+  it("uses the old line number for a removed line", () => {
     expect(
-      formatDiffComment(
+      diffCommentContext(
         {
           path: "src/old.ts",
           line: {
             kind: "del",
-            text: "legacy();",
+            text: "legacy();\r",
             oldNumber: 8,
             newNumber: null,
           },
         },
         "Keep this behavior.",
       ),
-    ).toContain("`src/old.ts:8` (deleted line)");
+    ).toMatchObject({ line: 8, change: "removed", code: "legacy();" });
   });
 
   it("ignores an empty comment", () => {
     expect(
-      formatDiffComment(
+      diffCommentContext(
         {
           path: "README.md",
           line: {
@@ -56,6 +57,6 @@ describe("diff comments", () => {
         },
         " \n ",
       ),
-    ).toBe("");
+    ).toBeNull();
   });
 });

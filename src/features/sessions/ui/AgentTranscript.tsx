@@ -86,6 +86,8 @@ import { AgentMarkdown } from "./AgentMarkdown";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
 import { parseUserMessageLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
+import { ChatContextChip } from "./ChatContextChip";
+import { splitChatContext } from "../model/chatContext";
 import {
   activityPhaseTitle,
   activityStillRunning,
@@ -1309,6 +1311,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         layout={layout}
         stickyIndex={stickyIndex}
         cwd={cwd}
+        onOpenFile={onOpenFile}
         onEdit={onEditLastTurn}
         editing={editing}
         onSaveNote={onSaveNote}
@@ -1428,6 +1431,7 @@ function UserMessageBlock({
   onEdit,
   editing = false,
   cwd,
+  onOpenFile,
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
@@ -1438,6 +1442,7 @@ function UserMessageBlock({
   onEdit?: () => void;
   editing?: boolean;
   cwd?: string;
+  onOpenFile?: (path: string) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
@@ -1448,8 +1453,15 @@ function UserMessageBlock({
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
-  const text =
-    card && card.kind !== "handoff" ? "" : visibleUserPrompt(block.text);
+  const prompt = useMemo(
+    () =>
+      card && card.kind !== "handoff"
+        ? { text: "", items: [] }
+        : splitChatContext(visibleUserPrompt(block.text)),
+    [block.text, card],
+  );
+  const text = prompt.text;
+  const context = prompt.items;
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -1459,6 +1471,7 @@ function UserMessageBlock({
     Boolean(text) &&
     !block.draft &&
     !block.attachments?.length &&
+    !context.length &&
     !card &&
     !note;
 
@@ -1532,11 +1545,19 @@ function UserMessageBlock({
           }`}
           style={{ zIndex: stickyIndex }}
         >
-          {block.attachments?.length ? (
+          {context.length || block.attachments?.length ? (
             <div
-              className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}
+              data-user-message-context
+              className={`flex flex-wrap items-center gap-1.5 ${text || card || note ? "mb-2" : ""}`}
             >
-              {block.attachments.map((file) => (
+              {context.map((item, index) => (
+                <ChatContextChip
+                  key={index}
+                  item={item}
+                  onOpenFile={onOpenFile}
+                />
+              ))}
+              {block.attachments?.map((file) => (
                 <AttachmentChip key={file.id} attachment={file} />
               ))}
             </div>

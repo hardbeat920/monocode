@@ -6,6 +6,7 @@ import {
   promptPreview,
 } from "./promptOutline";
 import type { Block } from "./session";
+import { composeChatContext } from "./chatContext";
 
 const viewport = { top: 100, bottom: 500 };
 
@@ -136,5 +137,20 @@ describe("promptPreview", () => {
 
   it("returns null for an unknown prompt", () => {
     expect(promptPreview([], "missing")).toBeNull();
+  });
+
+  it("titles a prompt by its typed text, else by its attached context", () => {
+    const code = {
+      kind: "code" as const,
+      path: "src/app/App.tsx",
+      startLine: 12,
+      endLine: 40,
+    };
+    const blocks = [
+      block("u1", "user", composeChatContext("Explain this", [code])),
+      block("u2", "user", composeChatContext("", [code])),
+    ];
+    expect(promptPreview(blocks, "u1")?.title).toBe("Explain this");
+    expect(promptPreview(blocks, "u2")?.title).toBe("App.tsx:12-40");
   });
 });
