@@ -42,6 +42,8 @@ import {
 import {
   AccountStatusLabel,
   barClass,
+  meterWindows,
+  UsageMeter,
 } from "../../features/providers/ui/ProviderAccountUsage";
 import {
   identityKey,
@@ -511,6 +513,7 @@ function ProviderAccountPicker({
           const orgTag = identityOrganizationTag(identity);
           const subtitle = identitySubtitle(identity);
           const usage = usageFor(account);
+          const meters = meterWindows(usage);
           return (
             <button
               key={account.id}
@@ -551,9 +554,20 @@ function ProviderAccountPicker({
                     status={accountStatus(usage, now)}
                     className="min-w-0"
                   />
-                  <span className="min-w-2 flex-1" />
-                  <UsageSummary limits={usage} />
                 </span>
+                {meters.length > 0 ? (
+                  <span className="mt-2 flex gap-3">
+                    {meters.map((entry) => (
+                      <UsageMeter
+                        key={entry.title}
+                        title={entry.title}
+                        window={entry.window}
+                        now={now}
+                        className="min-w-0 flex-1"
+                      />
+                    ))}
+                  </span>
+                ) : null}
               </span>
               {selected ? (
                 <Check
@@ -586,25 +600,6 @@ function ProviderAccountPicker({
         </button>
       ) : null}
     </div>
-  );
-}
-
-/** "5h 4% · wk 30%", the same compact form as the footer chip. */
-function UsageSummary({ limits }: { limits: ProviderRateLimits | undefined }) {
-  const windows = limits ? usageWindows(limits) : [];
-  if (windows.length === 0) return null;
-  return (
-    <span className="shrink-0 text-[10px] tabular-nums text-content/40">
-      {windows.map((entry, index) => (
-        <span key={entry.key}>
-          {index > 0 ? <span className="text-content/20"> · </span> : null}
-          {formatWindowLabel(entry.window.windowMinutes)}{" "}
-          <span className={entry.window.usedPercent >= 100 ? "text-red-400" : ""}>
-            {formatUsagePercent(entry.window.usedPercent)}
-          </span>
-        </span>
-      ))}
-    </span>
   );
 }
 

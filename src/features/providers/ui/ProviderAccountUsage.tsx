@@ -78,6 +78,17 @@ export function AccountUsageRefresh({ usage }: { usage: AccountUsage }) {
   );
 }
 
+/** Titled 5h / weekly / monthly windows an account has data for. */
+export function meterWindows(
+  limits: ProviderRateLimits | undefined,
+): { title: string; window: RateLimitWindow }[] {
+  return [
+    limits?.session ? { title: "5h", window: limits.session } : null,
+    limits?.weekly ? { title: "Weekly", window: limits.weekly } : null,
+    limits?.monthly ? { title: "Monthly", window: limits.monthly } : null,
+  ].filter((entry) => entry != null);
+}
+
 /** Compact 5h / weekly meters for one account row. */
 export function AccountUsageMeters({
   limits,
@@ -86,11 +97,7 @@ export function AccountUsageMeters({
   limits: ProviderRateLimits | undefined;
   now: number;
 }) {
-  const windows = [
-    limits?.session ? { title: "5h", window: limits.session } : null,
-    limits?.weekly ? { title: "Weekly", window: limits.weekly } : null,
-    limits?.monthly ? { title: "Monthly", window: limits.monthly } : null,
-  ].filter((entry) => entry != null);
+  const windows = meterWindows(limits);
 
   if (windows.length === 0) {
     const loading =
@@ -124,14 +131,16 @@ export function AccountUsageMeters({
   );
 }
 
-function UsageMeter({
+export function UsageMeter({
   title,
   window,
   now,
+  className = "w-36",
 }: {
   title: string;
   window: RateLimitWindow;
   now: number;
+  className?: string;
 }) {
   const pct = clampUsedPercent(window.usedPercent);
   const full = pct >= 100 && (window.resetsAt == null || window.resetsAt > now);
@@ -143,7 +152,7 @@ function UsageMeter({
         : formatResetDuration(window.resetsAt - now);
   return (
     <div
-      className="w-36"
+      className={className}
       title={
         window.resetsAt == null
           ? undefined
