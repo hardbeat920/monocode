@@ -522,7 +522,7 @@ function ProviderAccountPicker({
               aria-selected={selected}
               aria-label={account.label}
               aria-describedby={`${statusId}-${account.id}`}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] ring-1 ring-inset transition-colors ${
+              className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[11px] ring-1 ring-inset transition-colors ${
                 selected
                   ? "bg-accent/10 text-content ring-accent/20"
                   : "bg-content/[0.035] text-content/70 ring-content/[0.06] hover:bg-content/[0.075] hover:text-content"
@@ -547,14 +547,18 @@ function ProviderAccountPicker({
                   ) : null}
                 </span>
                 <span className="mt-1 flex min-w-0 items-center gap-3 text-[10px]">
-                  <span id={`${statusId}-${account.id}`} className="min-w-0">
+                  <span
+                    id={`${statusId}-${account.id}`}
+                    // Without meters, a long "unknown" reason truncates.
+                    className={meters.length > 0 ? "shrink-0" : "min-w-0"}
+                  >
                     <AccountStatusLabel
                       status={accountStatus(usage, now)}
                       className="min-w-0"
                     />
                   </span>
                   {meters.length > 0 ? (
-                    <span className="ml-auto flex w-44 shrink-0 gap-2.5">
+                    <span className="flex min-w-0 flex-1 gap-2.5">
                       {meters.map((entry) => (
                         // Short "5h" / "wk" titles, as on the footer chip.
                         <UsageMeter
