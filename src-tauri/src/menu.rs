@@ -464,8 +464,12 @@ fn build(
             .separator()
             .item(&quit)
             .build()?;
-        let window_menu =
-            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
+        // Tauri registers this submenu via NSApp.setWindowsMenu:, which throws
+        // on macOS 12 when the menu is empty and aborts the app at launch.
+        let window_menu = SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window")
+            .minimize()
+            .maximize()
+            .build()?;
         return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
     }
 
