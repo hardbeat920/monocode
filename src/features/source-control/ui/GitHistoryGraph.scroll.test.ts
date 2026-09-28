@@ -151,9 +151,7 @@ beforeEach(() => {
   window.innerHeight = VIEWPORT.height;
   anchorTop = 300;
   observers = [];
-  // The card reads the real message and stats modules, whose caches are
-  // singletons that outlive the test, so a shared repo path between two tests
-  // would leave the second one reading the first one's cached commit.
+  // Module singletons that outlive the test.
   clearCommitMessageCache();
   clearCommitStatsCache();
   // happy-dom has no IntersectionObserver, so stand one in that records what

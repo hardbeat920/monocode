@@ -116,7 +116,6 @@ beforeEach(() => {
   mockMessage.mockReset();
   mockMessage.mockResolvedValue(commit.subject);
   mockCopy.mockClear();
-  // Both caches are module singletons that outlive the test.
   clearCommitMessageCache();
   clearCommitStatsCache();
   container = document.createElement("div");
@@ -278,16 +277,33 @@ describe("CommitHoverCard", () => {
     render("/workspace/width");
     await flush();
 
-    // VS Code's editor hover has exactly one sizing rule:
-    // `max-width: 500px`. The card shrink-wraps and is capped. No fixed width,
-    // and no viewport calculation here, because `placePopover` already clamps
-    // the frame to the window.
+    // VS Code's editor hover has one sizing rule: `max-width: 500px`. The card
+    // shrink-wraps and is capped.
     const classes = Array.from(tooltip().classList);
     expect(classes).toContain("w-max");
-    expect(classes).toContain("max-w-[min(31.25rem,100%)]");
-    // No fixed pixel width is handed to the Popover: a measured width would
-    // have to restate the padding and border sizes as a magic number.
-    expect(tooltip().getAttribute("style") ?? "").not.toContain("width:");
+    expect(classes).toContain("max-w-[31.25rem]");
+
+    // No percentage: it resolves against the frame width `Popover` computes from
+    // this card, so the browser drops it and the frame takes the max-content
+    // width, which `placePopover` clamps to the window.
+    expect(classes).not.toContain("max-w-[min(31.25rem,100%)]");
+    expect(classes.filter((name) => name.startsWith("max-w-"))).toEqual([
+      "max-w-[31.25rem]",
+    ]);
+  });
+
+  it("gives Popover no width, because the frame measures the card", async () => {
+    render("/workspace/no-width");
+    await flush();
+
+    // The width is on the *frame*, not the surface: `Popover` writes an explicit
+    // `width` onto the frame and the surface is its child. An earlier version of
+    // this asserted the surface had no inline width, which is trivially true and
+    // let a full-screen-wide frame through.
+    const surface = tooltip();
+    const frame = surface.parentElement as HTMLElement;
+    expect(surface.getAttribute("style") ?? "").not.toContain("width:");
+    expect(frame.getAttribute("data-popover-side")).toBe("right");
   });
 
   it("caps rather than fixes, so a busy commit is wider but not unbounded", async () => {
@@ -332,16 +348,15 @@ describe("CommitHoverCard", () => {
     };
 
     // Both cards carry the same rule. The busy one is wider only because it has
-    // more to show, and the cap is what stops that mattering past 500px. This is
-    // why the width is a class and not a measurement: happy-dom reports no
-    // layout, so there is no rendered width to compare.
+    // more to show, and the cap is what stops that mattering past 500px. happy-dom
+    // reports no layout, so the cap is asserted as a class rather than measured.
     expect(await widthRules("busy-card", busy, "/workspace/busy")).toEqual([
       "w-max",
-      "max-w-[min(31.25rem,100%)]",
+      "max-w-[31.25rem]",
     ]);
     expect(await widthRules("bare-card", bare, "/workspace/bare")).toEqual([
       "w-max",
-      "max-w-[min(31.25rem,100%)]",
+      "max-w-[31.25rem]",
     ]);
   });
 

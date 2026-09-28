@@ -20,12 +20,9 @@ export type CommitCache<T> = {
  *
  * Commits are immutable, so a successful lookup is cached for the session.
  * Failures are not cached: the next hover retries rather than pinning a
- * transient Git error.
- *
- * The map is capped rather than cleared per project, which bounds it no matter
- * how many repositories a session visits without needing call sites to tell it
- * when the project changed. Map iteration is insertion-ordered, so the oldest
- * entries are the ones dropped.
+ * transient Git error. The map is capped rather than cleared per project, which
+ * bounds it however many repositories a session visits. Map iteration is
+ * insertion-ordered, so the oldest entries are the ones dropped.
  */
 export function createCommitCache<T>(
   fetchValue: (cwd: string, sha: string) => Promise<T>,

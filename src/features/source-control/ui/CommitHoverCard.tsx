@@ -121,19 +121,16 @@ export function CommitHoverCard({
       id={id}
       role="dialog"
       aria-label={`Commit ${commit.shortSha} details`}
-      // VS Code's editor hover has exactly one sizing rule:
-      // `max-width: var(--vscode-hover-maxWidth, 500px)`. The card shrink-wraps
-      // and is capped — there is no fixed width, and the cap is a plain
-      // `max-width`, not a viewport calculation, because `placePopover` already
-      // clamps the frame to the window. `min()` keeps the cap below the frame
-      // width too, for when the frame is the narrower of the two; a second
-      // `max-w-full` would collide with `max-w-*` over stylesheet order.
+      // VS Code's editor hover has one sizing rule: `max-width: 500px`. The card
+      // shrink-wraps and is capped.
       //
-      // A card that changes width between rows is fine. The 300ms open delay is
-      // what stops a sweep down the list from flashing a card on every row:
-      // moving quickly opens nothing, and a card you have dwelt on long enough
-      // to appear is one you are already looking at.
-      className="flex w-max max-w-[min(31.25rem,100%)] flex-col gap-1.5 p-3 font-sans text-left text-content"
+      // The cap must be a plain length. A percentage resolves against the frame
+      // width `Popover` is computing *from this card*, so the browser drops it
+      // for intrinsic sizing, the frame takes the card's max-content width —
+      // the longest unwrapped body line — and `placePopover` clamps that to the
+      // window. A commit with a long single-paragraph body rendered a card as
+      // wide as the screen.
+      className="flex w-max max-w-[31.25rem] flex-col gap-1.5 p-3 font-sans text-left text-content"
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next))
@@ -154,10 +151,8 @@ export function CommitHoverCard({
       }}
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
-      // `onFocus` bubbles as focusin, so this also fires when focus lands on one
-      // of the card's own actions. The row uses it to tell a keyboard dismissal
-      // from a pointer one: only a card that actually held focus has focus to
-      // give back.
+      // Bubbles as focusin, so this also fires for the card's own actions.
+      // Lets the row tell a keyboard dismissal from a pointer one.
       onFocus={onFocusEnter}
     >
       <CommitHeader author={commit.author} timestamp={timestamp} />

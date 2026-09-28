@@ -139,9 +139,8 @@ function HistoryRow({
   // dismissal would immediately reopen what the user just closed. This guard
   // makes the dismissal win without depending on the order of the two calls.
   const refocusing = useRef(false);
-  // Whether focus is currently inside the card rather than on the row. Set by
-  // the card's own focusin, so it is true for keyboard use and false for a
-  // card that only ever opened under the pointer.
+  // Set by the card's own focusin: true for keyboard use, false for a card
+  // that only ever opened under the pointer.
   const focusInCard = useRef(false);
   // A Tab that arrived while the card was still waiting to paint.
   const pendingTab = useRef(false);
@@ -158,10 +157,8 @@ function HistoryRow({
   }, [cardId]);
 
   const refocusAfterDismiss = useCallback(() => {
-    // Only a card that actually held focus has focus to give back. A pointer
-    // user pressing Escape to dismiss a hover-opened card has focus on the
-    // document, and pulling it into the list would be a side effect of a
-    // gesture that was only ever meant to close something.
+    // Only a card that held focus has focus to give back; Escape on a
+    // pointer-opened card should not pull focus into the list.
     if (!focusInCard.current) return;
     focusInCard.current = false;
     // Not named `row`: that is the history item prop, and an HTMLElement under
@@ -189,8 +186,7 @@ function HistoryRow({
   const [revealed, setRevealed] = useState(false);
   const onReveal = useCallback(() => {
     setRevealed(true);
-    // The Tab that arrived during the reveal gap lands here, now that there is
-    // a card to put focus on.
+    // The Tab held during the reveal gap lands here.
     if (!pendingTab.current) return;
     pendingTab.current = false;
     focusFirstCardAction();
@@ -203,10 +199,8 @@ function HistoryRow({
     focusInCard.current = false;
   }, [open]);
 
-  // Every card callback is memoized. `Popover`'s dismissal effect depends on
-  // `onDismiss` and re-registers its window listeners whenever that identity
-  // changes, so an inline arrow here tears down and re-adds two listeners on
-  // every render of an open card.
+  // Memoized: `Popover` re-registers its window listeners whenever `onDismiss`
+  // changes identity, so an inline arrow re-adds them on every render.
   const onFocusEnter = useCallback(() => {
     focusInCard.current = true;
   }, []);
@@ -280,12 +274,10 @@ function HistoryRow({
             event.preventDefault();
             return;
           }
-          // The card is wanted but has not painted yet: it holds its paint
-          // until the commit message lands, and on the first hover of a commit
-          // that is a real Git round trip. Letting Tab through now would move
-          // focus to the next row, whose blur closes this card, and the copy
-          // actions would be unreachable for that commit until it was hovered
-          // again. Hold focus here and let the reveal hand it over.
+          // The card is wanted but has not painted yet. Letting Tab through
+          // would move focus to the next row, whose blur closes this card, so
+          // the copy actions would be unreachable. Hold, and let the reveal
+          // hand focus over.
           if (open) {
             event.preventDefault();
             pendingTab.current = true;
@@ -308,12 +300,9 @@ function HistoryRow({
         aria-haspopup="dialog"
         aria-expanded={revealed}
         aria-controls={revealed ? cardId : undefined}
-        // Deliberately no `title`. The card paints on every hover and focus
-        // whether or not Git answers — it falls back to "Date unavailable" and
-        // "Changed files unavailable" — so it already carries the author, the
-        // date, the full message, the full ref names and the SHA. A native
-        // title would only duplicate it, and it could not show the ref names
-        // the row truncates, which is what it was there for before.
+        // Deliberately no `title`: the card paints on every hover whether or
+        // not Git answers, and it carries everything a title did plus the ref
+        // names the row truncates.
         className={`git-history-item flex h-[22px] min-w-0 w-full items-stretch overflow-visible pr-2 text-left ${
           row.kind === "HEAD" ? "is-head" : ""
         } ${

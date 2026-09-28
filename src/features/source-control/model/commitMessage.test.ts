@@ -17,9 +17,7 @@ const mockMessage = vi.mocked(gitCommitMessage);
 
 beforeEach(() => {
   mockMessage.mockReset();
-  // The cache is a module singleton that outlives the test, so a test that
-  // reused an earlier test's repo path would be served its cached message and
-  // assert nothing about Git.
+  // Module singleton that outlives the test.
   clearCommitMessageCache();
 });
 

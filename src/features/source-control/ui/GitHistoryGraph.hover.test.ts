@@ -122,9 +122,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(gitHistory).mockResolvedValue({ head: commits[0]!.sha, commits });
   vi.mocked(gitCommitMessage).mockResolvedValue("Subject\n");
-  // The card reads the real message and stats modules, whose caches are
-  // singletons that outlive the test, so a shared repo path between two tests
-  // would leave the second one reading the first one's cached commit.
+  // Module singletons that outlive the test.
   clearCommitMessageCache();
   clearCommitStatsCache();
   container = document.createElement("div");
@@ -198,9 +196,8 @@ it("holds Tab during the reveal gap instead of dropping out of the list", async 
   const rows = historyRows();
   const row = rows[0]!;
 
-  // Git has not answered yet, so the card is wanted but not painted. This is
-  // the first focus of this commit, which is exactly when the gap is real: the
-  // message is uncached and the card withholds its paint until it lands.
+  // First focus of this commit, so the message is uncached and the card is
+  // wanted but not painted.
   let release!: (text: string) => void;
   vi.mocked(gitCommitMessage).mockReturnValue(
     new Promise<string>((resolve) => {
@@ -211,9 +208,8 @@ it("holds Tab during the reveal gap instead of dropping out of the list", async 
   act(() => row.focus());
   expect(card()).toBeNull();
 
-  // Tab must not be allowed to fall through: the next row would take focus and
-  // its blur would close this card, and the copy actions would be unreachable
-  // for this commit until it was hovered again.
+  // Tab must not fall through: the next row would take focus and its blur
+  // would close this card.
   const event = new KeyboardEvent("keydown", {
     key: "Tab",
     bubbles: true,
@@ -225,7 +221,6 @@ it("holds Tab during the reveal gap instead of dropping out of the list", async 
   expect(event.defaultPrevented).toBe(true);
   expect(document.activeElement).toBe(row);
 
-  // The reveal hands focus over once there is a card to put it on.
   await act(async () => {
     release("First\n\nBody");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -242,9 +237,7 @@ it("leaves focus alone when Escape dismisses a card the pointer opened", async (
   document.body.append(outside);
   act(() => outside.focus());
 
-  // A hover-opened card never held focus, so Escape has nothing to give back.
-  // Pulling focus into the list here would be a side effect of a pointer
-  // gesture that was only ever meant to close something.
+  // Never held focus, so Escape has nothing to give back.
   await openCardOnHover(row);
   expect(card()).not.toBeNull();
   expect(document.activeElement).toBe(outside);
