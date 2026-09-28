@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { Check, GitBranch, Plus, Search } from "../../../shared/ui/icons";
 import {
   useEffect,
@@ -283,11 +284,11 @@ export function BranchPicker({
     ? detached
       ? `detached ${current}`
       : current
-    : "No repo";
+    : t("composer.noRepo", "No repo");
   const title = awaitingBranch
     ? "Loading branch…"
     : missingGit
-      ? "No git repository"
+      ? t("composer.noRepo", "No git repository")
       : label;
   const interactive = enabled && !awaitingBranch && !missingGit;
 

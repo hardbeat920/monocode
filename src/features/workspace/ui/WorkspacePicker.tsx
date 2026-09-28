@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import {
   useCallback,
@@ -134,7 +135,9 @@ export function WorkspacePicker({
 /** A started conversation owns its working copy; only its branch stays mutable. */
 export function WorkspaceIdentity({ worktree }: { worktree: boolean }) {
   const Icon = worktree ? FolderTree : Folder;
-  const label = worktree ? "Worktree" : "Current checkout";
+  const label = worktree
+    ? t("composer.worktree", "Worktree")
+    : t("composer.checkout", "Current checkout");
   return (
     <div
       title={`Workspace: ${label}`}
@@ -253,7 +256,10 @@ function WorkspaceModePicker({
       setPickError(undefined);
     }, HOVER_CLOSE_MS);
   };
-  const label = mode === "worktree" ? "New worktree" : "Current checkout";
+  const label =
+    mode === "worktree"
+      ? t("composer.newWorktree", "New worktree")
+      : t("composer.checkout", "Current checkout");
   const shortcut = keybindingShortcutLabel(
     "Composer: Toggle Workspace",
     WORKSPACE_MODE_SHORTCUT,
@@ -312,8 +318,12 @@ function WorkspaceModePicker({
           </div>
           {(
             [
-              ["current", "Current checkout", Folder],
-              ["worktree", "New worktree", FolderTree],
+              ["current", t("composer.checkout", "Current checkout"), Folder],
+              [
+                "worktree",
+                t("composer.newWorktree", "New worktree"),
+                FolderTree,
+              ],
             ] as const
           ).map(([value, text, RowIcon]) => (
             <button

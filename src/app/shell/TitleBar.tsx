@@ -1,3 +1,4 @@
+import { t } from "../../features/i18n/model/i18n";
 import {
   CheckCircle,
   ChevronLeft,
@@ -40,7 +41,10 @@ import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { WindowControls } from "./WindowControls";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
 import type { RecentProject } from "../../features/projects/model/recents";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../features/files/ui/ExplorerMenu";
 import {
   paneDropFromPoint,
   setExternalPaneDrop,
@@ -124,7 +128,7 @@ export function tabCopy(tab: Tab): {
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
   const sessions = sessionMeta(tab);
-  const untitled = "New session";
+  const untitled = t("sessions.newSession", "New session");
 
   let headline: string;
   const metaParts: string[] = [];
@@ -869,10 +873,16 @@ function TitleBarComponent({
             ) : null}
             {railClosed && !projectless ? (
               <>
-                <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
+                <IconButton
+                  label={`${t("sessions.goToFile", "Go to File")} (${MOD}P)`}
+                  onClick={onGoToFile}
+                >
                   <Search className="size-3.5" strokeWidth={1.75} />
                 </IconButton>
-                <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+                <IconButton
+                  label={`${t("sessions.newSession", "New session")} (${MOD}T)`}
+                  onClick={onNew}
+                >
                   <Plus className="size-3.5" strokeWidth={1.75} />
                 </IconButton>
               </>
