@@ -352,7 +352,7 @@ export function SearchableProjectPicker({
                     <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                       {itemLabel}
                     </span>
-                    <span className="max-w-44 shrink truncate font-mono text-[11px] text-content/40">
+                    <span className="min-w-0 max-w-28 shrink truncate font-mono text-[11px] text-content/40">
                       {prettyParent(item.path)}
                     </span>
                   </button>
