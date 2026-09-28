@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { HarnessId } from "./session";
+import { newSession, type HarnessId } from "./session";
 import {
   MODELS,
   coerceModelPickerTab,
@@ -420,7 +420,7 @@ describe("live catalog overlays", () => {
     expect(hasLiveCatalog("omp")).toBe(false);
   });
 
-  it("keeps a Claude alias on the same model family across relaunch", () => {
+  it("keeps saved Claude versions distinct from a live alias", () => {
     const live = [
       {
         id: "claude:sonnet",
@@ -437,13 +437,21 @@ describe("live catalog overlays", () => {
     ];
 
     setHarnessModels("claude", live);
-    expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus");
-    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus");
+    expect(newSession("claude", "/repo", "claude:opus-5").model).toBe(
+      "claude:opus-5",
+    );
+    const saved = resolveModel("claude", "claude:opus-5-5");
+    expect(saved.id).toBe("claude:opus-5-5");
+    expect(nativeModelId(saved)).toBe("claude-opus-5-5");
 
     // A relaunch starts with the built-in catalog until discovery completes.
-    // The alias follows the newest bundled Opus, not whichever row is first.
     resetHarnessModelOverlays();
-    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+    const alias = resolveModel("claude", "claude:opus");
+    expect(alias.id).toBe("claude:opus");
+    expect(nativeModelId(alias)).toBe("opus");
+    expect(newSession("claude", "/repo", "claude:opus").model).toBe(
+      "claude:opus",
+    );
   });
 
   it("keeps Opus 5.5 when the live catalog drops it", () => {
@@ -471,7 +479,9 @@ describe("live catalog overlays", () => {
       },
     ]);
 
-    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus-5-5");
+    expect(resolveModel("claude", "claude:opus-5-5").id).toBe(
+      "claude:opus-5-5",
+    );
     expect(nativeModelId("claude:opus-5-5")).toBe("claude-opus-5-5");
     expect(encodeModelLaunchId("claude:opus-5-5")).toBe("claude-opus-5-5");
   });
@@ -488,7 +498,9 @@ describe("live catalog overlays", () => {
         nativeId: "claude-opus-5",
       },
     ]);
-    expect(resolveModel("claude", "claude:opus-5-5").id).toBe("claude:opus-5-5");
+    expect(resolveModel("claude", "claude:opus-5-5").id).toBe(
+      "claude:opus-5-5",
+    );
   });
 
   it("prefixes a short live-catalog native id before launching", () => {
@@ -521,7 +533,9 @@ describe("live catalog overlays", () => {
   it("leaves a bare Claude alias and other providers alone", () => {
     expect(nativeModelId("claude:opus")).toBe("opus");
     expect(nativeModelId("claude:sonnet")).toBe("sonnet");
-    expect(nativeModelId("codex:gpt-5.6-unreleased")).toBe("gpt-5.6-unreleased");
+    expect(nativeModelId("codex:gpt-5.6-unreleased")).toBe(
+      "gpt-5.6-unreleased",
+    );
   });
 
   it("keeps a lone fuzzy match for a versioned id", () => {
@@ -556,10 +570,10 @@ describe("live catalog overlays", () => {
       "claude:opus-5-5",
     );
     expect(resolveModel("claude", "claude:opus-5").id).toBe("claude:opus-5");
-    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus");
   });
 
-  it("does not rank a dated Claude snapshot above a newer generation", () => {
+  it("keeps a saved alias when live discovery lists only versions", () => {
     setHarnessModels("claude", [
       {
         id: "claude:opus-5-20260101",
@@ -574,7 +588,9 @@ describe("live catalog overlays", () => {
         nativeId: "claude-opus-5-5",
       },
     ]);
-    expect(resolveModel("claude", "claude:opus").id).toBe("claude:opus-5-5");
+    const alias = resolveModel("claude", "claude:opus");
+    expect(alias.id).toBe("claude:opus");
+    expect(nativeModelId(alias)).toBe("opus");
   });
 });
 

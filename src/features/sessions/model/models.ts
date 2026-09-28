@@ -358,43 +358,48 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       (model) => (model.nativeId ?? nativeIdFrom(model.id)) === slug,
     );
     if (byNative) return byNative;
-    // Fuzzy on purpose, to absorb provider id drift (a saved
-    // `claude:opus-4-6` against a live `claude-opus-4-6`) and to follow a
-    // moving alias, which the CLI owns. A versioned id gets no benefit from
-    // guessing: `opus-5-5` prefix-matches both `opus` and `opus-5`, and
-    // picking the first silently ran a different generation than the session
-    // was saved with. A singleton hit is still the live alias (`opus`) or
-    // the same id after stripping `claude-`; any other versioned prefix
-    // match is a different generation, so fall through to the bundled entry.
+    // Keep moving Claude aliases as aliases until the CLI advertises them.
+    if (harness === "claude" && /^(opus|sonnet|haiku)$/.test(slug)) {
+      return {
+        id: `claude:${slug}`,
+        harness,
+        name: `Claude ${slug.charAt(0).toUpperCase()}${slug.slice(1)}`,
+        nativeId: slug,
+      };
+    }
+    // A versioned id may differ only by Claude's provider prefix. Do not
+    // resolve it to a moving alias or another version via a prefix match.
     const comparableSlug = comparableNativeId(harness, slug);
-    const matches = (model: AgentModel) => {
+    const hits = available.filter((model) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
       const comparableNative = comparableNativeId(harness, native);
       return (
         comparableNative.startsWith(comparableSlug) ||
         comparableSlug.startsWith(comparableNative)
       );
-    };
-    const hits = available.filter(matches);
+    });
     if (/\d/.test(comparableSlug)) {
-      if (hits.length === 1) {
-        const hit = hits[0];
-        const comparableNative = comparableNativeId(
-          harness,
-          hit.nativeId ?? nativeIdFrom(hit.id),
-        );
-        if (
-          comparableNative === comparableSlug ||
-          !/\d/.test(comparableNative)
-        ) {
-          return hit;
-        }
-      }
+      const same = hits.find(
+        (model) =>
+          comparableNativeId(
+            harness,
+            model.nativeId ?? nativeIdFrom(model.id),
+          ) === comparableSlug,
+      );
+      if (same) return same;
+      if (
+        harness !== "claude" &&
+        hits.length === 1 &&
+        !/\d/.test(
+          comparableNativeId(
+            harness,
+            hits[0].nativeId ?? nativeIdFrom(hits[0].id),
+          ),
+        )
+      )
+        return hits[0];
     } else if (hits.length === 1) {
       return hits[0];
-    } else if (hits.length > 1 && harness === "claude") {
-      const newest = newestClaudeFamilyMember(hits, comparableSlug);
-      if (newest) return newest;
     } else if (hits.length > 0) {
       return hits[0];
     }
@@ -417,8 +422,9 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       name: nativeId
         ? nativeId
             .replace(/^gpt/i, "GPT")
-            .replace(/-([a-z])/g, (_, letter: string) =>
-              `-${letter.toUpperCase()}`,
+            .replace(
+              /-([a-z])/g,
+              (_, letter: string) => `-${letter.toUpperCase()}`,
             )
         : harness.charAt(0).toUpperCase() + harness.slice(1),
       nativeId,
@@ -923,60 +929,9 @@ function nativeIdFrom(id: string): string {
   return bracket >= 0 ? slug.slice(0, bracket) : slug;
 }
 
-/** Claude's live catalog uses `opus`; its startup fallback uses `claude-opus-5`. */
+/** Match Claude ids with and without the provider prefix. */
 function comparableNativeId(harness: HarnessId, id: string): string {
   return harness === "claude" ? id.replace(/^claude-/, "") : id;
-}
-
-/**
- * Newest versioned member of a Claude family among prefix matches.
- * `opus` against `opus-5` and `opus-5-5` must land on 5.5, not whichever
- * row happens to be first in the bundled list.
- */
-function newestClaudeFamilyMember(
-  models: AgentModel[],
-  family: string,
-): AgentModel | undefined {
-  let best: AgentModel | undefined;
-  let bestParts: number[] | undefined;
-  for (const model of models) {
-    const native = comparableNativeId(
-      "claude",
-      model.nativeId ?? nativeIdFrom(model.id),
-    );
-    const parts = versionAfterFamily(native, family);
-    if (!parts) continue;
-    if (!bestParts || compareVersionParts(parts, bestParts) > 0) {
-      best = model;
-      bestParts = parts;
-    }
-  }
-  return best;
-}
-
-function versionAfterFamily(
-  comparable: string,
-  family: string,
-): number[] | null {
-  const prefix = `${family}-`;
-  if (!comparable.startsWith(prefix)) return null;
-  const rest = comparable.slice(prefix.length);
-  if (!/^\d+(?:-\d+)*$/.test(rest)) return null;
-  const parts: number[] = [];
-  for (const part of rest.split("-")) {
-    if (/^\d{8}$/.test(part)) break;
-    parts.push(Number.parseInt(part, 10));
-  }
-  return parts.length > 0 ? parts : null;
-}
-
-function compareVersionParts(left: number[], right: number[]): number {
-  const n = Math.max(left.length, right.length);
-  for (let i = 0; i < n; i += 1) {
-    const delta = (left[i] ?? 0) - (right[i] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  return 0;
 }
 
 function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
