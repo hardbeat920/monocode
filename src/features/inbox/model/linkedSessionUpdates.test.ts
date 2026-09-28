@@ -5,6 +5,7 @@ import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   linkedSessionUpdateIds,
   linkedSessionUpdates,
+  linkedSessionUpdatesToReveal,
   linkedWorkItemTargets,
   linkedWorkItemUpdateKey,
 } from "./linkedSessionUpdates";
@@ -179,5 +180,123 @@ describe("linked session updates", () => {
 
     acknowledged.set(`multi:${linkedWorkItemUpdateKey(issue)}`, 180);
     expect(linkedSessionUpdateIds(sessions, snapshots, seenAt).size).toBe(0);
+  });
+
+  it("passes the original linkedWorkItem into seenAt", () => {
+    const issue: LinkedWorkItem = {
+      kind: "issue",
+      repo: "acme/app",
+      number: 8,
+      url: "https://github.com/acme/app/issues/8",
+    };
+    const seen: Array<{
+      item: number;
+      primary?: number;
+    }> = [];
+    linkedSessionUpdates(
+      [session("multi", 100, { linkedWorkItems: [linked, issue] })],
+      new Map([
+        [linkedWorkItemUpdateKey(linked), remote(200)],
+        [
+          linkedWorkItemUpdateKey(issue),
+          {
+            ...issue,
+            title: "Follow-up",
+            state: "open",
+            updatedAt: new Date(180).toISOString(),
+            labels: [],
+            assignees: [],
+            draft: false,
+          },
+        ],
+      ]),
+      (_sessionId, item, primaryItem) => {
+        seen.push({ item: item.number, primary: primaryItem?.number });
+        return 0;
+      },
+    );
+    expect(seen).toEqual([
+      { item: 42, primary: 42 },
+      { item: 8, primary: 42 },
+    ]);
+  });
+});
+
+describe("linked session updates to reveal", () => {
+  const pullUpdate = {
+    sessionId: "open",
+    item: remote(200),
+    since: 100,
+    updatedAt: 200,
+  };
+  const issue: LinkedWorkItem = {
+    kind: "issue",
+    repo: "acme/app",
+    number: 8,
+    url: "https://github.com/acme/app/issues/8",
+  };
+  const issueUpdate = {
+    sessionId: "open",
+    item: {
+      ...issue,
+      title: "Follow-up",
+      state: "open",
+      updatedAt: new Date(180).toISOString(),
+      labels: [],
+      assignees: [],
+      draft: false,
+    },
+    since: 100,
+    updatedAt: 180,
+  };
+  const pullKey = `${linkedWorkItemUpdateKey(linked)}:200`;
+  const issueKey = `${linkedWorkItemUpdateKey(issue)}:180`;
+
+  it("does not reveal the first time an open session is observed", () => {
+    const { reveal, selectionKeys } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map([["open", pullUpdate]]),
+      new Map(),
+    );
+    expect(reveal).toEqual([]);
+    expect(selectionKeys.get("open")).toBe(pullKey);
+  });
+
+  it("reveals when the selected linked item changes", () => {
+    const { reveal, selectionKeys } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map([["open", issueUpdate]]),
+      new Map([["open", pullKey]]),
+    );
+    expect(reveal).toEqual([issueUpdate]);
+    expect(selectionKeys.get("open")).toBe(issueKey);
+  });
+
+  it("does not reveal when dismissal leaves the same selected update", () => {
+    const { reveal } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map([["open", pullUpdate]]),
+      new Map([["open", pullKey]]),
+    );
+    expect(reveal).toEqual([]);
+  });
+
+  it("does not reveal when acknowledgement clears the selected update", () => {
+    const { reveal, selectionKeys } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map(),
+      new Map([["open", pullKey]]),
+    );
+    expect(reveal).toEqual([]);
+    expect(selectionKeys.get("open")).toBe("");
+  });
+
+  it("reveals when an already-open session gains a selected update", () => {
+    const { reveal } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map([["open", pullUpdate]]),
+      new Map([["open", ""]]),
+    );
+    expect(reveal).toEqual([pullUpdate]);
   });
 });

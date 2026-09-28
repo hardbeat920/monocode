@@ -16,6 +16,12 @@ export type LinkedSessionUpdate = {
   updatedAt: number;
 };
 
+export type LinkedSessionSeenAt = (
+  sessionId: string,
+  item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
+  primaryItem?: Pick<LinkedWorkItem, "repo" | "kind" | "number"> | null,
+) => number;
+
 export function linkedWorkItemUpdateKey(
   item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
 ): string {
@@ -40,10 +46,7 @@ export function linkedWorkItemTargets(
 export function linkedSessionUpdates(
   sessions: readonly SessionSummary[],
   workItems: ReadonlyMap<string, GithubWorkItem>,
-  seenAt: (
-    sessionId: string,
-    item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
-  ) => number = () => 0,
+  seenAt: LinkedSessionSeenAt = () => 0,
 ): Map<string, LinkedSessionUpdate> {
   const updates = new Map<string, LinkedSessionUpdate>();
   for (const session of sessions) {
@@ -52,7 +55,10 @@ export function linkedSessionUpdates(
     for (const linked of sessionLinkedWorkItems(session)) {
       const item = workItems.get(linkedWorkItemUpdateKey(linked));
       if (!item) continue;
-      const since = Math.max(session.updatedAt, seenAt(session.id, linked));
+      const since = Math.max(
+        session.updatedAt,
+        seenAt(session.id, linked, session.linkedWorkItem),
+      );
       const remoteUpdatedAt = Date.parse(item.updatedAt);
       if (
         Number.isFinite(remoteUpdatedAt) &&
@@ -75,10 +81,33 @@ export function linkedSessionUpdates(
 export function linkedSessionUpdateIds(
   sessions: readonly SessionSummary[],
   workItems: ReadonlyMap<string, GithubWorkItem>,
-  seenAt?: (
-    sessionId: string,
-    item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
-  ) => number,
+  seenAt?: LinkedSessionSeenAt,
 ): Set<string> {
   return new Set(linkedSessionUpdates(sessions, workItems, seenAt).keys());
+}
+
+function linkedSessionUpdateSelectionKey(update: LinkedSessionUpdate): string {
+  return `${linkedWorkItemUpdateKey(update.item)}:${update.updatedAt}`;
+}
+
+/** Selected linked-item updates that changed for sessions already open. */
+export function linkedSessionUpdatesToReveal(
+  openSessionIds: readonly string[],
+  updates: ReadonlyMap<string, LinkedSessionUpdate>,
+  previousSelectionKeys: ReadonlyMap<string, string>,
+): {
+  reveal: LinkedSessionUpdate[];
+  selectionKeys: Map<string, string>;
+} {
+  const selectionKeys = new Map<string, string>();
+  const reveal: LinkedSessionUpdate[] = [];
+  for (const sessionId of new Set(openSessionIds)) {
+    const update = updates.get(sessionId);
+    const key = update ? linkedSessionUpdateSelectionKey(update) : "";
+    selectionKeys.set(sessionId, key);
+    const previous = previousSelectionKeys.get(sessionId);
+    if (previous === undefined || previous === key || !update) continue;
+    reveal.push(update);
+  }
+  return { reveal, selectionKeys };
 }

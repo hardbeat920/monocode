@@ -554,7 +554,10 @@ import {
   pendingLinkedWorkItemUpdateCard,
   type LinkedWorkItemUpdateCard,
 } from "../features/inbox/model/linkedWorkItemActivity";
-import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
+import {
+  linkedSessionUpdatesToReveal,
+  type LinkedSessionUpdate,
+} from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
 import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
@@ -1049,6 +1052,7 @@ export default function App({
   const linkedSessionUpdatesRef = useRef<
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
+  const linkedSessionUpdateSelectionKeysRef = useRef(new Map<string, string>());
   const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
   const queueDispatchingRef = useRef(new Set<string>());
   const usageResumingRef = useRef(new Set<string>());
@@ -9217,6 +9221,17 @@ export default function App({
     onAppeared: onInboxAppeared,
   });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
+  useEffect(() => {
+    const { reveal, selectionKeys } = linkedSessionUpdatesToReveal(
+      tabs.flatMap((tab) => leafIds(tab.layout)),
+      linkedSessionUpdates,
+      linkedSessionUpdateSelectionKeysRef.current,
+    );
+    linkedSessionUpdateSelectionKeysRef.current = selectionKeys;
+    for (const update of reveal) {
+      revealLinkedSessionUpdate(update.sessionId, update);
+    }
+  }, [linkedSessionUpdates, revealLinkedSessionUpdate, tabs]);
   const inboxRelatedSessions = useMemo(() => {
     const byId = new Map<string, SessionSummary>();
     for (const session of storedLinkedSessions) byId.set(session.id, session);

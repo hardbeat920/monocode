@@ -46,8 +46,20 @@ function saveSeenMap(items: SeenMap) {
 export function linkedSessionSeenAt(
   sessionId: string,
   item: LinkedItemRef,
+  primaryItem?: LinkedItemRef | null,
 ): number {
-  return loadSeenMap()[seenKey(sessionId, item)] ?? 0;
+  const seen = loadSeenMap();
+  const itemSeen = seen[seenKey(sessionId, item)];
+  if (typeof itemSeen === "number") return itemSeen;
+  // Pre-multi-link acknowledgements lived under sessionId. Reuse that stamp
+  // for the original linkedWorkItem.
+  if (
+    primaryItem &&
+    linkedWorkItemUpdateKey(item) === linkedWorkItemUpdateKey(primaryItem)
+  ) {
+    return seen[sessionId] ?? 0;
+  }
+  return 0;
 }
 
 /** Remember the exact remote snapshot acknowledged for this session item. */
