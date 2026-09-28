@@ -2,6 +2,9 @@ import type { TranslationDict } from "./en";
 
 export const zhCN: TranslationDict = {
   common: {
+    cancelEdit: "取消编辑",
+    saveDraft: "保存草稿",
+    send: "发送",
     save: "保存",
     cancel: "取消",
     close: "关闭",
@@ -363,6 +366,24 @@ export const zhCN: TranslationDict = {
     },
   },
   composer: {
+    selectWorktreePrompt: "请选择分支或工作树以继续…",
+    inboxNotePrompt: "添加备注，或直接发送开始…",
+    noteMessagePrompt: "添加消息，或直接发送…",
+    handoffContextPrompt: "补充上下文，或直接发送继续…",
+    uploadFile: "上传文件",
+    attachFilesOrImages: "添加文件或图片",
+    planMode: "规划模式",
+    planModeDesc: "生成计划供您先审查再执行",
+    operatorMode: "操作员模式",
+    operatorModeDesc: "赋予此会话操作 MonoCode 自身权限",
+    orchestratorMode: "编排器模式",
+    orchestratorModeDesc: "规划并协同多个代理分工",
+    draftMode: "草稿模式",
+    draftModeDesc: "仅保存此输入，不启动代理执行",
+    turnOffPlanMode: "关闭规划模式",
+    turnOffDraftMode: "关闭草稿模式",
+    turnOffOperatorMode: "关闭操作员模式",
+    turnOffOrchestratorMode: "关闭编排器模式",
     placeholder: "输入提示词，或输入 / 查看快捷命令...",
     model: "模型",
     provider: "平台",
@@ -380,6 +401,11 @@ export const zhCN: TranslationDict = {
     noRepo: "无代码仓库",
     operatorTip:
       "在开头输入 /operator 即可让智能体直接操作 MonoCode 自身客户端。",
+  },
+  session: {
+    handoffTitle: "会话转交",
+    handoffFiles: "{count} 个关联文件",
+    removeHandoff: "移除转交卡片",
   },
   sessions: {
     newSession: "新建会话",

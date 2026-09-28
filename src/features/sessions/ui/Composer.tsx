@@ -1959,13 +1959,13 @@ export function Composer({
               defaultValue={initialDraft}
               placeholder={
                 worktreeRemoved
-                  ? "Select a branch or worktree to continue…"
+                  ? t("composer.selectWorktreePrompt", "Select a branch or worktree to continue…")
                   : inboxCard
-                    ? "Add a note, or send to start…"
+                    ? t("composer.inboxNotePrompt", "Add a note, or send to start…")
                     : noteCard
-                      ? "Add a message, or send…"
+                      ? t("composer.noteMessagePrompt", "Add a message, or send…")
                       : handoffCard
-                        ? "Add context, or send to continue…"
+                        ? t("composer.handoffContextPrompt", "Add context, or send to continue…")
                         : (placeholder ??
                           t(
                             "composer.placeholder",
@@ -2039,10 +2039,10 @@ export function Composer({
                   >
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
-                      <span className="block text-[13px]">Upload file</span>
+                      <span className="block text-[13px]">{t("composer.uploadFile", "Upload file")}</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
-                          ? "Attach files or images"
+                          ? t("composer.attachFilesOrImages", "Attach files or images")
                           : `${HARNESS_TITLE[harness]} does not support attachments`}
                       </span>
                     </span>
@@ -2063,9 +2063,9 @@ export function Composer({
                   >
                     <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px]">Plan mode</span>
+                      <span className="block text-[13px]">{t("composer.planMode", "Plan mode")}</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                        Review a plan before building
+                        {t("composer.planModeDesc", "Review a plan before building")}
                       </span>
                     </span>
                     {planSelected ? (
@@ -2088,9 +2088,9 @@ export function Composer({
                   >
                     <CursorMagicSelection className="mt-0.5 size-4 shrink-0 text-sky-300/80" />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px]">Operator</span>
+                      <span className="block text-[13px]">{t("composer.operatorMode", "Operator")}</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                        Give this thread access to MonoCode
+                        {t("composer.operatorModeDesc", "Give this thread access to MonoCode")}
                       </span>
                     </span>
                     {operatorSelected ? (
@@ -2115,13 +2115,13 @@ export function Composer({
                       <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5">
-                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="text-[13px]">{t("composer.orchestratorMode", "Orchestrator")}</span>
                           <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
                             v1
                           </span>
                         </span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Plan and coordinate agent work
+                          {t("composer.orchestratorModeDesc", "Plan and coordinate agent work")}
                         </span>
                       </span>
                       {orchestrationSelected && (
@@ -2146,9 +2146,9 @@ export function Composer({
                     >
                       <CircleDashed className="mt-0.5 size-4 shrink-0 text-content/60" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Draft</span>
+                        <span className="block text-[13px]">{t("composer.draftMode", "Draft")}</span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Save this message without starting the agent
+                          {t("composer.draftModeDesc", "Save this message without starting the agent")}
                         </span>
                       </span>
                       {draftSelected ? (
@@ -2162,7 +2162,7 @@ export function Composer({
             {!compact && operatorSelected ? (
               <button
                 type="button"
-                title="Turn off Operator"
+                title={t("composer.turnOffOperatorMode", "Turn off Operator")}
                 aria-label="Turn off Operator"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
@@ -2179,7 +2179,7 @@ export function Composer({
             {!compact && orchestrationSelected && (
               <button
                 type="button"
-                title="Turn off Orchestrator mode"
+                title={t("composer.turnOffOrchestratorMode", "Turn off Orchestrator mode")}
                 aria-label="Turn off Orchestrator mode"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
@@ -2196,7 +2196,7 @@ export function Composer({
             {!compact && planSelected ? (
               <button
                 type="button"
-                title="Turn off Plan mode"
+                title={t("composer.turnOffPlanMode", "Turn off Plan mode")}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   setPlanSelected(false);
@@ -2212,7 +2212,7 @@ export function Composer({
             {!compact && draftSelected ? (
               <button
                 type="button"
-                title="Turn off Draft mode"
+                title={t("composer.turnOffDraftMode", "Turn off Draft mode")}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   setDraftSelected(false);
@@ -2288,7 +2288,7 @@ export function Composer({
                 className="edit-last-turn-button flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-[11px] font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
               >
                 <X className="size-3" strokeWidth={1.8} />
-                <span>Cancel edit</span>
+                <span>{t("common.cancelEdit", "Cancel edit")}</span>
               </button>
             ) : null}
             <div className="flex shrink-0 items-center gap-1">
@@ -2297,7 +2297,7 @@ export function Composer({
                 disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}
-                label={draftSelected ? "Save draft" : "Send"}
+                label={draftSelected ? t("common.saveDraft", "Save draft") : t("common.send", "Send")}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
