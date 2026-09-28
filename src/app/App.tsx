@@ -544,9 +544,9 @@ import {
 import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
-  linkedWorkItemFields,
   resolveLinkedWorkItem,
   sessionLinkedWorkItems,
+  withLinkedWorkItems,
 } from "../features/sessions/model/sessionWorkItem";
 import {
   completeLinkedWorkItemUpdateCard,
@@ -662,20 +662,6 @@ type Submit = (
   attachments?: Attachment[],
   options?: SubmitOptions,
 ) => SubmissionAcceptance;
-
-function withLinkedWorkItems<
-  T extends {
-    linkedWorkItem?: LinkedWorkItem;
-    linkedWorkItems?: LinkedWorkItem[];
-  },
->(session: T, items: readonly LinkedWorkItem[] | undefined): T {
-  return {
-    ...session,
-    linkedWorkItem: undefined,
-    linkedWorkItems: undefined,
-    ...linkedWorkItemFields(items),
-  };
-}
 
 function withPlanStatus(
   session: Session,
@@ -3968,13 +3954,13 @@ export default function App({
   const dismissNoticesForContinuedSession = useCallback(
     (sessionId: string) => {
       void sessionReminders.dismissDue(sessionId);
-      const updatedAt = sessionsRef.current.find(
+      const card = sessionsRef.current.find(
         (session) => session.id === sessionId,
-      )?.linkedWorkItemUpdateCard?.updatedAt;
-      if (updatedAt == null) return;
-      markLinkedSessionUpdateSeen(sessionId, updatedAt);
-      setLinkedWorkItemUpdateCard(sessionId, (card) =>
-        card?.updatedAt === updatedAt ? undefined : card,
+      )?.linkedWorkItemUpdateCard;
+      if (!card) return;
+      markLinkedSessionUpdateSeen(sessionId, card, card.updatedAt);
+      setLinkedWorkItemUpdateCard(sessionId, (current) =>
+        current?.updatedAt === card.updatedAt ? undefined : current,
       );
     },
     [sessionReminders.dismissDue, setLinkedWorkItemUpdateCard],
@@ -6870,26 +6856,28 @@ export default function App({
             : undefined;
 
         if (!session) {
-          session = {
-            ...newSession(
-              automation.harness,
-              automation.cwd,
-              automation.model,
-              automation.runtimeMode,
-              automation.modelSettings,
-            ),
-            title: eventRun
-              ? HARNESS_LABEL[automation.harness]
-              : formatSessionTitle(automation.harness, automation.name),
-            automationId: automation.id,
-            ...(linkedWorkItem ? { linkedWorkItem } : {}),
-            ...(automation.workspaceMode === "worktree"
-              ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
-              : automation.workspaceMode === "existing" &&
-                  automation.worktreeCwd
-                ? { worktreeCwd: automation.worktreeCwd }
-                : {}),
-          };
+          session = withLinkedWorkItems(
+            {
+              ...newSession(
+                automation.harness,
+                automation.cwd,
+                automation.model,
+                automation.runtimeMode,
+                automation.modelSettings,
+              ),
+              title: eventRun
+                ? HARNESS_LABEL[automation.harness]
+                : formatSessionTitle(automation.harness, automation.name),
+              automationId: automation.id,
+              ...(automation.workspaceMode === "worktree"
+                ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
+                : automation.workspaceMode === "existing" &&
+                    automation.worktreeCwd
+                  ? { worktreeCwd: automation.worktreeCwd }
+                  : {}),
+            },
+            linkedWorkItem ? [linkedWorkItem] : undefined,
+          );
           const nextSessions = [...sessionsRef.current, session];
           sessionsRef.current = nextSessions;
           setSessions(nextSessions);
@@ -6900,14 +6888,18 @@ export default function App({
             setComposerFocused(false);
           }
         } else {
-          const stamped = {
-            ...session,
-            automationId: automation.id,
-            model: automation.model,
-            modelSettings: automation.modelSettings ?? {},
-            runtimeMode: automation.runtimeMode,
-            ...(linkedWorkItem ? { linkedWorkItem } : {}),
-          };
+          const stamped = withLinkedWorkItems(
+            {
+              ...session,
+              automationId: automation.id,
+              model: automation.model,
+              modelSettings: automation.modelSettings ?? {},
+              runtimeMode: automation.runtimeMode,
+            },
+            linkedWorkItem
+              ? [linkedWorkItem]
+              : sessionLinkedWorkItems(session),
+          );
           session = stamped;
           const nextSessions = sessionsRef.current.map((entry) =>
             entry.id === stamped.id ? stamped : entry,

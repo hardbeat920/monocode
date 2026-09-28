@@ -270,7 +270,11 @@ describe("Inbox activity polling", () => {
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
 
     act(() => {
-      markLinkedSessionUpdateSeen(session.id, Date.parse(remote.updatedAt));
+      markLinkedSessionUpdateSeen(
+        session.id,
+        session.linkedWorkItem!,
+        Date.parse(remote.updatedAt),
+      );
     });
 
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
@@ -282,7 +286,11 @@ describe("Inbox activity polling", () => {
       items: [listed],
       errors: {},
     }));
-    markLinkedSessionUpdateSeen(session.id, Date.parse(listed.updatedAt));
+    markLinkedSessionUpdateSeen(
+      session.id,
+      session.linkedWorkItem!,
+      Date.parse(listed.updatedAt),
+    );
     await mount();
     expect(activity.unseen).toBe(false);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);

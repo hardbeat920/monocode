@@ -17,6 +17,8 @@ import {
   parseGithubWorkItemUrls,
   relatedSessionsForInboxItem,
   resolveLinkedWorkItem,
+  sessionLinkedWorkItems,
+  withLinkedWorkItems,
 } from "./sessionWorkItem";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -270,5 +272,37 @@ describe("session work items", () => {
         sessions,
       ),
     ).toEqual([]);
+  });
+
+  it("reuses a multi-link session by updating both linked-item fields", () => {
+    const pull = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 1,
+      url: "https://github.com/acme/app/pull/1",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 2,
+      url: "https://github.com/acme/app/issues/2",
+    };
+    const eventItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 9,
+      url: "https://github.com/acme/app/pull/9",
+    };
+    const reused = withLinkedWorkItems(
+      {
+        id: "reused",
+        linkedWorkItem: pull,
+        linkedWorkItems: [pull, issue],
+      },
+      [eventItem],
+    );
+    expect(reused.linkedWorkItem).toEqual(eventItem);
+    expect(reused.linkedWorkItems).toBeUndefined();
+    expect(sessionLinkedWorkItems(reused)).toEqual([eventItem]);
   });
 });

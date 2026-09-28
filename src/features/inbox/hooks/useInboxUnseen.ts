@@ -285,7 +285,15 @@ export function useInboxActivity(
                 (linked) => linkedWorkItemUpdateKey(linked) === key,
               )
             ) {
-              markLinkedSessionUpdateSeen(session.id, updatedAt);
+              markLinkedSessionUpdateSeen(
+                session.id,
+                {
+                  repo: item.repo,
+                  kind: item.kind,
+                  number: item.number,
+                },
+                updatedAt,
+              );
             }
           }
         }

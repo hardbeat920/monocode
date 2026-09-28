@@ -40,16 +40,19 @@ export function linkedWorkItemTargets(
 export function linkedSessionUpdates(
   sessions: readonly SessionSummary[],
   workItems: ReadonlyMap<string, GithubWorkItem>,
-  seenAt: (sessionId: string) => number = () => 0,
+  seenAt: (
+    sessionId: string,
+    item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
+  ) => number = () => 0,
 ): Map<string, LinkedSessionUpdate> {
   const updates = new Map<string, LinkedSessionUpdate>();
   for (const session of sessions) {
     if (session.archived) continue;
-    const since = Math.max(session.updatedAt, seenAt(session.id));
     let best: LinkedSessionUpdate | undefined;
     for (const linked of sessionLinkedWorkItems(session)) {
       const item = workItems.get(linkedWorkItemUpdateKey(linked));
       if (!item) continue;
+      const since = Math.max(session.updatedAt, seenAt(session.id, linked));
       const remoteUpdatedAt = Date.parse(item.updatedAt);
       if (
         Number.isFinite(remoteUpdatedAt) &&
@@ -72,7 +75,10 @@ export function linkedSessionUpdates(
 export function linkedSessionUpdateIds(
   sessions: readonly SessionSummary[],
   workItems: ReadonlyMap<string, GithubWorkItem>,
-  seenAt?: (sessionId: string) => number,
+  seenAt?: (
+    sessionId: string,
+    item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
+  ) => number,
 ): Set<string> {
   return new Set(linkedSessionUpdates(sessions, workItems, seenAt).keys());
 }

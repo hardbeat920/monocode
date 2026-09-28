@@ -1,10 +1,18 @@
+import type { LinkedWorkItem } from "../../sessions/model/session";
+import { linkedWorkItemUpdateKey } from "./linkedSessionUpdates";
+
 const KEY = "monocode.linkedSessionSeen";
 const MAX_ENTRIES = 500;
 
 type SeenMap = Record<string, number>;
 type Listener = () => void;
+type LinkedItemRef = Pick<LinkedWorkItem, "repo" | "kind" | "number">;
 
 const listeners = new Set<Listener>();
+
+function seenKey(sessionId: string, item: LinkedItemRef): string {
+  return `${sessionId}::${linkedWorkItemUpdateKey(item)}`;
+}
 
 function loadSeenMap(): SeenMap {
   try {
@@ -35,20 +43,25 @@ function saveSeenMap(items: SeenMap) {
   for (const listener of listeners) listener();
 }
 
-export function linkedSessionSeenAt(sessionId: string): number {
-  return loadSeenMap()[sessionId] ?? 0;
+export function linkedSessionSeenAt(
+  sessionId: string,
+  item: LinkedItemRef,
+): number {
+  return loadSeenMap()[seenKey(sessionId, item)] ?? 0;
 }
 
-/** Remember the exact remote snapshot acknowledged for this session. */
+/** Remember the exact remote snapshot acknowledged for this session item. */
 export function markLinkedSessionUpdateSeen(
   sessionId: string,
+  item: LinkedItemRef,
   remoteUpdatedAt: number,
 ) {
   if (!sessionId || !Number.isFinite(remoteUpdatedAt)) return;
   const current = loadSeenMap();
+  const key = seenKey(sessionId, item);
   const next = {
     ...current,
-    [sessionId]: Math.max(current[sessionId] ?? 0, remoteUpdatedAt),
+    [key]: Math.max(current[key] ?? 0, remoteUpdatedAt),
   };
   const trimmed = Object.fromEntries(
     Object.entries(next)

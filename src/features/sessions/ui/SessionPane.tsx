@@ -718,9 +718,13 @@ export const SessionPane = memo(function SessionPane({
               sessionId={session.id}
               card={session.linkedWorkItemUpdateCard}
               onAcknowledge={() => {
-                const updatedAt = session.linkedWorkItemUpdateCard?.updatedAt;
-                if (updatedAt != null) {
-                  markLinkedSessionUpdateSeen(session.id, updatedAt);
+                const card = session.linkedWorkItemUpdateCard;
+                if (card) {
+                  markLinkedSessionUpdateSeen(
+                    session.id,
+                    card,
+                    card.updatedAt,
+                  );
                 }
               }}
               onDismiss={() => onLinkedWorkItemUpdateCardDismiss?.(session.id)}

@@ -112,6 +112,20 @@ export function linkedWorkItemFields(
   return { linkedWorkItem: list[0], linkedWorkItems: list };
 }
 
+export function withLinkedWorkItems<
+  T extends {
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: LinkedWorkItem[];
+  },
+>(session: T, items: readonly LinkedWorkItem[] | undefined): T {
+  return {
+    ...session,
+    linkedWorkItem: undefined,
+    linkedWorkItems: undefined,
+    ...linkedWorkItemFields(items),
+  };
+}
+
 function explicitHint(message: string): GeneratedWorkItemHint | null {
   const patterns: Array<[GithubTaskKind, RegExp]> = [
     ["pr", /\b(?:pr|pull\s+request)\s*#?\s*(\d+)\b/i],

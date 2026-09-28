@@ -4,6 +4,7 @@ import type { GithubWorkItem } from "./githubTasks";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   linkedSessionUpdateIds,
+  linkedSessionUpdates,
   linkedWorkItemTargets,
   linkedWorkItemUpdateKey,
 } from "./linkedSessionUpdates";
@@ -132,5 +133,51 @@ describe("linked session updates", () => {
         "newer",
       ),
     ).toBe(true);
+  });
+
+  it("keeps a second linked-item update after the newest one is acknowledged", () => {
+    const issue: LinkedWorkItem = {
+      kind: "issue",
+      repo: "acme/app",
+      number: 8,
+      url: "https://github.com/acme/app/issues/8",
+    };
+    const snapshots = new Map([
+      [linkedWorkItemUpdateKey(linked), remote(200)],
+      [
+        linkedWorkItemUpdateKey(issue),
+        {
+          ...issue,
+          title: "Follow-up",
+          state: "open",
+          updatedAt: new Date(180).toISOString(),
+          labels: [],
+          assignees: [],
+          draft: false,
+        },
+      ],
+    ]);
+    const acknowledged = new Map<string, number>();
+    const seenAt = (
+      sessionId: string,
+      item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
+    ) => acknowledged.get(`${sessionId}:${linkedWorkItemUpdateKey(item)}`) ?? 0;
+    const sessions = [
+      session("multi", 100, { linkedWorkItems: [linked, issue] }),
+    ];
+
+    const first = linkedSessionUpdates(sessions, snapshots, seenAt);
+    expect(first.get("multi")?.item.number).toBe(42);
+    expect(
+      linkedSessionUpdateIds(sessions, snapshots, seenAt).has("multi"),
+    ).toBe(true);
+
+    acknowledged.set(`multi:${linkedWorkItemUpdateKey(linked)}`, 200);
+    const second = linkedSessionUpdates(sessions, snapshots, seenAt);
+    expect(second.get("multi")?.item.number).toBe(8);
+    expect(second.get("multi")?.updatedAt).toBe(180);
+
+    acknowledged.set(`multi:${linkedWorkItemUpdateKey(issue)}`, 180);
+    expect(linkedSessionUpdateIds(sessions, snapshots, seenAt).size).toBe(0);
   });
 });
