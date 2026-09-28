@@ -244,6 +244,26 @@ describe("parseCodexRateLimits", () => {
     expect(limits.resetCredits).toEqual({ availableCount: 3, credits: null });
   });
 
+  it("maps a free plan's lone 30-day primary window to monthly", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        primary: {
+          usedPercent: 4,
+          windowDurationMins: 43_200,
+          resetsAt: 1_792_550_273,
+        },
+        secondary: null,
+      },
+    });
+    expect(limits.session).toBeNull();
+    expect(limits.weekly).toBeNull();
+    expect(limits.monthly).toEqual({
+      usedPercent: 4,
+      windowMinutes: 43_200,
+      resetsAt: 1_792_550_273_000,
+    });
+  });
+
   it("falls back to primary=session when durations are unknown", () => {
     const limits = parseCodexRateLimits({
       primary: { usedPercent: 10, resetsAt: 100 },

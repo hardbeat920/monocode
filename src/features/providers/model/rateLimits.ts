@@ -345,7 +345,7 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
-    monthly: null,
+    monthly: mapCodexSnapshot(classified.monthly, MONTHLY_WINDOW_MINUTES),
     resetCredits: parseResetCredits(
       rec?.rateLimitResetCredits ?? rec?.rate_limit_reset_credits,
     ),
@@ -464,14 +464,17 @@ function classifyCodexWindows(input: {
 }): {
   session: CodexWindowSnapshot | null;
   weekly: CodexWindowSnapshot | null;
+  monthly: CodexWindowSnapshot | null;
 } {
   let session: CodexWindowSnapshot | null = null;
   let weekly: CodexWindowSnapshot | null = null;
+  let monthly: CodexWindowSnapshot | null = null;
   for (const window of [input.primary, input.secondary]) {
     if (!window) continue;
     const kind = classifyWindowDuration(window.windowDurationMins);
     if (kind === "session" && !session) session = window;
     else if (kind === "weekly" && !weekly) weekly = window;
+    else if (kind === "monthly" && !monthly) monthly = window;
   }
   if (
     !session &&
@@ -487,12 +490,12 @@ function classifyCodexWindows(input: {
   ) {
     weekly = input.secondary;
   }
-  return { session, weekly };
+  return { session, weekly, monthly };
 }
 
 function classifyWindowDuration(
   duration: number | null,
-): "session" | "weekly" | null {
+): "session" | "weekly" | "monthly" | null {
   if (duration == null || !Number.isFinite(duration)) return null;
   if (
     Math.abs(duration - SESSION_WINDOW_MINUTES) <=
@@ -505,6 +508,13 @@ function classifyWindowDuration(
     WINDOW_DURATION_TOLERANCE_MINUTES
   ) {
     return "weekly";
+  }
+  // Free plans get a single 30-day window.
+  if (
+    Math.abs(duration - MONTHLY_WINDOW_MINUTES) <=
+    WINDOW_DURATION_TOLERANCE_MINUTES
+  ) {
+    return "monthly";
   }
   return null;
 }

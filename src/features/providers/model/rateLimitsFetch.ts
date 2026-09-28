@@ -134,7 +134,9 @@ export async function fetchCodexRateLimits(
       accountId,
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.resetCredits) return parsed;
+    if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
+      return parsed;
+    }
     const rec = asRecord(result);
     if (rec && !parsed.session && !parsed.weekly) {
       return unavailableRateLimits("codex", "No Codex usage data");
