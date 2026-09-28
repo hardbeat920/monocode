@@ -1,78 +1,35 @@
-import { nativeModelId, setHarnessModels } from "../../../../features/sessions/model/models";
+import { nativeModelId } from "../../../../features/sessions/model/models";
 import { openCrabsPromptBlocks } from "./opencrabsPrompt";
-import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { AcpClient, type AcpHandlers } from "../../core/acp";
-import {
-  killChild,
-  resolveOpenCrabsBinary,
-  spawnChild,
-  unwatchChild,
-  watchChild,
-} from "../../core/child";
-import {
-  eventsFromAcpUpdate,
-  modelsFromSessionNew,
-  nativeCommandsFromUpdate,
-  sessionIdFromResult,
-} from "./opencrabsProtocol";
-import { handlePermission } from "./opencrabsApproval";
 import type {
   ApprovalDecision,
   CompactContextInput,
-  HarnessEvent,
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
-
-type Live = {
-  acp: AcpClient;
-  acpSessionId: string;
-  threadId: string;
-  cwd: string;
-  muteUpdates: boolean;
-  cancelled: boolean;
-  runtimeMode: RuntimeMode;
-  planning: boolean;
-  onEvent: (event: HarnessEvent) => void;
-  approvals: Map<number, (decision: ApprovalDecision) => void>;
-  turns: Promise<void>;
-};
-
-type Resume = {
-  acpSessionId: string;
-  cwd: string;
-};
-
-// OpenCrabs boots a full runtime (config, brain files, provider handshake)
-// before it can answer `initialize`, so give it more room than a thin CLI.
-const INIT_TIMEOUT_MS = 30_000;
-const SESSION_TIMEOUT_MS = 45_000;
-const CONTROL_TIMEOUT_MS = 15_000;
-const PROMPT_TIMEOUT_MS = 30 * 60_000;
-
-const SERVER_HELP =
-  "The ACP server mode ships in opencrabs v0.5.2 and later. " +
-  "Check `opencrabs --version`, then upgrade (or point the resolver at a " +
-  "newer binary) and retry.";
-
 import {
-  cacheNativeCommands,
-  clearNativeCommands,
-} from "./opencrabsCommands";
+  cancelledThreads,
+  CONTROL_TIMEOUT_MS,
+  ensureLive,
+  liveByThread,
+  type Live,
+  PROMPT_TIMEOUT_MS,
+  SERVER_HELP,
+  stopOpenCrabsSession,
+} from "./opencrabsLive";
 
-const CLIENT_CAPABILITIES = {
-  fs: { readTextFile: false, writeTextFile: false },
-  terminal: false,
-};
-
-const liveByThread = new Map<string, Live>();
-const resumeByThread = new Map<string, Resume>();
-const cancelledThreads = new Set<string>();
+// Lifecycle (spawn, handshake, resume, teardown) lives in opencrabsLive;
+// re-exported here so existing import sites keep working.
+export {
+  bindOpenCrabsSession,
+  forgetOpenCrabsSession,
+  spawnArgs,
+  stopOpenCrabsSession,
+} from "./opencrabsLive";
 
 /**
- * Live OpenCrabs adapter. Spawns `opencrabs acp` and talks Agent Client
- * Protocol over stdio. Permission requests surface in the UI unless the
- * runtime mode auto-answers them.
+ * Live OpenCrabs adapter turn orchestration. Spawns `opencrabs acp` (via
+ * opencrabsLive) and talks Agent Client Protocol over stdio. Permission
+ * requests surface in the UI unless the runtime mode auto-answers them.
  */
 export async function sendOpenCrabsTurn(input: SendTurnInput): Promise<void> {
   let live: Live;
@@ -157,28 +114,6 @@ export async function cancelOpenCrabsTurn(sessionId: string): Promise<void> {
   live.acp.rejectPending(new Error("cancelled"));
 }
 
-/** Kill the process but keep the ACP session id so we can session/load. */
-export async function stopOpenCrabsSession(sessionId: string): Promise<void> {
-  cancelledThreads.delete(sessionId);
-  const live = liveByThread.get(sessionId);
-  liveByThread.delete(sessionId);
-  if (live) {
-    live.muteUpdates = true;
-    for (const [, resolve] of live.approvals) resolve("deny");
-    live.approvals.clear();
-  }
-  live?.acp.close();
-  unwatchChild(sessionId);
-  await killChild(sessionId).catch(() => undefined);
-}
-
-/** Delete or idle detach — drop the OpenCrabs conversation too. */
-export async function forgetOpenCrabsSession(sessionId: string): Promise<void> {
-  clearNativeCommands(sessionId);
-  resumeByThread.delete(sessionId);
-  await stopOpenCrabsSession(sessionId);
-}
-
 /**
  * Compact the session's context window via `session/compact`. The server
  * runs its native summarization turn; the request resolves when it ends.
@@ -215,219 +150,6 @@ export async function compactOpenCrabsContext(
   }
 }
 
-/** Seed ACP resume state for a restored MonoCode session. */
-export function bindOpenCrabsSession(
-  threadId: string,
-  acpSessionId: string,
-  cwd: string,
-): void {
-  const sessionId = acpSessionId.trim();
-  if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
-}
-
-async function ensureLive(input: SendTurnInput): Promise<Live> {
-  const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
-    existing.onEvent = input.onEvent;
-    existing.runtimeMode = input.runtimeMode;
-    existing.planning = input.intent === "plan";
-    return existing;
-  }
-  if (existing) {
-    resumeByThread.delete(input.sessionId);
-    await stopOpenCrabsSession(input.sessionId);
-  }
-
-  const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
-    resumeByThread.delete(input.sessionId);
-  }
-
-  const { path } = await resolveOpenCrabsBinary();
-  const handlers: AcpHandlers = {};
-  const acp = new AcpClient(input.sessionId, handlers);
-  const liveRef: { current: Live | null } = { current: null };
-  const muteGate = { current: false };
-
-  handlers.onNotification = (method, params) => {
-    // Control-plane carve-out: the commands push can land during the
-    // session/load window — before `live` exists and while transcript replay
-    // is muted. Muting exists to keep replay out of the transcript; it must
-    // not drop command discovery, or every restarted session loses the
-    // autocomplete catalog.
-    const pushedCommands = nativeCommandsFromUpdate(params);
-    if (pushedCommands) {
-      cacheNativeCommands(input.sessionId, pushedCommands);
-      return;
-    }
-    if (muteGate.current) return;
-    const live = liveRef.current;
-    if (!live || live.muteUpdates) return;
-    handleNotification(live, method, params);
-  };
-  handlers.onRequest = (id, method, params) => {
-    const live = liveRef.current;
-    if (!live) {
-      void acp
-        .respondError(id, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
-        .catch(() => undefined);
-      return;
-    }
-    void handleRequest(live, id, method, params);
-  };
-
-  // ensureLive runs once per session, so these handlers outlive the turn that
-  // created them. Route through liveRef so events after turn 1 reach the
-  // current turn's listener instead of a finished one.
-  const emit = (event: HarnessEvent) => {
-    (liveRef.current?.onEvent ?? input.onEvent)(event);
-  };
-
-  watchChild(
-    input.sessionId,
-    (line) => acp.pushLine(line),
-    (code) => {
-      acp.close(new Error("opencrabs exited"));
-      liveByThread.delete(input.sessionId);
-      emit({ type: "session.ended", code });
-    },
-    (line) => {
-      console.debug("[monocode] opencrabs stderr", line);
-    },
-  );
-
-  await spawnChild(
-    input.sessionId,
-    path,
-    spawnArgs(input.model),
-    input.cwd,
-    undefined,
-    "opencrabs",
-  );
-
-  try {
-    await acp.request(
-      "initialize",
-      {
-        protocolVersion: 1,
-        clientCapabilities: CLIENT_CAPABILITIES,
-        clientInfo: { name: "monocode", version: "0.1.0" },
-      },
-      INIT_TIMEOUT_MS,
-    );
-
-    let setup: unknown;
-    let acpSessionId: string | undefined;
-    let didLoad = false;
-    let resumeFailureReason: string | undefined;
-
-    if (canLoad && resume) {
-      muteGate.current = true;
-      try {
-        setup = await acp.request(
-          "session/load",
-          {
-            sessionId: resume.acpSessionId,
-            cwd: input.cwd,
-            mcpServers: [],
-          },
-          SESSION_TIMEOUT_MS,
-        );
-        acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-        didLoad = true;
-      } catch (error) {
-        // Context loss must be visible: MonoCode renders the old transcript
-        // locally, but a fresh opencrabs session has no memory of it. The
-        // notice is deferred until the replacement session is confirmed —
-        // saying "started a fresh session" before session/new succeeds
-        // would claim a fallback that may never exist.
-        resumeFailureReason = error instanceof Error ? error.message : String(error);
-        setup = undefined;
-        acpSessionId = undefined;
-        didLoad = false;
-      } finally {
-        muteGate.current = false;
-      }
-    }
-
-    if (!acpSessionId) {
-      setup = await acp.request(
-        "session/new",
-        { cwd: input.cwd, mcpServers: [] },
-        SESSION_TIMEOUT_MS,
-      );
-      acpSessionId = sessionIdFromResult(setup);
-    }
-    if (!acpSessionId) throw new Error("opencrabs did not return a session id");
-    if (resumeFailureReason) {
-      // The fallback session exists: now the boundary notice is true.
-      emit({
-        type: "interjection",
-        customType: "custom",
-        text: `OpenCrabs session could not be resumed (${resumeFailureReason}) — started a fresh session. Earlier messages in this transcript are no longer in the agent's context.`,
-      });
-    }
-
-    // Live catalog: replace the static "default" picker entry with the
-    // server's configured provider/model pairs.
-    const catalog = modelsFromSessionNew(setup);
-    if (catalog.available.length > 0) {
-      setHarnessModels(
-        "opencrabs",
-        catalog.available.map((entry) => ({
-          id: `opencrabs:${entry.modelId}`,
-          harness: "opencrabs" as const,
-          name: entry.name,
-          nativeId: entry.modelId,
-        })),
-      );
-    }
-
-    const live: Live = {
-      acp,
-      acpSessionId,
-      threadId: input.sessionId,
-      cwd: input.cwd,
-      muteUpdates: didLoad,
-      cancelled: false,
-      runtimeMode: input.runtimeMode,
-      planning: input.intent === "plan",
-      onEvent: input.onEvent,
-      approvals: new Map(),
-      turns: Promise.resolve(),
-    };
-    liveRef.current = live;
-    liveByThread.set(input.sessionId, live);
-    resumeByThread.set(input.sessionId, {
-      acpSessionId,
-      cwd: input.cwd,
-    });
-    live.onEvent({
-      type: "session.providerBound",
-      providerSessionId: acpSessionId,
-    });
-    // Reflect the server's current model in the thread badge — on load this
-    // is the restored per-session pick, so the picker survives restarts.
-    if (catalog.current) {
-      live.onEvent({
-        type: "session.configChanged",
-        model: `opencrabs:${catalog.current}`,
-      });
-    }
-    live.onEvent({ type: "session.started" });
-    return live;
-  } catch (error) {
-    acp.close(error instanceof Error ? error : new Error(String(error)));
-    await stopOpenCrabsSession(input.sessionId);
-    throw error;
-  }
-}
-
 /**
  * Model selection is best-effort: the static catalog ships only `default`
  * (empty native id, skipped here), while live catalog entries carry
@@ -458,16 +180,6 @@ async function applyModelSelection(
   }
 }
 
-export function spawnArgs(model: string): string[] {
-  const native = nativeModelId(model).trim();
-  // "default" is the placeholder id from the static catalog, not a model the
-  // server knows — spawning `--model default` only works by fallback luck.
-  // Omit the flag so the server uses its configured default model.
-  return native && native.toLowerCase() !== "default"
-    ? ["acp", "--model", native]
-    : ["acp"];
-}
-
 /**
  * Push the runtime/plan mode server-side so the approval policy lives where
  * the tools run. Client-side gating in handlePermission stays as backstop,
@@ -488,6 +200,16 @@ async function applyRuntimeMode(
       const detail = error instanceof Error ? error.message : String(error);
       console.debug("[monocode] opencrabs set_mode failed", detail);
       if (/timed out|not running|exited|closed|pipe/i.test(detail)) throw error;
+      // Old binaries without set_mode answer "method not found" — that is
+      // the designed degradation to client-side gating, not a failure worth
+      // a transcript line. Anything else the user should hear: the next
+      // turn then runs a different approval policy than the chip promises.
+      if (!/method not found/i.test(detail)) {
+        live.onEvent({
+          type: "session.error",
+          message: `Mode switch to ${modeId} failed — the next turn keeps the previous tool-approval policy (${detail})`,
+        });
+      }
     });
 }
 
@@ -519,34 +241,4 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   }
-}
-
-function handleNotification(live: Live, method: string, params: unknown) {
-  if (method !== "session/update") return;
-  const commands = nativeCommandsFromUpdate(params);
-  if (commands) {
-    cacheNativeCommands(live.threadId, commands);
-    return;
-  }
-  for (const event of eventsFromAcpUpdate(params)) {
-    live.onEvent(event);
-  }
-}
-
-async function handleRequest(
-  live: Live,
-  id: number,
-  method: string,
-  params: unknown,
-) {
-  if (method === "session/request_permission") {
-    await handlePermission(live, id, params);
-    return;
-  }
-  await live.acp
-    .respondError(id, {
-      code: -32601,
-      message: `Method not found: ${method}`,
-    })
-    .catch(() => undefined);
 }
