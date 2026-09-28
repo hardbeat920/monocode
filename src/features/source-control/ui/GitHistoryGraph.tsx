@@ -140,41 +140,43 @@ function HistoryRow({
   const refocusing = useRef(false);
 
   const refocusAfterDismiss = useCallback(() => {
-    const row = anchorRef.current;
-    if (!row || row === document.activeElement) return;
+    // Not named `row`: that is the history item prop, and an HTMLElement under
+    // the same name reads as the wrong thing entirely.
+    const element = anchorRef.current;
+    if (!element || element === document.activeElement) return;
     refocusing.current = true;
-    row.focus();
+    element.focus();
     // Leave no guard armed if focus did not actually land.
-    if (document.activeElement !== row) refocusing.current = false;
+    if (document.activeElement !== element) refocusing.current = false;
   }, []);
 
+  const { openNow, closeNow, open } = hover;
   const openOnFocus = useCallback(() => {
     if (refocusing.current) {
       refocusing.current = false;
       return;
     }
-    hover.openNow();
-  }, [hover]);
+    openNow();
+  }, [openNow]);
 
   // A card belongs to the row it describes. The card is `position: fixed`
   // beside the panel, and `placePopover` keeps it inside the window, so once
   // the row scrolls out of the list the card is left clamped to the viewport,
   // drifting further above the row with every scroll and describing nothing.
   // Close it instead, the way a native title tooltip goes away.
-  const closeNow = hover.closeNow;
   useEffect(() => {
-    if (!hover.open) return;
-    const row = anchorRef.current;
-    if (!row || typeof IntersectionObserver === "undefined") return;
+    if (!open) return;
+    const element = anchorRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) closeNow();
       },
-      { root: row.closest("[data-history-scroll]"), threshold: 0 },
+      { root: element.closest("[data-history-scroll]"), threshold: 0 },
     );
-    observer.observe(row);
+    observer.observe(element);
     return () => observer.disconnect();
-  }, [hover.open, closeNow]);
+  }, [open, closeNow]);
   return (
     <li className="min-w-0 overflow-visible" style={{ height: GRAPH_ROW_PX }}>
       <button
@@ -209,15 +211,15 @@ function HistoryRow({
           ) {
             return;
           }
-          hover.closeNow();
+          closeNow();
         }}
         // `aria-current` marks which commit is open. It replaced `aria-pressed`,
         // which conflicted with `aria-expanded` on the same button: a row is not
         // a toggle button that happens to also disclose something.
         aria-current={active ? "true" : undefined}
         aria-haspopup="dialog"
-        aria-expanded={hover.open}
-        aria-controls={hover.open ? cardId : undefined}
+        aria-expanded={open}
+        aria-controls={open ? cardId : undefined}
         className={`git-history-item flex h-[22px] min-w-0 w-full items-stretch overflow-visible pr-2 text-left ${
           row.kind === "HEAD" ? "is-head" : ""
         } ${
