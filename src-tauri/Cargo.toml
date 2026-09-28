@@ -26,7 +26,7 @@ unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri-plugin-dialog = "2"
-rusqlite = { version = "0.40.2", features = ["bundled"], default-features = false }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
 url = "2.5"
 tauri-plugin-process = "2"

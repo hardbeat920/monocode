@@ -318,6 +318,7 @@ export type SessionSearchResult = {
 
 export async function searchSessions(options: {
   query: string;
+  searchOwner: string;
   cwd?: string;
   includeArchived?: boolean;
 }): Promise<SessionSearchResult> {
@@ -326,6 +327,7 @@ export async function searchSessions(options: {
   const result = await invoke<SessionSearchResult>("session_search", {
     options: {
       query,
+      searchOwner: options.searchOwner,
       ...(options.cwd && options.cwd !== "~"
         ? { cwd: normalizeProjectPath(options.cwd) }
         : {}),
@@ -336,6 +338,10 @@ export async function searchSessions(options: {
     hits: Array.isArray(result?.hits) ? result.hits : [],
     truncated: !!result?.truncated,
   };
+}
+
+export function cancelSessionSearch(searchOwner: string): Promise<void> {
+  return invoke<void>("cancel_session_search", { searchOwner });
 }
 
 export async function getSession(sessionId: string): Promise<Session | null> {

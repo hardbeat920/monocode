@@ -131,6 +131,7 @@ import {
 import {
   clearTranscriptHighlights,
   paintTranscriptHighlights,
+  transcriptMutationNeedsRepaint,
   transcriptWordRanges,
 } from "../model/transcriptHighlights";
 
@@ -604,13 +605,20 @@ function AgentTranscriptComponent({
       return;
     }
     let frame = 0;
+    let pending: MutationRecord[] = [];
     const paint = () => {
-      frame = 0;
       const { matches, current } = transcriptWordRanges(el, searchQuery);
       paintTranscriptHighlights(owner, matches, current);
     };
-    const observer = new MutationObserver(() => {
-      if (!frame) frame = requestAnimationFrame(paint);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) pending.push(record);
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const changed = pending;
+        pending = [];
+        if (transcriptMutationNeedsRepaint(changed, searchQuery)) paint();
+      });
     });
     observer.observe(el, {
       childList: true,
