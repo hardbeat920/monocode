@@ -2242,6 +2242,32 @@ mod tests {
     }
 
     #[test]
+    fn linked_work_items_array_round_trips() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut row = sample("s1", "/tmp/a", "Fix PR");
+        row.linked_work_item = Some(json!([
+            {
+                "kind": "pr",
+                "repo": "openai/codex",
+                "number": 42,
+                "url": "https://github.com/openai/codex/pull/42"
+            },
+            {
+                "kind": "issue",
+                "repo": "openai/codex",
+                "number": 12,
+                "url": "https://github.com/openai/codex/issues/12"
+            }
+        ]));
+
+        let summary = upsert_session(&conn, &row).unwrap();
+        assert_eq!(summary.linked_work_item, row.linked_work_item);
+        let stored = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(stored.linked_work_item, row.linked_work_item);
+    }
+
+    #[test]
     fn linked_work_item_can_be_set_and_removed_without_rewriting_the_session() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();

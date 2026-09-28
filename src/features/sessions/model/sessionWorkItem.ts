@@ -10,6 +10,8 @@ import type { GeneratedWorkItemHint } from "./sessionTitle";
 
 const GITHUB_URL_RE =
   /https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)\b/i;
+const GITHUB_URL_TOKEN_RE =
+  /^https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)(?:[/?#]\S*)?$/i;
 
 function validNumber(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
@@ -19,14 +21,125 @@ function githubUrl(repo: string, kind: GithubTaskKind, number: number): string {
   return `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`;
 }
 
+function linkedWorkItemFromMatch(
+  owner: string,
+  name: string,
+  kindPath: string,
+  numberText: string,
+): LinkedWorkItem | null {
+  const number = Number(numberText);
+  if (!validNumber(number)) return null;
+  const repo = `${owner}/${name}`;
+  const kind = kindPath.toLowerCase() === "pull" ? "pr" : "issue";
+  return { kind, repo, number, url: githubUrl(repo, kind, number) };
+}
+
 export function parseGithubWorkItemUrl(message: string): LinkedWorkItem | null {
   const match = GITHUB_URL_RE.exec(message);
   if (!match) return null;
-  const number = Number(match[4]);
-  if (!validNumber(number)) return null;
-  const repo = `${match[1]}/${match[2]}`;
-  const kind = match[3].toLowerCase() === "pull" ? "pr" : "issue";
-  return { kind, repo, number, url: githubUrl(repo, kind, number) };
+  return linkedWorkItemFromMatch(match[1], match[2], match[3], match[4]);
+}
+
+export function linkedWorkItemKey(item: LinkedWorkItem): string {
+  return `${item.repo.trim().toLowerCase()}:${item.kind}:${item.number}`;
+}
+
+export function dedupeLinkedWorkItems(
+  items: readonly LinkedWorkItem[],
+): LinkedWorkItem[] {
+  const seen = new Set<string>();
+  const unique: LinkedWorkItem[] = [];
+  for (const item of items) {
+    const key = linkedWorkItemKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+  return unique;
+}
+
+/** Parse comma-, space-, or newline-separated GitHub issue/PR URLs. */
+export function parseGithubWorkItemUrls(
+  text: string,
+): LinkedWorkItem[] | null {
+  const tokens = text
+    .split(/[\s,;]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return [];
+  const items: LinkedWorkItem[] = [];
+  for (const token of tokens) {
+    const match = GITHUB_URL_TOKEN_RE.exec(token);
+    if (!match) return null;
+    const item = linkedWorkItemFromMatch(
+      match[1],
+      match[2],
+      match[3],
+      match[4],
+    );
+    if (!item) return null;
+    items.push(item);
+  }
+  return dedupeLinkedWorkItems(items);
+}
+
+export function formatGithubWorkItemUrls(
+  items: readonly LinkedWorkItem[],
+): string {
+  return items.map((item) => item.url).join(", ");
+}
+
+export function sessionLinkedWorkItems(session: {
+  linkedWorkItem?: LinkedWorkItem;
+  linkedWorkItems?: readonly LinkedWorkItem[];
+} | null | undefined): LinkedWorkItem[] {
+  if (!session) return [];
+  if (session.linkedWorkItems && session.linkedWorkItems.length > 0) {
+    return [...session.linkedWorkItems];
+  }
+  return session.linkedWorkItem ? [session.linkedWorkItem] : [];
+}
+
+export function linkedWorkItemFields(
+  items: readonly LinkedWorkItem[] | undefined,
+): {
+  linkedWorkItem?: LinkedWorkItem;
+  linkedWorkItems?: LinkedWorkItem[];
+} {
+  const list = items?.length ? dedupeLinkedWorkItems(items) : [];
+  if (list.length === 0) return {};
+  if (list.length === 1) return { linkedWorkItem: list[0] };
+  return { linkedWorkItem: list[0], linkedWorkItems: list };
+}
+
+export function withLinkedWorkItems<
+  T extends {
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: LinkedWorkItem[];
+  },
+>(session: T, items: readonly LinkedWorkItem[] | undefined): T {
+  return {
+    ...session,
+    linkedWorkItem: undefined,
+    linkedWorkItems: undefined,
+    ...linkedWorkItemFields(items),
+  };
+}
+
+export function withPersistedLinkedWorkItems<
+  T extends {
+    id: string;
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: LinkedWorkItem[];
+  },
+>(
+  session: T,
+  items: readonly LinkedWorkItem[] | undefined,
+  persistedBySessionId: Map<string, LinkedWorkItem[]>,
+): T {
+  const next = withLinkedWorkItems(session, items);
+  persistedBySessionId.set(next.id, sessionLinkedWorkItems(next));
+  return next;
 }
 
 function explicitHint(message: string): GeneratedWorkItemHint | null {
@@ -153,12 +266,15 @@ export function linkedWorkItemInboxKey(linked: LinkedWorkItem): string {
 
 /** Find local sessions whose persisted GitHub identity matches an Inbox row. */
 export function relatedSessionsForInboxItem<
-  T extends { linkedWorkItem?: LinkedWorkItem },
+  T extends {
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: readonly LinkedWorkItem[];
+  },
 >(item: InboxItem, sessions: readonly T[]): T[] {
   if (item.provider !== "github") return [];
-  return sessions.filter(
-    (session) =>
-      session.linkedWorkItem != null &&
-      inboxItemMatchesLinkedWorkItem(item, session.linkedWorkItem),
+  return sessions.filter((session) =>
+    sessionLinkedWorkItems(session).some((linked) =>
+      inboxItemMatchesLinkedWorkItem(item, linked),
+    ),
   );
 }

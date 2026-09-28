@@ -1,7 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Modal } from "../../../shared/ui/Modal";
 import type { LinkedWorkItem } from "../model/session";
-import { parseGithubWorkItemUrl } from "../model/sessionWorkItem";
+import {
+  formatGithubWorkItemUrls,
+  parseGithubWorkItemUrls,
+  sessionLinkedWorkItems,
+} from "../model/sessionWorkItem";
 
 export function LinkSessionWorkItemDialog({
   initial,
@@ -9,27 +13,41 @@ export function LinkSessionWorkItemDialog({
   onSave,
   onClose,
 }: {
-  initial?: LinkedWorkItem;
+  initial?: LinkedWorkItem | readonly LinkedWorkItem[];
   sessionTitle: string;
-  onSave: (item: LinkedWorkItem | undefined) => void;
+  onSave: (items: LinkedWorkItem[] | undefined) => void;
   onClose: () => void;
 }) {
-  const [url, setUrl] = useState(initial?.url ?? "");
+  const initialItems = sessionLinkedWorkItems({
+    linkedWorkItems:
+      initial == null
+        ? undefined
+        : Array.isArray(initial)
+          ? [...initial]
+          : [initial],
+  });
+  const [url, setUrl] = useState(() => formatGithubWorkItemUrls(initialItems));
   const [error, setError] = useState("");
+  const editing = initialItems.length > 0;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const item = parseGithubWorkItemUrl(url.trim());
-    if (!item) {
-      setError("Enter a valid GitHub issue or pull request URL.");
+    const items = parseGithubWorkItemUrls(url);
+    if (items == null || items.length === 0) {
+      const tokenCount = url.split(/[\s,;]+/).filter(Boolean).length;
+      setError(
+        items == null && tokenCount > 1
+          ? "Enter valid GitHub issue or pull request URLs, separated by commas."
+          : "Enter a valid GitHub issue or pull request URL.",
+      );
       return;
     }
-    onSave(item);
+    onSave(items);
   };
 
   return (
     <Modal
-      title={initial ? "Edit GitHub link" : "Link GitHub issue or PR"}
+      title={editing ? "Edit GitHub link" : "Link GitHub issue or PR"}
       description={sessionTitle}
       size="sm"
       onClose={onClose}
@@ -37,21 +55,29 @@ export function LinkSessionWorkItemDialog({
       <form onSubmit={submit} className="flex flex-col gap-4 p-4 text-[12px]">
         <label className="flex flex-col gap-1.5">
           <span className="font-medium text-content/80">
-            Issue or pull request URL
+            Issue or pull request URLs
           </span>
-          <input
+          <textarea
             autoFocus
-            type="url"
+            rows={2}
+            spellCheck={false}
             value={url}
-            aria-label="GitHub issue or pull request URL"
+            aria-label="GitHub issue or pull request URLs"
             aria-invalid={error ? true : undefined}
-            aria-describedby={error ? "linked-work-item-error" : undefined}
-            placeholder="https://github.com/owner/repo/pull/123"
+            aria-describedby={
+              error ? "linked-work-item-error" : "linked-work-item-hint"
+            }
+            placeholder="https://github.com/owner/repo/pull/123, https://github.com/owner/repo/issues/456"
+            onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+              if (event.key !== "Enter" || event.shiftKey) return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
             onChange={(event) => {
               setUrl(event.target.value);
               if (error) setError("");
             }}
-            className={`h-9 rounded-md border bg-content/5 px-2.5 text-[13px] text-content outline-none placeholder:text-content/30 focus:border-content/30 ${
+            className={`min-h-[4.5rem] resize-none rounded-md border bg-content/5 px-2.5 py-2 text-[13px] leading-snug text-content outline-none placeholder:text-content/30 focus:border-content/30 ${
               error ? "border-red-400/60" : "border-content/10"
             }`}
           />
@@ -64,14 +90,17 @@ export function LinkSessionWorkItemDialog({
               {error}
             </span>
           ) : (
-            <span className="text-[11px] text-content/45">
-              Paste the full github.com URL. The linked item will appear on the
-              session card.
+            <span
+              id="linked-work-item-hint"
+              className="text-[11px] text-content/45"
+            >
+              Paste full github.com URLs, separated by commas. The linked items
+              will appear on the session card.
             </span>
           )}
         </label>
         <div className="flex items-center justify-end gap-2">
-          {initial ? (
+          {editing ? (
             <button
               type="button"
               onClick={() => onSave(undefined)}
@@ -91,7 +120,7 @@ export function LinkSessionWorkItemDialog({
             type="submit"
             className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110 active:scale-[0.97]"
           >
-            {initial ? "Update link" : "Link"}
+            {editing ? "Update link" : "Link"}
           </button>
         </div>
       </form>

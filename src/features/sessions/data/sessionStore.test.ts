@@ -318,6 +318,40 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("persists multiple GitHub work items as an array", () => {
+    const session = newSession("codex", "/tmp/project");
+    session.blocks = [{ id: "u1", role: "user", text: "fix PR #42" }];
+    const pull = {
+      kind: "pr" as const,
+      repo: "openai/codex",
+      number: 42,
+      url: "https://example.com/not-trusted",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "openai/codex",
+      number: 12,
+      url: "https://example.com/also-untrusted",
+    };
+    session.linkedWorkItem = pull;
+    session.linkedWorkItems = [pull, issue];
+
+    expect(sanitizeSessionForPersist(session).linkedWorkItem).toEqual([
+      {
+        kind: "pr",
+        repo: "openai/codex",
+        number: 42,
+        url: "https://github.com/openai/codex/pull/42",
+      },
+      {
+        kind: "issue",
+        repo: "openai/codex",
+        number: 12,
+        url: "https://github.com/openai/codex/issues/12",
+      },
+    ]);
+  });
+
   it("persists the automation that started a session", () => {
     const session = newSession("codex", "/tmp/project");
     session.blocks = [{ id: "u1", role: "user", text: "review PRs" }];

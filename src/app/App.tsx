@@ -545,6 +545,9 @@ import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   resolveLinkedWorkItem,
+  sessionLinkedWorkItems,
+  withLinkedWorkItems,
+  withPersistedLinkedWorkItems,
 } from "../features/sessions/model/sessionWorkItem";
 import {
   completeLinkedWorkItemUpdateCard,
@@ -552,7 +555,12 @@ import {
   pendingLinkedWorkItemUpdateCard,
   type LinkedWorkItemUpdateCard,
 } from "../features/inbox/model/linkedWorkItemActivity";
-import type { LinkedSessionUpdate } from "../features/inbox/model/linkedSessionUpdates";
+import {
+  linkedSessionUpdatesToReveal,
+  linkedWorkItemActivityKey,
+  sameLinkedWorkItemActivity,
+  type LinkedSessionUpdate,
+} from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
 import { inboxTrackerDescription } from "../features/inbox/model/inboxContext";
 import { gitlabWorkItemDetails, peekGitlabWorkItemDetails } from "../features/inbox/model/gitlab";
@@ -1017,7 +1025,11 @@ export default function App({
   const [history, setHistory] = useState<SessionSummary[]>(() => bootHistory);
   const [storedLinkedSessions, setStoredLinkedSessions] = useState<
     SessionSummary[]
-  >(() => bootHistory.filter((session) => session.linkedWorkItem));
+  >(() =>
+    bootHistory.filter(
+      (session) => sessionLinkedWorkItems(session).length > 0,
+    ),
+  );
   /**
    * Projects whose rows are already in `history`. This has to be state, not a
    * ref: `sidebarCwd` is derived during render, so the frame that first shows
@@ -1039,10 +1051,15 @@ export default function App({
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const linkedWorkItemEditRevisions = useRef(new Map<string, number>());
+  const lastPersistedLinkedWorkItems = useRef(
+    new Map<string, LinkedWorkItem[]>(),
+  );
   const linkedSessionUpdatesRef = useRef<
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
-  const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
+  const linkedSessionUpdateSelectionKeysRef = useRef(new Map<string, string>());
+  const linkedWorkItemActivityFetches = useRef(new Map<string, string>());
   const queueDispatchingRef = useRef(new Set<string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
@@ -3686,48 +3703,56 @@ export default function App({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      if (!session?.linkedWorkItem) return;
+      if (!session || sessionLinkedWorkItems(session).length === 0) return;
+      const activityKey = linkedWorkItemActivityKey(
+        update.item,
+        update.updatedAt,
+      );
       if (
-        session.linkedWorkItemUpdateCard?.updatedAt === update.updatedAt &&
-        session.linkedWorkItemUpdateCard.status !== "error"
+        sameLinkedWorkItemActivity(session.linkedWorkItemUpdateCard, {
+          ...update.item,
+          updatedAt: update.updatedAt,
+        }) &&
+        session.linkedWorkItemUpdateCard?.status !== "error"
       ) {
         return;
       }
-      if (
-        linkedWorkItemActivityFetches.current.get(sessionId) ===
-        update.updatedAt
-      ) {
+      if (linkedWorkItemActivityFetches.current.get(sessionId) === activityKey) {
         return;
       }
       const pending = pendingLinkedWorkItemUpdateCard(update);
-      linkedWorkItemActivityFetches.current.set(sessionId, update.updatedAt);
+      linkedWorkItemActivityFetches.current.set(sessionId, activityKey);
       // A stale/error card should not remain visible while fresh details load.
       // The session itself is already open; this request stays fully detached
       // from the navigation path.
       setLinkedWorkItemUpdateCard(sessionId, (current) =>
-        current?.updatedAt === update.updatedAt && current.status === "ready"
+        sameLinkedWorkItemActivity(current, {
+          ...update.item,
+          updatedAt: update.updatedAt,
+        }) && current?.status === "ready"
           ? current
           : undefined,
       );
 
       void githubWorkItemThread(
         session.cwd,
-        session.linkedWorkItem.repo,
-        session.linkedWorkItem.kind,
-        session.linkedWorkItem.number,
+        update.item.repo,
+        update.item.kind,
+        update.item.number,
         { force: true },
       ).then(
         (thread) => {
           if (
-            linkedWorkItemActivityFetches.current.get(sessionId) !==
-            pending.updatedAt
+            linkedWorkItemActivityFetches.current.get(sessionId) !== activityKey
           ) {
             return;
           }
           linkedWorkItemActivityFetches.current.delete(sessionId);
+          const selected = linkedSessionUpdatesRef.current.get(sessionId);
           if (
-            linkedSessionUpdatesRef.current.get(sessionId)?.updatedAt !==
-            pending.updatedAt
+            !selected ||
+            linkedWorkItemActivityKey(selected.item, selected.updatedAt) !==
+              activityKey
           ) {
             return;
           }
@@ -3737,15 +3762,16 @@ export default function App({
         },
         () => {
           if (
-            linkedWorkItemActivityFetches.current.get(sessionId) !==
-            pending.updatedAt
+            linkedWorkItemActivityFetches.current.get(sessionId) !== activityKey
           ) {
             return;
           }
           linkedWorkItemActivityFetches.current.delete(sessionId);
+          const selected = linkedSessionUpdatesRef.current.get(sessionId);
           if (
-            linkedSessionUpdatesRef.current.get(sessionId)?.updatedAt !==
-            pending.updatedAt
+            !selected ||
+            linkedWorkItemActivityKey(selected.item, selected.updatedAt) !==
+              activityKey
           ) {
             return;
           }
@@ -3959,13 +3985,13 @@ export default function App({
   const dismissNoticesForContinuedSession = useCallback(
     (sessionId: string) => {
       void sessionReminders.dismissDue(sessionId);
-      const updatedAt = sessionsRef.current.find(
+      const card = sessionsRef.current.find(
         (session) => session.id === sessionId,
-      )?.linkedWorkItemUpdateCard?.updatedAt;
-      if (updatedAt == null) return;
-      markLinkedSessionUpdateSeen(sessionId, updatedAt);
-      setLinkedWorkItemUpdateCard(sessionId, (card) =>
-        card?.updatedAt === updatedAt ? undefined : card,
+      )?.linkedWorkItemUpdateCard;
+      if (!card) return;
+      markLinkedSessionUpdateSeen(sessionId, card, card.updatedAt);
+      setLinkedWorkItemUpdateCard(sessionId, (current) =>
+        sameLinkedWorkItemActivity(current, card) ? undefined : current,
       );
     },
     [sessionReminders.dismissDue, setLinkedWorkItemUpdateCard],
@@ -4556,29 +4582,44 @@ export default function App({
   );
 
   const onSetHistorySessionLinkedWorkItem = useCallback(
-    (sessionId: string, linkedWorkItem: LinkedWorkItem | undefined) => {
-      const previousLinkedWorkItem =
-        sessionsRef.current.find((session) => session.id === sessionId)
-          ?.linkedWorkItem ??
-        history.find((session) => session.id === sessionId)?.linkedWorkItem;
+    (
+      sessionId: string,
+      value: LinkedWorkItem | readonly LinkedWorkItem[] | undefined,
+    ) => {
+      const nextItems =
+        value == null ? [] : Array.isArray(value) ? [...value] : [value];
+      const revision =
+        (linkedWorkItemEditRevisions.current.get(sessionId) ?? 0) + 1;
+      linkedWorkItemEditRevisions.current.set(sessionId, revision);
+      const previousItems = sessionLinkedWorkItems(
+        sessionsRef.current.find((session) => session.id === sessionId) ??
+          history.find((session) => session.id === sessionId),
+      );
+      if (!lastPersistedLinkedWorkItems.current.has(sessionId)) {
+        lastPersistedLinkedWorkItems.current.set(sessionId, [...previousItems]);
+      }
       invalidateLoadedSession(sessionId);
       loadedSessionCache.current.delete(sessionId);
 
       const nextSessions = sessionsRef.current.map((session) =>
-        session.id === sessionId ? { ...session, linkedWorkItem } : session,
+        session.id === sessionId
+          ? withLinkedWorkItems(session, nextItems)
+          : session,
       );
       sessionsRef.current = nextSessions;
       setSessions(nextSessions);
       setHistory((current) =>
         current.map((session) =>
-          session.id === sessionId ? { ...session, linkedWorkItem } : session,
+          session.id === sessionId
+            ? withLinkedWorkItems(session, nextItems)
+            : session,
         ),
       );
       setStoredLinkedSessions((current) =>
-        linkedWorkItem
+        nextItems.length
           ? current.map((session) =>
               session.id === sessionId
-                ? { ...session, linkedWorkItem }
+                ? withLinkedWorkItems(session, nextItems)
                 : session,
             )
           : current.filter((session) => session.id !== sessionId),
@@ -4590,32 +4631,38 @@ export default function App({
         return next;
       });
 
-      void setSessionLinkedWorkItem(sessionId, linkedWorkItem).catch(
-        (error) => {
+      void setSessionLinkedWorkItem(
+        sessionId,
+        nextItems.length ? nextItems : undefined,
+      )
+        .then(() => {
+          lastPersistedLinkedWorkItems.current.set(sessionId, [...nextItems]);
+        })
+        .catch((error) => {
+          if (linkedWorkItemEditRevisions.current.get(sessionId) !== revision) {
+            return;
+          }
+          const rollbackItems =
+            lastPersistedLinkedWorkItems.current.get(sessionId) ?? previousItems;
           const rolledBackSessions = sessionsRef.current.map((session) =>
-            session.id === sessionId &&
-            session.linkedWorkItem === linkedWorkItem
-              ? { ...session, linkedWorkItem: previousLinkedWorkItem }
+            session.id === sessionId
+              ? withLinkedWorkItems(session, rollbackItems)
               : session,
           );
           sessionsRef.current = rolledBackSessions;
           setSessions(rolledBackSessions);
           setHistory((current) =>
             current.map((session) =>
-              session.id === sessionId &&
-              session.linkedWorkItem === linkedWorkItem
-                ? { ...session, linkedWorkItem: previousLinkedWorkItem }
+              session.id === sessionId
+                ? withLinkedWorkItems(session, rollbackItems)
                 : session,
             ),
           );
           setStoredLinkedSessions((current) =>
-            previousLinkedWorkItem
+            rollbackItems.length
               ? current.map((session) =>
                   session.id === sessionId
-                    ? {
-                        ...session,
-                        linkedWorkItem: previousLinkedWorkItem,
-                      }
+                    ? withLinkedWorkItems(session, rollbackItems)
                     : session,
                 )
               : current.filter((session) => session.id !== sessionId),
@@ -4625,8 +4672,7 @@ export default function App({
             `Could not update this conversation's GitHub link.\n\n${String(error)}`,
             { title: "MonoCode", kind: "error" },
           );
-        },
-      );
+        });
     },
     [history, invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
@@ -6866,26 +6912,29 @@ export default function App({
             : undefined;
 
         if (!session) {
-          session = {
-            ...newSession(
-              automation.harness,
-              automation.cwd,
-              automation.model,
-              automation.runtimeMode,
-              automation.modelSettings,
-            ),
-            title: eventRun
-              ? HARNESS_LABEL[automation.harness]
-              : formatSessionTitle(automation.harness, automation.name),
-            automationId: automation.id,
-            ...(linkedWorkItem ? { linkedWorkItem } : {}),
-            ...(automation.workspaceMode === "worktree"
-              ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
-              : automation.workspaceMode === "existing" &&
-                  automation.worktreeCwd
-                ? { worktreeCwd: automation.worktreeCwd }
-                : {}),
-          };
+          session = withPersistedLinkedWorkItems(
+            {
+              ...newSession(
+                automation.harness,
+                automation.cwd,
+                automation.model,
+                automation.runtimeMode,
+                automation.modelSettings,
+              ),
+              title: eventRun
+                ? HARNESS_LABEL[automation.harness]
+                : formatSessionTitle(automation.harness, automation.name),
+              automationId: automation.id,
+              ...(automation.workspaceMode === "worktree"
+                ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
+                : automation.workspaceMode === "existing" &&
+                    automation.worktreeCwd
+                  ? { worktreeCwd: automation.worktreeCwd }
+                  : {}),
+            },
+            linkedWorkItem ? [linkedWorkItem] : undefined,
+            lastPersistedLinkedWorkItems.current,
+          );
           const nextSessions = [...sessionsRef.current, session];
           sessionsRef.current = nextSessions;
           setSessions(nextSessions);
@@ -6896,14 +6945,19 @@ export default function App({
             setComposerFocused(false);
           }
         } else {
-          const stamped = {
-            ...session,
-            automationId: automation.id,
-            model: automation.model,
-            modelSettings: automation.modelSettings ?? {},
-            runtimeMode: automation.runtimeMode,
-            ...(linkedWorkItem ? { linkedWorkItem } : {}),
-          };
+          const stamped = withPersistedLinkedWorkItems(
+            {
+              ...session,
+              automationId: automation.id,
+              model: automation.model,
+              modelSettings: automation.modelSettings ?? {},
+              runtimeMode: automation.runtimeMode,
+            },
+            linkedWorkItem
+              ? [linkedWorkItem]
+              : sessionLinkedWorkItems(session),
+            lastPersistedLinkedWorkItems.current,
+          );
           session = stamped;
           const nextSessions = sessionsRef.current.map((entry) =>
             entry.id === stamped.id ? stamped : entry,
@@ -9252,14 +9306,26 @@ export default function App({
     onAppeared: onInboxAppeared,
   });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
+  useEffect(() => {
+    const { reveal, selectionKeys } = linkedSessionUpdatesToReveal(
+      tabs.flatMap((tab) => leafIds(tab.layout)),
+      linkedSessionUpdates,
+      linkedSessionUpdateSelectionKeysRef.current,
+    );
+    linkedSessionUpdateSelectionKeysRef.current = selectionKeys;
+    for (const update of reveal) {
+      revealLinkedSessionUpdate(update.sessionId, update);
+    }
+  }, [linkedSessionUpdates, revealLinkedSessionUpdate, tabs]);
   const inboxRelatedSessions = useMemo(() => {
     const byId = new Map<string, SessionSummary>();
     for (const session of storedLinkedSessions) byId.set(session.id, session);
     for (const session of history) {
-      if (session.linkedWorkItem) byId.set(session.id, session);
+      if (sessionLinkedWorkItems(session).length) byId.set(session.id, session);
     }
     for (const session of sessions) {
-      if (session.inboxAsk || !session.linkedWorkItem) continue;
+      if (session.inboxAsk || sessionLinkedWorkItems(session).length === 0)
+        continue;
       const current = byId.get(session.id);
       const summary = summaryFromSession(session);
       byId.set(
@@ -9273,6 +9339,7 @@ export default function App({
               title: summary.title,
               cwd: summary.cwd,
               linkedWorkItem: summary.linkedWorkItem,
+              linkedWorkItems: summary.linkedWorkItems,
             }
           : summary,
       );

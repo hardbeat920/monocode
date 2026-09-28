@@ -14,8 +14,12 @@ import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   parseGithubWorkItemUrl,
+  parseGithubWorkItemUrls,
   relatedSessionsForInboxItem,
   resolveLinkedWorkItem,
+  sessionLinkedWorkItems,
+  withLinkedWorkItems,
+  withPersistedLinkedWorkItems,
 } from "./sessionWorkItem";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -37,6 +41,32 @@ describe("session work items", () => {
       number: 321,
       url: "https://github.com/openai/codex/pull/321",
     });
+  });
+
+  it("parses comma-separated GitHub issue and pull request URLs", () => {
+    expect(
+      parseGithubWorkItemUrls(
+        "https://github.com/openai/codex/pull/321?diff=split, https://github.com/openai/codex/issues/12",
+      ),
+    ).toEqual([
+      {
+        kind: "pr",
+        repo: "openai/codex",
+        number: 321,
+        url: "https://github.com/openai/codex/pull/321",
+      },
+      {
+        kind: "issue",
+        repo: "openai/codex",
+        number: 12,
+        url: "https://github.com/openai/codex/issues/12",
+      },
+    ]);
+    expect(
+      parseGithubWorkItemUrls(
+        "https://github.com/openai/codex/pull/321, https://example.com/issues/12",
+      ),
+    ).toBeNull();
   });
 
   it("creates a stable link from a GitHub Inbox item", () => {
@@ -224,10 +254,88 @@ describe("session work items", () => {
 
     expect(relatedSessionsForInboxItem(item, sessions)).toEqual([matching]);
     expect(
+      relatedSessionsForInboxItem(item, [
+        {
+          id: "second-link",
+          linkedWorkItem: { ...matching.linkedWorkItem, number: 7 },
+          linkedWorkItems: [
+            { ...matching.linkedWorkItem, number: 7 },
+            matching.linkedWorkItem,
+          ],
+        },
+      ]),
+    ).toEqual([expect.objectContaining({ id: "second-link" })]);
+    expect(
       relatedSessionsForInboxItem(
         { ...item, provider: "linear", kind: "linear" } as InboxItem,
         sessions,
       ),
     ).toEqual([]);
+  });
+
+  it("reuses a multi-link session by updating both linked-item fields", () => {
+    const pull = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 1,
+      url: "https://github.com/acme/app/pull/1",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 2,
+      url: "https://github.com/acme/app/issues/2",
+    };
+    const eventItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 9,
+      url: "https://github.com/acme/app/pull/9",
+    };
+    const reused = withLinkedWorkItems(
+      {
+        id: "reused",
+        linkedWorkItem: pull,
+        linkedWorkItems: [pull, issue],
+      },
+      [eventItem],
+    );
+    expect(reused.linkedWorkItem).toEqual(eventItem);
+    expect(reused.linkedWorkItems).toBeUndefined();
+    expect(sessionLinkedWorkItems(reused)).toEqual([eventItem]);
+  });
+
+  it("refreshes the rollback baseline when automation stamps new links", () => {
+    const pull = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 1,
+      url: "https://github.com/acme/app/pull/1",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 2,
+      url: "https://github.com/acme/app/issues/2",
+    };
+    const eventItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 9,
+      url: "https://github.com/acme/app/pull/9",
+    };
+    const persisted = new Map([["reused", [pull, issue]]]);
+    const stamped = withPersistedLinkedWorkItems(
+      {
+        id: "reused",
+        linkedWorkItem: pull,
+        linkedWorkItems: [pull, issue],
+      },
+      [eventItem],
+      persisted,
+    );
+
+    expect(sessionLinkedWorkItems(stamped)).toEqual([eventItem]);
+    expect(persisted.get("reused")).toEqual([eventItem]);
   });
 });

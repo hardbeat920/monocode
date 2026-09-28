@@ -718,16 +718,27 @@ export const SessionPane = memo(function SessionPane({
               sessionId={session.id}
               card={session.linkedWorkItemUpdateCard}
               onAcknowledge={() => {
-                const updatedAt = session.linkedWorkItemUpdateCard?.updatedAt;
-                if (updatedAt != null) {
-                  markLinkedSessionUpdateSeen(session.id, updatedAt);
+                const card = session.linkedWorkItemUpdateCard;
+                if (card) {
+                  markLinkedSessionUpdateSeen(
+                    session.id,
+                    card,
+                    card.updatedAt,
+                  );
                 }
               }}
               onDismiss={() => onLinkedWorkItemUpdateCardDismiss?.(session.id)}
               onOpenDiscussion={() => {
-                if (session.linkedWorkItem) {
-                  onOpenLinkedWorkItem?.(session.linkedWorkItem, session.id);
-                }
+                const card = session.linkedWorkItemUpdateCard;
+                const item = card
+                  ? {
+                      kind: card.kind,
+                      repo: card.repo,
+                      number: card.number,
+                      url: card.url,
+                    }
+                  : session.linkedWorkItem;
+                if (item) onOpenLinkedWorkItem?.(item, session.id);
               }}
               onAddToChat={(text) => addSelectionToChat(text, "plain")}
               onArchiveSession={

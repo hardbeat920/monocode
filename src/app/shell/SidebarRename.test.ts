@@ -48,12 +48,16 @@ function pressKey(target: HTMLElement, key: string) {
   return event;
 }
 
-function typeTitle(input: HTMLInputElement, title: string) {
+function typeTitle(
+  input: HTMLInputElement | HTMLTextAreaElement,
+  title: string,
+) {
   // Use the native setter so React sees a user change, not its own value write.
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value",
-  )!.set!;
+  const proto =
+    input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")!.set!;
   act(() => {
     setter.call(input, title);
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1004,6 +1008,47 @@ describe("sidebar linked work item updates", () => {
     expect(archive?.nextElementSibling).toBe(pullRequest);
   });
 
+  it("shows each linked issue or PR as its own footer badge", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const pull = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 27,
+      url: "https://github.com/acme/app/issues/27",
+    };
+    props.sessions = [
+      {
+        ...props.sessions[0],
+        linkedWorkItem: pull,
+        linkedWorkItems: [pull, issue],
+      },
+    ];
+    act(() => render());
+
+    const pullRequest = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open PR #42"]',
+    )!;
+    const issueBadge = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open issue #27"]',
+    )!;
+    expect(pullRequest.textContent).toContain("#42");
+    expect(issueBadge.textContent).toContain("#27");
+    expect(card().textContent).toContain("#42");
+    expect(card().textContent).toContain("#27");
+    act(() => issueBadge.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      issue,
+      "session-1",
+    );
+  });
+
   it("renders an unread dot without changing session order", () => {
     props.busySessionIds = new Set();
     props.activeSessionId = undefined;
@@ -1053,8 +1098,8 @@ describe("sidebar session GitHub links", () => {
     ).find((item) => item.textContent === "Link GitHub issue or PR…")!;
     expect(link).toBeDefined();
     act(() => link.click());
-    return document.querySelector<HTMLInputElement>(
-      'input[aria-label="GitHub issue or pull request URL"]',
+    return document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="GitHub issue or pull request URLs"]',
     )!;
   }
 
@@ -1119,8 +1164,8 @@ describe("sidebar session GitHub links", () => {
     act(() => edit.click());
 
     expect(
-      document.querySelector<HTMLInputElement>(
-        'input[aria-label="GitHub issue or pull request URL"]',
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="GitHub issue or pull request URLs"]',
       )?.value,
     ).toBe("https://github.com/acme/widgets/pull/42");
     const remove = Array.from(document.querySelectorAll("button")).find(
@@ -1131,6 +1176,35 @@ describe("sidebar session GitHub links", () => {
       "session-1",
       undefined,
     );
+  });
+
+  it("links multiple GitHub URLs from a comma-separated list", () => {
+    props.onSetSessionLinkedWorkItem = vi.fn();
+    act(() => render());
+    const input = openLinkDialog();
+    typeTitle(
+      input,
+      "https://github.com/acme/widgets/pull/42, https://github.com/acme/widgets/issues/27",
+    );
+    const submit = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Link",
+    )!;
+    act(() => submit.click());
+
+    expect(props.onSetSessionLinkedWorkItem).toHaveBeenCalledWith("session-1", [
+      {
+        kind: "pr",
+        repo: "acme/widgets",
+        number: 42,
+        url: "https://github.com/acme/widgets/pull/42",
+      },
+      {
+        kind: "issue",
+        repo: "acme/widgets",
+        number: 27,
+        url: "https://github.com/acme/widgets/issues/27",
+      },
+    ]);
   });
 });
 
