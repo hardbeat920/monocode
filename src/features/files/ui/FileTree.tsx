@@ -719,7 +719,9 @@ export const FileTree = memo(function FileTree({
     if ((e.target as HTMLElement).closest("input")) return;
     if (
       (e.target as HTMLElement).closest("button") &&
-      !(e.target as HTMLElement).closest("[role='treeitem']")
+      !(e.target as HTMLElement).closest(
+        "[role='treeitem'], [data-explorer-root]",
+      )
     ) {
       return;
     }
@@ -923,6 +925,7 @@ export const FileTree = memo(function FileTree({
         <div className="flex h-8 shrink-0 items-center">
           <button
             type="button"
+            data-explorer-root
             aria-expanded={rootOpen}
             title={cwd}
             onClick={() => {

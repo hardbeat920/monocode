@@ -326,6 +326,16 @@ describe("FileTree copies paths", () => {
     expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
   });
 
+  it("copies the project root path from the root row", async () => {
+    const rootRow = container.querySelector<HTMLButtonElement>(
+      "[data-explorer-root]",
+    );
+    if (!rootRow) throw new Error("Root row not rendered");
+    await act(async () => rootRow.click());
+    await press(rootRow, { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(cwd);
+  });
+
   it("copies the selected path on a non-Latin layout", async () => {
     await press(row("first.ts"), {
       key: "С",
