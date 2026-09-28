@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { macTerminalShortcutData } from "./terminalKeys";
+import {
+  isMacTerminalClearShortcut,
+  macTerminalShortcutData,
+} from "./terminalKeys";
 
 function key(
   key: string,
@@ -59,5 +62,20 @@ describe("mac terminal editing shortcuts", () => {
     expect(
       macTerminalShortcutData(key("Delete", { metaKey: true })),
     ).toBeNull();
+  });
+});
+
+describe("mac terminal clear shortcut", () => {
+  it("matches Command+K only", () => {
+    expect(isMacTerminalClearShortcut(key("k", { metaKey: true }))).toBe(true);
+    expect(isMacTerminalClearShortcut(key("K", { metaKey: true }))).toBe(true);
+    expect(isMacTerminalClearShortcut(key("k", { ctrlKey: true }))).toBe(false);
+    expect(
+      isMacTerminalClearShortcut(key("k", { metaKey: true, shiftKey: true })),
+    ).toBe(false);
+    expect(
+      isMacTerminalClearShortcut(key("k", { metaKey: true, altKey: true })),
+    ).toBe(false);
+    expect(isMacTerminalClearShortcut(key("j", { metaKey: true }))).toBe(false);
   });
 });
