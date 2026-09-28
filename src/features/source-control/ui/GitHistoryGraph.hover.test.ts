@@ -274,17 +274,49 @@ it("waits VS Code's 300ms before opening on hover", async () => {
   expect(card()).not.toBeNull();
 });
 
-it("reports the row as expanded before the card has painted", async () => {
+it("does not report the row as expanded until the card has painted", async () => {
   await mount("/repo/hover-pending");
   const row = historyRows()[0]!;
 
   act(() => row.focus());
 
-  // The card waits for the commit message so it cannot animate in without its
-  // body. During that window the row already reports itself expanded, which is
-  // the cost of the gate: a few tens of milliseconds of `aria-expanded="true"`
-  // pointing at an id that is not on screen yet.
-  expect(row.getAttribute("aria-expanded")).toBe("true");
-  expect(row.getAttribute("aria-controls")).not.toBeNull();
+  // The card withholds its paint until the commit message arrives, so `open`
+  // means a card is wanted, not that one is on screen. Reporting
+  // `aria-expanded` from it would tell a screen reader the row is expanded
+  // during the reveal gap, pointing at an id that does not exist yet.
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(row.hasAttribute("aria-controls")).toBe(false);
   expect(card()).toBeNull();
+
+  // Once the card paints, the row reports it — and the id it points at is the
+  // card that is actually on screen.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(card()).not.toBeNull();
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+  expect(row.getAttribute("aria-controls")).toBe(card()!.id);
+});
+
+it("drops the expanded state again when the card closes", async () => {
+  await mount("/repo/hover-collapse");
+  const row = historyRows()[0]!;
+  await focusRow(row);
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+
+  vi.useFakeTimers();
+  act(() => {
+    row.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+  });
+  act(() => {
+    vi.advanceTimersByTime(299);
+  });
+  expect(card()).not.toBeNull();
+
+  act(() => {
+    vi.advanceTimersByTime(1);
+  });
+  expect(card()).toBeNull();
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(row.hasAttribute("aria-controls")).toBe(false);
 });

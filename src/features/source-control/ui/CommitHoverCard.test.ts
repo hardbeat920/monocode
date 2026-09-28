@@ -70,6 +70,7 @@ function render(cwd: string, overrides: Record<string, unknown> = {}) {
         anchor,
         id: "commit-tooltip",
         onDismiss: () => undefined,
+        onReveal: () => undefined,
         onFocusLeave: () => undefined,
         onReturnFocus: () => undefined,
         onTabForward: () => false,
@@ -223,25 +224,66 @@ describe("CommitHoverCard", () => {
     expect(card.textContent).toContain(commit.shortSha);
   });
 
-  it("holds a fixed width so the card does not resize between rows", async () => {
+  it("keeps the author and date on one line, truncating the author", async () => {
+    const longAuthor = "A Very Long Author Name That Will Not Fit In The Card";
+    act(() =>
+      root.render(
+        createElement(CommitHoverCard, {
+          cwd: "/workspace/header",
+          commit: { ...commit, author: longAuthor },
+          refs,
+          anchor,
+          id: "header-card",
+          onDismiss: () => undefined,
+          onReveal: () => undefined,
+          onFocusLeave: () => undefined,
+          onReturnFocus: () => undefined,
+          onTabForward: () => false,
+          onPointerEnter: () => undefined,
+          onPointerLeave: () => undefined,
+        }),
+      ),
+    );
+    await flush();
+
+    const header = document.getElementById("header-card")!;
+    // The card shrink-wraps and is capped, so a long author used to push the
+    // date onto a second line. The header must not wrap: VS Code keeps the date
+    // at `flex-shrink: 0` and ellipsizes the flexible part.
+    const row = header.firstElementChild as HTMLElement;
+    expect(row.classList).not.toContain("flex-wrap");
+    expect(row.classList).toContain("items-center");
+
+    const author = row.querySelector<HTMLElement>(".truncate")!;
+    expect(author.textContent).toBe(longAuthor);
+    // The full name stays reachable even though it is ellipsized.
+    expect(author.getAttribute("title")).toBe(longAuthor);
+
+    // The date never shrinks, so it is never the thing that gives way.
+    const clock = row.querySelector("svg")!;
+    const date = clock.nextElementSibling as HTMLElement;
+    expect(date.classList).toContain("shrink-0");
+    expect(date.classList).not.toContain("truncate");
+    expect(date.classList).not.toContain("break-words");
+  });
+
+  it("shrink-wraps its content and caps the width, as VS Code does", async () => {
     render("/workspace/width");
     await flush();
 
-    // A card that shrink-wraps changes width on every row in the list — no refs
-    // versus three long branch names, "fix" versus a long body — so it flickers
-    // as the pointer moves down. The width is a class, not a measurement, which
-    // is also why happy-dom can assert it: there is no layout to read.
+    // VS Code's editor hover has exactly one sizing rule:
+    // `max-width: 500px`. The card shrink-wraps and is capped. No fixed width,
+    // and no viewport calculation here, because `placePopover` already clamps
+    // the frame to the window.
     const classes = Array.from(tooltip().classList);
-    expect(classes).toContain("w-[28rem]");
-    expect(classes).toContain("max-w-full");
-    expect(classes).not.toContain("w-max");
+    expect(classes).toContain("w-max");
+    expect(classes).toContain("max-w-[min(31.25rem,100%)]");
     // No fixed pixel width is handed to the Popover: a measured width would
     // have to restate the padding and border sizes as a magic number.
     expect(tooltip().getAttribute("style") ?? "").not.toContain("width:");
   });
 
-  it("keeps the same width for a bare commit and a busy one", async () => {
-    const bare = { ...commit, author: "", subject: "fix", refs: [] };
+  it("caps rather than fixes, so a busy commit is wider but not unbounded", async () => {
     const busy = {
       ...commit,
       author: "A Very Long Author Name Indeed",
@@ -254,59 +296,55 @@ describe("CommitHoverCard", () => {
         },
       ],
     };
-    const widthClass = (el: Element) =>
-      Array.from(el.classList).find((name) => name.startsWith("w-["));
+    const bare = { ...commit, author: "", subject: "fix", refs: [] };
 
-    act(() =>
-      root.render(
-        createElement(CommitHoverCard, {
-          cwd: "/workspace/bare",
-          commit: bare,
-          refs: [],
-          anchor,
-          id: "bare-card",
-          onDismiss: () => undefined,
-          onFocusLeave: () => undefined,
-          onReturnFocus: () => undefined,
-          onTabForward: () => false,
-          onPointerEnter: () => undefined,
-          onPointerLeave: () => undefined,
-        }),
-      ),
-    );
-    await flush();
-    const bareWidth = widthClass(document.getElementById("bare-card")!);
+    const widthRules = async (id: string, target: typeof bare, cwd: string) => {
+      act(() =>
+        root.render(
+          createElement(CommitHoverCard, {
+            cwd,
+            commit: target,
+            refs: target.refs,
+            anchor,
+            id,
+            onDismiss: () => undefined,
+            onReveal: () => undefined,
+            onFocusLeave: () => undefined,
+            onReturnFocus: () => undefined,
+            onTabForward: () => false,
+            onPointerEnter: () => undefined,
+            onPointerLeave: () => undefined,
+          }),
+        ),
+      );
+      await flush();
+      return Array.from(document.getElementById(id)!.classList).filter(
+        (name) => name.startsWith("w-") || name.startsWith("max-w-"),
+      );
+    };
 
-    act(() =>
-      root.render(
-        createElement(CommitHoverCard, {
-          cwd: "/workspace/busy",
-          commit: busy,
-          refs: busy.refs,
-          anchor,
-          id: "busy-card",
-          onDismiss: () => undefined,
-          onFocusLeave: () => undefined,
-          onReturnFocus: () => undefined,
-          onTabForward: () => false,
-          onPointerEnter: () => undefined,
-          onPointerLeave: () => undefined,
-        }),
-      ),
-    );
-    await flush();
-
-    expect(busy.subject.length).toBeGreaterThan(bare.subject.length);
-    expect(widthClass(document.getElementById("busy-card")!)).toBe(bareWidth);
+    // Both cards carry the same rule. The busy one is wider only because it has
+    // more to show, and the cap is what stops that mattering past 500px. This is
+    // why the width is a class and not a measurement: happy-dom reports no
+    // layout, so there is no rendered width to compare.
+    expect(await widthRules("busy-card", busy, "/workspace/busy")).toEqual([
+      "w-max",
+      "max-w-[min(31.25rem,100%)]",
+    ]);
+    expect(await widthRules("bare-card", bare, "/workspace/bare")).toEqual([
+      "w-max",
+      "max-w-[min(31.25rem,100%)]",
+    ]);
   });
 
-  it("keeps a long ref name discoverable even though the chip truncates", async () => {
+  it("truncates a ref chip that outgrows the cap, keeping the full name", async () => {
     render("/workspace/refs");
     await flush();
 
-    // The card is a fixed width now, so a very long branch name can outgrow
-    // its chip. It truncates the way the row's pill does, and the full name
-    // stays in the DOM and in the tooltip attribute.
+    // The card shrink-wraps, so a long branch name normally widens it. Past
+    // the 500px cap the chip has to give way instead: it truncates the way the
+    // row's pill does, and the full name stays in the DOM and in the title
+    // attribute so it is still reachable.
     const chip = tooltip().querySelector<HTMLElement>(
       '[title="feature/a-very-long-branch-name"]',
     )!;

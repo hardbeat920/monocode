@@ -27,7 +27,7 @@ export type HoverCardController = {
  * `editor.hover.sticky` on. Both are settings there; here they are the
  * defaults a caller can still override.
  */
-const DEFAULT_OPEN_DELAY_MS = 200;
+const DEFAULT_OPEN_DELAY_MS = 300;
 const DEFAULT_CLOSE_DELAY_MS = 300;
 
 /**

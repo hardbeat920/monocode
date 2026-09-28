@@ -159,6 +159,16 @@ function HistoryRow({
     openNow();
   }, [openNow]);
 
+  // The card withholds its paint until the commit message arrives, so `open`
+  // means "a card is wanted" rather than "a card is on screen". Announcing
+  // `aria-expanded` from `open` would tell a screen reader the row is expanded
+  // during the reveal gap, with nothing to expand to. This tracks the paint.
+  const [revealed, setRevealed] = useState(false);
+  const onReveal = useCallback(() => setRevealed(true), []);
+  useEffect(() => {
+    if (!open) setRevealed(false);
+  }, [open]);
+
   // A card belongs to the row it describes. The card is `position: fixed`
   // beside the panel, and `placePopover` keeps it inside the window, so once
   // the row scrolls out of the list the card is left clamped to the viewport,
@@ -190,10 +200,17 @@ function HistoryRow({
         onFocus={openOnFocus}
         onKeyDown={(event) => {
           // Focus opens the card immediately, so the card's actions are always
-          // mounted and Tab can be handed to them. This costs one extra stop per
-          // row: row → card actions → next row. It is the price of reaching the
-          // copy actions without a pointer, and the hand-off is unavoidable
-          // because the card is portalled out of the list.
+          // mounted and Tab can be handed to them. The hand-off is unavoidable
+          // because the card is portalled out of the list, so DOM order can no
+          // longer carry focus from its last action back into the rows.
+          //
+          // This is a deliberate divergence from VS Code, whose hover is not
+          // focusable and never traps Tab — it puts the actions in the detail
+          // view instead. Doing it here makes the copy actions reachable
+          // without a pointer, at the cost of one extra stop per row: with a
+          // 200-row history that is 600 tab presses to cross the list. If that
+          // proves too expensive, the fix is to make the card a single tab stop
+          // with a roving tabindex over its actions, not to drop the hand-off.
           if (event.key !== "Tab" || event.shiftKey) return;
           const firstButton = document
             .getElementById(cardId)
@@ -218,8 +235,8 @@ function HistoryRow({
         // a toggle button that happens to also disclose something.
         aria-current={active ? "true" : undefined}
         aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? cardId : undefined}
+        aria-expanded={revealed}
+        aria-controls={revealed ? cardId : undefined}
         className={`git-history-item flex h-[22px] min-w-0 w-full items-stretch overflow-visible pr-2 text-left ${
           row.kind === "HEAD" ? "is-head" : ""
         } ${
@@ -279,6 +296,7 @@ function HistoryRow({
           refs={row.refs}
           anchor={anchorRef}
           id={cardId}
+          onReveal={onReveal}
           onDismiss={(reason) => {
             hover.closeNow();
             if (reason === "escape") refocusAfterDismiss();

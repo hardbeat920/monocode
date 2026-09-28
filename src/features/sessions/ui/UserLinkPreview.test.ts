@@ -117,17 +117,19 @@ describe("GitHub work item link preview", () => {
     );
   });
 
-  it("opens after a short hover delay", async () => {
+  it("opens after VS Code's 300ms hover delay", async () => {
     vi.useFakeTimers();
     act(() => root.render(createElement(UserLinkPreview, { link })));
     const chip = container.querySelector<HTMLAnchorElement>(
       '[data-github-work-item-chip="pr"]',
     )!;
 
+    // `editor.hover.delay` is 300. This used to be 220, which meant the same
+    // app had two hover cards disagreeing about when to appear.
     act(() =>
       chip.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
     );
-    act(() => vi.advanceTimersByTime(219));
+    act(() => vi.advanceTimersByTime(299));
     expect(
       document.querySelector("[data-github-work-item-popover]"),
     ).toBeNull();
@@ -174,12 +176,18 @@ describe("GitHub work item link preview", () => {
       document.querySelector("[data-github-work-item-popover]"),
     ).not.toBeNull();
 
-    // Leaving the card for real does close it.
+    // Leaving the card for real does close it, after `editor.hover.hidingDelay`
+    // rather than the 100ms this used to use.
     act(() =>
       popover.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
     );
+    act(() => vi.advanceTimersByTime(299));
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).not.toBeNull();
+
     await act(async () => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
     expect(

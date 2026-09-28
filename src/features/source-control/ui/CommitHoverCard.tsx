@@ -27,6 +27,7 @@ type Props = {
   anchor: PopoverAnchor;
   id: string;
   onDismiss: (reason: PopoverDismissReason) => void;
+  onReveal: () => void;
   onFocusLeave: (next: EventTarget | null) => void;
   onReturnFocus: () => void;
   onTabForward: () => boolean;
@@ -59,8 +60,8 @@ function hasRepo(cwd: string): boolean {
  * few tens of milliseconds of hover latency for one clean animation of the
  * finished card.
  *
- * The row reports `aria-expanded` for the whole window, so for up to
- * `REVEAL_BUDGET_MS` it points at a card that is not on screen yet.
+ * The row reports `aria-expanded` only once `onReveal` fires, so an assistive
+ * technology is never told a card is expanded while nothing is on screen.
  */
 function useRevealWhenSettled(settled: boolean): boolean {
   const [expired, setExpired] = useState(false);
@@ -84,6 +85,7 @@ export function CommitHoverCard({
   anchor,
   id,
   onDismiss,
+  onReveal,
   onFocusLeave,
   onReturnFocus,
   onTabForward,
@@ -96,6 +98,13 @@ export function CommitHoverCard({
   // once without its body and then jumping as the text lands.
   const message = useCommitMessage(cwd, commit.sha);
   const revealed = useRevealWhenSettled(message !== undefined || !hasRepo(cwd));
+
+  // In an effect, not during render: the row is a different component and
+  // updating it mid-render is what React warns about. It also means the row
+  // reports the card as expanded only once the paint has actually happened.
+  useEffect(() => {
+    if (revealed) onReveal();
+  }, [revealed, onReveal]);
 
   if (!revealed) return null;
 
@@ -110,21 +119,19 @@ export function CommitHoverCard({
       id={id}
       role="dialog"
       aria-label={`Commit ${commit.shortSha} details`}
-      // A fixed width, capped by the frame, the way VS Code sizes its issue
-      // hover (`width: 621px; max-width: 100%`). A card that shrink-wraps
-      // changes width on every row in the list — no refs versus three long
-      // branch names, "fix" versus a long body — so it flickers as the pointer
-      // moves down. `max-w-full` is what keeps the fixed width from being
-      // clipped when the window is narrower than the card; the Popover frame
-      // carries `overflow-hidden`, and `placePopover` clamps that frame to the
-      // viewport, so the cap belongs here in CSS rather than in a second
-      // viewport calculation.
+      // VS Code's editor hover has exactly one sizing rule:
+      // `max-width: var(--vscode-hover-maxWidth, 500px)`. The card shrink-wraps
+      // and is capped — there is no fixed width, and the cap is a plain
+      // `max-width`, not a viewport calculation, because `placePopover` already
+      // clamps the frame to the window. `min()` keeps the cap below the frame
+      // width too, for when the frame is the narrower of the two; a second
+      // `max-w-full` would collide with `max-w-*` over stylesheet order.
       //
-      // VS Code's core editor hover uses a single `max-width` instead, but
-      // picks 500px rather than shrink-wrapping. Raising this to 500px would
-      // match it exactly; 28rem leaves a card that opens off a narrow sidebar a
-      // little less screen to cover.
-      className="flex w-[28rem] max-w-full flex-col gap-1.5 p-3 font-sans text-left text-content"
+      // A card that changes width between rows is fine. The 300ms open delay is
+      // what stops a sweep down the list from flashing a card on every row:
+      // moving quickly opens nothing, and a card you have dwelt on long enough
+      // to appear is one you are already looking at.
+      className="flex w-max max-w-[min(31.25rem,100%)] flex-col gap-1.5 p-3 font-sans text-left text-content"
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next))
@@ -183,7 +190,13 @@ export function CommitHoverCard({
   );
 }
 
-/** Author and date on one wrapped line; the widest thing the card sizes to. */
+/**
+ * Author and date on one line, never two. The card shrink-wraps and is capped,
+ * so a long author used to push the date onto a second line once the cap bit.
+ * VS Code's hover header keeps the date at `flex-shrink: 0` and ellipsizes the
+ * flexible part instead, which is what this does: the author truncates, the
+ * date is always whole, and `title` carries the full name.
+ */
 function CommitHeader({
   author,
   timestamp,
@@ -192,11 +205,11 @@ function CommitHeader({
   timestamp: string;
 }) {
   return (
-    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-[11px] leading-4">
+    <div className="flex min-w-0 max-w-full items-center gap-1.5 text-[11px] leading-4">
       {author ? (
         <>
           <span
-            className="min-w-0 break-words font-medium text-content/80"
+            className="min-w-0 truncate font-medium text-content/80"
             title={author}
           >
             {author}
@@ -205,7 +218,7 @@ function CommitHeader({
         </>
       ) : null}
       <Clock className="size-3.5 shrink-0 text-content/45" aria-hidden="true" />
-      <span className="min-w-0 break-words text-content/55">
+      <span className="shrink-0 text-content/55">
         {timestamp || "Date unavailable"}
       </span>
     </div>

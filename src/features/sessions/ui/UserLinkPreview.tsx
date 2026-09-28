@@ -110,8 +110,11 @@ function GenericLinkPreview({ link }: { link: UserLink }) {
   );
 }
 
-const HOVER_OPEN_DELAY_MS = 220;
-const HOVER_CLOSE_DELAY_MS = 100;
+// VS Code's `editor.hover.delay` and `editor.hover.hidingDelay`, both 300.
+// The chip's own constants used to be 220/100, which meant the same app had
+// two hover cards that disagreed about when to appear and how long to wait.
+const HOVER_OPEN_DELAY_MS = 300;
+const HOVER_CLOSE_DELAY_MS = 300;
 
 function GithubWorkItemPreview({
   link,
