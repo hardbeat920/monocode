@@ -10,6 +10,7 @@ import {
 } from "../../../platform/tauri/fs";
 import {
   loadCommitStats,
+  MAX_CACHED_COMMIT_STATS,
   peekCommitStats,
   summarizeCommitFiles,
 } from "./commitStats";
@@ -109,5 +110,43 @@ describe("loadCommitStats", () => {
       deletions: 1,
     });
     expect(mockFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the oldest entries once the cache is full", async () => {
+    mockFiles.mockResolvedValue([file(1, 1)]);
+
+    // Two commits past the cap, so the very first one is evicted. Eviction is
+    // what stops a long session across many projects growing without bound.
+    const first = "sha-0";
+    await loadCommitStats("/repo-cap", first);
+    for (let i = 1; i <= MAX_CACHED_COMMIT_STATS; i++) {
+      await loadCommitStats("/repo-cap", `sha-${i}`);
+    }
+
+    expect(peekCommitStats("/repo-cap", first)).toBeUndefined();
+    // The most recent entry survives, and re-reading an evicted commit is a
+    // fresh Git call rather than a permanent miss.
+    expect(
+      peekCommitStats("/repo-cap", `sha-${MAX_CACHED_COMMIT_STATS}`),
+    ).toBeDefined();
+    const callsBefore = mockFiles.mock.calls.length;
+    await loadCommitStats("/repo-cap", first);
+    expect(mockFiles).toHaveBeenCalledTimes(callsBefore + 1);
+  });
+
+  it("does not evict on a failed lookup", async () => {
+    mockFiles.mockResolvedValue([file(1, 1)]);
+    await loadCommitStats("/repo-cap-fail", "keep-me");
+    const callsBefore = mockFiles.mock.calls.length;
+
+    mockFiles.mockRejectedValue(new Error("git exploded"));
+    expect(await loadCommitStats("/repo-cap-fail", "boom")).toBeNull();
+    // The failure is not cached, so it costs one call and no cache slot.
+    expect(mockFiles).toHaveBeenCalledTimes(callsBefore + 1);
+
+    // The good entry is still there and still cached: no extra Git call.
+    expect(peekCommitStats("/repo-cap-fail", "keep-me")).toBeDefined();
+    await loadCommitStats("/repo-cap-fail", "keep-me");
+    expect(mockFiles).toHaveBeenCalledTimes(callsBefore + 1);
   });
 });

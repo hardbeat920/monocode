@@ -7,6 +7,7 @@ vi.mock("../../../platform/tauri/fs", () => ({
 import { gitCommitMessage } from "../../../platform/tauri/fs";
 import {
   loadCommitMessage,
+  MAX_CACHED_COMMIT_MESSAGES,
   peekCommitMessage,
   splitCommitMessage,
 } from "./commitMessage";
@@ -96,5 +97,43 @@ describe("loadCommitMessage", () => {
       description: "",
     });
     expect(mockMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the oldest entries once the cache is full", async () => {
+    mockMessage.mockResolvedValue("Subject");
+
+    // Two commits past the cap, so the very first one is evicted. Eviction is
+    // what stops a long session across many projects growing without bound.
+    const first = "sha-0";
+    await loadCommitMessage("/repo-cap", first);
+    for (let i = 1; i <= MAX_CACHED_COMMIT_MESSAGES; i++) {
+      await loadCommitMessage("/repo-cap", `sha-${i}`);
+    }
+
+    expect(peekCommitMessage("/repo-cap", first)).toBeUndefined();
+    expect(
+      peekCommitMessage("/repo-cap", `sha-${MAX_CACHED_COMMIT_MESSAGES}`),
+    ).toBeDefined();
+    const callsBefore = mockMessage.mock.calls.length;
+    await loadCommitMessage("/repo-cap", first);
+    expect(mockMessage).toHaveBeenCalledTimes(callsBefore + 1);
+  });
+
+  it("does not evict on a failed lookup", async () => {
+    mockMessage.mockResolvedValue("Keep me");
+    await loadCommitMessage("/repo-cap-fail", "keep-me");
+    const callsBefore = mockMessage.mock.calls.length;
+
+    mockMessage.mockRejectedValue(new Error("git exploded"));
+    expect(await loadCommitMessage("/repo-cap-fail", "boom")).toBeNull();
+    // The failure is not cached, so it costs one call and no cache slot.
+    expect(mockMessage).toHaveBeenCalledTimes(callsBefore + 1);
+
+    // The good entry is still there and still cached: no extra Git call.
+    expect(peekCommitMessage("/repo-cap-fail", "keep-me")?.subject).toBe(
+      "Keep me",
+    );
+    await loadCommitMessage("/repo-cap-fail", "keep-me");
+    expect(mockMessage).toHaveBeenCalledTimes(callsBefore + 1);
   });
 });

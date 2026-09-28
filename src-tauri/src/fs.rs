@@ -2308,6 +2308,12 @@ fn git_peel_commit(root: &Path, spec: &str) -> Result<String, String> {
     git_stdout(root, &["rev-parse", "--verify", &peeled]).ok_or_else(|| "Unknown commit".into())
 }
 
+/// Files a commit changed, diffed against its first parent.
+///
+/// The parent is named explicitly because a bare `diff-tree <sha>` reports
+/// nothing for a merge, and because `git_commit_file_diff_for` already diffs
+/// each file against first parent: the list and the per-file diffs have to
+/// agree or the commit view lists a file whose diff is empty.
 fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, String> {
     if !git_is_work_tree(root) {
         return Err("Not a git repository".into());
@@ -2589,17 +2595,19 @@ fn git_head_message_for(root: &Path) -> Result<String, String> {
     git_stdout(root, &["log", "-1", "--pretty=%B"]).ok_or_else(|| "No commits yet".to_string())
 }
 
+/// Full message (subject and body) of one commit, for the history hover card.
+///
+/// `--pretty=format:` rather than the default `tformat:` because only the
+/// default appends its own terminating newline, and the card copies this text
+/// back verbatim. Reading the raw object instead would mean hand-parsing
+/// git's internal commit layout to recover the same string.
 fn git_commit_message_for(root: &Path, sha: &str) -> Result<String, String> {
     if !git_is_work_tree(root) {
         return Err("Not a git repository".into());
     }
     let sha = git_peel_commit(root, sha)?;
-    let commit =
-        git_run(root, &["cat-file", "-p", &sha]).ok_or_else(|| "Unknown commit".to_string())?;
-    commit
-        .split_once("\n\n")
-        .map(|(_, message)| message.to_string())
-        .ok_or_else(|| "Invalid commit".to_string())
+    git_run(root, &["show", "-s", "--pretty=format:%B", &sha])
+        .ok_or_else(|| "Unknown commit".to_string())
 }
 
 fn git_push_for(root: &Path) -> Result<(), String> {
@@ -6834,24 +6842,33 @@ mod tests {
         assert!(git_commit_file_diff_for(&dir.0, sha, "../secret.txt").is_err());
     }
 
+    /// A repo whose HEAD is a two-parent merge of `feature` into `main`.
+    /// Returns the merge sha, or `None` when the environment cannot commit.
+    fn init_merge_commit(dir: &Path) -> Option<String> {
+        if !init_git_commit(dir, &[("a.txt", "alpha\n")]) {
+            return None;
+        }
+        assert!(git(dir, &["checkout", "-b", "feature"]));
+        std::fs::write(dir.join("feat.txt"), "one\n").unwrap();
+        assert!(git(dir, &["add", "."]));
+        assert!(git(dir, &["commit", "-m", "feature work"]));
+        assert!(git(dir, &["checkout", "main"]));
+        std::fs::write(dir.join("main.txt"), "two\n").unwrap();
+        assert!(git(dir, &["add", "."]));
+        assert!(git(dir, &["commit", "-m", "main work"]));
+        assert!(git(
+            dir,
+            &["merge", "feature", "--no-ff", "-m", "Merge feature"]
+        ));
+        git_stdout(dir, &["rev-parse", "HEAD"])
+    }
+
     #[test]
     fn git_history_records_merge_parents() {
         let dir = tmp("git-history-merge");
-        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+        let Some(sha) = init_merge_commit(&dir.0) else {
             return;
-        }
-        assert!(git(&dir.0, &["checkout", "-b", "feature"]));
-        std::fs::write(dir.0.join("feat.txt"), "one\n").unwrap();
-        assert!(git(&dir.0, &["add", "."]));
-        assert!(git(&dir.0, &["commit", "-m", "feature work"]));
-        assert!(git(&dir.0, &["checkout", "main"]));
-        std::fs::write(dir.0.join("main.txt"), "two\n").unwrap();
-        assert!(git(&dir.0, &["add", "."]));
-        assert!(git(&dir.0, &["commit", "-m", "main work"]));
-        assert!(git(
-            &dir.0,
-            &["merge", "feature", "--no-ff", "-m", "Merge feature"]
-        ));
+        };
 
         let history = git_history_for(&dir.0, Some(20)).unwrap();
         let merge = history
@@ -6859,11 +6876,30 @@ mod tests {
             .iter()
             .find(|commit| commit.subject == "Merge feature")
             .unwrap();
+        assert_eq!(merge.sha, sha);
         assert_eq!(merge.parents.len(), 2);
-        let files = git_commit_files_for(&dir.0, &merge.sha).unwrap();
+    }
+
+    #[test]
+    fn git_commit_files_of_a_merge_diff_against_the_first_parent() {
+        let dir = tmp("git-commit-files-merge");
+        let Some(sha) = init_merge_commit(&dir.0) else {
+            return;
+        };
+
+        // A bare `diff-tree <sha>` reports nothing for a merge. Naming the
+        // first parent is what makes the file list agree with
+        // `git_commit_file_diff_for`, which diffs the same way.
+        let files = git_commit_files_for(&dir.0, &sha).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].relative, "feat.txt");
         assert_eq!(files[0].additions, 1);
+        assert_eq!(files[0].deletions, 0);
+
+        // The list and the per-file diff have to describe the same change.
+        let diff = git_commit_file_diff_for(&dir.0, &sha, "feat.txt").unwrap();
+        assert_eq!(diff.status, "added");
+        assert_eq!(diff.current, "one\n");
     }
 
     #[test]
@@ -7137,6 +7173,44 @@ mod tests {
         );
         assert!(git_commit_message_for(&dir.0, "../oops").is_err());
         assert!(git_commit_message_for(&dir.0, "not-hex!").is_err());
+    }
+
+    #[test]
+    fn git_commit_message_round_trips_exact_paragraph_spacing() {
+        let dir = tmp("git-commit-message-raw");
+        let files = tmp("git-commit-message-raw-msg");
+        if !init_git_commit(&dir.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        let msg_path = files.0.join("message");
+        // Paragraph spacing and blank lines around the subject are the cases a
+        // re-joined subject/body, or a hand-parsed commit object, would mangle.
+        for message in [
+            "Subject\nBody without a blank separator\n",
+            "Subject\n\n- one\n- two\n\nTrailer: value\n",
+            "\n\nSubject after a leading blank line\n\n",
+            "Just a subject\n",
+        ] {
+            // `verbatim` keeps git from normalizing the message on the way in,
+            // so the test measures this function rather than git's cleanup.
+            std::fs::write(&msg_path, message).unwrap();
+            assert!(git(
+                &dir.0,
+                &[
+                    "commit",
+                    "--allow-empty",
+                    "--cleanup=verbatim",
+                    "-F",
+                    &msg_path.to_string_lossy(),
+                ]
+            ));
+            let sha = git_stdout(&dir.0, &["rev-parse", "HEAD"]).unwrap();
+            assert_eq!(
+                git_commit_message_for(&dir.0, &sha).unwrap(),
+                message,
+                "message did not round-trip: {message:?}"
+            );
+        }
     }
 
     #[test]

@@ -13,12 +13,28 @@ export type CommitMessage = {
  * Commit messages are immutable, so a successful lookup is cached for the
  * session. Failures are not cached: the next hover retries rather than
  * pinning a transient Git error.
+ *
+ * The map is capped rather than cleared per project, which bounds it no matter
+ * how many repositories a session visits without needing call sites to tell it
+ * when the project changed. Map iteration is insertion-ordered, so the oldest
+ * entries are the ones dropped.
  */
 const cache = new Map<string, CommitMessage>();
 const inFlight = new Map<string, Promise<CommitMessage | null>>();
 
+/** Roughly a full page of history per repository, several projects over. */
+export const MAX_CACHED_COMMIT_MESSAGES = 256;
+
 function cacheKey(cwd: string, sha: string): string {
   return `${cwd}\u0000${sha}`;
+}
+
+function remember(key: string, value: CommitMessage): void {
+  cache.set(key, value);
+  for (const stale of cache.keys()) {
+    if (cache.size <= MAX_CACHED_COMMIT_MESSAGES) break;
+    cache.delete(stale);
+  }
 }
 
 /** Split `git show --pretty=%B` output into the subject and its description. */
@@ -60,7 +76,7 @@ export function loadCommitMessage(
   const request = gitCommitMessage(cwd, sha)
     .then((text) => {
       const message = splitCommitMessage(text);
-      cache.set(key, message);
+      remember(key, message);
       return message;
     })
     .catch(() => null)

@@ -42,6 +42,61 @@ const commits: GitHistoryCommit[] = [
 let container: HTMLDivElement;
 let root: Root;
 
+function historyRows(): HTMLButtonElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>("[data-history-row]"),
+  );
+}
+
+function card(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[role="dialog"]');
+}
+
+function cardActions(): HTMLButtonElement[] {
+  return Array.from(
+    card()?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+  );
+}
+
+function key(target: Element, init: KeyboardEventInit) {
+  act(() => {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  });
+}
+
+async function mount(cwd: string, selectedSha?: string) {
+  await act(async () => {
+    root.render(
+      createElement(GitHistoryGraph, {
+        cwd,
+        enabled: true,
+        expanded: true,
+        selectedSha,
+        onToggleExpanded: () => undefined,
+        onOpenCommit: () => undefined,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Focus a row and let the card reveal. The card waits for the commit message
+ * before painting, so it is not on screen the instant the row takes focus.
+ */
+async function focusRow(row: HTMLElement) {
+  await act(async () => {
+    row.focus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(gitHistory).mockResolvedValue({ head: commits[0]!.sha, commits });
@@ -57,71 +112,40 @@ afterEach(() => {
 });
 
 it("tabs into the commit actions, back to the row, and forward to the next row", async () => {
-  await act(async () => {
-    root.render(
-      createElement(GitHistoryGraph, {
-        cwd: "/repo/hover-keyboard",
-        enabled: true,
-        expanded: true,
-        onToggleExpanded: () => undefined,
-        onOpenCommit: () => undefined,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-
-  const rows = container.querySelectorAll<HTMLButtonElement>("li > button");
+  await mount("/repo/hover-keyboard");
+  const rows = historyRows();
   expect(rows).toHaveLength(2);
-  act(() => rows[0]!.focus());
-  let card = document.querySelector<HTMLElement>('[role="dialog"]')!;
-  expect(card).not.toBeNull();
 
-  act(() =>
-    rows[0]!.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-      }),
-    ),
-  );
-  expect(document.activeElement).toBe(card.querySelector("button"));
+  await focusRow(rows[0]!);
+  expect(card()).not.toBeNull();
 
-  act(() =>
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    ),
-  );
+  key(rows[0]!, { key: "Tab" });
+  expect(document.activeElement).toBe(cardActions()[0]);
+
+  key(document.activeElement!, { key: "Tab", shiftKey: true });
   expect(document.activeElement).toBe(rows[0]);
 
-  card = document.querySelector<HTMLElement>('[role="dialog"]')!;
-  const lastAction = card.querySelectorAll<HTMLButtonElement>("button")[1]!;
-  act(() => lastAction.focus());
-  act(() =>
-    lastAction.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-      }),
-    ),
-  );
-  expect(document.activeElement).toBe(rows[1]);
+  // Shift+Tab back to the row keeps the card open: focus is still inside the
+  // row's disclosure, so the card is still relevant.
+  expect(card()).not.toBeNull();
 
-  act(() =>
-    rows[1]!.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-      }),
-    ),
-  );
+  const last = cardActions().at(-1)!;
+  act(() => last.focus());
+  key(last, { key: "Tab" });
+  expect(document.activeElement).toBe(rows[1]);
+});
+
+it("closes on Escape without reopening the card it dismissed", async () => {
+  await mount("/repo/hover-escape");
+  const row = historyRows()[0]!;
+
+  // Focus is inside the card, so Escape has to hand focus back to the row.
+  // Focus fires the row's onFocus, which opens the card, so this is the case
+  // where a dismissal can silently undo itself.
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  expect(document.activeElement).toBe(cardActions()[0]);
+
   act(() =>
     document.activeElement!.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -131,6 +155,109 @@ it("tabs into the commit actions, back to the row, and forward to the next row",
       }),
     ),
   );
+
+  expect(document.activeElement).toBe(row);
+  expect(card()).toBeNull();
+
+  // The guard is consumed, so ordinary focus still opens the card afterwards.
+  act(() => row.blur());
+  await focusRow(row);
+  expect(card()).not.toBeNull();
+});
+
+it("closes when focus leaves the card for somewhere outside", async () => {
+  await mount("/repo/hover-focus-leave");
+  const row = historyRows()[0]!;
+  const outside = document.createElement("button");
+  document.body.append(outside);
+
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  expect(card()).not.toBeNull();
+
+  // React's onBlur listens for focusout, which is the bubbling event.
+  await act(async () => {
+    cardActions()[0]!.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: outside }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(card()).toBeNull();
+});
+
+it("skips a non-row element when handing focus to the next row", async () => {
+  await mount("/repo/hover-decoy");
+  const rows = historyRows();
+
+  // A separator or group heading between two rows used to end the traversal
+  // silently: `nextElementSibling` found the decoy, it had no button, and Tab
+  // dropped out of the list entirely.
+  const decoy = document.createElement("li");
+  decoy.textContent = "last week";
+  rows[0]!.closest("li")!.after(decoy);
+
+  await focusRow(rows[0]!);
+  key(rows[0]!, { key: "Tab" });
+  const last = cardActions().at(-1)!;
+  act(() => last.focus());
+  key(last, { key: "Tab" });
+
   expect(document.activeElement).toBe(rows[1]);
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it("lets the final row's card give Tab back to the browser", async () => {
+  await mount("/repo/hover-last-row");
+  const row = historyRows().at(-1)!;
+
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  const last = cardActions().at(-1)!;
+  act(() => last.focus());
+
+  const event = new KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    last.dispatchEvent(event);
+  });
+
+  // Not prevented, so the browser moves focus onward instead of trapping the
+  // user on the last row.
+  expect(event.defaultPrevented).toBe(false);
+});
+
+it("marks the open commit as the current one, not a pressed toggle", async () => {
+  await mount("/repo/hover-aria", commits[0]!.sha);
+  const rows = historyRows();
+
+  // aria-pressed would conflict with aria-expanded on the same button.
+  expect(rows[0]!.hasAttribute("aria-pressed")).toBe(false);
+  expect(rows[0]!.getAttribute("aria-current")).toBe("true");
+  expect(rows[1]!.hasAttribute("aria-current")).toBe(false);
+
+  expect(rows[0]!.getAttribute("aria-haspopup")).toBe("dialog");
+  expect(rows[0]!.getAttribute("aria-expanded")).toBe("false");
+  expect(rows[0]!.hasAttribute("aria-controls")).toBe(false);
+
+  await focusRow(rows[0]!);
+  expect(rows[0]!.getAttribute("aria-expanded")).toBe("true");
+  const controlled = rows[0]!.getAttribute("aria-controls");
+  expect(controlled).toBe(card()!.id);
+});
+
+it("reports the row as expanded before the card has painted", async () => {
+  await mount("/repo/hover-pending");
+  const row = historyRows()[0]!;
+
+  act(() => row.focus());
+
+  // The card waits for the commit message so it cannot animate in without its
+  // body. During that window the row already reports itself expanded, which is
+  // the cost of the gate: a few tens of milliseconds of `aria-expanded="true"`
+  // pointing at an id that is not on screen yet.
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+  expect(row.getAttribute("aria-controls")).not.toBeNull();
+  expect(card()).toBeNull();
 });

@@ -35,7 +35,10 @@ vi.mock("../../inbox/model/githubTasks", () => ({
 }));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { githubWorkItem, githubWorkItemDetails } from "../../inbox/model/githubTasks";
+import {
+  githubWorkItem,
+  githubWorkItemDetails,
+} from "../../inbox/model/githubTasks";
 import type { UserLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
 
@@ -138,6 +141,50 @@ describe("GitHub work item link preview", () => {
     expect(
       document.querySelector("[data-github-work-item-popover]"),
     ).not.toBeNull();
+  });
+
+  it("keeps the card open while the pointer travels onto it", async () => {
+    vi.useFakeTimers();
+    act(() => root.render(createElement(UserLinkPreview, { link })));
+    const chip = container.querySelector<HTMLAnchorElement>(
+      '[data-github-work-item-chip="pr"]',
+    )!;
+
+    act(() =>
+      chip.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+    const popover = document.querySelector<HTMLElement>(
+      "[data-github-work-item-popover]",
+    )!;
+    expect(popover).not.toBeNull();
+
+    // Leaving the chip arms a delayed close, so the pointer can cross the gap.
+    act(() =>
+      chip.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    );
+    act(() =>
+      popover.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+    act(() => vi.advanceTimersByTime(500));
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).not.toBeNull();
+
+    // Leaving the card for real does close it.
+    act(() =>
+      popover.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).toBeNull();
   });
 
   it("keeps the chip clickable and opens the original URL", () => {

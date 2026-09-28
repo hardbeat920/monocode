@@ -77,6 +77,7 @@ export function GitHistoryGraph({
       {expanded ? (
         <div
           ref={lockOverscroll}
+          data-history-scroll
           className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none"
         >
           {!cwd || cwd === "~" ? (
@@ -129,17 +130,64 @@ function HistoryRow({
   const anchorRef = useRef<HTMLButtonElement>(null);
   const cardId = useId();
   const hover = useHoverCard({ openDelayMs: 600 });
+  // Focus always opens the card, so putting focus back on the row after a
+  // dismissal would immediately reopen what the user just closed. This guard
+  // makes the dismissal win without depending on the order of the two calls.
+  const refocusing = useRef(false);
+
+  const refocusAfterDismiss = useCallback(() => {
+    const row = anchorRef.current;
+    if (!row || row === document.activeElement) return;
+    refocusing.current = true;
+    row.focus();
+    // Leave no guard armed if focus did not actually land.
+    if (document.activeElement !== row) refocusing.current = false;
+  }, []);
+
+  const openOnFocus = useCallback(() => {
+    if (refocusing.current) {
+      refocusing.current = false;
+      return;
+    }
+    hover.openNow();
+  }, [hover]);
+
+  // A card belongs to the row it describes. The card is `position: fixed`
+  // beside the panel, and `placePopover` keeps it inside the window, so once
+  // the row scrolls out of the list the card is left clamped to the viewport,
+  // drifting further above the row with every scroll and describing nothing.
+  // Close it instead, the way a native title tooltip goes away.
+  const closeNow = hover.closeNow;
+  useEffect(() => {
+    if (!hover.open) return;
+    const row = anchorRef.current;
+    if (!row || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) closeNow();
+      },
+      { root: row.closest("[data-history-scroll]"), threshold: 0 },
+    );
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [hover.open, closeNow]);
   return (
     <li className="min-w-0 overflow-visible" style={{ height: GRAPH_ROW_PX }}>
       <button
         ref={anchorRef}
         type="button"
+        data-history-row
         onClick={() => onOpen()}
         onDoubleClick={() => onOpen(true)}
         onMouseEnter={hover.openAfterDelay}
         onMouseLeave={hover.closeAfterDelay}
-        onFocus={hover.openNow}
+        onFocus={openOnFocus}
         onKeyDown={(event) => {
+          // Focus opens the card immediately, so the card's actions are always
+          // mounted and Tab can be handed to them. This costs one extra stop per
+          // row: row → card actions → next row. It is the price of reaching the
+          // copy actions without a pointer, and the hand-off is unavoidable
+          // because the card is portalled out of the list.
           if (event.key !== "Tab" || event.shiftKey) return;
           const firstButton = document
             .getElementById(cardId)
@@ -159,7 +207,10 @@ function HistoryRow({
           }
           hover.closeNow();
         }}
-        aria-pressed={active}
+        // `aria-current` marks which commit is open. It replaced `aria-pressed`,
+        // which conflicted with `aria-expanded` on the same button: a row is not
+        // a toggle button that happens to also disclose something.
+        aria-current={active ? "true" : undefined}
         aria-haspopup="dialog"
         aria-expanded={hover.open}
         aria-controls={hover.open ? cardId : undefined}
@@ -223,26 +274,43 @@ function HistoryRow({
           anchor={anchorRef}
           id={cardId}
           onDismiss={(reason) => {
-            if (reason === "escape") anchorRef.current?.focus();
             hover.closeNow();
+            if (reason === "escape") refocusAfterDismiss();
           }}
           onFocusLeave={(next) => {
             if (next !== anchorRef.current) hover.closeNow();
           }}
           onReturnFocus={() => anchorRef.current?.focus()}
-          onTabForward={() => {
-            const next = anchorRef.current
-              ?.closest("li")
-              ?.nextElementSibling?.querySelector<HTMLButtonElement>("button");
-            next?.focus();
-            return !!next;
-          }}
+          onTabForward={() => focusNextHistoryRow(anchorRef.current)}
           onPointerEnter={hover.cancelClose}
           onPointerLeave={hover.closeAfterDelay}
         />
       ) : null}
     </li>
   );
+}
+
+/**
+ * Focus the next commit row, so Tab walks row → card → row instead of running
+ * off the end of the document. The card is portalled to the body, so DOM order
+ * can no longer carry focus from the last action back into the list.
+ *
+ * Returns false when this is the final row, which lets the caller fall
+ * through to the browser's own Tab handling. Rows are found by their shared
+ * attribute rather than by `nextElementSibling`, so a non-row element between
+ * two rows is skipped instead of swallowing the traversal.
+ */
+function focusNextHistoryRow(anchor: HTMLElement | null): boolean {
+  if (!anchor) return false;
+  const rows = anchor
+    .closest("ul")
+    ?.querySelectorAll<HTMLButtonElement>("[data-history-row]");
+  if (!rows) return false;
+  const index = Array.prototype.indexOf.call(rows, anchor);
+  const next = rows[index + 1];
+  if (!next) return false;
+  next.focus();
+  return true;
 }
 
 function RefPill({ refInfo }: { refInfo: GraphRef }) {

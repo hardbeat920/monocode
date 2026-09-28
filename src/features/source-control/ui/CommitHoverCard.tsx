@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   Clock,
@@ -20,7 +14,7 @@ import {
 } from "../../../shared/ui/Popover";
 import { copyText } from "../../../platform/tauri/clipboard";
 import type { GitHistoryCommit } from "../../../platform/tauri/fs";
-import { loadCommitMessage } from "../model/commitMessage";
+import { loadCommitMessage, type CommitMessage } from "../model/commitMessage";
 import { useCommitStats } from "../hooks/useCommitStats";
 import { useCommitMessage } from "../hooks/useCommitMessage";
 import { formatCommitTimestamp } from "../model/commitDate";
@@ -41,6 +35,44 @@ type Props = {
 };
 
 /**
+ * How long to wait for the commit message before showing the card anyway. Git
+ * usually answers in well under this; the budget only stops a slow repository
+ * from leaving the card invisible, and costs nothing when the message is
+ * already cached. Exported so a test can hold the reveal to the same number
+ * rather than a copy of it.
+ */
+export const REVEAL_BUDGET_MS = 150;
+
+/** No project folder means no Git to ask, so there is nothing to wait for. */
+function hasRepo(cwd: string): boolean {
+  return Boolean(cwd) && cwd !== "~";
+}
+
+/**
+ * Whether to paint the card, given whether the content it is waiting on has
+ * settled.
+ *
+ * The card animates in over 170ms, and its body arrives from a Git call a
+ * moment later. Painting straight away means the animation plays on a card
+ * with no body, which then grows by up to 240px under the reader — a jump
+ * rather than a reveal. Holding the paint until the body is in hand trades a
+ * few tens of milliseconds of hover latency for one clean animation of the
+ * finished card.
+ *
+ * The row reports `aria-expanded` for the whole window, so for up to
+ * `REVEAL_BUDGET_MS` it points at a card that is not on screen yet.
+ */
+function useRevealWhenSettled(settled: boolean): boolean {
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    if (settled) return;
+    const timer = setTimeout(() => setExpired(true), REVEAL_BUDGET_MS);
+    return () => clearTimeout(timer);
+  }, [settled]);
+  return settled || expired;
+}
+
+/**
  * Hover card for a history row, in the shape VS Code's GitLens card uses:
  * author and date on one line, the full message, a changed-file summary,
  * ref chips, then the SHA with copy actions. No avatar and no remote link.
@@ -59,20 +91,13 @@ export function CommitHoverCard({
   onPointerLeave,
 }: Props) {
   const timestamp = formatCommitTimestamp(commit.timestamp);
-  const measureRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState<number>();
+  // The message is the card's height. Fetched here rather than in the body so
+  // the reveal can wait for it, which is what keeps the card from painting
+  // once without its body and then jumping as the text lands.
+  const message = useCommitMessage(cwd, commit.sha);
+  const revealed = useRevealWhenSettled(message !== undefined || !hasRepo(cwd));
 
-  useLayoutEffect(() => {
-    const header = measureRef.current;
-    if (!header) return;
-    const measure = () => {
-      if (header.offsetWidth) setWidth(header.offsetWidth + 26); // 12px padding and 1px border per side
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(header);
-    return () => observer.disconnect();
-  }, [commit.author, timestamp]);
+  if (!revealed) return null;
 
   return (
     <Popover
@@ -80,13 +105,26 @@ export function CommitHoverCard({
       side="right"
       align="start"
       gap={6}
-      width={width}
       constrainHeight={false}
       onDismiss={onDismiss}
       id={id}
       role="dialog"
       aria-label={`Commit ${commit.shortSha} details`}
-      className="flex w-full min-w-0 flex-col gap-1.5 p-3 font-sans text-left text-content"
+      // A fixed width, capped by the frame, the way VS Code sizes its issue
+      // hover (`width: 621px; max-width: 100%`). A card that shrink-wraps
+      // changes width on every row in the list — no refs versus three long
+      // branch names, "fix" versus a long body — so it flickers as the pointer
+      // moves down. `max-w-full` is what keeps the fixed width from being
+      // clipped when the window is narrower than the card; the Popover frame
+      // carries `overflow-hidden`, and `placePopover` clamps that frame to the
+      // viewport, so the cap belongs here in CSS rather than in a second
+      // viewport calculation.
+      //
+      // VS Code's core editor hover uses a single `max-width` instead, but
+      // picks 500px rather than shrink-wrapping. Raising this to 500px would
+      // match it exactly; 28rem leaves a card that opens off a narrow sidebar a
+      // little less screen to cover.
+      className="flex w-[28rem] max-w-full flex-col gap-1.5 p-3 font-sans text-left text-content"
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next))
@@ -108,16 +146,7 @@ export function CommitHoverCard({
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
     >
-      <div
-        ref={measureRef}
-        aria-hidden="true"
-        className="invisible absolute flex w-max items-center gap-1.5 whitespace-nowrap text-[11px] leading-4"
-      >
-        <CommitHeader author={commit.author} timestamp={timestamp} />
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] leading-4">
-        <CommitHeader author={commit.author} timestamp={timestamp} />
-      </div>
+      <CommitHeader author={commit.author} timestamp={timestamp} />
 
       {commit.subject ? (
         <p className="break-words text-[12px] leading-[1.45] text-content/85">
@@ -125,7 +154,7 @@ export function CommitHoverCard({
         </p>
       ) : null}
 
-      <CommitDescription cwd={cwd} sha={commit.sha} />
+      <CommitDescription message={message} />
 
       <CommitStatsLine cwd={cwd} sha={commit.sha} />
 
@@ -136,7 +165,6 @@ export function CommitHoverCard({
           ))}
         </div>
       ) : null}
-
       <div className="flex min-w-0 items-center gap-1 border-t border-content/[0.07] pt-1.5">
         <code className="shrink-0 font-mono text-[11px] leading-4 text-content/70">
           {commit.shortSha}
@@ -155,6 +183,7 @@ export function CommitHoverCard({
   );
 }
 
+/** Author and date on one wrapped line; the widest thing the card sizes to. */
 function CommitHeader({
   author,
   timestamp,
@@ -163,7 +192,7 @@ function CommitHeader({
   timestamp: string;
 }) {
   return (
-    <>
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-[11px] leading-4">
       {author ? (
         <>
           <span
@@ -179,17 +208,21 @@ function CommitHeader({
       <span className="min-w-0 break-words text-content/55">
         {timestamp || "Date unavailable"}
       </span>
-    </>
+    </div>
   );
 }
 
 /**
  * The body under the subject. The card grows to show all of it; past
  * `max-h-60` the block scrolls inside the card rather than pushing it off
- * screen.
+ * screen. Takes the message from the card, which already has it in hand.
  */
-function CommitDescription({ cwd, sha }: { cwd: string; sha: string }) {
-  const message = useCommitMessage(cwd, sha);
+function CommitDescription({
+  message,
+}: {
+  // Still undefined if the reveal budget expired before Git answered.
+  message: CommitMessage | null | undefined;
+}) {
   const description = message?.description;
   if (!description) return null;
   return (
@@ -206,9 +239,11 @@ function CommitStatsLine({ cwd, sha }: { cwd: string; sha: string }) {
 
   if (stats === undefined) {
     return (
+      // `h-4` matches the `leading-4` of the real line below, so the swap from
+      // placeholder to text does not nudge the card's height.
       <span
-        aria-label="Loading changed files"
-        className="block h-3 w-40 rounded bg-content/10 motion-safe:animate-pulse"
+        aria-hidden="true"
+        className="block h-4 w-40 rounded bg-content/10 motion-safe:animate-pulse"
       />
     );
   }
@@ -312,6 +347,7 @@ function CopyMessageButton({
   return (
     <button
       type="button"
+      aria-label="Copy commit message"
       onClick={() => {
         void loadCommitMessage(cwd, sha).then((message) =>
           copy(message?.raw ?? fallback),

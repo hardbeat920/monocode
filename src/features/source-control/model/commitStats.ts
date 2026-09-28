@@ -1,4 +1,7 @@
-import { gitCommitFiles, type GitChangedFile } from "../../../platform/tauri/fs";
+import {
+  gitCommitFiles,
+  type GitChangedFile,
+} from "../../../platform/tauri/fs";
 
 export type CommitStats = {
   filesChanged: number;
@@ -10,12 +13,28 @@ export type CommitStats = {
  * Commits are immutable, so a successful lookup is cached for the session.
  * Failures are not cached: the next hover retries rather than pinning a
  * transient Git error.
+ *
+ * The map is capped rather than cleared per project, which bounds it no matter
+ * how many repositories a session visits without needing call sites to tell it
+ * when the project changed. Map iteration is insertion-ordered, so the oldest
+ * entries are the ones dropped.
  */
 const cache = new Map<string, CommitStats>();
 const inFlight = new Map<string, Promise<CommitStats | null>>();
 
+/** Roughly a full page of history per repository, several projects over. */
+export const MAX_CACHED_COMMIT_STATS = 256;
+
 function cacheKey(cwd: string, sha: string): string {
   return `${cwd}\u0000${sha}`;
+}
+
+function remember(key: string, value: CommitStats): void {
+  cache.set(key, value);
+  for (const stale of cache.keys()) {
+    if (cache.size <= MAX_CACHED_COMMIT_STATS) break;
+    cache.delete(stale);
+  }
 }
 
 /** Changed-file counts for the commit summary line. */
@@ -55,7 +74,7 @@ export function loadCommitStats(
   const request = gitCommitFiles(cwd, sha)
     .then((files) => {
       const stats = summarizeCommitFiles(files);
-      cache.set(key, stats);
+      remember(key, stats);
       return stats;
     })
     .catch(() => null)

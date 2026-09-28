@@ -92,5 +92,12 @@ export function useHoverCard({
     }, closeDelayMs);
   }, [cancelOpen, cancelClose, closeDelayMs, setOpenState]);
 
-  return { open, openNow, openAfterDelay, closeAfterDelay, closeNow, cancelClose };
+  return {
+    open,
+    openNow,
+    openAfterDelay,
+    closeAfterDelay,
+    closeNow,
+    cancelClose,
+  };
 }

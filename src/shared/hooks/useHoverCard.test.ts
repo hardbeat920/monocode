@@ -131,4 +131,36 @@ describe("useHoverCard", () => {
     unmount();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("does not re-arm the open timer when the delay prop changes", () => {
+    // Timers are refs, so a re-render must not restart the countdown. The
+    // commit card passes a 600ms delay; if the timer were state-driven, every
+    // parent re-render would push the open further away.
+    function Probe({ delay }: { delay: number }) {
+      controller = useHoverCard({ openDelayMs: delay });
+      return null;
+    }
+    act(() => root.render(createElement(Probe, { delay: 200 })));
+    act(() => controller.openAfterDelay());
+
+    act(() => root.render(createElement(Probe, { delay: 600 })));
+    advance(199);
+    expect(controller.open).toBe(false);
+    advance(1);
+    expect(controller.open).toBe(true);
+  });
+
+  it("keeps the callbacks stable across re-renders", () => {
+    function Probe() {
+      controller = useHoverCard();
+      return null;
+    }
+    act(() => root.render(createElement(Probe)));
+    const first = controller.openAfterDelay;
+    act(() => controller.openNow());
+    act(() => root.render(createElement(Probe)));
+    // A caller passing these straight to a DOM prop gets no needless listener
+    // churn when unrelated state changes.
+    expect(controller.openAfterDelay).toBe(first);
+  });
 });
