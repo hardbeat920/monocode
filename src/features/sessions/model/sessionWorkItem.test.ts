@@ -19,6 +19,7 @@ import {
   resolveLinkedWorkItem,
   sessionLinkedWorkItems,
   withLinkedWorkItems,
+  withPersistedLinkedWorkItems,
 } from "./sessionWorkItem";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -263,9 +264,7 @@ describe("session work items", () => {
           ],
         },
       ]),
-    ).toEqual([
-      expect.objectContaining({ id: "second-link" }),
-    ]);
+    ).toEqual([expect.objectContaining({ id: "second-link" })]);
     expect(
       relatedSessionsForInboxItem(
         { ...item, provider: "linear", kind: "linear" } as InboxItem,
@@ -304,5 +303,39 @@ describe("session work items", () => {
     expect(reused.linkedWorkItem).toEqual(eventItem);
     expect(reused.linkedWorkItems).toBeUndefined();
     expect(sessionLinkedWorkItems(reused)).toEqual([eventItem]);
+  });
+
+  it("refreshes the rollback baseline when automation stamps new links", () => {
+    const pull = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 1,
+      url: "https://github.com/acme/app/pull/1",
+    };
+    const issue = {
+      kind: "issue" as const,
+      repo: "acme/app",
+      number: 2,
+      url: "https://github.com/acme/app/issues/2",
+    };
+    const eventItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 9,
+      url: "https://github.com/acme/app/pull/9",
+    };
+    const persisted = new Map([["reused", [pull, issue]]]);
+    const stamped = withPersistedLinkedWorkItems(
+      {
+        id: "reused",
+        linkedWorkItem: pull,
+        linkedWorkItems: [pull, issue],
+      },
+      [eventItem],
+      persisted,
+    );
+
+    expect(sessionLinkedWorkItems(stamped)).toEqual([eventItem]);
+    expect(persisted.get("reused")).toEqual([eventItem]);
   });
 });

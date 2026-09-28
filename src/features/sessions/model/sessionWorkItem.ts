@@ -126,6 +126,22 @@ export function withLinkedWorkItems<
   };
 }
 
+export function withPersistedLinkedWorkItems<
+  T extends {
+    id: string;
+    linkedWorkItem?: LinkedWorkItem;
+    linkedWorkItems?: LinkedWorkItem[];
+  },
+>(
+  session: T,
+  items: readonly LinkedWorkItem[] | undefined,
+  persistedBySessionId: Map<string, LinkedWorkItem[]>,
+): T {
+  const next = withLinkedWorkItems(session, items);
+  persistedBySessionId.set(next.id, sessionLinkedWorkItems(next));
+  return next;
+}
+
 function explicitHint(message: string): GeneratedWorkItemHint | null {
   const patterns: Array<[GithubTaskKind, RegExp]> = [
     ["pr", /\b(?:pr|pull\s+request)\s*#?\s*(\d+)\b/i],

@@ -86,8 +86,31 @@ export function linkedSessionUpdateIds(
   return new Set(linkedSessionUpdates(sessions, workItems, seenAt).keys());
 }
 
+export function linkedWorkItemActivityKey(
+  item: Pick<LinkedWorkItem, "repo" | "kind" | "number">,
+  updatedAt: number,
+): string {
+  return `${linkedWorkItemUpdateKey(item)}:${updatedAt}`;
+}
+
+export function sameLinkedWorkItemActivity(
+  left:
+    | (Pick<LinkedWorkItem, "repo" | "kind" | "number"> & { updatedAt: number })
+    | null
+    | undefined,
+  right: Pick<LinkedWorkItem, "repo" | "kind" | "number"> & {
+    updatedAt: number;
+  },
+): boolean {
+  return Boolean(
+    left &&
+    linkedWorkItemActivityKey(left, left.updatedAt) ===
+      linkedWorkItemActivityKey(right, right.updatedAt),
+  );
+}
+
 function linkedSessionUpdateSelectionKey(update: LinkedSessionUpdate): string {
-  return `${linkedWorkItemUpdateKey(update.item)}:${update.updatedAt}`;
+  return linkedWorkItemActivityKey(update.item, update.updatedAt);
 }
 
 /** Selected linked-item updates that changed for sessions already open. */

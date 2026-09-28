@@ -547,6 +547,7 @@ import {
   resolveLinkedWorkItem,
   sessionLinkedWorkItems,
   withLinkedWorkItems,
+  withPersistedLinkedWorkItems,
 } from "../features/sessions/model/sessionWorkItem";
 import {
   completeLinkedWorkItemUpdateCard,
@@ -556,6 +557,8 @@ import {
 } from "../features/inbox/model/linkedWorkItemActivity";
 import {
   linkedSessionUpdatesToReveal,
+  linkedWorkItemActivityKey,
+  sameLinkedWorkItemActivity,
   type LinkedSessionUpdate,
 } from "../features/inbox/model/linkedSessionUpdates";
 import { markLinkedSessionUpdateSeen } from "../features/inbox/model/linkedSessionSeen";
@@ -1053,7 +1056,7 @@ export default function App({
     ReadonlyMap<string, LinkedSessionUpdate>
   >(new Map());
   const linkedSessionUpdateSelectionKeysRef = useRef(new Map<string, string>());
-  const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
+  const linkedWorkItemActivityFetches = useRef(new Map<string, string>());
   const queueDispatchingRef = useRef(new Set<string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
@@ -3686,25 +3689,32 @@ export default function App({
         (entry) => entry.id === sessionId,
       );
       if (!session || sessionLinkedWorkItems(session).length === 0) return;
+      const activityKey = linkedWorkItemActivityKey(
+        update.item,
+        update.updatedAt,
+      );
       if (
-        session.linkedWorkItemUpdateCard?.updatedAt === update.updatedAt &&
-        session.linkedWorkItemUpdateCard.status !== "error"
+        sameLinkedWorkItemActivity(session.linkedWorkItemUpdateCard, {
+          ...update.item,
+          updatedAt: update.updatedAt,
+        }) &&
+        session.linkedWorkItemUpdateCard?.status !== "error"
       ) {
         return;
       }
-      if (
-        linkedWorkItemActivityFetches.current.get(sessionId) ===
-        update.updatedAt
-      ) {
+      if (linkedWorkItemActivityFetches.current.get(sessionId) === activityKey) {
         return;
       }
       const pending = pendingLinkedWorkItemUpdateCard(update);
-      linkedWorkItemActivityFetches.current.set(sessionId, update.updatedAt);
+      linkedWorkItemActivityFetches.current.set(sessionId, activityKey);
       // A stale/error card should not remain visible while fresh details load.
       // The session itself is already open; this request stays fully detached
       // from the navigation path.
       setLinkedWorkItemUpdateCard(sessionId, (current) =>
-        current?.updatedAt === update.updatedAt && current.status === "ready"
+        sameLinkedWorkItemActivity(current, {
+          ...update.item,
+          updatedAt: update.updatedAt,
+        }) && current?.status === "ready"
           ? current
           : undefined,
       );
@@ -3718,15 +3728,16 @@ export default function App({
       ).then(
         (thread) => {
           if (
-            linkedWorkItemActivityFetches.current.get(sessionId) !==
-            pending.updatedAt
+            linkedWorkItemActivityFetches.current.get(sessionId) !== activityKey
           ) {
             return;
           }
           linkedWorkItemActivityFetches.current.delete(sessionId);
+          const selected = linkedSessionUpdatesRef.current.get(sessionId);
           if (
-            linkedSessionUpdatesRef.current.get(sessionId)?.updatedAt !==
-            pending.updatedAt
+            !selected ||
+            linkedWorkItemActivityKey(selected.item, selected.updatedAt) !==
+              activityKey
           ) {
             return;
           }
@@ -3736,15 +3747,16 @@ export default function App({
         },
         () => {
           if (
-            linkedWorkItemActivityFetches.current.get(sessionId) !==
-            pending.updatedAt
+            linkedWorkItemActivityFetches.current.get(sessionId) !== activityKey
           ) {
             return;
           }
           linkedWorkItemActivityFetches.current.delete(sessionId);
+          const selected = linkedSessionUpdatesRef.current.get(sessionId);
           if (
-            linkedSessionUpdatesRef.current.get(sessionId)?.updatedAt !==
-            pending.updatedAt
+            !selected ||
+            linkedWorkItemActivityKey(selected.item, selected.updatedAt) !==
+              activityKey
           ) {
             return;
           }
@@ -3964,7 +3976,7 @@ export default function App({
       if (!card) return;
       markLinkedSessionUpdateSeen(sessionId, card, card.updatedAt);
       setLinkedWorkItemUpdateCard(sessionId, (current) =>
-        current?.updatedAt === card.updatedAt ? undefined : current,
+        sameLinkedWorkItemActivity(current, card) ? undefined : current,
       );
     },
     [sessionReminders.dismissDue, setLinkedWorkItemUpdateCard],
@@ -6860,7 +6872,7 @@ export default function App({
             : undefined;
 
         if (!session) {
-          session = withLinkedWorkItems(
+          session = withPersistedLinkedWorkItems(
             {
               ...newSession(
                 automation.harness,
@@ -6881,6 +6893,7 @@ export default function App({
                   : {}),
             },
             linkedWorkItem ? [linkedWorkItem] : undefined,
+            lastPersistedLinkedWorkItems.current,
           );
           const nextSessions = [...sessionsRef.current, session];
           sessionsRef.current = nextSessions;
@@ -6892,7 +6905,7 @@ export default function App({
             setComposerFocused(false);
           }
         } else {
-          const stamped = withLinkedWorkItems(
+          const stamped = withPersistedLinkedWorkItems(
             {
               ...session,
               automationId: automation.id,
@@ -6903,6 +6916,7 @@ export default function App({
             linkedWorkItem
               ? [linkedWorkItem]
               : sessionLinkedWorkItems(session),
+            lastPersistedLinkedWorkItems.current,
           );
           session = stamped;
           const nextSessions = sessionsRef.current.map((entry) =>

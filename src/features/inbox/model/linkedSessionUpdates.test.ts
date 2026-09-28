@@ -6,8 +6,10 @@ import {
   linkedSessionUpdateIds,
   linkedSessionUpdates,
   linkedSessionUpdatesToReveal,
+  linkedWorkItemActivityKey,
   linkedWorkItemTargets,
   linkedWorkItemUpdateKey,
+  sameLinkedWorkItemActivity,
 } from "./linkedSessionUpdates";
 
 const linked: LinkedWorkItem = {
@@ -298,5 +300,42 @@ describe("linked session updates to reveal", () => {
       new Map([["open", ""]]),
     );
     expect(reveal).toEqual([pullUpdate]);
+  });
+
+  it("treats two linked items with the same timestamp as different selections", () => {
+    const otherUpdate = {
+      ...issueUpdate,
+      updatedAt: pullUpdate.updatedAt,
+    };
+    const { reveal } = linkedSessionUpdatesToReveal(
+      ["open"],
+      new Map([["open", otherUpdate]]),
+      new Map([["open", pullKey]]),
+    );
+    expect(reveal).toEqual([otherUpdate]);
+  });
+});
+
+describe("linked work item activity identity", () => {
+  const pull = {
+    kind: "pr" as const,
+    repo: "acme/app",
+    number: 42,
+    updatedAt: 200,
+  };
+  const issue = {
+    kind: "issue" as const,
+    repo: "acme/app",
+    number: 8,
+    updatedAt: 200,
+  };
+
+  it("includes the item identity alongside the timestamp", () => {
+    expect(linkedWorkItemActivityKey(pull, pull.updatedAt)).not.toBe(
+      linkedWorkItemActivityKey(issue, issue.updatedAt),
+    );
+    expect(sameLinkedWorkItemActivity(pull, issue)).toBe(false);
+    expect(sameLinkedWorkItemActivity(pull, pull)).toBe(true);
+    expect(sameLinkedWorkItemActivity(undefined, pull)).toBe(false);
   });
 });
