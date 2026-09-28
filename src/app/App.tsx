@@ -121,7 +121,6 @@ import {
 } from "../features/sessions/model/attachments";
 import {
   basename,
-  deleteGeneratedImages,
   notifyGitChanged,
   pickFolder,
   type GitFileDiffKind,
@@ -711,26 +710,6 @@ function scheduleHarnessFlush(run: () => void): ScheduledFlush {
     return { kind: "timeout", id: window.setTimeout(run, 32) };
   }
   return { kind: "raf", id: requestAnimationFrame(run) };
-}
-
-function removedGeneratedImagePaths(previous: Block[], next: Block[]): string[] {
-  const retained = new Set(
-    next
-      .filter((block) => block.role === "image" && block.image)
-      .map((block) => block.image!.path),
-  );
-  return previous
-    .filter(
-      (block) =>
-        block.role === "image" && block.image && !retained.has(block.image.path),
-    )
-    .map((block) => block.image!.path);
-}
-
-function deleteGeneratedImagePaths(paths: string[]): void {
-  if (paths.length > 0) {
-    void deleteGeneratedImages(paths).catch(() => undefined);
-  }
 }
 
 function userTurnCards(
@@ -6090,12 +6069,6 @@ export default function App({
       }
 
       dismissNoticesForContinuedSession(sessionId);
-      const removedImagePaths = editedResend
-        ? removedGeneratedImagePaths(
-            current.blocks,
-            editedResend.replace(current).blocks,
-          )
-        : [];
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
           prev.map((s) => {
@@ -6199,7 +6172,6 @@ export default function App({
       };
       if (!options?.resendEdited) {
         flushSync(commitSubmittedTurn);
-        deleteGeneratedImagePaths(removedImagePaths);
       }
 
       const launchTitleGeneration = (workCwd: string) => {
@@ -6485,9 +6457,8 @@ export default function App({
         };
         const acceptEditedResend = () => {
           if (!editedResend || editedResend.isAccepted()) return;
-           flushSync(commitSubmittedTurn);
-           deleteGeneratedImagePaths(removedImagePaths);
-           editedResend.markAccepted();
+          flushSync(commitSubmittedTurn);
+          editedResend.markAccepted();
           for (const event of pendingEditedEvents) applyTurnEvent(event);
           pendingEditedEvents.length = 0;
         };
@@ -6500,10 +6471,6 @@ export default function App({
           const recovered = previous
             ? editedResend.recoverAfterFailure(previous)
             : undefined;
-          const removedImagePaths =
-            previous && recovered
-              ? removedGeneratedImagePaths(previous.blocks, recovered.blocks)
-              : [];
           flushSync(() => {
             setSessions((prev) =>
               prev.map((session) =>
@@ -6511,7 +6478,6 @@ export default function App({
               ),
             );
           });
-          deleteGeneratedImagePaths(removedImagePaths);
         };
 
         if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {
