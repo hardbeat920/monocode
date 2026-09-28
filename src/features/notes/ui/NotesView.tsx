@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import { LoaderCircle, Plus, Search, File, Trash2, X } from "../../../shared/ui/icons";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -100,6 +101,7 @@ export function NotesView({
   onClose,
   onToggleSidebar,
 }: Props) {
+  const { t } = useTranslation();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const listLock = useLockOverscroll<HTMLDivElement>();
@@ -242,8 +244,8 @@ export function NotesView({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter notes"
-            aria-label="Filter notes"
+            placeholder={t("notes.filterPlaceholder", "Filter notes")}
+            aria-label={t("notes.filterAriaLabel", "Filter notes")}
             spellCheck={false}
             autoComplete="off"
             className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] text-content outline-none placeholder:text-content/40"
@@ -251,8 +253,8 @@ export function NotesView({
         </div>
         <button
           type="button"
-          title="New note"
-          aria-label="New note"
+          title={t("notes.newNote", "New note")}
+          aria-label={t("notes.newNote", "New note")}
           disabled={creating}
           onClick={() => void onCreate()}
           className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-40"
@@ -280,8 +282,8 @@ export function NotesView({
         ) : visible.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">
             {query.trim()
-              ? "No matching notes"
-              : "No notes yet. Save a turn from the transcript, or create one here."}
+              ? t("notes.noMatchingNotes", "No matching notes")
+              : t("notes.emptyState", "No notes yet. Save a turn from the transcript, or create one here.")}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5 p-1.5">
@@ -304,7 +306,7 @@ export function NotesView({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize notes list"
+        aria-label={t("notes.resizeList", "Resize notes list")}
         className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
@@ -317,7 +319,7 @@ export function NotesView({
   return (
     <div
       role="region"
-      aria-label="Notes"
+      aria-label={t("nav.notes", "Notes")}
       data-app-notes
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -335,7 +337,7 @@ export function NotesView({
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
-          <span className="min-w-0 truncate text-content">Notes</span>
+          <span className="min-w-0 truncate text-content">{t("nav.notes", "Notes")}</span>
         </div>
         {IS_MAC ? null : <WindowControls />}
       </div>
@@ -434,10 +436,12 @@ function NoteCard({
   active: boolean;
   onSelect: () => void;
 } & ProjectMarks) {
+  const { t } = useTranslation();
+  const displayTitle = note.title === "Untitled" ? t("notes.untitled", "Untitled") : note.title;
   const preview = notePreview(note.body, note.title);
   const project = noteSourceProject(note.sourceCwd);
   const time = formatRelativeTime(new Date(note.updatedAt).toISOString());
-  const hint = [note.title, project].filter(Boolean).join(" · ");
+  const hint = [displayTitle, project].filter(Boolean).join(" · ");
   return (
     <button
       type="button"
@@ -471,7 +475,7 @@ function NoteCard({
         ) : null}
       </span>
       <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-        {note.title}
+        {displayTitle}
       </span>
       {preview ? (
         <span className="mt-1 line-clamp-1 text-[12px] leading-snug text-content/45">
@@ -514,11 +518,12 @@ function NoteDetail({
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
 }) {
+  const { t } = useTranslation();
   if (!note) {
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
         <File className="mb-3 size-6 text-content/30" strokeWidth={1.75} />
-        <p className="text-[13px] text-content/45">Select a note</p>
+        <p className="text-[13px] text-content/45">{t("notes.selectNote", "Select a note")}</p>
       </div>
     );
   }
@@ -550,8 +555,10 @@ function NoteEditor({
   onDelete: (id: string) => void | Promise<void>;
   onAddToChat: (note: Note) => void;
 }) {
+  const { t } = useTranslation();
+  const untitledTitle = t("notes.untitled", "Untitled");
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-  const blank = !note.body.trim() && note.title === "Untitled";
+  const blank = !note.body.trim() && (note.title === "Untitled" || note.title === "无标题" || note.title === untitledTitle);
   const [mode, setMode] = useMarkdownMode(note.id);
   type Edits = Partial<Pick<Note, "title" | "body" | "tags">>;
   const [edits, setEdits] = useState<Edits>({});
@@ -793,7 +800,7 @@ function NoteEditor({
         <header className="flex flex-col gap-3">
           <div className="flex min-w-0 items-center gap-2 text-[12px] text-content/50">
             <File className="size-3.5 shrink-0" strokeWidth={1.75} />
-            <span>Note</span>
+            <span>{t("notes.badge", "Note")}</span>
             {note.slug ? (
               <span className="min-w-0 truncate">{note.slug}</span>
             ) : null}
@@ -823,12 +830,14 @@ function NoteEditor({
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
-            aria-label="Note title"
+            aria-label={t("notes.titleAriaLabel", "Note title")}
             className="w-full border-0 bg-transparent p-0 text-[20px] font-semibold leading-tight text-content outline-none placeholder:text-content/35"
-            placeholder="Untitled"
+            placeholder={untitledTitle}
           />
           {time ? (
-            <div className="text-[12px] text-content/50">Updated {time}</div>
+            <div className="text-[12px] text-content/50">
+              {t("notes.updatedAt", "Updated {time}", { time })}
+            </div>
           ) : null}
           <NoteTagsEditor
             tags={tags}
@@ -844,7 +853,7 @@ function NoteEditor({
               onClick={() => onAddToChat(draft)}
               className="inline-flex items-center gap-1 rounded-md bg-content px-3 h-6.5 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
             >
-              Add to chat
+              {t("notes.addToChat", "Add to chat")}
             </button>
             <button
               type="button"
@@ -857,7 +866,7 @@ function NoteEditor({
               className="inline-flex items-center gap-1.5 rounded-md px-3 h-7 text-[12px] text-content/70 hover:bg-content/10 hover:text-red-400"
             >
               <Trash2 className="size-3.5" strokeWidth={1.75} />
-              Delete
+              {t("common.delete", "Delete")}
             </button>
           </div>
           {saveError ? (
@@ -865,7 +874,7 @@ function NoteEditor({
               role="alert"
               className="flex items-center gap-2 text-[12px] text-red-400/90"
             >
-              <span>Could not save note: {saveError}</span>
+              <span>{t("notes.saveError", "Could not save note: {error}", { error: saveError })}</span>
               <button
                 type="button"
                 onClick={() => {
@@ -874,23 +883,23 @@ function NoteEditor({
                 }}
                 className="shrink-0 underline hover:no-underline"
               >
-                Retry
+                {t("common.retry", "Retry")}
               </button>
             </div>
           ) : null}
         </header>
         <div
           role="tablist"
-          aria-label="Note sections"
+          aria-label={t("notes.sectionsAriaLabel", "Note sections")}
           className="flex h-9 items-stretch gap-4 border-b border-stroke"
         >
           <NoteDetailTab
-            label="Preview"
+            label={t("notes.previewTab", "Preview")}
             selected={mode === "preview"}
             onSelect={() => setMode("preview")}
           />
           <NoteDetailTab
-            label="Source"
+            label={t("notes.sourceTab", "Source")}
             selected={mode === "source"}
             onSelect={() => setMode("source")}
           />
@@ -929,7 +938,9 @@ function NoteEditor({
         >
           {imageDrag || imageBusy ? (
             <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-background-base/80 text-[12px] text-content/70 backdrop-blur-sm">
-              {imageBusy ? "Adding images…" : "Drop images here"}
+              {imageBusy
+                ? t("notes.addingImages", "Adding images…")
+                : t("notes.dropImages", "Drop images here")}
             </div>
           ) : null}
           {mode === "source" ? (
@@ -945,7 +956,7 @@ function NoteEditor({
           ) : body.trim() ? (
             <AgentMarkdown text={body} cwd={sourceCwd} />
           ) : (
-            <p className="text-[13px] text-content/45">No description</p>
+            <p className="text-[13px] text-content/45">{t("notes.noDescription", "No description")}</p>
           )}
         </div>
       </div>
@@ -964,6 +975,7 @@ function NoteSource({
   textareaRef: { current: HTMLTextAreaElement | null };
   autoFocus?: boolean;
 }) {
+  const { t } = useTranslation();
   const lines = value.split("\n");
   const gutterWidth = `calc(${Math.max(String(lines.length).length, 2)}ch + 0.75rem)`;
   const textOffset = `calc(${gutterWidth} + 0.75rem)`;
@@ -999,7 +1011,7 @@ function NoteSource({
         autoFocus={autoFocus}
         onChange={(event) => onChange(event.target.value)}
         spellCheck={false}
-        placeholder="Write markdown…"
+        placeholder={t("notes.writeMarkdownPlaceholder", "Write markdown…")}
         className="markdown-source-field absolute inset-0 h-full w-full resize-none overflow-hidden border-0 bg-transparent py-0 pr-0 font-mono text-[13px] leading-5 whitespace-pre-wrap wrap-break-word outline-none"
         style={{ paddingLeft: textOffset }}
       />
@@ -1014,6 +1026,7 @@ function NoteTagsEditor({
   tags: string[];
   onChange: (tags: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const [value, setValue] = useState("");
 
   const addTag = (input = value) => {
@@ -1025,9 +1038,9 @@ function NoteTagsEditor({
   return (
     <div
       className="flex min-w-0 flex-wrap items-center gap-1.5"
-      aria-label="Tags"
+      aria-label={t("notes.tags", "Tags")}
     >
-      <span className="mr-0.5 text-[11px] text-content/45">Tags</span>
+      <span className="mr-0.5 text-[11px] text-content/45">{t("notes.tags", "Tags")}</span>
       {tags.map((tag) => (
         <span
           key={tag}
@@ -1036,8 +1049,8 @@ function NoteTagsEditor({
           <span className="truncate">#{tag}</span>
           <button
             type="button"
-            title={`Remove #${tag}`}
-            aria-label={`Remove #${tag}`}
+            title={t("notes.removeTag", `Remove #${tag}`, { tag })}
+            aria-label={t("notes.removeTag", `Remove #${tag}`, { tag })}
             onClick={() => onChange(tags.filter((item) => item !== tag))}
             className="grid size-4 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
           >
@@ -1066,8 +1079,8 @@ function NoteTagsEditor({
               onChange(tags.slice(0, -1));
             }
           }}
-          aria-label="Add note tag"
-          placeholder="Add tag…"
+          aria-label={t("notes.addTagAriaLabel", "Add note tag")}
+          placeholder={t("notes.addTagPlaceholder", "Add tag…")}
           spellCheck={false}
           autoComplete="off"
           className="h-6 min-w-20 flex-1 border-0 bg-transparent px-1 text-[11px] text-content outline-none placeholder:text-content/35"

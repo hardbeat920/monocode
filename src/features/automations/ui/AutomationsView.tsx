@@ -9,6 +9,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { useTranslation } from "../../i18n/model/i18n";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
@@ -140,10 +141,11 @@ export function AutomationsView({
   onLaunch,
   onOpenSession,
 }: Props) {
+  const { t } = useTranslation();
   return (
     <div
       role="region"
-      aria-label="Automations"
+      aria-label={t("nav.automations", "Automations")}
       data-app-automations
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -161,7 +163,7 @@ export function AutomationsView({
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
-          <span className="min-w-0 truncate text-content">Automations</span>
+          <span className="min-w-0 truncate text-content">{t("nav.automations", "Automations")}</span>
         </div>
         {IS_MAC ? null : <WindowControls />}
       </div>
@@ -181,6 +183,7 @@ function AutomationsContent({
   onLaunch,
   onOpenSession,
 }: Pick<Props, "cwd" | "recents" | "onLaunch" | "onOpenSession">) {
+  const { t } = useTranslation();
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -352,11 +355,11 @@ function AutomationsContent({
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
           <label className="relative flex h-7 min-w-0 flex-1 items-center">
             <Search className="pointer-events-none absolute left-2 size-3 shrink-0 text-content/40" />
-            <span className="sr-only">Filter automations</span>
+            <span className="sr-only">{t("automations.filterAriaLabel", "Filter automations")}</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter automations"
+              placeholder={t("automations.filterPlaceholder", "Filter automations")}
               spellCheck={false}
               autoComplete="off"
               className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] outline-none placeholder:text-content/40"
@@ -364,8 +367,8 @@ function AutomationsContent({
           </label>
           <button
             type="button"
-            title="New automation"
-            aria-label="New automation"
+            title={t("automations.newAutomation", "New automation")}
+            aria-label={t("automations.newAutomation", "New automation")}
             onClick={beginCreate}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -408,7 +411,9 @@ function AutomationsContent({
             </ul>
           ) : (
             <p className="px-3 py-8 text-center text-[12px] text-content/45">
-              {query.trim() ? "No matching automations" : "No automations yet"}
+              {query.trim()
+                ? t("automations.noMatchingAutomations", "No matching automations")
+                : t("automations.noAutomationsYet", "No automations yet")}
             </p>
           )}
         </div>
