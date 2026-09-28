@@ -28,6 +28,7 @@ import {
 import { MOD } from "../../../platform/tauri/platform";
 import type { TerminalMetaPatch } from "../model/terminalTab";
 import { TerminalView } from "./TerminalView";
+import { useTranslation } from "../../i18n/model/i18n";
 
 type Props = {
   dock: ProjectTerminalDock;
@@ -81,6 +82,7 @@ export function ProjectTerminalDock({
   onReorderTerminals,
   onTerminalMetaChange,
 }: Props) {
+  const { t } = useTranslation();
   const vertical = isVerticalDock(dock.side);
   const [dragging, setDragging] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -188,7 +190,7 @@ export function ProjectTerminalDock({
       <div
         role="separator"
         aria-orientation={vertical ? "horizontal" : "vertical"}
-        aria-label="Resize terminal"
+        aria-label={t("terminal.resizeTerminal", "Resize terminal")}
         aria-valuenow={dock.size}
         className={`${sash} ${dragging ? "bg-content/15" : "hover:bg-content/10"}`}
         onPointerDown={onResizePointerDown}
@@ -205,7 +207,7 @@ export function ProjectTerminalDock({
         activeFileId={dock.pane.activeFileId}
         dirtyFileIds={EMPTY_IDS}
         fileErrorCounts={EMPTY_ERRORS}
-        label="Terminals"
+        label={t("terminal.terminals", "Terminals")}
         onSelectFile={onSelectTerminal}
         onCloseFile={onCloseTerminal}
         onCloseOtherFiles={onCloseOtherTerminals}
@@ -220,7 +222,7 @@ export function ProjectTerminalDock({
             </IconButton>
             <div ref={sideButton}>
             <IconButton
-              label="Move Terminal"
+              label={t("terminal.moveTerminal", "Move Terminal")}
               onClick={() => {
                 const rect = sideButton.current?.getBoundingClientRect();
                 if (!rect) return;
@@ -231,7 +233,7 @@ export function ProjectTerminalDock({
             </IconButton>
             </div>
             <IconButton
-              label={`Hide Terminal (${MOD}J)`}
+              label={t("terminal.hideTerminalShortcut", `Hide Terminal (${MOD}J)`, { mod: MOD })}
               onClick={onHide}
             >
               <HideIcon className="size-3.5" strokeWidth={1.75} />
@@ -263,13 +265,23 @@ export function ProjectTerminalDock({
         <ExplorerMenu
           x={menu.x}
           y={menu.y}
-          ariaLabel="Move terminal"
-          items={SIDE_ITEMS.map((item) => ({
-            kind: "item" as const,
-            id: item.id,
-            label: item.label,
-            checked: item.id === dock.side,
-          }))}
+          ariaLabel={t("terminal.moveTerminal", "Move Terminal")}
+          items={SIDE_ITEMS.map((item) => {
+            const label =
+              item.id === "bottom"
+                ? t("terminal.dockBottom", "Dock Bottom")
+                : item.id === "top"
+                  ? t("terminal.dockTop", "Dock Top")
+                  : item.id === "left"
+                    ? t("terminal.dockLeft", "Dock Left")
+                    : t("terminal.dockRight", "Dock Right");
+            return {
+              kind: "item" as const,
+              id: item.id,
+              label,
+              checked: item.id === dock.side,
+            };
+          })}
           onPick={(id) => {
             if (id === "top" || id === "bottom" || id === "left" || id === "right") {
               onSideChange(id);

@@ -48,13 +48,17 @@ export function resolveLanguage(pref?: LanguagePreference): ResolvedLanguage {
   if (choice === "zh-CN") return "zh-CN";
 
   // System detection
-  if (typeof navigator !== "undefined" && navigator.language) {
-    const lang = navigator.language.toLowerCase();
-    if (lang.startsWith("zh")) {
+  if (typeof navigator !== "undefined") {
+    if (navigator.language && navigator.language.toLowerCase().startsWith("zh")) {
       return "zh-CN";
     }
+    if (Array.isArray(navigator.languages)) {
+      for (const lang of navigator.languages) {
+        if (lang.toLowerCase().startsWith("zh")) return "zh-CN";
+      }
+    }
   }
-  return "en";
+  return "zh-CN";
 }
 
 const LOCALES: Record<ResolvedLanguage, TranslationDict> = {
