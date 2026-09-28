@@ -499,12 +499,15 @@ fn factory_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".factory"))
 }
 
+/// Reads the key that decrypts one Droid credentials file.
+type DroidKeyReader = Box<dyn Fn() -> Option<Vec<u8>>>;
+
 /// Droid writes its credentials to one of two encrypted files: the macOS
 /// Keychain variant (key held by the `security` CLI) or the plain file
 /// variant (key in `auth.v2.key`). The most recently written one wins.
 fn read_droid_credentials() -> Option<DroidCredentials> {
     let dir = factory_dir()?;
-    let mut sources: Vec<(PathBuf, Box<dyn Fn() -> Option<Vec<u8>>>)> = Vec::new();
+    let mut sources: Vec<(PathBuf, DroidKeyReader)> = Vec::new();
     #[cfg(target_os = "macos")]
     sources.push((
         dir.join("auth.v2.loginkeychain"),
@@ -522,7 +525,7 @@ fn read_droid_credentials() -> Option<DroidCredentials> {
             Some((modified, path, key))
         })
         .collect();
-    existing.sort_by(|a, b| b.0.cmp(&a.0));
+    existing.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     existing.into_iter().find_map(|(_, path, key)| {
         let blob = std::fs::read_to_string(&path).ok()?;
         let plain = decrypt_droid_blob(&blob, &key()?)?;
@@ -607,7 +610,7 @@ fn jwt_expires_at_ms(token: &str) -> Option<i64> {
         .ok()?;
     let claims: Value = serde_json::from_slice(&bytes).ok()?;
     let exp = claims.get("exp")?.as_f64()?;
-    exp.is_finite().then(|| (exp * 1000.0) as i64)
+    exp.is_finite().then_some((exp * 1000.0) as i64)
 }
 
 struct ClaudeCredentials {
@@ -1140,17 +1143,14 @@ mod tests {
     #[test]
     fn droid_credentials_read_token_expiry_and_region() {
         let token = fake_jwt(1_700_000_000);
-        let raw = format!(
-            r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"eu"}}}}"#
-        );
+        let raw = format!(r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"eu"}}}}"#);
         let creds = droid_credentials_from_json(&raw).unwrap();
         assert_eq!(creds.access_token, token);
         assert_eq!(creds.expires_at_ms, Some(1_700_000_000_000));
         assert!(creds.eu);
 
-        let raw = format!(
-            r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"global"}}}}"#
-        );
+        let raw =
+            format!(r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"global"}}}}"#);
         assert!(!droid_credentials_from_json(&raw).unwrap().eu);
         assert!(droid_credentials_from_json(r#"{"access_token":" "}"#).is_none());
     }
@@ -1159,7 +1159,10 @@ mod tests {
     fn decode_droid_key_requires_32_bytes() {
         use base64::Engine;
         let engine = base64::engine::general_purpose::STANDARD;
-        assert_eq!(decode_droid_key(&engine.encode([1u8; 32])).map(|k| k.len()), Some(32));
+        assert_eq!(
+            decode_droid_key(&engine.encode([1u8; 32])).map(|k| k.len()),
+            Some(32)
+        );
         assert_eq!(decode_droid_key(&engine.encode([1u8; 16])), None);
     }
 
