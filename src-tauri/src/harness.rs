@@ -2078,6 +2078,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "hermes" => resolve_hermes(),
         "antigravity" => resolve_antigravity(),
         "devin" => resolve_devin(),
+        "opencrabs" => resolve_opencrabs(),
         _ => None,
     }
 }

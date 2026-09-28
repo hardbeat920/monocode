@@ -423,6 +423,7 @@ async function resolveHarnessBinary(
     hermes: "harness_resolve_hermes",
     antigravity: "harness_resolve_antigravity",
     devin: "harness_resolve_devin",
+    opencrabs: "harness_resolve_opencrabs",
   };
   return invoke(command[provider]);
 }
