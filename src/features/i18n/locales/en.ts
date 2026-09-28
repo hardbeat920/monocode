@@ -68,6 +68,78 @@ export const en = {
     noProjectsYet: "No projects yet",
   },
   settings: {
+    appearancePage: {
+      colorTitle: "Color",
+      colorDesc:
+        "Hue and saturation tint every surface. Lightness only moves the dark theme.",
+      hue: "Hue",
+      hueDesc: "Base hue for accents and tinted surfaces.",
+      saturation: "Saturation",
+      saturationDesc:
+        "How strongly the hue tints the interface. Zero keeps it neutral.",
+      darkLightness: "Dark-mode lightness",
+      darkLightnessDesc:
+        "Base brightness of the dark theme. Lower values are darker; zero is true black.",
+      translucencyTitle: "Translucency",
+      translucencyDesc:
+        "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes.",
+      sidebarOpacity: "Sidebar opacity",
+      sidebarOpacityDesc:
+        "Applies to the project rail and the other glass panes.",
+      blurRadius: "Blur radius",
+      blurRadiusDesc: "Background blur behind the window.",
+      mainPaneGlass: "Main pane glass",
+      mainPaneGlassDesc:
+        "Extend the translucent treatment to the main pane behind sessions and editors.",
+      chatBackgroundTitle: "Chat background",
+      chatBackgroundDesc:
+        "An image behind your chat panes. It stays on this device.",
+      chooseImage: "Choose an image",
+      changeImage: "Change",
+      removeImage: "Remove",
+      backgroundEffect: "Background effect",
+      showOn: "Show on",
+      emptyOnly: "Empty only",
+      allSessions: "All sessions",
+      emptyVisibility: "Empty chat visibility",
+      sessionVisibility: "Session visibility",
+      layoutTitle: "Layout",
+      collapsedRail: "Collapsed project rail",
+      collapsedRailDesc:
+        "Keep project navigation available as a compact icon rail, or hide the rail completely.",
+      iconRail: "Icon rail",
+      hidden: "Hidden",
+      interfaceScale: "Interface scale",
+      interfaceScaleDesc:
+        "Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).",
+      showExcludedFiles: "Show excluded files",
+      showExcludedFilesDesc:
+        "Show files and folders Git excludes, such as build output and dependencies, in the explorer.",
+    },
+    inboxPage: {
+      projectNotificationsTitle: "Project notifications",
+      projectNotificationsDesc:
+        "Choose sounds, banners and sidebar indicators by category. Mute pauses them without changing your choices. Unread items stay marked in Inbox.",
+      selectProjects: "Select projects",
+      done: "Done",
+      selectAllProjects: "Select all projects",
+      selectedCount: "{count} selected",
+      openProjectHint:
+        "Open a project or connect an Inbox provider to configure its notifications.",
+      connection: "Connection",
+      connected: "Connected",
+      checking: "Checking",
+      signInRequired: "Sign in required",
+      notInstalled: "Not installed",
+      checkAgain: "Check again",
+      installGuide: "Installation guide",
+      disconnect: "Disconnect",
+      connect: "Connect",
+      saving: "Saving",
+      apiKey: "API key",
+      apiKeyDesc: "Create a personal API key. Disconnect deletes it.",
+    },
+
     workspace: {
       title: "Workspace",
       description: "How project navigation and workspace tabs behave.",
@@ -328,6 +400,14 @@ export const en = {
     "auto-accept-edits": "Auto-accept edits",
     auto: "Auto",
     "full-access": "Full access",
+  },
+
+  notificationCategories: {
+    pullRequests: "Pull requests / Merge requests",
+    issues: "Issues and Linear tasks",
+    agentFinished: "Agent finished",
+    agentInput: "Agent approvals and questions",
+    reminders: "Reminders",
   },
   files: {
     explorer: "Explorer",

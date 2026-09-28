@@ -70,6 +70,73 @@ export const zhCN: TranslationDict = {
     noProjectsYet: "暂无项目",
   },
   settings: {
+    appearancePage: {
+      colorTitle: "色彩调节",
+      colorDesc:
+        "色相与饱和度将为界面的所有表面着色。明度仅调整深色主题的深浅。",
+      hue: "色相",
+      hueDesc: "强调色与着色界面的基准色相。",
+      saturation: "饱和度",
+      saturationDesc: "色相浸润界面的强度。设为 0 保持纯净黑白灰。",
+      darkLightness: "深色模式明度",
+      darkLightnessDesc:
+        "深色主题的基准明度。数值越低越黑，0 为纯黑 (OLED 级纯黑)。",
+      translucencyTitle: "半透明与毛玻璃",
+      translucencyDesc:
+        "桌面壁纸透过 MonoCode 窗口的可见度。模糊半径越高，合成越柔和。",
+      sidebarOpacity: "侧边栏不透明度",
+      sidebarOpacityDesc: "应用于项目导轨以及其他磨砂玻璃面板。",
+      blurRadius: "模糊半径",
+      blurRadiusDesc: "窗口背后的背景高斯模糊半径。",
+      mainPaneGlass: "主面板毛玻璃效果",
+      mainPaneGlassDesc: "将半透明磨砂效果延伸至会话与编辑器背后的主面板。",
+      chatBackgroundTitle: "会话背景图",
+      chatBackgroundDesc: "在会话面板背后展示自定义背景壁纸，仅保存在本机。",
+      chooseImage: "选择背景图片",
+      changeImage: "更换图片",
+      removeImage: "移除",
+      backgroundEffect: "背景特效",
+      showOn: "展示范围",
+      emptyOnly: "仅空白页展示",
+      allSessions: "所有会话展示",
+      emptyVisibility: "空白页背景透明度",
+      sessionVisibility: "会话页背景透明度",
+      layoutTitle: "界面布局",
+      collapsedRail: "项目导轨折叠模式",
+      collapsedRailDesc: "将项目导航保留为紧凑图标导轨，或将其完全隐藏。",
+      iconRail: "图标导轨",
+      hidden: "完全隐藏",
+      interfaceScale: "界面缩放比例",
+      interfaceScaleDesc:
+        "缩放整个应用界面。也可使用快捷键 Cmd+= / Cmd+- / Cmd+0 调整。",
+      showExcludedFiles: "显示被 Git 忽略的文件",
+      showExcludedFilesDesc:
+        "在资源管理器中显示被 .gitignore 忽略的文件与文件夹（如构建输出和依赖目录）。",
+    },
+    inboxPage: {
+      projectNotificationsTitle: "项目通知规则",
+      projectNotificationsDesc:
+        "按分类设置提示音、系统横幅与侧边栏红点标记。静音可暂停通知而不改变具体选项。未读条目将在收件箱中保持标记。",
+      selectProjects: "批量选择项目",
+      done: "完成",
+      selectAllProjects: "全选项目",
+      selectedCount: "已选择 {count} 个项目",
+      openProjectHint: "打开一个项目或连接收件箱平台以配置其通知规则。",
+      connection: "平台连接",
+      connected: "已连接",
+      checking: "正在检测...",
+      signInRequired: "需要登录",
+      notInstalled: "未安装",
+      checkAgain: "重新检测",
+      installGuide: "安装指南",
+      disconnect: "断开连接",
+      connect: "连接",
+      saving: "正在保存...",
+      apiKey: "API 密钥",
+      apiKeyDesc:
+        "在对应平台创建并输入个人访问令牌 (Token)，断开连接将彻底删除本机凭据。",
+    },
+
     workspace: {
       title: "工作区",
       description: "项目导航与工作区标签页的行为模式。",
@@ -324,6 +391,14 @@ export const zhCN: TranslationDict = {
     "auto-accept-edits": "自动接受编辑",
     auto: "自动评审",
     "full-access": "完全访问权限 (Full access)",
+  },
+
+  notificationCategories: {
+    pullRequests: "代码合并请求 (Pull requests / Merge requests)",
+    issues: "代码任务与工单 (Issues / Linear)",
+    agentFinished: "智能体任务完成",
+    agentInput: "智能体等待审批或提问",
+    reminders: "定时提醒",
   },
   files: {
     explorer: "文件浏览",

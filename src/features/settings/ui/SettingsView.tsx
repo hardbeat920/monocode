@@ -1337,6 +1337,7 @@ function InboxPage({
 }
 
 function GithubSettings() {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1380,7 +1381,10 @@ function GithubSettings() {
 
   return (
     <>
-      <Row label="Connection" description={description}>
+      <Row
+        label={t("settings.inboxPage.connection", "Connection")}
+        description={description}
+      >
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (
           <SecondaryButton
@@ -1388,11 +1392,13 @@ function GithubSettings() {
               void openUrl("https://cli.github.com/").catch(() => {});
             }}
           >
-            Installation guide
+            {t("settings.inboxPage.installGuide", "Installation guide")}
           </SecondaryButton>
         ) : null}
         <SecondaryButton onClick={() => void checkStatus()} disabled={checking}>
-          {checking ? "Checking" : "Check again"}
+          {checking
+            ? t("settings.inboxPage.checking", "Checking")
+            : t("settings.inboxPage.checkAgain", "Check again")}
         </SecondaryButton>
       </Row>
       {error ? (
@@ -1405,6 +1411,7 @@ function GithubSettings() {
 }
 
 function GitlabSettings() {
+  const { t } = useTranslation();
   const [url, setUrl] = useState("https://gitlab.com");
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
@@ -1465,7 +1472,7 @@ function GitlabSettings() {
   return (
     <>
       <Row
-        label="Connection"
+        label={t("settings.inboxPage.connection", "Connection")}
         description="Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it."
       >
         {connected ? (
@@ -1477,7 +1484,7 @@ function GitlabSettings() {
               onClick={() => void onDisconnect()}
               disabled={busy}
             >
-              Disconnect
+              {t("settings.inboxPage.disconnect", "Disconnect")}
             </SecondaryButton>
           </div>
         ) : (
@@ -1513,7 +1520,9 @@ function GitlabSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy
+                ? t("settings.inboxPage.saving", "Saving")
+                : t("settings.inboxPage.connect", "Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1651,6 +1660,7 @@ function AzureDevOpsSettings() {
 }
 
 function LinearSettings() {
+  const { t } = useTranslation();
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1739,7 +1749,7 @@ function LinearSettings() {
   return (
     <>
       <Row
-        label="API key"
+        label={t("settings.inboxPage.apiKey", "API key")}
         description="Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it."
       >
         {connected ? (
@@ -2189,13 +2199,19 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       </Group>
 
       <Group
-        title="Color"
-        description="Hue and saturation tint every surface. Lightness only moves the dark theme."
+        title={t("settings.appearancePage.colorTitle", "Color")}
+        description={t(
+          "settings.appearancePage.colorDesc",
+          "Hue and saturation tint every surface. Lightness only moves the dark theme.",
+        )}
       >
         <Row
           id="hue"
-          label="Hue"
-          description="Base hue for accents and tinted surfaces."
+          label={t("settings.appearancePage.hue", "Hue")}
+          description={t(
+            "settings.appearancePage.hueDesc",
+            "Base hue for accents and tinted surfaces.",
+          )}
         >
           <Slider
             label="Hue"
@@ -2210,8 +2226,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="saturation"
-          label="Saturation"
-          description="How strongly the hue tints the interface. Zero keeps it neutral."
+          label={t("settings.appearancePage.saturation", "Saturation")}
+          description={t(
+            "settings.appearancePage.saturationDesc",
+            "How strongly the hue tints the interface. Zero keeps it neutral.",
+          )}
         >
           <Slider
             label="Saturation"
@@ -2224,11 +2243,17 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="dark-lightness"
-          label="Dark-mode lightness"
+          label={t(
+            "settings.appearancePage.darkLightness",
+            "Dark-mode lightness",
+          )}
           description={
             glassDisabled
               ? "This only affects dark mode. Your dark-mode value is preserved."
-              : "Base brightness of the dark theme. Lower values are darker; zero is true black."
+              : t(
+                  "settings.appearancePage.darkLightnessDesc",
+                  "Base brightness of the dark theme. Lower values are darker; zero is true black.",
+                )
           }
         >
           <Slider
@@ -2244,11 +2269,14 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       </Group>
 
       <Group
-        title="Translucency"
+        title={t("settings.appearancePage.translucencyTitle", "Translucency")}
         description={
           glassDisabled
             ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
-            : "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
+            : t(
+                "settings.appearancePage.translucencyDesc",
+                "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes.",
+              )
         }
       >
         <Row
@@ -2268,8 +2296,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="blur"
-          label="Blur radius"
-          description="Background blur behind the window."
+          label={t("settings.appearancePage.blurRadius", "Blur radius")}
+          description={t(
+            "settings.appearancePage.blurRadiusDesc",
+            "Background blur behind the window.",
+          )}
         >
           <Slider
             label="Blur radius"
@@ -2283,8 +2314,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="main-pane-glass"
-          label="Main pane glass"
-          description="Extend the translucent treatment to the main pane behind sessions and editors."
+          label={t("settings.appearancePage.mainPaneGlass", "Main pane glass")}
+          description={t(
+            "settings.appearancePage.mainPaneGlassDesc",
+            "Extend the translucent treatment to the main pane behind sessions and editors.",
+          )}
         >
           <Toggle
             label="Main pane glass"
@@ -2297,26 +2331,41 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
 
       <ChatBackgroundCard appearance={appearance} />
 
-      <Group title="Layout">
+      <Group title={t("settings.appearancePage.layoutTitle", "Layout")}>
         <Row
           id="collapsed-project-rail"
-          label="Collapsed project rail"
-          description="Keep project navigation available as a compact icon rail, or hide the rail completely."
+          label={t(
+            "settings.appearancePage.collapsedRail",
+            "Collapsed project rail",
+          )}
+          description={t(
+            "settings.appearancePage.collapsedRailDesc",
+            "Keep project navigation available as a compact icon rail, or hide the rail completely.",
+          )}
         >
           <Segmented
             label="Collapsed project rail"
             value={appearance.collapsedProjectRailMode}
             options={[
-              { value: "compact", label: "Icon rail" },
-              { value: "hidden", label: "Hidden" },
+              {
+                value: "compact",
+                label: t("settings.appearancePage.iconRail", "Icon rail"),
+              },
+              {
+                value: "hidden",
+                label: t("settings.appearancePage.hidden", "Hidden"),
+              },
             ]}
             onChange={appearance.onCollapsedProjectRailMode}
           />
         </Row>
         <Row
           id="interface-scale"
-          label="Interface scale"
-          description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
+          label={t("settings.appearancePage.interfaceScale", "Interface scale")}
+          description={t(
+            "settings.appearancePage.interfaceScaleDesc",
+            "Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).",
+          )}
         >
           <Slider
             label="Interface scale"
@@ -2330,8 +2379,14 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="show-excluded-files"
-          label="Show excluded files"
-          description="Show files and folders Git excludes, such as build output and dependencies, in the explorer."
+          label={t(
+            "settings.appearancePage.showExcludedFiles",
+            "Show excluded files",
+          )}
+          description={t(
+            "settings.appearancePage.showExcludedFilesDesc",
+            "Show files and folders Git excludes, such as build output and dependencies, in the explorer.",
+          )}
         >
           <Toggle
             label="Show excluded files"
@@ -2349,6 +2404,7 @@ function ChatBackgroundCard({
 }: {
   appearance: AppearanceSettings;
 }) {
+  const { t } = useTranslation();
   const src = chatBackgroundSrc(appearance.chatBackgroundPath);
   const hasImage = Boolean(appearance.chatBackgroundPath && src);
   const emptyVisibility = Math.round(
@@ -2362,8 +2418,14 @@ function ChatBackgroundCard({
   return (
     <Group
       id="chat-background"
-      title="Chat background"
-      description="An image behind your chat panes. It stays on this device."
+      title={t(
+        "settings.appearancePage.chatBackgroundTitle",
+        "Chat background",
+      )}
+      description={t(
+        "settings.appearancePage.chatBackgroundDesc",
+        "An image behind your chat panes. It stays on this device.",
+      )}
     >
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
@@ -2402,7 +2464,9 @@ function ChatBackgroundCard({
               ) : (
                 <ImagePlus className="size-5" aria-hidden />
               )}
-              <span className="text-[12px]">Choose an image</span>
+              <span className="text-[12px]">
+                {t("settings.appearancePage.chooseImage", "Choose an image")}
+              </span>
             </button>
           )}
         </div>
@@ -2415,14 +2479,14 @@ function ChatBackgroundCard({
               {busy ? (
                 <Loader className="size-3.5 animate-spin" aria-hidden />
               ) : null}
-              Change
+              {t("settings.appearancePage.changeImage", "Change")}
             </SecondaryButton>
             <SecondaryButton
               onClick={() => void appearance.onClearChatBackground()}
               disabled={busy}
               danger
             >
-              Remove
+              {t("settings.appearancePage.removeImage", "Remove")}
             </SecondaryButton>
           </div>
         ) : null}
@@ -2435,7 +2499,10 @@ function ChatBackgroundCard({
       {hasImage ? (
         <>
           <Row
-            label="Background effect"
+            label={t(
+              "settings.appearancePage.backgroundEffect",
+              "Background effect",
+            )}
             description={
               NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[
                 appearance.newThreadBackgroundEffect
@@ -2454,21 +2521,33 @@ function ChatBackgroundCard({
             />
           </Row>
           <Row
-            label="Show on"
+            label={t("settings.appearancePage.showOn", "Show on")}
             description="Empty sessions only, or every conversation."
           >
             <Segmented
               label="Show background on"
               value={appearance.chatBackgroundScope}
               options={[
-                { value: "empty", label: "Empty only" },
-                { value: "all", label: "All sessions" },
+                {
+                  value: "empty",
+                  label: t("settings.appearancePage.emptyOnly", "Empty only"),
+                },
+                {
+                  value: "all",
+                  label: t(
+                    "settings.appearancePage.allSessions",
+                    "All sessions",
+                  ),
+                },
               ]}
               onChange={appearance.onChatBackgroundScope}
             />
           </Row>
           <Row
-            label="Empty chat visibility"
+            label={t(
+              "settings.appearancePage.emptyVisibility",
+              "Empty chat visibility",
+            )}
             description="Background strength before a chat has messages."
           >
             <Slider
@@ -2481,7 +2560,10 @@ function ChatBackgroundCard({
             />
           </Row>
           <Row
-            label="Session visibility"
+            label={t(
+              "settings.appearancePage.sessionVisibility",
+              "Session visibility",
+            )}
             description="Background strength once the conversation has messages."
           >
             <Slider
