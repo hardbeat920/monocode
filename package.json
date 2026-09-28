@@ -4,6 +4,7 @@
   "version": "0.4.0",
   "type": "module",
   "scripts": {
+    "postinstall": "patch-package",
     "dev": "vite",
     "dev:stable": "vite --mode stable",
     "build": "tsc && vite build",
@@ -68,6 +69,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "happy-dom": "20.14.0",
+    "patch-package": "^8.0.1",
     "tailwindcss": "^4",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
