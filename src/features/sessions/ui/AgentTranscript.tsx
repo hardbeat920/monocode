@@ -33,6 +33,7 @@ import { AttachmentChip } from "./AttachmentChip";
 import { MonocodeSparkles } from "./MonocodeSparkles";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { t } from "../../i18n/model/i18n";
 import { ToolDiffPreview } from "./ToolDiffPreview";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
@@ -1011,7 +1012,7 @@ function LiveFoldTitle({
   // Yielding with a command still going is not the end of the turn. The clock
   // keeps running and the line says what it is waiting on.
   const text = paused
-    ? (waitingLabel ?? "Waiting for approval")
+    ? (waitingLabel ?? t("turn.waitingForApproval", "Waiting for approval"))
     : background?.length
       ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
       : formatWorkingDuration(elapsedMs, modelName);
@@ -1149,27 +1150,38 @@ function TurnMetricsBadge({
   const headline =
     [
       metrics.cacheHitPercent != null
-        ? `Cache hit ${Math.round(metrics.cacheHitPercent)}%`
+        ? t("turn.cacheHit", `Cache hit ${Math.round(metrics.cacheHitPercent)}%`, {
+            percent: Math.round(metrics.cacheHitPercent),
+          })
         : null,
       outputRate != null
-        ? `Output ${formatMetricCount(outputRate)} tok/s`
+        ? t("turn.outputRate", `Output ${formatMetricCount(outputRate)} tok/s`, {
+            rate: formatMetricCount(outputRate),
+          })
         : null,
     ]
       .filter(Boolean)
-      .join(" · ") || "Turn tokens";
+      .join(" · ") || t("turn.turnTokens", "Turn tokens");
   const detail = [
     metrics.inputTokens != null
-      ? `${formatMetricCount(metrics.inputTokens)} input`
+      ? t("turn.inputTokens", `${formatMetricCount(metrics.inputTokens)} input`, {
+          count: formatMetricCount(metrics.inputTokens),
+        })
       : null,
     metrics.outputTokens != null
-      ? `${formatMetricCount(metrics.outputTokens)} output`
+      ? t("turn.outputTokens", `${formatMetricCount(metrics.outputTokens)} output`, {
+          count: formatMetricCount(metrics.outputTokens),
+        })
       : null,
     metrics.cacheReadTokens != null
-      ? `${formatMetricCount(metrics.cacheReadTokens)} cached`
+      ? t("turn.cachedTokens", `${formatMetricCount(metrics.cacheReadTokens)} cached`, {
+          count: formatMetricCount(metrics.cacheReadTokens),
+        })
       : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const metricsLabel = t("turn.metrics", "Turn metrics");
   const label = [headline, detail].filter(Boolean).join(". ");
 
   return (
@@ -1184,8 +1196,8 @@ function TurnMetricsBadge({
       <span
         role="img"
         tabIndex={0}
-        aria-label={`Turn metrics: ${label}`}
-        title="Turn metrics"
+        aria-label={`${metricsLabel}: ${label}`}
+        title={metricsLabel}
         className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
         <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
@@ -1237,12 +1249,13 @@ function formatClockTime(epochMs: number): string {
 function CopyTurnButton({
   text,
   attachments,
-  label = "Copy response",
+  label,
 }: {
   text: string;
   attachments?: Attachment[];
   label?: string;
 }) {
+  const defaultLabel = label ?? t("turn.copyResponse", "Copy response");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1256,13 +1269,15 @@ function CopyTurnButton({
     };
   }, [text, attachments]);
 
+  const buttonLabel = copied ? t("turn.copied", "Copied") : defaultLabel;
+
   return (
     <>
       <button
         type="button"
         disabled={pending}
-        title={copied ? "Copied" : label}
-        aria-label={copied ? "Copied" : label}
+        title={buttonLabel}
+        aria-label={buttonLabel}
         className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={(event) => {
           event.stopPropagation();
@@ -1292,7 +1307,7 @@ function CopyTurnButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Copy failed. {error}
+          {t("turn.copyFailed", "Copy failed.")} {error}
         </span>
       )}
     </>
@@ -1319,13 +1334,17 @@ function SaveNoteButton({
     };
   }, [text]);
 
+  const saveLabel = saved
+    ? t("turn.savedToNotes", "Saved to Notes")
+    : t("turn.saveAsNote", "Save as note");
+
   return (
     <>
       <button
         type="button"
         disabled={pending}
-        title={saved ? "Saved to Notes" : "Save as note"}
-        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        title={saveLabel}
+        aria-label={saveLabel}
         className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={async () => {
           setError(null);
@@ -1352,7 +1371,7 @@ function SaveNoteButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Could not save note. {error}
+          {t("turn.couldNotSaveNote", "Could not save note.")} {error}
         </span>
       )}
     </>
@@ -1366,7 +1385,9 @@ function EditLastTurnButton({
   onEdit: () => void;
   editing?: boolean;
 }) {
-  const label = editing ? "Cancel edit" : "Edit and resend";
+  const label = editing
+    ? t("turn.cancelEdit", "Cancel edit")
+    : t("turn.editAndResend", "Edit and resend");
   return (
     <button
       type="button"
@@ -1780,7 +1801,7 @@ function UserMessageBlock({
               <CopyTurnButton
                 text={text}
                 attachments={block.attachments}
-                label="Copy message"
+                label={t("turn.copyMessage", "Copy message")}
               />
             ) : null}
             {onEdit ? (
@@ -3209,12 +3230,24 @@ function formatWorkingDuration(
 ): string {
   const who = modelName?.trim();
   const elapsed = formatElapsed(elapsedMs);
-  const verb = done ? (who ? "worked" : "Worked") : who ? "working" : "Working";
   if (elapsed == null) {
-    if (done) return who ? `${who} ${verb}` : verb;
-    return who ? `${who} ${verb}…` : `${verb}…`;
+    if (done) {
+      return who
+        ? t("turn.worked", `${who} worked`, { who })
+        : t("turn.workedNoWho", "Worked");
+    }
+    return who
+      ? t("turn.working", `${who} working…`, { who })
+      : t("turn.workingNoWho", "Working…");
   }
-  return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
+  if (done) {
+    return who
+      ? t("turn.workedFor", `${who} worked for ${elapsed}`, { who, elapsed })
+      : t("turn.workedForNoWho", `Worked for ${elapsed}`, { elapsed });
+  }
+  return who
+    ? t("turn.workingFor", `${who} working for ${elapsed}`, { who, elapsed })
+    : t("turn.workingForNoWho", `Working for ${elapsed}`, { elapsed });
 }
 
 function formatElapsed(elapsedMs: number | null): string | null {
