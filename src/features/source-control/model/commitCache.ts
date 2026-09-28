@@ -30,6 +30,9 @@ export function createCommitCache<T>(
 ): CommitCache<T> {
   const cache = new Map<string, T>();
   const inFlight = new Map<string, Promise<T | null>>();
+  // Bumped by clear(), so a request started before it cannot repopulate the
+  // cache or delete a newer in-flight entry when it settles.
+  let generation = 0;
 
   // NUL cannot appear in a path, so it cannot make two pairs collide.
   const keyOf = (cwd: string, sha: string) => `${cwd}\u0000${sha}`;
@@ -53,14 +56,15 @@ export function createCommitCache<T>(
       const pending = inFlight.get(key);
       if (pending) return pending;
 
+      const gen = generation;
       const request = fetchValue(cwd, sha)
         .then((value) => {
-          remember(key, value);
+          if (gen === generation) remember(key, value);
           return value;
         })
         .catch(() => null)
         .finally(() => {
-          inFlight.delete(key);
+          if (inFlight.get(key) === request) inFlight.delete(key);
         });
 
       inFlight.set(key, request);
@@ -68,6 +72,7 @@ export function createCommitCache<T>(
     },
 
     clear: () => {
+      generation++;
       cache.clear();
       inFlight.clear();
     },
