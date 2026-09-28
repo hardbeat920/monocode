@@ -77,6 +77,8 @@ async function promptOnce(input: {
       path,
       ["run", "--quiet", "--format", "json", input.prompt],
       input.cwd,
+      undefined,
+      "opencrabs",
     );
     await exitPromise;
   } finally {

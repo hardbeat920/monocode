@@ -301,7 +301,14 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, spawnArgs(input.model), input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    spawnArgs(input.model),
+    input.cwd,
+    undefined,
+    "opencrabs",
+  );
 
   try {
     await acp.request(
