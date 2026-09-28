@@ -196,6 +196,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
         return false;
       }
       if (IS_MAC && isMacTerminalClearShortcut(event)) {
+        if (event.isComposing) return false;
         if (event.type === "keydown") {
           event.preventDefault();
           term.clear();
