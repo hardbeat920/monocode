@@ -48,6 +48,8 @@ export class AcpSubagents {
           text: event.title ?? "",
           toolKind: event.kind,
           status: event.status,
+          // Only a settled call carries a result worth reading.
+          detail: event.type === "tool.updated" ? event.detail : undefined,
           preview: event.preview,
         });
       } else if (

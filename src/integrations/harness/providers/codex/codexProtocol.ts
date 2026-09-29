@@ -1045,6 +1045,9 @@ export function mapCodexSubagentSteps(
             text: event.title ?? "",
             ...(event.kind ? { toolKind: event.kind } : {}),
             ...(event.status ? { status: event.status } : {}),
+            ...(event.type === "tool.updated" && event.detail
+              ? { detail: event.detail }
+              : {}),
             ...(event.preview ? { preview: event.preview } : {}),
           },
         ];

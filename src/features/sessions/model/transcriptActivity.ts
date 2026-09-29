@@ -30,19 +30,23 @@ export function needsApproval(block: Block): boolean {
   return !!block.approval && !block.approval.decided;
 }
 
+/** Statuses a provider uses for a call that did not work. */
+export function isFailedStatus(status?: string): boolean {
+  const value = status?.toLowerCase() ?? "";
+  return (
+    value === "failed" ||
+    value === "error" ||
+    value === "cancelled" ||
+    value === "canceled"
+  );
+}
+
 export function toolCallState(block: Block): ToolCallState {
   const status = block.tool?.status?.toLowerCase() ?? "";
   const decided = block.approval?.decided;
 
   if (decided === "deny") return "rejected";
-  if (
-    status === "failed" ||
-    status === "error" ||
-    status === "cancelled" ||
-    status === "canceled"
-  ) {
-    return "rejected";
-  }
+  if (isFailedStatus(status)) return "rejected";
   if (needsApproval(block)) return "pending";
   if (status === "completed" || status === "success") return "accepted";
   if (

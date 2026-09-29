@@ -608,6 +608,35 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Show error details for npm test");
   });
 
+  it("counts a failed step on a folded subagent row, so it is not hidden", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        // The run itself finished; only one of its steps did not.
+        tool: { callId: "agent-1", kind: "agent", status: "completed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            { id: "read", kind: "tool", text: "Read package.json" },
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+            { id: "fix", kind: "tool", text: "Edit src/App.tsx" },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("3 steps, 1 failed");
+  });
+
   it("opens a lone subagent straight into its own transcript", () => {
     const markup = render(
       [

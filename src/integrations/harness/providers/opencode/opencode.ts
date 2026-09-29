@@ -1117,6 +1117,7 @@ function emitSubagentStep(
     }) ||
     (typeof state.title === "string" && state.title) ||
     tool;
+  const failed = status === "error";
   live.onEvent({
     type: "agent.step",
     callId,
@@ -1124,12 +1125,13 @@ function emitSubagentStep(
     kind: "tool",
     text: title,
     toolKind: kind,
-    status:
-      status === "error"
-        ? "failed"
-        : status === "completed"
-          ? "completed"
-          : "in_progress",
+    status: failed
+      ? "failed"
+      : status === "completed"
+        ? "completed"
+        : "in_progress",
+    // Only a failure earns detail; a preview's output is never shown here.
+    ...(failed ? { detail: detailFromToolPart(part) } : {}),
     ...(preview ? { preview } : {}),
   });
   if (kind === "agent") trackSubagentRow(live, callId, part);

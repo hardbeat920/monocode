@@ -1038,13 +1038,14 @@ function recordAgentStep(
   if (!text && event.kind !== "tool") return session;
 
   const run = prev.agentRun;
+  const detail = capToolDetail(event.detail);
   const step: AgentStep = {
     id: event.stepId,
     kind: event.kind,
     text,
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
-    ...(event.detail ? { detail: event.detail } : {}),
+    ...(detail ? { detail } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
