@@ -491,7 +491,7 @@ export function isSettingsSectionId(
 
 export function settingsSectionLabel(id: SettingsSectionId): string {
   const fallback = SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General";
-  return t(`settings.${id}`, fallback);
+  return t(`nav.${id}`, fallback);
 }
 
 export function settingsSectionDescription(id: SettingsSectionId): string {

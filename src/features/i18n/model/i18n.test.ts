@@ -133,4 +133,27 @@ describe("i18n", () => {
     expect(t("search.filesToExcludePlaceholder", "files to exclude")).toBe("files to exclude");
     expect(t("automations.searchTriggersPlaceholder", "Search triggers")).toBe("Search triggers");
   });
+
+  it("translates remote connection surfaces correctly", () => {
+    saveLanguagePreference("zh-CN");
+    expect(t("nav.connections", "Connections")).toBe("远程连接");
+    expect(t("settings.connections.title", "Connections")).toBe("远程连接");
+    expect(
+      t("connections.connectedInstruction", "{name} is connected.", {
+        name: "家用 Mac",
+      }),
+    ).toContain("家用 Mac 已连接");
+    expect(t("connections.connectThroughSsh", "Connect through SSH")).toBe(
+      "通过 SSH 连接",
+    );
+    expect(t("connections.openFolderTitle", "Open folder on a machine")).toBe(
+      "打开其他机器上的文件夹",
+    );
+
+    saveLanguagePreference("en");
+    expect(t("nav.connections", "Connections")).toBe("Connections");
+    expect(t("connections.connectThroughSsh", "Connect through SSH")).toBe(
+      "Connect through SSH",
+    );
+  });
 });

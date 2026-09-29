@@ -101,6 +101,7 @@ export const en = {
     openProject: "Open project",
     openFolder: "Open folder…",
     openFolderOnMachine: "Open folder on a machine…",
+    connections: "Connections",
     machineNotConnected: "Machine not connected on this computer",
     machineConnecting: "Connecting",
     machineConnected: "Connected",
@@ -109,6 +110,111 @@ export const en = {
     projectOptions: "Project options",
     resizeProjectSidebar: "Resize project sidebar",
     searchProjectsPlaceholder: "Search projects...",
+  },
+  connections: {
+    title: "Connections",
+    description: "Connect your machines and run agents remotely through SSH.",
+    yourMachines: "Your machines",
+    overview:
+      "Run agents on another computer and return to them from your laptop. The host keeps working when you close MonoCode here.",
+    addMachine: "Add machine",
+    addMachinePrompt: "Add a machine",
+    updatedAndReconnected: "{name} was updated and reconnected.",
+    connectedInstruction:
+      "{name} is connected. To work on it, click + next to Projects in the project rail and choose Open folder on a machine.",
+    connected: "Connected",
+    port: "port",
+    checkingConnection: "Checking connection…",
+    providerMissing: "Connected · install a supported provider on the host",
+    hostUpdateNeeded: "Connected · host update needed for Explorer and Changes",
+    offlineReconnect: "Offline · reconnect to check access",
+    updatingWarning: "Updating restarts the host and interrupts active agent turns.",
+    updateHostTitle:
+      "Downloads the matching host package and restarts the host; active agent turns will be interrupted",
+    updateHost: "Update Host",
+    reconnect: "Reconnect",
+    removeConnection: "Remove connection…",
+    removeConnectionAria: "Remove {name}",
+    confirmRemoving: "Confirm removing {name}",
+    removeMachineTitle: "Remove {name} from this desktop?",
+    removeMachineDescription:
+      "This closes this desktop’s connection to the machine. It does not stop the host, and its sessions keep running and stay on that machine. You can add it again later.",
+    removeCredentialDescription:
+      "Removing alone leaves this desktop’s credential valid on the host. Revoke access to invalidate it first; the machine must be reachable.",
+    stopHostDescription: "To stop the host and turn off its background service, run",
+    onMachine: "on that machine (",
+    onWindows: "on Windows). Its sessions and history are kept.",
+    revokeAndRemove: "Revoke access and remove",
+    removeLocalOnly: "Remove from this desktop only",
+    emptyMachines: "Add your always-on Windows, Mac, or Linux machine to get started.",
+    connectThroughSsh: "Connect through SSH",
+    sshAddress: "SSH address",
+    sshAddressPlaceholder: "user@my-mac-mini or an SSH alias",
+    name: "Name",
+    optional: "(optional)",
+    namePlaceholder: "Optional, e.g. Home Mac mini",
+    advanced: "Advanced",
+    sshPort: "SSH port",
+    sshPortPlaceholder: "From SSH config",
+    setupSshDescription:
+      "MonoCode installs and starts its background host, then connects securely. Your SSH keys and config are used automatically. Enable SSH on the host and sign in to Codex or Claude Code there. On Windows and Mac, keep the host’s desktop account signed in and the machine awake. Locking the desktop is fine.",
+    setupLinuxDescription:
+      "On Linux, setup installs a systemd user service and turns on lingering for your account (",
+    setupLinuxDescriptionEnd:
+      "), so the host and your other user services keep running after you log out. The host keeps running until you stop it on that machine; removing it here only disconnects this desktop.",
+    connecting: "Connecting…",
+    connect: "Connect",
+    startingConnection: "Starting connection…",
+    sshPassword: "SSH password or passphrase",
+    trustHost: "Trust host and continue",
+    reject: "Reject",
+    cancelConnection: "Cancel connection",
+    existingHostUrl: "Connect to an existing host by URL",
+    hostUrl: "Host URL",
+    deviceToken: "Device token",
+    connectByUrl: "Connect by URL",
+    connectedNotice: "{name} is connected.",
+    updatedNotice: "{name} was updated and reconnected.",
+    removedRevokedNotice:
+      "{name} was removed and this desktop’s access was revoked. The host and its sessions keep running.",
+    removedLocalNotice:
+      "{name} was removed from this desktop. The host and its sessions keep running, and it still accepts this desktop’s credential.",
+    revokeFailed:
+      "Could not revoke access, so {name} was not removed: {error}. Reconnect and try again, or remove it from this desktop only and revoke it on the host with monocode-host devices and monocode-host revoke <device-id>.",
+    openFolderTitle: "Open folder on a machine",
+    openFolderDescription:
+      "Sessions in this project run on that machine, using its checkout and its Codex or Claude Code sign-in. They keep running when you close MonoCode here.",
+    noMachines: "No machines are connected yet. Add one in Settings, then open a folder on it here.",
+    machine: "Machine",
+    onMachineShort: "On {name}",
+    folderPath: "Folder path on the machine",
+    folders: "Folders",
+    noSubfolders: "No subfolders",
+    loadingFolders: "Loading folders…",
+    opening: "Opening…",
+    open: "Open",
+    missingMachineDetails:
+      "This project’s machine details are missing. Add the project again from the project rail.",
+    machineNotConnected:
+      "The machine for this project isn’t connected on this computer.",
+    connectingMachine: "Connecting to the machine…",
+    manageMachines: "Manage machines",
+    hostIdentityChanged:
+      "Host identity changed. Reconnect this machine before continuing.",
+    differentHostProject: "This session belongs to a different host project",
+    loadingModels: "Loading models…",
+    waitingForHost: "Waiting for the host to confirm your request.",
+    retry: "Retry",
+    tryAgain: "Try again",
+    dismiss: "Dismiss",
+    saveDraftFailed: "Couldn’t save the draft on {name}.",
+    sendMessageFailed: "Couldn’t send the message on {name}.",
+    loadModelsFailed: "Couldn’t load models from {name}.",
+    chooseWorktree: "Choose a worktree on this machine",
+    fixedWorktree: "This session’s worktree is fixed. Start a new session to use another.",
+    selectModelForPlan:
+      "Select that model in the composer before building this remote plan.",
+    newRemoteSession: "New remote session",
   },
   settings: {
     appearancePage: {
@@ -424,6 +530,10 @@ export const en = {
       closeToTrayDesc:
         "Keep MonoCode running in the system menu bar when the main window is closed.",
     },
+    connections: {
+      title: "Connections",
+      description: "Connect your machines and run agents remotely through SSH.",
+    },
     appearance: {
       title: "Appearance",
       description:
@@ -544,6 +654,7 @@ export const en = {
 
     search: {
       noMatchingSettings: "No matching settings",
+      remoteMachines: "Your machines",
       projectWorktrees: "Project worktrees",
       version: "Version",
       sounds: "Sounds",

@@ -1751,7 +1751,10 @@ function SidebarComponent({
                   </p>
                 ) : remoteProject && !remote.machine ? (
                   <p className="px-3 py-2 text-[12px] text-content/45">
-                    This project’s machine isn’t connected on this computer.
+                    {t(
+                      "connections.machineNotConnected",
+                      "This project’s machine isn’t connected on this computer.",
+                    )}
                   </p>
                 ) : (
                   <SessionsEmpty

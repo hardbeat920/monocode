@@ -10385,7 +10385,12 @@ export default function App({
     if (!snapshot) {
       lastRemoteSnapshot.current.delete(shellId);
       setSessions((current) => current.map((entry) => entry.id === shellId
-        ? { ...entry, title: "New remote session", blocks: [], busy: false }
+        ? {
+            ...entry,
+            title: t("connections.newRemoteSession", "New remote session"),
+            blocks: [],
+            busy: false,
+          }
         : entry));
       return;
     }
