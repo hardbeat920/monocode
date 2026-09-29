@@ -157,6 +157,12 @@ export type SettingsEntry = {
 export const SETTINGS_INDEX: SettingsEntry[] = [
   { id: "remote-machines", section: "connections", label: "Your machines", keywords: "ssh remote connect host server environment" },
   {
+    id: "language",
+    section: "general",
+    label: "Language",
+    keywords: "locale translation chinese english interface display",
+  },
+  {
     id: "project-worktrees",
     section: "worktrees",
     label: "Project worktrees",

@@ -1534,15 +1534,16 @@ function SidebarComponent({
   const changeDeletions = changeStats?.deletions ?? 0;
   const hasChanges = (changeStats?.files ?? 0) > 0;
   const hasChangeStats = changeAdditions > 0 || changeDeletions > 0;
+  const translatedChangesLabel = t("nav.changes", "Changes");
   const changesLabel = hasChangeStats
     ? [
-        "Changes",
+        translatedChangesLabel,
         changeAdditions > 0 ? `+${changeAdditions}` : "",
         changeDeletions > 0 ? `-${changeDeletions}` : "",
       ]
         .filter(Boolean)
         .join(" ")
-    : "Changes";
+    : translatedChangesLabel;
 
   const workspaceTabItems = visibleTabs.map((itemId) => {
     const active = tab === itemId;
@@ -3083,7 +3084,19 @@ const SessionCard = memo(function SessionCard({
           ? t("sidebar.openLinkedPrBesideSession", `Open PR #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`, { number: linkedWorkItem.number, mod: MOD })
           : t("sidebar.openLinkedIssueBesideSession", `Open issue #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`, { number: linkedWorkItem.number, mod: MOD })
       }
-      aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
+      aria-label={
+        linkedWorkItem.kind === "pr"
+          ? t(
+              "sidebar.openLinkedPrBesideSession",
+              `Open PR #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`,
+              { number: linkedWorkItem.number, mod: MOD },
+            )
+          : t(
+              "sidebar.openLinkedIssueBesideSession",
+              `Open issue #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`,
+              { number: linkedWorkItem.number, mod: MOD },
+            )
+      }
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.preventDefault();
@@ -3415,7 +3428,7 @@ const SessionCard = memo(function SessionCard({
                 data-automation-icon
                 role="img"
                 title={t("shell.startedByAutomation", "Started by an automation")}
-                aria-label="Started by an automation"
+                aria-label={t("shell.startedByAutomation", "Started by an automation")}
                 className="grid size-5 -mr-1 shrink-0 place-items-center text-amber-400"
               >
                 <Zap className="size-3" strokeWidth={1.75} />

@@ -634,6 +634,7 @@ export const zhCN: TranslationDict = {
     search: {
       noMatchingSettings: "未找到匹配的设置",
       remoteMachines: "你的机器",
+      language: "语言",
       projectWorktrees: "项目工作树",
       version: "版本",
       sounds: "音效",

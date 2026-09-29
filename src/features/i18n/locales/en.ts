@@ -655,6 +655,7 @@ export const en = {
     search: {
       noMatchingSettings: "No matching settings",
       remoteMachines: "Your machines",
+      language: "Language",
       projectWorktrees: "Project worktrees",
       version: "Version",
       sounds: "Sounds",
