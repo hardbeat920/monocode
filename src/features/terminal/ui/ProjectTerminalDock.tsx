@@ -1,4 +1,4 @@
-import { t } from "../../i18n/model/i18n";
+import { useTranslation } from "../../i18n/model/i18n";
 import {
   ChevronDown,
   ChevronLeft,
@@ -28,7 +28,6 @@ import {
 } from "../../projects/model/projectTerminal";
 import { MOD } from "../../../platform/tauri/platform";
 import type { TerminalMetaPatch } from "../model/terminalTab";
-import { useTranslation } from "../../i18n/model/i18n";
 import { lazySurface } from "../../../shared/ui/lazySurface";
 
 const TerminalView = lazySurface(async () => {
