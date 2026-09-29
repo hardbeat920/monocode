@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
@@ -146,7 +146,17 @@ pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool) {
             let _ = window.set_background_color(Some(Color(247, 247, 247, 255)));
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        // No system blur API on Linux: transparency only. The compositor
+        // (e.g. Mutter) blends the translucent CSS glass over the desktop.
+        if enabled {
+            let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+        } else {
+            let _ = window.set_background_color(Some(Color(247, 247, 247, 255)));
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (window, enabled);
     }
