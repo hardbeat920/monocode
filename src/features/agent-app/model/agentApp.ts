@@ -20,8 +20,16 @@ import {
   placeSessionInFolder,
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
-import type { Note } from "../../notes";
+import {
+  normalizeNoteTags,
+  noteTitle,
+  type Note,
+  type NoteUpsert,
+} from "../../notes";
 import type { QuickLaunch } from "../../quick-composer/model/quickComposer";
+import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
+import { pathKey } from "../../../shared/lib/paths";
+import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage } from "./sessionConversation";
 
@@ -34,8 +42,17 @@ export type AppSessionListing = {
   hasDraft: boolean;
 };
 
+export type AppSessionPlacement = {
+  direction: SplitDir;
+  besideSessionId: string;
+};
+
 export type AgentAppHost = {
-  start(launch: QuickLaunch, id: string): Promise<void>;
+  start(
+    launch: QuickLaunch,
+    id: string,
+    placement?: AppSessionPlacement,
+  ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
   send(
@@ -48,8 +65,16 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  worktrees(cwd: string): Promise<Worktrees>;
+  createWorktree(
+    cwd: string,
+    branch: string,
+    base: string,
+    existing: boolean,
+  ): Promise<Worktree>;
   notes(): Promise<Note[]>;
   note(id: string): Promise<Note | null>;
+  saveNote(note: NoteUpsert): Promise<Note>;
 };
 
 const FIELDS = new Map<string, readonly string[]>([
@@ -71,12 +96,18 @@ const FIELDS = new Map<string, readonly string[]>([
       "reveal",
       "workspaceMode",
       "worktreeBase",
+      "worktreeCwd",
+      "placement",
+      "besideSessionId",
     ],
   ],
+  ["worktrees.list", []],
+  ["worktrees.create", ["branch", "base", "existing"]],
   ["folders.list", []],
   ["folders.move", ["sessionId", "folderId", "newFolderName"]],
   ["notes.list", ["limit", "offset"]],
   ["notes.read", ["id"]],
+  ["notes.write", ["id", "title", "body", "tags"]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -108,6 +139,24 @@ function optionalString(
   max = 512,
 ): string | undefined {
   return value === undefined ? undefined : requiredString(value, name, max);
+}
+
+function noteBody(value: unknown): string {
+  if (typeof value !== "string" || value.length > 240_000)
+    throw new Error("body must be a string under 240000 characters");
+  return value.replace(/\r\n?/g, "\n");
+}
+
+function noteTags(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > 20 ||
+    value.some((tag) => typeof tag !== "string" || tag.length > 48)
+  )
+    throw new Error(
+      "tags must be an array of at most 20 strings under 48 characters each",
+    );
+  return normalizeNoteTags(value as string[]);
 }
 
 function requireProject(source: Session): string {
@@ -207,6 +256,9 @@ function startLaunch(
   const worktreeBase = optionalString(input.worktreeBase, "worktreeBase");
   if (worktreeBase && workspaceMode !== "worktree")
     throw new Error("worktreeBase requires workspaceMode worktree");
+  const worktreeCwd = optionalString(input.worktreeCwd, "worktreeCwd");
+  if (worktreeCwd && workspaceMode !== "current")
+    throw new Error("worktreeCwd requires workspaceMode current");
   return {
     cwd,
     prompt,
@@ -222,8 +274,8 @@ function startLaunch(
     runtimeMode: runtimeMode as Session["runtimeMode"],
     reveal,
     workspaceMode,
-    ...(workspaceMode === "current" && source.worktreeCwd
-      ? { worktreeCwd: source.worktreeCwd }
+    ...(workspaceMode === "current" && (worktreeCwd || source.worktreeCwd)
+      ? { worktreeCwd: worktreeCwd || source.worktreeCwd }
       : {}),
     ...(worktreeBase ? { worktreeBase } : {}),
   };
@@ -307,8 +359,38 @@ export async function handleAgentApp(
           "request ID must use letters, digits, underscores or hyphens",
         );
       const launch = startLaunch(source, input);
+      if (input.worktreeCwd !== undefined) {
+        const chosen = (await host.worktrees(launch.cwd)).worktrees.find(
+          (tree) =>
+            !tree.missing &&
+            pathKey(tree.path) === pathKey(launch.worktreeCwd!),
+        );
+        if (!chosen)
+          throw new Error(
+            "Worktree is unavailable in this project; run worktrees.list",
+          );
+        launch.worktreeCwd =
+          pathKey(chosen.path) === pathKey(launch.cwd)
+            ? undefined
+            : chosen.path;
+      }
+      const placement = input.placement ?? "tab";
+      if (placement !== "tab" && placement !== "right" && placement !== "down")
+        throw new Error("placement must be tab, right or down");
+      if (input.besideSessionId !== undefined && placement === "tab")
+        throw new Error("besideSessionId requires placement right or down");
+      const besideSessionId =
+        placement === "tab"
+          ? undefined
+          : (optionalString(input.besideSessionId, "besideSessionId", 256) ??
+            source.id);
       const id = `app-${source.id}-${requestId}`;
-      await host.start(launch, id);
+      if (besideSessionId)
+        await host.start(launch, id, {
+          direction: placement as SplitDir,
+          besideSessionId,
+        });
+      else await host.start(launch, id);
       return {
         id,
         cwd: launch.cwd,
@@ -317,6 +399,19 @@ export async function handleAgentApp(
         submitted: !launch.draft,
         draft: !!launch.draft,
       };
+    }
+    case "worktrees.list":
+      return host.worktrees(requireProject(source));
+    case "worktrees.create": {
+      const cwd = requireProject(source);
+      const branch = requiredString(input.branch, "branch", 400);
+      const existing = input.existing ?? false;
+      if (typeof existing !== "boolean")
+        throw new Error("existing must be a boolean");
+      const base = optionalString(input.base, "base", 400);
+      if (existing && base)
+        throw new Error("base cannot be set for an existing branch");
+      return host.createWorktree(cwd, branch, base ?? "HEAD", existing);
     }
     case "folders.list": {
       const cwd = requireProject(source);
@@ -389,6 +484,52 @@ export async function handleAgentApp(
       const note = await host.note(id);
       if (!note) throw new Error("Note was not found");
       return note;
+    }
+    case "notes.write": {
+      const id = optionalString(input.id, "id", 256);
+      if (id && !/^[A-Za-z0-9_-]+$/.test(id))
+        throw new Error("Invalid note ID");
+      const title =
+        input.title === undefined
+          ? undefined
+          : requiredString(input.title, "title", 200);
+      const body = input.body === undefined ? undefined : noteBody(input.body);
+      const tags = input.tags === undefined ? undefined : noteTags(input.tags);
+      if (id) {
+        if (title === undefined && body === undefined && tags === undefined)
+          throw new Error("Supply title, body or tags to update a note");
+        const current = await host.note(id);
+        if (!current) throw new Error("Note was not found");
+        return host.saveNote({
+          id,
+          title: title ?? current.title,
+          body: body ?? current.body,
+          tags: tags ?? current.tags,
+        });
+      }
+      if (body === undefined)
+        throw new Error("body is required to create a note");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const createdId = `app-${source.id}-${requestId}`;
+      const existing = await host.note(createdId);
+      if (existing) {
+        if (
+          existing.title !== (title ?? noteTitle(body)) ||
+          existing.body !== body ||
+          JSON.stringify(existing.tags) !== JSON.stringify(tags ?? [])
+        )
+          throw new Error("Request ID was already used for another note");
+        return existing;
+      }
+      return host.saveNote({
+        id: createdId,
+        title: title ?? noteTitle(body),
+        body,
+        tags: tags ?? [],
+        sourceSessionId: source.id,
+        ...(looksLikeProject(source.cwd) ? { sourceCwd: source.cwd } : {}),
+      });
     }
   }
 }

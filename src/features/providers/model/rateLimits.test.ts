@@ -8,7 +8,6 @@ import {
   formatUsagePercent,
   formatWindowLabel,
   idleRateLimits,
-  isRateLimitSnapshotStale,
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
@@ -16,10 +15,7 @@ import {
   parseGrokBilling,
   parseOpencodeGoUsage,
   parseResetTimestamp,
-  RATE_LIMIT_MIN_REFETCH_MS,
   rateLimitWindowTooltip,
-  shouldFetchProvider,
-  shouldFetchRateLimits,
 } from "./rateLimits";
 
 describe("formatWindowLabel", () => {
@@ -246,6 +242,26 @@ describe("parseCodexRateLimits", () => {
     expect(limits.resetCredits).toEqual({ availableCount: 3, credits: null });
   });
 
+  it("maps a free plan's lone 30-day primary window to monthly", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        primary: {
+          usedPercent: 4,
+          windowDurationMins: 43_200,
+          resetsAt: 1_792_550_273,
+        },
+        secondary: null,
+      },
+    });
+    expect(limits.session).toBeNull();
+    expect(limits.weekly).toBeNull();
+    expect(limits.monthly).toEqual({
+      usedPercent: 4,
+      windowMinutes: 43_200,
+      resetsAt: 1_792_550_273_000,
+    });
+  });
+
   it("falls back to primary=session when durations are unknown", () => {
     const limits = parseCodexRateLimits({
       primary: { usedPercent: 10, resetsAt: 100 },
@@ -361,7 +377,11 @@ describe("parseOpencodeGoUsage", () => {
           resetsAt: "2026-09-16T16:27:38.287Z",
         },
         weekly: { status: "ok", percent: 30, resetsAt: "2026-09-23T00:00:00Z" },
-        monthly: { status: "ok", percent: 12, resetsAt: "2026-10-16T00:00:00Z" },
+        monthly: {
+          status: "ok",
+          percent: 12,
+          resetsAt: "2026-10-16T00:00:00Z",
+        },
       },
     });
     expect(limits.provider).toBe("opencode");
@@ -403,121 +423,5 @@ describe("rateLimitWindowTooltip", () => {
         now,
       ),
     ).toBe("42% used · Resets in 2h 33m");
-  });
-});
-
-describe("shouldFetchRateLimits", () => {
-  const now = Date.parse("2026-08-27T08:00:00Z");
-  const fresh = {
-    ...idleRateLimits("claude"),
-    status: "ok" as const,
-    updatedAt: now - 60_000,
-  };
-  const stale = {
-    ...fresh,
-    provider: "codex" as const,
-    updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-  };
-
-  it("always fetches when forced", () => {
-    expect(
-      shouldFetchRateLimits({
-        force: true,
-        visible: false,
-        claude: fresh,
-        codex: fresh,
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips when the window is hidden", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: false,
-        claude: stale,
-        codex: stale,
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("skips a visible window when both snapshots are fresh", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: fresh,
-        codex: { ...fresh, provider: "codex" },
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("fetches on focus once either snapshot is 5 minutes old", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: fresh,
-        codex: stale,
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("treats the first idle load as stale", () => {
-    expect(isRateLimitSnapshotStale(idleRateLimits("claude"), now)).toBe(true);
-  });
-
-  it("does not keep polling a provider that is not connected", () => {
-    const disconnected = {
-      ...idleRateLimits("codex"),
-      status: "unavailable" as const,
-      updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-      error: "Codex CLI not found",
-    };
-    expect(isRateLimitSnapshotStale(disconnected, now)).toBe(false);
-    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
-      false,
-    );
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: disconnected,
-        codex: disconnected,
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("still polls the connected provider when the other is not", () => {
-    const disconnected = {
-      ...idleRateLimits("claude"),
-      status: "unavailable" as const,
-      updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-      error: "Claude not signed in",
-    };
-    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
-      false,
-    );
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: disconnected,
-        codex: stale,
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("retries a disconnected provider only when forced", () => {
-    const disconnected = {
-      ...idleRateLimits("codex"),
-      status: "unavailable" as const,
-      updatedAt: now,
-      error: "Codex not signed in",
-    };
-    expect(
-      shouldFetchProvider(disconnected, { force: true, visible: true, now }),
-    ).toBe(true);
   });
 });

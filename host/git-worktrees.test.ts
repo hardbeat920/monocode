@@ -17,7 +17,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-it("generates a remote session title and renames its new worktree branch", async () => {
+it.each([false, true])("applies generated worktree names only to retained sessions (deleted: %s)", async (deleted) => {
   const cwd = mkdtempSync(join(tmpdir(), "monocode-host-names-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd });
   git("init", "-q");
@@ -39,7 +39,8 @@ it("generates a remote session title and renames its new worktree branch", async
     title: "Fix remote naming",
     workItem: null,
   }));
-  const branch = vi.fn(async () => "remote-naming");
+  let finishBranch!: (branch: string) => void;
+  const branch = vi.fn(() => new Promise<string>((resolve) => { finishBranch = resolve; }));
   const engine = new HostEngine(store, {
     codex: {
       send: async () => {},
@@ -77,6 +78,19 @@ it("generates a remote session title and renames its new worktree branch", async
     sessionId,
     text: "Fix remote session and worktree naming",
   });
+  await vi.waitFor(() => expect(branch).toHaveBeenCalledTimes(1));
+  if (deleted) {
+    await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"));
+    store.deleteSession(sessionId);
+    const logged = vi.spyOn(console, "debug").mockImplementation(() => {});
+    try {
+      finishBranch("remote-naming");
+      await vi.waitFor(() => expect(logged).toHaveBeenCalledWith("[monocode] remote worktree branch", expect.any(Error)));
+      expect((await hostWorktrees(cwd)).worktrees.find((item) => item.path === tree.path)?.branch).toBe("mc/12345678");
+    } finally { logged.mockRestore(); }
+    return;
+  }
+  finishBranch("remote-naming");
   await vi.waitFor(() => {
     expect(store.session(sessionId).session).toMatchObject({
       title: "codex · Fix remote naming",

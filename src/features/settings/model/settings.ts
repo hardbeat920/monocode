@@ -354,7 +354,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "provider-accounts",
     section: "providers",
     label: "Provider accounts",
-    keywords: "account sign in login rename remove delete credentials profile",
+    keywords:
+      "account sign in login rename remove delete credentials profile usage limit quota exhausted",
   },
   {
     id: "claude-hooks",

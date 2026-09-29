@@ -19,6 +19,7 @@ import {
 } from "../src/integrations/harness/core/child";
 import { HostChildBackend } from "./child-backend";
 import { HostStore } from "./store";
+import { acquireHostOwner } from "./owner";
 import { HostEngine } from "./engine";
 import { hostProviders } from "./providers";
 import { createHostServer } from "./server";
@@ -214,30 +215,12 @@ Connect another computer using an SSH forward to the loopback port.`);
     store.close();
     throw new Error("Unknown command; run with --help");
   }
-  const lock = join(directory, "owner.lock");
-  if (existsSync(lock)) {
-    const oldPid = Number(readFileSync(lock, "utf8"));
-    if (!Number.isSafeInteger(oldPid) || oldPid < 1)
-      throw new Error(
-        "Host lock is incomplete; inspect the host before removing owner.lock",
-      );
-    let alive = true;
-    try {
-      process.kill(oldPid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") alive = false;
-    }
-    if (alive) throw new Error("A host already owns this data directory");
-    rmSync(lock);
-  }
-  const fd = openSync(lock, "wx", 0o600);
-  writeFileSync(fd, String(process.pid));
-  closeSync(fd);
+  const releaseOwner = await acquireHostOwner(directory);
   const backend = new HostChildBackend();
   let cleanup = () => {
-    rmSync(lock, { force: true });
     rmSync(statePath, { force: true });
     store.close();
+    releaseOwner();
   };
   try {
     configureChildBackend(backend);
@@ -317,9 +300,9 @@ Connect another computer using an SSH forward to the loopback port.`);
       `Providers: ${available.join(", ") || "none found; install and authenticate Codex or Claude on this host"}`,
     );
     cleanup = () => {
-      rmSync(lock, { force: true });
       rmSync(statePath, { force: true });
       store.close();
+      releaseOwner();
     };
   } catch (error) {
     await backend.close();

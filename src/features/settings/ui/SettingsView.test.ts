@@ -597,6 +597,9 @@ describe("settings pages", () => {
 
   it("shows path details for every Agent CLI", async () => {
     await render("providers");
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === "harness_exec"),
+    ).toBe(false);
     for (const harness of HARNESSES) {
       expect(
         container.querySelector(

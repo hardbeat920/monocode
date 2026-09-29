@@ -67,6 +67,7 @@ async function git(root: string, args: string[], maxBuffer = 4 * 1024 * 1024) {
       timeout: 10_000,
       maxBuffer,
       encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C" },
     })
   ).stdout;
 }
@@ -169,7 +170,14 @@ const MAX_INDEXED_FILES = 20_000;
 /** Every file in the worktree, honoring .gitignore when it is a repository. */
 async function hostFilePaths(root: string): Promise<string[]> {
   let paths: string[];
+  let repository = false;
   try {
+    repository = (await git(root, ["rev-parse", "--is-inside-work-tree"])).trim() === "true";
+  } catch (error) {
+    if (!String((error as { stderr?: string }).stderr).includes("not a git repository"))
+      throw error;
+  }
+  if (repository) {
     paths = (
       await git(
         root,
@@ -179,7 +187,7 @@ async function hostFilePaths(root: string): Promise<string[]> {
     )
       .split("\0")
       .filter(Boolean);
-  } catch {
+  } else {
     paths = [];
     const pending = [""];
     while (pending.length && paths.length < 5000) {
@@ -746,7 +754,7 @@ export async function hostGitAction(
   };
   switch (action) {
     case "stageContents": {
-      const path = relative(root, workspacePath(root, input));
+      const path = relative(root, workspacePath(root, input)).split(sep).join("/");
       if (
         typeof contents !== "string" ||
         Buffer.byteLength(contents) > MAX_FILE
@@ -789,7 +797,7 @@ export async function hostGitAction(
       await git(root, ["reset", "-q", "--", "."]);
       return;
     case "discard": {
-      const path = relative(root, workspacePath(root, input));
+      const path = relative(root, workspacePath(root, input)).split(sep).join("/");
       const file = (await hostGitIndex(root)).files.find(
         (entry) => entry.relative === path && entry.unstaged,
       );

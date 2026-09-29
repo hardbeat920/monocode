@@ -119,3 +119,18 @@ it("points to Settings when no machine is connected", async () => {
   expect(document.body.textContent).toContain("No machines are connected yet");
   expect(button("Add a machine")).toBeTruthy();
 });
+
+it("ignores a project that finishes opening after cancellation", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  vi.mocked(invoke).mockImplementation((command, input) => {
+    if ((input as { method?: string } | undefined)?.method === "projects.open")
+      return new Promise((resolve) => { finish = resolve; });
+    return original(command, input);
+  });
+  await render();
+  await act(async () => button("Open").click());
+  await act(async () => button("Cancel").click());
+  await act(async () => finish({ id: "late", cwd: "/home/me", name: "me" }));
+  expect(opened).toEqual([]);
+});

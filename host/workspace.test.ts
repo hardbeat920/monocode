@@ -28,8 +28,18 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
+it("reports a broken Git index instead of searching ignored files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "monocode-broken-index-"));
+  roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(join(root, ".gitignore"), "private.txt\n");
+  writeFileSync(join(root, "private.txt"), "ignored");
+  writeFileSync(join(root, ".git", "index"), "broken");
+  await expect(searchHostFiles(root, "private")).rejects.toThrow();
+});
+
 it("lists host files and rejects paths escaping the project", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "monocode-workspace-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-workspace-")));
   roots.push(root);
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "app.ts"), "source\n");
@@ -86,12 +96,13 @@ it("lists host files and rejects paths escaping the project", async () => {
 });
 
 it("reports tracked and untracked changes and commits staged files", async () => {
-  const root = realpathSync(
+  const root = realpathSync.native(
     mkdtempSync(join(tmpdir(), "monocode-workspace-git-")),
   );
   roots.push(root);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: root });
   git("init", "-q");
+  git("config", "core.autocrlf", "false");
   git("config", "user.name", "Workspace Test");
   git("config", "user.email", "workspace@example.test");
   writeFileSync(join(root, "app.ts"), "before\n");
@@ -175,7 +186,7 @@ it("reports tracked and untracked changes and commits staged files", async () =>
   });
   await hostGitAction(root, "commit", undefined, "remote commit");
   expect((await hostGitIndex(root)).files).toEqual([]);
-  const remote = realpathSync(
+  const remote = realpathSync.native(
     mkdtempSync(join(tmpdir(), "monocode-workspace-remote-")),
   );
   roots.push(remote);
@@ -196,28 +207,33 @@ it("reports tracked and untracked changes and commits staged files", async () =>
 });
 
 it("stages selected host diff content without replacing the working file", async () => {
-  const root = realpathSync(
+  const root = realpathSync.native(
     mkdtempSync(join(tmpdir(), "monocode-workspace-hunk-")),
   );
   roots.push(root);
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: root, encoding: "utf8" });
   git("init", "-q");
+  git("config", "core.autocrlf", "false");
   git("config", "user.name", "Workspace Test");
   git("config", "user.email", "workspace@example.test");
-  writeFileSync(join(root, "app.ts"), "one\ntwo\nthree\n");
-  git("add", "app.ts");
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src/app.ts"), "one\ntwo\nthree\n");
+  git("add", "src/app.ts");
   git("commit", "-qm", "initial");
-  writeFileSync(join(root, "app.ts"), "ONE\ntwo\nTHREE\n");
+  writeFileSync(join(root, "src/app.ts"), "ONE\ntwo\nTHREE\n");
   await hostGitAction(
     root,
     "stageContents",
-    "app.ts",
+    "src/app.ts",
     undefined,
     "ONE\ntwo\nthree\n",
   );
-  expect(git("show", ":app.ts")).toBe("ONE\ntwo\nthree\n");
-  expect(await readHostFile(root, "app.ts")).toBe("ONE\ntwo\nTHREE\n");
+  expect(git("show", ":src/app.ts")).toBe("ONE\ntwo\nthree\n");
+  expect(await readHostFile(root, "src/app.ts")).toBe("ONE\ntwo\nTHREE\n");
+  await hostGitAction(root, "discard", "src/app.ts");
+  expect(await readHostFile(root, "src/app.ts")).toBe("ONE\ntwo\nthree\n");
+  expect(git("ls-files").trim()).toBe("src/app.ts");
   await expect(
     hostGitAction(root, "stageContents", "../escape", undefined, "x"),
   ).rejects.toThrow("outside");

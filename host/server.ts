@@ -12,7 +12,7 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import { HostEngine } from "./engine";
-import { writeAttachmentChunk } from "./attachments";
+import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
 import { SyncTransfers } from "./sync-transfer";
@@ -153,6 +153,14 @@ export function createHostServer(
           return;
         }
         const input = await body(request);
+        // Reading a request body yields: a device may have been revoked since
+        // the headers arrived. Reject it before dispatching any operation.
+        if (!engine.store.authenticated(token)) {
+          response.writeHead(401).end(JSON.stringify({
+            error: "Device credential is invalid or revoked",
+          }));
+          return;
+        }
         if (input.version !== HOST_PROTOCOL_VERSION)
           throw new Error("Incompatible protocol version");
         if (
@@ -201,6 +209,7 @@ export function createHostServer(
                 "git.fileDiff",
                 "git.action",
                 "attachments.upload",
+                "attachments.read",
                 "sessions.draft",
                 "sessions.plan",
               ],
@@ -324,6 +333,9 @@ export function createHostServer(
           case "attachments.upload":
             result = writeAttachmentChunk(engine.store, params);
             break;
+          case "attachments.read":
+            result = readAttachmentChunk(engine.store, params);
+            break;
           case "devices.revokeSelf":
             // Only the caller's own credential. Sessions and other devices
             // are unaffected; the host keeps running.
@@ -403,6 +415,7 @@ export function createHostServer(
                 cwd,
               ),
             );
+            workspace.invalidateRoots();
             break;
           }
           case "files.read": {

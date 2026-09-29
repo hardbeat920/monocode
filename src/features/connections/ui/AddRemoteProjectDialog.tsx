@@ -31,6 +31,12 @@ export function AddRemoteProjectDialog({
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
   const alive = useRef(true);
+  const requestVersion = useRef(0);
+  const cancel = () => {
+    alive.current = false;
+    requestVersion.current++;
+    onCancel();
+  };
   // Set on every mount: development StrictMode mounts, unmounts and mounts
   // again, and responses after the first cleanup must still be shown.
   useEffect(() => {
@@ -45,7 +51,7 @@ export function AddRemoteProjectDialog({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      onCancel();
+      cancel();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -53,7 +59,9 @@ export function AddRemoteProjectDialog({
 
   const browse = async (next?: string) => {
     if (!machine) return;
+    const version = ++requestVersion.current;
     setLoading(true);
+    setOpening(false);
     setError("");
     try {
       const value = await remoteRequest<HostDirectory>(
@@ -61,13 +69,13 @@ export function AddRemoteProjectDialog({
         "projects.browse",
         { path: next },
       );
-      if (!alive.current) return;
+      if (!alive.current || version !== requestVersion.current) return;
       setDirectory(value);
       setPath(value.path);
     } catch (reason) {
-      if (alive.current) setError(String(reason).replace(/^Error: /, ""));
+      if (alive.current && version === requestVersion.current) setError(String(reason).replace(/^Error: /, ""));
     } finally {
-      if (alive.current) setLoading(false);
+      if (alive.current && version === requestVersion.current) setLoading(false);
     }
   };
 
@@ -78,8 +86,10 @@ export function AddRemoteProjectDialog({
   }, [machine?.id]);
 
   const open = async () => {
-    if (!machine || !path.trim()) return;
+    if (!machine || !path.trim() || opening) return;
+    const version = ++requestVersion.current;
     setOpening(true);
+    setLoading(false);
     setError("");
     try {
       const project = await remoteRequest<HostProject>(
@@ -87,17 +97,18 @@ export function AddRemoteProjectDialog({
         "projects.open",
         { cwd: path.trim() },
       );
-      onOpen(rememberRemoteProject(machine.environmentId, project).key);
+      if (alive.current && version === requestVersion.current)
+        onOpen(rememberRemoteProject(machine.environmentId, project).key);
     } catch (reason) {
-      if (alive.current) setError(String(reason).replace(/^Error: /, ""));
+      if (alive.current && version === requestVersion.current) setError(String(reason).replace(/^Error: /, ""));
     } finally {
-      if (alive.current) setOpening(false);
+      if (alive.current && version === requestVersion.current) setOpening(false);
     }
   };
 
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
-      <div className="absolute inset-0 bg-black/30" onMouseDown={onCancel} />
+      <div className="absolute inset-0 bg-black/30" onMouseDown={cancel} />
       <form
         role="dialog"
         aria-modal="true"
@@ -128,7 +139,7 @@ export function AddRemoteProjectDialog({
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={onCancel}
+                onClick={cancel}
                 className="rounded-md px-3 py-1.5 text-[12px] text-content/70 hover:bg-content/8 hover:text-content"
               >
                 Cancel
@@ -136,7 +147,7 @@ export function AddRemoteProjectDialog({
               <button
                 type="button"
                 onClick={() => {
-                  onCancel();
+                  cancel();
                   window.dispatchEvent(new Event(OPEN_CONNECTIONS_EVENT));
                 }}
                 className="rounded-md bg-selection px-3 py-1.5 text-[12px] font-medium hover:bg-selection-hover"
@@ -216,7 +227,7 @@ export function AddRemoteProjectDialog({
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={onCancel}
+                onClick={cancel}
                 className="rounded-md px-3 py-1.5 text-[12px] text-content/70 hover:bg-content/8 hover:text-content"
               >
                 Cancel

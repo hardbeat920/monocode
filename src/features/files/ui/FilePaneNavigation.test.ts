@@ -137,7 +137,9 @@ describe("file pane source navigation", () => {
   });
 
   it("reapplies the requested location when a pending file reload adds its line", async () => {
-    invoke.mockResolvedValueOnce("first line");
+    // Watcher stat calls can arrive before the initial read on slower runners.
+    // Model the file itself instead of whichever IPC call happens to run next.
+    disk.content = "first line";
     const view = await render("/repo/growing.txt", 3);
     await act(async () =>
       vi.waitFor(() => {
@@ -146,6 +148,7 @@ describe("file pane source navigation", () => {
       }),
     );
     await act(async () => {
+      disk.content = "first line\nsecond line\nthird line";
       invalidateWatchedFiles(["/repo/growing.txt"]);
       await new Promise((resolve) => setTimeout(resolve, 100));
     });

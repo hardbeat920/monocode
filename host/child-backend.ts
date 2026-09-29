@@ -232,7 +232,9 @@ export class HostChildBackend implements ChildBackend {
       const timer = setTimeout(() => {
         this.signal(child, "SIGKILL");
         resolve();
-      }, 1_000);
+      // The guard needs a full second to escalate against the provider's
+      // separate process group before we may kill the guard itself.
+      }, 3_000);
       child.once("close", () => {
         clearTimeout(timer);
         resolve();

@@ -152,10 +152,13 @@ fn rpc(
     let response = match response {
         Ok(response) => response,
         Err(ureq::Error::Status(_, response)) => response,
-        Err(_) => {
+        Err(ureq::Error::Transport(error)) if connection_refused(&error) => {
             return Err(
                 "Machine is unreachable. Check the host and SSH tunnel, then reconnect.".into(),
             )
+        }
+        Err(_) => {
+            return Err("The host request did not complete. Retry to confirm its result.".into())
         }
     };
     let status = response.status();
@@ -179,6 +182,22 @@ fn rpc(
         .get("result")
         .cloned()
         .ok_or_else(|| "Invalid host response".into())
+}
+
+// Only a refused connection proves the local forwarding listener is gone.
+// A slow request or an interrupted response says nothing about SSH health.
+fn connection_refused(error: &ureq::Transport) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::ConnectionRefused)
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
 }
 
 fn store_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -246,9 +265,8 @@ pub fn remote_connect(
         .map_err(|_| "Connection store is locked")?;
     let path = store_path(&app)?;
     let mut machines = read(&path)?;
-    let id = machines
-        .iter()
-        .find(|m| m.environment_id == environment_id)
+    let existing = machines.iter().find(|m| m.environment_id == environment_id);
+    let id = existing
         .map(|m| m.id.clone())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let machine = StoredMachine {
@@ -257,7 +275,7 @@ pub fn remote_connect(
         endpoint,
         environment_id,
         token,
-        ssh: None,
+        ssh: existing.and_then(|m| m.ssh.clone()),
     };
     machines.retain(|m| m.id != id);
     machines.push(machine.clone());
@@ -354,6 +372,7 @@ fn supported_remote_method(method: &str) -> bool {
             | "sessions.syncChunk"
             | "commands.dispatch"
             | "attachments.upload"
+            | "attachments.read"
             | "devices.revokeSelf"
             | "git.diff"
             | "git.branches"
@@ -632,6 +651,33 @@ pub fn remote_ssh_cancel(
 mod tests {
     use super::*;
     #[test]
+    fn a_slow_host_does_not_look_like_a_dead_tunnel() {
+        use std::{net::TcpListener, thread, time::Duration};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_millis(200));
+        });
+        let error = ureq::get(&url)
+            .timeout(Duration::from_millis(50))
+            .call()
+            .unwrap_err();
+        let ureq::Error::Transport(error) = error else {
+            panic!("Expected a timeout")
+        };
+        assert!(!connection_refused(&error));
+        server.join().unwrap();
+        // A freed ephemeral port can be claimed by another parallel fixture.
+        // Exercise ureq's actual wrapped I/O source without that port race.
+        let error = ureq::Error::from(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
+        let ureq::Error::Transport(error) = error else {
+            panic!("Expected a refused connection")
+        };
+        assert!(connection_refused(&error));
+    }
+
+    #[test]
     fn desktop_forwards_supported_host_operations() {
         for method in [
             "git.branches",
@@ -640,6 +686,7 @@ mod tests {
             "git.worktrees",
             "git.worktreeCreate",
             "attachments.upload",
+            "attachments.read",
         ] {
             assert!(supported_remote_method(method), "{method}");
         }

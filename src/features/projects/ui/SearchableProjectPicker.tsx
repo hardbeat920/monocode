@@ -237,7 +237,7 @@ export function SearchableProjectPicker({
             project={seed}
             color={color}
             name={resolveTabGroupMascot(key, groupMascots)}
-            className={`${compact ? "size-4" : "size-3"} shrink-0`}
+            className={`${compact ? "size-3.5" : "size-3"} shrink-0`}
             active={busy}
           />
         )}
@@ -349,10 +349,10 @@ export function SearchableProjectPicker({
                         />
                       )}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                    <span className="min-w-0 max-w-[calc(100%_-_36px)] shrink-0 truncate text-[13px] font-medium">
                       {itemLabel}
                     </span>
-                    <span className="max-w-44 shrink truncate font-mono text-[11px] text-content/40">
+                    <span className="min-w-0 max-w-28 flex-1 truncate font-mono text-[11px] text-content/40">
                       {prettyParent(item.path)}
                     </span>
                   </button>

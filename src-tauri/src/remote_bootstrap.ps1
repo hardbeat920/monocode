@@ -86,7 +86,10 @@ try {
     $nextPointer = Join-Path $temporary 'runtime-path'
     [IO.File]::WriteAllText($nextPointer, $runtime, (New-Object Text.UTF8Encoding($false)))
     if (Test-Path -LiteralPath $pointer) {
-      [IO.File]::Replace($nextPointer, $pointer, $null)
+      # Windows PowerShell coerces $null to an empty backup path here, which
+      # .NET Framework rejects. Keep the previous pointer in this temporary
+      # directory; the install's finally block removes it after replacement.
+      [IO.File]::Replace($nextPointer, $pointer, (Join-Path $temporary 'previous-runtime-path'))
     } else {
       [IO.File]::Move($nextPointer, $pointer)
     }

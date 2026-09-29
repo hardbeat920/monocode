@@ -25,11 +25,16 @@ import { Composer, ComposerAction } from "./Composer";
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import type { UserQuestionPrompt } from "../model/userQuestion";
 
-function renderAction(busy: boolean, hasValue: boolean) {
+function renderAction(
+  busy: boolean,
+  hasValue: boolean,
+  allowBusySubmit = true,
+) {
   return renderToStaticMarkup(
     createElement(ComposerAction, {
       busy,
       hasValue,
+      allowBusySubmit,
       onSend: vi.fn(),
       onStop: vi.fn(),
     }),
@@ -47,6 +52,12 @@ describe("ComposerAction", () => {
     expect(typed).toContain("composer-send");
     expect(typed).toContain("primary-action");
     expect(typed).not.toContain('aria-label="Stop"');
+  });
+
+  it("keeps Stop while busy when submitting follow-up text is disabled", () => {
+    const typed = renderAction(true, true, false);
+    expect(typed).toContain('aria-label="Stop"');
+    expect(typed).not.toContain('aria-label="Send"');
   });
 });
 
@@ -86,7 +97,10 @@ describe("Composer question focus", () => {
     busy = false,
     focusToken = 0,
     initialDraft?: string,
-    onBtwCommand?: (text: string) => boolean | void,
+    onBtwCommand?: (
+      text: string,
+      options?: { draft?: boolean },
+    ) => boolean | void,
     onSubmit: (text: string, attachments: Attachment[]) => void = () => {},
   ) {
     await act(async () =>
@@ -143,6 +157,33 @@ describe("Composer question focus", () => {
     expect(onBtwCommand).toHaveBeenCalledWith(text);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(textarea.value).toBe("");
+  });
+
+  async function typeInto(textarea: HTMLTextAreaElement, value: string) {
+    await act(async () => {
+      textarea.value = value;
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it("opens BTW as soon as `/btw ` is typed and hands over the rest", async () => {
+    const onBtwCommand = vi.fn(() => true);
+    await renderComposer(undefined, vi.fn(), false, 0, undefined, onBtwCommand);
+    const textarea = container.querySelector("textarea")!;
+    await typeInto(textarea, "/btw");
+    expect(onBtwCommand).not.toHaveBeenCalled();
+
+    await typeInto(textarea, "/btw why");
+    expect(onBtwCommand).toHaveBeenCalledWith("why", { draft: true });
+    expect(textarea.value).toBe("");
+  });
+
+  it("leaves a typed `/btw ` alone when BTW is unavailable", async () => {
+    const onBtwCommand = vi.fn(() => false);
+    await renderComposer(undefined, vi.fn(), false, 0, undefined, onBtwCommand);
+    const textarea = container.querySelector("textarea")!;
+    await typeInto(textarea, "/btw ");
+    expect(textarea.value).toBe("/btw ");
   });
 
   it("keeps the draft when onBtwCommand rejects the command", async () => {

@@ -247,7 +247,7 @@ export class HostEngine {
   private switchingProjects = new Set<string>();
   private running = new Map<
     string,
-    { runId: string; done: Promise<void>; cancelled: boolean }
+    { runId: string; done: Promise<void>; cancelled: boolean; persistenceFailed: boolean }
   >();
   /** Running sessions, including streamed events not yet written to disk. */
   private live = new Map<
@@ -357,6 +357,8 @@ export class HostEngine {
     try {
       this.flush(id);
     } catch (error) {
+      const active = this.running.get(id);
+      if (active) active.persistenceFailed = true;
       console.error(
         "Session persistence failed; stopping its provider:",
         error instanceof Error ? error.message : "unknown error",
@@ -587,7 +589,7 @@ export class HostEngine {
                   : value.session.title,
               blocks: [
                 ...value.session.blocks
-                  .filter((block) => block !== draft)
+                  .filter((block) => !block.draft)
                   .map((block) =>
                     block === plan
                       ? {
@@ -741,8 +743,12 @@ export class HostEngine {
         .then(async (fragment) => {
           const branch = fragment ? namedWorktreeBranch(fragment) : null;
           if (!branch) return;
+          // A title/branch request may finish after the conversation was deleted.
+          const currentBeforeRename = this.store.session(id);
+          if (currentBeforeRename.autoWorktreeBranch !== temporary) return;
           const project = this.store.project(value.projectId);
-          await renameHostWorktreeBranch(project.cwd, cwd, temporary, branch);
+          await renameHostWorktreeBranch(project.cwd, cwd, temporary, branch,
+            () => this.store.session(id).autoWorktreeBranch === temporary);
           this.flush(id);
           const current = this.store.session(id);
           const saved = this.save(
@@ -770,7 +776,7 @@ export class HostEngine {
   ): void {
     const { session, runId } = value;
     const provider = this.provider(session.harness);
-    const active = { runId: runId!, done: Promise.resolve(), cancelled: false };
+    const active = { runId: runId!, done: Promise.resolve(), cancelled: false, persistenceFailed: false };
     this.running.set(session.id, active);
     this.live.set(session.id, { value, events: [] });
     active.done = Promise.resolve()
@@ -816,13 +822,15 @@ export class HostEngine {
         if (latest.runId === runId) {
           const message = this.closing
             ? "Host stopped. This turn was interrupted."
-            : active.cancelled
+            : active.persistenceFailed
+              ? "Session storage failed during this turn. Inspect its work before continuing."
+              : active.cancelled
               ? "Stopped by you."
               : error;
           this.save(
             this.settled(
               latest,
-              this.closing ? "interrupted" : "idle",
+              this.closing || active.persistenceFailed ? "interrupted" : "idle",
               message,
             ),
             { type: "settled", error, cancelled: active.cancelled },
@@ -854,7 +862,8 @@ export class HostEngine {
     if (session === live.value.session) return;
     live.value = { ...live.value, session };
     live.events.push(event);
-    if (!BATCHED.has(event.type)) this.flush(id);
+    if (!BATCHED.has(event.type))
+      this.scheduledFlush(id, this.provider(session.harness));
     else
       live.timer ??= setTimeout(
         () => this.scheduledFlush(id, this.provider(session.harness)),

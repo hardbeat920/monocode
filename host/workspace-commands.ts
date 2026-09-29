@@ -96,6 +96,12 @@ type Located = { root: string; relative: string };
 
 export class WorkspaceCommands {
   private roots = new Map<string, { at: number; roots: string[] }>();
+  private rootsGeneration = 0;
+
+  invalidateRoots(): void {
+    this.rootsGeneration++;
+    this.roots.clear();
+  }
 
   constructor(
     private readonly store: HostStore,
@@ -200,6 +206,7 @@ export class WorkspaceCommands {
 
   /** The project folders and worktrees files may be read and written in. */
   private async allowedRoots(): Promise<string[]> {
+    const generation = this.rootsGeneration;
     const out: string[] = [];
     for (const project of this.store.projects()) {
       const cached = this.roots.get(project.cwd);
@@ -215,7 +222,8 @@ export class WorkspaceCommands {
             .map((tree) => tree.path),
         ])
         .catch(() => [project.cwd]);
-      this.roots.set(project.cwd, { at: Date.now(), roots });
+      if (generation === this.rootsGeneration)
+        this.roots.set(project.cwd, { at: Date.now(), roots });
       out.push(...roots);
     }
     return out;

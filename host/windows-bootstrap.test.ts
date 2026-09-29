@@ -60,18 +60,19 @@ afterAll(() => {
 });
 
 async function install(badChecksum: boolean) {
+  const fixtureDirectory = mkdtempSync(join(directory, "install-"));
   const base = join(
-    directory,
+    fixtureDirectory,
     badChecksum ? "broken" : "host with spaces ' $ 日本語",
   );
-  const checksum = join(directory, badChecksum ? "bad.sha256" : "good.sha256");
+  const checksum = join(fixtureDirectory, badChecksum ? "bad.sha256" : "good.sha256");
   writeFileSync(
     checksum,
     `${badChecksum ? "0".repeat(64) : createHash("sha256").update(readFileSync(archive)).digest("hex")}  host.zip\n`,
   );
-  const events = join(directory, badChecksum ? "bad.events" : "events");
+  const events = join(fixtureDirectory, badChecksum ? "bad.events" : "events");
   const downloads = join(
-    directory,
+    fixtureDirectory,
     badChecksum ? "bad.downloads" : "downloads",
   );
   const overrides = `
@@ -103,7 +104,7 @@ function Expand-Archive([string] $LiteralPath, [string] $DestinationPath) {
       overrides +
         "\nNew-Item -ItemType Directory -Force -Path $base | Out-Null",
     );
-  const file = join(directory, badChecksum ? "bad.ps1" : "install.ps1");
+  const file = join(fixtureDirectory, badChecksum ? "bad.ps1" : "install.ps1");
   writeFileSync(file, script);
   const launch = `try { & ([ScriptBlock]::Create([IO.File]::ReadAllText(${psQuote(file)}))) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`;
   return {

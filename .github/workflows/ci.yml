@@ -55,3 +55,122 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo check
       - run: cargo test
+
+  rpm:
+    name: RPM build (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # almalinux:10 covers the Enterprise Linux path in
+        # scripts/install-linux-deps-fedora.sh (EPEL 10 + CRB), which is the
+        # only way to catch packages that are missing from EPEL 10.
+        image: [fedora:43, almalinux:10]
+    steps:
+      # Neither fedora:43 nor almalinux:10 ships git, which actions/checkout
+      # otherwise has to work around with a REST API tarball download.
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: bash scripts/install-linux-deps-fedora.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+      - run: npm run build:fedora
+
+      - name: Install the generated rpm
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(target/release/bundle/rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          # tauri-bundler derives rpm Requires only from
+          # bundle.linux.rpm.depends, so assert the runtime stack is declared.
+          # The install below cannot prove this on its own: the setup script has
+          # already installed every -devel package.
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          echo "$requires"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
+          dnf install -y "${bundle[0]}"
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
+          command -v monocode
+
+      - name: Upload rpm for the clean install check
+        # Ship and test the EL 10 build. Fedora 43's glibc is newer, so a
+        # fedora:43 rpm can dnf-install on AlmaLinux 10 and still fail to load.
+        if: matrix.image == 'almalinux:10'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+
+  rpm-clean-install:
+    name: Clean rpm install
+    needs: rpm
+    runs-on: ubuntu-latest
+    # Deliberately no setup script: this is the only job that can catch an rpm
+    # whose Requires are missing, since everywhere else the -devel packages are
+    # already installed. It mirrors the README instructions for an EL 10 user.
+    # ldd -r is the loader check: dnf install succeeding does not prove the
+    # binary can resolve against EL 10's glibc and runtime libraries.
+    container: almalinux:10
+    steps:
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enable EPEL 10
+        run: dnf install -y epel-release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rpm-package
+          path: rpm
+
+      - name: Install the rpm on a clean image
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          dnf install -y "${bundle[0]}"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3; do
+            rpm -q "$dep" >/dev/null || { echo "dnf did not install $dep" >&2; exit 1; }
+          done
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
+          test -x /usr/bin/monocode
+          # ldd -r can exit non-zero on GTK/WebKit plugin symbols; fail only
+          # when a library or GLIBC version is actually missing.
+          loader_output="$(ldd -r /usr/bin/monocode 2>&1 || true)"
+          printf '%s\n' "$loader_output"
+          if grep -q 'not found' <<<"$loader_output"; then
+            echo "monocode cannot load on EL 10" >&2
+            exit 1
+          fi

@@ -6,15 +6,18 @@ import {
   BTW_MAX_SNAPSHOT_CHARS,
   buildBtwPrompt,
   btwOpenTargetTurnId,
+  btwThreadBlocks,
   btwTurnHarness,
   btwVisibleBlocks,
   consumeBtwCommand,
+  consumeBtwPrefix,
   replaceBtwThread,
   resolveBtwHarness,
   sessionHasBtwEligibleTurn,
   sessionHasBtwThreads,
   serializeBtwBlock,
   serializeBtwSnapshot,
+  sessionBtwThreads,
   supportsBtwHarness,
 } from "./btw";
 import type { Block, BtwThread } from "./session";
@@ -81,13 +84,33 @@ describe("consumeBtwCommand", () => {
   });
 });
 
+describe("consumeBtwPrefix", () => {
+  it("commits once whitespace follows the command", () => {
+    expect(consumeBtwPrefix("/btw")).toBeNull();
+    expect(consumeBtwPrefix("/btw ")).toBe("");
+    expect(consumeBtwPrefix(" /BTW  why is this slow?")).toBe(
+      "why is this slow?",
+    );
+  });
+
+  it("ignores other commands and mid-text mentions", () => {
+    expect(consumeBtwPrefix("/btwx ")).toBeNull();
+    expect(consumeBtwPrefix("ask /btw later")).toBeNull();
+  });
+});
+
 describe("btwOpenTargetTurnId", () => {
   it("targets the latest completed turn while the current turn is still running", () => {
     const blocks = [
       { id: "u1", role: "user" as const, text: "first", durationMs: 1000 },
       { id: "a1", role: "assistant" as const, text: "done" },
       { id: "u2", role: "user" as const, text: "second" },
-      { id: "a2", role: "assistant" as const, text: "working", streaming: true },
+      {
+        id: "a2",
+        role: "assistant" as const,
+        text: "working",
+        streaming: true,
+      },
     ];
     const turns = [
       [blocks[0], blocks[1]],
@@ -157,9 +180,9 @@ describe("sessionHasBtwEligibleTurn", () => {
 
 describe("resolveBtwHarness", () => {
   it("falls back to a stored thread harness after a handoff", () => {
-    expect(
-      resolveBtwHarness("fx", [thread({ harness: "claude" })]),
-    ).toBe("claude");
+    expect(resolveBtwHarness("fx", [thread({ harness: "claude" })])).toBe(
+      "claude",
+    );
   });
 });
 
@@ -170,6 +193,98 @@ describe("sessionHasBtwThreads", () => {
         { id: "u1", role: "user", text: "hi", btwThreads: [thread()] },
       ]),
     ).toBe(true);
+  });
+});
+
+describe("sessionBtwThreads", () => {
+  it("lists threads from every turn oldest first with their turn", () => {
+    const blocks: Block[] = [
+      {
+        id: "u1",
+        role: "user",
+        text: "first",
+        durationMs: 1,
+        btwThreads: [thread({ id: "late", createdAt: 30 })],
+      },
+      block("a1", "assistant"),
+      {
+        id: "u2",
+        role: "user",
+        text: "second",
+        durationMs: 1,
+        btwThreads: [thread({ id: "early", createdAt: 10 })],
+      },
+      block("a2", "assistant"),
+    ];
+    const entries = sessionBtwThreads(blocks);
+    expect(entries.map((entry) => entry.thread.id)).toEqual(["early", "late"]);
+    expect(entries[0].turn[0].id).toBe("u2");
+    expect(entries[1].turn[0].id).toBe("u1");
+  });
+
+  it("returns nothing when the session has no side threads", () => {
+    expect(sessionBtwThreads([block("u1", "user")])).toEqual([]);
+  });
+});
+
+describe("btwThreadBlocks", () => {
+  it("turns answered questions into settled transcript turns", () => {
+    const blocks = btwThreadBlocks({
+      messages: [
+        { id: "q1", role: "user", text: "Why?", createdAt: 100 },
+        { id: "a1", role: "assistant", text: "Because.", createdAt: 350 },
+      ],
+      running: false,
+      harness: "claude",
+      model: "sonnet",
+    });
+    expect(blocks).toEqual([
+      expect.objectContaining({
+        id: "q1",
+        role: "user",
+        startedAt: 100,
+        durationMs: 250,
+        turnModel: expect.objectContaining({ harness: "claude", id: "sonnet" }),
+      }),
+      { id: "a1", role: "assistant", text: "Because." },
+    ]);
+  });
+
+  it("uses a reply's own activity blocks when it has them", () => {
+    const activity = block("tool-1", "tool");
+    const blocks = btwThreadBlocks({
+      messages: [
+        { id: "q1", role: "user", text: "Look", createdAt: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          text: "",
+          createdAt: 2,
+          blocks: [activity],
+        },
+      ],
+      running: false,
+    });
+    expect(blocks.map(({ id }) => id)).toEqual(["q1", "tool-1"]);
+  });
+
+  it("leaves the streaming question open with its live blocks", () => {
+    const blocks = btwThreadBlocks({
+      messages: [{ id: "q1", role: "user", text: "Now?", createdAt: 1 }],
+      pendingBlocks: [block("live", "assistant")],
+      running: true,
+    });
+    expect(blocks[0].durationMs).toBeUndefined();
+    expect(blocks.map(({ id }) => id)).toEqual(["q1", "live"]);
+  });
+
+  it("closes a question that failed without an answer", () => {
+    const [question] = btwThreadBlocks({
+      messages: [{ id: "q1", role: "user", text: "Now?", createdAt: 10 }],
+      running: false,
+      updatedAt: 40,
+    });
+    expect(question.durationMs).toBe(30);
   });
 });
 
@@ -204,6 +319,23 @@ describe("btwVisibleBlocks", () => {
 });
 
 describe("serializeBtwBlock", () => {
+  it("serializes generated image blocks by name and description", () => {
+    expect(
+      serializeBtwBlock({
+        id: "image-1",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      }),
+    ).toBe("Image: generated-image — A clean product photo");
+  });
+
   it("serializes regular blocks and attachments with normalized text", () => {
     expect(
       serializeBtwBlock({

@@ -45,6 +45,7 @@ export const HARNESSES: HarnessId[] = [
 export type BlockRole =
   | "user"
   | "assistant"
+  | "image"
   | "reasoning"
   | "tool"
   | "approval"
@@ -224,6 +225,14 @@ export type AgentRunMeta = {
 
 export type AttachmentKind = "image" | "audio" | "file";
 
+export type GeneratedImageMeta = {
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  alt?: string;
+};
+
 export type Attachment = {
   /** Live transcript only; deliberately excluded from persisted attachments. */
   copyFromPath?: boolean;
@@ -280,6 +289,7 @@ export type Block = {
   id: string;
   role: BlockRole;
   text: string;
+  image?: GeneratedImageMeta;
   attachments?: Attachment[];
   streaming?: boolean;
   /** Epoch ms when this user turn started. */
@@ -294,6 +304,8 @@ export type Block = {
   draft?: boolean;
   /** This user turn activated MonoCode app access for its thread. */
   monocode?: boolean;
+  /** The Plan or Orchestrator mode this user turn was sent in. */
+  intent?: Extract<TurnIntent, "plan" | "orchestrate">;
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
   /** Provider-reported token metrics for this user turn, when available. */

@@ -6,7 +6,7 @@ import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { HostProvider } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
-import { writeAttachmentChunk } from "./attachments";
+import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -61,6 +61,29 @@ function setup(harness: "codex" | "claude" = "codex") {
 }
 
 describe("headless session ownership", () => {
+  it.each(["send", "compact"] as const)("clears the old draft when a normal %s starts", async (type) => {
+    const { engine, store, turns, provider, id } = setup();
+    provider.compact = (input) => provider.send({ ...input, text: "/compact" });
+    engine.command({ type: "draft", commandId: "draft", sessionId: id, text: "Later" });
+    engine.command({ type, commandId: "next", sessionId: id, text: "New work" });
+    expect(store.session(id).session.blocks.some((block) => block.draft)).toBe(false);
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].finish();
+  });
+
+  it("contains a persistence failure while requesting approval", async () => {
+    const { engine, store, turns, provider, id } = setup();
+    engine.command({ type: "send", commandId: "approval-failure", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(store, "save").mockImplementationOnce(() => { throw new Error("disk full"); });
+    try {
+      expect(() => turns[0].input.onEvent({ type: "approval.requested", requestId: 1, title: "Run?" })).not.toThrow();
+      await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+      await vi.waitFor(() => expect(store.session(id).status).toBe("interrupted"));
+    } finally { log.mockRestore(); }
+  });
+
   it("stores a remote draft with an uploaded file, then sends it in plan mode", async () => {
     const { engine, store, turns, id } = setup();
     const fileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -139,6 +162,12 @@ describe("headless session ownership", () => {
       name: "shot.png",
       data: image.toString("base64"),
     });
+    expect(readAttachmentChunk(store, { sessionId: id, id: fileId, offset: 0 })).toEqual({
+      offset: image.length, size: image.length, data: image.toString("base64"),
+    });
+    const other = engine.command({ type: "create", commandId: "other-session", projectId: store.session(id).projectId,
+      harness: "claude", model: "claude:test", runtimeMode: "supervised" });
+    expect(() => readAttachmentChunk(store, { sessionId: other.sessionId, id: fileId, offset: 0 })).toThrow();
     turns[0].finish();
   });
 

@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  cancelProjectSearch,
   searchProject,
   type OpenFileFn,
   type ProjectSearchMatch,
@@ -63,6 +64,7 @@ export function ProjectSearch({
   const [error, setError] = useState<string | null>(null);
   const [matches, setMatches] = useState<ProjectSearchMatch[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const activeSearchId = useRef<string | null>(null);
 
   useEffect(() => {
     if (!focusToken) return;
@@ -93,11 +95,14 @@ export function ProjectSearch({
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
+      const searchId = crypto.randomUUID();
+      activeSearchId.current = searchId;
       setLoading(true);
       setError(null);
       void search({
         cwd,
         query: trimmed,
+        searchId,
         caseSensitive,
         wholeWord,
         regex,
@@ -116,12 +121,20 @@ export function ProjectSearch({
           setTruncated(false);
           setError(err instanceof Error ? err.message : String(err));
           setLoading(false);
+        })
+        .finally(() => {
+          if (activeSearchId.current === searchId) activeSearchId.current = null;
         });
     }, 200);
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      const searchId = activeSearchId.current;
+      activeSearchId.current = null;
+      if (searchId) {
+        void cancelProjectSearch(cwd, searchId).catch(() => undefined);
+      }
     };
   }, [caseSensitive, cwd, exclude, include, query, regex, wholeWord, search]);
 

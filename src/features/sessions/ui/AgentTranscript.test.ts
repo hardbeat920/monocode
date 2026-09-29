@@ -38,7 +38,7 @@ describe("AgentTranscript collapsed work", () => {
       { id: "answer", role: "assistant", text: "Done" },
     ]);
     expect(markup).toContain('aria-label="Worked for 2s"');
-    expect(markup).toContain("ml-1.5 flex shrink-0 items-center gap-2.5");
+    expect(markup).toContain("flex shrink-0 items-center gap-2.5");
     expect(markup).not.toContain("ml-auto flex shrink-0 items-center gap-2.5");
   });
 

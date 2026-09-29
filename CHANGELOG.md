@@ -11,10 +11,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
 
+## [0.4.0] - 2026-09-28
+
+### Added
+
+- Operator can create and edit notes with `notes.write`; open Notes views refresh after an update.
+- Operator can list and create project worktrees, start sessions in an existing checkout, and place new sessions in panes to the right or below another session.
+- The project folder picker can open several folders at once, preserving their selection order and activating folders that are already open. In #443.
+- Pasting a screenshot into the main or Quick composer attaches the image. Pasting a file or folder copied in a file manager attaches it to the message, including on Wayland. In #479.
+- Codex-generated images appear in transcripts and persist across restarts, including images produced by subagents and BTW side conversations. Image assets are cleaned up when their messages or sessions are removed. In #399.
+- Settings → Providers and the footer account picker show each Claude and Codex account's readiness and usage. The usage view suggests an account with more headroom when the current one is low or exhausted. In #492.
+- Pi sessions show Anthropic or OpenAI Codex subscription usage when the configured provider supports it. In #431.
+- Fedora and Enterprise Linux 10 users can install a native `.rpm` from GitHub Releases; CI builds and checks the package on Fedora and AlmaLinux. In #362.
+- `Cmd/Ctrl+Shift+C` copies the selected Explorer path. The shortcut also works with non-Latin keyboard layouts and the focused project root. In #404.
+- Completed plan and orchestrator turns have distinct animated celebrations, with their intent preserved in saved transcripts.
+
+### Changed
+
+- Provider usage is cached across Settings and footer views and refreshed on explicit request or appropriate polling intervals, avoiding duplicate CLI probes and unnecessary reloads.
+- Project, session, editor, and transcript searches bound their work and cancel superseded requests. Session search no longer holds the write connection while scanning, and truncated results are indicated in the UI. In #462.
+- Release workflow checkouts no longer persist GitHub credentials.
+
 ### Fixed
 
-- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries.
+- Claude sessions keep the full native IDs of versioned models, including models missing from the live catalog, instead of selecting another generation or passing an invalid model name. In #488.
+- The project picker keeps the project name visible when its parent path is long. In #507.
+- `Cmd+K` clears the terminal when App: Search has been disabled or assigned another shortcut. In #491.
+- Git commits launched from Finder or the Dock can find `gpg`, hooks, Git LFS, and credential helpers through the user's shell path. In #484.
+- Codex free-plan monthly usage windows are recognized alongside session and weekly windows.
+
+## [0.3.0] - 2026-09-27
+
+### Added
+
+- Settings → Keybindings can record, disable, and reset custom shortcuts for app, editor, tab, and menu commands. The native macOS and in-app menus show the active shortcuts, and conflicts with existing shortcuts are rejected. In #438.
+- Settings → Providers can use an explicitly chosen Agent CLI binary path for each provider, with version validation and automatic detection when no path is set. In #407.
+- `.jsonc` files receive comment-aware syntax highlighting in the editor and Git diff preview. In #382.
+- Tab title menus can archive or delete all conversations in a tab.
+- The macOS terminal supports Option and Command navigation and deletion shortcuts.
+
+### Changed
+
+- BTW side conversations open in an animated sheet, with improved submission and conversation restoration behavior. In #476.
+- Second opinions can use a different model from the same provider when it is the only enabled provider. The picker excludes the model that produced the original answer and explains when no alternative is available. In #421.
+- The compact sidebar has updated session and file icons and a clearer activity indicator; the compact project picker mascot is smaller.
+- The redundant Changes button has been removed from Explorer.
+- Finished streaming responses discard their temporary word-fade markup after the animation completes.
+
+### Fixed
+
+- Source-control file lists report paths relative to the workspace when the workspace is a subfolder of its Git repository, so nested workspaces no longer mix repository-relative and workspace-relative entries. In #465.
 - Opening a file with CRLF line endings no longer doubles every line in the editor, preview, and diff view. Saving and staging keep the file's original line endings, and staged-only changes under `core.autocrlf` are shown instead of an empty diff. Fixes #411.
+- MonoCode now prefers the Claude binary found by the user's shell, then the inherited PATH, before checking fixed install locations. A transient busy-binary error on Linux is retried. In #448.
+- Claude shell commands are restored in session transcripts, including long command labels.
+- Completed GitHub issues show the correct status icon in the Inbox. In #455.
+- BTW submissions report failures, saved conversations survive edge cases, and OpenCode replies no longer duplicate or reorder streamed text. In #476.
+- A malformed PTY data chunk is skipped without throwing from the terminal listener. In #472.
+- Inline Claude subagents no longer leave a turn busy after reporting back, so captured plans can be built. New plan turns also keep their own plan blocks after an app restart. In #452.
+- The macOS shortcut conflict test now checks the platform's Command modifier instead of Control. In #453.
 
 ## [0.2.0] - 2026-09-25
 
@@ -1049,7 +1103,9 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/hardbeat920/monocode/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/hardbeat920/monocode/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0
 [0.1.56]: https://github.com/hardbeat920/monocode/compare/v0.1.55...v0.1.56
 [0.1.55]: https://github.com/hardbeat920/monocode/compare/v0.1.54...v0.1.55

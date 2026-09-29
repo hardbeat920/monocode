@@ -28,14 +28,14 @@ it("runs the resolved Claude version fallback in headless mode", async () => {
   }
 });
 
-it("stops a provider's child processes as well as its main process", async () => {
+it.each([false, true])("stops a provider tree (ignores SIGTERM: %s)", async (stubborn) => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-provider-tree-"));
   const file = join(directory, "provider.cjs");
   writeFileSync(
     file,
     `const { spawn } = require('node:child_process');
-const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-console.log(JSON.stringify({ child: child.pid }));
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(`${stubborn ? "process.on('SIGTERM', () => {});" : ""} console.log('ready'); setInterval(() => {}, 1000)`)}], { stdio: ['ignore', 'pipe', 'ignore'] });
+child.stdout.once('data', () => console.log(JSON.stringify({ child: child.pid })));
 setInterval(() => {}, 1000);
 `,
   );

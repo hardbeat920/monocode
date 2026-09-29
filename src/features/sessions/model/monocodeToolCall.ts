@@ -17,6 +17,7 @@ const ACTION_LABELS: Record<string, string> = {
   "folders.move": "Move a session",
   "notes.list": "List notes",
   "notes.read": "Read a note",
+  "notes.write": "Write a note",
 };
 
 /** Conservatively parse one shell invocation; compound commands use the shell row. */

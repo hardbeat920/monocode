@@ -24,6 +24,7 @@ mod menu;
 mod notes;
 mod notifications;
 mod pasteboard;
+mod pi_usage;
 mod project_logo;
 mod pty;
 #[cfg(target_os = "macos")]
@@ -227,6 +228,8 @@ pub fn run() {
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
+            // Start loading the login-shell PATH before the first git call needs it.
+            std::thread::spawn(harness::gui_search_path);
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
@@ -393,6 +396,7 @@ pub fn run() {
             fs::move_path,
             fs::reveal_path,
             pasteboard::clipboard_file_paths,
+            pasteboard::clipboard_image,
             pasteboard::copy_file_to_clipboard,
             fs::clone_repo,
             fs::read_file_preview,
@@ -401,6 +405,8 @@ pub fn run() {
             fs::read_file_base64,
             fs::read_binary_file,
             fs::write_attachment,
+            fs::save_generated_image,
+            fs::delete_generated_images,
             fs::read_text_file,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
@@ -408,6 +414,7 @@ pub fn run() {
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
+            search::cancel_project_search,
             cursor_store::cursor_tool_calls,
             cursor_store::cursor_subagent_runs,
             harness::harness_resolve_cursor,
@@ -434,6 +441,7 @@ pub fn run() {
             harness::harness_exec,
             harness::provider_account_remove,
             account_identity::provider_account_identity,
+            pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
             rate_limits::fetch_droid_usage,
@@ -448,6 +456,7 @@ pub fn run() {
             session_store::session_rebase_project,
             session_store::session_list_linked,
             session_store::session_search,
+            session_store::cancel_session_search,
             session_store::session_get,
             session_store::session_delete,
             session_store::session_set_archived,

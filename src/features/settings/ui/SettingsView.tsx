@@ -225,6 +225,17 @@ import {
   useProviderAccountIdentities,
 } from "../../providers/model/providerAccountIdentity";
 import {
+  accountStatus,
+  accountUsageKey,
+  useProviderAccountUsage,
+} from "../../providers/model/accountUsage";
+import { clearCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import {
+  AccountStatusLabel,
+  AccountUsageMeters,
+  AccountUsageRefresh,
+} from "../../providers/ui/ProviderAccountUsage";
+import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
 } from "../../sessions/model/sessionFilters";
@@ -2773,10 +2784,6 @@ function ProviderBinaryControl({
   );
 
   useEffect(() => {
-    void inspect(loadProviderBinaryPath(provider));
-  }, [inspect, provider]);
-
-  useEffect(() => {
     if (editing) editInput.current?.focus();
   }, [editing]);
 
@@ -2842,6 +2849,9 @@ function ProviderBinaryControl({
         aria-haspopup="dialog"
         title={`${title} CLI path${restartRequired ? " — restart required" : ""}`}
         onClick={() => {
+          if (!open && !inspection && !working && !error) {
+            void inspect(loadProviderBinaryPath(provider));
+          }
           setOpen((value) => !value);
           setEditing(false);
         }}
@@ -3307,6 +3317,7 @@ function ProviderAccountsSettings() {
     try {
       await removeProviderAccountCredentials(account.provider, account.id);
       removeProviderAccount(account.provider, account.id);
+      clearCachedRateLimits(account.provider, account.id);
       if (
         editor?.provider === account.provider &&
         editor.accountId === account.id
@@ -3328,12 +3339,14 @@ function ProviderAccountsSettings() {
     PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
     version,
   );
+  const usage = useProviderAccountUsage(version);
 
   return (
     <Group
       id="provider-accounts"
       title="Accounts"
       description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+      action={<AccountUsageRefresh usage={usage} />}
     >
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
@@ -3376,6 +3389,7 @@ function ProviderAccountsSettings() {
                 const removing = working === `remove:${provider}:${account.id}`;
                 const identity = identities[identityKey(account)];
                 const orgTag = identityOrganizationTag(identity);
+                const limits = usage.usage[accountUsageKey(account)];
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -3405,14 +3419,21 @@ function ProviderAccountsSettings() {
                           </span>
                         ) : null}
                       </div>
-                      <div className="mt-0.5 truncate text-[10px] text-content/35">
-                        {identitySubtitle(identity) ??
-                          (account.isDefault
-                            ? "Provider CLI profile"
-                            : "Isolated profile")}
+                      <div className="mt-0.5 flex min-w-0 items-center gap-2.5 text-[10px]">
+                        <AccountStatusLabel
+                          status={accountStatus(limits, usage.now)}
+                          className="shrink-0"
+                        />
+                        <span className="min-w-0 truncate text-content/30">
+                          {identitySubtitle(identity) ??
+                            (account.isDefault
+                              ? "Provider CLI profile"
+                              : "Isolated profile")}
+                        </span>
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <AccountUsageMeters limits={limits} now={usage.now} />
+                    <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
                           Default

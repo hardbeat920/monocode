@@ -632,6 +632,9 @@ it("keeps a new draft on screen while the host confirms it", async () => {
   expect(commands.map((command) => command.type)).toEqual(["create", "draft"]);
   expect(transcriptItems("Review this later")).toHaveLength(1);
   expect(container.textContent).not.toContain("What should we work on");
+  expect(container.querySelector('[aria-label="Transcript"]')?.getAttribute("data-busy")).toBe("false");
+  expect(byLabel("Send remote draft")).not.toBeNull();
+  expect(byLabel("Remove remote draft")).not.toBeNull();
   await act(async () => {
     releaseSync();
     syncDelay = undefined;
@@ -980,4 +983,50 @@ it("holds a settings change during a running turn and applies it afterwards", as
       }),
     { timeout: 4_000 },
   );
+});
+
+it.each([false, true])("retries a lost create response without duplicating the first turn (remount: %s)", async (remount) => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let accepted: ReturnType<typeof dispatch> | undefined;
+  const attempts: HostCommand[] = [];
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "create") {
+      attempts.push(request.params);
+      if (accepted) return accepted;
+      accepted = dispatch(request.params);
+      throw new Error("Response lost after host accepted the request");
+    }
+    return original(command, input);
+  });
+  await render();
+  await send("Keep this first message");
+  expect(commands.map((command) => command.type)).toEqual(["create"]);
+  if (remount) {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render();
+  }
+  const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+  expect(retry).toBeTruthy();
+  await act(async () => retry.click());
+  await settle();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(commands.map((command) => command.type)).toEqual(["create", "send"]);
+  expect(commands[1]).toMatchObject({ text: "Keep this first message", sessionId: "host-session" });
+  expect(transcriptItems("Keep this first message")).toHaveLength(1);
+});
+
+it("ignores a late create response after its tab has switched conversations", async () => {
+  await render();
+  let release!: () => void;
+  dispatchDelay = new Promise<void>((resolve) => { release = resolve; });
+  await send("Pending first message");
+  await act(async () => rememberRemoteSession("shell", "different-session"));
+  await act(async () => { release(); dispatchDelay = undefined; });
+  await settle();
+  expect(remoteSessionFor("shell")).toBe("different-session");
+  expect(commands.map((command) => command.type)).toEqual(["create"]);
+  expect(container.textContent).not.toContain("Pending first message");
 });

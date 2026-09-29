@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
+import { Socket } from "node:net";
 import { createReadStream } from "node:fs";
 import { join } from "node:path";
 
 // fd 3 belongs only to the host. EOF means it exited, even after a hard crash.
-const parent = createReadStream("/dev/null", { fd: 3, autoClose: false });
+// Unix stdio pipes are sockets: destroying one cancels its pending read.
+// A filesystem read can otherwise keep a worker blocked during guard exit.
+const parent = process.platform === "win32"
+  ? createReadStream("/dev/null", { fd: 3, autoClose: false })
+  : new Socket({ fd: 3, readable: true, writable: false });
 parent.resume();
 const [command, ...args] = process.argv.slice(2);
 if (!command) throw new Error("Missing provider command");
@@ -21,9 +26,18 @@ child.stdin.on("error", () => {});
 
 let stopping = false;
 let exitCode = 1;
+let escalation;
+let finished = false;
 function finish() {
+  if (finished) return;
+  finished = true;
+  clearTimeout(escalation);
   parent.destroy();
-  process.exitCode = exitCode;
+  // The watchdog/stdin pipes can remain open after the provider exits.
+  // Ownership is finished; do not make the host kill an otherwise idle guard.
+  process.stdout.write("", () => {
+    process.stderr.write("", () => process.exit(exitCode));
+  });
 }
 function stopTree() {
   if (stopping) return;
@@ -48,7 +62,7 @@ function stopTree() {
       finish();
       return;
     }
-    setTimeout(() => {
+    escalation = setTimeout(() => {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {
@@ -68,5 +82,11 @@ child.on("error", (error) => {
 });
 child.on("close", (code) => {
   exitCode = code ?? 1;
+  if (stopping && process.platform !== "win32") {
+    try { process.kill(-child.pid, 0); }
+    catch (error) {
+      if (error.code === "ESRCH") finish();
+    }
+  }
   stopTree();
 });

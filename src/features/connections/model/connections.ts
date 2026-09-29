@@ -11,6 +11,7 @@ import {
   type SessionSyncResponse,
 } from "./protocol";
 import { remoteProjectFor } from "./remoteProjects";
+import { withRemoteAttachmentPreviews } from "./remoteAttachmentPreviews";
 
 const CHANGE = "monocode:remote-machines";
 export const REMOTE_HISTORY_CHANGE = "monocode:remote-history";
@@ -82,10 +83,22 @@ export function rememberRemoteSession(shellId: string, sessionId?: string) {
 const pendingPrefix = (project: string, environment: string) =>
   `monocode.remote-command.v1:${JSON.stringify([project, environment])}:`;
 
+type PendingEntry = { command: HostCommand; shellId?: string; followup?: HostCommand };
+const readPendingEntry = (value: string): PendingEntry => {
+  const parsed = JSON.parse(value) as PendingEntry | HostCommand;
+  return "command" in parsed ? parsed : { command: parsed };
+};
+
+export const pendingRemoteFollowup = (project: string, environment: string, id: string) => {
+  const value = localStorage.getItem(`${pendingPrefix(project, environment)}${id}`);
+  return value ? readPendingEntry(value).followup : undefined;
+};
+
 export const pendingRemoteCommand = (
   project: string,
   environment: string,
   sessionId?: string | null,
+  shellId?: string,
 ): HostCommand | undefined => {
   const prefix = pendingPrefix(project, environment);
   for (let index = 0; index < localStorage.length; index++) {
@@ -93,11 +106,12 @@ export const pendingRemoteCommand = (
     if (key?.startsWith(prefix)) {
       const value = localStorage.getItem(key);
       if (value) {
-        const command = JSON.parse(value) as HostCommand;
+        const entry = readPendingEntry(value);
+        const command = entry.command;
         if (
           sessionId === undefined ||
           (sessionId === null
-            ? command.type === "create"
+            ? command.type === "create" && (!entry.shellId || entry.shellId === shellId)
             : command.type !== "create" && command.sessionId === sessionId)
         )
           return command;
@@ -113,11 +127,15 @@ export const savePendingRemoteCommand = (
   project: string,
   environment: string,
   command: HostCommand,
+  shellId?: string,
+  followup?: HostCommand,
 ) => {
   try {
     localStorage.setItem(
       `${pendingPrefix(project, environment)}${command.commandId}`,
-      JSON.stringify(command),
+      JSON.stringify({ command, shellId,
+        followup: followup ?? pendingRemoteFollowup(project, environment, command.commandId),
+      } satisfies PendingEntry),
     );
   } catch {
     throw new Error(
@@ -178,11 +196,14 @@ export async function loadRemoteSession(
   const sync = (revision?: number) =>
     syncRemoteSession(machineId, sessionId, revision);
   const update = await sync(known?.revision);
+  let snapshot: HostSession;
   try {
-    return applySessionSync(known, update);
+    snapshot = applySessionSync(known, update);
   } catch {
-    return applySessionSync(undefined, await sync());
+    snapshot = applySessionSync(undefined, await sync());
   }
+  return withRemoteAttachmentPreviews(machineId, snapshot, known,
+    (params) => remoteRequest(machineId, "attachments.read", params));
 }
 
 /** The connected machine for an environment, from the last machine list read. */

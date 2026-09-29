@@ -61,7 +61,7 @@ function registeredSync(cwd: string): HostWorktree[] {
   );
   return parse(output).map((tree) => ({
     ...tree,
-    path: available(tree.path) ? realpathSync(tree.path) : tree.path,
+    path: available(tree.path) ? realpathSync.native(tree.path) : tree.path,
   }));
 }
 
@@ -77,14 +77,14 @@ export function resolveHostWorktree(
     requested.length > 4096
   )
     throw new Error("Invalid working copy");
-  const actual = available(requested) ? realpathSync(requested) : requested;
+  const actual = available(requested) ? realpathSync.native(requested) : requested;
   if (actual === projectCwd) return projectCwd;
   const target = registeredSync(projectCwd).find(
     (tree) => tree.path === actual,
   );
   if (!target || !available(target.path))
     throw new Error("Choose an available worktree of this project");
-  return realpathSync(target.path);
+  return realpathSync.native(target.path);
 }
 
 export async function resolveHostWorktreeAsync(
@@ -99,7 +99,7 @@ export async function resolveHostWorktreeAsync(
     requested.length > 4096
   )
     throw new Error("Invalid working copy");
-  const actual = available(requested) ? realpathSync(requested) : requested;
+  const actual = available(requested) ? realpathSync.native(requested) : requested;
   if (actual === projectCwd) return projectCwd;
   const listed = await hostWorktrees(projectCwd);
   if (!listed.worktrees.some((tree) => tree.path === actual && !tree.missing))
@@ -115,7 +115,7 @@ export async function hostWorktrees(cwd: string): Promise<HostWorktrees> {
   );
   const worktrees = parse(stdout).map((tree) => ({
     ...tree,
-    path: available(tree.path) ? realpathSync(tree.path) : tree.path,
+    path: available(tree.path) ? realpathSync.native(tree.path) : tree.path,
     missing: !available(tree.path),
   }));
   const main = worktrees[0];
@@ -208,6 +208,7 @@ export async function renameHostWorktreeBranch(
   path: string,
   expectedBranch: string,
   branch: string,
+  stillOwned: () => boolean = () => true,
 ): Promise<HostWorktree> {
   if (!/^mc\/[a-z0-9]{8}$/.test(expectedBranch))
     throw new Error("This is not an automatically created worktree branch");
@@ -225,6 +226,7 @@ export async function renameHostWorktreeBranch(
   if (!tree || tree.isMain || tree.branch !== expectedBranch)
     throw new Error("The worktree branch has changed");
   if (branch === expectedBranch) return tree;
+  if (!stillOwned()) throw new Error("The session no longer owns this branch");
   await exec(
     "git",
     ["branch", "-m", expectedBranch, branch],
