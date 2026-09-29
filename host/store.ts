@@ -11,13 +11,18 @@ import type {
 } from "../src/features/connections/model/protocol";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { sessionNeedsInput } from "../src/features/sessions/model/session";
+import { ChangeFeed } from "./changes";
 
 const CACHED_SESSIONS = 32;
+/** How long a pairing link from `connect` can be redeemed. */
+export const PAIRING_TTL_MS = 15 * 60_000;
 
 export class HostStore {
   readonly db: DatabaseSync;
   readonly environmentId: string;
   readonly attachmentDir: string;
+  /** Session writes by this process, for `changes.wait`. */
+  readonly changes = new ChangeFeed();
   // This process is the only session writer, so recently used snapshots are
   // served from memory instead of re-parsing whole transcripts. Callers must
   // treat returned values as immutable.
@@ -33,7 +38,8 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), snapshot TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, signature TEXT NOT NULL, receipt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, revision));
-      CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE);`);
+      CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE);
+      CREATE TABLE IF NOT EXISTS pairings (hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);`);
     const columns = this.db.prepare("PRAGMA table_info(sessions)").all();
     if (!columns.some((column) => column.name === "summary"))
       this.db.exec("ALTER TABLE sessions ADD COLUMN summary TEXT");
@@ -193,6 +199,13 @@ export class HostStore {
     this.db
       .prepare("DELETE FROM events WHERE session_id=? AND revision<?")
       .run(value.session.id, value.revision - 2_000);
+    this.changes.record({
+      id: value.session.id,
+      projectId: value.projectId,
+      revision: value.revision,
+      status: value.status,
+      busy: !!value.session.busy,
+    });
     return this.remember(value);
   }
 
@@ -232,6 +245,14 @@ export class HostStore {
       this.db.prepare("DELETE FROM events WHERE session_id=?").run(id);
       this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
       this.cache.delete(id);
+      this.changes.record({
+        id,
+        projectId: current.projectId,
+        revision: current.revision,
+        deleted: true,
+        status: current.status,
+        busy: false,
+      });
     });
   }
 
@@ -281,6 +302,57 @@ export class HostStore {
       .prepare("INSERT INTO devices VALUES (?, ?, ?)")
       .run(id, name, this.hash(token));
     return { id, token };
+  }
+
+  /** A one-time code that a desktop exchanges for a device credential. */
+  issuePairing(now = Date.now()): { code: string; expiresAt: number } {
+    const code = randomBytes(32).toString("base64url");
+    const expiresAt = now + PAIRING_TTL_MS;
+    this.db.prepare("DELETE FROM pairings WHERE expires_at<=?").run(now);
+    this.db
+      .prepare("INSERT INTO pairings VALUES (?, ?)")
+      .run(this.hash(code), expiresAt);
+    return { code, expiresAt };
+  }
+
+  /** Consumes a pairing code. Returns undefined for an unknown, used, or
+   * expired code. */
+  redeemPairing(
+    code: string,
+    deviceName: string,
+    now = Date.now(),
+  ): { id: string; token: string } | undefined {
+    return this.transaction(() => {
+      const removed = this.db
+        .prepare("DELETE FROM pairings WHERE hash=? AND expires_at>?")
+        .run(this.hash(code), now).changes;
+      return Number(removed) > 0 ? this.issueDevice(deviceName) : undefined;
+    });
+  }
+
+  /** Sessions with a turn in progress, from the saved summaries. */
+  runningTurns(): number {
+    return Number(
+      this.db
+        .prepare(
+          "SELECT count(*) AS n FROM sessions WHERE json_extract(summary, '$.status')='running'",
+        )
+        .get()!.n,
+    );
+  }
+
+  pendingPairings(now = Date.now()): number {
+    return Number(
+      this.db
+        .prepare("SELECT count(*) AS n FROM pairings WHERE expires_at>?")
+        .get(now)!.n,
+    );
+  }
+
+  devices(): { id: string; name: string }[] {
+    return this.db
+      .prepare("SELECT id, name FROM devices ORDER BY name")
+      .all() as { id: string; name: string }[];
   }
 
   revokeDevice(id: string): boolean {

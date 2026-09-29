@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
+import { lifecycle } from "./control";
 import {
   runPowerShell,
   windowsTaskScript,
@@ -33,13 +34,9 @@ export async function connectionInfo(
   ) {
     throw new Error("Invalid host state");
   }
-  const response = await fetch(`http://127.0.0.1:${state.port}/lifecycle`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${state.secret}` },
-    body: JSON.stringify({ action: "status" }),
-    signal: AbortSignal.timeout(2000),
+  await lifecycle(state, "status").catch(() => {
+    throw new Error("Host is not ready");
   });
-  if (!response.ok) throw new Error("Host is not ready");
   return { port: state.port, pid: state.pid };
 }
 
@@ -218,7 +215,17 @@ export async function installService(
       await run("launchctl", ["kickstart", `${domain}/${LABEL}`]);
     } else {
       await writeFile(file, launchAgent(options, path), { mode: 0o600 });
-      await run("launchctl", ["bootstrap", domain, file]);
+      // Right after `bootout`, as when connect replaces an older host,
+      // launchd can refuse the same label until it finishes removing it.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await run("launchctl", ["bootstrap", domain, file]);
+          break;
+        } catch (error) {
+          if (attempt >= 10) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
     }
   } else if (process.platform === "linux") {
     const user = userInfo();

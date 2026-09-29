@@ -9,7 +9,11 @@ EXISTED=0
 FORCE_UPGRADE=${MONOCODE_HOST_FORCE_UPGRADE:-0}
 HOST_PORT=${MONOCODE_HOST_PORT:-3774}
 
-if [ ! -x "$ENTRY" ] || [ "$FORCE_UPGRADE" = 1 ]; then
+# `connect` needs a host of this version, so install it when the launcher
+# runs another version. Installing does not restart a running host.
+INSTALLED=""
+[ "$EXISTED" = 1 ] && INSTALLED=$("$ENTRY" --version 2>/dev/null </dev/null || true)
+if [ "$EXISTED" = 0 ] || [ "$FORCE_UPGRADE" = 1 ] || [ "$INSTALLED" != "$VERSION" ]; then
   case "$(uname -s)" in Darwin) OS=darwin ;; Linux) OS=linux ;; *) echo 'MonoCode Host supports Linux and macOS.' >&2; exit 1 ;; esac
   case "$(uname -m)" in arm64|aarch64) ARCH=arm64 ;; x86_64|amd64) ARCH=x64 ;; *) echo 'Unsupported host architecture.' >&2; exit 1 ;; esac
   FILE="monocode-host-$OS-$ARCH.tar.gz"
@@ -62,8 +66,9 @@ SH
   mv "$TMP/launcher" "$ENTRY"
 fi
 
-if [ "$EXISTED" = 1 ] && [ "$FORCE_UPGRADE" = 1 ]; then
-  "$ENTRY" service uninstall >/dev/null
-fi
-"$ENTRY" service install --port "$HOST_PORT" >/dev/null
-"$ENTRY" connection-info
+# `connect` installs or reuses the background service, turns on network
+# access, and prints one JSON line with a pairing link. It restarts an older
+# running host only with --yes, which the desktop passes for Update Host.
+YES=""
+[ "$FORCE_UPGRADE" = 1 ] && YES="--yes"
+"$ENTRY" connect --json --port "$HOST_PORT" $YES </dev/null

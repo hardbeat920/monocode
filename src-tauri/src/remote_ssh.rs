@@ -414,13 +414,6 @@ pub fn upgrade_script(platform: HostPlatform, port: u16) -> String {
     }
 }
 
-pub fn pairing_script(platform: HostPlatform, name: &str) -> String {
-    match platform {
-        HostPlatform::Unix => format!("set -eu\n\"$HOME/.monocode-host/bin/monocode-host\" pair --name {} --json\n", shell_quote(name)),
-        HostPlatform::Windows => format!("$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.monocode-host'\n$runtime = [IO.File]::ReadAllText((Join-Path $base 'runtime-path')).Trim()\n& (Join-Path $runtime 'node.exe') (Join-Path $runtime 'host.mjs') pair --name {} --json\nif ($LASTEXITCODE -ne 0) {{ throw 'Host pairing failed.' }}\n", powershell_quote(name)),
-    }
-}
-
 pub struct Tunnel {
     child: Child,
     pub port: u16,
@@ -785,7 +778,7 @@ mod tests {
         assert!(script.contains("--proto '=https'"));
         assert!(script.contains("checksum mismatch"));
         assert!(script.contains("\"$FORCE_UPGRADE\" = 1"));
-        assert!(script.contains("service uninstall"));
+        assert!(script.contains("connect --json"));
         assert!(
             upgrade_script(HostPlatform::Unix, 3774).starts_with("MONOCODE_HOST_FORCE_UPGRADE=1")
         );
@@ -812,7 +805,7 @@ mod tests {
         assert!(!script.contains("@@"));
         assert!(script.contains("checksum mismatch"));
         assert!(script.contains("Protect-MonoCodeDirectory"));
-        assert!(pairing_script(HostPlatform::Windows, "Nick's $PC").contains("'Nick''s $PC'"));
+        assert!(script.contains("connect', '--json'"));
     }
     #[cfg(windows)]
     #[test]

@@ -29,13 +29,17 @@ import {
   pendingRemoteFollowup,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
+  REMOTE_CHANGES,
   REMOTE_HISTORY_CHANGE,
+  remoteChangesLive,
   remoteRequest,
   reportRemoteMachineStatus,
   remotePendingWorktree,
   remoteSessionFor,
   savePendingRemoteCommand,
   useRemoteMachines,
+  watchRemoteChanges,
+  type RemoteChangesDetail,
 } from "../model/connections";
 import { parseRemotePath, remotePath, remoteProjectFor, type RemoteProject } from "../model/remoteProjects";
 import {
@@ -360,8 +364,29 @@ function ConnectedRemoteSession({
     // Every request carries the expected host identity; describe again only
     // after a failure, when the host may have been replaced.
     let described = false;
+    let inFlight = false;
+    let again = false;
+    // The host reports each write to this session, so the transcript updates
+    // as soon as it changes instead of on the next poll.
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<RemoteChangesDetail>).detail;
+      if (
+        detail.machineId !== machine.id ||
+        !sessionId ||
+        (!detail.reset && !detail.sessions.some((entry) => entry.id === sessionId))
+      )
+        return;
+      if (inFlight) again = true;
+      else {
+        clearTimeout(timer);
+        void poll();
+      }
+    };
+    window.addEventListener(REMOTE_CHANGES, changed);
+    const unwatch = watchRemoteChanges(machine.id);
     const poll = async () => {
       let active = false;
+      inFlight = true;
       try {
         if (!described) {
           const host = requireHostDescriptor(
@@ -407,22 +432,32 @@ function ConnectedRemoteSession({
         described = false;
         failed++;
       }
-      if (!disposed)
-        timer = setTimeout(
-          () => void poll(),
-          failed
-            ? Math.min(10_000, 750 * 2 ** Math.min(failed, 4))
-            : active
-              ? 750
-              : visible
-                ? 3_000
-                : 10_000,
-        );
+      inFlight = false;
+      if (disposed) return;
+      if (again) {
+        again = false;
+        timer = setTimeout(() => void poll(), 0);
+        return;
+      }
+      // With pushed changes, polling only covers a missed change.
+      const pushed = remoteChangesLive(machine.id);
+      timer = setTimeout(
+        () => void poll(),
+        failed
+          ? Math.min(10_000, 750 * 2 ** Math.min(failed, 4))
+          : active
+            ? pushed ? 5_000 : 750
+            : visible
+              ? pushed ? 15_000 : 3_000
+              : pushed ? 30_000 : 10_000,
+      );
     };
     void poll();
     return () => {
       disposed = true;
       clearTimeout(timer);
+      window.removeEventListener(REMOTE_CHANGES, changed);
+      unwatch();
     };
   }, [
     machine.id,

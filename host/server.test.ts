@@ -51,7 +51,9 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
   // Follow production's canonicalization, including Windows 8.3 paths such
   // as RUNNER~1 in the CI runner's temporary directory.
   const project = await engine.openProject(directory);
-  const server = createHostServer(engine, providers);
+  const server = createHostServer(engine, providers, undefined, {
+    endpoints: () => ["https://10.0.0.5:3774"],
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -65,6 +67,16 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/rpc`;
   const first = store.issueDevice("Laptop");
   const second = store.issueDevice("Other computer");
+  const pair = async (params: unknown, method = "pair.exchange") => {
+    const response = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({ version: 1, method, params }),
+    });
+    return {
+      status: response.status,
+      value: (await response.json()) as { result?: any; error?: string },
+    };
+  };
   const call = async (
     method: string,
     params: unknown = {},
@@ -102,6 +114,7 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
     store,
     project,
     call,
+    pair,
     first,
     second,
     send,
@@ -376,6 +389,65 @@ describe("remote host API", () => {
     expect(
       (await s.call("environment.describe", {}, s.second.token)).status,
     ).toBe(200);
+  });
+
+  it("exchanges a pairing code for a device credential once", async () => {
+    const s = await setup();
+    const { code } = s.store.issuePairing();
+    const paired = await s.pair({ code, name: "Studio" });
+    expect(paired.status).toBe(200);
+    expect(paired.value.result).toMatchObject({
+      environmentId: s.store.environmentId,
+    });
+    const token = paired.value.result.token;
+    expect(s.store.devices().map((device) => device.name)).toContain("Studio");
+    const described = await s.call("environment.describe", {}, token);
+    expect(described.value.result).toMatchObject({
+      hostVersion: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      endpoints: ["https://10.0.0.5:3774"],
+      capabilities: expect.arrayContaining(["changes.wait"]),
+    });
+    expect((await s.pair({ code, name: "Again" })).status).toBe(401);
+    // Without a credential, nothing but pairing is reachable.
+    expect((await s.pair({}, "projects.list")).status).toBe(401);
+  });
+
+  it("slows repeated failed pairing attempts", async () => {
+    const s = await setup();
+    for (let attempt = 0; attempt < 30; attempt++)
+      expect((await s.pair({ code: "x".repeat(43) })).status).toBe(401);
+    const { code } = s.store.issuePairing();
+    expect((await s.pair({ code })).status).toBe(429);
+  });
+
+  it("answers a waiting desktop when a session changes", async () => {
+    const s = await setup();
+    const first = await s.call("changes.wait", {});
+    expect(first.value.result).toMatchObject({ reset: true, sessions: [] });
+    const { boot, cursor } = first.value.result;
+    const waiting = s.call("changes.wait", { boot, after: cursor });
+    const create = await s.call("commands.dispatch", {
+      type: "create",
+      commandId: "create",
+      projectId: s.project.id,
+      harness: "codex",
+      model: "codex:test",
+      runtimeMode: "supervised",
+    });
+    const changed = (await waiting).value.result;
+    expect(changed.reset).toBe(false);
+    expect(changed.sessions).toEqual([
+      expect.objectContaining({
+        id: create.value.result.sessionId,
+        projectId: s.project.id,
+      }),
+    ]);
+    const idle = await s.call("changes.wait", {
+      boot,
+      after: changed.cursor,
+      timeoutMs: 20,
+    });
+    expect(idle.value.result.sessions).toEqual([]);
   });
 
   it("lets a desktop revoke only its own credential, keeping sessions", async () => {

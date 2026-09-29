@@ -45,8 +45,11 @@ beforeAll(async () => {
     `import { appendFileSync } from 'node:fs';
 const action = process.argv[2];
 if (action === '--version') console.log(${JSON.stringify(version)});
-else if (action === 'service') appendFileSync(process.env.MONOCODE_TEST_EVENTS, 'service ' + process.argv[3] + '\\n');
-else if (action === 'connection-info') console.log(JSON.stringify({ port: 3774, pid: 123 }));
+else if (action === 'connect') {
+  appendFileSync(process.env.MONOCODE_TEST_EVENTS, process.argv.slice(2).join(' ') + '\\n');
+  console.error('progress');
+  console.log(JSON.stringify({ link: 'monocode://pair?v=1', port: 3774 }));
+}
 else process.exit(1);
 `,
   );
@@ -125,7 +128,10 @@ it.skipIf(!shell)(
   async () => {
     const fixture = await install(false);
     const result = await fixture.run();
-    expect(JSON.parse(result.stdout)).toEqual({ port: 3774, pid: 123 });
+    expect(JSON.parse(result.stdout)).toEqual({
+      link: "monocode://pair?v=1",
+      port: 3774,
+    });
     expect(existsSync(join(fixture.base, "bin", "monocode-host.cmd"))).toBe(
       true,
     );
@@ -149,7 +155,7 @@ it.skipIf(!shell)(
 );
 
 it.skipIf(!shell)(
-  "updates an existing Windows host and restarts its service on request",
+  "updates an existing Windows host and lets connect restart it on request",
   async () => {
     const fixture = await install(false);
     await fixture.run();
@@ -159,9 +165,8 @@ it.skipIf(!shell)(
       oldRuntime,
     );
     expect(readFileSync(fixture.events, "utf8").trim().split(/\r?\n/)).toEqual([
-      "service install",
-      "service uninstall",
-      "service install",
+      "connect --json --port 3774",
+      "connect --json --port 3774 --yes",
     ]);
     expect(
       readFileSync(fixture.downloads, "utf8").trim().split(/\r?\n/),
