@@ -1958,8 +1958,13 @@ function useAppearanceSettings(
   );
 
   const restoreDefaults = useCallback(() => {
-    saveFontFamily("ui", "");
-    saveFontFamily("code", "");
+    for (const kind of ["ui", "code"] as const) {
+      try {
+        saveFontFamily(kind, "");
+      } catch {
+        // A failed font write must not prevent the other appearance resets.
+      }
+    }
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onAccentColor(ACCENT_COLOR_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
@@ -2064,7 +2069,8 @@ function FontPicker({
           ...names.map((name) => ({ value: name, label: name })),
         ]}
         searchPlaceholder="Search fonts"
-        emptyLabel="No matching fonts"
+        emptyLabel="Type a family name and press Enter"
+        allowCustomValue
         renderLabel={(option) => (
           <span style={{ fontFamily: fontFamilyCss(kind, option.value) }}>
             {option.label}
@@ -2091,16 +2097,19 @@ function FontPicker({
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
-  const [fonts, setFonts] = useState<string[]>([]);
+  const [fonts, setFonts] = useState<{ all: string[]; monospaced: string[] }>({
+    all: [],
+    monospaced: [],
+  });
   const [fontStatus, setFontStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   useEffect(() => {
     let cancelled = false;
-    invoke<string[]>("list_font_families")
+    invoke<{ all: string[]; monospaced: string[] }>("list_font_families")
       .then((families) => {
         if (cancelled) return;
-        setFonts(families ?? []);
+        setFonts(families ?? { all: [], monospaced: [] });
         setFontStatus("ready");
       })
       .catch(() => {
@@ -2154,14 +2163,14 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           label="UI font"
           description="Menus, chat messages, and message inputs."
         >
-          <FontPicker kind="ui" families={fonts} />
+          <FontPicker kind="ui" families={fonts.all} />
         </Row>
         <Row
           id="code-font-family"
           label="Code font"
           description="Code snippets, editors, diffs, and terminals."
         >
-          <FontPicker kind="code" families={fonts} />
+          <FontPicker kind="code" families={fonts.monospaced} />
         </Row>
         {fontStatus !== "ready" ? (
           <p role="status" className="px-4 py-2 text-xs text-content/50">

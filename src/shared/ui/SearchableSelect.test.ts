@@ -8,6 +8,44 @@ import { SearchableSelect } from "./SearchableSelect";
 let root: Root;
 let container: HTMLDivElement;
 
+it.each([false, true])(
+  "accepts an unmatched family only when custom values are enabled (%s)",
+  async (allowCustomValue) => {
+    let selected = "";
+    await act(async () =>
+      root.render(
+        createElement(SearchableSelect, {
+          label: "Font",
+          value: "",
+          options: [],
+          allowCustomValue,
+          onChange: (value: string) => {
+            selected = value;
+          },
+        }),
+      ),
+    );
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("button")!.click(),
+    );
+    const input =
+      document.querySelector<HTMLInputElement>('[role="combobox"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "  Custom Font  ");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    expect(selected).toBe(allowCustomValue ? "Custom Font" : "");
+  },
+);
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(

@@ -31,6 +31,7 @@ export function SearchableSelect({
   layer,
   variant = "field",
   searchable = true,
+  allowCustomValue = false,
   align = "start",
   renderLabel,
 }: {
@@ -45,6 +46,7 @@ export function SearchableSelect({
   layer?: number;
   variant?: "field" | "transparent" | "row" | "panel" | "pill";
   searchable?: boolean;
+  allowCustomValue?: boolean;
   align?: PopoverAlign;
   renderLabel?: (option: SearchableSelectOption) => ReactNode;
 }) {
@@ -170,8 +172,8 @@ export function SearchableSelect({
     if (event.key === "Enter") {
       event.preventDefault();
       const option = filtered[active];
-      if (!option) return;
-      pick(option.value);
+      if (option) pick(option.value);
+      else if (allowCustomValue && query.trim()) pick(query.trim());
     }
   };
 
