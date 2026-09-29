@@ -1,4 +1,3 @@
-import { t } from "../../i18n/model/i18n";
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, Folder, Minus } from "../../../shared/ui/icons";
 import { NotificationMuteControl } from "./NotificationMuteControl";
@@ -104,7 +103,7 @@ export function ProjectNotificationSettings({
       });
       setError(null);
     } catch {
-      setError(t("notifications.savePreferencesError", "Could not save notification preferences. Please try again."));
+      setError("Could not save notification preferences. Please try again.");
     }
   }
 
@@ -117,16 +116,12 @@ export function ProjectNotificationSettings({
       <div className="flex flex-wrap items-end gap-4 pb-2.5">
         <div className="min-w-[min(100%,240px)] flex-1">
           <h2 className="text-[13px] font-semibold text-content">
-            {t(
-              "settings.inboxPage.projectNotificationsTitle",
-              "Project notifications",
-            )}
+            Project notifications
           </h2>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            {t(
-              "settings.inboxPage.projectNotificationsDesc",
-              "Choose sounds, banners and sidebar indicators by category. Mute pauses them without changing your choices. Unread items stay marked in Inbox.",
-            )}
+            Choose sounds, banners and sidebar indicators by category. Mute
+            pauses them without changing your choices. Unread items stay marked
+            in Inbox.
           </p>
         </div>
         {projects.length ? (
@@ -139,9 +134,7 @@ export function ProjectNotificationSettings({
                 setSelected([]);
               }}
             >
-              {selecting
-                ? t("settings.inboxPage.done", "Done")
-                : t("settings.inboxPage.selectProjects", "Select projects")}
+              {selecting ? "Done" : "Select projects"}
             </SecondaryButton>
           </div>
         ) : null}
@@ -161,10 +154,7 @@ export function ProjectNotificationSettings({
             role="status"
             className="px-4 py-3.5 text-[12px] leading-relaxed text-content/45"
           >
-            {t(
-              "settings.inboxPage.openProjectHint",
-              "Open a project or connect an Inbox provider to configure its notifications.",
-            )}
+            Open a project or connect an Inbox provider to configure its notifications.
           </p>
         ) : null}
         {projects.length ? (
@@ -173,10 +163,7 @@ export function ProjectNotificationSettings({
               <div className="flex min-h-9 flex-wrap items-center justify-between gap-3 border-b border-content/5 px-4 py-3.5">
                 <label className="flex cursor-pointer items-center gap-2.5 text-[12px] text-content/55 hover:text-content/80">
                   <ProjectSelection
-                    label={t(
-                      "settings.inboxPage.selectAllProjects",
-                      "Select all projects",
-                    )}
+                    label="Select all projects"
                     checked={selectedIds.length === projects.length}
                     mixed={
                       selectedIds.length > 0 &&
@@ -189,15 +176,8 @@ export function ProjectNotificationSettings({
                     }
                   />
                   {selectedIds.length
-                    ? t(
-                        "settings.inboxPage.selectedCount",
-                        `${selectedIds.length} selected`,
-                        { count: selectedIds.length },
-                      )
-                    : t(
-                        "settings.inboxPage.selectAllProjects",
-                        "Select all projects",
-                      )}
+                    ? `${selectedIds.length} selected`
+                    : "Select all projects"}
                 </label>
                 {selectedIds.length ? (
                   <div role="group" aria-label="Mute selected projects">
@@ -249,7 +229,7 @@ export function ProjectNotificationSettings({
                       <div className="flex min-w-[min(100%,200px)] flex-1 items-center gap-3">
                         {selecting ? (
                           <ProjectSelection
-                            label={t("notifications.selectProject", "Select {name}", { name: project.name })}
+                            label={`Select ${project.name}`}
                             checked={selectedIds.includes(project.id)}
                             onChange={(checked) =>
                               setSelected((current) =>
@@ -305,12 +285,12 @@ export function ProjectNotificationSettings({
                             </p>
                             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
                               {project.kind === "local"
-                                ? t("notifications.localProjectPrefix", "Local project · ")
+                                ? "Local project · "
                                 : ""}
                               {muted
-                                ? t("notifications.allPaused", "All notifications paused")
+                                ? "All notifications paused"
                                 : enabledCount === categories.length
-                                  ? t("notifications.allCategoriesEnabled", "All categories enabled")
+                                  ? "All categories enabled"
                                   : `${enabledCount} of ${categories.length} enabled`}
                             </p>
                           </div>
@@ -342,7 +322,8 @@ export function ProjectNotificationSettings({
                             role="status"
                             className="pt-3.5 text-[12px] leading-relaxed text-content/45"
                           >
-                            {t("notifications.categoryChoicesMutedNotice", "Your category choices apply when notifications resume. You can edit them while muted.")}
+                            Your category choices apply when notifications
+                            resume. You can edit them while muted.
                           </p>
                         ) : null}
                         {categories.map((category) => (
@@ -350,12 +331,7 @@ export function ProjectNotificationSettings({
                             key={category.id}
                             className="flex min-h-11 cursor-pointer items-center justify-between gap-6 border-b border-content/5 py-3.5 text-[13px] text-content last:border-b-0 hover:text-content/75"
                           >
-                            <span>
-                              {t(
-                                `notificationCategories.${category.id}`,
-                                category.label,
-                              )}
-                            </span>
+                            <span>{category.label}</span>
                             <span className="relative flex shrink-0">
                               <input
                                 type="checkbox"

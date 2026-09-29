@@ -4,13 +4,11 @@
 <dict>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
-	<key>CFBundleDisplayName</key>
-	<string>MonoCode 中文版</string>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>MonoCode 需要访问您选择的项目文件夹（包括桌面目录）。</string>
+	<string>MonoCode opens project folders you choose, including Desktop.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>MonoCode 需要访问您选择的项目文件夹（包括文稿目录）。</string>
+	<string>MonoCode opens project folders you choose, including Documents.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>MonoCode 需要访问您选择的项目文件夹（包括下载目录）。</string>
+	<string>MonoCode opens project folders you choose, including Downloads.</string>
 </dict>
 </plist>

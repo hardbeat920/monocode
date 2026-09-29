@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import { normalizeProjectPath } from "../../../../features/projects/model/recents";
@@ -768,7 +767,7 @@ function handleFrame(
       }
     }
     if (type === "advisor_yielded") {
-      live.onEvent({ type: "status", text: t("harness.advisorReviewedTurn", "Advisor reviewed this turn") });
+      live.onEvent({ type: "status", text: "Advisor reviewed this turn" });
       return;
     }
     if (type === "session_info_update") {
@@ -1170,7 +1169,7 @@ async function applyModel(
           text:
             error instanceof Error
               ? error.message
-              : t("harness.fastModeUnavailable", "Fast mode is unavailable for the current model."),
+              : "Fast mode is unavailable for the current model.",
         });
       }
     }

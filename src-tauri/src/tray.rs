@@ -12,8 +12,8 @@ const SHOW: &str = "tray_show";
 const QUIT: &str = "tray_quit";
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItemBuilder::with_id(SHOW, "显示 MonoCode").build(app)?;
-    let quit = MenuItemBuilder::with_id(QUIT, "退出 MonoCode").build(app)?;
+    let show = MenuItemBuilder::with_id(SHOW, "Show MonoCode").build(app)?;
+    let quit = MenuItemBuilder::with_id(QUIT, "Quit MonoCode").build(app)?;
     let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
 
     let mut tray = TrayIconBuilder::with_id("main")

@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -1205,7 +1204,7 @@ async function handleServerRequest(
       if (!live.cancelled && !live.muteUpdates)
         live.onEvent({
           type: "status",
-          text: t("harness.mcpAuthUnsupportedNotice", "This MCP server requested a form or browser sign-in that MonoCode does not support yet. Complete it in the server's own interface."),
+          text: "This MCP server requested a form or browser sign-in that MonoCode does not support yet. Complete it in the server's own interface.",
         });
       await live.rpc.respond(id, {
         action: "cancel",

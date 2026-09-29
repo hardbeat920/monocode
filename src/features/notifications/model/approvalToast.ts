@@ -1,4 +1,3 @@
-import { t } from "../../i18n/model/i18n";
 import { leafIds, type WorkspaceTab } from "../../workspace/model/layout";
 import type { Block, Session } from "../../sessions/model/session";
 import { toolCallLabel } from "../../sessions/model/transcriptActivity";
@@ -22,7 +21,7 @@ export function pendingApprovalForSession(
       label:
         session.pendingQuestion.title ||
         session.pendingQuestion.questions[0]?.prompt ||
-        t("notifications.question", "Question"),
+        "Question",
       kind: "question",
     };
   }

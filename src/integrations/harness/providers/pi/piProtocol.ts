@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import type { Attachment, ToolPreview, TurnMetrics } from "../../../../features/sessions/model/session";
 import {
   attachmentPathText,
@@ -279,7 +278,7 @@ export function parseExtensionUiRequest(
     return {
       id,
       method,
-      title: stringField(rec, "title") ?? t("harness.piChooseOption", "Choose an option"),
+      title: stringField(rec, "title") ?? "Choose an option",
       options,
     };
   }
@@ -287,7 +286,7 @@ export function parseExtensionUiRequest(
     return {
       id,
       method,
-      title: stringField(rec, "title") ?? t("common.confirm", "Confirm"),
+      title: stringField(rec, "title") ?? "Confirm",
       message: stringField(rec, "message") ?? "",
     };
   }
@@ -757,7 +756,7 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
   if (!reasoning) return undefined;
   return {
     id: "thinking",
-    label: t("models.settings.thinking", "Thinking"),
+    label: "Thinking",
     kind: "select",
     value: "medium",
     options: PI_THINKING_LEVELS.map((value) => ({
@@ -770,13 +769,13 @@ export function thinkingSetting(reasoning: boolean): ModelSetting | undefined {
 export function fastModeSetting(): ModelSetting {
   return {
     id: "fast",
-    label: t("models.settings.fast", "Fast"),
-    description: t("harness.piPriorityFast", "Use priority processing when the current model supports it"),
+    label: "Fast",
+    description: "Use priority processing when the current model supports it",
     kind: "toggle",
     value: "false",
     options: [
-      { value: "true", label: t("models.options.on", "On") },
-      { value: "false", label: t("models.options.off", "Off") },
+      { value: "true", label: "On" },
+      { value: "false", label: "Off" },
     ],
   };
 }
@@ -788,24 +787,9 @@ export function isPiThinkingLevel(
 }
 
 function thinkingLabel(level: PiThinkingLevel): string {
-  switch (level) {
-    case "off":
-      return t("models.options.off", "Off");
-    case "minimal":
-      return t("models.options.minimal", "Minimal");
-    case "low":
-      return t("models.options.low", "Low");
-    case "medium":
-      return t("models.options.medium", "Medium");
-    case "high":
-      return t("models.options.high", "High");
-    case "xhigh":
-      return t("models.options.extraHigh", "Extra High");
-    case "max":
-      return t("models.options.max", "Max");
-    default:
-      return level;
-  }
+  if (level === "xhigh") return "Extra High";
+  if (level === "off") return "Off";
+  return level.slice(0, 1).toUpperCase() + level.slice(1);
 }
 
 function assistantMessageUsage(

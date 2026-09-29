@@ -1,4 +1,3 @@
-import { t } from "../../../features/i18n/model/i18n";
 import type {
   AgentRunMeta,
   AgentStep,
@@ -604,7 +603,7 @@ function stopBlockProgress(block: Block): Block {
       orchestration: {
         ...stopped.orchestration,
         status: "invalid",
-        error: t("orchestration.planningInterrupted", "Planning was interrupted. Generate the assignments again."),
+        error: "Planning was interrupted. Generate the assignments again.",
       },
     };
   }

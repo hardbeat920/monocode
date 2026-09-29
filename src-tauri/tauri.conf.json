@@ -23,7 +23,7 @@
         "hiddenTitle": true,
         "transparent": true,
         "backgroundColor": "#171717",
-        "backgroundThrottling": "disabled",
+        "backgroundThrottling": "throttle",
         "shadow": true
       }
     ],
@@ -40,7 +40,7 @@
     }
   },
   "bundle": {
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": "all",
     "icon": [
@@ -55,7 +55,7 @@
     },
     "macOS": {
       "entitlements": "Entitlements.plist",
-      "signingIdentity": "Apple Development: wangdada8208@gmail.com (32D6F6XLKD)"
+      "signingIdentity": "-"
     },
     "linux": {
       "rpm": {

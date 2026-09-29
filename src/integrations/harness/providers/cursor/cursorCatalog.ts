@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
@@ -255,7 +254,7 @@ function groupCliModels(
     if (efforts.length > 1) {
       settings.push({
         id: effortKeyFor(base),
-        label: t("models.settings.effort", "Effort"),
+        label: "Effort",
         kind: "select",
         value: canonical?.effort ?? efforts[0],
         options: efforts.map((value) => ({
@@ -267,24 +266,24 @@ function groupCliModels(
     if (hasThinking) {
       settings.push({
         id: "thinking",
-        label: t("models.settings.thinking", "Thinking"),
+        label: "Thinking",
         kind: "toggle",
         value: canonical?.thinking ? "true" : "false",
         options: [
-          { value: "false", label: t("models.options.off", "Off") },
-          { value: "true", label: t("models.options.on", "On") },
+          { value: "false", label: "Off" },
+          { value: "true", label: "On" },
         ],
       });
     }
     if (hasFast) {
       settings.push({
         id: "fast",
-        label: t("models.settings.fast", "Fast"),
+        label: "Fast",
         kind: "toggle",
         value: canonical?.fast ? "true" : "false",
         options: [
-          { value: "false", label: t("models.options.off", "Off") },
-          { value: "true", label: t("models.options.fast", "Fast") },
+          { value: "false", label: "Off" },
+          { value: "true", label: "Fast" },
         ],
       });
     }
@@ -361,8 +360,8 @@ function parseConfigOptions(raw: unknown): ModelSetting[] | undefined {
         kind: "toggle",
         value: on ? "true" : "false",
         options: [
-          { value: "false", label: t("models.options.off", "Off") },
-          { value: "true", label: t("models.options.on", "On") },
+          { value: "false", label: "Off" },
+          { value: "true", label: "On" },
         ],
       });
       continue;
@@ -446,20 +445,20 @@ function effortKeyFor(base: string): string {
 function effortLabel(value: string): string {
   switch (value) {
     case "none":
-      return t("models.options.none", "None");
+      return "None";
     case "minimal":
-      return t("models.options.minimal", "Minimal");
+      return "Minimal";
     case "low":
-      return t("models.options.low", "Low");
+      return "Low";
     case "medium":
-      return t("models.options.medium", "Medium");
+      return "Medium";
     case "high":
-      return t("models.options.high", "High");
+      return "High";
     case "xhigh":
     case "extra-high":
-      return t("models.options.extraHigh", "Extra High");
+      return "Extra High";
     case "max":
-      return t("models.options.max", "Max");
+      return "Max";
     default:
       return value;
   }

@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
@@ -259,7 +258,7 @@ export function modelsFromSessionNew(raw: unknown): AgentModel[] {
     const current = String(option.currentValue ?? "");
     settings.push({
       id: "effort",
-      label: t("models.settings.effort", "Effort"),
+      label: "Effort",
       kind: "select",
       value: values.some((choice) => choice.value === current)
         ? current : values[0].value,

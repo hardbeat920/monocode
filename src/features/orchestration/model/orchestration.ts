@@ -1,4 +1,3 @@
-import { t } from "../../i18n/model/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { HARNESSES, type HarnessId, type Session } from "../../sessions/model/session";
 import { pathKey } from "../../../shared/lib/paths";
@@ -359,7 +358,7 @@ export class Orchestrator {
           ? {
               ...entry,
               status: "paused",
-              error: t("orchestration.couldNotSaveRun", "Could not save run: {error}", { error: messageOf(error) }),
+              error: `Could not save run: ${messageOf(error)}`,
               tasks: entry.tasks.map((task) =>
                 activeTask(task) ? { ...task, status: "cancelling" } : task,
               ),
@@ -394,7 +393,7 @@ export class Orchestrator {
                               ? { lastDispatchId: task.activeDispatchId }
                               : {}),
                             error:
-                              t("orchestration.stoppedHistorySaveFailed", "Stopped because run history could not be saved. Resume will continue from the retained worker checkout."),
+                              "Stopped because run history could not be saved. Resume will continue from the retained worker checkout.",
                             recoveryPrompt: recoveryTurn(
                               "run history could not be saved",
                             ),
@@ -409,7 +408,7 @@ export class Orchestrator {
                             stage: "settled",
                             updatedAt: Date.now(),
                             error:
-                              t("orchestration.stoppedHistorySaveFailedShort", "Stopped because run history could not be saved."),
+                              "Stopped because run history could not be saved.",
                           }
                         : dispatch,
                     ),
@@ -527,7 +526,7 @@ export class Orchestrator {
                   : {}),
                 accepted: false,
                 error:
-                  t("orchestration.interruptedNotRunningWorker", "Interrupted while MonoCode was not running. Resume will continue from the retained worker checkout."),
+                  "Interrupted while MonoCode was not running. Resume will continue from the retained worker checkout.",
                 recoveryPrompt: recoveryTurn(
                   "MonoCode stopped while the worker was running",
                 ),
@@ -542,13 +541,13 @@ export class Orchestrator {
                 state: "interrupted",
                 stage: "settled",
                 updatedAt: Date.now(),
-                error: t("orchestration.interruptedNotRunning", "Interrupted while MonoCode was not running."),
+                error: "Interrupted while MonoCode was not running.",
               }
             : dispatch,
         ),
         error:
           run.status === "active"
-            ? t("orchestration.runInterruptedNotRunning", "Run interrupted while MonoCode was not running. Worker checkouts were retained; Resume will continue them.")
+            ? "Run interrupted while MonoCode was not running. Worker checkouts were retained; Resume will continue them."
             : run.error,
         lastPauseReason:
           run.status === "active"

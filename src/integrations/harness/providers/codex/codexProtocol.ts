@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import type {
   Attachment,
   RuntimeMode,
@@ -515,7 +514,7 @@ function mapTurnTerminal(
   if (status === "failed" && error) {
     events.push({ type: "session.error", message: error });
   } else if (status === "failed") {
-    events.push({ type: "session.error", message: t("harness.codexTurnFailed", "Codex turn failed.") });
+    events.push({ type: "session.error", message: "Codex turn failed." });
   }
   return {
     events,
@@ -785,19 +784,19 @@ function codexCommandPresentation(
       const query = stringField(action, "query");
       if (!query) continue;
       return {
-        title: t("harness.findPrefix", "Find {name}", { name: query }),
+        title: `Find ${query}`,
         preview: shellCommandPreview(command, path, query),
       };
     }
     if (type === "read" && path) {
       return {
-        title: t("harness.readPrefix", "Read {name}", { name: shownPath ?? path }),
+        title: `Read ${shownPath}`,
         preview: shellCommandPreview(command, path),
       };
     }
     if (type === "listFiles") {
       return {
-        title: shownPath ? t("harness.listPrefix", "List {name}", { name: shownPath }) : t("harness.list", "List"),
+        title: shownPath ? `List ${shownPath}` : "List",
         preview: shellCommandPreview(command, path),
       };
     }
@@ -857,7 +856,7 @@ function mapSubAgentActivity(
       title,
       kind: "agent",
       status: "failed",
-      detail: t("harness.subagentInterrupted", "Subagent interrupted."),
+      detail: "Subagent interrupted.",
     };
   }
   if (kind === "interacted") {
@@ -1131,10 +1130,10 @@ function mapFileChangeItem(
   const title =
     composeToolTitle({
       kind: "edit",
-      title: path ? `${t("common.edit", "Edit")} ${path}` : t("common.edit", "Edit"),
+      title: path ? `Edit ${path}` : "Edit",
       path,
       previewKind: "write",
-    }) || t("common.edit", "Edit");
+    }) || "Edit";
   if (!completed) {
     return {
       type: "tool.started",
@@ -1173,10 +1172,10 @@ function mapFileChangePatch(
   const title =
     composeToolTitle({
       kind: "edit",
-      title: path ? `${t("common.edit", "Edit")} ${path}` : t("common.edit", "Edit"),
+      title: path ? `Edit ${path}` : "Edit",
       path,
       previewKind: "write",
-    }) || t("common.edit", "Edit");
+    }) || "Edit";
   return {
     events: [
       {
@@ -1199,7 +1198,7 @@ function buildDiffPreview(
   if (!path && !diff) return undefined;
   const fake = {
     kind: "edit",
-    title: path ? `${t("common.edit", "Edit")} ${path}` : t("common.edit", "Edit"),
+    title: path ? `Edit ${path}` : "Edit",
     content: diff
       ? [{ type: "diff", path, patch: diff }]
       : path

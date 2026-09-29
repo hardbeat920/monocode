@@ -1,4 +1,3 @@
-import { t } from "../../i18n/model/i18n";
 import { useRef, useState } from "react";
 import { useProjectNotificationPreferences } from "../hooks/useProjectNotificationPreferences";
 import {
@@ -48,7 +47,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
       close();
       onChanged?.();
     } catch {
-      setError(t("notifications.savePreferencesError", "Could not save notification preferences. Please try again."));
+      setError("Could not save notification preferences. Please try again.");
     }
   };
 
@@ -65,7 +64,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
           className="rounded-md px-2 py-1.5 text-xs text-content/70 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
           onClick={() => change(undefined)}
         >
-          {t("notifications.resumeNotifications", "Resume notifications")}
+          Resume notifications
         </button>
       ) : null}
       <SecondaryButton
@@ -76,12 +75,12 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
         }
         aria-haspopup={open === "custom" ? "dialog" : "menu"}
         aria-expanded={open !== null}
-        title={t("notifications.muteTooltip", "Mute pauses all project notifications without changing your category choices.")}
+        title="Mute pauses all project notifications without changing your category choices."
         disabled={!projectIds.length}
         onClick={() => setOpen(open ? null : "menu")}
       >
         <BellOff className="size-3.5" aria-hidden="true" />
-        {muted.length ? t("notifications.muted", "Muted") : t("notifications.mute", "Mute")}
+        {muted.length ? "Muted" : "Mute"}
         <ChevronDown className="size-3 text-content/40" aria-hidden="true" />
       </SecondaryButton>
       {error ? (
@@ -97,7 +96,7 @@ export function NotificationMuteControl({ projectIds, onChanged }: Props) {
           width={244}
           header={
             <p className="px-2 py-1.5 text-[11px] text-content/45">
-              {t("notifications.muteAllFor", "Mute all notifications for")}
+              Mute all notifications for
             </p>
           }
           items={notificationMuteActions()}

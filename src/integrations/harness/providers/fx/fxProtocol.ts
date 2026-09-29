@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import type { PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
 import type { RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
@@ -31,14 +30,14 @@ export type SessionConfigOption = {
 };
 
 const EFFORT_LABELS: Record<string, string> = {
-  auto: t("models.options.auto", "Auto"),
-  none: t("models.options.none", "None"),
-  minimal: t("models.options.minimal", "Minimal"),
-  low: t("models.options.low", "Low"),
-  medium: t("models.options.medium", "Medium"),
-  high: t("models.options.high", "High"),
-  xhigh: t("models.options.extraHigh", "Extra High"),
-  max: t("models.options.max", "Max"),
+  auto: "Auto",
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
 };
 
 /** ACP prompt blocks for fx: text only. Image and audio are not accepted. */
@@ -438,7 +437,7 @@ function settingsFromJson(rec: Record<string, unknown>): ModelSetting[] {
   if (effortOptions.length > 1) {
     settings.push({
       id: "effort",
-      label: t("models.settings.effort", "Effort"),
+      label: "Effort",
       kind: "select",
       value: stringField(rec, "effort") ?? effortOptions[0]?.value ?? "auto",
       options: effortOptions,
@@ -447,12 +446,12 @@ function settingsFromJson(rec: Record<string, unknown>): ModelSetting[] {
   if (rec.fast === true || rec.fast_mode === true || rec.supportsFast === true) {
     settings.push({
       id: "fast",
-      label: t("models.settings.fast", "Fast"),
+      label: "Fast",
       kind: "toggle",
       value: rec.fast_mode === true || rec.fast === true ? "true" : "false",
       options: [
-        { value: "true", label: t("models.options.on", "On") },
-        { value: "false", label: t("models.options.off", "Off") },
+        { value: "true", label: "On" },
+        { value: "false", label: "Off" },
       ],
     });
   }

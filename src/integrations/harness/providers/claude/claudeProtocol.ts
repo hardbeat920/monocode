@@ -1,4 +1,3 @@
-import { t } from "../../../../features/i18n/model/i18n";
 import type {
   Attachment,
   RuntimeMode,
@@ -494,7 +493,7 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
   }
   if (joined.includes("cancel")) return { status: "cancelled" };
   const error = errors.find((item) => !item.startsWith("[ede_diagnostic]"));
-  return { status: "failed", error: error ?? t("harness.claudeTurnFailed", "Claude turn failed.") };
+  return { status: "failed", error: error ?? "Claude turn failed." };
 }
 
 /**
@@ -626,7 +625,7 @@ export function parseTaskStarted(
   return {
     taskId,
     toolUseId: stringField(rec, "tool_use_id"),
-    description: stringField(rec, "description") ?? t("harness.subagent", "Subagent"),
+    description: stringField(rec, "description") ?? "Subagent",
     taskType: stringField(rec, "task_type") ?? "",
     backgrounded: rec.is_backgrounded === true,
     ambient: rec.ambient === true,
@@ -656,7 +655,7 @@ export function parseTaskProgress(
   return {
     taskId,
     toolUseId: stringField(rec, "tool_use_id"),
-    description: stringField(rec, "description") ?? t("harness.subagent", "Subagent"),
+    description: stringField(rec, "description") ?? "Subagent",
     subagentType: stringField(rec, "subagent_type"),
     lastToolName: stringField(rec, "last_tool_name"),
     summary: stringField(rec, "summary"),
@@ -753,7 +752,7 @@ export function parseBackgroundTasks(
       {
         taskId,
         taskType,
-        description: stringField(row, "description") ?? t("harness.subagent", "Subagent"),
+        description: stringField(row, "description") ?? "Subagent",
       },
     ];
   });
