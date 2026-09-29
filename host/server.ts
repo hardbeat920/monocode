@@ -42,11 +42,31 @@ import {
 import { WorkspaceCommands } from "./workspace-commands";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
+import { discoverCursorModels } from "../src/integrations/harness/providers/cursor/cursorCatalog";
+import { discoverGrokModels } from "../src/integrations/harness/providers/grok/grokCatalog";
+import { discoverOpenCodeModels } from "../src/integrations/harness/providers/opencode/opencodeCatalog";
+import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
+import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
+import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
+import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
+import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
 
 const exec = promisify(execFile);
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
+const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel[]>> = {
+  codex: discoverCodexModels,
+  claude: discoverClaudeModels,
+  cursor: discoverCursorModels,
+  grok: discoverGrokModels,
+  opencode: discoverOpenCodeModels,
+  pi: discoverPiModels,
+  omp: discoverOmpModels,
+  fx: discoverFxModels,
+  hermes: discoverHermesModels,
+  antigravity: discoverAntigravityModels,
+};
 
 async function body(
   request: IncomingMessage,
@@ -87,10 +107,9 @@ export function createHostServer(
         await Promise.all(
           providers.map(async (provider) => {
             try {
-              result.models[provider] =
-                provider === "codex"
-                  ? await discoverCodexModels(cwd)
-                  : await discoverClaudeModels(cwd);
+              const discovered = await discoverModels[provider](cwd);
+              result.models[provider] = discovered;
+              if (discovered.length) setHarnessModels(provider, discovered);
             } catch (error) {
               result.errors[provider] =
                 error instanceof Error ? error.message : String(error);
@@ -184,7 +203,12 @@ export function createHostServer(
               environmentId: engine.store.environmentId,
               name: hostname(),
               platform: process.platform,
-              providers,
+              // Older clients validate this list against Codex and Claude only.
+              providers: providers.filter((provider) =>
+                Array.isArray(params.supportedProviders)
+                  ? params.supportedProviders.includes(provider)
+                  : provider === "codex" || provider === "claude"
+              ),
               capabilities: [
                 "sessions",
                 "projects.browse",

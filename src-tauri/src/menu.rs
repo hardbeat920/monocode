@@ -91,6 +91,22 @@ fn menu_item(
 
 pub fn dispatch(app: &AppHandle, id: &str) {
     match id {
+        "help_website" => {
+            let _ = open::that("https://usemono.dev");
+        }
+        "help_github" => {
+            let _ = open::that("https://github.com/hardbeat920/monocode");
+        }
+        "help_report_bug" => {
+            let _ = open::that(
+                "https://github.com/hardbeat920/monocode/issues/new?template=bug_report.yml",
+            );
+        }
+        "help_request_feature" => {
+            let _ = open::that(
+                "https://github.com/hardbeat920/monocode/issues/new?template=feature_request.yml",
+            );
+        }
         "new_window" => {
             let _ = crate::window::open_new_window(app);
         }
@@ -467,7 +483,19 @@ fn build(
             .build()?;
         let window_menu =
             SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
-        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
+        let website = MenuItemBuilder::with_id("help_website", "MonoCode Website").build(app)?;
+        let github = MenuItemBuilder::with_id("help_github", "View on GitHub").build(app)?;
+        let report_bug = MenuItemBuilder::with_id("help_report_bug", "Report a Bug…").build(app)?;
+        let request_feature =
+            MenuItemBuilder::with_id("help_request_feature", "Request a Feature…").build(app)?;
+        let help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, "Help")
+            .item(&website)
+            .item(&github)
+            .separator()
+            .item(&report_bug)
+            .item(&request_feature)
+            .build()?;
+        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu, &help]);
     }
 
     #[allow(unreachable_code)]

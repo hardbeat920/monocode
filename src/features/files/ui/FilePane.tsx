@@ -1,4 +1,5 @@
 import { t } from "../../i18n/model/i18n";
+import { lazySurface } from "../../../shared/ui/lazySurface";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { memo, useSyncExternalStore } from "react";
 import {
@@ -32,13 +33,29 @@ import {
 import { AgentTabView } from "../../sessions/ui/AgentTabView";
 import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
-import { CommitDiff } from "../../source-control/ui/CommitDiff";
-import { FileEditor } from "./FileEditor";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
-import { SessionChangesDiff } from "../../source-control/ui/SessionChangesDiff";
-import { TerminalView } from "../../terminal/ui/TerminalView";
-import { WorkingTreeDiff } from "../../source-control/ui/WorkingTreeDiff";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+
+const CommitDiff = lazySurface(async () => {
+  const module = await import("../../source-control/ui/CommitDiff");
+  return { default: module.CommitDiff };
+});
+const FileEditor = lazySurface(async () => {
+  const module = await import("./FileEditor");
+  return { default: module.FileEditor };
+});
+const SessionChangesDiff = lazySurface(async () => {
+  const module = await import("../../source-control/ui/SessionChangesDiff");
+  return { default: module.SessionChangesDiff };
+});
+const TerminalView = lazySurface(async () => {
+  const module = await import("../../terminal/ui/TerminalView");
+  return { default: module.TerminalView };
+});
+const WorkingTreeDiff = lazySurface(async () => {
+  const module = await import("../../source-control/ui/WorkingTreeDiff");
+  return { default: module.WorkingTreeDiff };
+});
 
 type Props = {
   pane: EditorPane;
@@ -293,7 +310,10 @@ function PlanSurface({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <p className="text-[13px] text-content/70">
-          {t("files.planNotInSession", "This plan is no longer in the session.")}
+          {t(
+            "files.planNotInSession",
+            "This plan is no longer in the session.",
+          )}
         </p>
       </div>
     );
@@ -307,10 +327,10 @@ function PlanSurface({
     block.plan?.status === "built";
   const buildLabel =
     block.plan?.status === "building"
-      ? "Building…"
+      ? t("files.planBuilding", "Building…")
       : block.plan?.status === "built"
-        ? "Built"
-        : "Build";
+        ? t("files.planBuilt", "Built")
+        : t("files.buildPlan", "Build");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">

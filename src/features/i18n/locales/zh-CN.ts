@@ -158,7 +158,8 @@ export const zhCN: TranslationDict = {
       accentColorDesc: "用于输入框的发送按钮和你的消息气泡。",
       darkOnlyNotice: "此项仅影响深色模式。你的深色模式设置会保留。",
       emptyChatVisibilityDesc: "会话还没有消息时的背景强度。",
-      lightOpaqueNotice: "浅色模式始终使用不透明窗口，因此这些选项已关闭。你的深色模式设置会保留。",
+      lightOpaqueNotice:
+        "浅色模式始终使用不透明窗口，因此这些选项已关闭。你的深色模式设置会保留。",
       sessionVisibilityDesc: "会话有消息后的背景强度。",
       showOnDesc: "仅空会话，或所有会话。",
       systemFollowsOs: "“跟随系统”会使用操作系统的外观设置。",
@@ -185,13 +186,16 @@ export const zhCN: TranslationDict = {
       apiKey: "API 密钥",
       apiKeyDesc:
         "在对应平台创建并输入个人访问令牌 (Token)，断开连接将彻底删除本机凭据。",
-      adoConnectionDescription: "使用个人访问令牌（Boards + Repos 读写权限，用于评论）连接你的 ADO 组织。令牌仅保存在本地，断开连接会将其删除。",
+      adoConnectionDescription:
+        "使用个人访问令牌（Boards + Repos 读写权限，用于评论）连接你的 ADO 组织。令牌仅保存在本地，断开连接会将其删除。",
       adoDescription: "来自你的 ADO 组织的 PR 和 Boards 工作项。",
       githubDescription: "通过 GitHub CLI 读取 PR、审查和 Issue。",
-      gitlabConnectionDescription: "连接 GitLab.com 或自建 GitLab 实例。请使用具有 API 权限的个人访问令牌；令牌仅保存在本地，断开连接会将其删除。",
+      gitlabConnectionDescription:
+        "连接 GitLab.com 或自建 GitLab 实例。请使用具有 API 权限的个人访问令牌；令牌仅保存在本地，断开连接会将其删除。",
       gitlabDescription: "来自 GitLab.com 或自建实例的合并请求。",
       jiraDescription: "你所选项目中的 Jira Cloud Issue。",
-      linearApiKeyDescription: "在 Linear → Settings → Security & Access 中创建个人 API 密钥。断开连接会将其删除。",
+      linearApiKeyDescription:
+        "在 Linear → Settings → Security & Access 中创建个人 API 密钥。断开连接会将其删除。",
       linearDescription: "你所选团队中分配给你的 Issue。",
       uncheckedTeamsHint: "未勾选的团队不会出现在收件箱中。",
     },
@@ -217,16 +221,16 @@ export const zhCN: TranslationDict = {
       closeToTrayDesc:
         "关闭主窗口时将其隐藏至系统托盘而不是完全退出，保持后台运行中的智能体继续工作。",
       aboutTitle: "关于 MonoCode",
-    
-    orchestrationAgentSuffix: "{name} — 编排智能体",
-    projectLogo: "项目图标",
-    mascot: "吉祥物",
-    existingWorktree: "已有工作树…",
-    worktreeSettings: "工作树设置",
-    noExistingWorktrees: "没有已有工作树",
-    fromBranch: "基于 {name}",
-    noMatchingBranches: "无匹配分支",
-  },
+
+      orchestrationAgentSuffix: "{name} — 编排智能体",
+      projectLogo: "项目图标",
+      mascot: "吉祥物",
+      existingWorktree: "已有工作树…",
+      worktreeSettings: "工作树设置",
+      noExistingWorktrees: "没有已有工作树",
+      fromBranch: "基于 {name}",
+      noMatchingBranches: "无匹配分支",
+    },
     chatPage: {
       transcriptTitle: "对话时间线",
       transcriptDesc: "会话增长过程中的呈现与排版方式。",
@@ -443,10 +447,13 @@ export const zhCN: TranslationDict = {
       addAccount: "添加账号",
       checkingSelectedCli: "正在检查所选 CLI…",
       checkingVersion: "正在检查版本…",
-      cliAbsoluteCustomPathHint: "输入 CLI 可执行文件的绝对路径。重启 MonoCode 后生效。",
+      cliAbsoluteCustomPathHint:
+        "输入 CLI 可执行文件的绝对路径。重启 MonoCode 后生效。",
       editPath: "编辑路径",
-      installedGlobalDescription: "只要在 PATH 中找到服务商的 CLI，就会显示为已安装。未安装的 CLI 仍会列出，但不会出现在模型选择器中；已安装但关闭了“在选择器中显示”的也一样。服务商旁边的模型是它新会话的默认模型；“默认使用”用于选择默认服务商。CLI 路径对 MonoCode 全局生效，适用于所有项目。",
-      isolatedAccountsDescription: "为支持账号配置的服务商创建相互隔离的登录。随时可以在底栏的用量控件中切换账号。",
+      installedGlobalDescription:
+        "只要在 PATH 中找到服务商的 CLI，就会显示为已安装。未安装的 CLI 仍会列出，但不会出现在模型选择器中；已安装但关闭了“在选择器中显示”的也一样。服务商旁边的模型是它新会话的默认模型；“默认使用”用于选择默认服务商。CLI 路径对 MonoCode 全局生效，适用于所有项目。",
+      isolatedAccountsDescription:
+        "为支持账号配置的服务商创建相互隔离的登录。随时可以在底栏的用量控件中切换账号。",
       openLocation: "打开所在位置",
       removeAccountOk: "移除账号",
       removeAccountTitle: "移除 {provider} 账号",
@@ -472,40 +479,40 @@ export const zhCN: TranslationDict = {
       title: "收件箱",
       description:
         "查看和审核分配到当前项目的 Pull Requests、代码问题和定时提醒。",
-    
-    askTitle: "提问 · {title}",
-    askPrefix: "提问 · ",
-    noChecksReported: "无检查结果",
-    moreAnnotations: "另外 {count} 条注解",
-    prNumber: "· PR #{number}",
-    untitledChat: "未命名对话",
-    noMatchingChats: "无匹配对话",
-    ciDetailsIncluded: "已包含 CI 详情",
-    preparing: "准备中…",
-    restartConversation: "重新开始对话",
-    createMergeCommit: "创建合并提交",
-    squashAndMerge: "压缩并合并",
-    rebaseAndMerge: "变基并合并",
-    updatedAt: "更新于 {time}",
-    githubActivity: "GitHub 动态",
-    noMessage: "无消息内容",
-    cleanUpThisSession: "清理此会话",
-    checks: {
-      repairing: "修复中",
-      awaitingCi: "等待 CI",
-      refreshing: "刷新中",
-      outOfDate: "已过期",
-      ciPassed: "CI 通过",
-      ciRunning: "CI 运行中",
-      ciCancelled: "CI 已取消",
-      ciSkipped: "CI 已跳过",
-      unknown: "未知",
-      stopped: "已停止",
-      agentStopped: "智能体已停止",
-      includedChecks: "包含的检查项",
-      latestPrCommit: "最新 PR 提交：",
+
+      askTitle: "提问 · {title}",
+      askPrefix: "提问 · ",
+      noChecksReported: "无检查结果",
+      moreAnnotations: "另外 {count} 条注解",
+      prNumber: "· PR #{number}",
+      untitledChat: "未命名对话",
+      noMatchingChats: "无匹配对话",
+      ciDetailsIncluded: "已包含 CI 详情",
+      preparing: "准备中…",
+      restartConversation: "重新开始对话",
+      createMergeCommit: "创建合并提交",
+      squashAndMerge: "压缩并合并",
+      rebaseAndMerge: "变基并合并",
+      updatedAt: "更新于 {time}",
+      githubActivity: "GitHub 动态",
+      noMessage: "无消息内容",
+      cleanUpThisSession: "清理此会话",
+      checks: {
+        repairing: "修复中",
+        awaitingCi: "等待 CI",
+        refreshing: "刷新中",
+        outOfDate: "已过期",
+        ciPassed: "CI 通过",
+        ciRunning: "CI 运行中",
+        ciCancelled: "CI 已取消",
+        ciSkipped: "CI 已跳过",
+        unknown: "未知",
+        stopped: "已停止",
+        agentStopped: "智能体已停止",
+        includedChecks: "包含的检查项",
+        latestPrCommit: "最新 PR 提交：",
+      },
     },
-  },
     worktrees: {
       title: "工作树 (Worktrees)",
       description: "在当前活跃项目中管理 Git Worktree 多工作区分支。",
@@ -516,7 +523,7 @@ export const zhCN: TranslationDict = {
       restore: "恢复",
       unarchive: "取消归档",
     },
-  
+
     search: {
       noMatchingSettings: "未找到匹配的设置",
       projectWorktrees: "项目工作树",
@@ -588,7 +595,8 @@ export const zhCN: TranslationDict = {
       jiraApiToken: "Jira API 令牌",
       projects: "项目",
       connect: "连接",
-      connectDescription: "使用你的 Atlassian 邮箱和一个无权限范围限制的 API 令牌连接 Jira Cloud 站点。断开连接会删除已保存的凭据。",
+      connectDescription:
+        "使用你的 Atlassian 邮箱和一个无权限范围限制的 API 令牌连接 Jira Cloud 站点。断开连接会删除已保存的凭据。",
       connecting: "连接中",
       createApiToken: "创建 API 令牌",
       disconnect: "断开连接",
@@ -631,15 +639,18 @@ export const zhCN: TranslationDict = {
       checkForUpdates: "检查更新",
       downloadUpdate: "下载",
     },
-    closeToTrayDescription: "关闭窗口时隐藏到系统托盘而不是退出，运行中的智能体会继续工作。可从托盘图标重新打开，并在托盘菜单中真正退出。关闭此项后，关闭窗口即结束窗口。",
+    closeToTrayDescription:
+      "关闭窗口时隐藏到系统托盘而不是退出，运行中的智能体会继续工作。可从托盘图标重新打开，并在托盘菜单中真正退出。关闭此项后，关闭窗口即结束窗口。",
     notAvailableOnPlatform: "此平台不可用",
-    notesDescription: "项目栏上的全局 Markdown 笔记本。可以从对话记录中保存已完成的回合，之后用 @note 引用或添加到对话。",
+    notesDescription:
+      "项目栏上的全局 Markdown 笔记本。可以从对话记录中保存已完成的回合，之后用 @note 引用或添加到对话。",
     notifications: {
       openSystemSettings: "打开系统设置",
     },
     pageBadge: "页面",
     permissionNeeded: "需要权限",
-    quickComposerDescription: "在任意应用中按 {shortcut}，即可在其上方浮出输入框并开始会话，无需切换到 MonoCode。可在“快捷键”中修改快捷键。按 Return 在后台开始；按 ⌘Return 开始并切换到该会话。",
+    quickComposerDescription:
+      "在任意应用中按 {shortcut}，即可在其上方浮出输入框并开始会话，无需切换到 MonoCode。可在“快捷键”中修改快捷键。按 Return 在后台开始；按 ⌘Return 开始并切换到该会话。",
   },
   composer: {
     selectWorktreePrompt: "请选择分支或工作树以继续…",
@@ -699,8 +710,10 @@ export const zhCN: TranslationDict = {
     handoffTitle: "会话转交",
     handoffFiles: "{count} 个关联文件",
     removeHandoff: "移除转交卡片",
-    accessChangesNextTurn: "权限变更将在下一回合生效。停止并重新发送可立即生效。",
-    agentNoLongerRunningSummarised: "此智能体已停止运行。它的工作已汇总到编排器的会话中。",
+    accessChangesNextTurn:
+      "权限变更将在下一回合生效。停止并重新发送可立即生效。",
+    agentNoLongerRunningSummarised:
+      "此智能体已停止运行。它的工作已汇总到编排器的会话中。",
     allow: "允许",
     btwInterruptedBeforeReload: "这个随手提问在重新加载前被中断了。",
     changedFiles: "已修改 {count} {unit}",
@@ -729,7 +742,8 @@ export const zhCN: TranslationDict = {
     couldNotLoadReminders: "无法加载提醒。",
     deny: "拒绝",
     desktopAlertsOff: "桌面通知已关闭。请在设置中开启。",
-    detailsNotAvailableOnGitHub: "此处无法显示详情，但仍可在 GitHub 上打开链接。",
+    detailsNotAvailableOnGitHub:
+      "此处无法显示详情，但仍可在 GitHub 上打开链接。",
     exploreItemWithAgent: "与智能体一起探索此项。",
     keep: "保留",
     loadingCodexModels: "正在加载 Codex 模型…",
@@ -778,7 +792,7 @@ export const zhCN: TranslationDict = {
     couldNotLoadSessions: "无法加载会话列表",
     whatShouldWeWorkOn: "我们来做点什么？",
     whatShouldWeWorkOnProject: "我们在 {project} 中处理什么？",
-  
+
     viewCliCommands: "查看 CLI 命令",
     waitingForOrchestrator: "等待编排器",
     waitingForAnswers: "等待答复",
@@ -866,10 +880,8 @@ export const zhCN: TranslationDict = {
     closePaneWithShortcut: "关闭分栏 ({shortcut})",
     jumpToLatest: "跳转至最新",
     undoAllChanges: "撤销本次会话的所有修改",
-    undoUnavailableRunning:
-      "当此项目中仍有其他会话在运行时无法执行撤销",
-    undoUnavailableExternal:
-      "因有文件在本次会话之外被修改，无法执行撤销",
+    undoUnavailableRunning: "当此项目中仍有其他会话在运行时无法执行撤销",
+    undoUnavailableExternal: "因有文件在本次会话之外被修改，无法执行撤销",
     keepChangesDismiss: "保留本次会话的所有修改并关闭此卡片",
     reviewChanges: "审查修改",
     cancelAutoResume: "取消配额重置后自动继续",
@@ -919,7 +931,7 @@ export const zhCN: TranslationDict = {
     filesAndFolders: "文件与文件夹",
     goToFilePlaceholder: "转到文件（输入 > 运行命令）",
     findPlaceholder: "查找",
-  
+
     copied: "已复制",
     zoomOut: "缩小",
     fit: "自适应",
@@ -956,6 +968,9 @@ export const zhCN: TranslationDict = {
     openInTerminal: "在终端中打开",
     paste: "粘贴",
     planNotInSession: "此计划已不在会话中。",
+    planBuilding: "正在构建…",
+    planBuilt: "已构建",
+    buildPlan: "构建",
     reloadMonocode: "重新加载 MonoCode",
     reveal: "显示位置",
     saved: "已保存",
@@ -1020,7 +1035,7 @@ export const zhCN: TranslationDict = {
     runs: "运行历史",
     triggers: "触发条件",
     prompt: "提示词",
-  
+
     categories: {
       popular: "热门",
       review: "代码审查",
@@ -1365,7 +1380,8 @@ export const zhCN: TranslationDict = {
       unknown: "未知",
     },
     checksFailedToLoad: "检查加载失败",
-    checksFailedToLoadSaved: "检查加载失败，显示的是可能已过期的缓存结果：{saved}",
+    checksFailedToLoadSaved:
+      "检查加载失败，显示的是可能已过期的缓存结果：{saved}",
     checksTab: "检查",
     chooseProject: "选择项目",
     ciDetailsIncluded: "已附带 CI 详情",
@@ -1404,7 +1420,8 @@ export const zhCN: TranslationDict = {
     muteAllProjects: "静音所有项目",
     newProjectChat: "新建项目会话",
     noChecksReported: "没有上报的检查",
-    noErrorAnnotationsReported: "没有上报错误注释。请在 GitHub 上查看完整日志。",
+    noErrorAnnotationsReported:
+      "没有上报错误注释。请在 GitHub 上查看完整日志。",
     noMatchingChats: "没有匹配的会话",
     noMessage: "无消息",
     noStepsReported: "此任务没有上报步骤。",
@@ -1458,13 +1475,15 @@ export const zhCN: TranslationDict = {
     deleteSessionTitle: "删除会话？",
     deleteSessionPermanent: "“{title}” 将被永久删除。",
     deleteSessionUnusedWorktree: "同时删除未使用的工作树 (worktree)",
-    deleteSessionKeepBranchNotice: "保留分支。如果文件包含未提交的更改，工作树将被保留。",
+    deleteSessionKeepBranchNotice:
+      "保留分支。如果文件包含未提交的更改，工作树将被保留。",
     deleteSessionAction: "删除会话",
 
     // Remove Project Dialog
     removeProjectTitle: "删除 “{name}”？",
     removeProjectAriaLabel: "删除 {name}",
-    removeProjectDescription: "此项目的所有对话记录都将被删除，同时从侧边栏移除。磁盘上的本地文件夹不受影响，再次打开该文件夹将作为一个全新的空项目。",
+    removeProjectDescription:
+      "此项目的所有对话记录都将被删除，同时从侧边栏移除。磁盘上的本地文件夹不受影响，再次打开该文件夹将作为一个全新的空项目。",
     removeProjectSessions_one: "将移除 1 个已保存的会话记录。",
     removeProjectSessions_other: "将移除 {count} 个已保存的会话记录。",
     removeProjectAction: "删除",
@@ -1477,7 +1496,8 @@ export const zhCN: TranslationDict = {
 
     // Create Worktree Dialog
     createWorktreeTitle: "创建工作树",
-    createWorktreeDescription: "{cwd} 的独立工作副本。现有未提交的修改将保留在当前副本中。",
+    createWorktreeDescription:
+      "{cwd} 的独立工作副本。现有未提交的修改将保留在当前副本中。",
     createWorktreeBranchLabel: "分支",
     createWorktreeBranchTypeLabel: "分支类型",
     createWorktreeOptionNew: "创建新分支",
@@ -1498,17 +1518,24 @@ export const zhCN: TranslationDict = {
     deleteWorktreeTitle: "删除工作树？",
     deleteWorktreeDescription: "这将永久删除该工作副本及其中所有内容。",
     deleteWorktreeSessionCount_one: "正在使用此工作树的 1 个会话{status}",
-    deleteWorktreeSessionCount_other: "正在使用此工作树的 {count} 个会话{status}",
+    deleteWorktreeSessionCount_other:
+      "正在使用此工作树的 {count} 个会话{status}",
     deleteWorktreeSessionsPermanentlyDeleted_one: "将被永久删除。",
     deleteWorktreeSessionsPermanentlyDeleted_other: "将被永久删除。",
-    deleteWorktreeSessionsKept_one: "将被保留。选择其他分支或工作树可继续该会话。",
-    deleteWorktreeSessionsKept_other: "将被保留。选择其他分支或工作树可继续这些会话。",
-    deleteWorktreeDirtyWarning: "此工作树中所有未提交和未跟踪的修改都将被丢弃。",
-    deleteWorktreeDirtyCheckFailed: "无法检查修改状态。未提交的更改都将被丢弃。",
+    deleteWorktreeSessionsKept_one:
+      "将被保留。选择其他分支或工作树可继续该会话。",
+    deleteWorktreeSessionsKept_other:
+      "将被保留。选择其他分支或工作树可继续这些会话。",
+    deleteWorktreeDirtyWarning:
+      "此工作树中所有未提交和未跟踪的修改都将被丢弃。",
+    deleteWorktreeDirtyCheckFailed:
+      "无法检查修改状态。未提交的更改都将被丢弃。",
     deleteWorktreeBranchKeptNamed: "将保留 {branch} 分支及其提交记录。",
     deleteWorktreeBranchKept: "将保留分支及其提交记录。",
-    deleteWorktreeUnpushed_one: "有 1 个提交尚未推送到远程仓库，该提交将保留在本地分支上。",
-    deleteWorktreeUnpushed_other: "有 {count} 个提交尚未推送到远程仓库，这些提交将保留在本地分支上。",
+    deleteWorktreeUnpushed_one:
+      "有 1 个提交尚未推送到远程仓库，该提交将保留在本地分支上。",
+    deleteWorktreeUnpushed_other:
+      "有 {count} 个提交尚未推送到远程仓库，这些提交将保留在本地分支上。",
     deleteWorktreeAlsoDeleteSessions: "同时删除关联的会话",
     deleteWorktreeAction: "删除工作树",
     deleteWorktreeAndSession_one: "删除工作树及会话",
@@ -1516,8 +1543,10 @@ export const zhCN: TranslationDict = {
 
     // Switch Branch Dialog
     switchBranchTitle: "存在未提交的更改",
-    switchBranchCreatingConflict: "创建 “{branch}” 将覆盖本地修改。请暂存 (Stash) 这些修改，或先在此分支上完成提交。",
-    switchBranchSwitchingConflict: "切换到 “{branch}” 将覆盖本地修改。请暂存 (Stash) 这些修改，或先在此分支上完成提交。",
+    switchBranchCreatingConflict:
+      "创建 “{branch}” 将覆盖本地修改。请暂存 (Stash) 这些修改，或先在此分支上完成提交。",
+    switchBranchSwitchingConflict:
+      "切换到 “{branch}” 将覆盖本地修改。请暂存 (Stash) 这些修改，或先在此分支上完成提交。",
     switchBranchMessagePlaceholder: "提交说明 ({mod}↩ 提交)",
     switchBranchGenerateCommitMessage: "生成提交说明",
     switchBranchCommitAndSwitch: "提交并切换",
@@ -1539,7 +1568,8 @@ export const zhCN: TranslationDict = {
     linkWorkItemNewTitle: "关联 GitHub Issue 或 PR",
     linkWorkItemUrlLabel: "Issue 或 Pull Request 链接",
     linkWorkItemInvalidUrl: "请输入有效的 GitHub Issue 或 Pull Request URL。",
-    linkWorkItemHelperText: "粘贴完整的 github.com 链接。关联项将显示在会话卡片上。",
+    linkWorkItemHelperText:
+      "粘贴完整的 github.com 链接。关联项将显示在会话卡片上。",
     linkWorkItemRemoveLink: "移除关联",
     linkWorkItemUpdateLink: "更新关联",
     linkWorkItemLinkAction: "关联",
@@ -1570,7 +1600,8 @@ export const zhCN: TranslationDict = {
     projectBackgroundEffectDescDither: "使用抖动算法与受限调色板重构画面。",
     projectBackgroundEffectDescAscii: "在纯黑背景上以彩色终端字符重构画面。",
     projectBackgroundEffectDescHalftone: "在纯黑背景上以印刷网点图案重构画面。",
-    projectBackgroundEffectDescScanlines: "添加明显的横向 CRT 显像管扫描线纹理。",
+    projectBackgroundEffectDescScanlines:
+      "添加明显的横向 CRT 显像管扫描线纹理。",
     projectBackgroundEffectDescGradientBlur: "柔和色彩与动态模糊光晕效果。",
 
     // Project Context Menu
@@ -1593,7 +1624,8 @@ export const zhCN: TranslationDict = {
     projectMenuDeleteGroupDesc: "组内项目将恢复为未分组状态",
 
     // Confirmation popups
-    confirmDeleteHistorySessions: "确定要删除选中的 {count} 个会话吗？此操作无法撤销。",
+    confirmDeleteHistorySessions:
+      "确定要删除选中的 {count} 个会话吗？此操作无法撤销。",
     confirmDeleteFolder: "确定要删除文件夹 “{name}” 及其所有内容吗？",
     confirmDeleteFile: "确定要删除 “{name}” 吗？",
   },
@@ -1654,6 +1686,7 @@ export const zhCN: TranslationDict = {
     amendMessagePlaceholder: "修改提交信息 ({mod}↩ 执行修补)",
     commitMessagePlaceholder: "提交说明 ({mod}↩ 快速提交)",
     generateCommitMessage: "AI 生成提交说明",
+    cancelGenerateCommitMessage: "取消生成提交说明",
     commit: "提交",
     amendCommit: "修补提交",
     commitOptions: "提交选项",
@@ -1692,10 +1725,12 @@ export const zhCN: TranslationDict = {
     loadingChanges: "正在加载代码变更…",
     deleteUntrackedFileConfirm: "确定删除未跟踪文件 {name} 吗？",
     discardChangesFileConfirm: "确定放弃对 {name} 的更改吗？此操作无法撤销。",
-    discardAllUnstagedConfirm: "确定放弃这 {count} 个文件中的所有未暂存更改吗？此操作无法撤销。",
+    discardAllUnstagedConfirm:
+      "确定放弃这 {count} 个文件中的所有未暂存更改吗？此操作无法撤销。",
     deleteUntrackedOnlyConfirm: "确定删除未跟踪文件 {name} 吗？",
     pushToDefaultBranchConfirm: '确定推送到默认分支 "{branch}" 吗？',
-    prFromDefaultBranchConfirm: '确定从默认分支 "{branch}" 创建 Pull Request 吗？',
+    prFromDefaultBranchConfirm:
+      '确定从默认分支 "{branch}" 创建 Pull Request 吗？',
     discard: "放弃更改",
     delete: "删除",
     history: "提交历史",
@@ -1738,7 +1773,8 @@ export const zhCN: TranslationDict = {
     worktreeUnavailable: "工作树不可用",
     noRepo: "非 Git 仓库",
     filterWorkingCopies: "筛选工作副本…",
-    sessionWorktreeDeletedDesc: "当前会话对应的工作树已被删除，请选择工作副本以继续。",
+    sessionWorktreeDeletedDesc:
+      "当前会话对应的工作树已被删除，请选择工作副本以继续。",
     anotherWorkingCopyOpensNewDesc: "切换至其他工作副本将开启新会话。",
     workingCopies: "工作副本列表",
     loadingWorkingCopies: "正在加载工作副本…",
@@ -1756,7 +1792,8 @@ export const zhCN: TranslationDict = {
     newBranch: "新建分支",
     branches: "分支列表",
     createWorktree: "新建工作树",
-    worktreesDescription: "多个会话可共享同一个工作树。删除工作树默认会保留关联会话并丢弃未提交的修改，其分支与提交记录均会保留。",
+    worktreesDescription:
+      "多个会话可共享同一个工作树。删除工作树默认会保留关联会话并丢弃未提交的修改，其分支与提交记录均会保留。",
     refreshWorktrees: "刷新工作树",
     refresh: "刷新",
     refreshFailed: "刷新失败：{error}。点击重试。",
@@ -1785,12 +1822,15 @@ export const zhCN: TranslationDict = {
     branchNameLabel: "分支名称",
     createBranchButton: "创建分支",
     uncommittedChangesTitle: "存在未提交变更",
-    switchBranchOverwriteWarning: "切换到“{branch}”将覆盖未提交的本地更改。您可以先暂存（Stash）以便稍后恢复，或先在此分支上提交。",
-    createBranchOverwriteWarning: "创建“{branch}”将覆盖未提交的本地更改。您可以先暂存（Stash）以便稍后恢复，或先在此分支上提交。",
+    switchBranchOverwriteWarning:
+      "切换到“{branch}”将覆盖未提交的本地更改。您可以先暂存（Stash）以便稍后恢复，或先在此分支上提交。",
+    createBranchOverwriteWarning:
+      "创建“{branch}”将覆盖未提交的本地更改。您可以先暂存（Stash）以便稍后恢复，或先在此分支上提交。",
     commitAndSwitch: "提交并切换",
     stashAndSwitch: "暂存并切换",
     createWorktreeTitle: "新建工作树",
-    createWorktreeExplanation: "{path} 的独立工作副本。现有未提交的修改将保留在当前工作区中。",
+    createWorktreeExplanation:
+      "{path} 的独立工作副本。现有未提交的修改将保留在当前工作区中。",
     branchType: "分支类型",
     createNewBranchOption: "创建新分支",
     useExistingLocalBranchOption: "使用现有本地分支",
@@ -1805,25 +1845,34 @@ export const zhCN: TranslationDict = {
     searchBranchesAndRefsPlaceholder: "搜索分支与引用…",
     createdInPath: "将在 {path} 中创建",
     deleteWorktreeQuestion: "删除工作树？",
-    deleteWorktreePermanentWarning: "此操作将永久删除该工作副本及其内部的所有内容。",
-    deleteWorktreeSessionsKept: "使用此工作树的 {count} 个会话将被保留。选择分支或工作树即可继续会话。",
-    deleteWorktreeSessionsKeptPlural: "使用此工作树的 {count} 个会话将被保留。选择分支或工作树即可继续会话。",
-    deleteWorktreeSessionsDeleted: "使用此工作树的 {count} 个会话将被永久删除。",
-    deleteWorktreeSessionsDeletedPlural: "使用此工作树的 {count} 个会话将被永久删除。",
+    deleteWorktreePermanentWarning:
+      "此操作将永久删除该工作副本及其内部的所有内容。",
+    deleteWorktreeSessionsKept:
+      "使用此工作树的 {count} 个会话将被保留。选择分支或工作树即可继续会话。",
+    deleteWorktreeSessionsKeptPlural:
+      "使用此工作树的 {count} 个会话将被保留。选择分支或工作树即可继续会话。",
+    deleteWorktreeSessionsDeleted:
+      "使用此工作树的 {count} 个会话将被永久删除。",
+    deleteWorktreeSessionsDeletedPlural:
+      "使用此工作树的 {count} 个会话将被永久删除。",
     discardUncommittedWarning: "此工作树中的所有未提交与未跟踪更改都将被丢弃。",
-    cannotCheckChangesWarning: "无法核查代码变更。此处任何未提交的内容都将被丢弃。",
+    cannotCheckChangesWarning:
+      "无法核查代码变更。此处任何未提交的内容都将被丢弃。",
     branchAndCommitsKeptNamed: "分支 {branch} 及其提交记录将被保留。",
     branchKept: "分支将被保留。",
-    unpushedNotOnRemote: "{count} 个提交尚未推送到远程仓库，它们将保留在分支上。",
-    unpushedNotOnRemotePlural: "{count} 个提交尚未推送到远程仓库，它们将保留在分支上。",
+    unpushedNotOnRemote:
+      "{count} 个提交尚未推送到远程仓库，它们将保留在分支上。",
+    unpushedNotOnRemotePlural:
+      "{count} 个提交尚未推送到远程仓库，它们将保留在分支上。",
     alsoDeleteSessions: "同时删除关联会话",
     deleteWorktreeAndSessions: "删除工作树及关联会话",
     deleteWorktreeAndSessionsPlural: "删除工作树及关联会话",
     searchBaseBranchesPlaceholder: "搜索基准分支…",
-  
+
     noUncommittedChanges: "没有未提交的更改",
     commitPushCreatePr: "提交、推送并创建 PR",
-    diffTooLargeNoPatches: "差异过大，无法完整显示。仅显示文件列表，不含补丁内容。",
+    diffTooLargeNoPatches:
+      "差异过大，无法完整显示。仅显示文件列表，不含补丁内容。",
     newWorktreesCreatedIn: "新工作树将创建在 {path}。",
   },
   search: {
@@ -1850,7 +1899,7 @@ export const zhCN: TranslationDict = {
     dockTop: "顶部停靠",
     dockLeft: "左侧停靠",
     dockRight: "右侧停靠",
-  
+
     gameOver: "游戏结束",
     takeControl: "接管控制",
     newTerminal: "新建终端",
@@ -1926,8 +1975,7 @@ export const zhCN: TranslationDict = {
     promptPlaceholderWithProject: "在 {project} 中开启 {harness} 会话…",
     promptPlaceholderNoProject: "请先在 MonoCode 中打开项目",
     promptAriaLabel: "输入提示词",
-    unsupportedAttachmentsAlert:
-      "请选择支持附件的服务商，或移除已添加的文件。",
+    unsupportedAttachmentsAlert: "请选择支持附件的服务商，或移除已添加的文件。",
     addAttachmentAriaLabel: "添加附件",
     addAttachmentTitle: "添加附件或截取屏幕",
     addAttachmentUnsupportedTitle: "当前服务商不支持附件",
@@ -1992,19 +2040,23 @@ export const zhCN: TranslationDict = {
     settingsWithKey: "设置 ({key})",
     updatedTo: "已更新至 {version}",
     whatsNew: "新特性",
-    cannotFollowUpMidTurn: "{harness} 不支持在回合进行中追加消息——请等待本回合结束，或先停止它。",
+    cannotFollowUpMidTurn:
+      "{harness} 不支持在回合进行中追加消息——请等待本回合结束，或先停止它。",
     chatBecameUnavailable: "请求开始前会话已不可用。请在就绪后重试。",
     compactedContext: "已压缩上下文",
     compactingContext: "正在压缩上下文…",
     completedTurnNoLongerAvailable: "已完成的回合不再可用。",
-    conversationUsesRemovedAccount: "此会话使用的服务商账号已被移除。请在用量控件中切换账号后开始新会话。",
+    conversationUsesRemovedAccount:
+      "此会话使用的服务商账号已被移除。请在用量控件中切换账号后开始新会话。",
     harnessNotConnected: "智能体后端未连接",
     manualContextCompactionUnsupported: "{provider} 不支持手动压缩上下文。",
-    operatorOutsideOrchestration: "请在普通会话回合中使用 /operator，不要在编排运行中使用。",
+    operatorOutsideOrchestration:
+      "请在普通会话回合中使用 /operator，不要在编排运行中使用。",
     orchestrationPlan: "编排计划",
     orchestrationPlanningStartsAfterTurn: "编排规划将在当前回合结束后开始。",
     projectWorkingDirRequired: "此问题需要项目工作目录。",
-    providerNotConnectedRetry: "{harness} 尚未连接——请安装并登录该服务商后重试。",
+    providerNotConnectedRetry:
+      "{harness} 尚未连接——请安装并登录该服务商后重试。",
     releaseNotesNotAvailable: "此构建版本未包含本版更新说明。",
     selectedCodexModelUnavailable: "所选 Codex 模型不可用。",
     sessionUnavailableOrRunning: "会话不可用或已在运行",
@@ -2054,9 +2106,9 @@ export const zhCN: TranslationDict = {
     localProjectPrefix: "本地项目 · ",
     allPaused: "所有通知已暂停",
     allCategoriesEnabled: "已启用所有类别",
-    muteTooltip:
-      "静音将暂停所有项目通知，且不会更改您已选的通知类别。",
-    categoryChoicesMutedNotice: "恢复通知后你选择的分类才会生效。静音期间也可以修改。",
+    muteTooltip: "静音将暂停所有项目通知，且不会更改您已选的通知类别。",
+    categoryChoicesMutedNotice:
+      "恢复通知后你选择的分类才会生效。静音期间也可以修改。",
     chooseDateTime: "选择日期和时间",
     chooseFutureDateTime: "请选择未来的日期和时间。",
     chooseValidDateTime: "请选择有效的日期和时间。",
@@ -2093,22 +2145,29 @@ export const zhCN: TranslationDict = {
     confirmAndStart: "确认并开始",
     couldNotSaveRun: "无法保存运行记录：{error}",
     interruptedNotRunning: "MonoCode 未运行期间已中断。",
-    interruptedNotRunningWorker: "MonoCode 未运行期间已中断。恢复后将从保留的工作智能体检出继续。",
-    leadPlanningReviewHint: "主导智能体正在选择任务和工作智能体模型。开始前请在此审查分配。",
+    interruptedNotRunningWorker:
+      "MonoCode 未运行期间已中断。恢复后将从保留的工作智能体检出继续。",
+    leadPlanningReviewHint:
+      "主导智能体正在选择任务和工作智能体模型。开始前请在此审查分配。",
     openBlocker: "打开阻塞项",
     planningInterrupted: "规划已中断。请重新生成任务分配。",
-    resumeDesc: "恢复会让中断的工作智能体从保留的检出继续，并启动排队的任务。被策略拦截的任务保持停止，等待审查。",
-    runInterruptedNotRunning: "MonoCode 未运行期间运行已中断。工作智能体的检出已保留，恢复后将继续执行。",
+    resumeDesc:
+      "恢复会让中断的工作智能体从保留的检出继续，并启动排队的任务。被策略拦截的任务保持停止，等待审查。",
+    runInterruptedNotRunning:
+      "MonoCode 未运行期间运行已中断。工作智能体的检出已保留，恢复后将继续执行。",
     seeDetails: "查看详情",
     showFewerTasks: "收起任务",
     starting: "启动中…",
-    stoppedHistorySaveFailed: "由于无法保存运行记录，已停止。恢复后将从保留的工作智能体检出继续。",
+    stoppedHistorySaveFailed:
+      "由于无法保存运行记录，已停止。恢复后将从保留的工作智能体检出继续。",
     stoppedHistorySaveFailedShort: "由于无法保存运行记录，已停止。",
     stoppingInterruptedWork: "正在停止中断的任务，之后才能恢复本次运行。",
     tryAgain: "重试",
     viewAgents: "查看智能体",
-    waitingForLeadTurn: "正在等待主导智能体被中断的回合结束，之后才能恢复本次运行。",
-    workersRunDescription: "其余任务会排队等候，依赖其他任务的任务也会等待其完成。所有工作智能体都在同一个项目文件夹中修改文件，所以数值越小，同时写入的改动越少。",
+    waitingForLeadTurn:
+      "正在等待主导智能体被中断的回合结束，之后才能恢复本次运行。",
+    workersRunDescription:
+      "其余任务会排队等候，依赖其他任务的任务也会等待其完成。所有工作智能体都在同一个项目文件夹中修改文件，所以数值越小，同时写入的改动越少。",
     workersRunTitle: "同时运行多少个工作智能体",
   },
   projects: {
@@ -2139,11 +2198,13 @@ export const zhCN: TranslationDict = {
     listPrefix: "列出 {name}",
     advisorReviewedTurn: "顾问已审阅本回合",
     antigravityEndedTurn: "Antigravity 结束了本回合（{reason}）。",
-    antigravityStuckNotice: "Antigravity 已两分钟没有响应——回合后的处理可能卡住了。请停止并重新发送以恢复。",
+    antigravityStuckNotice:
+      "Antigravity 已两分钟没有响应——回合后的处理可能卡住了。请停止并重新发送以恢复。",
     claudeTurnFailed: "Claude 回合失败。",
     codexTurnFailed: "Codex 回合失败。",
     fastModeUnavailable: "当前模型不支持快速模式。",
-    mcpAuthUnsupportedNotice: "此 MCP 服务器请求了 MonoCode 暂不支持的表单或浏览器登录。请在该服务器自己的界面中完成。",
+    mcpAuthUnsupportedNotice:
+      "此 MCP 服务器请求了 MonoCode 暂不支持的表单或浏览器登录。请在该服务器自己的界面中完成。",
     piDelegateSubagents: "委派子智能体",
     piPriorityFast: "当前模型支持时使用优先处理",
     subagentFailed: "子智能体失败。",

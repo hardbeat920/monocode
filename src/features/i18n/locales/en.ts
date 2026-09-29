@@ -158,11 +158,16 @@ export const en = {
       showExcludedFiles: "Show excluded files",
       showExcludedFilesDesc:
         "Show files and folders Git excludes, such as build output and dependencies, in the explorer.",
-      accentColorDesc: "Used for the composer send button and your message bubbles.",
-      darkOnlyNotice: "This only affects dark mode. Your dark-mode value is preserved.",
-      emptyChatVisibilityDesc: "Background strength before a chat has messages.",
-      lightOpaqueNotice: "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved.",
-      sessionVisibilityDesc: "Background strength once the conversation has messages.",
+      accentColorDesc:
+        "Used for the composer send button and your message bubbles.",
+      darkOnlyNotice:
+        "This only affects dark mode. Your dark-mode value is preserved.",
+      emptyChatVisibilityDesc:
+        "Background strength before a chat has messages.",
+      lightOpaqueNotice:
+        "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved.",
+      sessionVisibilityDesc:
+        "Background strength once the conversation has messages.",
       showOnDesc: "Empty sessions only, or every conversation.",
       systemFollowsOs: "System follows the OS appearance.",
     },
@@ -188,13 +193,19 @@ export const en = {
       saving: "Saving",
       apiKey: "API key",
       apiKeyDesc: "Create a personal API key. Disconnect deletes it.",
-      adoConnectionDescription: "Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it.",
-      adoDescription: "Pull requests and Boards work items from your ADO organization.",
-      githubDescription: "Pull requests, reviews, and issues, read through the GitHub CLI.",
-      gitlabConnectionDescription: "Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it.",
-      gitlabDescription: "Merge requests from GitLab.com or a self-managed instance.",
+      adoConnectionDescription:
+        "Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it.",
+      adoDescription:
+        "Pull requests and Boards work items from your ADO organization.",
+      githubDescription:
+        "Pull requests, reviews, and issues, read through the GitHub CLI.",
+      gitlabConnectionDescription:
+        "Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it.",
+      gitlabDescription:
+        "Merge requests from GitLab.com or a self-managed instance.",
       jiraDescription: "Jira Cloud issues from the projects you pick.",
-      linearApiKeyDescription: "Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.",
+      linearApiKeyDescription:
+        "Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.",
       linearDescription: "Issues assigned to you, from the teams you pick.",
       uncheckedTeamsHint: "Unchecked teams stay out of the inbox.",
     },
@@ -220,16 +231,16 @@ export const en = {
       closeToTrayDesc:
         "Closing a window hides it to the system tray instead of quitting.",
       aboutTitle: "About",
-    
-    orchestrationAgentSuffix: "{name} — orchestration agent",
-    projectLogo: "Project logo",
-    mascot: "Mascot",
-    existingWorktree: "Existing worktree…",
-    worktreeSettings: "Worktree settings",
-    noExistingWorktrees: "No existing worktrees",
-    fromBranch: "From {name}",
-    noMatchingBranches: "No matching branches",
-  },
+
+      orchestrationAgentSuffix: "{name} — orchestration agent",
+      projectLogo: "Project logo",
+      mascot: "Mascot",
+      existingWorktree: "Existing worktree…",
+      worktreeSettings: "Worktree settings",
+      noExistingWorktrees: "No existing worktrees",
+      fromBranch: "From {name}",
+      noMatchingBranches: "No matching branches",
+    },
     chatPage: {
       transcriptTitle: "Transcript",
       transcriptDesc: "How a conversation reads as it grows.",
@@ -365,7 +376,8 @@ export const en = {
       delete: "Delete",
       noProjects: "No archived projects.",
       noConversations: "No archived conversations in this project.",
-      openProjectToSeeArchived: "Open a project to see its archived conversations.",
+      openProjectToSeeArchived:
+        "Open a project to see its archived conversations.",
     },
 
     title: "Settings",
@@ -451,10 +463,13 @@ export const en = {
       addAccount: "Add account",
       checkingSelectedCli: "Checking the selected CLI…",
       checkingVersion: "Checking version…",
-      cliAbsoluteCustomPathHint: "Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.",
+      cliAbsoluteCustomPathHint:
+        "Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.",
       editPath: "Edit path",
-      installedGlobalDescription: "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project.",
-      isolatedAccountsDescription: "Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer.",
+      installedGlobalDescription:
+        "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project.",
+      isolatedAccountsDescription:
+        "Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer.",
       openLocation: "Open location",
       removeAccountOk: "Remove account",
       removeAccountTitle: "Remove {provider} account",
@@ -482,40 +497,40 @@ export const en = {
       title: "Inbox",
       description:
         "Review pulls, issues, and reminders assigned to your projects.",
-    
-    askTitle: "Ask · {title}",
-    askPrefix: "Ask · ",
-    noChecksReported: "No checks reported",
-    moreAnnotations: "{count} more annotations",
-    prNumber: "· PR #{number}",
-    untitledChat: "Untitled chat",
-    noMatchingChats: "No matching chats",
-    ciDetailsIncluded: "CI details included",
-    preparing: "Preparing...",
-    restartConversation: "Restart conversation",
-    createMergeCommit: "Create a merge commit",
-    squashAndMerge: "Squash and merge",
-    rebaseAndMerge: "Rebase and merge",
-    updatedAt: "Updated {time}",
-    githubActivity: "GitHub activity",
-    noMessage: "No message",
-    cleanUpThisSession: "Clean up this session",
-    checks: {
-      repairing: "Repairing",
-      awaitingCi: "Awaiting CI",
-      refreshing: "Refreshing",
-      outOfDate: "Out of date",
-      ciPassed: "CI passed",
-      ciRunning: "CI running",
-      ciCancelled: "CI cancelled",
-      ciSkipped: "CI skipped",
-      unknown: "Unknown",
-      stopped: "Stopped",
-      agentStopped: "Agent stopped",
-      includedChecks: "Included checks",
-      latestPrCommit: "Latest PR commit:",
+
+      askTitle: "Ask · {title}",
+      askPrefix: "Ask · ",
+      noChecksReported: "No checks reported",
+      moreAnnotations: "{count} more annotations",
+      prNumber: "· PR #{number}",
+      untitledChat: "Untitled chat",
+      noMatchingChats: "No matching chats",
+      ciDetailsIncluded: "CI details included",
+      preparing: "Preparing...",
+      restartConversation: "Restart conversation",
+      createMergeCommit: "Create a merge commit",
+      squashAndMerge: "Squash and merge",
+      rebaseAndMerge: "Rebase and merge",
+      updatedAt: "Updated {time}",
+      githubActivity: "GitHub activity",
+      noMessage: "No message",
+      cleanUpThisSession: "Clean up this session",
+      checks: {
+        repairing: "Repairing",
+        awaitingCi: "Awaiting CI",
+        refreshing: "Refreshing",
+        outOfDate: "Out of date",
+        ciPassed: "CI passed",
+        ciRunning: "CI running",
+        ciCancelled: "CI cancelled",
+        ciSkipped: "CI skipped",
+        unknown: "Unknown",
+        stopped: "Stopped",
+        agentStopped: "Agent stopped",
+        includedChecks: "Included checks",
+        latestPrCommit: "Latest PR commit:",
+      },
     },
-  },
     worktrees: {
       title: "Worktrees",
       description: "Manage Git worktrees across active projects.",
@@ -526,7 +541,7 @@ export const en = {
       restore: "Restore",
       unarchive: "Unarchive",
     },
-  
+
     search: {
       noMatchingSettings: "No matching settings",
       projectWorktrees: "Project worktrees",
@@ -598,7 +613,8 @@ export const en = {
       jiraApiToken: "Jira API token",
       projects: "Projects",
       connect: "Connect",
-      connectDescription: "Connect your Jira Cloud site using your Atlassian email and an API token without scopes. Disconnect deletes the saved credentials.",
+      connectDescription:
+        "Connect your Jira Cloud site using your Atlassian email and an API token without scopes. Disconnect deletes the saved credentials.",
       connecting: "Connecting",
       createApiToken: "Create API token",
       disconnect: "Disconnect",
@@ -641,15 +657,18 @@ export const en = {
       checkForUpdates: "Check for updates",
       downloadUpdate: "Download",
     },
-    closeToTrayDescription: "Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window.",
+    closeToTrayDescription:
+      "Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window.",
     notAvailableOnPlatform: "Not available on this platform",
-    notesDescription: "A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat.",
+    notesDescription:
+      "A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat.",
     notifications: {
       openSystemSettings: "Open System Settings",
     },
     pageBadge: "Page",
     permissionNeeded: "Permission needed",
-    quickComposerDescription: "Press {shortcut} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.",
+    quickComposerDescription:
+      "Press {shortcut} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.",
   },
   composer: {
     selectWorktreePrompt: "Select a branch or worktree to continue…",
@@ -708,12 +727,16 @@ export const en = {
     handoffTitle: "Handoff",
     handoffFiles: "{count} files",
     removeHandoff: "Remove handoff",
-    accessChangesNextTurn: "Access changes apply to the next turn. Stop and resend to apply them now.",
-    agentNoLongerRunningSummarised: "This agent is no longer running. Its work is summarised in the orchestrator's conversation.",
+    accessChangesNextTurn:
+      "Access changes apply to the next turn. Stop and resend to apply them now.",
+    agentNoLongerRunningSummarised:
+      "This agent is no longer running. Its work is summarised in the orchestrator's conversation.",
     allow: "Allow",
-    btwInterruptedBeforeReload: "This by-the-way request was interrupted before reload.",
+    btwInterruptedBeforeReload:
+      "This by-the-way request was interrupted before reload.",
     changedFiles: "Changed {count} {unit}",
-    ciContextIncluded: "CI instructions and failure details included with this request.",
+    ciContextIncluded:
+      "CI instructions and failure details included with this request.",
     clearFilters: "Clear filters",
     clickChipToOpenOnGitHub: "Click the chip to open on GitHub",
     commands: {
@@ -724,10 +747,12 @@ export const en = {
         description: "Summarize older conversation context to free space.",
       },
       operator: {
-        description: "Give this thread access to MonoCode sessions, folders, and notes.",
+        description:
+          "Give this thread access to MonoCode sessions, folders, and notes.",
       },
       plan: {
-        description: "Create a reviewable implementation plan before changing files.",
+        description:
+          "Create a reviewable implementation plan before changing files.",
       },
       sessionFolder: {
         description: "Place this session in an existing or new sidebar folder.",
@@ -738,7 +763,8 @@ export const en = {
     couldNotLoadReminders: "Couldn’t load reminders.",
     deny: "Deny",
     desktopAlertsOff: "Desktop alerts are off. Enable in Settings.",
-    detailsNotAvailableOnGitHub: "Details aren't available here, but the link can still be opened on GitHub.",
+    detailsNotAvailableOnGitHub:
+      "Details aren't available here, but the link can still be opened on GitHub.",
     exploreItemWithAgent: "Explore this item with your agent.",
     keep: "Keep",
     loadingCodexModels: "Loading Codex models…",
@@ -787,7 +813,7 @@ export const en = {
     couldNotLoadSessions: "Couldn’t load sessions",
     whatShouldWeWorkOn: "What should we work on?",
     whatShouldWeWorkOnProject: "What should we work on in {project}?",
-  
+
     viewCliCommands: "View CLI commands",
     waitingForOrchestrator: "Waiting for orchestrator",
     waitingForAnswers: "Waiting for answers",
@@ -928,7 +954,7 @@ export const en = {
     filesAndFolders: "Files and folders",
     goToFilePlaceholder: "Go to File (type > for commands)",
     findPlaceholder: "Find",
-  
+
     copied: "Copied",
     zoomOut: "Zoom out",
     fit: "Fit",
@@ -955,7 +981,8 @@ export const en = {
     couldNotOpenFile: "Couldn’t open {name}",
     cut: "Cut",
     duplicate: "Duplicate",
-    lineEndingChanges: "line-ending changes. Line breaks are normalized in this view.",
+    lineEndingChanges:
+      "line-ending changes. Line breaks are normalized in this view.",
     newFile: "New File",
     newFolder: "New Folder",
     notReadableImage: "not a readable image",
@@ -965,6 +992,9 @@ export const en = {
     openInTerminal: "Open in Terminal",
     paste: "Paste",
     planNotInSession: "This plan is no longer in the session.",
+    planBuilding: "Building…",
+    planBuilt: "Built",
+    buildPlan: "Build",
     reloadMonocode: "Reload MonoCode",
     reveal: "Reveal",
     saved: "Saved",
@@ -980,7 +1010,8 @@ export const en = {
     filterAriaLabel: "Filter notes",
     newNote: "New note",
     noMatchingNotes: "No matching notes",
-    emptyState: "No notes yet. Save a turn from the transcript, or create one here.",
+    emptyState:
+      "No notes yet. Save a turn from the transcript, or create one here.",
     resizeList: "Resize notes list",
     selectNote: "Select a note",
     untitled: "Untitled",
@@ -1029,7 +1060,7 @@ export const en = {
     runs: "Runs",
     triggers: "Triggers",
     prompt: "Prompt",
-  
+
     categories: {
       popular: "Popular",
       review: "Code Review",
@@ -1109,7 +1140,8 @@ export const en = {
       saving: "Saving...",
       scheduled: "Scheduled",
       sessionFolderHint: "Where runs appear in the sidebar",
-      skillsAndCommandsHint: "Skills, @file references, and built-in commands work here.",
+      skillsAndCommandsHint:
+        "Skills, @file references, and built-in commands work here.",
       tabHistory: "Run history",
       tabSettings: "Settings",
       testRun: "Test run",
@@ -1130,72 +1162,86 @@ export const en = {
     templates: {
       "find-critical-bugs": {
         name: "Find critical bugs",
-        description: "Analyze recent commits for high-severity correctness bugs and submit safe fixes",
+        description:
+          "Analyze recent commits for high-severity correctness bugs and submit safe fixes",
         triggerLabel: "Weekdays at 09:00",
       },
       "scan-vulnerabilities": {
         name: "Scan codebase for vulnerabilities",
-        description: "Review the full repository on a schedule and alert on validated high-impact security issues",
+        description:
+          "Review the full repository on a schedule and alert on validated high-impact security issues",
         triggerLabel: "Monday at 10:00",
       },
       "generate-docs": {
         name: "Generate docs",
-        description: "Create and update developer documentation for recently changed or under-documented code",
+        description:
+          "Create and update developer documentation for recently changed or under-documented code",
         triggerLabel: "Monday at 09:00",
       },
       "add-test-coverage": {
         name: "Add test coverage",
-        description: "Review recent changes and add tests for high-risk logic that lacks adequate coverage",
+        description:
+          "Review recent changes and add tests for high-risk logic that lacks adequate coverage",
         triggerLabel: "Weekdays at 11:00",
       },
       "review-pull-requests": {
         name: "Review pull requests",
-        description: "When a pull request is opened, review the diff for bugs, regressions, and missing tests",
+        description:
+          "When a pull request is opened, review the diff for bugs, regressions, and missing tests",
         triggerLabel: "Pull request opened",
       },
       "review-draft-prs": {
         name: "Review draft PRs",
-        description: "Give early feedback when a draft pull request is opened so issues are caught before review",
+        description:
+          "Give early feedback when a draft pull request is opened so issues are caught before review",
         triggerLabel: "Draft opened",
       },
       "dependency-audit": {
         name: "Audit dependencies",
-        description: "Check lockfiles and manifests for vulnerable, abandoned, or unexpectedly upgraded packages",
+        description:
+          "Check lockfiles and manifests for vulnerable, abandoned, or unexpectedly upgraded packages",
         triggerLabel: "Monday at 09:30",
       },
       "secret-scan": {
         name: "Scan for secrets",
-        description: "Search the working tree and recent history for committed credentials, tokens, and keys",
+        description:
+          "Search the working tree and recent history for committed credentials, tokens, and keys",
         triggerLabel: "Monday at 09:30",
       },
       "triage-github-issues": {
         name: "Triage GitHub issues",
-        description: "When a GitHub issue is opened, inspect the repo and add a concrete reproduction or next step",
+        description:
+          "When a GitHub issue is opened, inspect the repo and add a concrete reproduction or next step",
         triggerLabel: "Issue opened",
       },
       "triage-new-issues": {
         name: "Triage new issues",
-        description: "When a Linear issue is created, inspect the repo and add a concrete reproduction or next step",
+        description:
+          "When a Linear issue is created, inspect the repo and add a concrete reproduction or next step",
         triggerLabel: "Issue created",
       },
       "failing-ci-watch": {
         name: "Watch failing checks",
-        description: "On a weekday morning, run the project's tests and diagnose anything that is already red",
+        description:
+          "On a weekday morning, run the project's tests and diagnose anything that is already red",
         triggerLabel: "Weekdays at 08:30",
       },
       "weekly-changelog": {
         name: "Weekly changelog",
-        description: "Summarize the week's commits into a changelog humans can actually read",
+        description:
+          "Summarize the week's commits into a changelog humans can actually read",
         triggerLabel: "Friday at 16:00",
       },
       "repo-health": {
         name: "Repo health check",
-        description: "Inspect the working tree, stale branches, and obvious project-setup drift on a schedule",
+        description:
+          "Inspect the working tree, stale branches, and obvious project-setup drift on a schedule",
         triggerLabel: "Monday at 09:00",
       },
       "install-doctor": {
         name: "Environment doctor",
-        description: "Verify the project still installs and boots from a clean working copy",
+        description:
+          "Verify the project still installs and boots from a clean working copy",
         triggerLabel: "Monday at 10:00",
       },
     },
@@ -1374,7 +1420,8 @@ export const en = {
       unknown: "Unknown",
     },
     checksFailedToLoad: "Checks failed to load",
-    checksFailedToLoadSaved: "Checks failed to load, showing saved results that may be out of date: {saved}",
+    checksFailedToLoadSaved:
+      "Checks failed to load, showing saved results that may be out of date: {saved}",
     checksTab: "Checks",
     chooseProject: "Choose project",
     ciDetailsIncluded: "CI details included",
@@ -1413,7 +1460,8 @@ export const en = {
     muteAllProjects: "Mute all projects",
     newProjectChat: "New project chat",
     noChecksReported: "No checks reported",
-    noErrorAnnotationsReported: "No error annotations reported. View the full log on GitHub.",
+    noErrorAnnotationsReported:
+      "No error annotations reported. View the full log on GitHub.",
     noMatchingChats: "No matching chats",
     noMessage: "No message",
     noStepsReported: "No steps reported for this job.",
@@ -1461,19 +1509,22 @@ export const en = {
     installUpdate: "Install Update",
     later: "Later",
     releaseNotes: "Release Notes",
-    whatsNewNoNotes: "Release notes for this version are not available in this build.",
+    whatsNewNoNotes:
+      "Release notes for this version are not available in this build.",
 
     // Delete Session Dialog
     deleteSessionTitle: "Delete session?",
     deleteSessionPermanent: "“{title}” will be permanently deleted.",
     deleteSessionUnusedWorktree: "Also delete the unused worktree",
-    deleteSessionKeepBranchNotice: "The branch is kept. If files have uncommitted changes, the worktree stays.",
+    deleteSessionKeepBranchNotice:
+      "The branch is kept. If files have uncommitted changes, the worktree stays.",
     deleteSessionAction: "Delete session",
 
     // Remove Project Dialog
     removeProjectTitle: "Delete “{name}”?",
     removeProjectAriaLabel: "Delete {name}",
-    removeProjectDescription: "All conversations for this project will be deleted. It also leaves the sidebar. The folder on disk stays put, and opening it again brings the project back empty.",
+    removeProjectDescription:
+      "All conversations for this project will be deleted. It also leaves the sidebar. The folder on disk stays put, and opening it again brings the project back empty.",
     removeProjectSessions_one: "1 saved conversation will be removed.",
     removeProjectSessions_other: "{count} saved conversations will be removed.",
     removeProjectAction: "Delete",
@@ -1486,7 +1537,8 @@ export const en = {
 
     // Create Worktree Dialog
     createWorktreeTitle: "Create worktree",
-    createWorktreeDescription: "An independent working copy of {cwd}. Existing uncommitted changes stay in their current working copy.",
+    createWorktreeDescription:
+      "An independent working copy of {cwd}. Existing uncommitted changes stay in their current working copy.",
     createWorktreeBranchLabel: "Branch",
     createWorktreeBranchTypeLabel: "Branch type",
     createWorktreeOptionNew: "Create a new branch",
@@ -1505,19 +1557,28 @@ export const en = {
 
     // Delete Worktree Dialog
     deleteWorktreeTitle: "Delete worktree?",
-    deleteWorktreeDescription: "This permanently deletes the working copy and everything inside it.",
+    deleteWorktreeDescription:
+      "This permanently deletes the working copy and everything inside it.",
     deleteWorktreeSessionCount_one: "1 session using this worktree {status}",
-    deleteWorktreeSessionCount_other: "{count} sessions using this worktree {status}",
+    deleteWorktreeSessionCount_other:
+      "{count} sessions using this worktree {status}",
     deleteWorktreeSessionsPermanentlyDeleted_one: "is permanently deleted.",
     deleteWorktreeSessionsPermanentlyDeleted_other: "are permanently deleted.",
-    deleteWorktreeSessionsKept_one: "is kept. Select a branch or worktree to continue them.",
-    deleteWorktreeSessionsKept_other: "are kept. Select a branch or worktree to continue them.",
-    deleteWorktreeDirtyWarning: "All uncommitted and untracked changes here are discarded.",
-    deleteWorktreeDirtyCheckFailed: "Changes could not be checked. Anything uncommitted here is discarded.",
-    deleteWorktreeBranchKeptNamed: "The {branch} branch and its commits are kept.",
+    deleteWorktreeSessionsKept_one:
+      "is kept. Select a branch or worktree to continue them.",
+    deleteWorktreeSessionsKept_other:
+      "are kept. Select a branch or worktree to continue them.",
+    deleteWorktreeDirtyWarning:
+      "All uncommitted and untracked changes here are discarded.",
+    deleteWorktreeDirtyCheckFailed:
+      "Changes could not be checked. Anything uncommitted here is discarded.",
+    deleteWorktreeBranchKeptNamed:
+      "The {branch} branch and its commits are kept.",
     deleteWorktreeBranchKept: "The branch is kept.",
-    deleteWorktreeUnpushed_one: "1 commit is not on a remote. It stays on the branch.",
-    deleteWorktreeUnpushed_other: "{count} commits are not on a remote. They stay on the branch.",
+    deleteWorktreeUnpushed_one:
+      "1 commit is not on a remote. It stays on the branch.",
+    deleteWorktreeUnpushed_other:
+      "{count} commits are not on a remote. They stay on the branch.",
     deleteWorktreeAlsoDeleteSessions: "Also delete associated sessions",
     deleteWorktreeAction: "Delete worktree",
     deleteWorktreeAndSession_one: "Delete worktree and session",
@@ -1525,8 +1586,10 @@ export const en = {
 
     // Switch Branch Dialog
     switchBranchTitle: "Uncommitted changes",
-    switchBranchCreatingConflict: "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
-    switchBranchSwitchingConflict: "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+    switchBranchCreatingConflict:
+      "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+    switchBranchSwitchingConflict:
+      "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
     switchBranchMessagePlaceholder: "Message ({mod}↩ to commit)",
     switchBranchGenerateCommitMessage: "Generate commit message",
     switchBranchCommitAndSwitch: "Commit & switch",
@@ -1548,7 +1611,8 @@ export const en = {
     linkWorkItemNewTitle: "Link GitHub issue or PR",
     linkWorkItemUrlLabel: "Issue or pull request URL",
     linkWorkItemInvalidUrl: "Enter a valid GitHub issue or pull request URL.",
-    linkWorkItemHelperText: "Paste the full github.com URL. The linked item will appear on the session card.",
+    linkWorkItemHelperText:
+      "Paste the full github.com URL. The linked item will appear on the session card.",
     linkWorkItemRemoveLink: "Remove link",
     linkWorkItemUpdateLink: "Update link",
     linkWorkItemLinkAction: "Link",
@@ -1559,8 +1623,10 @@ export const en = {
     projectBackgroundNoImage: "No background selected",
     projectBackgroundChangeImage: "Change image",
     projectBackgroundChooseImage: "Choose image",
-    projectBackgroundOverrideNotice: "This image overrides the global background for this project.",
-    projectBackgroundFollowNotice: "This project currently follows the global Appearance setting.",
+    projectBackgroundOverrideNotice:
+      "This image overrides the global background for this project.",
+    projectBackgroundFollowNotice:
+      "This project currently follows the global Appearance setting.",
     projectBackgroundEffect: "Background effect",
     projectBackgroundEffectLabel: "Project background effect",
     projectBackgroundShowOn: "Show on",
@@ -1576,11 +1642,16 @@ export const en = {
     projectBackgroundEffectScanlines: "Scanlines",
     projectBackgroundEffectGradientBlur: "Haze",
     projectBackgroundEffectDescNone: "Shows the original artwork.",
-    projectBackgroundEffectDescDither: "Rebuilds the artwork with a dithered color palette.",
-    projectBackgroundEffectDescAscii: "Recreates the artwork with colored characters on black.",
-    projectBackgroundEffectDescHalftone: "Recreates the artwork with colored print dots on black.",
-    projectBackgroundEffectDescScanlines: "Adds a pronounced horizontal display-line texture.",
-    projectBackgroundEffectDescGradientBlur: "Soft colors with dynamic blur glow.",
+    projectBackgroundEffectDescDither:
+      "Rebuilds the artwork with a dithered color palette.",
+    projectBackgroundEffectDescAscii:
+      "Recreates the artwork with colored characters on black.",
+    projectBackgroundEffectDescHalftone:
+      "Recreates the artwork with colored print dots on black.",
+    projectBackgroundEffectDescScanlines:
+      "Adds a pronounced horizontal display-line texture.",
+    projectBackgroundEffectDescGradientBlur:
+      "Soft colors with dynamic blur glow.",
 
     // Project Context Menu (used by useProjectMenu)
     projectMenuRevealMac: "Reveal in Finder",
@@ -1602,7 +1673,8 @@ export const en = {
     projectMenuDeleteGroupDesc: "Projects will become ungrouped",
 
     // Confirmation popups (window.confirm)
-    confirmDeleteHistorySessions: "Delete {count} selected conversations? This can’t be undone.",
+    confirmDeleteHistorySessions:
+      "Delete {count} selected conversations? This can’t be undone.",
     confirmDeleteFolder: "Delete folder “{name}” and everything inside it?",
     confirmDeleteFile: "Delete “{name}”?",
   },
@@ -1624,7 +1696,8 @@ export const en = {
     secondOpinionMenuLabel: "Send this turn to another agent",
     buildTarget: "Build with another model",
     buildTargetDisabled: "No build providers are available",
-    buildTargetDesc: "Choose the model and provider that should build this plan.",
+    buildTargetDesc:
+      "Choose the model and provider that should build this plan.",
     buildTargetMenuLabel: "Build this plan with another model or provider",
     noProvidersAvailable: "No providers available",
     providerModels: "{provider} models",
@@ -1659,10 +1732,12 @@ export const en = {
     pull: "Pull",
     pulling: "Pulling…",
     pullComplete: "Pull complete",
-    needRemoteToPull: "This branch needs a remote and upstream before it can pull",
+    needRemoteToPull:
+      "This branch needs a remote and upstream before it can pull",
     amendMessagePlaceholder: "Amend message ({mod}↩ to amend)",
     commitMessagePlaceholder: "Message ({mod}↩ to commit)",
     generateCommitMessage: "Generate commit message",
+    cancelGenerateCommitMessage: "Cancel commit message generation",
     commit: "Commit",
     amendCommit: "Amend Commit",
     commitOptions: "Commit options",
@@ -1700,11 +1775,14 @@ export const en = {
     noFiles: "No files",
     loadingChanges: "Loading changes…",
     deleteUntrackedFileConfirm: "Delete untracked file {name}?",
-    discardChangesFileConfirm: "Discard changes in {name}? This cannot be undone.",
-    discardAllUnstagedConfirm: "Discard all unstaged changes in {count} files? This cannot be undone.",
+    discardChangesFileConfirm:
+      "Discard changes in {name}? This cannot be undone.",
+    discardAllUnstagedConfirm:
+      "Discard all unstaged changes in {count} files? This cannot be undone.",
     deleteUntrackedOnlyConfirm: "Delete untracked file {name}?",
     pushToDefaultBranchConfirm: 'Push to default branch "{branch}"?',
-    prFromDefaultBranchConfirm: 'Create a pull request from default branch "{branch}"?',
+    prFromDefaultBranchConfirm:
+      'Create a pull request from default branch "{branch}"?',
     discard: "Discard",
     delete: "Delete",
     history: "History",
@@ -1747,7 +1825,8 @@ export const en = {
     worktreeUnavailable: "Worktree unavailable",
     noRepo: "No repo",
     filterWorkingCopies: "Filter working copies…",
-    sessionWorktreeDeletedDesc: "This session’s worktree was deleted. Select a working copy to continue.",
+    sessionWorktreeDeletedDesc:
+      "This session’s worktree was deleted. Select a working copy to continue.",
     anotherWorkingCopyOpensNewDesc: "Another working copy opens a new session.",
     workingCopies: "Working copies",
     loadingWorkingCopies: "Loading working copies…",
@@ -1765,14 +1844,16 @@ export const en = {
     newBranch: "New branch",
     branches: "Branches",
     createWorktree: "Create worktree",
-    worktreesDescription: "Sessions can share a worktree. Deleting one keeps its sessions by default and discards uncommitted changes. Its branch and commits are kept.",
+    worktreesDescription:
+      "Sessions can share a worktree. Deleting one keeps its sessions by default and discards uncommitted changes. Its branch and commits are kept.",
     refreshWorktrees: "Refresh worktrees",
     refresh: "Refresh",
     refreshFailed: "Refresh failed: {error}. Click to retry.",
     addProjectToManageWorktrees: "Add a project to manage its worktrees.",
     loadingWorktrees: "Loading worktrees…",
     noAdditionalWorktrees: "No additional worktrees",
-    createWorktreeHelp: "Create a worktree to work on another branch in a separate folder.",
+    createWorktreeHelp:
+      "Create a worktree to work on another branch in a separate folder.",
     selectedProjectFolder: "Selected project folder",
     currentBranchLabel: "Current branch: {branch}",
     detachedAtLabel: "Detached at {head}",
@@ -1788,18 +1869,22 @@ export const en = {
     revealFolder: "Reveal folder",
     deleteWorktree: "Delete worktree",
     unlockWorktreeFirst: "Unlock this worktree in Git first",
-    createBranchBeforeDeletingDetached: "Create a branch before deleting this detached worktree",
+    createBranchBeforeDeletingDetached:
+      "Create a branch before deleting this detached worktree",
     newBranchTitle: "New branch",
     newBranchDescription: "Create and check out a branch in this project.",
     branchNameLabel: "Branch name",
     createBranchButton: "Create branch",
     uncommittedChangesTitle: "Uncommitted changes",
-    switchBranchOverwriteWarning: "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
-    createBranchOverwriteWarning: "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+    switchBranchOverwriteWarning:
+      "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+    createBranchOverwriteWarning:
+      "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
     commitAndSwitch: "Commit & switch",
     stashAndSwitch: "Stash & switch",
     createWorktreeTitle: "Create worktree",
-    createWorktreeExplanation: "An independent working copy of {path}. Existing uncommitted changes stay in their current working copy.",
+    createWorktreeExplanation:
+      "An independent working copy of {path}. Existing uncommitted changes stay in their current working copy.",
     branchType: "Branch type",
     createNewBranchOption: "Create a new branch",
     useExistingLocalBranchOption: "Use an existing local branch",
@@ -1814,25 +1899,35 @@ export const en = {
     searchBranchesAndRefsPlaceholder: "Search branches and refs…",
     createdInPath: "Created in {path}",
     deleteWorktreeQuestion: "Delete worktree?",
-    deleteWorktreePermanentWarning: "This permanently deletes the working copy and everything inside it.",
-    deleteWorktreeSessionsKept: "{count} session using this worktree is kept. Select a branch or worktree to continue them.",
-    deleteWorktreeSessionsKeptPlural: "{count} sessions using this worktree are kept. Select a branch or worktree to continue them.",
-    deleteWorktreeSessionsDeleted: "{count} session using this worktree is permanently deleted.",
-    deleteWorktreeSessionsDeletedPlural: "{count} sessions using this worktree are permanently deleted.",
-    discardUncommittedWarning: "All uncommitted and untracked changes here are discarded.",
-    cannotCheckChangesWarning: "Changes could not be checked. Anything uncommitted here is discarded.",
+    deleteWorktreePermanentWarning:
+      "This permanently deletes the working copy and everything inside it.",
+    deleteWorktreeSessionsKept:
+      "{count} session using this worktree is kept. Select a branch or worktree to continue them.",
+    deleteWorktreeSessionsKeptPlural:
+      "{count} sessions using this worktree are kept. Select a branch or worktree to continue them.",
+    deleteWorktreeSessionsDeleted:
+      "{count} session using this worktree is permanently deleted.",
+    deleteWorktreeSessionsDeletedPlural:
+      "{count} sessions using this worktree are permanently deleted.",
+    discardUncommittedWarning:
+      "All uncommitted and untracked changes here are discarded.",
+    cannotCheckChangesWarning:
+      "Changes could not be checked. Anything uncommitted here is discarded.",
     branchAndCommitsKeptNamed: "The {branch} branch and its commits are kept.",
     branchKept: "The branch is kept.",
-    unpushedNotOnRemote: "{count} commit is not on a remote. They stay on the branch.",
-    unpushedNotOnRemotePlural: "{count} commits are not on a remote. They stay on the branch.",
+    unpushedNotOnRemote:
+      "{count} commit is not on a remote. They stay on the branch.",
+    unpushedNotOnRemotePlural:
+      "{count} commits are not on a remote. They stay on the branch.",
     alsoDeleteSessions: "Also delete associated sessions",
     deleteWorktreeAndSessions: "Delete worktree and session",
     deleteWorktreeAndSessionsPlural: "Delete worktree and sessions",
     searchBaseBranchesPlaceholder: "Search base branches…",
-  
+
     noUncommittedChanges: "No uncommitted changes",
     commitPushCreatePr: "Commit, Push & Create PR",
-    diffTooLargeNoPatches: "Diff is too large to display in full. File list is shown without patches.",
+    diffTooLargeNoPatches:
+      "Diff is too large to display in full. File list is shown without patches.",
     newWorktreesCreatedIn: "New worktrees are created in {path}.",
   },
   search: {
@@ -1859,7 +1954,7 @@ export const en = {
     dockTop: "Dock Top",
     dockLeft: "Dock Left",
     dockRight: "Dock Right",
-  
+
     gameOver: "game over",
     takeControl: "take control",
     newTerminal: "New terminal",
@@ -2001,20 +2096,30 @@ export const en = {
     settingsWithKey: "Settings ({key})",
     updatedTo: "Updated to {version}",
     whatsNew: "What's new",
-    cannotFollowUpMidTurn: "{harness} cannot take a follow-up mid-turn — wait for this turn to finish, or stop it first.",
-    chatBecameUnavailable: "The chat became unavailable before the request could start. Try again when it is ready.",
+    cannotFollowUpMidTurn:
+      "{harness} cannot take a follow-up mid-turn — wait for this turn to finish, or stop it first.",
+    chatBecameUnavailable:
+      "The chat became unavailable before the request could start. Try again when it is ready.",
     compactedContext: "Compacted context",
     compactingContext: "Compacting context…",
-    completedTurnNoLongerAvailable: "The completed turn is no longer available.",
-    conversationUsesRemovedAccount: "This conversation uses a removed provider account. Switch accounts from the usage control to start a new conversation.",
+    completedTurnNoLongerAvailable:
+      "The completed turn is no longer available.",
+    conversationUsesRemovedAccount:
+      "This conversation uses a removed provider account. Switch accounts from the usage control to start a new conversation.",
     harnessNotConnected: "Harness is not connected",
-    manualContextCompactionUnsupported: "{provider} does not support manual context compaction.",
-    operatorOutsideOrchestration: "Use /operator from a regular session turn, outside an orchestration run.",
+    manualContextCompactionUnsupported:
+      "{provider} does not support manual context compaction.",
+    operatorOutsideOrchestration:
+      "Use /operator from a regular session turn, outside an orchestration run.",
     orchestrationPlan: "Orchestration plan",
-    orchestrationPlanningStartsAfterTurn: "Orchestration planning will start after the current turn finishes.",
-    projectWorkingDirRequired: "A project working directory is required for this question.",
-    providerNotConnectedRetry: "{harness} is not connected yet — install and sign in to that provider, then retry.",
-    releaseNotesNotAvailable: "Release notes for this version are not available in this build.",
+    orchestrationPlanningStartsAfterTurn:
+      "Orchestration planning will start after the current turn finishes.",
+    projectWorkingDirRequired:
+      "A project working directory is required for this question.",
+    providerNotConnectedRetry:
+      "{harness} is not connected yet — install and sign in to that provider, then retry.",
+    releaseNotesNotAvailable:
+      "Release notes for this version are not available in this build.",
     selectedCodexModelUnavailable: "The selected Codex model is unavailable.",
     sessionUnavailableOrRunning: "Session is unavailable or already running",
     turnDidNotComplete: "Turn did not complete",
@@ -2048,9 +2153,12 @@ export const en = {
     notConnected: "Not connected",
     loadingUsage: "Loading usage…",
     usageDetails: "Usage details",
-    accountLocalNameHint: "Give this account a local name, then finish sign-in in your browser.",
-    accountPinnedHint: "Each conversation stays pinned to the account that started it.",
-    couldNotRefreshSnapshot: "Couldn’t refresh. Showing the last available snapshot.",
+    accountLocalNameHint:
+      "Give this account a local name, then finish sign-in in your browser.",
+    accountPinnedHint:
+      "Each conversation stays pinned to the account that started it.",
+    couldNotRefreshSnapshot:
+      "Couldn’t refresh. Showing the last available snapshot.",
     notConnectedLower: "not connected",
     signInAndAddAccount: "Sign in and add account",
     spendResetNow: "Spend this reset now?",
@@ -2065,7 +2173,8 @@ export const en = {
     allCategoriesEnabled: "All categories enabled",
     muteTooltip:
       "Mute pauses all project notifications without changing your category choices.",
-    categoryChoicesMutedNotice: "Your category choices apply when notifications resume. You can edit them while muted.",
+    categoryChoicesMutedNotice:
+      "Your category choices apply when notifications resume. You can edit them while muted.",
     chooseDateTime: "Choose date and time",
     chooseFutureDateTime: "Choose a date and time in the future.",
     chooseValidDateTime: "Choose a valid date and time.",
@@ -2076,7 +2185,8 @@ export const en = {
     muteUntilThen: "Mute until then",
     reminderTitle: "Reminder",
     resumeNotifications: "Resume notifications",
-    savePreferencesError: "Could not save notification preferences. Please try again.",
+    savePreferencesError:
+      "Could not save notification preferences. Please try again.",
     untilResumed: "Until resumed",
   },
   orchestration: {
@@ -2102,22 +2212,32 @@ export const en = {
     confirmAndStart: "Confirm & start",
     couldNotSaveRun: "Could not save run: {error}",
     interruptedNotRunning: "Interrupted while MonoCode was not running.",
-    interruptedNotRunningWorker: "Interrupted while MonoCode was not running. Resume will continue from the retained worker checkout.",
-    leadPlanningReviewHint: "Your lead is choosing tasks and worker models. Review the assignments here before starting.",
+    interruptedNotRunningWorker:
+      "Interrupted while MonoCode was not running. Resume will continue from the retained worker checkout.",
+    leadPlanningReviewHint:
+      "Your lead is choosing tasks and worker models. Review the assignments here before starting.",
     openBlocker: "Open blocker",
-    planningInterrupted: "Planning was interrupted. Generate the assignments again.",
-    resumeDesc: "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review.",
-    runInterruptedNotRunning: "Run interrupted while MonoCode was not running. Worker checkouts were retained; Resume will continue them.",
+    planningInterrupted:
+      "Planning was interrupted. Generate the assignments again.",
+    resumeDesc:
+      "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review.",
+    runInterruptedNotRunning:
+      "Run interrupted while MonoCode was not running. Worker checkouts were retained; Resume will continue them.",
     seeDetails: "See details",
     showFewerTasks: "Show fewer tasks",
     starting: "Starting…",
-    stoppedHistorySaveFailed: "Stopped because run history could not be saved. Resume will continue from the retained worker checkout.",
-    stoppedHistorySaveFailedShort: "Stopped because run history could not be saved.",
-    stoppingInterruptedWork: "Stopping interrupted work before this run can resume.",
+    stoppedHistorySaveFailed:
+      "Stopped because run history could not be saved. Resume will continue from the retained worker checkout.",
+    stoppedHistorySaveFailedShort:
+      "Stopped because run history could not be saved.",
+    stoppingInterruptedWork:
+      "Stopping interrupted work before this run can resume.",
     tryAgain: "Try again",
     viewAgents: "View agents",
-    waitingForLeadTurn: "Waiting for the lead's interrupted turn to finish before this run can resume.",
-    workersRunDescription: "The rest of the tasks wait their turn, and a task that depends on another waits for it either way. Every worker edits this same project folder, so a lower number means fewer changes landing in it at the same time.",
+    waitingForLeadTurn:
+      "Waiting for the lead's interrupted turn to finish before this run can resume.",
+    workersRunDescription:
+      "The rest of the tasks wait their turn, and a task that depends on another waits for it either way. Every worker edits this same project folder, so a lower number means fewer changes landing in it at the same time.",
     workersRunTitle: "How many workers run at once",
   },
   projects: {
@@ -2148,13 +2268,16 @@ export const en = {
     listPrefix: "List {name}",
     advisorReviewedTurn: "Advisor reviewed this turn",
     antigravityEndedTurn: "Antigravity ended the turn ({reason}).",
-    antigravityStuckNotice: "Antigravity has been quiet for two minutes — its post-turn work may be stuck. Stop and resend to recover.",
+    antigravityStuckNotice:
+      "Antigravity has been quiet for two minutes — its post-turn work may be stuck. Stop and resend to recover.",
     claudeTurnFailed: "Claude turn failed.",
     codexTurnFailed: "Codex turn failed.",
     fastModeUnavailable: "Fast mode is unavailable for the current model.",
-    mcpAuthUnsupportedNotice: "This MCP server requested a form or browser sign-in that MonoCode does not support yet. Complete it in the server's own interface.",
+    mcpAuthUnsupportedNotice:
+      "This MCP server requested a form or browser sign-in that MonoCode does not support yet. Complete it in the server's own interface.",
     piDelegateSubagents: "Delegate subagents",
-    piPriorityFast: "Use priority processing when the current model supports it",
+    piPriorityFast:
+      "Use priority processing when the current model supports it",
     subagentFailed: "Subagent failed.",
     subagentInterrupted: "Subagent interrupted.",
     toolFailed: "Tool failed.",

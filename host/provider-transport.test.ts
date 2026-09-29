@@ -14,6 +14,7 @@ import { HostEngine } from "./engine";
 import { hostProviders } from "./providers";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
+import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
 import {
   acquireHarnessBridge,
   configureChildBackend,
@@ -30,6 +31,16 @@ const record = value => require('node:fs').appendFileSync(require('node:path').j
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
+  if (request.jsonrpc === '2.0') {
+    if (request.id == null) return;
+    if (request.method === 'session/prompt') {
+      send({jsonrpc: '2.0', method: 'session/update', params: {sessionId: 'fixture_acp', update: {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'Headless ACP completed'}}}});
+      setTimeout(() => send({jsonrpc: '2.0', id: request.id, result: {stopReason: 'end_turn'}}), 30);
+    } else {
+      send({jsonrpc: '2.0', id: request.id, result: request.method === 'session/new' || request.method === 'session/load' || request.method === 'session/resume' ? {sessionId: 'fixture_acp', configOptions: []} : {}});
+    }
+    return;
+  }
   if (request.method === 'initialize') send({id: request.id, result: {}});
   if (request.method === 'account/read') send({id: request.id, result: {account: {type: 'fixture'}, requiresOpenaiAuth: false}});
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
@@ -51,6 +62,16 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
     send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
   }, 30);
+  if (request.type === 'get_state') send({type: 'response', id: request.id, command: 'get_state', success: true, data: {sessionId: 'fixture_pi', model: {provider: 'openai', id: 'fixture-model', contextWindow: 100000}}});
+  if (request.type === 'get_session_stats') send({type: 'response', id: request.id, command: 'get_session_stats', success: true, data: {contextWindow: 100000}});
+  if (request.type === 'get_available_models') send({type: 'response', id: request.id, command: 'get_available_models', success: true, data: {models: [{provider: 'openai', id: 'fixture-model', name: 'Fixture model'}]}});
+  if (request.type === 'prompt') {
+    send({type: 'response', id: request.id, command: 'prompt', success: true, data: {}});
+    setTimeout(() => {
+      send({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'Headless Pi completed'}});
+      send({type: 'agent_settled'});
+    }, 30);
+  }
 });
 `;
 
@@ -66,7 +87,17 @@ describe("existing providers over headless process I/O", () => {
     );
     const binary = join(directory, "provider.cjs");
     writeFileSync(binary, fixture, { mode: 0o700 });
-    backend = new HostChildBackend({ codex: binary, claude: binary });
+    backend = new HostChildBackend({
+      codex: binary,
+      claude: binary,
+      pi: binary,
+      omp: binary,
+      cursor: binary,
+      grok: binary,
+      fx: binary,
+      hermes: binary,
+      antigravity: binary,
+    });
     configureChildBackend(backend);
     release = await acquireHarnessBridge();
     store = new HostStore(join(directory, "host.db"));
@@ -81,16 +112,24 @@ describe("existing providers over headless process I/O", () => {
   });
 
   it("discovers host models in parallel without probe process collisions", async () => {
-    const [codexA, codexB, claudeA, claudeB] = await Promise.all([
+    const [codexA, codexB, claudeA, claudeB, piA, piB, ompA, ompB] = await Promise.all([
       discoverCodexModels(directory),
       discoverCodexModels(directory),
       discoverClaudeModels(directory),
       discoverClaudeModels(directory),
+      discoverPiModels(directory),
+      discoverPiModels(directory),
+      discoverOmpModels(directory),
+      discoverOmpModels(directory),
     ]);
     expect(codexA).toEqual(codexB);
     expect(codexA[0]).toMatchObject({ id: "codex:fixture-model" });
     expect(claudeA).toEqual(claudeB);
     expect(claudeA[0]).toMatchObject({ nativeId: "claude-fixture-model" });
+    expect(piA).toEqual(piB);
+    expect(piA[0]).toMatchObject({ id: "pi:openai/fixture-model" });
+    expect(ompA).toEqual(ompB);
+    expect(ompA[0]).toMatchObject({ id: "omp:openai/fixture-model" });
   });
 
   it.each(["codex", "claude"] as const)(
@@ -123,6 +162,67 @@ describe("existing providers over headless process I/O", () => {
         expect(state.blocks.at(-1)?.text).toContain("completed");
         expect(state.providerSessionId).toBeTruthy();
       }
+    },
+  );
+
+  it.each(["pi", "omp"] as const)(
+    "completes and resumes %s over the host RPC transport",
+    async (harness) => {
+      const project = await engine.openProject(directory);
+      const { sessionId } = engine.command({
+        type: "create",
+        commandId: `create-${harness}`,
+        projectId: project.id,
+        harness,
+        model: `${harness}:default`,
+        runtimeMode: "supervised",
+      });
+      for (let turn = 0; turn < 2; turn++) {
+        engine.command({
+          type: "send",
+          commandId: `${harness}-send-${turn}`,
+          sessionId,
+          text: "hello",
+        });
+        await vi.waitFor(
+          () => expect(store.session(sessionId).status).toBe("idle"),
+          { timeout: 4_000 },
+        );
+        const state = store.session(sessionId).session;
+        expect(
+          state.blocks.filter((block) => block.role === "assistant"),
+        ).toHaveLength(turn + 1);
+        expect(state.blocks.at(-1)?.text).toContain("Headless Pi completed");
+        expect(state.providerSessionId).toBe("fixture_pi");
+      }
+    },
+  );
+
+  it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
+    "completes a %s turn over the headless ACP transport",
+    async (harness) => {
+      const project = await engine.openProject(directory);
+      const { sessionId } = engine.command({
+        type: "create",
+        commandId: `create-${harness}`,
+        projectId: project.id,
+        harness,
+        model: `${harness}:default`,
+        runtimeMode: "supervised",
+      });
+      engine.command({
+        type: "send",
+        commandId: `${harness}-send`,
+        sessionId,
+        text: "hello",
+      });
+      await vi.waitFor(
+        () => expect(store.session(sessionId).status).toBe("idle"),
+        { timeout: 4_000 },
+      );
+      const state = store.session(sessionId).session;
+      expect(state.blocks.at(-1)?.text).toContain("Headless ACP completed");
+      expect(state.providerSessionId).toBe("fixture_acp");
     },
   );
 

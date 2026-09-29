@@ -28,8 +28,13 @@ import {
 } from "../../projects/model/projectTerminal";
 import { MOD } from "../../../platform/tauri/platform";
 import type { TerminalMetaPatch } from "../model/terminalTab";
-import { TerminalView } from "./TerminalView";
 import { useTranslation } from "../../i18n/model/i18n";
+import { lazySurface } from "../../../shared/ui/lazySurface";
+
+const TerminalView = lazySurface(async () => {
+  const module = await import("./TerminalView");
+  return { default: module.TerminalView };
+});
 
 type Props = {
   dock: ProjectTerminalDock;
@@ -47,11 +52,11 @@ type Props = {
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
 };
 
-const SIDE_ITEMS: { id: DockSide; label: string }[] = [
-  { id: "bottom", label: t("terminal.dockBottom", "Dock Bottom") },
-  { id: "top", label: t("terminal.dockTop", "Dock Top") },
-  { id: "left", label: t("terminal.dockLeft", "Dock Left") },
-  { id: "right", label: t("terminal.dockRight", "Dock Right") },
+const SIDE_ITEMS: { id: DockSide }[] = [
+  { id: "bottom" },
+  { id: "top" },
+  { id: "left" },
+  { id: "right" },
 ];
 
 function sideIcon(side: DockSide) {
@@ -216,25 +221,33 @@ export function ProjectTerminalDock({
         trailing={
           <div className="flex shrink-0 items-center gap-0.5 pr-1.5">
             <IconButton
-              label={t("terminal.newTerminalShortcut", "New Terminal ({mod}`)", { mod: MOD })}
+              label={t(
+                "terminal.newTerminalShortcut",
+                "New Terminal ({mod}`)",
+                { mod: MOD },
+              )}
               onClick={onAddTerminal}
             >
               <Plus className="size-3.5" strokeWidth={1.75} />
             </IconButton>
             <div ref={sideButton}>
-            <IconButton
-              label={t("terminal.moveTerminal", "Move Terminal")}
-              onClick={() => {
-                const rect = sideButton.current?.getBoundingClientRect();
-                if (!rect) return;
-                setMenu({ x: rect.left, y: rect.bottom + 4 });
-              }}
-            >
-              <SideIcon className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
+              <IconButton
+                label={t("terminal.moveTerminal", "Move Terminal")}
+                onClick={() => {
+                  const rect = sideButton.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setMenu({ x: rect.left, y: rect.bottom + 4 });
+                }}
+              >
+                <SideIcon className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
             </div>
             <IconButton
-              label={t("terminal.hideTerminalShortcut", `Hide Terminal (${MOD}J)`, { mod: MOD })}
+              label={t(
+                "terminal.hideTerminalShortcut",
+                `Hide Terminal (${MOD}J)`,
+                { mod: MOD },
+              )}
               onClick={onHide}
             >
               <HideIcon className="size-3.5" strokeWidth={1.75} />
@@ -284,7 +297,12 @@ export function ProjectTerminalDock({
             };
           })}
           onPick={(id) => {
-            if (id === "top" || id === "bottom" || id === "left" || id === "right") {
+            if (
+              id === "top" ||
+              id === "bottom" ||
+              id === "left" ||
+              id === "right"
+            ) {
               onSideChange(id);
             }
             setMenu(null);

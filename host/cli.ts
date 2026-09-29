@@ -23,7 +23,10 @@ import { acquireHostOwner } from "./owner";
 import { HostEngine } from "./engine";
 import { hostProviders } from "./providers";
 import { createHostServer } from "./server";
-import type { RemoteProvider } from "../src/features/connections/model/protocol";
+import {
+  REMOTE_PROVIDERS,
+  type RemoteProvider,
+} from "../src/features/connections/model/protocol";
 import { connectionInfo, installService, uninstallService } from "./service";
 import { version } from "../package.json";
 import { protectWindowsDirectory } from "./windows";
@@ -226,7 +229,7 @@ Connect another computer using an SSH forward to the loopback port.`);
     configureChildBackend(backend);
     const release = await acquireHarnessBridge();
     const available: RemoteProvider[] = [];
-    for (const provider of ["codex", "claude"] as const) {
+    for (const provider of REMOTE_PROVIDERS) {
       try {
         await backend.resolve(provider);
         available.push(provider);
@@ -297,7 +300,7 @@ Connect another computer using an SSH forward to the loopback port.`);
       `MonoCode Host ${store.environmentId} listening on 127.0.0.1:${port}`,
     );
     console.log(
-      `Providers: ${available.join(", ") || "none found; install and authenticate Codex or Claude on this host"}`,
+      `Providers: ${available.join(", ") || "none found; install and authenticate a supported provider on this host"}`,
     );
     cleanup = () => {
       rmSync(statePath, { force: true });

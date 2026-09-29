@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Undo2,
   WandSparkles,
+  X,
 } from "../../../shared/ui/icons";
 import {
   useCallback,
@@ -187,7 +188,9 @@ export function GitChangesPanel({
 
   if (!cwd || cwd === "~") {
     return (
-      <p className="px-3 py-2 text-[12px] text-content/50">{t("sourceControl.noProjectFolder", "No project folder")}</p>
+      <p className="px-3 py-2 text-[12px] text-content/50">
+        {t("sourceControl.noProjectFolder", "No project folder")}
+      </p>
     );
   }
 
@@ -197,7 +200,9 @@ export function GitChangesPanel({
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-stroke px-3">
-        <span className="text-[12px] font-medium text-content">{t("sourceControl.changes", "Changes")}</span>
+        <span className="text-[12px] font-medium text-content">
+          {t("sourceControl.changes", "Changes")}
+        </span>
         {status ? (
           <span role="status" className="text-[11px] text-content/50">
             {status}
@@ -250,7 +255,10 @@ export function GitChangesPanel({
                   title={
                     canPull
                       ? undefined
-                      : t("sourceControl.needRemoteToPull", "This branch needs a remote and upstream before it can pull")
+                      : t(
+                          "sourceControl.needRemoteToPull",
+                          "This branch needs a remote and upstream before it can pull",
+                        )
                   }
                   onClick={() => void pull()}
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
@@ -263,7 +271,9 @@ export function GitChangesPanel({
                   ) : (
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
                   )}
-                  {busy === "pull" ? t("sourceControl.pulling", "Pulling…") : t("sourceControl.pull", "Pull")}
+                  {busy === "pull"
+                    ? t("sourceControl.pulling", "Pulling…")
+                    : t("sourceControl.pull", "Pull")}
                 </button>
               </div>
             ) : null}
@@ -361,6 +371,7 @@ function ChangedFiles({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
+  const generateAbortRef = useRef<AbortController | null>(null);
   const [message, setMessage] = useState("");
   const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;
@@ -426,6 +437,17 @@ function ChangedFiles({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [message, enabled]);
 
+  useEffect(
+    () => () => {
+      if (generateAbortRef.current) {
+        generateAbortRef.current.abort();
+        generateAbortRef.current = null;
+        setBusy(null);
+      }
+    },
+    [cwd, setBusy],
+  );
+
   useEffect(() => {
     if (!menuOpen) return;
     const onPointer = (event: PointerEvent) => {
@@ -460,8 +482,16 @@ function ChangedFiles({
     const branch = index.branch;
     return confirmNative(
       kind === "pr"
-        ? t("sourceControl.prFromDefaultBranchConfirm", `Create a pull request from default branch "${branch}"?`, { branch })
-        : t("sourceControl.pushToDefaultBranchConfirm", `Push to default branch "${branch}"?`, { branch }),
+        ? t(
+            "sourceControl.prFromDefaultBranchConfirm",
+            `Create a pull request from default branch "${branch}"?`,
+            { branch },
+          )
+        : t(
+            "sourceControl.pushToDefaultBranchConfirm",
+            `Push to default branch "${branch}"?`,
+            { branch },
+          ),
     );
   };
 
@@ -475,9 +505,19 @@ function ChangedFiles({
       const untracked = file.status === "untracked";
       const ok = await confirmNative(
         untracked
-          ? t("sourceControl.deleteUntrackedFileConfirm", `Delete untracked file ${name}?`, { name })
-          : t("sourceControl.discardChangesFileConfirm", `Discard changes in ${name}? This cannot be undone.`, { name }),
-        untracked ? t("sourceControl.delete", "Delete") : t("sourceControl.discard", "Discard"),
+          ? t(
+              "sourceControl.deleteUntrackedFileConfirm",
+              `Delete untracked file ${name}?`,
+              { name },
+            )
+          : t(
+              "sourceControl.discardChangesFileConfirm",
+              `Discard changes in ${name}? This cannot be undone.`,
+              { name },
+            ),
+        untracked
+          ? t("sourceControl.delete", "Delete")
+          : t("sourceControl.discard", "Discard"),
       );
       if (!ok) return;
     }
@@ -503,11 +543,25 @@ function ChangedFiles({
       const untrackedOnly = n === 1 && only?.status === "untracked";
       const ok = await confirmNative(
         untrackedOnly
-          ? t("sourceControl.deleteUntrackedOnlyConfirm", `Delete untracked file ${basename(only.relative)}?`, { name: basename(only.relative) })
+          ? t(
+              "sourceControl.deleteUntrackedOnlyConfirm",
+              `Delete untracked file ${basename(only.relative)}?`,
+              { name: basename(only.relative) },
+            )
           : n === 1 && only
-            ? t("sourceControl.discardChangesFileConfirm", `Discard changes in ${basename(only.relative)}? This cannot be undone.`, { name: basename(only.relative) })
-            : t("sourceControl.discardAllUnstagedConfirm", `Discard all unstaged changes in ${n} files? This cannot be undone.`, { count: n }),
-        untrackedOnly ? t("sourceControl.delete", "Delete") : t("sourceControl.discard", "Discard"),
+            ? t(
+                "sourceControl.discardChangesFileConfirm",
+                `Discard changes in ${basename(only.relative)}? This cannot be undone.`,
+                { name: basename(only.relative) },
+              )
+            : t(
+                "sourceControl.discardAllUnstagedConfirm",
+                `Discard all unstaged changes in ${n} files? This cannot be undone.`,
+                { count: n },
+              ),
+        untrackedOnly
+          ? t("sourceControl.delete", "Delete")
+          : t("sourceControl.discard", "Discard"),
       );
       if (!ok) return;
     }
@@ -527,15 +581,31 @@ function ChangedFiles({
   };
 
   const generate = async () => {
-    if (!canGenerate) return;
+    if (!canGenerate || generateAbortRef.current) return;
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     setBusy("generate");
     try {
-      setMessage(await generateCommitMessage(cwd, textHarness));
+      const generated = await generateCommitMessage(
+        cwd,
+        textHarness,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) setMessage(generated);
     } catch (error) {
-      fail(error);
+      if (!controller.signal.aborted) fail(error);
     } finally {
-      setBusy(null);
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null;
+        setBusy(null);
+      }
     }
+  };
+
+  const cancelGenerate = () => {
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+    setBusy(null);
   };
 
   const toggleAmend = async () => {
@@ -659,8 +729,16 @@ function ChangedFiles({
             value={message}
             placeholder={
               amend
-                ? t("sourceControl.amendMessagePlaceholder", `Amend message (${MOD}↩ to amend)`, { mod: MOD })
-                : t("sourceControl.commitMessagePlaceholder", `Message (${MOD}↩ to commit)`, { mod: MOD })
+                ? t(
+                    "sourceControl.amendMessagePlaceholder",
+                    `Amend message (${MOD}↩ to amend)`,
+                    { mod: MOD },
+                  )
+                : t(
+                    "sourceControl.commitMessagePlaceholder",
+                    `Message (${MOD}↩ to commit)`,
+                    { mod: MOD },
+                  )
             }
             disabled={!canEditMessage}
             onChange={(event) => setMessage(event.target.value)}
@@ -678,14 +756,45 @@ function ChangedFiles({
           />
           <button
             type="button"
-            title={t("sourceControl.generateCommitMessage", "Generate commit message")}
-            aria-label={t("sourceControl.generateCommitMessage", "Generate commit message")}
-            disabled={!canGenerate}
-            onClick={() => void generate()}
-            className="absolute top-1 right-1 grid size-5 place-items-center rounded-md text-content bg-content/10 hover:bg-content/20 hover:text-content disabled:opacity-40"
+            title={
+              busy === "generate"
+                ? t(
+                    "sourceControl.cancelGenerateCommitMessage",
+                    "Cancel commit message generation",
+                  )
+                : t(
+                    "sourceControl.generateCommitMessage",
+                    "Generate commit message",
+                  )
+            }
+            aria-label={
+              busy === "generate"
+                ? t(
+                    "sourceControl.cancelGenerateCommitMessage",
+                    "Cancel commit message generation",
+                  )
+                : t(
+                    "sourceControl.generateCommitMessage",
+                    "Generate commit message",
+                  )
+            }
+            disabled={busy !== "generate" && !canGenerate}
+            onClick={() =>
+              busy === "generate" ? cancelGenerate() : void generate()
+            }
+            className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 hover:text-content disabled:opacity-40"
           >
             {busy === "generate" ? (
-              <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+              <>
+                <Loader
+                  className="size-3.5 animate-spin group-hover:hidden group-focus-visible:hidden"
+                  strokeWidth={1.75}
+                />
+                <X
+                  className="hidden size-3.5 group-hover:block group-focus-visible:block"
+                  strokeWidth={1.75}
+                />
+              </>
             ) : (
               <WandSparkles className="size-3" strokeWidth={1} />
             )}
@@ -703,7 +812,9 @@ function ChangedFiles({
             }`}
           >
             <Check className="size-3.5" strokeWidth={2} />
-            {amend ? t("sourceControl.amendCommit", "Amend Commit") : t("sourceControl.commit", "Commit")}
+            {amend
+              ? t("sourceControl.amendCommit", "Amend Commit")
+              : t("sourceControl.commit", "Commit")}
           </button>
 
           <button
@@ -743,7 +854,10 @@ function ChangedFiles({
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                {t("sourceControl.commitPushCreatePr", "Commit, Push & Create PR")}
+                {t(
+                  "sourceControl.commitPushCreatePr",
+                  "Commit, Push & Create PR",
+                )}
               </button>
               <div className="my-1 border-t border-content/10" />
               <button
@@ -792,7 +906,10 @@ function ChangedFiles({
             {index
               ? index.ahead > 0 || index.behind > 0
                 ? syncStatusLabel(index)
-                : t("sourceControl.noUncommittedChanges", "No uncommitted changes")
+                : t(
+                    "sourceControl.noUncommittedChanges",
+                    "No uncommitted changes",
+                  )
               : t("sourceControl.loadingChanges", "Loading changes…")}
           </p>
         ) : (
@@ -810,12 +927,18 @@ function ChangedFiles({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: t("sourceControl.openAllChanges", "Open All Changes"),
+                    title: t(
+                      "sourceControl.openAllChanges",
+                      "Open All Changes",
+                    ),
                     icon: <FileDiff className="size-3.5" strokeWidth={1.75} />,
                     onClick: onOpenAllChanges,
                   },
                   {
-                    title: t("sourceControl.unstageAllChanges", "Unstage All Changes"),
+                    title: t(
+                      "sourceControl.unstageAllChanges",
+                      "Unstage All Changes",
+                    ),
                     icon: <Minus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () => void runAll("unstage"),
                   },
@@ -846,17 +969,26 @@ function ChangedFiles({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: t("sourceControl.openAllChanges", "Open All Changes"),
+                    title: t(
+                      "sourceControl.openAllChanges",
+                      "Open All Changes",
+                    ),
                     icon: <FileDiff className="size-3.5" strokeWidth={1.75} />,
                     onClick: onOpenAllChanges,
                   },
                   {
-                    title: t("sourceControl.discardAllChanges", "Discard All Changes"),
+                    title: t(
+                      "sourceControl.discardAllChanges",
+                      "Discard All Changes",
+                    ),
                     icon: <Undo2 className="size-3.5" strokeWidth={1.75} />,
                     onClick: () => void runAll("discard"),
                   },
                   {
-                    title: t("sourceControl.stageAllChanges", "Stage All Changes"),
+                    title: t(
+                      "sourceControl.stageAllChanges",
+                      "Stage All Changes",
+                    ),
                     icon: <Plus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () => void runAll("stage"),
                   },
@@ -930,15 +1062,31 @@ function cachedPr(
 
 function syncStatusLabel(index: GitDiffIndex): string {
   if (index.ahead > 0 && index.behind > 0) {
-    return t("sourceControl.divergedFrom", `Diverged from ${index.upstream ?? "upstream"}`, { upstream: index.upstream ?? "upstream" });
+    return t(
+      "sourceControl.divergedFrom",
+      `Diverged from ${index.upstream ?? "upstream"}`,
+      { upstream: index.upstream ?? "upstream" },
+    );
   }
   if (index.ahead > 0) {
     const n = index.ahead;
-    return t(n === 1 ? "sourceControl.unpushedCommit" : "sourceControl.unpushedCommits", `${n} unpushed commits`, { count: n });
+    return t(
+      n === 1
+        ? "sourceControl.unpushedCommit"
+        : "sourceControl.unpushedCommits",
+      `${n} unpushed commits`,
+      { count: n },
+    );
   }
   if (index.behind > 0) {
     const n = index.behind;
-    return t(n === 1 ? "sourceControl.incomingCommit" : "sourceControl.incomingCommits", `${n} incoming commits`, { count: n });
+    return t(
+      n === 1
+        ? "sourceControl.incomingCommit"
+        : "sourceControl.incomingCommits",
+      `${n} incoming commits`,
+      { count: n },
+    );
   }
   return t("sourceControl.noFiles", "No files");
 }
@@ -982,18 +1130,45 @@ function GitSyncActions({
     ? t("sourceControl.synchronizingChanges", "Synchronizing Changes...")
     : canPublish
       ? index.branch
-        ? t("sourceControl.publishBranchNamed", `Publish Branch "${index.branch}"`, { branch: index.branch })
+        ? t(
+            "sourceControl.publishBranchNamed",
+            `Publish Branch "${index.branch}"`,
+            { branch: index.branch },
+          )
         : t("sourceControl.publishBranch", "Publish Branch")
       : behind > 0 && ahead > 0
-        ? t("sourceControl.pullAndPushCommits", `Pull ${behind} and push ${ahead} commits between ${dest}`, { behind, ahead, dest })
+        ? t(
+            "sourceControl.pullAndPushCommits",
+            `Pull ${behind} and push ${ahead} commits between ${dest}`,
+            { behind, ahead, dest },
+          )
         : behind > 0
-          ? t(behind === 1 ? "sourceControl.pullCommitsFrom" : "sourceControl.pullCommitsFromPlural", `Pull ${behind} commits from ${dest}`, { behind, dest })
-          : t(ahead === 1 ? "sourceControl.pushCommitsTo" : "sourceControl.pushCommitsToPlural", `Push ${ahead} commits to ${dest}`, { ahead, dest });
+          ? t(
+              behind === 1
+                ? "sourceControl.pullCommitsFrom"
+                : "sourceControl.pullCommitsFromPlural",
+              `Pull ${behind} commits from ${dest}`,
+              { behind, dest },
+            )
+          : t(
+              ahead === 1
+                ? "sourceControl.pushCommitsTo"
+                : "sourceControl.pushCommitsToPlural",
+              `Push ${ahead} commits to ${dest}`,
+              { ahead, dest },
+            );
   const createTitle = index.defaultBranch
-    ? t("sourceControl.createPrInto", `Create a pull request into ${index.defaultBranch}`, { branch: index.defaultBranch })
+    ? t(
+        "sourceControl.createPrInto",
+        `Create a pull request into ${index.defaultBranch}`,
+        { branch: index.defaultBranch },
+      )
     : t("sourceControl.createPr", "Create PR");
   const viewTitle = pr?.title
-    ? t("sourceControl.viewPrTitle", `View PR #${pr.number}: ${pr.title}`, { number: pr.number, title: pr.title })
+    ? t("sourceControl.viewPrTitle", `View PR #${pr.number}: ${pr.title}`, {
+        number: pr.number,
+        title: pr.title,
+      })
     : t("sourceControl.viewPr", "View PR");
   const btn =
     "flex h-7 w-full min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] font-medium disabled:opacity-40";
@@ -1020,7 +1195,9 @@ function GitSyncActions({
           ) : (
             <CloudUpload className="size-3.5 shrink-0" strokeWidth={1.75} />
           )}
-          <span className="min-w-0 truncate">{t("sourceControl.publishBranch", "Publish Branch")}</span>
+          <span className="min-w-0 truncate">
+            {t("sourceControl.publishBranch", "Publish Branch")}
+          </span>
         </button>
       ) : canSync ? (
         <button
@@ -1034,7 +1211,9 @@ function GitSyncActions({
             className={`size-3.5 shrink-0 ${syncing ? "animate-spin" : ""}`}
             strokeWidth={1.75}
           />
-          <span className="min-w-0 truncate">{t("sourceControl.syncChanges", "Sync Changes")}</span>
+          <span className="min-w-0 truncate">
+            {t("sourceControl.syncChanges", "Sync Changes")}
+          </span>
           {behind > 0 ? (
             <span className="shrink-0 tabular-nums text-content/55">
               ↓{behind}
@@ -1076,7 +1255,11 @@ function GitSyncActions({
         >
           <ExternalLink className="size-3.5 shrink-0" strokeWidth={1.75} />
           <span className="min-w-0 truncate">
-            {pr?.number ? t("sourceControl.viewPrNumbered", `View PR #${pr.number}`, { number: pr.number }) : t("sourceControl.viewPr", "View PR")}
+            {pr?.number
+              ? t("sourceControl.viewPrNumbered", `View PR #${pr.number}`, {
+                  number: pr.number,
+                })
+              : t("sourceControl.viewPr", "View PR")}
           </span>
         </button>
       ) : null}
@@ -1130,7 +1313,11 @@ export function FileSection({
           </span>
         </button>
         <IconAction
-          title={view === "tree" ? t("sourceControl.viewAsList", "View as List") : t("sourceControl.viewAsTree", "View as Tree")}
+          title={
+            view === "tree"
+              ? t("sourceControl.viewAsList", "View as List")
+              : t("sourceControl.viewAsTree", "View as Tree")
+          }
           onClick={onToggleView}
         >
           {view === "tree" ? (
@@ -1167,12 +1354,17 @@ type ChangeDir = {
 async function remotePrContent(cwd: string) {
   const range = await gitRangeContext(cwd);
   const commits = range.commitSummary.trim();
-  const firstCommit = commits.split(/\r?\n/, 1)[0]?.replace(/^[0-9a-f]+\s+/i, "").trim();
+  const firstCommit = commits
+    .split(/\r?\n/, 1)[0]
+    ?.replace(/^[0-9a-f]+\s+/i, "")
+    .trim();
   const title = firstCommit || `Changes on ${range.head}`;
   const body = [
     commits && `## Commits\n\n${commits}`,
     range.diffSummary.trim() && `## Changes\n\n${range.diffSummary.trim()}`,
-  ].filter(Boolean).join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return { title, body: body || title, base: range.base, head: range.head };
 }
 

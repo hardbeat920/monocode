@@ -8,6 +8,7 @@ export {
 } from "./core/auth";
 export {
   applyHarnessEvent,
+  applyHarnessEvents,
   appendUser,
   appendSteerUser,
   promoteLastAssistantToPlan,

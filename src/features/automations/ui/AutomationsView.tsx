@@ -501,19 +501,20 @@ function AutomationCard({
   const model = resolveModel(automation.harness, automation.model);
   return (
     <div
-      className={`group rounded-md border px-2.5 py-2 ${
+      className={`group relative rounded-md border ${
         active
           ? "border-transparent bg-selection"
           : "border-transparent hover:bg-content/5"
       }`}
     >
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          aria-current={active ? "true" : undefined}
-          onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] text-content/45"
-        >
+      <button
+        type="button"
+        aria-current={active ? "true" : undefined}
+        aria-label={`Open ${automation.name}`}
+        onClick={onSelect}
+        className="block w-full rounded-md px-2.5 py-2 text-left"
+      >
+        <span className="flex min-w-0 items-center gap-1.5 pr-8 text-[10px] text-content/45">
           <TriggerMark
             kind={
               automationTriggers(automation)[0]?.kind ?? automation.triggerKind
@@ -521,20 +522,8 @@ function AutomationCard({
             className="size-3"
           />
           <span className="min-w-0 truncate">{triggerLabel(automation)}</span>
-        </button>
-        <ToggleSwitch
-          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
-          on={automation.enabled}
-          onChange={onToggle}
-          compact
-        />
-      </div>
-      <button
-        type="button"
-        onClick={onSelect}
-        className="mt-1 w-full text-left"
-      >
-        <span className="block truncate text-[13px] font-semibold text-content">
+        </span>
+        <span className="mt-1 block truncate text-[13px] font-semibold text-content">
           {automation.name}
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
@@ -571,6 +560,14 @@ function AutomationCard({
           </span>
         </span>
       </button>
+      <span className="absolute right-2.5 top-2 flex">
+        <ToggleSwitch
+          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
+          on={automation.enabled}
+          onChange={onToggle}
+          compact
+        />
+      </span>
     </div>
   );
 }

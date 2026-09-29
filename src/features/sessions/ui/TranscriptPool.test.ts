@@ -80,6 +80,22 @@ afterEach(() => {
 });
 
 describe("transcript pool", () => {
+  it("cycles through ten chats without rebuilding any transcript", () => {
+    const pool = new TranscriptPool();
+    const ids = Array.from({ length: 10 }, (_, index) => `chat-${index}`);
+    const instances = new Map<string, string | undefined>();
+    for (const id of ids) {
+      render(pool, id);
+      instances.set(id, probe(id)?.dataset.instance);
+    }
+    for (const id of ids) {
+      render(pool, id);
+      expect(probe(id)?.dataset.instance).toBe(instances.get(id));
+    }
+    expect(mounts).toEqual(ids);
+    expect(unmounts).toEqual([]);
+  });
+
   it("shows the transcript inside the pane that hosts it", () => {
     const pool = new TranscriptPool();
     render(pool, "a");

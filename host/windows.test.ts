@@ -143,7 +143,9 @@ try {
     expect(["IgnoreNew", "2"]).toContain(result.definition.instances);
     expect(result.definition.action).toContain("-EncodedCommand");
   },
-  30_000,
+  // Three sequential PowerShell calls each have their own 30s process timeout.
+  // Leave room for all three to settle before test teardown removes their files.
+  100_000,
 );
 
 it.skipIf(process.platform !== "win32")(

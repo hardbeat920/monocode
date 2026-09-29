@@ -46,6 +46,7 @@ import {
 } from "../model/remoteModels";
 import {
   isRemoteProvider,
+  REMOTE_PROVIDERS,
   requireHostDescriptor,
   type CommandReceipt,
   type HostCommand,
@@ -270,7 +271,7 @@ function ConnectedRemoteSession({
     pendingRemoteCommand(project.key, machine.environmentId, sessionId ?? null, shell.id),
   );
   const [draft, setDraft] = useState<Configuration>(() => ({
-    harness: shell.harness === "claude" ? "claude" : "codex",
+    harness: isRemoteProvider(shell.harness) ? shell.harness : "codex",
     model: shell.model,
     settings: shell.modelSettings ?? {},
     mode: shell.runtimeMode,
@@ -367,6 +368,7 @@ function ConnectedRemoteSession({
             await remoteRequest<HostDescriptor>(
               machine.id,
               "environment.describe",
+              { supportedProviders: REMOTE_PROVIDERS },
             ),
           );
           if (host.environmentId !== machine.environmentId)
@@ -464,7 +466,7 @@ function ConnectedRemoteSession({
   // A new session starts with the tab's model when the host offers it, and
   // otherwise with the host's first model.
   useEffect(() => {
-    if (sessionId || !catalog || !providers.length) return;
+    if (!online || sessionId || !catalog || !providers.length) return;
     const harness = providers.includes(draft.harness)
       ? draft.harness
       : providers[0];
@@ -481,7 +483,7 @@ function ConnectedRemoteSession({
       model: model.id,
       settings: carryModelSettings(model.settings ?? [], current.settings),
     }));
-  }, [catalog, providers, sessionId, draft.harness, draft.model]);
+  }, [online, catalog, providers, sessionId, draft.harness, draft.model]);
 
   const saved: Configuration | undefined = hostSession && {
     harness: hostSession.harness as RemoteProvider,
@@ -904,7 +906,7 @@ function ConnectedRemoteSession({
       id: `remote:${machine.environmentId}`,
       modelsFor: models,
       resolve: (harness, id = "") => {
-        const provider = harness === "claude" ? "claude" : "codex";
+        const provider = harness as RemoteProvider;
         // Keep the saved model's effort visible even when the host catalog is
         // loading, failed, or no longer lists it.
         const controls = remoteModelControls(

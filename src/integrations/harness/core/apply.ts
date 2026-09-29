@@ -22,6 +22,35 @@ import { isReviewablePlan } from "../../../features/sessions/model/plan";
 import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 
+/** Apply one delivery batch without copying the transcript for every token. */
+export function applyHarnessEvents(
+  session: Session,
+  events: readonly HarnessEvent[],
+): Session {
+  let next = session;
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.type !== "message.delta" && event.type !== "reasoning.delta") {
+      next = applyHarnessEvent(next, event);
+      continue;
+    }
+    const texts = [event.text];
+    while (index + 1 < events.length) {
+      const following = events[index + 1];
+      if (following.type !== event.type) break;
+      texts.push(following.text);
+      index++;
+    }
+    next = patchStreaming(
+      next,
+      event.type === "message.delta" ? "assistant" : "reasoning",
+      texts,
+      true,
+    );
+  }
+  return next;
+}
+
 export function applyHarnessEvent(
   session: Session,
   event: HarnessEvent,
@@ -702,10 +731,14 @@ function appendBlock(session: Session, block: Block): Session {
 function patchStreaming(
   session: Session,
   role: "assistant" | "reasoning",
-  text: string,
+  input: string | readonly string[],
   streaming: boolean,
 ): Session {
-  if (!text && role === "reasoning") return session;
+  if (
+    role === "reasoning" &&
+    (typeof input === "string" ? !input : input.every((text) => !text))
+  )
+    return session;
   let index = session.blocks.length - 1;
   while (
     index >= 0 &&
@@ -718,7 +751,12 @@ function patchStreaming(
   // even when no tool or status row landed between them; joining the two can
   // turn separate Markdown blocks into text such as `commitConnect`.
   if (last?.role === role && last.streaming) {
-    const nextText = joinStreamText(last.text, text);
+    // Fold against the existing text in order: providers can mix tokens and
+    // full snapshots, so concatenating the incoming chunks would duplicate text.
+    const nextText =
+      typeof input === "string"
+        ? joinStreamText(last.text, input)
+        : input.reduce(joinStreamText, last.text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
     blocks[index] = {
@@ -732,7 +770,7 @@ function patchStreaming(
   blocks.push({
     id: crypto.randomUUID(),
     role,
-    text,
+    text: typeof input === "string" ? input : input.reduce(joinStreamText, ""),
     streaming,
   });
   return { ...session, blocks };
