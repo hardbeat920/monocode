@@ -658,6 +658,67 @@ describe("claude subagents", () => {
     });
   });
 
+  it("shows one row per background subagent when the task list comes first", async () => {
+    const { events } = await startTurn("s1");
+    const agents = [
+      { id: "toolu_a", task: "t1", description: "Explore the auth module" },
+      { id: "toolu_b", task: "t2", description: "Review the tests" },
+    ];
+
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: agents.map((agent) => ({
+          type: "tool_use",
+          id: agent.id,
+          name: "Agent",
+          input: {
+            description: agent.description,
+            subagent_type: "explore",
+            run_in_background: true,
+          },
+        })),
+      },
+    });
+    // Claude lists the tasks, with no tool_use_id, before it announces them.
+    emit({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: agents.map((agent) => ({
+        task_id: agent.task,
+        task_type: "local_agent",
+        description: agent.description,
+      })),
+    });
+    for (const agent of agents) {
+      emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: agent.task,
+        tool_use_id: agent.id,
+        description: agent.description,
+        task_type: "local_agent",
+        is_backgrounded: true,
+      });
+    }
+
+    await waitFor(
+      () =>
+        events.filter(
+          (event) =>
+            event.type === "tool.updated" && event.callId === "toolu_b",
+        ).length > 0,
+      "second task started",
+    );
+    const rows = events.flatMap((event) =>
+      event.type === "tool.started" && event.kind === "agent"
+        ? [event.callId]
+        : [],
+    );
+    expect(rows).toEqual(["toolu_a", "toolu_b"]);
+  });
+
   it("stays busy after a parent result while a background subagent is running", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;
