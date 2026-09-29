@@ -96,8 +96,10 @@ import {
   saveSidebarOpacity,
   saveThemeHue,
   saveThemeSaturation,
+  isLightScheme,
   saveTranscriptLayout,
   saveTranscriptAnchor,
+  syncNativeGlass,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
   loadShowExcludedFiles,
   saveShowExcludedFiles,
@@ -184,7 +186,7 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
-import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -1868,6 +1870,7 @@ function useAppearanceSettings(
     applyBodyGlass(next);
     saveBodyGlass(next);
     setBodyGlass(next);
+    if (IS_LINUX) syncNativeGlass(isLightScheme() ? "light" : "dark");
   }, []);
 
   const onShowExcludedFiles = useCallback((next: boolean) => {

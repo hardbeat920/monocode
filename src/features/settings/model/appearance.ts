@@ -1,6 +1,10 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { isHexColor } from "../../../shared/lib/colorUtils";
-import { HAS_NATIVE_GLASS, IS_MAC } from "../../../platform/tauri/platform";
+import {
+  HAS_NATIVE_GLASS,
+  IS_LINUX,
+  IS_MAC,
+} from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
 import {
@@ -133,7 +137,7 @@ export const PROJECT_RAIL_WIDTH_MIN = 180;
 export const PROJECT_RAIL_WIDTH_MAX = 360;
 export const PROJECT_RAIL_WIDTH_DEFAULT = 200;
 
-export const BODY_GLASS_DEFAULT = true;
+export const BODY_GLASS_DEFAULT = !IS_LINUX;
 
 export const CHAT_BACKGROUND_OPACITY_MIN = 0.05;
 export const CHAT_BACKGROUND_OPACITY_MAX = 0.65;
@@ -372,8 +376,9 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
   return next;
 }
 
-function syncNativeGlass(scheme: ColorScheme) {
-  void invoke("set_window_glass_enabled", { enabled: scheme === "dark" });
+export function syncNativeGlass(scheme: ColorScheme) {
+  const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
+  void invoke("set_window_glass_enabled", { enabled });
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
