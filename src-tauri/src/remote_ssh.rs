@@ -393,6 +393,7 @@ pub fn bootstrap_script(platform: HostPlatform) -> String {
     let url = format!("https://github.com/hardbeat920/monocode/releases/download/v{version}");
     match platform {
         HostPlatform::Unix => include_str!("remote_bootstrap.sh")
+            .replace("\r\n", "\n")
             .replace("@@VERSION@@", &shell_quote(version))
             .replace("@@RELEASE@@", &shell_quote(&url)),
         HostPlatform::Windows => include_str!("remote_bootstrap.ps1")
