@@ -351,38 +351,55 @@ pub(crate) fn try_create_pull_request(
     }
 }
 
-/// First Azure DevOps remote in `git config`, preferring `origin`.
+/// Azure DevOps remote for the branch's effective push destination.
+/// Uses the configured upstream remote when one exists, `origin` otherwise.
+/// Returns `Ok(None)` when that push remote is not an Azure DevOps remote,
+/// so callers fall back to the GitHub CLI path.
 fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, String> {
+    let remote = effective_push_remote(root).unwrap_or_else(|| "origin".to_string());
+    let url = git_remote_url(root, &remote)?;
+    let Some(parsed) = parse_azure_remote(&url) else {
+        return Ok(None);
+    };
+    if !valid_repo_parts(&parsed.1, &parsed.2) {
+        return Ok(None);
+    }
+    Ok(Some(parsed))
+}
+
+/// Remote that `git push` would use: the upstream's remote, else `origin`.
+fn effective_push_remote(root: &Path) -> Option<String> {
     let mut cmd = Command::new("git");
     crate::hide_window_console(&mut cmd);
     let output = cmd
-        .args(["config", "--get-regexp", r"^remote\..*\.url$"])
+        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let upstream = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    upstream
+        .split('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn git_remote_url(root: &Path, remote: &str) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    crate::hide_window_console(&mut cmd);
+    let output = cmd
+        .args(["remote", "get-url", remote])
         .current_dir(root)
         .output()
         .map_err(|_| "Could not run git".to_string())?;
-    if !output.status.success() && output.status.code() != Some(1) {
-        return Err("Could not read git remotes".into());
+    if !output.status.success() {
+        // No such remote (e.g. no `origin` yet): not Azure, fall back.
+        return Ok(String::new());
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut fallback: Option<(String, String, String)> = None;
-    for line in stdout.lines() {
-        let Some((name, remote)) = line.split_once(char::is_whitespace) else {
-            continue;
-        };
-        let Some(parsed) = parse_azure_remote(remote.trim()) else {
-            continue;
-        };
-        if !valid_repo_parts(&parsed.1, &parsed.2) {
-            continue;
-        }
-        if name == "remote.origin.url" {
-            return Ok(Some(parsed));
-        }
-        if fallback.is_none() {
-            fallback = Some(parsed);
-        }
-    }
-    Ok(fallback)
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn azure_devops_list_work_items_for(
@@ -1975,7 +1992,7 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
     }
     // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo} (no scheme).
     if !remote.contains("://") && remote.contains('@') {
-        if let Some((_, path)) = remote.split_once(':') {
+        if let Some((left, path)) = remote.split_once(':') {
             let path = path.strip_prefix("v3/").unwrap_or(path);
             let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
             if parts.len() >= 3 && remote.contains("dev.azure.com") {
@@ -1990,6 +2007,41 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
                     project,
                     repo,
                 ));
+            }
+            // On-premises scp-style SSH: user@host:{collection/...}/{project}/_git/{repo}
+            let host = left
+                .rsplit('@')
+                .next()
+                .unwrap_or(left)
+                .trim()
+                .to_ascii_lowercase();
+            if !host.is_empty() {
+                let segments: Vec<String> = path
+                    .split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(percent_decode)
+                    .collect();
+                if let Some(git_index) = segments
+                    .iter()
+                    .position(|segment| segment.eq_ignore_ascii_case("_git"))
+                {
+                    if git_index >= 2 && git_index + 1 < segments.len() {
+                        let project = segments[git_index - 1].clone();
+                        let repo = segments[git_index + 1..]
+                            .join("/")
+                            .trim_end_matches(".git")
+                            .trim()
+                            .to_string();
+                        let org_path = segments[..git_index - 1].join("/");
+                        if !org_path.is_empty() && !project.is_empty() && !repo.is_empty() {
+                            return Some((
+                                format!("https://{host}/{org_path}").to_ascii_lowercase(),
+                                project,
+                                repo,
+                            ));
+                        }
+                    }
+                }
             }
         }
     }

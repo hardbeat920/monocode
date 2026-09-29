@@ -442,10 +442,13 @@ function ChangedFiles({
     window.alert(error instanceof Error ? error.message : String(error));
   };
 
-  const recordPrActivity = (number = pr?.number) => {
+  const recordPrActivity = (
+    number = pr?.number,
+    provider: "github" | "azuredevops" = "github",
+  ) => {
     if (!number) return;
     recordInboxSelfActivity({
-      provider: "github",
+      provider,
       kind: "pr",
       number,
       projectPath: cwd,
@@ -622,10 +625,11 @@ function ChangedFiles({
       content.base,
       content.head,
     );
-    const number = Number(
-      /\/(?:pull|pullrequest)\/(\d+)(?:[/?#]|$)/.exec(url)?.[1],
-    );
-    if (Number.isInteger(number) && number > 0) recordPrActivity(number);
+    const match = /\/(pull|pullrequest)\/(\d+)(?:[/?#]|$)/.exec(url);
+    const number = Number(match?.[2]);
+    if (Number.isInteger(number) && number > 0) {
+      recordPrActivity(number, match?.[1] === "pullrequest" ? "azuredevops" : "github");
+    }
     await openUrl(url.trim());
   };
 
