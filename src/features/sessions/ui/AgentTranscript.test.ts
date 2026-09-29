@@ -581,6 +581,33 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("src/lib/session.ts");
   });
 
+  it("offers failed subagent tool results in the same error control as top-level tools", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        tool: { callId: "agent-1", kind: "agent", status: "failed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              toolKind: "execute",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("Show error details for npm test");
+  });
+
   it("opens a lone subagent straight into its own transcript", () => {
     const markup = render(
       [

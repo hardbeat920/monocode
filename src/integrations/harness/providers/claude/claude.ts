@@ -1381,6 +1381,7 @@ function noteSubagentResults(
       kind: "tool",
       text: "",
       status: result.isError ? "failed" : "completed",
+      ...(result.isError && result.text ? { detail: result.text } : {}),
     });
   }
 }

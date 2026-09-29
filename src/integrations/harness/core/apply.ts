@@ -1044,6 +1044,7 @@ function recordAgentStep(
     text,
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
+    ...(event.detail ? { detail: event.detail } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
@@ -1100,6 +1101,7 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
     a.text === b.text &&
     a.toolKind === b.toolKind &&
     a.status === b.status &&
+    a.detail === b.detail &&
     samePreview(a.preview, b.preview)
   );
 }

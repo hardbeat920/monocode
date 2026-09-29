@@ -87,6 +87,7 @@ export type HarnessEvent =
       /** Tool kind for a "tool" step, so it gets the right icon. */
       toolKind?: string;
       status?: string;
+      detail?: string;
       preview?: ToolPreview;
       /** The subagent's own name, when the provider only reveals it here. */
       agentName?: string;

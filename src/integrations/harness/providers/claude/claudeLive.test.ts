@@ -886,6 +886,72 @@ describe("claude subagents", () => {
     ]);
   });
 
+  it("keeps a failed subagent tool result on its tool row", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Agent",
+            input: { description: "Run tests" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_sub_bash",
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_sub_bash",
+            is_error: true,
+            content: [{ type: "text", text: "Tests failed: assertion error" }],
+          },
+        ],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    expect(
+      session.blocks.find((block) => block.tool?.callId === "toolu_agent")
+        ?.agentRun?.steps,
+    ).toMatchObject([
+      {
+        id: "toolu_sub_bash",
+        kind: "tool",
+        text: "npm test",
+        toolKind: "execute",
+        status: "failed",
+        detail: "Tests failed: assertion error",
+      },
+    ]);
+  });
+
   it("does not mirror a subagent result onto the parent tool row", async () => {
     const { events, turn } = await startTurn("s1");
     emit({

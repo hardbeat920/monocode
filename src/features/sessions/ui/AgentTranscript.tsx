@@ -2713,6 +2713,7 @@ function agentStepBlock(step: AgentStep): Block {
       title: step.text,
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
+      ...(step.detail ? { detail: step.detail } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
