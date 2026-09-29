@@ -724,6 +724,10 @@ function SidebarComponent({
   // Settings live in the rail slot, so they keep it visible even when the
   // project rail itself is collapsed.
   const railVisible = showProjectRail && (projectRailOpen || settingsOpen);
+  // Keep the full rail mounted after its first reveal so reopening does not
+  // recreate every project row and restart their Git-stat subscriptions.
+  const railMounted = useRef(railVisible);
+  if (railVisible) railMounted.current = true;
   const compactRailVisible =
     compactProjectRail && showProjectRail && !railVisible;
   const inProject = looksLikeProject(cwd);
@@ -2112,8 +2116,9 @@ function SidebarComponent({
           titleBarAbove={titleBarAbove}
         />
       ) : null}
-      {railVisible && onSelectProject && onOpenProject ? (
+      {railMounted.current && onSelectProject && onOpenProject ? (
         <ProjectRail
+          visible={railVisible}
           cwd={cwd}
           recents={recents}
           inboxUnseen={inboxUnseen}

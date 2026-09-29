@@ -136,6 +136,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("project rail visibility", () => {
+  it("keeps the mounted rail and its scroll state when collapsed", async () => {
+    props = {
+      ...props,
+      recents: [{ path: "/workspace/project", openedAt: Date.now() }],
+      projectRailOpen: true,
+      compactProjectRail: false,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+    };
+    await act(async () => render());
+    const rail = container.querySelector<HTMLElement>('nav[aria-label="Projects"]');
+    expect(rail).not.toBeNull();
+    rail!.scrollTop = 37;
+
+    props = { ...props, projectRailOpen: false };
+    await act(async () => render());
+    expect(rail?.classList.contains("hidden")).toBe(true);
+
+    props = { ...props, projectRailOpen: true };
+    await act(async () => render());
+    expect(container.querySelector('nav[aria-label="Projects"]')).toBe(rail);
+    expect(rail?.scrollTop).toBe(37);
+  });
+});
+
 describe("sidebar session multiselection", () => {
   it.each(["ctrlKey", "metaKey"] as const)(
     "resets the %s anchor after acting on another session's context menu",
