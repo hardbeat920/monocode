@@ -1155,9 +1155,11 @@ struct GitPrCreateInput {
     head: String,
 }
 
-/// Create a GitHub pull request with `gh` and return its URL.
+/// Create a pull request and return its URL. Azure Repos checkouts use the
+/// Azure DevOps API; everything else falls back to the GitHub CLI.
 #[tauri::command]
 pub async fn git_pr_create(
+    app: AppHandle,
     cwd: String,
     title: String,
     body: String,
@@ -1166,6 +1168,7 @@ pub async fn git_pr_create(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_pr_create_for(
+            &app,
             &expand_home(&cwd),
             &GitPrCreateInput {
                 title,
@@ -4042,7 +4045,21 @@ fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
     best
 }
 
-fn git_pr_create_for(root: &Path, input: &GitPrCreateInput) -> Result<String, String> {
+fn git_pr_create_for(
+    app: &AppHandle,
+    root: &Path,
+    input: &GitPrCreateInput,
+) -> Result<String, String> {
+    if let Some(url) = crate::azure_devops::try_create_pull_request(
+        app,
+        root,
+        &input.title,
+        &input.body,
+        &input.base,
+        &input.head,
+    )? {
+        return Ok(url);
+    }
     let title = input.title.trim();
     if title.is_empty() {
         return Err("Pull request title cannot be empty".into());

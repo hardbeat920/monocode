@@ -622,7 +622,9 @@ function ChangedFiles({
       content.base,
       content.head,
     );
-    const number = Number(/\/pull\/(\d+)(?:[/?#]|$)/.exec(url)?.[1]);
+    const number = Number(
+      /\/(?:pull|pullrequest)\/(\d+)(?:[/?#]|$)/.exec(url)?.[1],
+    );
     if (Number.isInteger(number) && number > 0) recordPrActivity(number);
     await openUrl(url.trim());
   };

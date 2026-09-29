@@ -285,6 +285,106 @@ pub async fn azure_devops_mr_diff(
     .map_err(|error| error.to_string())?
 }
 
+/// Create a pull request on Azure Repos and return its web URL.
+/// Returns `Ok(None)` when the checkout has no Azure DevOps remote, so
+/// callers can fall back to the GitHub flow.
+pub(crate) fn try_create_pull_request(
+    app: &AppHandle,
+    root: &Path,
+    title: &str,
+    body: &str,
+    base: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
+    let Some((org_key, project, repo_name)) = azure_remote_for(root)? else {
+        return Ok(None);
+    };
+    let title = title.trim();
+    let base = base.trim();
+    let head = head.trim();
+    if title.is_empty() {
+        return Err("Pull request title cannot be empty".into());
+    }
+    if base.is_empty() || head.is_empty() {
+        return Err("Pull request base and head branches are required".into());
+    }
+    if base == head {
+        return Err("Pull request base and head branches must differ".into());
+    }
+    let config = require_config(app)?;
+    if !config.url.trim().eq_ignore_ascii_case(&org_key) {
+        return Err(format!(
+            "Azure DevOps is connected to {} but this repository belongs to {org_key}. Update the organization in Settings.",
+            config.url.trim()
+        ));
+    }
+    let path = format!(
+        "/{}/_apis/git/repositories/{}/pullrequests?api-version={}",
+        encode_segment(&project),
+        encode_segment(&repo_name),
+        API_VERSION
+    );
+    let payload = json!({
+        "sourceRefName": format!("refs/heads/{head}"),
+        "targetRefName": format!("refs/heads/{base}"),
+        "title": title,
+        "description": body.trim(),
+    });
+    let response = azure_post_json(&config, &path, payload)?;
+    let url = response
+        .value
+        .get("_links")
+        .and_then(|links| links.get("web"))
+        .and_then(|web| web.get("href"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string);
+    if let Some(url) = url {
+        return Ok(Some(url));
+    }
+    // Fall back to the canonical web URL when the API omits _links.web.
+    let number = response.value.get("pullRequestId").and_then(Value::as_i64);
+    match number {
+        Some(id) if id > 0 => Ok(Some(pr_web_url(&config, &project, &repo_name, id))),
+        _ => Err("Azure DevOps did not return a pull request URL".into()),
+    }
+}
+
+/// First Azure DevOps remote in `git config`, preferring `origin`.
+fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, String> {
+    let mut cmd = Command::new("git");
+    crate::hide_window_console(&mut cmd);
+    let output = cmd
+        .args(["config", "--get-regexp", r"^remote\..*\.url$"])
+        .current_dir(root)
+        .output()
+        .map_err(|_| "Could not run git".to_string())?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err("Could not read git remotes".into());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut fallback: Option<(String, String, String)> = None;
+    for line in stdout.lines() {
+        let Some((name, remote)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Some(parsed) = parse_azure_remote(remote.trim()) else {
+            continue;
+        };
+        if !valid_repo_parts(&parsed.1, &parsed.2) {
+            continue;
+        }
+        if name == "remote.origin.url" {
+            return Ok(Some(parsed));
+        }
+        if fallback.is_none() {
+            fallback = Some(parsed);
+        }
+    }
+    Ok(fallback)
+}
+
 fn azure_devops_list_work_items_for(
     config: &AzureDevOpsConfig,
     repo: &str,
