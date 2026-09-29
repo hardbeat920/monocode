@@ -390,6 +390,46 @@ describe("cursor background subagents", () => {
     await turn;
   });
 
+  it("does not pass a child tool's command off as its error output", async () => {
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    emitAgentStart();
+    const meta = { parentToolCallId: "call_agent" };
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call",
+        _meta: meta,
+        toolCallId: "child_bash",
+        title: "npm test",
+        kind: "execute",
+        rawInput: { command: "npm test" },
+        status: "in_progress",
+      },
+    });
+    // Failed with nothing to say, but the update still carries the call: the
+    // command is the title, not the reason it failed.
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "child_bash",
+        status: "failed",
+        rawInput: { command: "npm test" },
+      },
+    });
+    const step = events
+      .filter((event) => event.type === "agent.step")
+      .at(-1);
+    expect(step).toMatchObject({
+      callId: "call_agent",
+      stepId: "tool:child_bash",
+      status: "failed",
+    });
+    expect(step).not.toHaveProperty("detail");
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+  });
+
   it("emits request-shaped Cursor todo updates as structured task lists", async () => {
     const { events, promptId, turn } = await startTurn("cursor-live");
     request(71, "cursor/update_todos", {

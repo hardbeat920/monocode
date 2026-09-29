@@ -869,7 +869,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
         title,
         kind: toolKind,
         status,
-        detail,
+        detail: toolOutput(update, tool),
         preview,
       });
       return;
@@ -1363,7 +1363,12 @@ function toolLabel(
   return kindTitle(kind);
 }
 
-function toolDetail(
+/**
+ * What the call produced. A step that opens an error control wants the reason
+ * it failed, and the request it was making is already its title, so the input
+ * fallback below belongs to a top-level row and not to this.
+ */
+function toolOutput(
   update: Record<string, unknown>,
   tool: Record<string, unknown>,
 ): string | undefined {
@@ -1375,8 +1380,16 @@ function toolDetail(
   if (typeof output === "string" && output.trim()) return capToolDetail(output);
   const outputText = textFromContent(output);
   if (outputText.trim()) return capToolDetail(outputText);
-  return inputLabel(
-    update.rawInput ?? tool.rawInput ?? update.input ?? tool.input,
+  return undefined;
+}
+
+function toolDetail(
+  update: Record<string, unknown>,
+  tool: Record<string, unknown>,
+): string | undefined {
+  return (
+    toolOutput(update, tool) ??
+    inputLabel(update.rawInput ?? tool.rawInput ?? update.input ?? tool.input)
   );
 }
 
