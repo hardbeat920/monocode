@@ -1,4 +1,4 @@
-import { useTranslation, t } from "../../features/i18n/model/i18n";
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -2960,6 +2960,7 @@ const SessionCard = memo(function SessionCard({
   onRename?: (sessionId: string) => void;
   onDelete?: (sessionId: string) => void;
 }) {
+  const { t } = useTranslation();
   const skipClickUntil = useRef(0);
   const prefetchTimer = useRef<number | null>(null);
   const orchestrationTooltipRootRef = useRef<HTMLDivElement>(null);
@@ -3562,6 +3563,7 @@ function DiffStat({
   additions: number;
   deletions: number;
 }) {
+  const { t } = useTranslation();
   if (additions <= 0 && deletions <= 0) return null;
 
   const label = [

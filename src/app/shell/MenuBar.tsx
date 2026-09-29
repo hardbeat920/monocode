@@ -63,6 +63,7 @@ export function MenuBar({
   );
   const [, refreshShortcuts] = useState(loadKeybindingOverrides);
   const barRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
 
   useEffect(
     () =>
@@ -367,7 +368,6 @@ export function MenuBar({
     return null;
   }
 
-  const { t } = useTranslation();
   const MENUS: { key: MenuKey; label: string }[] = [
     { key: "file", label: t("shell.menuBar.file", "File") },
     { key: "view", label: t("shell.menuBar.view", "View") },

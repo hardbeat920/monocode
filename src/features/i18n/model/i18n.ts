@@ -6,9 +6,9 @@ export type LanguagePreference = "system" | "en" | "zh-CN";
 export type ResolvedLanguage = "en" | "zh-CN";
 
 const LANGUAGE_KEY = "monocode.languagePreference";
-// Unit tests assert the upstream English copy; the app itself defaults to Chinese.
-const DEFAULT_LANGUAGE: ResolvedLanguage =
-  import.meta.env.MODE === "test" ? "en" : "zh-CN";
+// Preserve the upstream English experience on non-Chinese systems unless the
+// user explicitly selects Simplified Chinese.
+const DEFAULT_LANGUAGE: ResolvedLanguage = "en";
 export const LANGUAGE_CHANGE_EVENT = "monocode:language-change";
 
 export const LANGUAGE_OPTIONS: { id: LanguagePreference; label: string }[] = [
@@ -83,6 +83,16 @@ function getNestedValue(obj: unknown, path: string): string | undefined {
   return typeof current === "string" ? current : undefined;
 }
 
+function interpolate(
+  text: string,
+  vars?: Record<string, string | number>,
+): string {
+  if (!vars) return text;
+  return text.replace(/\{([^{}]+)\}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : match,
+  );
+}
+
 /**
  * Look up a translated string by dot-notated key.
  * If not found in the resolved language, falls back to English, then to provided fallback, then to key itself.
@@ -104,13 +114,7 @@ export function t(
     text = fallback ?? key;
   }
 
-  if (vars) {
-    for (const [vKey, vVal] of Object.entries(vars)) {
-      text = text.replace(new RegExp(`\\{${vKey}\\}`, "g"), String(vVal));
-    }
-  }
-
-  return text;
+  return interpolate(text, vars);
 }
 
 let cachedSnapshot: {
@@ -165,12 +169,7 @@ export function useTranslation() {
     if (text == null) {
       text = fallback ?? key;
     }
-    if (vars) {
-      for (const [vKey, vVal] of Object.entries(vars)) {
-        text = text.replace(new RegExp(`\\{${vKey}\\}`, "g"), String(vVal));
-      }
-    }
-    return text;
+    return interpolate(text, vars);
   };
 
   return {

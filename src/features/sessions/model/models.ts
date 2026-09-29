@@ -120,14 +120,14 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: t("models.settings.reasoning", "Reasoning"),
+        get label() { return t("models.settings.reasoning", "Reasoning"); },
         kind: "select",
         value: "high",
         options: [
-          { value: "xhigh", label: t("models.options.extraHigh", "Extra High") },
-          { value: "high", label: t("models.options.high", "High") },
-          { value: "medium", label: t("models.options.medium", "Medium") },
-          { value: "low", label: t("models.options.low", "Low") },
+          { value: "xhigh", get label() { return t("models.options.extraHigh", "Extra High"); } },
+          { value: "high", get label() { return t("models.options.high", "High"); } },
+          { value: "medium", get label() { return t("models.options.medium", "Medium"); } },
+          { value: "low", get label() { return t("models.options.low", "Low"); } },
         ],
       },
     ],
@@ -141,13 +141,13 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: t("models.settings.reasoning", "Reasoning"),
+        get label() { return t("models.settings.reasoning", "Reasoning"); },
         kind: "select",
         value: "high",
         options: [
-          { value: "high", label: t("models.options.high", "High") },
-          { value: "medium", label: t("models.options.medium", "Medium") },
-          { value: "low", label: t("models.options.low", "Low") },
+          { value: "high", get label() { return t("models.options.high", "High"); } },
+          { value: "medium", get label() { return t("models.options.medium", "Medium"); } },
+          { value: "low", get label() { return t("models.options.low", "Low"); } },
         ],
       },
     ],

@@ -175,7 +175,9 @@ export const BTW_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "btw",
   invocation: "btw",
-  description: t("session.commands.btw.description", "Ask a read-only side question about the current turn."),
+  get description() {
+    return t("session.commands.btw.description", "Ask a read-only side question about the current turn.");
+  },
   scope: "builtin",
   source: "monocode",
 };

@@ -1,4 +1,4 @@
-import { t } from "../../i18n/model/i18n";
+import { useTranslation } from "../../i18n/model/i18n";
 import { Check } from "../../../shared/ui/icons";
 import { type ReactNode } from "react";
 import { Popover } from "../../../shared/ui/Popover";
@@ -22,13 +22,6 @@ type Props = {
   onClose: () => void;
 };
 
-const TIME_OPTIONS: { id: SessionTimeFilter; label: string }[] = [
-  { id: "all", label: t("session.timeFilters.all", "All time") },
-  { id: "today", label: t("session.timeFilters.today", "Today") },
-  { id: "7d", label: t("session.timeFilters.7d", "Last 7 days") },
-  { id: "30d", label: t("session.timeFilters.30d", "Last 30 days") },
-];
-
 export function SessionFiltersMenu({
   x,
   y,
@@ -37,6 +30,13 @@ export function SessionFiltersMenu({
   onChange,
   onClose,
 }: Props) {
+  const { t } = useTranslation();
+  const TIME_OPTIONS: { id: SessionTimeFilter; label: string }[] = [
+    { id: "all", label: t("session.timeFilters.all", "All time") },
+    { id: "today", label: t("session.timeFilters.today", "Today") },
+    { id: "7d", label: t("session.timeFilters.7d", "Last 7 days") },
+    { id: "30d", label: t("session.timeFilters.30d", "Last 30 days") },
+  ];
   const hiddenHarnesses = new Set(filters.hiddenHarnesses);
 
   const toggleHarness = (harness: HarnessId) => {

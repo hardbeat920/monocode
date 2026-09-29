@@ -202,8 +202,8 @@ const states: Record<
     color: positive,
   },
   fail: {
-    label: t("inbox.repairStillFailing", "Still failing"),
-    summary: t("inbox.repairStillFailingSummary", "still failing"),
+    get label() { return t("inbox.repairStillFailing", "Still failing"); },
+    get summary() { return t("inbox.repairStillFailingSummary", "still failing"); },
     Icon: CircleX,
     color: negative,
   },
@@ -238,14 +238,14 @@ const states: Record<
     color: neutral,
   },
   interrupted: {
-    label: t("inbox.repairInterrupted", "Interrupted"),
-    summary: t("inbox.repairTrackingInterrupted", "Tracking interrupted"),
+    get label() { return t("inbox.repairInterrupted", "Interrupted"); },
+    get summary() { return t("inbox.repairTrackingInterrupted", "Tracking interrupted"); },
     Icon: CircleDashed,
     color: neutral,
   },
   "agent-error": {
     get label() { return t("inbox.checkStatus.agentStopped", "Agent stopped"); },
-    summary: t("inbox.repairAgentCouldNotFinish", "Agent could not finish"),
+    get summary() { return t("inbox.repairAgentCouldNotFinish", "Agent could not finish"); },
     Icon: CircleX,
     color: negative,
   },

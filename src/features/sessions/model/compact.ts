@@ -5,7 +5,9 @@ export const COMPACT_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "compact",
   invocation: "compact",
-  description: t("session.commands.compact.description", "Summarize older conversation context to free space."),
+  get description() {
+    return t("session.commands.compact.description", "Summarize older conversation context to free space.");
+  },
   scope: "builtin",
   source: "monocode",
 };

@@ -5,7 +5,9 @@ export const SESSION_FOLDER_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "add-to-folder",
   invocation: "add-to-folder",
-  description: t("session.commands.sessionFolder.description", "Place this session in an existing or new sidebar folder."),
+  get description() {
+    return t("session.commands.sessionFolder.description", "Place this session in an existing or new sidebar folder.");
+  },
   scope: "builtin",
   source: "monocode",
 };

@@ -1719,7 +1719,7 @@ export default function App({
           projectTerminalsRef.current,
           lastDockSideRef.current ?? undefined,
         ).finally(() => {
-          void (toTray || IS_MAC ? hideCurrentWindow() : closeCurrentWindow());
+          void (toTray ? hideCurrentWindow() : closeCurrentWindow());
         });
       })
       .then((fn) => {

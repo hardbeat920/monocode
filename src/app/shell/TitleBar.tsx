@@ -1,4 +1,4 @@
-import { t } from "../../features/i18n/model/i18n";
+import { t, useTranslation } from "../../features/i18n/model/i18n";
 import {
   CheckCircle,
   ChevronLeft,
@@ -284,6 +284,7 @@ function TitleTabItem({
   onContextMenu: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
+  useTranslation();
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
   const accessibleTooltip =
@@ -631,6 +632,7 @@ function TitleBarComponent({
   recents = [],
   onSelectProject,
 }: Props) {
+  useTranslation();
   const tabIds = tabs.map((tab) => tab.id);
   const { displayed, setTabNode, finishMotion } = useTabCloseMotion(tabs);
   const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
