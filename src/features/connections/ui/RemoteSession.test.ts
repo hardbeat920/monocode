@@ -602,6 +602,20 @@ it("keeps a new session on its selected remote provider", async () => {
   });
 });
 
+it("drops settings from the tab that the host's model does not offer", async () => {
+  await render({
+    ...shell(),
+    harness: "codex",
+    model: "codex:gpt-test",
+    modelSettings: { reasoningEffort: "high", serviceTier: "fast" },
+  });
+  await send("Fix the tests");
+  expect(commands[0]).toMatchObject({ type: "create", model: "codex:gpt-test" });
+  expect(commands[0]).toHaveProperty("modelSettings", {
+    reasoningEffort: "high",
+  });
+});
+
 it("sends a remote plan turn from the plus menu", async () => {
   await render();
   await act(async () => byLabel("Add files or choose a mode")!.click());

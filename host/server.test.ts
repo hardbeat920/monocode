@@ -14,6 +14,8 @@ import { request } from "node:http";
 import { HostEngine } from "./engine";
 import { HostStore } from "./store";
 import { createHostServer } from "./server";
+import { HostChildBackend } from "./child-backend";
+import { configureChildBackend } from "../src/integrations/harness/core/child";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
@@ -21,6 +23,9 @@ const modelProbe = vi.hoisted(() => vi.fn());
 vi.mock("../src/integrations/harness/providers/codex/codexCatalog", () => ({
   discoverCodexModels: modelProbe,
 }));
+// Catalog tests point the host at a stand-in provider CLI.
+const binaries: { codex?: string } = {};
+configureChildBackend(new HostChildBackend(binaries));
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -299,6 +304,46 @@ describe("remote host API", () => {
     expect((await s.call("environment.describe", {
       supportedProviders: ["codex", "cursor"],
     })).value.result.providers).toEqual(["codex", "cursor"]);
+  });
+  it("re-probes models after the provider CLI is updated", async () => {
+    const s = await setup();
+    cleanups.push(async () => {
+      delete binaries.codex;
+    });
+    writeFileSync(join(s.directory, "codex-1"), "");
+    writeFileSync(join(s.directory, "codex-2"), "");
+    binaries.codex = join(s.directory, "codex-1");
+    modelProbe.mockClear();
+    modelProbe.mockResolvedValueOnce([{ id: "codex:old", name: "Old" }]);
+    modelProbe.mockResolvedValueOnce([{ id: "codex:new", name: "New" }]);
+    const list = async () =>
+      (await s.call("models.list", { projectId: s.project.id })).value.result
+        .models.codex;
+    expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+    expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+    binaries.codex = join(s.directory, "codex-2");
+    expect(await list()).toEqual([{ id: "codex:new", name: "New" }]);
+    expect(modelProbe).toHaveBeenCalledTimes(2);
+  });
+  it("re-probes models once the catalog is five minutes old", async () => {
+    const s = await setup();
+    modelProbe.mockClear();
+    modelProbe.mockResolvedValueOnce([{ id: "codex:old", name: "Old" }]);
+    modelProbe.mockResolvedValueOnce([{ id: "codex:new", name: "New" }]);
+    const list = async () =>
+      (await s.call("models.list", { projectId: s.project.id })).value.result
+        .models.codex;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+      vi.setSystemTime(Date.now() + 4 * 60_000);
+      expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+      vi.setSystemTime(Date.now() + 60_000);
+      expect(await list()).toEqual([{ id: "codex:new", name: "New" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(modelProbe).toHaveBeenCalledTimes(2);
   });
   it("lets an authenticated desktop browse host folders without reading files", async () => {
     const s = await setup();
