@@ -63,10 +63,15 @@
   --color-accent: hsl(211 92% 62%);
   --color-skill: #e8c547;
   --color-mention: #38bdf8;
-  --font-mono:
+  --font-mono: var(--font-mono-default);
+  --font-sans: var(--font-sans-default);
+}
+
+:root {
+  --font-mono-default:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
-  --font-sans:
+  --font-sans-default:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
 }

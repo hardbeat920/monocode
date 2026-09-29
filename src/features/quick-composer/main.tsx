@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IS_MAC } from "../../platform/tauri/platform";
+import { initFonts } from "../settings/model/fonts";
 import {
   applyAccentColor,
   applyThemeDarkLightness,
@@ -23,6 +24,7 @@ import "../../styles/index.css";
  * theme may have changed in a workspace window since.
  */
 function applyAppearance() {
+  initFonts();
   document.documentElement.classList.toggle("is-mac", IS_MAC);
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());

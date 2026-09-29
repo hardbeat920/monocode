@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Check, ChevronDown, Search } from "./icons";
@@ -31,6 +32,7 @@ export function SearchableSelect({
   variant = "field",
   searchable = true,
   align = "start",
+  renderLabel,
 }: {
   label: string;
   value: string;
@@ -44,6 +46,7 @@ export function SearchableSelect({
   variant?: "field" | "transparent" | "row" | "panel" | "pill";
   searchable?: boolean;
   align?: PopoverAlign;
+  renderLabel?: (option: SearchableSelectOption) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -213,7 +216,7 @@ export function SearchableSelect({
         <span
           className={`min-w-0 truncate ${variant === "panel" ? "flex-1 text-right" : variant === "pill" || variant === "row" ? "" : "flex-1"} ${selected ? "text-content" : "text-content/40"}`}
         >
-          {selected?.label ?? placeholder}
+          {selected ? (renderLabel?.(selected) ?? selected.label) : placeholder}
         </span>
         <ChevronDown
           className={`shrink-0 text-content/45 transition-transform duration-150 ease-out ${variant === "pill" || variant === "row" ? "size-3" : "size-3.5"} ${open ? "rotate-180" : ""}`}
@@ -301,7 +304,7 @@ export function SearchableSelect({
                       ) : null}
                     </span>
                     <span className="min-w-0 flex-1 truncate">
-                      {option.label}
+                      {renderLabel?.(option) ?? option.label}
                     </span>
                   </button>
                 );

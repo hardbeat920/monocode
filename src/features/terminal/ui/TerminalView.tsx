@@ -19,6 +19,7 @@ import {
   type TerminalMetaPatch,
 } from "../model/terminalTab";
 import { isLightScheme, SCHEME_CHANGE_EVENT } from "../../settings/model/appearance";
+import { subscribeFonts } from "../../settings/model/fonts";
 import {
   applyTerminalChrome,
   fitTerminal,
@@ -345,9 +346,14 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     const frame = requestAnimationFrame(applySize);
     const observer = new ResizeObserver(schedule);
     observer.observe(host);
+    const unsubscribeFonts = subscribeFonts(() => {
+      term.options.fontFamily = monoFont();
+      schedule();
+    });
 
     return () => {
       closed = true;
+      unsubscribeFonts();
       cancelAnimationFrame(frame);
       if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
