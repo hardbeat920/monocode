@@ -2,6 +2,9 @@ name: Cross release (fork)
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*-opencrabs.*"
 
 permissions:
   contents: read
