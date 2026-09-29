@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    needs: [linux, linux-rpm, windows]
+    needs: [linux, linux-rpm, windows, host]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -157,7 +157,13 @@ jobs:
           name: windows-packages
           path: target/release/bundle/nsis
 
-      - name: Upload to R2
+      - name: Download host packages
+        uses: actions/download-artifact@v4
+        with:
+          name: host-packages
+          path: build/host-packages
+
+      - name: Upload updater packages to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -274,7 +280,6 @@ jobs:
           # retain an older release under these mutable names.
           aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" --content-type "application/json" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
 
       - name: GitHub Release
         env:
@@ -314,12 +319,107 @@ jobs:
           cp "$ARM_SIG" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
           cp "$INTEL_TAR" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz"
           cp "$INTEL_SIG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "MonoCode $VERSION" \
-            --notes "See CHANGELOG.md for details." \
-            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
-            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
-            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"
+          HOST_ARCHIVES=(build/host-packages/*.tar.gz build/host-packages/*.zip)
+          if (( ${#HOST_ARCHIVES[@]} != 6 )); then
+            echo "Expected six host archives" >&2
+            exit 1
+          fi
+          HOST_FILES=("${HOST_ARCHIVES[@]}")
+          for archive in "${HOST_ARCHIVES[@]}"; do
+            if [[ ! -f "$archive.sha256" ]]; then
+              echo "Missing host checksum: $archive.sha256" >&2
+              exit 1
+            fi
+            HOST_FILES+=("$archive.sha256")
+          done
+          RELEASE_FILES=(
+            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
+            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
+            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_FILES[@]}"
+          )
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "MonoCode $VERSION" \
+              --notes "See CHANGELOG.md for details."
+          fi
+          verify_release() {
+            local expected_draft="$1"
+            gh release view "$GITHUB_REF_NAME" --json isDraft,assets > "$RUNNER_TEMP/release-state.json"
+            node - "$RUNNER_TEMP/release-state.json" "$expected_draft" "${RELEASE_FILES[@]}" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (release.isDraft !== (process.argv[3] === "true")) {
+            console.error("GitHub Release publication state is unexpected.");
+            process.exit(1);
+          }
+          const names = new Set(release.assets.map((asset) => asset.name));
+          for (const file of process.argv.slice(4)) {
+            const name = path.basename(file);
+            if (!names.has(name)) {
+              console.error(`GitHub Release is missing ${name}.`);
+              process.exit(1);
+            }
+          }
+          NODE
+          }
+          IS_DRAFT=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [[ "$IS_DRAFT" == true ]]; then
+            # Draft assets can be replaced after an interrupted upload. A
+            # published release is immutable, so only resume drafts.
+            gh release upload "$GITHUB_REF_NAME" "${RELEASE_FILES[@]}" --clobber
+            verify_release true
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          elif [[ "$IS_DRAFT" != false ]]; then
+            echo "Unexpected GitHub Release state: $IS_DRAFT" >&2
+            exit 1
+          fi
+          verify_release false
+
+      - name: Publish updater feed
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" \
+            --content-type "application/json" \
+            --cache-control "no-store,max-age=0,must-revalidate" \
+            --endpoint-url "$ENDPOINT"
+
+  host:
+    name: Standalone host packages
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:host
+      - run: npm run host:package -- --all
+        if: runner.os == 'Linux'
+      - run: npm run host:package
+        if: runner.os != 'Linux'
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: host-packages
+          path: |
+            build/host-packages/*.tar.gz
+            build/host-packages/*.zip
+            build/host-packages/*.sha256
+          if-no-files-found: error
 
   linux:
     name: Linux packages

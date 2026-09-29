@@ -3,7 +3,7 @@ import { titleFromToolInput } from "../../../integrations/harness/core/preview";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
-import { normalizeProjectPath } from "../../projects/model/recents";
+import { isRemoteProjectPath, normalizeProjectPath } from "../../projects/model/recents";
 import {
   claudeShellCommands,
   ompActiveAssistantTexts,
@@ -112,6 +112,7 @@ type SessionUpsertPayload = {
 export function shouldPersistSession(session: Session): boolean {
   return (
     !session.inboxAsk &&
+    !isRemoteProjectPath(session.cwd) &&
     session.cwd !== "~" &&
     session.blocks.some((block) => block.role === "user")
   );

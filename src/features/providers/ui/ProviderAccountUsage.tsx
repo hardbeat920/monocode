@@ -143,6 +143,7 @@ export function UsageMeter({
   className?: string;
 }) {
   const pct = clampUsedPercent(window.usedPercent);
+  const remaining = 100 - pct;
   const full = pct >= 100 && (window.resetsAt == null || window.resetsAt > now);
   const reset =
     window.resetsAt == null
@@ -166,20 +167,20 @@ export function UsageMeter({
         <span
           className={`shrink-0 tabular-nums ${full ? "font-medium text-red-400" : "text-content/60"}`}
         >
-          {full ? "Full" : formatUsagePercent(pct)}
+          {formatUsagePercent(remaining)} left
         </span>
       </div>
       <div
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} limit used`}
+        aria-label={`${title} limit remaining`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(pct)}
+        aria-valuenow={Math.round(remaining)}
       >
         <span
           className={`block h-full rounded-full transition-[width] duration-300 ${barClass(pct)}`}
-          style={{ width: `${pct}%` }}
+          style={{ width: `${remaining}%` }}
         />
       </div>
     </div>

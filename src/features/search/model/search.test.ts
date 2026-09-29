@@ -51,4 +51,9 @@ describe("project search cancellation", () => {
       searchOwner: "owner-1",
     });
   });
+
+  it("does not send remote cancellation to this computer", async () => {
+    await cancelProjectSearch("remote://env/home/me/repo", "remote-search");
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
