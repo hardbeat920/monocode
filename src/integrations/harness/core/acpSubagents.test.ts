@@ -77,6 +77,48 @@ describe.each([
       false,
     );
   });
+
+  it("keeps a failed child tool's output on its step, where it can be read", () => {
+    const router = new AcpSubagents();
+    let session = newSession(provider, "/repo");
+    const push = (update: Record<string, unknown>) => {
+      const params = { sessionId: "parent", update };
+      for (const event of router.route(params, parse(params)))
+        session = applyHarnessEvent(session, event);
+    };
+    push({
+      sessionUpdate: "tool_call",
+      toolCallId: "spawn",
+      kind: "other",
+      title: "Task",
+      status: "in_progress",
+      rawInput: { _toolName: "task", description: "Check auth" },
+    });
+    const meta = { parentToolCallId: "spawn" };
+    push({
+      sessionUpdate: "tool_call",
+      _meta: meta,
+      toolCallId: "read",
+      kind: "read",
+      title: "Read auth.ts",
+      status: "in_progress",
+    });
+    push({
+      sessionUpdate: "tool_call_update",
+      _meta: meta,
+      toolCallId: "read",
+      status: "failed",
+      content: [{ type: "text", text: "File missing" }],
+    });
+    const steps =
+      session.blocks.find((entry) => entry.tool?.callId === "spawn")?.agentRun
+        ?.steps ?? [];
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({
+      status: "failed",
+      detail: "File missing",
+    });
+  });
 });
 
 describe("ACP child routing", () => {

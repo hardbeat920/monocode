@@ -1036,6 +1036,12 @@ export function mapCodexSubagentSteps(
   return mapCodexNotification(method, params).events.flatMap(
     (event): HarnessEvent[] => {
       if (event.type === "tool.started" || event.type === "tool.updated") {
+        // Only a failure earns detail: a settled result already rides in the
+        // preview, and a long one would weigh the run down for nothing.
+        const detail =
+          event.type === "tool.updated" && event.status === "failed"
+            ? event.detail
+            : undefined;
         return [
           {
             type: "agent.step",
@@ -1045,9 +1051,7 @@ export function mapCodexSubagentSteps(
             text: event.title ?? "",
             ...(event.kind ? { toolKind: event.kind } : {}),
             ...(event.status ? { status: event.status } : {}),
-            ...(event.type === "tool.updated" && event.detail
-              ? { detail: event.detail }
-              : {}),
+            ...(detail ? { detail } : {}),
             ...(event.preview ? { preview: event.preview } : {}),
           },
         ];
