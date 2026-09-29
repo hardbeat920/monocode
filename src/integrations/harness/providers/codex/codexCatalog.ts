@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
@@ -20,13 +21,13 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 const REASONING_LABELS: Record<string, string> = {
-  none: "None",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
+  none: t("models.options.none", "None"),
+  minimal: t("models.options.minimal", "Minimal"),
+  low: t("models.options.low", "Low"),
+  medium: t("models.options.medium", "Medium"),
+  high: t("models.options.high", "High"),
+  xhigh: t("models.options.extraHigh", "Extra High"),
+  max: t("models.options.max", "Max"),
   ultra: "Ultra",
 };
 
@@ -195,7 +196,7 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
   if (effortOptions.length > 0) {
     settings.push({
       id: "reasoningEffort",
-      label: "Reasoning",
+      label: t("models.settings.reasoning", "Reasoning"),
       kind: "select",
       value: defaultEffort ?? effortOptions[0].value,
       options: effortOptions,
@@ -209,14 +210,14 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
         ? rec.additionalSpeedTiers
         : []) ?? [];
   const tierOptions: ModelSettingChoice[] = [
-    { value: "default", label: "Standard" },
+    { value: "default", label: t("models.options.standard", "Standard") },
   ];
   for (const entry of tiersRaw) {
     if (typeof entry === "string") {
       if (entry === "default") continue;
       tierOptions.push({
         value: entry,
-        label: entry === "fast" ? "Fast" : entry,
+        label: entry === "fast" ? t("models.options.fast", "Fast") : entry,
       });
       continue;
     }
@@ -233,7 +234,7 @@ function parseModelSettings(rec: Record<string, unknown>): ModelSetting[] {
       stringField(rec, "defaultServiceTier") ?? "default";
     settings.push({
       id: "serviceTier",
-      label: "Service Tier",
+      label: t("models.settings.serviceTier", "Service Tier"),
       kind: "select",
       value: tierOptions.some((o) => o.value === defaultTier)
         ? defaultTier

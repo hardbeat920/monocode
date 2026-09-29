@@ -96,7 +96,7 @@ export function InboxComments({
       <div className="flex items-center gap-2 text-[12px] text-content/50">
         <h2 className="text-content/70">{label}</h2>
         {thread.truncated ? (
-          <span>Latest comments · more on {moreOn}</span>
+          <span>{t("inbox.latestCommentsMoreOn", "Latest comments · more on {source}", { source: moreOn })}</span>
         ) : null}
         {loading ? (
           <LoaderCircle
@@ -291,14 +291,14 @@ function InboxComment({
                 type="button"
                 title={
                   provider === "linear"
-                    ? "Open in Linear"
+                    ? t("inbox.openInLinear", "Open in Linear")
                     : provider === "jira"
-                      ? "Open in Jira"
+                      ? t("inbox.openInJira", "Open in Jira")
                       : provider === "gitlab"
-                        ? "Open on GitLab"
+                        ? t("inbox.openOnGitLab", "Open on GitLab")
                         : provider === "azuredevops"
-                          ? "Open on ADO"
-                          : "Open on GitHub"
+                          ? t("inbox.openOnAdo", "Open on ADO")
+                          : t("inbox.openOnGitHub", "Open on GitHub")
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"

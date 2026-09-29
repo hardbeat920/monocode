@@ -874,9 +874,9 @@ function SidebarComponent({
     ? sessionFolders.find((folder) => folder.id === folderMenu.folderId)
     : undefined;
   const folderMenuItems: ExplorerMenuItem[] = [
-    { kind: "item", id: "rename", label: "Rename", shortcut: "F2" },
+    { kind: "item", id: "rename", label: t("common.rename", "Rename"), shortcut: "F2" },
     { kind: "sep" },
-    { kind: "item", id: "ungroup", label: "Ungroup" },
+    { kind: "item", id: "ungroup", label: t("shell.sidebar.ungroup", "Ungroup") },
   ];
   const sessionMenuItems: ExplorerMenuItem[] = [
     ...(onCancelReminders && menuReminderTimes.length > 0
@@ -884,11 +884,11 @@ function SidebarComponent({
           {
             kind: "item" as const,
             id: "reminder:cancel",
-            label: "Cancel reminder",
+            label: t("shell.sidebar.cancelReminder", "Cancel reminder"),
             description:
               menuReminderTimes.length === 1
                 ? formatReminderTime(menuReminderTimes[0])
-                : "Multiple reminder times",
+                : t("sidebar.multipleReminderTimes", "Multiple reminder times"),
           },
           { kind: "sep" as const },
         ]
@@ -898,7 +898,7 @@ function SidebarComponent({
           {
             kind: "item" as const,
             id: "pin",
-            label: allMenuSessionsPinned ? "Unpin" : "Pin",
+            label: allMenuSessionsPinned ? t("shell.sidebar.unpin", "Unpin") : t("shell.sidebar.pin", "Pin"),
           },
         ]
       : []),
@@ -907,7 +907,7 @@ function SidebarComponent({
           {
             kind: "item" as const,
             id: "rename",
-            label: "Rename",
+            label: t("common.rename", "Rename"),
             shortcut: "F2",
           },
         ]
@@ -918,25 +918,25 @@ function SidebarComponent({
             kind: "item" as const,
             id: "link-work-item",
             label: menuSessions[0]?.linkedWorkItem
-              ? "Edit GitHub issue or PR link…"
-              : "Link GitHub issue or PR…",
+              ? t("shell.sidebar.editGitHubLink", "Edit GitHub issue or PR link…")
+              : t("shell.sidebar.linkGitHubLink", "Link GitHub issue or PR…"),
           },
         ]
       : []),
     {
       kind: "item",
       id: "reminder",
-      label: "Remind me",
+      label: t("shell.sidebar.remindMe", "Remind me"),
       disabled: !onSetReminders,
       submenu: sessionReminderPresets(),
     },
     { kind: "sep" as const },
-    { kind: "item" as const, id: "folder-new", label: "New folder" },
+    { kind: "item" as const, id: "folder-new", label: t("shell.sidebar.newFolder", "New folder") },
     ...(sessionFolders.length > 0 ? [{ kind: "sep" as const }] : []),
     ...sessionFolders.map((folder) => ({
       kind: "item" as const,
       id: `folder-add:${folder.id}`,
-      label: `Add to ${folder.name}`,
+      label: t("shell.sidebar.addToFolder", "Add to {name}", { name: folder.name }),
       checked:
         menuSessionIds.length > 0 &&
         menuSessionIds.every((sessionId) =>
@@ -949,8 +949,8 @@ function SidebarComponent({
             kind: "item" as const,
             id: "folder-remove",
             label: multipleMenuSessions
-              ? "Remove from folders"
-              : "Remove from folder",
+              ? t("shell.sidebar.removeFromFolders", "Remove from folders")
+              : t("shell.sidebar.removeFromFolder", "Remove from folder"),
           },
         ]
       : []),
@@ -965,7 +965,7 @@ function SidebarComponent({
                 {
                   kind: "item" as const,
                   id: "archive",
-                  label: allMenuSessionsArchived ? "Unarchive" : "Archive",
+                  label: allMenuSessionsArchived ? t("shell.sidebar.unarchive", "Unarchive") : t("common.archive", "Archive"),
                 },
               ]
             : []),
@@ -974,7 +974,7 @@ function SidebarComponent({
                 {
                   kind: "item" as const,
                   id: "delete",
-                  label: "Delete",
+                  label: t("common.delete", "Delete"),
                   shortcut: "⌫",
                   danger: true,
                 },
@@ -1398,7 +1398,7 @@ function SidebarComponent({
             data-tauri-drag-region="deep"
           >
             <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
-              Workspace
+              {t("sidebar.workspace", "Workspace")}
             </span>
             <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
           </div>
@@ -1491,7 +1491,7 @@ function SidebarComponent({
             </div>
           ) : (
             <p className="px-3 py-2 text-[12px] text-content/50">
-              No project folder
+              {t("sidebar.noProjectFolder", "No project folder")}
             </p>
           )}
         </div>
@@ -1523,7 +1523,7 @@ function SidebarComponent({
         >
           {!cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
-              No project folder
+              {t("sidebar.noProjectFolder", "No project folder")}
             </p>
           ) : (
             <div>
@@ -2858,7 +2858,11 @@ const SessionCard = memo(function SessionCard({
   const linkedWorkItem = session.linkedWorkItem;
   const linkedUpdateDot = linkedUpdate ? (
     <span
-      title={`Linked ${linkedWorkItem?.kind === "pr" ? "PR" : "issue"} updated since this session`}
+      title={
+        linkedWorkItem?.kind === "pr"
+          ? t("sidebar.linkedPrUpdated", "Linked PR updated since this session")
+          : t("sidebar.linkedIssueUpdated", "Linked issue updated since this session")
+      }
       aria-label="Linked work item updated"
       className="size-1.5 shrink-0 rounded-full bg-accent"
     />
@@ -2868,7 +2872,11 @@ const SessionCard = memo(function SessionCard({
       type="button"
       data-no-drag
       data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
+      title={
+        linkedWorkItem.kind === "pr"
+          ? t("sidebar.openLinkedPrBesideSession", `Open PR #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`, { number: linkedWorkItem.number, mod: MOD })
+          : t("sidebar.openLinkedIssueBesideSession", `Open issue #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`, { number: linkedWorkItem.number, mod: MOD })
+      }
       aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -3197,7 +3205,7 @@ const SessionCard = memo(function SessionCard({
               <span
                 data-automation-icon
                 role="img"
-                title="Started by an automation"
+                title={t("shell.startedByAutomation", "Started by an automation")}
                 aria-label="Started by an automation"
                 className="grid size-5 -mr-1 shrink-0 place-items-center text-amber-400"
               >
@@ -3395,7 +3403,7 @@ function DiffStat({
 
   return (
     <span
-      title={`${label} uncommitted`}
+      title={t("shell.uncommittedChanges", `${label} uncommitted`, { label })}
       className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (

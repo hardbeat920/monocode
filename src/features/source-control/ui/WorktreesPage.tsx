@@ -227,7 +227,7 @@ export function WorktreesPage({
       )}
       {data && (
         <p className="break-all text-[11px] text-content/40">
-          New worktrees are created in {prettyCwd(data.defaultRoot)}.
+          {t("sourceControl.newWorktreesCreatedIn", "New worktrees are created in {path}.", { path: prettyCwd(data.defaultRoot) })}
         </p>
       )}
       {creating && (

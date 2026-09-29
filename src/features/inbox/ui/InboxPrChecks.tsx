@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { CheckRepairForm, type CheckRepair } from "./CheckRepairForm";
 import {
   CheckRepairProgress,
@@ -110,7 +111,7 @@ export function PrChecksTab({
       onClick={onSelect}
       className={`${TAB} ${selected ? "text-content" : "text-content/50 hover:text-content"}`}
     >
-      <span className="leading-none">Checks</span>
+      <span className="leading-none">{t("inbox.checksTab", "Checks")}</span>
       <mark.Icon
         className={`size-3.5 shrink-0 ${mark.className}`}
         strokeWidth={1.75}
@@ -358,7 +359,7 @@ function PrCheckRow({
             aria-haspopup="dialog"
             aria-expanded={fixOpen}
             aria-label={`Fix ${check.name} with AI`}
-            title="Fix with AI"
+            title={t("inbox.fixWithAi", "Fix with AI")}
             className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.03] text-content/65 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
             <Sparkles className="size-3.5" strokeWidth={1.75} />
@@ -386,7 +387,7 @@ function PrCheckRow({
         {linked ? (
           <button
             type="button"
-            title="View full log on GitHub"
+            title={t("inbox.viewFullLogOnGitHub", "View full log on GitHub")}
             aria-label={`View ${check.name} on GitHub`}
             onClick={() => void openUrl(url)}
             className={`${REFRESH_BUTTON} opacity-60 group-hover/check:opacity-100 focus-visible:opacity-100`}
@@ -411,19 +412,19 @@ function PrCheckRow({
                 className="size-4 shrink-0 animate-spin"
                 strokeWidth={1.75}
               />
-              Loading steps…
+              {t("inbox.loadingSteps", "Loading steps…")}
             </p>
           ) : null}
           {error ? (
             <div role="alert" className="space-y-2 text-content/60">
-              <p>Could not load job details.</p>
+              <p>{t("inbox.couldNotLoadJobDetails", "Could not load job details.")}</p>
               <p className="break-words text-[11px]">{error}</p>
               <button
                 type="button"
                 onClick={() => setRetry((value) => value + 1)}
                 className="rounded px-2 py-1 hover:bg-content/5"
               >
-                Retry details
+                {t("inbox.retryDetails", "Retry details")}
               </button>
             </div>
           ) : null}
@@ -441,7 +442,7 @@ function PrCheckRow({
                 <details className="group/steps">
                   <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-content/50 hover:text-content [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="size-3 transition-transform group-open/steps:rotate-90 motion-reduce:transition-none" />
-                    View run steps
+                    {t("inbox.viewRunSteps", "View run steps")}
                     <span className="ml-auto pl-2 text-right text-[10px] text-content/35 @max-[420px]/checks:hidden">
                       {describeCheckCounts(countChecks(details.steps))}
                     </span>
@@ -474,14 +475,14 @@ function PrCheckRow({
                 </details>
               ) : (
                 <p className="text-content/50">
-                  No steps reported for this job.
+                  {t("inbox.noStepsReported", "No steps reported for this job.")}
                 </p>
               )}
               {check.state === "fail" &&
               !details.annotations.length &&
               !details.notice ? (
                 <p className="mt-3 text-content/50">
-                  No error annotations reported. View the full log on GitHub.
+                  {t("inbox.noErrorAnnotationsReported", "No error annotations reported. View the full log on GitHub.")}
                 </p>
               ) : null}
               {details.notice ? (
@@ -561,13 +562,13 @@ export function InboxPrChecks({
         </p>
         <button
           type="button"
-          title="Retry loading checks"
+          title={t("inbox.retryLoadingChecks", "Retry loading checks")}
           aria-label="Retry loading checks"
           onClick={onRefresh}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-3 text-[12px] text-content/80 hover:bg-content/5"
         >
           <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          Retry
+          {t("common.retry", "Retry")}
         </button>
       </div>
     );
@@ -638,7 +639,7 @@ export function InboxPrChecks({
               className="primary-action inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
             >
               <Sparkles className="size-3.5" strokeWidth={1.75} />
-              Fix all failed
+              {t("inbox.fixAllFailed", "Fix all failed")}
               <span
                 aria-hidden="true"
                 className="ml-1 border-l border-current/20 pl-2 text-[10px] opacity-55"
@@ -649,7 +650,7 @@ export function InboxPrChecks({
           ) : null}
           <button
             type="button"
-            title="Refresh checks"
+            title={t("inbox.refreshChecks", "Refresh checks")}
             aria-label="Refresh checks"
             disabled={refreshing}
             onClick={onRefresh}
@@ -686,7 +687,7 @@ export function InboxPrChecks({
       ) : null}
       {stale && error ? (
         <p role="status" className="px-2 text-[12px] text-content/55">
-          Saved results may be out of date.
+          {t("inbox.savedResultsOutOfDate", "Saved results may be out of date.")}
         </p>
       ) : null}
       {selection && selectionValid && repair ? (
@@ -733,12 +734,12 @@ export function InboxPrChecks({
             ))}
           </div>
           <span className="text-[10px] text-content/40 @max-[420px]/checks:hidden">
-            {counts.fail ? "Failures first" : ""}
+            {counts.fail ? t("inbox.failuresFirst", "Failures first") : ""}
           </span>
         </div>
       ) : null}
       {rows.length === 0 ? (
-        <p className="text-[13px] text-content/45">No checks reported</p>
+        <p className="text-[13px] text-content/45">{t("inbox.noChecksReported", "No checks reported")}</p>
       ) : (
         <>
           {groups.map((group) =>

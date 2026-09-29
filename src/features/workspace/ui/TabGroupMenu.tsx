@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   AppWindow,
   ChevronRight,
@@ -93,29 +94,29 @@ type MenuItem = {
 const ITEMS: MenuItem[] = [
   {
     id: "new-tab",
-    label: "New tab in group",
+    label: t("workspace.newTabInGroup", "New tab in group"),
     shortcut: `${MOD}T`,
     icon: SquarePlus,
   },
   {
     id: "new-window",
-    label: "Move group to new window",
+    label: t("workspace.moveGroupToNewWindow", "Move group to new window"),
     icon: AppWindow,
   },
   {
     id: "close-group",
-    label: "Close group",
+    label: t("workspace.closeGroup", "Close group"),
     shortcut: `${MOD}W`,
     icon: X,
   },
   {
     id: "ungroup",
-    label: "Ungroup",
+    label: t("workspace.ungroup", "Ungroup"),
     icon: Ungroup,
   },
   {
     id: "delete-group",
-    label: "Delete group",
+    label: t("workspace.deleteGroup", "Delete group"),
     danger: true,
     icon: Trash2,
   },
@@ -239,7 +240,7 @@ export function TabGroupMenu({
           <div className="mb-2 flex items-center gap-2 px-0.5">
             <button
               type="button"
-              title={logoPath ? "Change project logo" : "Add project logo"}
+              title={logoPath ? t("workspace.changeProjectLogo", "Change project logo") : t("workspace.addProjectLogo", "Add project logo")}
               aria-label={logoPath ? "Change project logo" : "Add project logo"}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
@@ -265,15 +266,15 @@ export function TabGroupMenu({
               />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] text-content/50">Project logo</p>
+              <p className="text-[11px] text-content/50">{t("workspace.projectLogo", "Project logo")}</p>
               <p className="truncate text-[12px] text-content/70">
-                {logoPath ? "Shown in tabs and composer" : "Optional — replaces folder icon"}
+                {logoPath ? t("workspace.shownInTabsAndComposer", "Shown in tabs and composer") : t("workspace.optionalReplacesFolderIcon", "Optional — replaces folder icon")}
               </p>
             </div>
             {logoPath ? (
               <button
                 type="button"
-                title="Remove project logo"
+                title={t("workspace.removeProjectLogo", "Remove project logo")}
                 aria-label="Remove project logo"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
@@ -309,7 +310,7 @@ export function TabGroupMenu({
         ) : null}
 
         <div className="mb-2 px-0.5">
-          <p className="mb-1 text-[11px] text-content/50">Mascot</p>
+          <p className="mb-1 text-[11px] text-content/50">{t("workspace.mascot", "Mascot")}</p>
           <div className="flex items-center justify-between gap-1">
             {PROJECT_MASCOTS.map((mascot) => (
               <MascotSwatch

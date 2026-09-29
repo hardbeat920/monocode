@@ -104,7 +104,7 @@ export function ProjectNotificationSettings({
       });
       setError(null);
     } catch {
-      setError("Could not save notification preferences. Please try again.");
+      setError(t("notifications.savePreferencesError", "Could not save notification preferences. Please try again."));
     }
   }
 
@@ -249,7 +249,7 @@ export function ProjectNotificationSettings({
                       <div className="flex min-w-[min(100%,200px)] flex-1 items-center gap-3">
                         {selecting ? (
                           <ProjectSelection
-                            label={`Select ${project.name}`}
+                            label={t("notifications.selectProject", "Select {name}", { name: project.name })}
                             checked={selectedIds.includes(project.id)}
                             onChange={(checked) =>
                               setSelected((current) =>
@@ -305,12 +305,12 @@ export function ProjectNotificationSettings({
                             </p>
                             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
                               {project.kind === "local"
-                                ? "Local project · "
+                                ? t("notifications.localProjectPrefix", "Local project · ")
                                 : ""}
                               {muted
-                                ? "All notifications paused"
+                                ? t("notifications.allPaused", "All notifications paused")
                                 : enabledCount === categories.length
-                                  ? "All categories enabled"
+                                  ? t("notifications.allCategoriesEnabled", "All categories enabled")
                                   : `${enabledCount} of ${categories.length} enabled`}
                             </p>
                           </div>
@@ -342,8 +342,7 @@ export function ProjectNotificationSettings({
                             role="status"
                             className="pt-3.5 text-[12px] leading-relaxed text-content/45"
                           >
-                            Your category choices apply when notifications
-                            resume. You can edit them while muted.
+                            {t("notifications.categoryChoicesMutedNotice", "Your category choices apply when notifications resume. You can edit them while muted.")}
                           </p>
                         ) : null}
                         {categories.map((category) => (

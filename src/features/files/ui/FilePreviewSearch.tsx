@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   useCallback,
   useEffect,
@@ -365,7 +366,7 @@ export function FilePreviewSearch({
               type="text"
               value={query}
               aria-label="Find"
-              placeholder="Find"
+              placeholder={t("files.findPlaceholder", "Find")}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -386,41 +387,41 @@ export function FilePreviewSearch({
           </div>
           <FindToggle
             label="Aa"
-            title={`Match Case (${ALT}C)`}
+            title={t("files.matchCaseWithShortcut", `Match Case (${ALT}C)`, { shortcut: `${ALT}C` })}
             pressed={caseSensitive}
             onClick={() => toggle(setCaseSensitive)}
           />
           <FindToggle
             label="ab"
-            title={`Match Whole Word (${ALT}W)`}
+            title={t("files.matchWholeWordWithShortcut", `Match Whole Word (${ALT}W)`, { shortcut: `${ALT}W` })}
             pressed={wholeWord}
             onClick={() => toggle(setWholeWord)}
           />
           <FindToggle
             label=".*"
-            title={`Use Regular Expression (${ALT}R)`}
+            title={t("files.useRegexWithShortcut", `Use Regular Expression (${ALT}R)`, { shortcut: `${ALT}R` })}
             pressed={regexp}
             onClick={() => toggle(setRegexp)}
           />
           <FindButton
-            label="Previous Match"
-            title={`Previous Match (${MOD}${SHIFT}G)`}
+            label={t("files.previousMatch", "Previous Match")}
+            title={t("files.previousMatchWithShortcut", `Previous Match (${MOD}${SHIFT}G)`, { shortcut: `${MOD}${SHIFT}G` })}
             disabled={total === 0}
             onClick={() => step(-1)}
           >
             <ChevronUp className="size-3.5" strokeWidth={1.75} />
           </FindButton>
           <FindButton
-            label="Next Match"
-            title={`Next Match (${MOD}G)`}
+            label={t("files.nextMatch", "Next Match")}
+            title={t("files.nextMatchWithShortcut", `Next Match (${MOD}G)`, { shortcut: `${MOD}G` })}
             disabled={total === 0}
             onClick={() => step(1)}
           >
             <ChevronDown className="size-3.5" strokeWidth={1.75} />
           </FindButton>
           <FindButton
-            label="Close"
-            title="Close (Escape)"
+            label={t("common.close", "Close")}
+            title={t("files.closeWithShortcut", "Close (Escape)")}
             onClick={closeSearch}
           >
             <X className="size-3.5" strokeWidth={1.75} />

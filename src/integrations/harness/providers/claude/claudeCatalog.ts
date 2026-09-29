@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
@@ -34,29 +35,29 @@ import {
 
 const EFFORT_LOW_TO_ULTRATHINK: ModelSetting = {
   id: "effort",
-  label: "Reasoning",
+  label: t("models.settings.reasoning", "Reasoning"),
   kind: "select",
   value: "high",
   options: [
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-    { value: "max", label: "Max" },
+    { value: "low", label: t("models.options.low", "Low") },
+    { value: "medium", label: t("models.options.medium", "Medium") },
+    { value: "high", label: t("models.options.high", "High") },
+    { value: "max", label: t("models.options.max", "Max") },
     { value: "ultrathink", label: "Ultrathink" },
   ],
 };
 
 const EFFORT_WITH_XHIGH: ModelSetting = {
   id: "effort",
-  label: "Reasoning",
+  label: t("models.settings.reasoning", "Reasoning"),
   kind: "select",
   value: "high",
   options: [
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-    { value: "xhigh", label: "Extra High" },
-    { value: "max", label: "Max" },
+    { value: "low", label: t("models.options.low", "Low") },
+    { value: "medium", label: t("models.options.medium", "Medium") },
+    { value: "high", label: t("models.options.high", "High") },
+    { value: "xhigh", label: t("models.options.extraHigh", "Extra High") },
+    { value: "max", label: t("models.options.max", "Max") },
     {
       value: "ultracode",
       label: "Ultracode",
@@ -67,45 +68,45 @@ const EFFORT_WITH_XHIGH: ModelSetting = {
 
 const EFFORT_OPUS_47: ModelSetting = {
   id: "effort",
-  label: "Reasoning",
+  label: t("models.settings.reasoning", "Reasoning"),
   kind: "select",
   value: "xhigh",
   options: [
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-    { value: "xhigh", label: "Extra High" },
-    { value: "max", label: "Max" },
+    { value: "low", label: t("models.options.low", "Low") },
+    { value: "medium", label: t("models.options.medium", "Medium") },
+    { value: "high", label: t("models.options.high", "High") },
+    { value: "xhigh", label: t("models.options.extraHigh", "Extra High") },
+    { value: "max", label: t("models.options.max", "Max") },
     { value: "ultrathink", label: "Ultrathink" },
   ],
 };
 
 const FAST_MODE: ModelSetting = {
   id: "fast",
-  label: "Fast",
+  label: t("models.settings.fast", "Fast"),
   kind: "toggle",
   value: "false",
   options: [
-    { value: "true", label: "On" },
-    { value: "false", label: "Off" },
+    { value: "true", label: t("models.options.on", "On") },
+    { value: "false", label: t("models.options.off", "Off") },
   ],
 };
 
 const THINKING: ModelSetting = {
   id: "thinking",
-  label: "Thinking",
+  label: t("models.settings.thinking", "Thinking"),
   kind: "toggle",
   value: "false",
   options: [
-    { value: "true", label: "On" },
-    { value: "false", label: "Off" },
+    { value: "true", label: t("models.options.on", "On") },
+    { value: "false", label: t("models.options.off", "Off") },
   ],
 };
 
 function contextWindow(defaultValue: "200k" | "1m"): ModelSetting {
   return {
     id: "context",
-    label: "Context",
+    label: t("models.settings.context", "Context"),
     kind: "select",
     value: defaultValue,
     options: [
@@ -181,14 +182,14 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: "Reasoning",
+        label: t("models.settings.reasoning", "Reasoning"),
         kind: "select",
         value: "high",
         options: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High" },
-          { value: "max", label: "Max" },
+          { value: "low", label: t("models.options.low", "Low") },
+          { value: "medium", label: t("models.options.medium", "Medium") },
+          { value: "high", label: t("models.options.high", "High") },
+          { value: "max", label: t("models.options.max", "Max") },
         ],
       },
       FAST_MODE,
@@ -209,11 +210,11 @@ const INIT_REQUEST_ID = "monocode_init";
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
 const EFFORT_LABELS: Record<string, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  max: "Max",
+  low: t("models.options.low", "Low"),
+  medium: t("models.options.medium", "Medium"),
+  high: t("models.options.high", "High"),
+  xhigh: t("models.options.extraHigh", "Extra High"),
+  max: t("models.options.max", "Max"),
 };
 
 let inflight: Promise<void> | null = null;
@@ -416,7 +417,7 @@ function effortSetting(levels: string[]): ModelSetting {
     : (options[0]?.value ?? "high");
   return {
     id: "effort",
-    label: "Reasoning",
+    label: t("models.settings.reasoning", "Reasoning"),
     kind: "select",
     value: defaultValue,
     options,

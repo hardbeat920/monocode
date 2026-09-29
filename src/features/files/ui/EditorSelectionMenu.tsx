@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useEffect, useRef } from "react";
 import { MessageSquarePlus } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
@@ -61,7 +62,7 @@ export function EditorSelectionMenu({
           className="size-3.5"
           strokeWidth={1.75}
         />
-        Add to chat
+        {t("files.addToChat", "Add to chat")}
       </button>
     </Popover>
   );

@@ -740,8 +740,8 @@ function RunRow({
         disabled={!sessionId}
         title={
           sessionId
-            ? "Open session"
-            : (run.error ?? "This run has no session yet")
+            ? t("automations.openSession", "Open session")
+            : (run.error ?? t("automations.noSessionYet", "This run has no session yet"))
         }
         onClick={() => {
           if (!sessionId) return;
@@ -1345,7 +1345,7 @@ function AutomationEditor({
                       autoFocus
                       value={triggerQuery}
                       onChange={(event) => setTriggerQuery(event.target.value)}
-                      placeholder="Search triggers"
+                      placeholder={t("automations.searchTriggersPlaceholder", "Search triggers")}
                       className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
                     />
                   </label>
@@ -1403,7 +1403,7 @@ function AutomationEditor({
                             <ChevronRight className="size-3.5 text-content/45" />
                           ) : (
                             <span className="shrink-0 text-[11px] text-content/35">
-                              Not connected
+                              {t("automations.notConnected", "Not connected")}
                             </span>
                           )}
                         </button>
@@ -1411,7 +1411,7 @@ function AutomationEditor({
                     })}
                     {triggerCategories.length === 0 ? (
                       <p className="px-2 py-5 text-center text-[12px] text-content/40">
-                        No matching triggers
+                        {t("automations.noMatchingTriggers", "No matching triggers")}
                       </p>
                     ) : null}
                   </div>
@@ -1457,7 +1457,7 @@ function AutomationEditor({
             </section>
 
             <section>
-              <SectionTitle>Instructions</SectionTitle>
+              <SectionTitle>{t("automations.instructions", "Instructions")}</SectionTitle>
               <div className="relative mt-3 rounded-md border border-content/10 bg-content/3 backdrop-blur-sm has-focus:border-content/20">
                 <PromptField
                   value={draft.prompt}
@@ -1504,19 +1504,19 @@ function AutomationEditor({
                 </div>
               </div>
               <p className="mt-2 px-1 text-[11px] text-content/35">
-                Skills, @file references, and built-in commands work here.
+                {t("automations.editor.skillsAndCommandsHint", "Skills, @file references, and built-in commands work here.")}
               </p>
             </section>
 
             <section>
-              <SectionTitle>Session</SectionTitle>
+              <SectionTitle>{t("automations.session", "Session")}</SectionTitle>
               <div className="mt-3 divide-y divide-content/7 rounded-md border border-content/10">
                 <SettingsRow
-                  label="Working copy"
-                  hint="This repo, or a fresh worktree"
+                  label={t("automations.workingCopy", "Working copy")}
+                  hint={t("automations.editor.workingCopyHint", "This repo, or a fresh worktree")}
                 >
                   <SettingsSelect
-                    label="Working copy"
+                    label={t("automations.workingCopy", "Working copy")}
                     value={
                       draft.workspaceMode === "worktree"
                         ? "worktree"
@@ -1534,11 +1534,11 @@ function AutomationEditor({
                   />
                 </SettingsRow>
                 <SettingsRow
-                  label="Conversation"
-                  hint="New chat, or continue the last run"
+                  label={t("automations.conversation", "Conversation")}
+                  hint={t("automations.editor.conversationHint", "New chat, or continue the last run")}
                 >
                   <SettingsSelect
-                    label="Conversation"
+                    label={t("automations.conversation", "Conversation")}
                     value={draft.reuseSession ? "reuse" : "fresh"}
                     disabled={draft.workspaceMode === "worktree"}
                     options={conversationOptions}
@@ -1548,14 +1548,14 @@ function AutomationEditor({
                   />
                 </SettingsRow>
                 <SettingsRow
-                  label="Session folder"
-                  hint="Where runs appear in the sidebar"
+                  label={t("automations.sessionFolder", "Session folder")}
+                  hint={t("automations.editor.sessionFolderHint", "Where runs appear in the sidebar")}
                 >
                   <SearchableSelect
                     variant="pill"
                     searchable={folderOptions.length > 6}
                     align="end"
-                    label="Session folder"
+                    label={t("automations.sessionFolder", "Session folder")}
                     value={draft.sessionFolderId}
                     options={folderOptions}
                     onChange={(value) => update("sessionFolderId", value)}
@@ -1568,21 +1568,21 @@ function AutomationEditor({
               <summary className="flex min-h-14 cursor-default list-none items-center justify-between gap-3 px-4 active:opacity-75">
                 <span>
                   <span className="block text-[13px] font-medium text-content/75">
-                    Advanced
+                    {t("automations.advanced", "Advanced")}
                   </span>
                   <span className="mt-0.5 block text-[11px] text-content/40">
-                    Catch-up window for missed runs
+                    {t("automations.editor.missedRunWindow", "Catch-up window for missed runs")}
                   </span>
                 </span>
                 <ChevronDown className="size-3.5 text-content/40" />
               </summary>
               <div className="divide-y divide-content/7 border-t border-content/8">
                 <SettingsRow
-                  label="Missed-run grace"
-                  hint="Catch up if a scheduled run was missed"
+                  label={t("automations.missedRunGrace", "Missed-run grace")}
+                  hint={t("automations.editor.missedRunGraceHint", "Catch up if a scheduled run was missed")}
                 >
                   <SettingsSelect
-                    label="Missed-run grace"
+                    label={t("automations.missedRunGrace", "Missed-run grace")}
                     value={String(draft.missedRunGraceMinutes)}
                     options={graceOptions}
                     onChange={(value) =>
@@ -1595,14 +1595,14 @@ function AutomationEditor({
           </div>
         ) : (
           <section className="mx-auto w-full max-w-5xl px-8 py-5 pb-10">
-            <SectionTitle>Run history</SectionTitle>
+            <SectionTitle>{t("automations.runHistory", "Run history")}</SectionTitle>
             {runs.length > 0 ? (
               <div className="mt-3 overflow-hidden rounded-md border border-content/10">
                 <div className={`${RUN_GRID} h-10 text-[11px] text-content/40`}>
-                  <span>Trigger</span>
-                  <span>Triggered</span>
-                  <span>Status</span>
-                  <span className="text-right">Duration</span>
+                  <span>{t("automations.triggerCol", "Trigger")}</span>
+                  <span>{t("automations.triggeredCol", "Triggered")}</span>
+                  <span>{t("automations.statusCol", "Status")}</span>
+                  <span className="text-right">{t("automations.durationCol", "Duration")}</span>
                 </div>
                 <ul className="divide-y divide-content/8 border-t border-content/8">
                   {runs.slice(0, 100).map((run) => (
@@ -1617,7 +1617,7 @@ function AutomationEditor({
               </div>
             ) : (
               <div className="mt-3 rounded-md border border-dashed border-content/10 px-4 py-16 text-center text-[12px] text-content/40">
-                This automation has not run yet.
+                {t("automations.editor.hasNotRunYet", "This automation has not run yet.")}
               </div>
             )}
           </section>

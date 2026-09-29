@@ -1,4 +1,4 @@
-import { useTranslation } from "../../features/i18n/model/i18n";
+import { useTranslation, t } from "../../features/i18n/model/i18n";
 import {
   BellOff,
   ChevronDown,
@@ -786,7 +786,7 @@ function ProjectGroupSection({
         <button
           type="button"
           data-no-drag
-          title="Group options"
+          title={t("shell.groupOptions", "Group options")}
           aria-label={`${group.name} group options`}
           aria-haspopup="menu"
           onPointerDown={(event) => event.stopPropagation()}
@@ -989,7 +989,7 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
+        title={pinned ? t("shell.unpinProject", "Unpin project") : t("shell.pinProject", "Pin project")}
         aria-label={pinned ? "Unpin project" : "Pin project"}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
@@ -1033,7 +1033,7 @@ function ProjectDiffStat({
 
   return (
     <span
-      title={`${label} uncommitted`}
+      title={t("shell.uncommittedChanges", `${label} uncommitted`, { label })}
       className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (

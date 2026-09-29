@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   isProjectMuted,
   NOTIFICATION_MUTE_HOURS,
@@ -25,10 +26,10 @@ const mutePresets = [
   {
     kind: "item" as const,
     id: "mute:indefinite",
-    label: "Until resumed",
+    label: t("notifications.untilResumed", "Until resumed"),
     milliseconds: null,
   },
-  { kind: "item" as const, id: "mute:custom", label: "Choose date and time" },
+  { kind: "item" as const, id: "mute:custom", label: t("notifications.chooseDateTime", "Choose date and time") },
 ];
 
 export function notificationMuteActions(now = new Date(Date.now())) {

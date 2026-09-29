@@ -233,8 +233,7 @@ export function UnifiedDiffView({
       >
         {truncated ? (
           <p className="px-3 py-3 text-[12px] text-content/45">
-            Diff is too large to display in full. File list is shown without
-            patches.
+            {t("sourceControl.diffTooLargeNoPatches", "Diff is too large to display in full. File list is shown without patches.")}
           </p>
         ) : null}
         <div

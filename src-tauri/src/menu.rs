@@ -146,17 +146,17 @@ fn build(
     let open_settings = menu_item(
         app,
         "open_settings",
-        "Settings…",
+        "设置…",
         "CmdOrCtrl+,",
         "App: Settings",
         overrides,
     )?;
     let check_for_updates =
-        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
+        MenuItemBuilder::with_id("check_for_updates", "检查更新…").build(app)?;
     let new_window = menu_item(
         app,
         "new_window",
-        "New Window",
+        "新建窗口",
         "CmdOrCtrl+Shift+N",
         "App: New Window",
         overrides,
@@ -164,7 +164,7 @@ fn build(
     let open_project = menu_item(
         app,
         "open_project",
-        "Open Project…",
+        "打开项目…",
         "CmdOrCtrl+O",
         "App: Open Project",
         overrides,
@@ -172,7 +172,7 @@ fn build(
     let go_to_file = menu_item(
         app,
         "go_to_file",
-        "Go to File…",
+        "转到文件…",
         "CmdOrCtrl+P",
         "App: Go to File",
         overrides,
@@ -180,7 +180,7 @@ fn build(
     let command_palette = menu_item(
         app,
         "open_command_palette",
-        "Command Palette…",
+        "命令面板…",
         "CmdOrCtrl+Shift+P",
         "App: Command Palette",
         overrides,
@@ -188,17 +188,17 @@ fn build(
     let open_search = menu_item(
         app,
         "open_search",
-        "Search…",
+        "搜索…",
         "CmdOrCtrl+K",
         "App: Search",
         overrides,
     )?;
-    let open_inbox = MenuItemBuilder::with_id("open_inbox", "Inbox").build(app)?;
-    let open_notes = MenuItemBuilder::with_id("open_notes", "Notes").build(app)?;
+    let open_inbox = MenuItemBuilder::with_id("open_inbox", "收件箱").build(app)?;
+    let open_notes = MenuItemBuilder::with_id("open_notes", "随手笔记").build(app)?;
     let new_tab = menu_item(
         app,
         "new_tab",
-        "New Tab",
+        "新建标签页",
         "CmdOrCtrl+T",
         "Tab: New",
         overrides,
@@ -206,7 +206,7 @@ fn build(
     let new_terminal = menu_item(
         app,
         "new_terminal",
-        "New Terminal",
+        "新建终端",
         "CmdOrCtrl+`",
         "Terminal: New",
         overrides,
@@ -214,7 +214,7 @@ fn build(
     let new_terminal_tab = menu_item(
         app,
         "new_terminal_tab",
-        "New Terminal Tab",
+        "新建终端标签页",
         "CmdOrCtrl+Shift+`",
         "Terminal: New Tab",
         overrides,
@@ -222,7 +222,7 @@ fn build(
     let toggle_terminal = menu_item(
         app,
         "toggle_terminal",
-        "Toggle Terminal",
+        "切换终端",
         "CmdOrCtrl+J",
         "Terminal: Toggle Dock",
         overrides,
@@ -230,7 +230,7 @@ fn build(
     let split_right = menu_item(
         app,
         "split_right",
-        "Split Pane Right",
+        "向右拆分窗格",
         "CmdOrCtrl+D",
         "Pane: Split Right",
         overrides,
@@ -238,7 +238,7 @@ fn build(
     let split_down = menu_item(
         app,
         "split_down",
-        "Split Pane Down",
+        "向下拆分窗格",
         "CmdOrCtrl+Shift+D",
         "Pane: Split Down",
         overrides,
@@ -246,7 +246,7 @@ fn build(
     let close_tab = menu_item(
         app,
         "close_tab",
-        "Close Pane",
+        "关闭窗格",
         "CmdOrCtrl+W",
         "Pane: Close",
         overrides,
@@ -254,7 +254,7 @@ fn build(
     let close_other_tabs = menu_item(
         app,
         "close_other_tabs",
-        "Close Other Tabs",
+        "关闭其他标签页",
         "CmdOrCtrl+Alt+T",
         "Tab: Close Others",
         overrides,
@@ -262,7 +262,7 @@ fn build(
     let close_all_tabs = menu_item(
         app,
         "close_all_tabs",
-        "Close All Tabs",
+        "关闭所有标签页",
         "CmdOrCtrl+Shift+W",
         "Tab: Close All",
         overrides,
@@ -270,7 +270,7 @@ fn build(
     let next_tab = menu_item(
         app,
         "next_tab",
-        "Next Tab",
+        "下一个标签页",
         "CmdOrCtrl+Shift+]",
         "Tab: Next",
         overrides,
@@ -278,7 +278,7 @@ fn build(
     let prev_tab = menu_item(
         app,
         "prev_tab",
-        "Previous Tab",
+        "上一个标签页",
         "CmdOrCtrl+Shift+[",
         "Tab: Previous",
         overrides,
@@ -286,7 +286,7 @@ fn build(
     let back_tab = menu_item(
         app,
         "back_tab",
-        "Go Back",
+        "返回",
         "CmdOrCtrl+[",
         "Tab: Back",
         overrides,
@@ -294,7 +294,7 @@ fn build(
     let forward_tab = menu_item(
         app,
         "forward_tab",
-        "Go Forward",
+        "前进",
         "CmdOrCtrl+]",
         "Tab: Forward",
         overrides,
@@ -303,7 +303,7 @@ fn build(
     let focus_left = menu_item(
         app,
         "focus_left",
-        "Focus Pane Left",
+        "聚焦左侧窗格",
         "CmdOrCtrl+Alt+Left",
         "Pane: Focus Left",
         overrides,
@@ -311,7 +311,7 @@ fn build(
     let focus_right = menu_item(
         app,
         "focus_right",
-        "Focus Pane Right",
+        "聚焦右侧窗格",
         "CmdOrCtrl+Alt+Right",
         "Pane: Focus Right",
         overrides,
@@ -319,7 +319,7 @@ fn build(
     let focus_up = menu_item(
         app,
         "focus_up",
-        "Focus Pane Up",
+        "聚焦上方窗格",
         "CmdOrCtrl+Alt+Up",
         "Pane: Focus Up",
         overrides,
@@ -327,7 +327,7 @@ fn build(
     let focus_down = menu_item(
         app,
         "focus_down",
-        "Focus Pane Down",
+        "聚焦下方窗格",
         "CmdOrCtrl+Alt+Down",
         "Pane: Focus Down",
         overrides,
@@ -336,7 +336,7 @@ fn build(
     let toggle_sidebar = menu_item(
         app,
         "toggle_sidebar",
-        "Toggle Sidebar",
+        "切换侧边栏",
         "CmdOrCtrl+B",
         "App: Toggle Sidebar",
         overrides,
@@ -344,7 +344,7 @@ fn build(
     let toggle_session_sidebar = menu_item(
         app,
         "toggle_session_sidebar",
-        "Toggle Session Sidebar",
+        "切换会话侧边栏",
         "CmdOrCtrl+Shift+B",
         "App: Toggle Session Sidebar",
         overrides,
@@ -352,23 +352,23 @@ fn build(
     let open_model_picker = menu_item(
         app,
         "open_model_picker",
-        "Switch Model…",
+        "切换模型…",
         "CmdOrCtrl+.",
         "App: Switch Model",
         overrides,
     )?;
     let sidebar_opacity =
-        MenuItemBuilder::with_id("sidebar_opacity", "Sidebar Appearance…").build(app)?;
+        MenuItemBuilder::with_id("sidebar_opacity", "侧边栏外观…").build(app)?;
     // No accelerators here on purpose: the webview key handler owns
     // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
     // a second time on top of it.
-    let zoom_in = MenuItemBuilder::with_id("zoom_in", "Zoom In").build(app)?;
-    let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id("zoom_in", "放大").build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("zoom_out", "缩小").build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "重置缩放").build(app)?;
     let reload = menu_item(
         app,
         "reload",
-        "Reload",
+        "重新加载",
         "CmdOrCtrl+Shift+R",
         "View: Reload",
         overrides,
@@ -376,7 +376,7 @@ fn build(
     let find = menu_item(
         app,
         "find",
-        "Find",
+        "查找",
         "CmdOrCtrl+F",
         "Editor: Find",
         overrides,
@@ -385,13 +385,13 @@ fn build(
     let find_in_project = menu_item(
         app,
         "find_in_project",
-        "Find in Files…",
+        "在文件中查找…",
         "CmdOrCtrl+Shift+F",
         "App: Find in Files",
         overrides,
     )?;
 
-    let file = SubmenuBuilder::new(app, "File")
+    let file = SubmenuBuilder::new(app, "文件")
         .item(&new_window)
         .item(&open_project)
         .item(&open_search)
@@ -414,7 +414,7 @@ fn build(
         .item(&forward_tab)
         .build()?;
 
-    let view = SubmenuBuilder::new(app, "View")
+    let view = SubmenuBuilder::new(app, "视图")
         .item(&toggle_sidebar)
         .item(&toggle_session_sidebar)
         .item(&open_inbox)
@@ -435,7 +435,7 @@ fn build(
         .item(&sidebar_opacity)
         .build()?;
 
-    let edit = SubmenuBuilder::new(app, "Edit")
+    let edit = SubmenuBuilder::new(app, "编辑")
         .undo()
         .redo()
         .separator()
@@ -449,7 +449,7 @@ fn build(
 
     #[cfg(target_os = "macos")]
     {
-        let quit = MenuItemBuilder::with_id("quit", "Quit MonoCode")
+        let quit = MenuItemBuilder::with_id("quit", "退出 MonoCode")
             .accelerator("CmdOrCtrl+Q")
             .build(app)?;
         let app_menu = SubmenuBuilder::new(app, "MonoCode")
@@ -465,7 +465,7 @@ fn build(
             .item(&quit)
             .build()?;
         let window_menu =
-            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
+            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "窗口").build()?;
         return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
     }
 

@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   useEffect,
   useRef,
@@ -271,7 +272,7 @@ export function SearchableProjectPicker({
         >
           <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-stroke px-3 text-content/45 focus-within:text-content/70">
             <Search className="size-4 shrink-0" strokeWidth={1.75} />
-            <span className="sr-only">Search projects</span>
+            <span className="sr-only">{t("projects.searchProjects", "Search projects")}</span>
             <input
               ref={searchRef}
               value={query}
@@ -279,7 +280,7 @@ export function SearchableProjectPicker({
                 setQuery(event.target.value);
                 setActive(0);
               }}
-              placeholder="Search projects..."
+              placeholder={t("nav.searchProjectsPlaceholder", "Search projects...")}
               className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
             />
           </label>
@@ -360,7 +361,7 @@ export function SearchableProjectPicker({
               })
             ) : (
               <p className="px-2.5 py-5 text-center text-[12px] text-content/45">
-                No projects found
+                {t("projects.noProjectsFound", "No projects found")}
               </p>
             )}
           </div>
@@ -375,7 +376,7 @@ export function SearchableProjectPicker({
                 className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-content/75 hover:bg-content/8 hover:text-content"
               >
                 <Plus className="size-4 shrink-0" strokeWidth={1.75} />
-                <span>New project</span>
+                <span>{t("projects.newProject", "New project")}</span>
               </button>
             </div>
           ) : null}

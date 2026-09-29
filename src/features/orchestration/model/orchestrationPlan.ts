@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { HARNESSES, type Block, type HarnessId, type Session } from "../../sessions/model/session";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 
@@ -372,7 +373,7 @@ export function restoreOrchestrationProposal(
     return {
       ...value,
       status: "invalid",
-      error: "Planning was interrupted. Generate the assignments again.",
+      error: t("orchestration.planningInterrupted", "Planning was interrupted. Generate the assignments again."),
     };
   if (value.status === "starting") return { ...value, status: "ready" };
   return value;

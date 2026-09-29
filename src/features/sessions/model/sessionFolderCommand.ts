@@ -1,10 +1,11 @@
+import { t } from "../../i18n/model/i18n";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const SESSION_FOLDER_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "add-to-folder",
   invocation: "add-to-folder",
-  description: "Place this session in an existing or new sidebar folder.",
+  description: t("session.commands.sessionFolder.description", "Place this session in an existing or new sidebar folder."),
   scope: "builtin",
   source: "monocode",
 };

@@ -133,7 +133,7 @@ export function FileMentionPicker({
                 </span>
                 {note ? (
                   <span className="shrink-0 font-mono text-[11px] text-content/40">
-                    Note
+                    {t("sessions.note", "Note")}
                   </span>
                 ) : dir ? (
                   <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">

@@ -188,7 +188,12 @@ function SkillList({
             </span>
             {!compact && skill.description ? (
               <span className="line-clamp-2 text-[11px] leading-4 text-content/50">
-                {skill.description}
+                {skill.kind === "builtin"
+                  ? t(
+                      `session.commands.${skill.name === "add-to-folder" ? "sessionFolder" : skill.name}.description`,
+                      skill.description,
+                    )
+                  : skill.description}
               </span>
             ) : null}
             {!compact && skill.kind === "native" && (skill.inputHint || skill.subcommands?.length) ? (

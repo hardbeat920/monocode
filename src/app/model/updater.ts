@@ -1,3 +1,4 @@
+import { t } from "../../features/i18n/model/i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -78,7 +79,7 @@ export async function runUpdateFlow(
     const detail = notes ? `\n\n${notes}` : "";
     const yes = await ask(
       `MonoCode ${update.version} is available (you have ${currentVersion}).${detail}\n\nInstall now?`,
-      { title: "Update available", kind: "info" },
+      { title: t("app.updateAvailable", "Update available"), kind: "info" },
     );
     if (!yes) return available;
 

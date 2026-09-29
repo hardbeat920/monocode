@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { titleFromToolInput } from "../../../integrations/harness/core/preview";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
@@ -756,7 +757,7 @@ function sanitizeBtwThreads(
           ? {
               error:
                 error ||
-                "This by-the-way request was interrupted before reload.",
+                t("session.btwInterruptedBeforeReload", "This by-the-way request was interrupted before reload."),
             }
           : error
             ? { error }

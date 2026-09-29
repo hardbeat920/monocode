@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { RefreshCw, Search } from "../../../shared/ui/icons";
 import {
   useEffect,
@@ -35,7 +36,7 @@ export function reloadActionHint(mod = MOD, shift = SHIFT) {
 }
 
 const ACTIONS: Action[] = [
-  { id: "reload", label: "Reload MonoCode", hint: reloadActionHint() },
+  { id: "reload", label: t("files.reloadMonocode", "Reload MonoCode"), hint: reloadActionHint() },
 ];
 
 type Props = {
@@ -222,7 +223,7 @@ export function FilePicker({
               ref={search}
               type="text"
               value={query}
-              placeholder="Go to File (type > for commands)"
+              placeholder={t("files.goToFilePlaceholder", "Go to File (type > for commands)")}
               aria-label={paletteMode ? "Command Palette" : "Go to File"}
               spellCheck={false}
               autoComplete="off"

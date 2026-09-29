@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import type { Block } from "./session";
 
 export type MonoCodeToolCall = {
@@ -96,7 +97,7 @@ export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
   if (action === "--help" || action === "help" || action === "-h") {
     return words.length > 3
       ? undefined
-      : { action: "--help", label: "View CLI commands", command };
+      : { action: "--help", label: t("sessions.viewCliCommands", "View CLI commands"), command };
   }
   if (!Object.prototype.hasOwnProperty.call(ACTION_LABELS, action))
     return undefined;

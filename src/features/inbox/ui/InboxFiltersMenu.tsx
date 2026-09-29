@@ -57,12 +57,12 @@ const KIND_OPTIONS: {
 }[] = [
   {
     id: "issue",
-    label: "Issues",
+    label: t("inbox.filterIssues", "Issues"),
     icon: <CircleDot className="size-3.5 shrink-0" strokeWidth={1.75} />,
   },
   {
     id: "pr",
-    label: "Pull requests",
+    label: t("inbox.filterPullRequests", "Pull requests"),
     icon: <GitPullRequest className="size-3.5 shrink-0" strokeWidth={1.75} />,
   },
 ];

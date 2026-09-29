@@ -140,7 +140,7 @@ export function WorkspaceIdentity({ worktree }: { worktree: boolean }) {
     : t("composer.checkout", "Current checkout");
   return (
     <div
-      title={`Workspace: ${label}`}
+      title={t("workspace.workspaceIdentityTooltip", `Workspace: ${label}`, { label })}
       aria-label={`Workspace ${label}`}
       className="-ml-1.5 flex h-6 min-w-0 shrink-0 items-center gap-1.5 px-1.5 text-[12px] text-content/45"
     >
@@ -309,7 +309,7 @@ function WorkspaceModePicker({
           className="overflow-hidden p-1.5"
         >
           <div className="flex items-center justify-between gap-3 px-2 py-1 text-[11px] font-medium text-content/45">
-            <span>Workspace</span>
+            <span>{t("sidebar.workspace", "Workspace")}</span>
             {shortcut ? (
               <kbd className="font-sans text-[10px] font-normal text-content/35">
                 {shortcut}
@@ -371,7 +371,7 @@ function WorkspaceModePicker({
               }`}
             >
               <FolderTree className="size-4 shrink-0 text-content/55" />
-              <span className="flex-1">Existing worktree…</span>
+              <span className="flex-1">{t("workspace.existingWorktree", "Existing worktree…")}</span>
               <ChevronRight className="size-3.5 shrink-0 text-content/45" />
             </button>
           ) : null}
@@ -379,7 +379,7 @@ function WorkspaceModePicker({
             <div className="h-9 border-t border-stroke">
               <button
                 type="button"
-                title="Open worktree settings"
+                title={t("workspace.openWorktreeSettings", "Open worktree settings")}
                 aria-label="Open worktree settings"
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={closeWorktreeMenu}
@@ -393,7 +393,7 @@ function WorkspaceModePicker({
                   className="size-4 shrink-0 text-content/45"
                   strokeWidth={1.75}
                 />
-                <span className="flex-1">Worktree settings</span>
+                <span className="flex-1">{t("workspace.worktreeSettings", "Worktree settings")}</span>
               </button>
             </div>
           ) : null}
@@ -424,7 +424,7 @@ function WorkspaceModePicker({
           {!data && !loadError ? (
             <p className="flex items-center gap-2 px-2 py-3 text-[12px] text-content/50">
               <Loader className="size-3.5 animate-spin" />
-              Loading worktrees…
+              {t("workspace.loadingWorktrees", "Loading worktrees…")}
             </p>
           ) : null}
           <div className="min-h-0 overflow-y-auto">
@@ -456,7 +456,7 @@ function WorkspaceModePicker({
             ))}
             {data && worktrees.length === 0 ? (
               <p className="px-2 py-3 text-[12px] text-content/50">
-                No existing worktrees
+                {t("workspace.noExistingWorktrees", "No existing worktrees")}
               </p>
             ) : null}
           </div>
@@ -541,13 +541,13 @@ function WorktreeBasePicker({
     <div ref={anchor} className="relative flex min-w-0 shrink-0">
       <GitPickerTrigger
         disabled={!enabled}
-        title={`Create from ${selected}`}
+        title={t("workspace.createFromBranch", `Create from ${selected}`, { branch: selected })}
         aria-label={`Create worktree from ${selected}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => setOpen((value) => !value)}
-        label={`From ${selected}`}
+        label={t("workspace.fromBranch", "From {name}", { name: selected })}
         loading={loading}
       />
       {open ? (
@@ -567,7 +567,7 @@ function WorktreeBasePicker({
             <input
               ref={search}
               value={query}
-              placeholder="Search base branches…"
+              placeholder={t("sourceControl.searchBaseBranchesPlaceholder", "Search base branches…")}
               aria-label="Search base branches"
               spellCheck={false}
               onChange={(event) => {
@@ -638,7 +638,7 @@ function WorktreeBasePicker({
             })}
             {rows.length === 0 ? (
               <p className="px-2 py-3 text-[12px] text-content/45">
-                No matching branches
+                {t("workspace.noMatchingBranches", "No matching branches")}
               </p>
             ) : null}
           </div>

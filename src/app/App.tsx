@@ -3793,7 +3793,7 @@ export default function App({
                   : undefined;
           session = {
             ...newDefaultSession(cwd),
-            title: `Ask · ${item.title}`,
+            title: t("inbox.askTitle", "Ask · {title}", { title: item.title }),
             inboxAsk: {
               key,
               title: item.title,
@@ -5657,7 +5657,7 @@ export default function App({
           options.onSettled?.({
             status: "failed",
             text: "",
-            error: "Session is unavailable or already running",
+            error: t("app.sessionUnavailableOrRunning", "Session is unavailable or already running"),
           });
           return false;
         }
@@ -5778,7 +5778,7 @@ export default function App({
         enqueueHarnessEvent(sessionId, {
           type: "session.error",
           message:
-            "This conversation uses a removed provider account. Switch accounts from the usage control to start a new conversation.",
+            t("app.conversationUsesRemovedAccount", "This conversation uses a removed provider account. Switch accounts from the usage control to start a new conversation."),
         });
         flushHarnessEvents();
         return false;
@@ -5794,7 +5794,7 @@ export default function App({
       ) {
         enqueueHarnessEvent(sessionId, {
           type: "status",
-          text: "Use /operator from a regular session turn, outside an orchestration run.",
+          text: t("app.operatorOutsideOrchestration", "Use /operator from a regular session turn, outside an orchestration run."),
         });
         flushHarnessEvents();
         return false;
@@ -5882,7 +5882,7 @@ export default function App({
           // floor here, so a follow-up sent mid-turn just vanished. Say so.
           enqueueHarnessEvent(sessionId, {
             type: "status",
-            text: `${current.harness} cannot take a follow-up mid-turn — wait for this turn to finish, or stop it first.`,
+            text: t("app.cannotFollowUpMidTurn", "{harness} cannot take a follow-up mid-turn — wait for this turn to finish, or stop it first.", { harness: current.harness }),
           });
           flushHarnessEvents();
           return false;
@@ -5972,7 +5972,7 @@ export default function App({
                 status: "failed",
                 text: "",
                 error:
-                  "The chat became unavailable before the request could start. Try again when it is ready.",
+                  t("app.chatBecameUnavailable", "The chat became unavailable before the request could start. Try again when it is ready."),
               });
             }
             return accepted;
@@ -6015,7 +6015,7 @@ export default function App({
             },
             settings: { choices: [], maxWorkers: 2 },
             status: "planning",
-            title: "Orchestration plan",
+            title: t("app.orchestrationPlan", "Orchestration plan"),
             summary: "",
             tasks: [],
           }
@@ -6136,7 +6136,7 @@ export default function App({
                   {
                     id: crypto.randomUUID(),
                     role: "system",
-                    text: `${next.harness} is not connected yet — install and sign in to that provider, then retry.`,
+                    text: t("app.providerNotConnectedRetry", "{harness} is not connected yet — install and sign in to that provider, then retry.", { harness: next.harness }),
                     notice: "error",
                   },
                 ],
@@ -6235,7 +6235,7 @@ export default function App({
         options?.onSettled?.({
           status: "failed",
           text: "",
-          error: "Harness is not connected",
+          error: t("app.harnessNotConnected", "Harness is not connected"),
         });
         return true;
       }
@@ -6266,7 +6266,7 @@ export default function App({
       let controlOutcome: ControlOutcome = {
         status: "failed",
         text: "",
-        error: "Turn did not complete",
+        error: t("app.turnDidNotComplete", "Turn did not complete"),
       };
       let controlText = "";
       let proposalText = "";
@@ -7245,7 +7245,7 @@ export default function App({
       if (message.intent === "orchestrate" && session.busy) {
         enqueueHarnessEvent(sessionId, {
           type: "status",
-          text: "Orchestration planning will start after the current turn finishes.",
+          text: t("app.orchestrationPlanningStartsAfterTurn", "Orchestration planning will start after the current turn finishes."),
         });
         flushHarnessEvents();
         return;
@@ -7573,7 +7573,7 @@ export default function App({
                   status: "error",
                   updatedAt: Date.now(),
                   error:
-                    "A project working directory is required for this question.",
+                    t("app.projectWorkingDirRequired", "A project working directory is required for this question."),
                 }
               : undefined,
         );
@@ -7590,7 +7590,7 @@ export default function App({
                   ...thread,
                   status: "error",
                   updatedAt: Date.now(),
-                  error: "The selected Codex model is unavailable.",
+                  error: t("app.selectedCodexModelUnavailable", "The selected Codex model is unavailable."),
                 }
               : undefined,
         );
@@ -7618,7 +7618,7 @@ export default function App({
                   error:
                     error instanceof Error
                       ? error.message
-                      : "The completed turn is no longer available.",
+                      : t("app.completedTurnNoLongerAvailable", "The completed turn is no longer available."),
                 }
               : undefined,
         );
@@ -8136,7 +8136,7 @@ export default function App({
           session.id === sessionId
             ? applyHarnessEvent(session, {
                 type: "status",
-                text: `${HARNESS_TITLE[current.harness]} does not support manual context compaction.`,
+                text: t("app.manualContextCompactionUnsupported", "{provider} does not support manual context compaction.", { provider: HARNESS_TITLE[current.harness] }),
               })
             : session,
         );
@@ -8153,7 +8153,7 @@ export default function App({
         session.id === sessionId
           ? applyHarnessEvent(
               { ...session, busy: true },
-              { type: "status", text: "Compacting context…" },
+              { type: "status", text: t("app.compactingContext", "Compacting context…") },
             )
           : session,
       );
@@ -8182,7 +8182,7 @@ export default function App({
           if (turnGen.current.get(sessionId) !== gen) return;
           enqueueHarnessEvent(sessionId, {
             type: "status",
-            text: "Compacted context",
+            text: t("app.compactedContext", "Compacted context"),
           });
         } catch (error: unknown) {
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -9400,7 +9400,7 @@ export default function App({
       if (!session) {
         session = {
           ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
-          title: `Fix CI #${item.number}: ${item.title}`,
+          title: t("inbox.fixCiTitle", "Fix CI #{number}: {title}", { number: item.number, title: item.title }),
           linkedWorkItem: linkedWorkItemFromInboxItem(item) ?? undefined,
         };
         const next = [...sessionsRef.current, session];

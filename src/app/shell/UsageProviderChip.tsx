@@ -1,4 +1,6 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { t } from "../../features/i18n/model/i18n";
 import {
   clampUsedPercent,
   formatRateLimitWindowChipLabel,
@@ -190,10 +192,10 @@ export function UsageProviderChip({
           tooltip ||
           limits.error ||
           (disconnected
-            ? "Not connected"
+            ? t("usage.notConnected", "Not connected")
             : loading
-              ? "Loading usage…"
-              : "Usage details")
+              ? t("usage.loadingUsage", "Loading usage…")
+              : t("usage.usageDetails", "Usage details"))
         }
         onClick={() => setOpen((value) => !value)}
       >
@@ -201,7 +203,7 @@ export function UsageProviderChip({
         {loading ? (
           <span className="animate-pulse text-content/35">···</span>
         ) : disconnected ? (
-          <span className="text-content/35">not connected</span>
+          <span className="text-content/35">{t("usage.notConnectedLower", "not connected")}</span>
         ) : windows.length === 0 ? (
           <span className="text-content/35">{emptyUsageLabel(limits)}</span>
         ) : (
@@ -332,14 +334,14 @@ export function UsageProviderChip({
                       strokeWidth={1.75}
                       aria-hidden
                     />
-                    Updating
+                    {t("usage.updating", "Updating")}
                   </span>
                 ) : null}
               </div>
 
               {limits.status === "error" && windows.length > 0 ? (
                 <p className="mb-2 rounded-lg bg-amber-400/10 px-2.5 py-2 text-[10px] leading-4 text-amber-700 dark:text-amber-300">
-                  Couldn’t refresh. Showing the last available snapshot.
+                  {t("usage.couldNotRefreshSnapshot", "Couldn’t refresh. Showing the last available snapshot.")}
                 </p>
               ) : null}
 
@@ -404,7 +406,7 @@ function AccountSwitchRow({
         onClick={onClick}
       >
         <span className="min-w-0 flex-1 truncate">{accountLabel}</span>
-        <span className="text-[10px] text-content/40">Switch</span>
+        <span className="text-[10px] text-content/40">{t("shell.usage.switch", "Switch")}</span>
         <ChevronRight
           className="size-3 shrink-0 text-content/35"
           strokeWidth={1.75}
@@ -434,6 +436,7 @@ function ProviderAccountPicker({
   onManage?: () => void;
   onSelect: (accountId: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div>
       <div className="flex h-7 items-center gap-1">
@@ -448,7 +451,7 @@ function ProviderAccountPicker({
         <h2 className="text-[13px] font-medium">{providerLabel} accounts</h2>
       </div>
       <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
-        Each conversation stays pinned to the account that started it.
+        {t("usage.accountPinnedHint", "Each conversation stays pinned to the account that started it.")}
       </p>
       <div className="mt-2 flex flex-col gap-1" role="listbox">
         {accounts.map((account) => {
@@ -501,7 +504,7 @@ function ProviderAccountPicker({
         onClick={onAdd}
       >
         <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
-        Add account
+        {t("shell.usage.addAccount", "Add account")}
       </button>
       {onManage ? (
         <button
@@ -511,7 +514,7 @@ function ProviderAccountPicker({
             onManage();
           }}
         >
-          Manage accounts…
+          {t("shell.usage.manageAccounts", "Manage accounts…")}
         </button>
       ) : null}
     </div>
@@ -529,6 +532,7 @@ function AddProviderAccount({
   onAdd?: (label: string) => Promise<ProviderAccount>;
   onComplete: () => void;
 }) {
+  const { t } = useTranslation();
   const [label, setLabel] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -561,20 +565,20 @@ function AddProviderAccount({
         >
           <ArrowLeft className="size-3.5" strokeWidth={1.75} aria-hidden />
         </button>
-        <h2 className="text-[13px] font-medium">Add {providerLabel} account</h2>
+        <h2 className="text-[13px] font-medium">{t("shell.usage.addProviderAccount", "Add {provider} account", { provider: providerLabel })}</h2>
       </div>
       <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
-        Give this account a local name, then finish sign-in in your browser.
+        {t("usage.accountLocalNameHint", "Give this account a local name, then finish sign-in in your browser.")}
       </p>
       <label className="mt-3 block text-[10px] font-medium text-content/55">
-        Account name
+        {t("usage.accountName", "Account name")}
         <input
           autoFocus
           type="text"
           maxLength={48}
           value={label}
           disabled={running}
-          placeholder="Work or Personal"
+          placeholder={t("settings.accountNamePlaceholder", "Work or Personal")}
           className="mt-1.5 h-8 w-full rounded-lg border border-content/10 bg-content/[0.04] px-2.5 text-[11px] text-content outline-none placeholder:text-content/25 focus:border-accent/45 disabled:opacity-55"
           onChange={(event) => setLabel(event.target.value)}
         />
@@ -587,7 +591,7 @@ function AddProviderAccount({
         {running ? (
           <RefreshCw className="size-3.5 animate-spin" aria-hidden />
         ) : null}
-        {running ? "Waiting for browser…" : "Sign in and add account"}
+        {running ? t("usage.waitingForBrowser", "Waiting for browser…") : t("usage.signInAndAddAccount", "Sign in and add account")}
       </button>
       {error ? (
         <p className="mt-2 text-[10px] leading-4 text-red-500" role="status">
@@ -651,7 +655,7 @@ function UsageWindowCard({
         />
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] leading-4 text-content/40">
-        <span className="tabular-nums">{remaining}% remaining</span>
+        <span className="tabular-nums">{t("usage.percentRemaining", "{percent}% remaining", { percent: remaining })}</span>
         <span
           className="truncate text-right tabular-nums"
           title={
@@ -712,7 +716,7 @@ function BankedResets({
       <div className="relative min-h-[78px] overflow-hidden rounded-lg bg-content/[0.04] px-3 py-3 pr-[84px] ring-1 ring-inset ring-content/[0.06]">
         <div className="relative z-10 min-w-0">
           <div className="flex items-center gap-1.5">
-            <h3 className="text-[11px] font-medium">Banked resets</h3>
+            <h3 className="text-[11px] font-medium">{t("usage.bankedResets", "Banked resets")}</h3>
             <span className="rounded-full bg-content/[0.07] px-1.5 py-px text-[9px] font-medium tabular-nums text-content/65 ring-1 ring-inset ring-content/[0.07]">
               {count}
             </span>
@@ -868,9 +872,9 @@ function BankedResetRow({
           }
         >
           {credit?.expiresAt == null
-            ? "Expiry not provided"
+            ? t("usage.expiryNotProvided", "Expiry not provided")
             : credit.expiresAt <= now
-              ? "Expires now"
+              ? t("usage.expiresNow", "Expires now")
               : `Expires in ${formatResetDuration(credit.expiresAt - now)}`}
         </p>
         {action === "using" ? (
@@ -880,7 +884,7 @@ function BankedResetRow({
               strokeWidth={1.75}
               aria-hidden
             />
-            Applying…
+            {t("shell.usage.applying", "Applying…")}
           </span>
         ) : isResetOutcome(action) || action === "error" ? (
           <span
@@ -900,14 +904,14 @@ function BankedResetRow({
             disabled={disabled}
             onClick={onConfirm}
           >
-            Use reset
+            {t("shell.usage.useReset", "Use reset")}
           </button>
         ) : null}
       </div>
       {action === "confirming" ? (
         <div className="mt-2 flex items-center justify-between gap-2 border-t border-content/[0.07] pt-2">
           <p className="text-[10px] leading-4 text-content/50">
-            Spend this reset now?
+            {t("usage.spendResetNow", "Spend this reset now?")}
           </p>
           <div className="flex shrink-0 gap-1">
             <button
@@ -915,14 +919,14 @@ function BankedResetRow({
               className="h-6 rounded-md px-2 text-[10px] text-content/50 hover:bg-content/10 hover:text-content"
               onClick={onCancel}
             >
-              Cancel
+              {t("common.cancel", "Cancel")}
             </button>
             <button
               type="button"
               className="h-6 rounded-md bg-content px-2.5 text-[10px] font-medium text-background-base transition-transform duration-150 ease-out active:scale-[0.97]"
               onClick={onUse}
             >
-              Confirm
+              {t("common.confirm", "Confirm")}
             </button>
           </div>
         </div>
@@ -938,14 +942,15 @@ function EmptyUsageState({
   limits: ProviderRateLimits;
   loading: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-lg bg-content/[0.04] px-3 py-4 text-center ring-1 ring-inset ring-content/[0.06]">
       <p className="text-[11px] font-medium text-content/65">
         {loading
-          ? "Loading usage…"
+          ? t("shell.usage.loadingUsage", "Loading usage…")
           : limits.status === "unavailable"
-            ? "Not connected"
-            : "Usage unavailable"}
+            ? t("usage.notConnected", "Not connected")
+            : t("usage.usageUnavailable", "Usage unavailable")}
       </p>
       {limits.error ? (
         <p className="mx-auto mt-1 max-w-[15rem] text-[10px] leading-4 text-content/40">

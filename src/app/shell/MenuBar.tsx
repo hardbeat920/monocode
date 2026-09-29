@@ -1,3 +1,4 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -366,10 +367,11 @@ export function MenuBar({
     return null;
   }
 
+  const { t } = useTranslation();
   const MENUS: { key: MenuKey; label: string }[] = [
-    { key: "file", label: "File" },
-    { key: "view", label: "View" },
-    { key: "terminal", label: "Terminal" },
+    { key: "file", label: t("shell.menuBar.file", "File") },
+    { key: "view", label: t("shell.menuBar.view", "View") },
+    { key: "terminal", label: t("shell.menuBar.terminal", "Terminal") },
   ];
 
   return (

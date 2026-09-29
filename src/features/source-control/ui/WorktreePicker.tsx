@@ -157,9 +157,9 @@ export function WorktreePicker({
                 : branches.current
               : settled
                 ? inWorktree
-                  ? "Worktree unavailable"
-                  : "No repo"
-                : "Loading…"
+                  ? t("sourceControl.worktreeUnavailable", "Worktree unavailable")
+                  : t("sourceControl.noRepo", "No repo")
+                : t("common.loading", "Loading…")
         }
         worktree={!worktreeRemoved && inWorktree}
       />

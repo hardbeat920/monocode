@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
 import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import { displayPath } from "../../../shared/lib/paths";
@@ -174,7 +175,7 @@ export const BTW_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "btw",
   invocation: "btw",
-  description: "Ask a read-only side question about the current turn.",
+  description: t("session.commands.btw.description", "Ask a read-only side question about the current turn."),
   scope: "builtin",
   source: "monocode",
 };

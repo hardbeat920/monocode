@@ -32,6 +32,7 @@
  */
 
 import type { FocusDir } from "./layout";
+import { keybindingCommandLabel } from "../../settings/model/settings";
 
 export type TabCommand =
   | "new"
@@ -264,4 +265,10 @@ export function deferUnhandledEscape(
   defer(() => {
     if (!e.defaultPrevented) run();
   });
+}
+
+export { keybindingCommandLabel };
+
+export function tabCommandLabel(command: TabCommand): string {
+  return keybindingCommandLabel(tabCommandKeybinding(command));
 }

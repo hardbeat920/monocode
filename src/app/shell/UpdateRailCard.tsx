@@ -1,3 +1,4 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { X } from "../../shared/ui/icons";
 import type { InstalledUpdate } from "../model/updateNotice";
 
@@ -9,6 +10,7 @@ type Props = {
 
 export function UpdateRailCard({ update, onOpen, onDismiss }: Props) {
   if (!update) return null;
+  const { t } = useTranslation();
 
   return (
     <section
@@ -30,10 +32,10 @@ export function UpdateRailCard({ update, onOpen, onDismiss }: Props) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[12px] font-medium leading-tight text-content">
-            Updated to {update.version}
+            {t("app.updatedTo", "Updated to {version}", { version: update.version })}
           </span>
           <span className="mt-0.5 block truncate text-[11px] leading-tight text-content/50">
-            What's new
+            {t("app.whatsNew", "What's new")}
           </span>
         </span>
       </button>

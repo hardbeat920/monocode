@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   ALT,
   IS_MAC,
@@ -428,7 +429,8 @@ export function searchSettings(
   const scored: { score: number; result: SettingsSearchResult }[] = [];
 
   for (const entry of SETTINGS_INDEX) {
-    const score = matchScore(needle, entry.label, entry.keywords);
+    const localizedLabel = t(`settings.search.${entry.id}`, entry.label);
+    const score = matchScore(needle, localizedLabel, `${entry.label} ${entry.keywords ?? ""}`);
     if (score == null) continue;
     scored.push({
       score,
@@ -436,25 +438,26 @@ export function searchSettings(
         section: entry.section,
         sectionLabel: settingsSectionLabel(entry.section),
         settingId: entry.id,
-        label: entry.label,
+        label: localizedLabel,
       },
     });
   }
 
   for (const section of SETTINGS_SECTIONS) {
+    const localizedLabel = settingsSectionLabel(section.id);
     const score = matchScore(
       needle,
-      section.label,
-      `${section.description} ${section.keywords ?? ""}`,
+      localizedLabel,
+      `${section.label} ${section.description} ${section.keywords ?? ""}`,
     );
     if (score == null) continue;
     scored.push({
       score: score + 0.5,
       result: {
         section: section.id,
-        sectionLabel: section.label,
+        sectionLabel: localizedLabel,
         settingId: null,
-        label: section.label,
+        label: localizedLabel,
       },
     });
   }
@@ -477,9 +480,8 @@ export function isSettingsSectionId(
 }
 
 export function settingsSectionLabel(id: SettingsSectionId): string {
-  return (
-    SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General"
-  );
+  const fallback = SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General";
+  return t(`settings.${id}`, fallback);
 }
 
 export function settingsSectionDescription(id: SettingsSectionId): string {
@@ -995,6 +997,60 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
 ];
 
+export const KEYBINDING_COMMAND_I18N_KEYS: Record<string, string> = {
+  "App: Settings": "settings.keybindingsPage.commands.appSettings",
+  "App: Search": "settings.keybindingsPage.commands.appSearch",
+  "App: Go to File": "settings.keybindingsPage.commands.appGoToFile",
+  "App: Command Palette": "settings.keybindingsPage.commands.appCommandPalette",
+  "App: Find in Files": "settings.keybindingsPage.commands.appFindInFiles",
+  "App: Open Project": "settings.keybindingsPage.commands.appOpenProject",
+  "App: New Window": "settings.keybindingsPage.commands.appNewWindow",
+  "App: Quick Composer": "settings.keybindingsPage.commands.appQuickComposer",
+  "App: Toggle Sidebar": "settings.keybindingsPage.commands.appToggleSidebar",
+  "App: Toggle Session Sidebar": "settings.keybindingsPage.commands.appToggleSessionSidebar",
+  "App: Switch Model": "settings.keybindingsPage.commands.appSwitchModel",
+  "Composer: Toggle Workspace": "settings.keybindingsPage.commands.composerToggleWorkspace",
+  "View: Reload": "settings.keybindingsPage.commands.viewReload",
+  "View: Zoom In": "settings.keybindingsPage.commands.viewZoomIn",
+  "View: Zoom Out": "settings.keybindingsPage.commands.viewZoomOut",
+  "View: Reset Zoom": "settings.keybindingsPage.commands.viewResetZoom",
+  "Tab: New": "settings.keybindingsPage.commands.tabNew",
+  "Tab: Close Others": "settings.keybindingsPage.commands.tabCloseOthers",
+  "Tab: Close All": "settings.keybindingsPage.commands.tabCloseAll",
+  "Tab: Next": "settings.keybindingsPage.commands.tabNext",
+  "Tab: Previous": "settings.keybindingsPage.commands.tabPrevious",
+  "Tab: Cycle Next": "settings.keybindingsPage.commands.tabCycleNext",
+  "Tab: Cycle Previous": "settings.keybindingsPage.commands.tabCyclePrevious",
+  "Tab: Back": "settings.keybindingsPage.commands.tabBack",
+  "Tab: Forward": "settings.keybindingsPage.commands.tabForward",
+  "Tab: Activate 1–8": "settings.keybindingsPage.commands.tabActivate1To8",
+  "Tab: Activate Last": "settings.keybindingsPage.commands.tabActivateLast",
+  "Session: Archive": "settings.keybindingsPage.commands.sessionArchive",
+  "Session: Previous": "settings.keybindingsPage.commands.sessionPrevious",
+  "Session: Next": "settings.keybindingsPage.commands.sessionNext",
+  "Session: Previous in Current Tab": "settings.keybindingsPage.commands.sessionPreviousInCurrentTab",
+  "Session: Next in Current Tab": "settings.keybindingsPage.commands.sessionNextInCurrentTab",
+  "Project: Previous": "settings.keybindingsPage.commands.projectPrevious",
+  "Project: Next": "settings.keybindingsPage.commands.projectNext",
+  "Pane: Close": "settings.keybindingsPage.commands.paneClose",
+  "Pane: Split Right": "settings.keybindingsPage.commands.paneSplitRight",
+  "Pane: Split Down": "settings.keybindingsPage.commands.paneSplitDown",
+  "Pane: Focus Left": "settings.keybindingsPage.commands.paneFocusLeft",
+  "Pane: Focus Right": "settings.keybindingsPage.commands.paneFocusRight",
+  "Pane: Focus Up": "settings.keybindingsPage.commands.paneFocusUp",
+  "Pane: Focus Down": "settings.keybindingsPage.commands.paneFocusDown",
+  "Terminal: New": "settings.keybindingsPage.commands.terminalNew",
+  "Terminal: New Tab": "settings.keybindingsPage.commands.terminalNewTab",
+  "Terminal: Toggle Dock": "settings.keybindingsPage.commands.terminalToggleDock",
+  "Editor: Find": "settings.keybindingsPage.commands.editorFind",
+  "Editor: Replace": "settings.keybindingsPage.commands.editorReplace",
+};
+
+export function keybindingCommandLabel(command: string): string {
+  const key = KEYBINDING_COMMAND_I18N_KEYS[command];
+  return key ? t(key, command) : command;
+}
+
 const KEYBINDING_OVERRIDES_KEY = "monocode.keybindingOverrides";
 const KEYBINDINGS_CHANGE_EVENT = "monocode:keybindings-change";
 
@@ -1286,10 +1342,13 @@ export function filterKeybindings(
 ): KeybindingRow[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return rows;
-  return rows.filter(
-    (row) =>
+  return rows.filter((row) => {
+    const label = keybindingCommandLabel(row.command).toLowerCase();
+    return (
       row.command.toLowerCase().includes(needle) ||
+      label.includes(needle) ||
       row.keys.toLowerCase().includes(needle) ||
-      row.when.toLowerCase().includes(needle),
-  );
+      row.when.toLowerCase().includes(needle)
+    );
+  });
 }

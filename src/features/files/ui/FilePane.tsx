@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { memo, useSyncExternalStore } from "react";
 import {
@@ -287,7 +288,7 @@ function PlanSurface({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <p className="text-[13px] text-content/70">
-          This plan is no longer in the session.
+          {t("files.planNotInSession", "This plan is no longer in the session.")}
         </p>
       </div>
     );

@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -96,7 +97,7 @@ export function BinaryFileView({ path, cwd }: Props) {
   if (state.status === "loading") {
     return (
       <div className="grid h-full place-items-center text-[12px] text-content/45">
-        Opening {basename(path)}…
+        {t("files.openingFile", "Opening {filename}…", { filename: basename(path) })}
       </div>
     );
   }
@@ -106,7 +107,7 @@ export function BinaryFileView({ path, cwd }: Props) {
       <FileCard
         path={path}
         cwd={cwd}
-        title={`Couldn’t open ${basename(path)}`}
+        title={t("files.couldNotOpen", `Couldn’t open ${basename(path)}`, { name: basename(path) })}
         detail={state.message}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
         onRetry={reload}
@@ -120,7 +121,7 @@ export function BinaryFileView({ path, cwd }: Props) {
         path={path}
         cwd={cwd}
         title={basename(path)}
-        detail={`${formatFileSize(state.size)} · not a readable image`}
+        detail={`${formatFileSize(state.size)} · ${t("files.notReadableImage", "not a readable image")}`}
         icon={
           <div className="mx-auto mb-3 flex justify-center">
             <FileTypeIcon name={basename(path)} isDir={false} size={28} />
@@ -234,7 +235,7 @@ function ImageView({
         <span className="flex-1" />
         {IS_MAC ? (
           <ZoomButton
-            label={copied ? "Copied" : "Copy original file"}
+            label={copied ? t("files.copied", "Copied") : t("files.copyOriginalFile", "Copy original file")}
             onClick={copyOriginal}
           >
             {copied ? (
@@ -245,7 +246,7 @@ function ImageView({
           </ZoomButton>
         ) : null}
         <ZoomButton
-          label="Zoom out"
+          label={t("files.zoomOut", "Zoom out")}
           onClick={() =>
             setZoom((value) => clampZoom((value === "fit" ? 1 : value) / 1.5))
           }
@@ -254,14 +255,14 @@ function ImageView({
         </ZoomButton>
         <button
           type="button"
-          title="Fit to window"
+          title={t("files.fitToWindow", "Fit to window")}
           onClick={() => setZoom("fit")}
           className="w-11 rounded text-center tabular-nums hover:text-content"
         >
-          {zoom === "fit" ? "Fit" : `${Math.round(zoom * 100)}%`}
+          {zoom === "fit" ? t("files.fit", "Fit") : `${Math.round(zoom * 100)}%`}
         </button>
         <ZoomButton
-          label="Zoom in"
+          label={t("files.zoomIn", "Zoom in")}
           onClick={() =>
             setZoom((value) => clampZoom((value === "fit" ? 1 : value) * 1.5))
           }
@@ -277,7 +278,7 @@ function ImageView({
             {
               kind: "item",
               id: "copy-original",
-              label: "Copy Original File",
+              label: t("files.copyOriginalFileMenu", "Copy Original File"),
             },
           ]}
           ariaLabel="Image actions"
@@ -341,15 +342,15 @@ function FileCard({
           {onRetry ? (
             <CardButton onClick={onRetry}>
               <RotateCcw className="size-3" strokeWidth={1.75} />
-              Retry
+              {t("common.retry", "Retry")}
             </CardButton>
           ) : null}
           <CardButton onClick={() => void revealPath(path).catch(() => {})}>
             <Folder className="size-3" strokeWidth={1.75} />
-            Reveal
+            {t("files.reveal", "Reveal")}
           </CardButton>
           <CardButton onClick={() => void copyText(path).catch(() => {})}>
-            Copy path
+            {t("files.copyPath", "Copy path")}
           </CardButton>
         </div>
       </div>

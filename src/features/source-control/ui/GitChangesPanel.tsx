@@ -722,7 +722,7 @@ function ChangedFiles({
                 onClick={() => void commit(true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit & Push
+                {t("sourceControl.commitAndPush", "Commit & Push")}
               </button>
               <button
                 type="button"
@@ -731,7 +731,7 @@ function ChangedFiles({
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit, Push & Create PR
+                {t("sourceControl.commitPushCreatePr", "Commit, Push & Create PR")}
               </button>
               <div className="my-1 border-t border-content/10" />
               <button
@@ -780,7 +780,7 @@ function ChangedFiles({
             {index
               ? index.ahead > 0 || index.behind > 0
                 ? syncStatusLabel(index)
-                : "No uncommitted changes"
+                : t("sourceControl.noUncommittedChanges", "No uncommitted changes")
               : t("sourceControl.loadingChanges", "Loading changes…")}
           </p>
         ) : (
@@ -1051,7 +1051,7 @@ function GitSyncActions({
           ) : (
             <GitPullRequest className="size-3.5 shrink-0" strokeWidth={1.75} />
           )}
-          Create PR
+          {t("sourceControl.createPr", "Create PR")}
         </button>
       ) : null}
       {showViewPr ? (

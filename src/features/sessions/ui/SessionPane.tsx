@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { ChevronDown, GripVertical, X } from "../../../shared/ui/icons";
 import {
   memo,
@@ -693,7 +694,7 @@ export const SessionPane = memo(function SessionPane({
           </span>
           <button
             type="button"
-            title={`Close Pane (${MOD}W)`}
+            title={t("sessions.closePaneWithShortcut", `Close Pane (${MOD}W)`, { shortcut: `${MOD}W` })}
             aria-label="Close pane"
             data-no-drag
             className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
@@ -743,7 +744,7 @@ export const SessionPane = memo(function SessionPane({
           {isEmpty ? (
             session.inboxAsk ? (
               <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                <DiscussionEmpty message="Explore this item with your agent." />
+                <DiscussionEmpty message={t("session.exploreItemWithAgent", "Explore this item with your agent.")} />
               </div>
             ) : (
               <EmptySession
@@ -890,7 +891,7 @@ export const SessionPane = memo(function SessionPane({
                 <div className="pointer-events-none absolute inset-x-0 bottom-2 z-30 flex justify-center">
                   <button
                     type="button"
-                    title="Jump to latest"
+                    title={t("sessions.jumpToLatest", "Jump to latest")}
                     aria-label="Jump to latest"
                     data-jump-to-bottom
                     onClick={() => jumpToBottomRef.current?.()}

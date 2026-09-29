@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   useContext,
   useEffect,
@@ -232,7 +233,7 @@ function AssignmentModel({
               ref={search}
               type="text"
               aria-label="Search assignment models"
-              placeholder="Search models or harnesses…"
+              placeholder={t("sessions.searchModelsOrHarnessesPlaceholder", "Search models or harnesses…")}
               spellCheck={false}
               autoComplete="off"
               value={query}
@@ -307,7 +308,7 @@ function AssignmentModel({
             ))}
             {!matches.length && (
               <p className="px-2 py-3 text-[12px] text-content/45">
-                No matching models
+                {t("orchestration.noMatchingModels", "No matching models")}
               </p>
             )}
           </div>
@@ -396,13 +397,10 @@ function WorkerHelp() {
           className={`px-2.5 py-2 ${open ? "" : "pointer-events-none"}`}
         >
           <div className="text-[12px] leading-4 text-content">
-            How many workers run at once
+            {t("orchestration.workersRunTitle", "How many workers run at once")}
           </div>
           <div className="mt-1 text-[11px] leading-4 text-content/50">
-            The rest of the tasks wait their turn, and a task that depends on
-            another waits for it either way. Every worker edits this same
-            project folder, so a lower number means fewer changes landing in it
-            at the same time.
+            {t("orchestration.workersRunDescription", "The rest of the tasks wait their turn, and a task that depends on another waits for it either way. Every worker edits this same project folder, so a lower number means fewer changes landing in it at the same time.")}
           </div>
         </Popover>
       )}
@@ -518,7 +516,7 @@ export function OrchestrationPreview({
         </span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium leading-tight text-content/90">
-            {planning ? "Planning assignments…" : proposal.title}
+            {planning ? t("orchestration.planningAssignments", "Planning assignments…") : proposal.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] leading-tight text-content/45">
             <HarnessIcon
@@ -529,7 +527,7 @@ export function OrchestrationPreview({
               className="truncate"
               title={HARNESS_TITLE[proposal.author.harness]}
             >
-              Lead · {proposal.author.name}
+              {t("orchestration.leadPrefix", "Lead · {name}", { name: proposal.author.name })}
             </span>
             {!!proposal.tasks.length && (
               <span className="shrink-0">
@@ -546,7 +544,7 @@ export function OrchestrationPreview({
               disabled={busy || !actions}
               onClick={() => actions?.retry(proposal.leadId, block.id)}
             >
-              Try again
+              {t("orchestration.tryAgain", "Try again")}
             </button>
           )}
           {!run && ["ready", "starting"].includes(proposal.status) && (
@@ -558,7 +556,7 @@ export function OrchestrationPreview({
               }
             >
               <Play className="size-3" strokeWidth={1.75} />
-              {starting ? "Starting…" : "Confirm & start"}
+              {starting ? t("orchestration.starting", "Starting…") : t("orchestration.confirmAndStart", "Confirm & start")}
             </button>
           )}
           {run && (
@@ -575,7 +573,7 @@ export function OrchestrationPreview({
                 )
               }
             >
-              View agents
+              {t("orchestration.viewAgents", "View agents")}
             </button>
           )}
         </div>
@@ -583,8 +581,8 @@ export function OrchestrationPreview({
       {planning && (
         <p className="px-3 pb-2.5 text-[12px] leading-5 text-content/50">
           {proposal.settings.choices.length
-            ? "Your lead is choosing tasks and worker models. Review the assignments here before starting."
-            : "Checking available harnesses and models…"}
+            ? t("orchestration.leadPlanningReviewHint", "Your lead is choosing tasks and worker models. Review the assignments here before starting.")
+            : t("orchestration.checkingHarnessesAndModels", "Checking available harnesses and models…")}
         </p>
       )}
       {!!proposal.tasks.length && (
@@ -661,7 +659,7 @@ export function OrchestrationPreview({
                     {editable ? (
                       <>
                         <label className="block">
-                          <span className={fieldLabel}>Task</span>
+                          <span className={fieldLabel}>{t("orchestration.task", "Task")}</span>
                           <input
                             aria-label={`Title for task ${index + 1}`}
                             className={field}
@@ -672,9 +670,9 @@ export function OrchestrationPreview({
                           />
                         </label>
                         <label className="block">
-                          <span className={fieldLabel}>Instructions</span>
+                          <span className={fieldLabel}>{t("orchestration.instructions", "Instructions")}</span>
                           <InstructionsField
-                            label={`Instructions for task ${index + 1}`}
+                            label={t("orchestration.instructionsForTask", "Instructions for task {index}", { index: index + 1 })}
                             value={task.prompt}
                             className={field}
                             onChange={(prompt) => change(task.id, { prompt })}
@@ -688,7 +686,7 @@ export function OrchestrationPreview({
                     )}
                     {!!task.dependsOn.length && (
                       <p>
-                        After ·{" "}
+                        {t("orchestration.afterPrefix", "After · ")}
                         {task.dependsOn
                           .map(
                             (id) =>
@@ -718,7 +716,7 @@ export function OrchestrationPreview({
             <ChevronRight className="size-3.5" />
           )}
           {showAll
-            ? "Show fewer tasks"
+            ? t("orchestration.showFewerTasks", "Show fewer tasks")
             : `Show ${proposal.tasks.length - 3} more ${proposal.tasks.length === 4 ? "task" : "tasks"}`}
         </button>
       )}
@@ -732,7 +730,7 @@ export function OrchestrationPreview({
           <div className="flex items-center gap-1.5">
             {editable ? (
               <>
-                <span>Parallel workers</span>
+                <span>{t("orchestration.parallelWorkers", "Parallel workers")}</span>
                 <div
                   role="radiogroup"
                   aria-label="Parallel workers"
@@ -772,11 +770,11 @@ export function OrchestrationPreview({
           <span>
             {run?.status ??
               (proposal.status === "approved"
-                ? "Approved"
+                ? t("orchestration.approved", "Approved")
                 : proposal.status === "ready"
-                  ? "Awaiting confirmation"
+                  ? t("orchestration.awaitingConfirmation", "Awaiting confirmation")
                   : "")}{" "}
-            · Shared project folder
+            {t("orchestration.sharedProjectFolder", "· Shared project folder")}
           </span>
         </div>
       )}

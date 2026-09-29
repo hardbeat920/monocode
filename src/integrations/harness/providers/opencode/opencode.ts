@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { modelContextWindow, nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode, TurnMetrics } from "../../../../features/sessions/model/session";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
@@ -960,8 +961,8 @@ function emitTool(live: Live, part: OpenCodePart): void {
       detail ??
       (status === "error"
         ? kind === "agent"
-          ? "Subagent failed."
-          : "Tool failed."
+          ? t("harness.subagentFailed", "Subagent failed.")
+          : t("harness.toolFailed", "Tool failed.")
         : undefined),
     preview,
   });
@@ -1188,7 +1189,7 @@ function showNextQuestion(live: Live): void {
   live.onEvent({
     type: "question.asked",
     requestId,
-    title: questionPromptTitle(questions) || "OpenCode question",
+    title: questionPromptTitle(questions) || t("session.openCodeQuestion", "OpenCode question"),
     questions,
   });
 }

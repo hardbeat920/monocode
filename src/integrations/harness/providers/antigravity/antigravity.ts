@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -326,7 +327,7 @@ function noteActivity(live: Live): void {
     live.stallNotified = true;
     live.onEvent({
       type: "status",
-      text: "Antigravity has been quiet for two minutes — its post-turn work may be stuck. Stop and resend to recover.",
+      text: t("harness.antigravityStuckNotice", "Antigravity has been quiet for two minutes — its post-turn work may be stuck. Stop and resend to recover."),
     });
   }, STALL_NOTIFY_MS);
 }
@@ -706,7 +707,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (stopReason != null && stopReason !== "end_turn") {
       live.onEvent({
         type: "session.error",
-        message: `Antigravity ended the turn (${String(stopReason)}).`,
+        message: t("harness.antigravityEndedTurn", "Antigravity ended the turn ({reason}).", { reason: String(stopReason) }),
       });
       return;
     }

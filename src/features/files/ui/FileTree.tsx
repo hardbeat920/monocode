@@ -170,51 +170,51 @@ function explorerItems(
     !!clip?.isDir &&
     (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
   return [
-    { kind: "item", id: "new-file", label: "New File" },
-    { kind: "item", id: "new-folder", label: "New Folder" },
+    { kind: "item", id: "new-file", label: t("files.newFile", "New File") },
+    { kind: "item", id: "new-folder", label: t("files.newFolder", "New Folder") },
     { kind: "sep" },
     {
       kind: "item",
       id: "cut",
-      label: "Cut",
+      label: t("files.cut", "Cut"),
       shortcut: `${MOD}X`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "copy",
-      label: "Copy",
+      label: t("common.copy", "Copy"),
       shortcut: `${MOD}C`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "paste",
-      label: "Paste",
+      label: t("files.paste", "Paste"),
       shortcut: `${MOD}V`,
       disabled: pasteBlocked,
     },
     {
       kind: "item",
       id: "duplicate",
-      label: "Duplicate",
+      label: t("files.duplicate", "Duplicate"),
       disabled: target.isRoot,
     },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
-    { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
+    { kind: "item", id: "copy-path", label: t("files.copyPath", "Copy Path") },
+    { kind: "item", id: "copy-relative-path", label: t("files.copyRelativePath", "Copy Relative Path") },
     { kind: "sep" },
     {
       kind: "item",
       id: "rename",
-      label: "Rename",
+      label: t("common.rename", "Rename"),
       shortcut: "F2",
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "delete",
-      label: "Delete",
+      label: t("common.delete", "Delete"),
       shortcut: "⌫",
       disabled: target.isRoot,
       danger: true,
@@ -225,7 +225,7 @@ function explorerItems(
           {
             kind: "item" as const,
             id: "open-terminal",
-            label: "Open in Terminal",
+            label: t("files.openInTerminal", "Open in Terminal"),
           },
         ]
       : []),
@@ -871,14 +871,14 @@ export const FileTree = memo(function FileTree({
           className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
           onContextMenu={(e) => e.stopPropagation()}
         >
-          <HeaderIcon label="New File" onClick={() => startCreate(false)}>
+          <HeaderIcon label={t("files.newFile", "New File")} onClick={() => startCreate(false)}>
             <FilePlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
-          <HeaderIcon label="New Folder" onClick={() => startCreate(true)}>
+          <HeaderIcon label={t("files.newFolder", "New Folder")} onClick={() => startCreate(true)}>
             <FolderPlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
           <HeaderIcon
-            label="Collapse All"
+            label={t("files.collapseAll", "Collapse All")}
             onClick={() => {
               setCreating(null);
               setRenaming(null);
@@ -891,7 +891,7 @@ export const FileTree = memo(function FileTree({
           </HeaderIcon>
           {onSearch ? (
             <HeaderIcon
-              label={`Search in files (${MOD}Shift+F)`}
+              label={t("files.searchInFilesWithShortcut", "Search in files ({shortcut})", { shortcut: `${MOD}Shift+F` })}
               onClick={onSearch}
             >
               <Search className="size-3.5" strokeWidth={1.75} />

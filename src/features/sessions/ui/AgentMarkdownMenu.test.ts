@@ -1,3 +1,4 @@
+import { t } from "../../../features/i18n/model/i18n";
 // @vitest-environment happy-dom
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -50,7 +51,14 @@ async function pick(label: string, link = container.querySelector("a")!) {
   const menu = openMenu(link)!;
   const item = Array.from(
     menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-  ).find((button) => button.textContent === label)!;
+  ).find((button) => {
+    if (button.textContent === label) return true;
+    if (label === "Open in MonoCode" && button.textContent === t("files.openInMonoCode", "Open in MonoCode")) return true;
+    if (label === "Open in Default App" && button.textContent === t("files.openInDefaultApp", "Open in Default App")) return true;
+    if (label === "Copy Path" && (button.textContent === t("files.copyPath", "Copy Path") || button.textContent === "复制完整路径" || button.textContent === "复制路径")) return true;
+    if (label === "Copy Relative Path" && button.textContent === t("files.copyRelativePath", "Copy Relative Path")) return true;
+    return false;
+  })!;
   await act(async () => item.click());
 }
 
@@ -80,13 +88,13 @@ describe("AgentMarkdown file link context menu", () => {
     const menu = openMenu(container.querySelector("a")!);
 
     expect(menu).not.toBeNull();
-    expect(menu!.textContent).toContain("Open in MonoCode");
-    expect(menu!.textContent).toContain("Open in Default App");
+    expect(menu!.textContent).toMatch(new RegExp(`${t("files.openInMonoCode", "Open in MonoCode")}|Open in MonoCode`));
+    expect(menu!.textContent).toMatch(new RegExp(`${t("files.openInDefaultApp", "Open in Default App")}|Open in Default App`));
     expect(menu!.textContent).toMatch(
-      /Reveal in Finder|Reveal in File Explorer|Open Containing Folder/,
+      /Reveal in Finder|Reveal in File Explorer|Open Containing Folder|在访达中显示|在文件管理器中显示/,
     );
-    expect(menu!.textContent).toContain("Copy Path");
-    expect(menu!.textContent).toContain("Copy Relative Path");
+    expect(menu!.textContent).toMatch(new RegExp(`${t("files.copyPath", "Copy Path")}|Copy Path|复制完整路径|复制路径`));
+    expect(menu!.textContent).toMatch(new RegExp(`${t("files.copyRelativePath", "Copy Relative Path")}|Copy Relative Path`));
   });
 
   it("runs internal-open, external-open, reveal, and copy actions", async () => {

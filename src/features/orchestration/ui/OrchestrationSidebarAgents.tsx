@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { findModel } from "../../sessions/model/models";
 import { orchestrator } from "../model/orchestration";
@@ -203,7 +204,7 @@ export function OrchestrationSidebarAgents({
                     {workers.openDetails && (
                       <button
                         type="button"
-                        title="Open this agent beside the orchestrator"
+                        title={t("orchestration.openAgentBesideOrchestrator", "Open this agent beside the orchestrator")}
                         className={solidAction}
                         onClick={() =>
                           workers.openDetails?.({
@@ -214,7 +215,7 @@ export function OrchestrationSidebarAgents({
                           })
                         }
                       >
-                        See details
+                        {t("orchestration.seeDetails", "See details")}
                       </button>
                     )}
                     {live && ["queued", "running"].includes(live.status) && (
@@ -228,7 +229,7 @@ export function OrchestrationSidebarAgents({
                           )
                         }
                       >
-                        Cancel task
+                        {t("orchestration.cancelTask", "Cancel task")}
                       </button>
                     )}
                   </div>
@@ -249,15 +250,16 @@ export function OrchestrationSidebarAgents({
         <div className="mt-1.5 space-y-1.5 border-t border-stroke pt-1.5">
           <p className="px-0.5 text-[11px] leading-relaxed text-content/45">
             {stopping
-              ? "Stopping interrupted work before this run can resume."
+              ? t("orchestration.stoppingInterruptedWork", "Stopping interrupted work before this run can resume.")
               : leadBusy
-                ? "Waiting for the lead's interrupted turn to finish before this run can resume."
-                : "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review."}
+                ? t("orchestration.waitingForLeadTurn", "Waiting for the lead's interrupted turn to finish before this run can resume.")
+                : t("orchestration.resumeDesc", "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review.")}
           </p>
           {resumeBlocker && (
             <p className="px-0.5 text-[11px] leading-relaxed text-amber-400">
-              {resumeBlocker.title || "Another conversation"} is still running
-              in this project.
+              {t("orchestration.blockerStillRunning", "{title} is still running in this project.", {
+                title: resumeBlocker.title || t("orchestration.anotherConversation", "Another conversation"),
+              })}
             </p>
           )}
           <div className="-mr-1.5 flex items-center justify-end gap-1">
@@ -268,7 +270,7 @@ export function OrchestrationSidebarAgents({
                 disabled={pending}
                 onClick={() => actions.open(resumeBlocker.id)}
               >
-                Open blocker
+                {t("orchestration.openBlocker", "Open blocker")}
               </button>
             )}
             <button
@@ -277,12 +279,12 @@ export function OrchestrationSidebarAgents({
               disabled={pending || stopping || leadBusy || !!resumeBlocker}
               title={
                 stopping
-                  ? "Wait for interrupted agents to stop"
+                  ? t("orchestration.waitForInterruptedToStop", "Wait for interrupted agents to stop")
                   : leadBusy
-                    ? "Wait for the lead's interrupted turn to finish"
+                    ? t("orchestration.waitForLeadToFinish", "Wait for the lead's interrupted turn to finish")
                     : resumeBlocker
                       ? `Stop ${resumeBlocker.title || "the other conversation"} before resuming`
-                      : "Continue interrupted and queued work"
+                      : t("orchestration.continueInterruptedAndQueued", "Continue interrupted and queued work")
               }
               onClick={() =>
                 void perform(() =>
@@ -294,7 +296,7 @@ export function OrchestrationSidebarAgents({
                 )
               }
             >
-              Resume
+              {t("common.resume", "Resume")}
             </button>
           </div>
         </div>

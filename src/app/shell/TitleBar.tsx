@@ -375,7 +375,7 @@ function TitleTabItem({
             {tab.dirty ? (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-content/70"
-                title="Unsaved changes"
+                title={t("shell.unsavedChanges", "Unsaved changes")}
                 aria-label="Unsaved changes"
               />
             ) : null}
@@ -390,7 +390,7 @@ function TitleTabItem({
       {closable ? (
         <button
           type="button"
-          title="Close Tab"
+          title={t("shell.closeTab", "Close Tab")}
           aria-label={`Close ${headline}`}
           data-no-drag
           data-tauri-drag-region="false"
@@ -510,10 +510,10 @@ export function DevModeLabel() {
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
+      title={t("shell.devBuild", "Development build")}
       className="mr-1 min-w-0 truncate rounded-md bg-skill/15 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-skill"
     >
-      Development
+      {t("app.devBuild", "Development")}
     </span>
   );
 }
@@ -547,14 +547,14 @@ export function TabVisitNav({
   return (
     <div className="flex shrink-0 items-center">
       <IconButton
-        label={`Back (${MOD}[)`}
+        label={`${t("common.back", "Back")} (${MOD}[)`}
         disabled={!canGoBack}
         onClick={onGoBack}
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={`Forward (${MOD}])`}
+        label={`${t("shell.forward", "Forward")} (${MOD}])`}
         disabled={!canGoForward}
         onClick={onGoForward}
       >
@@ -585,13 +585,13 @@ export function OverlayNav({
   return (
     <div className="flex shrink-0 items-center px-1.5">
       {onBack ? (
-        <IconButton label={`Back (${MOD}[)`} onClick={onBack}>
+        <IconButton label={`${t("common.back", "Back")} (${MOD}[)`} onClick={onBack}>
           <ChevronLeft className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onToggleSidebar ? (
         <IconButton
-          label={`Toggle Sidebar (${MOD}B)`}
+          label={t("app.toggleSidebarWithKey", "Toggle Sidebar ({key})", { key: `${MOD}B` })}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -888,7 +888,7 @@ function TitleBarComponent({
               </>
             ) : null}
             {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
-              <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+              <IconButton label={t("app.settingsWithKey", "Settings ({key})", { key: `${MOD},` })} onClick={onOpenSettings}>
                 <Settings className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}

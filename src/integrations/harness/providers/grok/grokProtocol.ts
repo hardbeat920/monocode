@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
@@ -42,10 +43,10 @@ const VARIANT_KIND: Record<string, string> = {
 };
 
 const EFFORT_LABELS: Record<string, string> = {
-  xhigh: "Extra High",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
+  xhigh: t("models.options.extraHigh", "Extra High"),
+  high: t("models.options.high", "High"),
+  medium: t("models.options.medium", "Medium"),
+  low: t("models.options.low", "Low"),
 };
 
 export type GrokPermissionRequest = {
@@ -484,18 +485,18 @@ export function fallbackGrokModels(): AgentModel[] {
     modelFromNative("grok-4.6", "Grok 4.6", {
       contextWindow: 500_000,
       efforts: [
-        { value: "xhigh", label: "Extra High" },
-        { value: "high", label: "High", default: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
+        { value: "xhigh", label: t("models.options.extraHigh", "Extra High") },
+        { value: "high", label: t("models.options.high", "High"), default: true },
+        { value: "medium", label: t("models.options.medium", "Medium") },
+        { value: "low", label: t("models.options.low", "Low") },
       ],
     }),
     modelFromNative("grok-4.5", "Grok 4.5", {
       contextWindow: 500_000,
       efforts: [
-        { value: "high", label: "High", default: true },
-        { value: "medium", label: "Medium" },
-        { value: "low", label: "Low" },
+        { value: "high", label: t("models.options.high", "High"), default: true },
+        { value: "medium", label: t("models.options.medium", "Medium") },
+        { value: "low", label: t("models.options.low", "Low") },
       ],
     }),
   ];
@@ -566,7 +567,7 @@ function effortSetting(
 ): ModelSetting {
   return {
     id: "effort",
-    label: "Reasoning",
+    label: t("models.settings.reasoning", "Reasoning"),
     kind: "select",
     value:
       value && options.some((item) => item.value === value)

@@ -639,7 +639,7 @@ function AgentTranscriptComponent({
               className="rounded-md bg-content/8 px-2.5 py-1.5 font-sans text-[12px] text-content/60 hover:bg-content/12 hover:text-content"
               onClick={loadEarlier}
             >
-              Load earlier messages
+              {t("sessions.loadEarlierMessages", "Load earlier messages")}
             </button>
           </div>
         ) : null}
@@ -698,9 +698,9 @@ function AgentTranscriptComponent({
               paused={waitingForApproval}
               waitingLabel={
                 managed && waitingForApproval
-                  ? "Waiting for orchestrator"
+                  ? t("sessions.waitingForOrchestrator", "Waiting for orchestrator")
                   : pendingQuestion
-                    ? "Waiting for answers"
+                    ? t("sessions.waitingForAnswers", "Waiting for answers")
                     : undefined
               }
               background={backgroundTasks}
@@ -984,7 +984,7 @@ function InitialThinking({
     <div
       className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
     >
-      {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
+      {live ? <Shimmer duration={1.6}>{t("sessions.thinking", "Thinking…")}</Shimmer> : t("sessions.thinking", "Thinking…")}
     </div>
   );
 }
@@ -1738,7 +1738,7 @@ function UserMessageBlock({
               className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
               onClick={toggle}
             >
-              {expanded ? "Show less" : "Show more"}
+              {expanded ? t("common.showLess", "Show less") : t("common.showMore", "Show more")}
             </button>
           ) : null}
           {block.ciContext ? (
@@ -1748,10 +1748,10 @@ function UserMessageBlock({
             >
               <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
                 <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
-                <span>CI context</span>
+                <span>{t("sessions.ciContext", "CI context")}</span>
               </summary>
               <p className="mt-2 text-xs text-content/50">
-                CI instructions and failure details included with this request.
+                {t("session.ciContextIncluded", "CI instructions and failure details included with this request.")}
               </p>
               <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
                 {block.ciContext}
@@ -1762,27 +1762,27 @@ function UserMessageBlock({
             <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
               <span className="flex items-center gap-1.5 text-xs text-content/50">
                 <CircleDashed className="size-3.5" strokeWidth={1.75} />
-                Draft
+                {t("sessions.draft", "Draft")}
               </span>
               <span className="flex items-center gap-1">
                 <button
                   type="button"
-                  title="Remove draft"
+                  title={t("sessions.removeDraft", "Remove draft")}
                   aria-label="Remove draft"
                   onClick={() => onRemoveDraft?.(block)}
                   className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
                 >
                   <Trash2 className="size-3.5" strokeWidth={1.75} />
-                  Remove
+                  {t("common.remove", "Remove")}
                 </button>
                 <button
                   type="button"
-                  title="Send draft"
+                  title={t("sessions.sendDraft", "Send draft")}
                   aria-label="Send draft"
                   onClick={() => onSendDraft?.(block)}
                   className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
                 >
-                  Send
+                  {t("common.send", "Send")}
                   <ArrowUp className="size-3.5" strokeWidth={2.25} />
                 </button>
               </span>
@@ -2498,7 +2498,7 @@ function SubagentPanel({
       {model || status ? (
         <span className="flex min-w-0 max-w-[55%] shrink-0 items-baseline gap-2 font-sans text-[12px] text-content/40">
           {model ? (
-            <span className="truncate" title={`Model: ${model}`}>
+            <span className="truncate" title={t("sessions.modelLabel", `Model: ${model}`, { model })}>
               {model}
             </span>
           ) : null}
@@ -3540,14 +3540,14 @@ function ApprovalControls({
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
         onClick={() => onApproval(approval.requestId, "allow")}
       >
-        Allow
+        {t("session.allow", "Allow")}
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
         onClick={() => onApproval(approval.requestId, "deny")}
       >
-        Deny
+        {t("session.deny", "Deny")}
       </button>
     </div>
   );
@@ -3683,7 +3683,7 @@ function InterjectionDivider({ block }: { block: Block }) {
               onClick={() => setExpanded((value) => !value)}
               className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
             >
-              {expanded ? "Show less" : "Show more"}
+              {expanded ? t("common.showLess", "Show less") : t("common.showMore", "Show more")}
             </button>
           ) : null}
         </div>

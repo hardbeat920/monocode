@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type SessionFolderTarget,
@@ -63,7 +64,7 @@ export function SessionFolderPicker({ folders, onPick, onDismiss }: Props) {
           ref={inputRef}
           value={query}
           aria-label="Session folder"
-          placeholder="Choose or name a session folder…"
+          placeholder={t("sessions.chooseSessionFolderPlaceholder", "Choose or name a session folder…")}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
@@ -92,7 +93,7 @@ export function SessionFolderPicker({ folders, onPick, onDismiss }: Props) {
         />
         <button
           type="button"
-          title="Cancel"
+          title={t("common.cancel", "Cancel")}
           aria-label="Cancel"
           onClick={onDismiss}
           className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
@@ -108,7 +109,7 @@ export function SessionFolderPicker({ folders, onPick, onDismiss }: Props) {
       >
         {rows.length === 0 ? (
           <p className="px-2 py-2 text-[12px] text-content/50">
-            Type a name to create the first folder
+            {t("session.typeNameToCreateFolder", "Type a name to create the first folder")}
           </p>
         ) : (
           rows.map((row, index) => {

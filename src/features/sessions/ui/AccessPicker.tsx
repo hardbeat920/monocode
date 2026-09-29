@@ -169,8 +169,7 @@ export function AccessPicker({
           })}
           {busy ? (
             <p className="px-2 py-1.5 text-[11px] leading-4 text-content/50">
-              Access changes apply to the next turn. Stop and resend to apply
-              them now.
+              {t("session.accessChangesNextTurn", "Access changes apply to the next turn. Stop and resend to apply them now.")}
             </p>
           ) : null}
         </Popover>

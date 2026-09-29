@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   ChevronDown,
   ChevronLeft,
@@ -47,10 +48,10 @@ type Props = {
 };
 
 const SIDE_ITEMS: { id: DockSide; label: string }[] = [
-  { id: "bottom", label: "Dock Bottom" },
-  { id: "top", label: "Dock Top" },
-  { id: "left", label: "Dock Left" },
-  { id: "right", label: "Dock Right" },
+  { id: "bottom", label: t("terminal.dockBottom", "Dock Bottom") },
+  { id: "top", label: t("terminal.dockTop", "Dock Top") },
+  { id: "left", label: t("terminal.dockLeft", "Dock Left") },
+  { id: "right", label: t("terminal.dockRight", "Dock Right") },
 ];
 
 function sideIcon(side: DockSide) {
@@ -215,7 +216,7 @@ export function ProjectTerminalDock({
         trailing={
           <div className="flex shrink-0 items-center gap-0.5 pr-1.5">
             <IconButton
-              label={`New Terminal (${MOD}\`)`}
+              label={t("terminal.newTerminalShortcut", "New Terminal ({mod}`)", { mod: MOD })}
               onClick={onAddTerminal}
             >
               <Plus className="size-3.5" strokeWidth={1.75} />

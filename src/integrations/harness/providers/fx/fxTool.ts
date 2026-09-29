@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import type { ToolPreview } from "../../../../features/sessions/model/session";
 
 /**
@@ -111,7 +112,7 @@ export function fxToolInfo(
     // the transcript only builds a file chip for "Read"/"Find" labels anyway,
     // so a read-shaped preview would buy nothing but the wrong label.
     return {
-      title: `List ${listing.path}`,
+      title: t("harness.listPrefix", "List {name}", { name: listing.path }),
       kind: "other",
       detail: text ?? undefined,
       resolved: true,

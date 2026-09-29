@@ -1,3 +1,4 @@
+import { t } from "../../features/i18n/model/i18n";
 import {
   useCallback,
   useEffect,
@@ -65,7 +66,7 @@ export function ColorSwatchRow({
       })}
       <button
         type="button"
-        title="Custom color"
+        title={t("common.customColor", "Custom color")}
         aria-label="Custom color"
         aria-expanded={customPickerOpen}
         aria-pressed={customColor != null}

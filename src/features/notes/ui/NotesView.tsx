@@ -190,7 +190,7 @@ export function NotesView({
     setCreating(true);
     try {
       const note = await createNote({
-        title: "Untitled",
+        title: t("notes.untitled", "Untitled"),
         body: "",
         ...(cwd && looksLikeProject(cwd) ? { sourceCwd: cwd } : {}),
       });

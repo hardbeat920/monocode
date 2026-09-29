@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
@@ -238,7 +239,7 @@ function openCodeModelSettings(
     }));
     settings.push({
       id: "variant",
-      label: "Variant",
+      label: t("models.settings.variant", "Variant"),
       kind: "select",
       value: defaultVariant ?? options[0].value,
       options,
@@ -248,7 +249,7 @@ function openCodeModelSettings(
     const defaultAgent = inferDefaultAgent(agents);
     settings.push({
       id: "agent",
-      label: "Agent",
+      label: t("models.settings.agent", "Agent"),
       kind: "select",
       value: defaultAgent ?? agents[0].name,
       options: agents.map((agent) => ({

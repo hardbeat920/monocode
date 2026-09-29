@@ -1,4 +1,4 @@
-import { useTranslation } from "../../i18n/model/i18n";
+import { t, useTranslation } from "../../i18n/model/i18n";
 import {
   ArrowUp,
   AiIdea,
@@ -352,7 +352,7 @@ function MessageQueue({
           <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
             <Pause className="size-3.5" />
             <span className="min-w-0 flex-1 truncate">
-              Queue paused because you interrupted
+              {t("composer.queuePausedInterrupted", "Queue paused because you interrupted")}
             </span>
             <button
               type="button"
@@ -360,7 +360,7 @@ function MessageQueue({
               className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
             >
               <Play className="size-3.5" />
-              Resume
+              {t("common.resume", "Resume")}
             </button>
           </div>
         ) : null}
@@ -399,7 +399,7 @@ function MessageQueue({
                   />
                   <button
                     type="button"
-                    title="Save queued message"
+                    title={t("composer.saveQueuedMessage", "Save queued message")}
                     aria-label="Save queued message"
                     disabled={
                       !editDraft.trim() && message.attachments.length === 0
@@ -411,7 +411,7 @@ function MessageQueue({
                   </button>
                   <button
                     type="button"
-                    title="Cancel queued message edit"
+                    title={t("composer.cancelQueuedMessageEdit", "Cancel queued message edit")}
                     aria-label="Cancel queued message edit"
                     onClick={cancelEdit}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
@@ -430,11 +430,11 @@ function MessageQueue({
                     className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
                   >
                     <CornerDownRight className="size-3.5" />
-                    Steer
+                    {t("composer.steer", "Steer")}
                   </button>
                   <button
                     type="button"
-                    title="Edit queued message"
+                    title={t("composer.editQueuedMessage", "Edit queued message")}
                     aria-label="Edit queued message"
                     onClick={() => startEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
@@ -443,7 +443,7 @@ function MessageQueue({
                   </button>
                   <button
                     type="button"
-                    title="Remove queued message"
+                    title={t("composer.removeQueuedMessage", "Remove queued message")}
                     aria-label="Remove queued message"
                     onClick={() => onDelete?.(message.id)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
@@ -1828,7 +1828,7 @@ export function Composer({
         >
           {fileDrag ? (
             <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
-              Drop files to attach
+              {t("composer.dropFilesToAttach", "Drop files to attach")}
             </div>
           ) : null}
           {hideTopBar ? null : (
@@ -2008,7 +2008,7 @@ export function Composer({
               className={compact ? "hidden" : "relative shrink-0"}
             >
               <ToolButton
-                label="Add files or choose a mode"
+                label={t("composer.addFilesOrMode", "Add files or choose a mode")}
                 active={plusOpen}
                 onClick={() => setPlusOpen((open) => !open)}
               >
@@ -2025,7 +2025,7 @@ export function Composer({
                   className="p-1.5"
                 >
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
-                    Add to message
+                    {t("composer.addToMessage", "Add to message")}
                   </p>
                   <button
                     type="button"
@@ -2172,7 +2172,7 @@ export function Composer({
                 className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-sky-500/15 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-500/20 dark:bg-sky-400/10 dark:text-sky-200/90 dark:hover:bg-sky-400/15"
               >
                 <CursorMagicSelection className="size-3.5" />
-                Operator
+                {t("composer.modes.operator", "Operator")}
                 <X className="size-3" />
               </button>
             ) : null}
@@ -2189,7 +2189,7 @@ export function Composer({
                 className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-500/15 px-1.5 text-[11px] font-medium text-fuchsia-700 hover:bg-fuchsia-500/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200/90 dark:hover:bg-fuchsia-400/15"
               >
                 <Share className="size-3.5" />
-                Orchestrator
+                {t("composer.modes.orchestrator", "Orchestrator")}
                 <X className="size-3" />
               </button>
             )}
@@ -2205,7 +2205,7 @@ export function Composer({
                 className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-yellow-300/12 px-1.5 text-[11px] text-yellow-200/90 hover:bg-yellow-300/18"
               >
                 <AiIdea className="size-3.5" />
-                Plan
+                {t("composer.modes.plan", "Plan")}
                 <X className="size-3" />
               </button>
             ) : null}
@@ -2221,7 +2221,7 @@ export function Composer({
                 className="flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-dashed border-content/25 bg-content/5 px-1.5 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
               >
                 <CircleDashed className="size-3.5" />
-                Draft
+                {t("composer.modes.draft", "Draft")}
                 <X className="size-3" />
               </button>
             ) : null}
@@ -2281,7 +2281,7 @@ export function Composer({
             {resendEdited ? (
               <button
                 type="button"
-                title="Stop editing last message"
+                title={t("composer.stopEditingLastMessage", "Stop editing last message")}
                 aria-label="Stop editing last message"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={exitEditMode}
@@ -2429,7 +2429,7 @@ export function ComposerAction({
     ) : (
       <button
         type="button"
-        title="Stop"
+        title={t("common.stop", "Stop")}
         aria-label="Stop"
         onClick={onStop}
         className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"

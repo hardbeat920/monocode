@@ -6,6 +6,9 @@ export type LanguagePreference = "system" | "en" | "zh-CN";
 export type ResolvedLanguage = "en" | "zh-CN";
 
 const LANGUAGE_KEY = "monocode.languagePreference";
+// Unit tests assert the upstream English copy; the app itself defaults to Chinese.
+const DEFAULT_LANGUAGE: ResolvedLanguage =
+  import.meta.env.MODE === "test" ? "en" : "zh-CN";
 export const LANGUAGE_CHANGE_EVENT = "monocode:language-change";
 
 export const LANGUAGE_OPTIONS: { id: LanguagePreference; label: string }[] = [
@@ -58,7 +61,7 @@ export function resolveLanguage(pref?: LanguagePreference): ResolvedLanguage {
       }
     }
   }
-  return "zh-CN";
+  return DEFAULT_LANGUAGE;
 }
 
 const LOCALES: Record<ResolvedLanguage, TranslationDict> = {

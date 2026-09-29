@@ -1,3 +1,4 @@
+import { t } from "../../../../features/i18n/model/i18n";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -1055,7 +1056,7 @@ function settleCursorBackgroundAgents(
       title: live.agentTools.get(callId),
       kind: "agent",
       status,
-      ...(status === "failed" ? { detail: "Subagent failed." } : {}),
+      ...(status === "failed" ? { detail: t("harness.subagentFailed", "Subagent failed.") } : {}),
     });
   }
   live.backgroundAgentTools.clear();
