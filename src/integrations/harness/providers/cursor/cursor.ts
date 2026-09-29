@@ -862,12 +862,14 @@ function handleSessionUpdate(live: Live, params: unknown) {
           previewKind: preview?.kind,
         }) || rawTitle;
     if (live.subagents.isChild(params)) {
+      // The shared child route decides what is worth keeping on a step.
       emit({
         type: "tool.updated",
         callId,
         title,
         kind: toolKind,
         status,
+        detail,
         preview,
       });
       return;

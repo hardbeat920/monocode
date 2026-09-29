@@ -354,6 +354,42 @@ describe("cursor background subagents", () => {
     await turn;
   });
 
+  it("keeps a failed child tool's error text on its step", async () => {
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    emitAgentStart();
+    const meta = { parentToolCallId: "call_agent" };
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call",
+        _meta: meta,
+        toolCallId: "child_bash",
+        title: "npm test",
+        kind: "execute",
+        status: "in_progress",
+      },
+    });
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "child_bash",
+        status: "failed",
+        content: [{ type: "text", text: "Tests failed: assertion error" }],
+      },
+    });
+    expect(
+      events.filter((event) => event.type === "agent.step").at(-1),
+    ).toMatchObject({
+      callId: "call_agent",
+      stepId: "tool:child_bash",
+      status: "failed",
+      detail: "Tests failed: assertion error",
+    });
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+  });
+
   it("emits request-shaped Cursor todo updates as structured task lists", async () => {
     const { events, promptId, turn } = await startTurn("cursor-live");
     request(71, "cursor/update_todos", {
