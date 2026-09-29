@@ -20,6 +20,7 @@ const SECTION_KEY = "monocode.settingsSection";
 
 export type SettingsSectionId =
   | "general"
+  | "connections"
   | "appearance"
   | "keybindings"
   | "chat"
@@ -55,6 +56,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
     keywords: "version update sounds notifications notes rail",
+  },
+  {
+    id: "connections",
+    group: "app",
+    label: "Connections",
+    description: "Connect your machines and run agents remotely through SSH.",
+    keywords: "ssh remote host machine server environment always on",
   },
   {
     id: "appearance",
@@ -147,6 +155,7 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  { id: "remote-machines", section: "connections", label: "Your machines", keywords: "ssh remote connect host server environment" },
   {
     id: "project-worktrees",
     section: "worktrees",
@@ -346,7 +355,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "provider-accounts",
     section: "providers",
     label: "Provider accounts",
-    keywords: "account sign in login rename remove delete credentials profile",
+    keywords:
+      "account sign in login rename remove delete credentials profile usage limit quota exhausted",
   },
   {
     id: "claude-hooks",

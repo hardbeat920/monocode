@@ -16,6 +16,7 @@ import {
 } from "../../features/sessions/model/session";
 import {
   newTab,
+  type SplitDir,
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import type { SubmissionAcceptance } from "./submissionAcceptance";
@@ -28,6 +29,11 @@ export async function acceptQuickLaunch(
     getSessions: () => Session[];
     updateSessions: (update: (sessions: Session[]) => Session[]) => void;
     appendTab: (tab: WorkspaceTab, cwd: string) => void;
+    placeSession?: (
+      sessionId: string,
+      placement: { direction: SplitDir; besideSessionId: string },
+      cwd: string,
+    ) => string;
     setProjectCwd: (cwd: string) => void;
     setRecents: (recents: RecentProject[]) => void;
     revealTab: (id: string, cwd: string) => void;
@@ -43,6 +49,7 @@ export async function acceptQuickLaunch(
       requestId: string,
     ) => SubmissionAcceptance;
   },
+  placement?: { direction: SplitDir; besideSessionId: string },
 ): Promise<void> {
   // Rehydrate image previews in this webview; the floating panel sends paths.
   const attachments = await prepareAttachments(launch.attachments ?? []);
@@ -76,14 +83,20 @@ export async function acceptQuickLaunch(
     );
   }
   if (!existing) {
-    workspace.updateSessions((sessions) => [...sessions, session]);
     const tab = newTab(session.id);
-    workspace.appendTab(tab, launch.cwd);
+    // Resolve the target before adding the session, so a closed pane cannot
+    // leave behind an orphaned launch if placement fails.
+    const tabId = placement
+      ? workspace.placeSession?.(session.id, placement, launch.cwd)
+      : tab.id;
+    if (!tabId) throw new Error("The target pane is unavailable");
+    workspace.updateSessions((sessions) => [...sessions, session]);
+    if (!placement) workspace.appendTab(tab, launch.cwd);
     if (launch.reveal) {
       // The title bar filters tabs by this project. Select it before the tab.
       workspace.setProjectCwd(launch.cwd);
       workspace.setRecents(rememberProject(launch.cwd));
-      workspace.revealTab(tab.id, launch.cwd);
+      workspace.revealTab(tabId, launch.cwd);
     }
   }
   if (launch.draft) {

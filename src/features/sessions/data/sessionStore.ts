@@ -4,7 +4,7 @@ import { titleFromToolInput } from "../../../integrations/harness/core/preview";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
-import { normalizeProjectPath } from "../../projects/model/recents";
+import { isRemoteProjectPath, normalizeProjectPath } from "../../projects/model/recents";
 import {
   claudeShellCommands,
   ompActiveAssistantTexts,
@@ -20,6 +20,7 @@ import type {
   Block,
   BtwMessage,
   BtwThread,
+  GeneratedImageMeta,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
@@ -112,6 +113,7 @@ type SessionUpsertPayload = {
 export function shouldPersistSession(session: Session): boolean {
   return (
     !session.inboxAsk &&
+    !isRemoteProjectPath(session.cwd) &&
     session.cwd !== "~" &&
     session.blocks.some((block) => block.role === "user")
   );
@@ -206,6 +208,7 @@ export function sanitizeSessionForPersist(
  * write concurrently.
  */
 const sessionWriteQueues = new Map<string, Promise<unknown>>();
+const sessionWriteLeadById = new Map<string, string>();
 const deletedSessionIds = new Set<string>();
 
 function enqueueSessionWrite<T>(
@@ -222,6 +225,7 @@ function enqueueSessionWrite<T>(
   void tail.then(() => {
     if (sessionWriteQueues.get(sessionId) === tail) {
       sessionWriteQueues.delete(sessionId);
+      sessionWriteLeadById.delete(sessionId);
     }
   });
   return run;
@@ -234,6 +238,11 @@ export async function upsertSession(
     return null;
   }
   const payload = sanitizeSessionForPersist(session);
+  if (session.orchestrationLeadId) {
+    sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
+  } else {
+    sessionWriteLeadById.delete(session.id);
+  }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
     return invoke<SessionSummary>("session_upsert", {
@@ -319,6 +328,7 @@ export type SessionSearchResult = {
 
 export async function searchSessions(options: {
   query: string;
+  searchOwner: string;
   cwd?: string;
   includeArchived?: boolean;
 }): Promise<SessionSearchResult> {
@@ -327,6 +337,7 @@ export async function searchSessions(options: {
   const result = await invoke<SessionSearchResult>("session_search", {
     options: {
       query,
+      searchOwner: options.searchOwner,
       ...(options.cwd && options.cwd !== "~"
         ? { cwd: normalizeProjectPath(options.cwd) }
         : {}),
@@ -337,6 +348,10 @@ export async function searchSessions(options: {
     hits: Array.isArray(result?.hits) ? result.hits : [],
     truncated: !!result?.truncated,
   };
+}
+
+export function cancelSessionSearch(searchOwner: string): Promise<void> {
+  return invoke<void>("cancel_session_search", { searchOwner });
 }
 
 export async function getSession(sessionId: string): Promise<Session | null> {
@@ -423,15 +438,27 @@ export function backfillClaudeShellCommands(
   return changed ? repaired : blocks;
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
+export async function deleteSession(
+  sessionId: string,
+  imagePaths: string[] = [],
+): Promise<void> {
   deletedSessionIds.add(sessionId);
   try {
-    // A lead's workers may still have writes in flight. Finish those before
+    // A lead with workers still has writes in flight. Finish those before
     // the deletion transaction strips their ownership metadata.
-    await Promise.all([...sessionWriteQueues.values()]);
+    const pendingWrites = [...sessionWriteQueues.entries()]
+      .filter(
+        ([queuedSessionId]) =>
+          queuedSessionId === sessionId ||
+          sessionWriteLeadById.get(queuedSessionId) === sessionId,
+      )
+      .map(([, pending]) => pending);
+    if (pendingWrites.length > 0) await Promise.all(pendingWrites);
     await enqueueSessionWrite(sessionId, () =>
-      invoke<void>("session_delete", { sessionId }),
+      invoke<void>("session_delete", { sessionId, imagePaths }),
     );
+    const tombstone = setTimeout(() => deletedSessionIds.delete(sessionId), 60_000);
+    if (typeof tombstone === "object") tombstone.unref();
   } catch (error) {
     deletedSessionIds.delete(sessionId);
     throw error;
@@ -443,7 +470,7 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId }),
+    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
 }
 
@@ -555,12 +582,20 @@ function sanitizeBlock(
   if (block.attachments?.length) {
     next.attachments = block.attachments.map(persistableAttachment);
   }
+  const image = sanitizeGeneratedImage(block.image);
+  if (block.role === "image" && !image) return null;
+  if (image) next.image = image;
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.role === "user" && block.draft) next.draft = true;
   if (block.role === "user" && block.monocode) next.monocode = true;
+  if (
+    block.role === "user" &&
+    (block.intent === "plan" || block.intent === "orchestrate")
+  )
+    next.intent = block.intent;
   if (
     block.role === "user" &&
     typeof block.appRequestId === "string" &&
@@ -766,6 +801,35 @@ function sanitizeBtwThreads(
     ];
   });
   return threads.length > 0 ? threads : undefined;
+}
+
+function sanitizeGeneratedImage(value: unknown): GeneratedImageMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
+  const size = record.size;
+  if (
+    !path ||
+    !name ||
+    !mimeType.startsWith("image/") ||
+    typeof size !== "number" ||
+    !Number.isSafeInteger(size) ||
+    size <= 0
+  ) {
+    return undefined;
+  }
+  const alt = typeof record.alt === "string" ? record.alt.trim() : "";
+  return {
+    path,
+    name,
+    mimeType,
+    size,
+    ...(alt ? { alt } : {}),
+  };
 }
 
 function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {

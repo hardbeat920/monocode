@@ -566,6 +566,34 @@ describe("list_models catalog", () => {
     ).toBe("1m");
   });
 
+  it("launches a versioned short value with the claude- prefix", () => {
+    const models = modelsFromClaudeListModels([
+      {
+        value: "opus-5-5",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus 5.5",
+      },
+      {
+        value: "opus",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus",
+      },
+    ]);
+
+    expect(models.map((model) => model.nativeId)).toEqual([
+      "claude-opus-5-5",
+      "opus",
+    ]);
+    expect(models[0]).toMatchObject({
+      id: "claude:opus-5-5",
+      nativeId: "claude-opus-5-5",
+    });
+    expect(models[1]).toMatchObject({
+      id: "claude:opus",
+      nativeId: "opus",
+    });
+  });
+
   it("parses success and error control responses", () => {
     expect(
       parseControlResponse({

@@ -12,6 +12,7 @@ import {
   attachmentPathText,
   isVisionImage,
   normalizeImageMime,
+  promptText,
 } from "../../../../features/sessions/model/attachments";
 import { displayPath } from "../../../../shared/lib/paths";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
@@ -186,7 +187,8 @@ function codexInput(
   attachments: Attachment[] = [],
 ): Array<Record<string, unknown>> {
   const input: Array<Record<string, unknown>> = [];
-  if (prompt) input.push({ type: "text", text: prompt });
+  const body = promptText(prompt ?? "", attachments);
+  if (body) input.push({ type: "text", text: body });
   for (const file of attachments) {
     if (isVisionImage(file.mimeType)) {
       input.push(
@@ -574,6 +576,24 @@ function mapItemLifecycle(
       return { events };
     }
     return { events: [] };
+  }
+
+  if (itemType === "imageGeneration") {
+    if (!completed) return { events: [] };
+    const result = stringField(item, "result")?.trim();
+    if (!result) return { events: [] };
+    const prompt = stringField(item, "revisedPrompt")?.trim();
+    return {
+      events: [
+        {
+          type: "image.generated",
+          itemId: callId,
+          data: result,
+          name: "generated-image",
+          ...(prompt ? { alt: prompt } : {}),
+        },
+      ],
+    };
   }
 
   if (itemType === "reasoning") {

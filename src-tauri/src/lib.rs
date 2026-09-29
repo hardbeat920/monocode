@@ -24,15 +24,19 @@ mod menu;
 mod notes;
 mod notifications;
 mod pasteboard;
+mod pi_usage;
 mod project_logo;
 mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
 mod rate_limits;
 mod reminders;
+mod remote;
+mod remote_ssh;
 mod search;
 mod session_store;
 mod skills;
+pub mod ssh_askpass;
 #[cfg(target_os = "windows")]
 mod tray;
 mod window;
@@ -220,6 +224,7 @@ pub fn run() {
         )
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
@@ -251,6 +256,15 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            remote::remote_machines,
+            remote::remote_connect,
+            remote::remote_disconnect,
+            remote::remote_request,
+            remote::remote_ssh_begin,
+            remote::remote_ssh_reconnect,
+            remote::remote_ssh_poll,
+            remote::remote_ssh_answer,
+            remote::remote_ssh_cancel,
             control::control_enable,
             control::control_disable,
             control::control_reply,
@@ -380,6 +394,7 @@ pub fn run() {
             fs::move_path,
             fs::reveal_path,
             pasteboard::clipboard_file_paths,
+            pasteboard::clipboard_image,
             pasteboard::copy_file_to_clipboard,
             fs::clone_repo,
             fs::read_file_preview,
@@ -388,6 +403,8 @@ pub fn run() {
             fs::read_file_base64,
             fs::read_binary_file,
             fs::write_attachment,
+            fs::save_generated_image,
+            fs::delete_generated_images,
             fs::read_text_file,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
@@ -395,6 +412,7 @@ pub fn run() {
             fs::write_text_file,
             skills::list_skills,
             search::search_project,
+            search::cancel_project_search,
             cursor_store::cursor_tool_calls,
             cursor_store::cursor_subagent_runs,
             harness::harness_resolve_cursor,
@@ -420,6 +438,7 @@ pub fn run() {
             harness::harness_exec,
             harness::provider_account_remove,
             account_identity::provider_account_identity,
+            pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
@@ -433,6 +452,7 @@ pub fn run() {
             session_store::session_rebase_project,
             session_store::session_list_linked,
             session_store::session_search,
+            session_store::cancel_session_search,
             session_store::session_get,
             session_store::session_delete,
             session_store::session_set_archived,
@@ -556,6 +576,7 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
+            handle.state::<remote::RemoteConnections>().shutdown();
             reap_harness_children(handle);
         }
         _ => {}

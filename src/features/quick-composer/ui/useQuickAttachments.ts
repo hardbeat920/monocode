@@ -18,7 +18,16 @@ import {
   revokeAttachment,
 } from "../../sessions/model/attachments";
 import type { Attachment } from "../../sessions/model/session";
+import {
+  isFileReferenceText,
+  nativeClipboardAttachments,
+} from "../../../platform/tauri/clipboard";
 import { storeQuickAttachments } from "../model/quickAttachments";
+import {
+  captureDraft,
+  dropPastedText,
+  insertRestoredText,
+} from "../../../shared/lib/draftRestore";
 
 function releaseCaptures(files: Attachment[]) {
   const paths = files.flatMap((file) => (file.path ? [file.path] : []));
@@ -26,6 +35,14 @@ function releaseCaptures(files: Attachment[]) {
     void invoke("quick_composer_release_capture", { paths }).catch(
       () => undefined,
     );
+}
+
+type CapturedClipboardPaste =
+  | { files: Attachment[]; warning?: string }
+  | { error: unknown };
+
+function discardCapturedPaste(paste: CapturedClipboardPaste) {
+  if ("files" in paste) paste.files.forEach(revokeAttachment);
 }
 
 export function useQuickAttachments(
@@ -40,6 +57,8 @@ export function useQuickAttachments(
   const loadingRef = useRef(false);
   const alive = useRef(true);
   const nativeDropAt = useRef(0);
+  /** Clipboard contents captured while another collection is still running. */
+  const queuedScreenshot = useRef<Promise<CapturedClipboardPaste> | null>(null);
   const supportedRef = useRef(supported);
   supportedRef.current = supported;
 
@@ -47,14 +66,23 @@ export function useQuickAttachments(
     alive.current = true;
     return () => {
       alive.current = false;
+      const queued = queuedScreenshot.current;
+      queuedScreenshot.current = null;
+      if (queued) void queued.then(discardCapturedPaste);
       filesRef.current.forEach(revokeAttachment);
       releaseCaptures(filesRef.current);
     };
   }, []);
 
+  /** `collect` bails on the same conditions, so a paste must ask first. */
+  const canCollect = useCallback(
+    () => supportedRef.current && !loadingRef.current,
+    [],
+  );
+
   const collect = useCallback(
     async (read: () => Promise<Attachment[]>) => {
-      if (loadingRef.current || !supportedRef.current) return;
+      if (!canCollect()) return;
       loadingRef.current = true;
       setLoading(true);
       onError(null);
@@ -96,9 +124,25 @@ export function useQuickAttachments(
       } finally {
         loadingRef.current = false;
         if (alive.current) setLoading(false);
+        // The clipboard read started when Paste was pressed. Queue only the
+        // captured result so a later clipboard change cannot replace it.
+        const queued = queuedScreenshot.current;
+        queuedScreenshot.current = null;
+        if (queued) {
+          if (!alive.current || !supportedRef.current) {
+            void queued.then(discardCapturedPaste);
+          } else {
+            void collect(async () => {
+              const result = await queued;
+              if ("error" in result) throw result.error;
+              if (result.warning) onError(result.warning);
+              return result.files;
+            });
+          }
+        }
       }
     },
-    [onError],
+    [onError, canCollect],
   );
 
   useEffect(() => {
@@ -129,7 +173,49 @@ export function useQuickAttachments(
 
   const onPaste = (event: ClipboardEvent) => {
     const pasted = filesFromClipboard(event.clipboardData);
-    if (!pasted.length || !supported) return;
+    if (!pasted.length) {
+      // A webview reports a paste as text only, so a screenshot or a file
+      // copied in a file manager arrives with nothing to attach; both live on
+      // the native clipboard.
+      if (!supported) return;
+      const text = event.clipboardData.getData("text/plain");
+      // Prose and whitespace alike are the webview's to insert, and cost no
+      // clipboard read, spinner, or cleared error.
+      if (text && !isFileReferenceText(text)) return;
+      // A file URI can still be inserted by the webview. A screenshot cannot,
+      // so capture it now even when attachment processing must wait.
+      if (!canCollect()) {
+        if (!text) {
+          event.preventDefault();
+          if (!queuedScreenshot.current) {
+            queuedScreenshot.current = nativeClipboardAttachments("").then(
+              ({ files, warning }) => ({ files, warning }),
+              (error: unknown) => ({ error }),
+            );
+          }
+        }
+        return;
+      }
+      // A file URI becomes a chip, so it is kept out of the prompt; with no
+      // text at all the paste carried an image the webview cannot see.
+      event.preventDefault();
+      // Captured before the read crosses an IPC hop.
+      const captured = isFileReferenceText(text)
+        ? captureDraft(event.target)
+        : null;
+      void collect(async () => {
+        const { files, warning } = await nativeClipboardAttachments(text);
+        if (warning) onError(warning);
+        if (files.length) {
+          // WebKit can insert the URI after preventDefault. The chip
+          // replaces it, so the prompt must not keep that text.
+          if (captured) dropPastedText(captured, text);
+        } else if (captured) insertRestoredText(captured, text);
+        return files;
+      });
+      return;
+    }
+    if (!supported) return;
     event.preventDefault();
     void collect(() => attachmentsFromFiles(pasted));
   };

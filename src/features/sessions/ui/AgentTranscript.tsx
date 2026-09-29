@@ -30,7 +30,10 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
+import { GeneratedImage } from "./GeneratedImage";
 import { MonocodeSparkles } from "./MonocodeSparkles";
+import { OrchestratorConstellation } from "./OrchestratorConstellation";
+import { PlanStepsBurst } from "./PlanStepsBurst";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { t } from "../../i18n/model/i18n";
@@ -132,6 +135,7 @@ import {
 import {
   clearTranscriptHighlights,
   paintTranscriptHighlights,
+  transcriptMutationNeedsRepaint,
   transcriptWordRanges,
 } from "../model/transcriptHighlights";
 
@@ -176,6 +180,7 @@ type Props = {
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
+  planBuildTargets?: boolean;
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
   onEditLastTurn?: () => void;
@@ -218,6 +223,7 @@ function AgentTranscriptComponent({
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
+  planBuildTargets = true,
   onSecondOpinion,
   onHandoff,
   onEditLastTurn,
@@ -605,13 +611,20 @@ function AgentTranscriptComponent({
       return;
     }
     let frame = 0;
+    let pending: MutationRecord[] = [];
     const paint = () => {
-      frame = 0;
       const { matches, current } = transcriptWordRanges(el, searchQuery);
       paintTranscriptHighlights(owner, matches, current);
     };
-    const observer = new MutationObserver(() => {
-      if (!frame) frame = requestAnimationFrame(paint);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) pending.push(record);
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const changed = pending;
+        pending = [];
+        if (transcriptMutationNeedsRepaint(changed, searchQuery)) paint();
+      });
     });
     observer.observe(el, {
       childList: true,
@@ -781,7 +794,7 @@ function AgentTranscriptComponent({
                 onOpenPlan={onOpenPlan}
                 onBuildPlan={onBuildPlan}
                 planBusy={!!busy}
-                planHarness={harness}
+                planHarness={planBuildTargets ? harness : undefined}
                 planModel={model}
                 planModelSettings={modelSettings}
                 cwd={cwd}
@@ -1470,6 +1483,10 @@ const TranscriptBlock = memo(function TranscriptBlock({
     );
   }
 
+  if (block.role === "image") {
+    return block.image ? <GeneratedImage image={block.image} /> : null;
+  }
+
   if (block.role === "tool") {
     return (
       <ToolCall
@@ -1790,6 +1807,13 @@ function UserMessageBlock({
           ) : null}
           {monocode ? (
             <MonocodeSparkles blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "plan" ? (
+            <PlanStepsBurst blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "orchestrate" ? (
+            <OrchestratorConstellation
+              blockId={block.id}
+              startedAt={block.startedAt}
+            />
           ) : null}
         </div>
         {text ||

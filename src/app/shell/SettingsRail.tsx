@@ -4,6 +4,7 @@ import {
   Bot,
   Inbox,
   FolderTree,
+  Internet,
   Keyboard,
   MessageSquare,
   Palette,
@@ -20,6 +21,7 @@ import { useTranslation } from "../../features/i18n/model/i18n";
 
 const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   general: SlidersHorizontal,
+  connections: Internet,
   appearance: Palette,
   keybindings: Keyboard,
   chat: MessageSquare,

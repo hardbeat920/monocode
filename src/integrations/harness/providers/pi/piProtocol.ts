@@ -1,6 +1,9 @@
 import { t } from "../../../../features/i18n/model/i18n";
 import type { Attachment, ToolPreview, TurnMetrics } from "../../../../features/sessions/model/session";
-import { attachmentPathText } from "../../../../features/sessions/model/attachments";
+import {
+  attachmentPathText,
+  promptText,
+} from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
@@ -184,7 +187,8 @@ export function piNativeId(provider: string, modelId: string): string {
 
 function piPromptContent(text: string, attachments: Attachment[] = []) {
   const images: PiImage[] = [];
-  const parts = text ? [text] : [];
+  const body = promptText(text, attachments);
+  const parts = body ? [body] : [];
   for (const attachment of attachments) {
     const mimeType = attachment.mimeType.trim().toLowerCase();
     if (

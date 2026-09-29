@@ -23,3 +23,17 @@ export function macTerminalShortcutData(
 
   return null;
 }
+
+/**
+ * Whether a key press is the macOS Cmd+K clear. It only reaches the terminal
+ * when "App: Search" is disabled or rebound, since the app claims it first.
+ */
+export function isMacTerminalClearShortcut(event: TerminalKeyEvent): boolean {
+  return (
+    event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === "k"
+  );
+}

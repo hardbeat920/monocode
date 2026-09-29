@@ -336,7 +336,7 @@ function WorkspaceModePicker({
                 onChange(value);
                 dismiss();
               }}
-              className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] hover:bg-content/8 ${
+              className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] hover:bg-content/8 disabled:opacity-40 ${
                 mode === value ? "bg-selection text-content" : "text-content/80"
               }`}
             >
@@ -480,7 +480,7 @@ function branchRef(branch: BaseBranch): string {
   return branch.remote ? `${branch.remote}/${branch.name}` : branch.name;
 }
 
-function WorktreeBasePicker({
+export function WorktreeBasePicker({
   branches,
   selected,
   loading,

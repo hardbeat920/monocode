@@ -32,6 +32,9 @@ export function applyHarnessEvent(
       return patchStreaming(session, "assistant", event.text, true);
     case "message.completed":
       return finishRole(session, "assistant");
+    case "image.generated":
+      if (!("path" in event)) return session;
+      return appendImage(session, event);
     case "reasoning.delta":
       return patchStreaming(session, "reasoning", event.text, true);
     case "reasoning.completed":
@@ -384,6 +387,7 @@ type UserTurnExtra = {
   ciContext?: string;
   internal?: boolean;
   monocode?: boolean;
+  intent?: Block["intent"];
   appRequestId?: string;
 };
 
@@ -394,6 +398,7 @@ function userTurnFields(extra?: UserTurnExtra) {
     ...(extra?.ciContext ? { ciContext: extra.ciContext } : {}),
     ...(extra?.internal ? { internal: true } : {}),
     ...(extra?.monocode ? { monocode: true } : {}),
+    ...(extra?.intent ? { intent: extra.intent } : {}),
     ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
   };
 }
@@ -454,14 +459,14 @@ export function appendSteerUser(
   };
 }
 
-export function stopStreaming(session: Session): Session {
+export function stopStreaming(session: Session, endedAt = Date.now()): Session {
   const { backgroundTasks: _cleared, ...settled } =
     settlePendingApprovals(session);
   return {
     ...settled,
     busy: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress)),
+    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
   };
 }
 
@@ -630,7 +635,7 @@ function stopBlockProgress(block: Block): Block {
   };
 }
 
-function stampTurnDuration(blocks: Block[]): Block[] {
+function stampTurnDuration(blocks: Block[], endedAt: number): Block[] {
   let lastUser = -1;
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") {
@@ -644,7 +649,7 @@ function stampTurnDuration(blocks: Block[]): Block[] {
   const next = blocks.slice();
   next[lastUser] = {
     ...user,
-    durationMs: Math.max(0, Date.now() - user.startedAt),
+    durationMs: Math.max(0, endedAt - user.startedAt),
   };
   return next;
 }
@@ -661,6 +666,24 @@ function appendStatus(session: Session, text: string): Session {
     id: crypto.randomUUID(),
     role: "system",
     text: trimmed,
+  });
+}
+
+function appendImage(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "image.generated"; path: string }>,
+): Session {
+  return appendBlock(session, {
+    id: crypto.randomUUID(),
+    role: "image",
+    text: "",
+    image: {
+      path: event.path,
+      name: event.name,
+      mimeType: event.mimeType,
+      size: event.size,
+      ...(event.alt ? { alt: event.alt } : {}),
+    },
   });
 }
 

@@ -25,6 +25,22 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("keeps the completed time beside actions when a turn has no BTW control", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Inspect",
+        startedAt: 1_000,
+        durationMs: 2_000,
+      },
+      { id: "answer", role: "assistant", text: "Done" },
+    ]);
+    expect(markup).toContain('aria-label="Worked for 2s"');
+    expect(markup).toContain("flex shrink-0 items-center gap-2.5");
+    expect(markup).not.toContain("ml-auto flex shrink-0 items-center gap-2.5");
+  });
+
   it("shows a /operator request without the command in its amber bubble", () => {
     const markup = render([
       { id: "user", role: "user", text: "list my notes", monocode: true },

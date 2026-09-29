@@ -6,14 +6,18 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
-    needs: [linux, windows]
+    needs: [linux, linux-rpm, windows, host]
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -141,13 +145,25 @@ jobs:
           name: linux-packages
           path: target/release/bundle/linux
 
+      - name: Download Linux rpm package
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-rpm-package
+          path: target/release/bundle/rpm
+
       - name: Download Windows packages
         uses: actions/download-artifact@v4
         with:
           name: windows-packages
           path: target/release/bundle/nsis
 
-      - name: Upload to R2
+      - name: Download host packages
+        uses: actions/download-artifact@v4
+        with:
+          name: host-packages
+          path: build/host-packages
+
+      - name: Upload updater packages to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -264,7 +280,6 @@ jobs:
           # retain an older release under these mutable names.
           aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" --content-type "application/json" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
 
       - name: GitHub Release
         env:
@@ -283,9 +298,16 @@ jobs:
           INTEL_DMG="$INTEL_BUNDLE/dmg/MonoCode_${VERSION}_x64.dmg"
           DEB="$BUNDLE/linux/MonoCode_${VERSION}_amd64.deb"
           APPIMAGE="$BUNDLE/linux/MonoCode_${VERSION}_amd64.AppImage"
+          shopt -s nullglob
+          RPMS=("$BUNDLE"/rpm/*.rpm)
+          if (( ${#RPMS[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          RPM="${RPMS[0]}"
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
-          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"; do
+          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
               exit 1
@@ -297,12 +319,107 @@ jobs:
           cp "$ARM_SIG" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
           cp "$INTEL_TAR" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz"
           cp "$INTEL_SIG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "MonoCode $VERSION" \
-            --notes "See CHANGELOG.md for details." \
-            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
-            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
-            "$DEB" "$APPIMAGE" "$NSIS" "$NSIS_SIG"
+          HOST_ARCHIVES=(build/host-packages/*.tar.gz build/host-packages/*.zip)
+          if (( ${#HOST_ARCHIVES[@]} != 6 )); then
+            echo "Expected six host archives" >&2
+            exit 1
+          fi
+          HOST_FILES=("${HOST_ARCHIVES[@]}")
+          for archive in "${HOST_ARCHIVES[@]}"; do
+            if [[ ! -f "$archive.sha256" ]]; then
+              echo "Missing host checksum: $archive.sha256" >&2
+              exit 1
+            fi
+            HOST_FILES+=("$archive.sha256")
+          done
+          RELEASE_FILES=(
+            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
+            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
+            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_FILES[@]}"
+          )
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "MonoCode $VERSION" \
+              --notes "See CHANGELOG.md for details."
+          fi
+          verify_release() {
+            local expected_draft="$1"
+            gh release view "$GITHUB_REF_NAME" --json isDraft,assets > "$RUNNER_TEMP/release-state.json"
+            node - "$RUNNER_TEMP/release-state.json" "$expected_draft" "${RELEASE_FILES[@]}" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (release.isDraft !== (process.argv[3] === "true")) {
+            console.error("GitHub Release publication state is unexpected.");
+            process.exit(1);
+          }
+          const names = new Set(release.assets.map((asset) => asset.name));
+          for (const file of process.argv.slice(4)) {
+            const name = path.basename(file);
+            if (!names.has(name)) {
+              console.error(`GitHub Release is missing ${name}.`);
+              process.exit(1);
+            }
+          }
+          NODE
+          }
+          IS_DRAFT=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [[ "$IS_DRAFT" == true ]]; then
+            # Draft assets can be replaced after an interrupted upload. A
+            # published release is immutable, so only resume drafts.
+            gh release upload "$GITHUB_REF_NAME" "${RELEASE_FILES[@]}" --clobber
+            verify_release true
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          elif [[ "$IS_DRAFT" != false ]]; then
+            echo "Unexpected GitHub Release state: $IS_DRAFT" >&2
+            exit 1
+          fi
+          verify_release false
+
+      - name: Publish updater feed
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" \
+            --content-type "application/json" \
+            --cache-control "no-store,max-age=0,must-revalidate" \
+            --endpoint-url "$ENDPOINT"
+
+  host:
+    name: Standalone host packages
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:host
+      - run: npm run host:package -- --all
+        if: runner.os == 'Linux'
+      - run: npm run host:package
+        if: runner.os != 'Linux'
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: host-packages
+          path: |
+            build/host-packages/*.tar.gz
+            build/host-packages/*.zip
+            build/host-packages/*.sha256
+          if-no-files-found: error
 
   linux:
     name: Linux packages
@@ -342,6 +459,69 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
+
+  linux-rpm:
+    name: Linux rpm package
+    runs-on: ubuntu-latest
+    # Build on EL 10 so the published rpm's glibc requirement matches the
+    # oldest advertised target. Fedora 43 is newer and would install on EL 10
+    # while failing to load.
+    container: almalinux:10
+    steps:
+      # almalinux:10 ships no git, which actions/checkout otherwise has to work
+      # around with a REST API tarball download.
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Enterprise Linux system dependencies
+        run: bash scripts/install-linux-deps-fedora.sh
+
+      - run: npm ci
+
+      - name: Build rpm package
+        run: npm run build:fedora
+
+      - name: Install and stage the generated rpm
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(target/release/bundle/rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          # tauri-bundler derives rpm Requires only from
+          # bundle.linux.rpm.depends, and the setup script has already
+          # installed every -devel package, so assert the metadata directly.
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
+          dnf install -y "${bundle[0]}"
+          rpm -q "$(rpm -qp --queryformat '%{NAME}' "${bundle[0]}")"
+          mkdir -p release-artifacts
+          cp "${bundle[0]}" release-artifacts/
+
+      - name: Upload rpm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm-package
           path: release-artifacts/
           if-no-files-found: error
 

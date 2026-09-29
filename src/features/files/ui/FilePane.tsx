@@ -25,7 +25,10 @@ import { editorPathsEqual } from "../../search/model/search";
 import type { PlanBuildTarget, Session } from "../../sessions/model/session";
 import { Play } from "../../../shared/ui/icons";
 import { BuildTargetButton } from "../../sessions/ui/SecondOpinionButton";
-import { loadDiffViewer, subscribeDiffViewer } from "../../settings/model/settings";
+import {
+  loadDiffViewer,
+  subscribeDiffViewer,
+} from "../../settings/model/settings";
 import { AgentTabView } from "../../sessions/ui/AgentTabView";
 import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
@@ -35,6 +38,7 @@ import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
 import { SessionChangesDiff } from "../../source-control/ui/SessionChangesDiff";
 import { TerminalView } from "../../terminal/ui/TerminalView";
 import { WorkingTreeDiff } from "../../source-control/ui/WorkingTreeDiff";
+import { isRemoteProjectPath } from "../../projects/model/recents";
 
 type Props = {
   pane: EditorPane;
@@ -283,6 +287,7 @@ function PlanSurface({
   const block = plan
     ? session?.blocks.find((entry) => entry.id === plan.blockId)
     : undefined;
+  const remote = !!session && isRemoteProjectPath(session.cwd);
 
   if (!block || !plan) {
     return (
@@ -333,7 +338,7 @@ function PlanSurface({
               <Play className="size-3" />
               {buildLabel}
             </button>
-            {session ? (
+            {session && !remote ? (
               <BuildTargetButton
                 from={session.harness}
                 model={session.model}
@@ -352,6 +357,7 @@ function PlanSurface({
             spellCheck={false}
             value={block.text}
             disabled={
+              remote ||
               block.plan?.status === "streaming" ||
               block.plan?.status === "building" ||
               block.plan?.status === "built"

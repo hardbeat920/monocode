@@ -537,7 +537,7 @@ export function FileEditor({
   );
 }
 
-function CodeMirrorEditor({
+export function CodeMirrorEditor({
   path,
   commentPath,
   value,
@@ -550,6 +550,7 @@ function CodeMirrorEditor({
   onSave,
   onStageGit,
   onDocChange,
+  formatOnSave = true,
 }: {
   path: string;
   commentPath: string;
@@ -563,6 +564,7 @@ function CodeMirrorEditor({
   onSave: (content: string) => Promise<void>;
   onStageGit?: (contents: string) => Promise<void>;
   onDocChange?: (content: string) => void;
+  formatOnSave?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -694,7 +696,7 @@ function CodeMirrorEditor({
       const generation = ++saveGeneration;
       void (async () => {
         const before = view.state.doc.toString();
-        if (loadFormatOnSave()) {
+        if (formatOnSave && loadFormatOnSave()) {
           const result = await formatText(
             path,
             before,
@@ -843,7 +845,7 @@ function CodeMirrorEditor({
       setSelectionTarget(null);
       view.destroy();
     };
-  }, [lockOverscroll, path, showDiff, syncChunkNav]);
+  }, [formatOnSave, lockOverscroll, path, showDiff, syncChunkNav]);
 
   useEffect(() => {
     const view = viewRef.current;

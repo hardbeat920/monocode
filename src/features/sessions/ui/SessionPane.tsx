@@ -92,8 +92,11 @@ import {
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
+import { RemoteSession } from "../../connections/ui/RemoteSession";
+import { isRemoteProjectPath } from "../../projects/model/recents";
+import type { HostSession } from "../../connections/model/protocol";
 
-type Props = {
+export type SessionPaneProps = {
   session: Session;
   reviewUndoLocked?: boolean;
   visible: boolean;
@@ -109,6 +112,7 @@ type Props = {
   onCwdChange: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
   onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
+  onRemoteSnapshot?: (shellId: string, snapshot?: HostSession) => void;
   onWorkspaceModeChange: (
     sessionId: string,
     mode: WorkspaceMode,
@@ -213,7 +217,40 @@ type Props = {
   transcriptPool?: TranscriptPool;
 };
 
-export const SessionPane = memo(function SessionPane({
+type Props = SessionPaneProps & {
+  /** The session runtime is on another machine. */
+  remoteSession?: boolean;
+  remoteFeatures?: { attachments: boolean; plan: boolean; draft: boolean };
+  /** An opened host conversation whose transcript has not arrived yet. */
+  remoteSessionLoading?: boolean;
+  remoteSessionStarted?: boolean;
+  allowedModelHarnesses?: readonly HarnessId[];
+};
+
+export const SessionPane = memo(function SessionPane(props: SessionPaneProps) {
+  // Sessions in a project on another machine render this same pane, backed by
+  // the host instead of this computer's session runtime.
+  if (isRemoteProjectPath(props.session.cwd))
+    return (
+      <RemoteSession
+        shell={props.session}
+        visible={props.visible}
+        onSnapshot={props.onRemoteSnapshot}
+        onOpenFile={props.onOpenFile}
+        onOpenDiff={props.onOpenDiff}
+        onOpenPlan={props.onOpenPlan}
+        render={(remote) => <LocalSessionPane {...props} {...remote} />}
+      />
+    );
+  return <LocalSessionPane {...props} />;
+});
+
+const LocalSessionPane = memo(function LocalSessionPane({
+  remoteSession = false,
+  remoteFeatures,
+  remoteSessionLoading = false,
+  remoteSessionStarted = false,
+  allowedModelHarnesses,
   session,
   reviewUndoLocked = false,
   visible,
@@ -287,7 +324,8 @@ export const SessionPane = memo(function SessionPane({
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
   const recallLastTurnRef = useRef<(() => void) | null>(null);
-  const editLastTurnSupported = canEditLastTurn(session);
+  const remote = remoteSession;
+  const editLastTurnSupported = !remote && canEditLastTurn(session);
   const turnRecall = editLastTurnSupported ? lastTurnRecall(session) : null;
   const draftBlock = sessionDraftBlock(session);
   useSyncExternalStore(
@@ -370,12 +408,13 @@ export const SessionPane = memo(function SessionPane({
   }, [visible]);
   // Restore a saved run for this lead; its agents render on the sidebar card.
   useEffect(() => {
-    if (!session.inboxAsk && !session.worktreeRemoved)
+    if (!remote && !session.inboxAsk && !session.worktreeRemoved)
       void orchestrator.hydrate(session.id).catch(console.error);
-  }, [session.id, session.inboxAsk, session.worktreeRemoved]);
+  }, [remote, session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const btw = useBtwConversation({
     available:
+      !remote &&
       !isEmpty &&
       !managed &&
       !session.inboxAsk &&
@@ -501,11 +540,15 @@ export const SessionPane = memo(function SessionPane({
   const workCwd = sessionWorkCwd(session);
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer =
-    !draftBlock && (!isEmpty || inSplit || !!session.inboxAsk);
+    remoteSessionLoading ||
+    (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk));
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const composer = (
     <Composer
+      remoteSession={remoteSession}
+      remoteFeatures={remoteFeatures}
+      allowedModelHarnesses={allowedModelHarnesses}
       enabled={visible}
       focused={focused && composerFocused && !btw.open}
       focusToken={composerFocusToken}
@@ -560,8 +603,9 @@ export const SessionPane = memo(function SessionPane({
         !session.inboxAsk &&
         !session.worktreeRemoved &&
         !managed &&
-        ((isEmpty && !session.worktreeCwd) ||
-          (!!session.workspaceMode && !session.worktreeCwd))
+        (remote
+          ? !remoteSessionStarted
+          : (isEmpty || !!session.workspaceMode) && !session.worktreeCwd)
       }
       workspaceMode={session.workspaceMode}
       worktreeBase={session.worktreeBase}
@@ -588,6 +632,7 @@ export const SessionPane = memo(function SessionPane({
       }
       onRuntimeModeChange={(mode) => onRuntimeModeChange(session.id, mode)}
       canSaveDraft={
+        (!remote || !!remoteFeatures?.draft) &&
         !session.busy &&
         !draftBlock &&
         !session.inboxAsk &&
@@ -741,7 +786,7 @@ export const SessionPane = memo(function SessionPane({
               }
             />
           ) : null}
-          {isEmpty ? (
+          {remoteSessionLoading ? null : isEmpty ? (
             session.inboxAsk ? (
               <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
                 <DiscussionEmpty message={t("session.exploreItemWithAgent", "Explore this item with your agent.")} />
@@ -812,6 +857,7 @@ export const SessionPane = memo(function SessionPane({
                   onOpenDiff={onOpenDiff}
                   onOpenPlan={openPlan}
                   onBuildPlan={session.worktreeRemoved ? undefined : buildPlan}
+                  planBuildTargets={!remote}
                   onSecondOpinion={
                     !session.inboxAsk &&
                     !session.worktreeRemoved &&
@@ -840,6 +886,7 @@ export const SessionPane = memo(function SessionPane({
                       : undefined
                   }
                   latestTurnAccessory={
+                    remote ||
                     session.inboxAsk ||
                     session.worktreeRemoved ||
                     draftBlock ? undefined : (

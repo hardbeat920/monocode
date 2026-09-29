@@ -97,15 +97,16 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         "quit" => crate::window::request_quit(app),
         "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
         | "forward_tab" | "split_right" | "split_down" | "focus_left" | "focus_right"
-        | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
-        | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
-        | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" => {
+        | "focus_up" | "focus_down" | "sidebar_opacity" | "open_project" | "go_to_file"
+        | "open_search" | "open_inbox" | "open_notes" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" | "toggle_terminal" | "open_model_picker"
+        | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         // Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
         // make every window act on a single menu click.
-        "toggle_session_sidebar"
+        "toggle_sidebar"
+        | "toggle_session_sidebar"
         | "zoom_in"
         | "zoom_out"
         | "zoom_reset"
@@ -357,8 +358,7 @@ fn build(
         "App: Switch Model",
         overrides,
     )?;
-    let sidebar_opacity =
-        MenuItemBuilder::with_id("sidebar_opacity", "侧边栏外观…").build(app)?;
+    let sidebar_opacity = MenuItemBuilder::with_id("sidebar_opacity", "侧边栏外观…").build(app)?;
     // No accelerators here on purpose: the webview key handler owns
     // CmdOrCtrl + - 0, and a menu accelerator would fire the same command
     // a second time on top of it.
