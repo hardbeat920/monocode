@@ -23,16 +23,20 @@ export function isLanguagePreference(
   return value === "system" || value === "en" || value === "zh-CN";
 }
 
+let inMemoryPreference: LanguagePreference = "system";
+
 export function loadLanguagePreference(): LanguagePreference {
   try {
     const raw = localStorage.getItem(LANGUAGE_KEY);
-    return isLanguagePreference(raw) ? raw : "system";
+    if (isLanguagePreference(raw)) return raw;
   } catch {
-    return "system";
+    // quota / private browsing / node test environment
   }
+  return inMemoryPreference;
 }
 
 export function saveLanguagePreference(value: LanguagePreference) {
+  inMemoryPreference = value;
   try {
     localStorage.setItem(LANGUAGE_KEY, value);
     if (typeof window !== "undefined") {

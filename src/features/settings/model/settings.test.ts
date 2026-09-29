@@ -1,3 +1,4 @@
+import { saveLanguagePreference } from "../../i18n/model/i18n";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
@@ -656,6 +657,13 @@ describe("settings search", () => {
 });
 
 describe("keybindingCommandLabel and filterKeybindings", () => {
+  beforeEach(() => {
+    saveLanguagePreference("zh-CN");
+  });
+  afterEach(() => {
+    saveLanguagePreference("en");
+  });
+
   it("translates keybinding command to Chinese when locale is zh-CN", () => {
     expect(keybindingCommandLabel("Session: Previous")).toBe("会话: 上一个");
     expect(keybindingCommandLabel("App: Settings")).toBe("应用: 设置");

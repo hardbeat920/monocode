@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveLanguagePreference } from "../../i18n/model/i18n";
 import {
   adjacentItemId,
   deferUnhandledEscape,
@@ -396,6 +397,13 @@ describe("deferUnhandledEscape", () => {
 });
 
 describe("tabCommandLabel", () => {
+  beforeEach(() => {
+    saveLanguagePreference("zh-CN");
+  });
+  afterEach(() => {
+    saveLanguagePreference("en");
+  });
+
   it("resolves command label for TabCommand", () => {
     expect(tabCommandLabel("new")).toBe("标签页: 新建");
     expect(tabCommandLabel("new-terminal")).toBe("终端: 新建");
