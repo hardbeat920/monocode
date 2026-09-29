@@ -205,7 +205,7 @@ function ConnectedRemoteSession({
   project: RemoteProject;
   render: (overrides: RemoteSessionOverrides) => ReactNode;
 }) {
-  const { t } = useTranslation();
+  const { t, resolvedLanguage } = useTranslation();
   const [descriptor, setDescriptor] = useState<HostDescriptor | undefined>(() =>
     cachedDescriptors.get(machine.id),
   );
@@ -968,6 +968,7 @@ function ConnectedRemoteSession({
     hostSession?.harness,
     hostSession?.model,
     hostSession?.modelSettings,
+    resolvedLanguage,
   ]);
 
   // Show a message the host has not confirmed yet in the transcript.
