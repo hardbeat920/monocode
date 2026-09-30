@@ -686,13 +686,12 @@ export function openChangesTab(
   const existingFile = existingPane?.files.find(matches);
 
   if (existingPane && existingFile) {
-    const updated = focusPath
-      ? {
-          ...existingFile,
-          path: focusPath,
-          changeKind: focusKind,
-        }
-      : existingFile;
+    const { changeKind: _previousKind, ...rest } = existingFile;
+    const updated = {
+      ...rest,
+      ...(focusPath ? { path: focusPath } : {}),
+      ...(focusKind ? { changeKind: focusKind } : {}),
+    };
     return {
       ...tab,
       focusedId: existingPane.id,

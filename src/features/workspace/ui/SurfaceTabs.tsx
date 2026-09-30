@@ -125,11 +125,12 @@ export function surfaceTabPresentation(
   }
 
   if (isChangesTab(file)) {
+    const staged = file.changeKind === "staged";
     return {
-      name: "Changes",
-      label: "Changes",
+      name: staged ? "Staged Changes" : "Changes",
+      label: staged ? "Staged Changes" : "Changes",
       iconName: "CHANGES",
-      tooltip: "Working tree changes",
+      tooltip: staged ? "Staged changes" : "Working tree changes",
     };
   }
 
