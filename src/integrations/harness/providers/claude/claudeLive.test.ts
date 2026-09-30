@@ -353,15 +353,16 @@ describe("claude task tools", () => {
     name: string,
     input: Record<string, unknown>,
     result: string,
+    providerSessionId = "sess_1",
   ) {
     emit({
       type: "assistant",
-      session_id: "sess_1",
+      session_id: providerSessionId,
       message: { content: [{ type: "tool_use", id, name, input }] },
     });
     emit({
       type: "user",
-      session_id: "sess_1",
+      session_id: providerSessionId,
       message: {
         content: [{ type: "tool_result", tool_use_id: id, content: result }],
       },
@@ -469,7 +470,11 @@ describe("claude task tools", () => {
   /** A later turn that must launch a new Claude process. */
   async function restartedTurn(
     events: HarnessEvent[],
-    options: { intent?: TurnIntent; providerAccountId?: string } = {},
+    options: {
+      intent?: TurnIntent;
+      providerAccountId?: string;
+      providerSessionId?: string;
+    } = {},
   ) {
     const spawnCount = spawned.length;
     const userCount = parse().filter(
@@ -491,7 +496,11 @@ describe("claude task tools", () => {
       () => spawned.length === spawnCount + 1,
       "replacement Claude process",
     );
-    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "system",
+      subtype: "init",
+      session_id: options.providerSessionId ?? "sess_1",
+    });
     await waitFor(
       () =>
         parse().filter((message) => message.type === "user").length > userCount,
@@ -644,6 +653,112 @@ describe("claude task tools", () => {
       { id: "2", text: "Ship it", status: "pending" },
       { id: "3", text: "Tag release", status: "pending" },
     ]);
+  });
+
+  /** Conversation A: tasks #1 and #2 in sess_1, reduced like the saved transcript. */
+  async function conversationWithTasks() {
+    const first = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests" },
+      "Task #1 created successfully: Write tests",
+    );
+    emitTaskTool(
+      "toolu_c2",
+      "TaskCreate",
+      { subject: "Ship it" },
+      "Task #2 created successfully: Ship it",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    return first.events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+  }
+
+  /** Conversation B updates A's #1, then creates its own #1. */
+  function emitConversationB() {
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+      "sess_2",
+    );
+    emitTaskTool(
+      "toolu_c3",
+      "TaskCreate",
+      { subject: "Fresh task" },
+      "Task #1 created successfully: Fresh task",
+      "sess_2",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_2" });
+  }
+
+  it("does not carry tasks to another conversation bound to the same thread", async () => {
+    const restored = await conversationWithTasks();
+    expect(
+      restored.blocks.find((block) => block.role === "tasks")?.taskList
+        ?.providerSessionId,
+    ).toBe("sess_1");
+
+    await stopClaudeSession("s1");
+    bindClaudeSession("s1", "sess_2", "/repo");
+    restoreClaudeTaskLists(
+      "s1",
+      restored.blocks.flatMap((block) =>
+        block.taskList ? [block.taskList] : [],
+      ),
+    );
+
+    const events: HarnessEvent[] = [];
+    const { turn } = await restartedTurn(events, { providerSessionId: "sess_2" });
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "sess_2"]),
+    );
+    emitConversationB();
+    await turn;
+
+    const updates = events.filter((event) => event.type === "tasks.updated");
+    expect(updates).toEqual([
+      expect.objectContaining({
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "Fresh task", status: "pending" }],
+      }),
+    ]);
+  });
+
+  it("starts a clean task map when Claude reports a different conversation", async () => {
+    await conversationWithTasks();
+
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "keep going",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().filter((message) => message.type === "user").length > 1,
+      "follow-up prompt",
+    );
+    emitConversationB();
+    await turn;
+
+    expect(
+      events.filter((event) => event.type === "tasks.updated").at(-1),
+    ).toEqual(
+      expect.objectContaining({
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "Fresh task", status: "pending" }],
+      }),
+    );
   });
 
   it("drops the task map when the conversation cannot resume", async () => {

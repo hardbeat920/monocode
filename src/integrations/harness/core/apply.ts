@@ -299,6 +299,7 @@ function upsertTaskList(
 
   const taskList = {
     ...(key ? { key } : {}),
+    ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
     ...(event.explanation?.trim()
       ? { explanation: event.explanation.trim() }
       : {}),

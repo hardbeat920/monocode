@@ -1003,10 +1003,15 @@ function sanitizeTaskList(value: unknown): TaskListMeta | null {
   });
   if (items.length === 0) return null;
   const key = typeof record.key === "string" ? record.key.trim() : "";
+  const providerSessionId =
+    typeof record.providerSessionId === "string"
+      ? record.providerSessionId.trim()
+      : "";
   const explanation =
     typeof record.explanation === "string" ? record.explanation.trim() : "";
   return {
     ...(key ? { key } : {}),
+    ...(providerSessionId ? { providerSessionId } : {}),
     ...(explanation ? { explanation } : {}),
     items,
   };

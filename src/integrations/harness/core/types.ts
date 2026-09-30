@@ -132,6 +132,8 @@ export type HarnessEvent =
       merge?: boolean;
       /** This snapshot owns its labels, so a changed item text is a rename. */
       authoritative?: boolean;
+      /** Provider conversation that owns these items. */
+      providerSessionId?: string;
       items: TaskListItem[];
     }
   | {
