@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { titleFromToolInput } from "../../../integrations/harness/core/preview";
+import {
+  isWeakToolTitle,
+  titleFromToolInput,
+} from "../../../integrations/harness/core/preview";
 import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
@@ -380,14 +383,22 @@ export async function getSession(sessionId: string): Promise<Session | null> {
       }
     }
   }
-  if (session.harness === "codex" && session.providerSessionId) {
-    const toolIds = shellPlaceholderIds(session.blocks);
-    if (toolIds.length) {
+  if (session.harness === "codex") {
+    // Relabel from the command already saved on the row. Only a row that never
+    // got one needs the rollout file, so this pass reads no disk at all for a
+    // session Codex labelled itself.
+    const saved = backfillCodexShellCommands(session.blocks);
+    if (saved !== session.blocks) {
+      session.blocks = saved;
+      await upsertSession(session);
+    }
+    const missing = unrecoverableShellPlaceholderIds(session.blocks);
+    if (session.providerSessionId && missing.length) {
       try {
         const commands = await codexShellCommands(
           session.providerSessionId,
           session.providerAccountId,
-          toolIds,
+          missing,
         );
         const blocks = backfillCodexShellCommands(session.blocks, commands);
         if (blocks !== session.blocks) {
@@ -463,23 +474,52 @@ function shellPlaceholderIds(blocks: Block[]): string[] {
   );
 }
 
+/**
+ * Placeholder rows whose command is not on the row itself, so the rollout file
+ * is the only place left to read it. A weak preview title ("Shell", "Bash") is
+ * no better than none.
+ */
+function unrecoverableShellPlaceholderIds(blocks: Block[]): string[] {
+  return shellPlaceholderIds(blocks).filter((callId) => {
+    const block = blocks.find((candidate) => candidate.tool?.callId === callId);
+    const saved = block?.tool?.preview?.title?.trim();
+    return !saved || isWeakToolTitle(saved);
+  });
+}
+
+/**
+ * Relabel exec rows that were saved without their command.
+ *
+ * The command is already on the row: Codex sends it with the item, and
+ * `shellCommandPreview` stores it as the preview title. Reading it back from
+ * there keeps whatever Codex chose to show the user — including anything it
+ * redacted — and never re-reads a secret off disk into the transcript store.
+ * Disk recovery stays the last resort for a row saved without a preview, where
+ * the command is genuinely gone from the session.
+ */
 export function backfillCodexShellCommands(
   blocks: Block[],
-  commands: Record<string, string>,
+  commands: Record<string, string> = {},
 ): Block[] {
   let changed = false;
   const repaired = blocks.map((block) => {
-    const callId = block.tool?.callId;
-    const value = callId ? commands[callId] : undefined;
-    const command = typeof value === "string" ? value.trim() : undefined;
     if (
       block.role !== "tool" ||
       block.tool?.kind !== "execute" ||
-      block.text.trim() !== "Shell" ||
-      !command
+      block.text.trim() !== "Shell"
     ) {
       return block;
     }
+    const callId = block.tool.callId;
+    const saved = block.tool.preview?.title?.trim();
+    const recovered = callId ? commands[callId] : undefined;
+    const command =
+      saved && !isWeakToolTitle(saved)
+        ? saved
+        : typeof recovered === "string" && recovered.trim()
+          ? recovered.trim()
+          : undefined;
+    if (!command) return block;
     changed = true;
     const { title, preview } = codexCommandPresentation({}, command);
     return {

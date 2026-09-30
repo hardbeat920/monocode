@@ -60,6 +60,54 @@ describe("Claude Shell row recovery", () => {
 });
 
 describe("Codex Shell row recovery", () => {
+  it("prefers the command already saved on the row over the rollout file", () => {
+    // The command Codex sent with the item is already on the row. Reading it
+    // back means whatever Codex redacted stays redacted, and no secret is
+    // re-read off disk into the transcript store.
+    const redacted = "/usr/bin/zsh -lc 'curl -H \"token=[redacted]\" example'";
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: redacted },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks, {
+      // A rollout holding the unredacted form must not win.
+      "exec-1": "/usr/bin/zsh -lc 'curl -H \"token=sk-live-realsecret\" example'",
+    });
+    expect(repaired[0].text).not.toBe("Shell");
+    expect(repaired[0].tool?.preview?.title).toContain("[redacted]");
+    expect(repaired[0].tool?.preview?.title).not.toContain("sk-live-realsecret");
+  });
+
+  it("falls back to the rollout file when the row saved no usable command", () => {
+    // A weak preview title names no command, so the rollout is the only source.
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "Shell" },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks, {
+      "exec-1": "rg --files -g AGENTS.md -g '!node_modules'",
+    });
+    expect(repaired[0].text).toBe("Find files");
+  });
+
   it("labels placeholder rows with the recovered command and rebuilds the preview", () => {
     const blocks: Block[] = [
       {
@@ -72,7 +120,6 @@ describe("Codex Shell row recovery", () => {
           kind: "execute",
           status: "failed",
           detail: "exit 1",
-          preview: { kind: "shell", title: "mangled" },
         },
       },
       {
@@ -96,7 +143,7 @@ describe("Codex Shell row recovery", () => {
       },
     });
     expect(repaired[1]).toBe(blocks[1]);
-    expect(backfillCodexShellCommands(repaired, {})).toBe(repaired);
+    expect(backfillCodexShellCommands(repaired)).toBe(repaired);
   });
 
   it("keeps the raw command when no readable intent is inferred", () => {
@@ -132,7 +179,8 @@ describe("Codex Shell row recovery", () => {
     live = applyHarnessEvents(live, mapCodexNotification("item/started", { item }).events);
     const liveRow = live.blocks[0];
 
-    // The same row as the buggy build saved it, and the command Rust recovers.
+    // The same row as the buggy build saved it. No recovered map: the command
+    // is already on the row, which is how it reads in production.
     const saved: Block[] = [
       {
         id: "e84ab067",
@@ -141,9 +189,7 @@ describe("Codex Shell row recovery", () => {
         tool: { ...liveRow.tool, title: "Shell" },
       },
     ];
-    const [recovered] = backfillCodexShellCommands(saved, {
-      "exec-88885872": "rg --files -g AGENTS.md -g '!node_modules'",
-    });
+    const [recovered] = backfillCodexShellCommands(saved);
 
     expect(recovered.text).not.toBe("Shell");
     expect(recovered.text).toBe(liveRow.text);
