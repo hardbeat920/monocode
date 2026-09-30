@@ -1,10 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { isHexColor } from "../../../shared/lib/colorUtils";
-import {
-  HAS_NATIVE_GLASS,
-  IS_LINUX,
-  IS_MAC,
-} from "../../../platform/tauri/platform";
+import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
+import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
 import {
@@ -302,10 +298,6 @@ export function applyThemeTint(hue: number, saturation: number) {
 
 export function initAppearance() {
   document.documentElement.classList.toggle("is-mac", IS_MAC);
-  document.documentElement.classList.toggle(
-    "has-native-glass",
-    HAS_NATIVE_GLASS,
-  );
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
@@ -376,9 +368,34 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
   return next;
 }
 
+/** The page colour the native window sits behind while glass is off. */
+function opaqueWindowBackground(): Rgb {
+  const style = getComputedStyle(document.documentElement);
+  const read = (name: string, fallback: number) => {
+    const value = Number.parseFloat(style.getPropertyValue(name));
+    return Number.isFinite(value) ? value : fallback;
+  };
+  return hslToRgb(
+    read("--theme-hue", THEME_HUE_DEFAULT),
+    read("--theme-saturation", THEME_SATURATION_DEFAULT),
+    read("--background-lightness", THEME_DARK_LIGHTNESS_DEFAULT),
+  );
+}
+
+/**
+ * `has-native-glass` follows the window, not the platform: Linux can turn glass
+ * off in dark mode too. It flips only once the window has settled, so neither
+ * side is briefly visible through the other.
+ */
 export function syncNativeGlass(scheme: ColorScheme) {
   const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
-  void invoke("set_window_glass_enabled", { enabled });
+  const root = document.documentElement;
+  void invoke("set_window_glass_enabled", {
+    enabled,
+    background: opaqueWindowBackground(),
+  })
+    .catch(() => {})
+    .finally(() => root.classList.toggle("has-native-glass", enabled));
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
