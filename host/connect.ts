@@ -285,9 +285,10 @@ export async function connect(options: ConnectOptions): Promise<void> {
         out.say(
           `! The background service could not be installed: ${error instanceof Error ? error.message : String(error)}`,
         );
-        // Remove what was installed, so a service that starts late does not
-        // compete with the detached host for the data directory.
-        await uninstallService().catch(() => []);
+        // Remove what was installed and wait for any host it started to
+        // exit, so two hosts never share the data directory. This throws
+        // instead of starting a second host if one is still running.
+        await stopHost(directory, readRunning(directory), true);
         await startDetached(target);
         service = "detached";
       }

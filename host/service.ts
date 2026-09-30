@@ -266,9 +266,12 @@ export async function installService(
   } else {
     throw new Error("MonoCode Host supports Windows, Linux and macOS");
   }
-  // launchd waits up to its 10 second ThrottleInterval before starting a job
+  // launchd waits up to its 10-second ThrottleInterval before starting a job
   // whose previous instance just exited, as when connect replaces a host.
-  for (let attempt = 0; attempt < 150; attempt++) {
+  // One deadline bounds the wait, since each status check can itself take
+  // 5 seconds to time out.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     try {
       return await connectionInfo(options.directory);
     } catch {

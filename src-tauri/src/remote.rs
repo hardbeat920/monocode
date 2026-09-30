@@ -225,12 +225,18 @@ enum Failure {
     Uncertain(String),
     /// The host answered and refused.
     Rejected(String),
+    /// The host turned the request away before acting on it (HTTP 429), as
+    /// its pairing throttle does. Another route may still succeed.
+    Throttled(String),
 }
 
 impl From<Failure> for String {
     fn from(failure: Failure) -> Self {
         match failure {
-            Failure::Unreachable(e) | Failure::Uncertain(e) | Failure::Rejected(e) => e,
+            Failure::Unreachable(e)
+            | Failure::Uncertain(e)
+            | Failure::Rejected(e)
+            | Failure::Throttled(e) => e,
         }
     }
 }
@@ -298,7 +304,12 @@ fn call(
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|_| Failure::Rejected("Invalid host response".into()))?;
     if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(Failure::Rejected(format!("Host rejected request: {error}")));
+        let error = format!("Host rejected request: {error}");
+        return Err(if status == 429 {
+            Failure::Throttled(error)
+        } else {
+            Failure::Rejected(error)
+        });
     }
     if status != 200 {
         return Err(Failure::Rejected(format!("Host returned HTTP {status}")));
@@ -455,7 +466,7 @@ fn resolve_route(app: &AppHandle, machine: &StoredMachine) -> Result<Route, Stri
                 slot.failure = None;
                 return Ok(route);
             }
-            Err(Failure::Rejected(error)) => return Err(error),
+            Err(Failure::Rejected(error)) | Err(Failure::Throttled(error)) => return Err(error),
             Err(Failure::Unreachable(error)) | Err(Failure::Uncertain(error)) => {
                 failures.push(error)
             }
@@ -643,11 +654,13 @@ fn exchange(
     state: &RemoteConnections,
     link: &PairingLink,
     tunnel: Option<Tunnel>,
-) -> Result<Paired, String> {
+) -> Result<Paired, Failure> {
     let params = json!({ "code": link.code, "name": remote_ssh::device_name() });
-    let accept = |result: Value, route: Route, tunnel: Option<Tunnel>| -> Result<Paired, String> {
+    let accept = |result: Value, route: Route, tunnel: Option<Tunnel>| -> Result<Paired, Failure> {
         if result.get("environmentId").and_then(Value::as_str) != Some(&link.environment_id) {
-            return Err("The machine that answered is not the one in the pairing link".into());
+            return Err(Failure::Rejected(
+                "The machine that answered is not the one in the pairing link".into(),
+            ));
         }
         let token = result
             .get("token")
@@ -657,7 +670,7 @@ fn exchange(
                     && s.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
             })
-            .ok_or("Host returned an invalid device credential")?;
+            .ok_or_else(|| Failure::Rejected("Host returned an invalid device credential".into()))?;
         Ok(Paired {
             token: token.into(),
             route,
@@ -667,7 +680,7 @@ fn exchange(
     if let Some(tunnel) = tunnel {
         let base = format!("http://127.0.0.1:{}", tunnel.port);
         let result = call(
-            &state.agent(None)?,
+            &state.agent(None).map_err(Failure::Rejected)?,
             &base,
             None,
             None,
@@ -676,25 +689,30 @@ fn exchange(
         )?;
         return accept(result, Route::Ssh, Some(tunnel));
     }
-    let agent = state.agent(Some(&link.fingerprint))?;
+    let agent = state
+        .agent(Some(&link.fingerprint))
+        .map_err(Failure::Rejected)?;
     let mut failures = Vec::new();
     for base in &link.endpoints {
         match call(&agent, base, None, None, "pair.exchange", params.clone()) {
             Ok(result) => return accept(result, Route::Direct(base.clone()), None),
-            Err(Failure::Rejected(error)) => return Err(error),
+            // The host redeems a code once, so resending one that may have
+            // arrived gets a clear "already used" answer at worst.
             Err(Failure::Unreachable(error)) | Err(Failure::Uncertain(error)) => {
                 failures.push(error)
             }
+            // Every address reaches the same throttle.
+            Err(failure) => return Err(failure),
         }
     }
-    Err(if link.endpoints.is_empty() {
+    Err(Failure::Unreachable(if link.endpoints.is_empty() {
         "This host listens only on loopback. Use Set up over SSH instead.".into()
     } else {
         format!(
             "None of the machine's addresses answered from this computer: {}. Both computers need to be on the same network or tailnet, or use Set up over SSH.",
             failures.join("; ")
         )
-    })
+    }))
 }
 
 /// Stores a newly paired machine. Pairing the same host again replaces this
@@ -763,7 +781,7 @@ pub async fn remote_pair(app: AppHandle, link: String, name: String) -> Result<M
     tauri::async_runtime::spawn_blocking(move || {
         let link = parse_pairing_link(&link)?;
         let state = app.state::<RemoteConnections>();
-        let paired = exchange(&state, &link, None)?;
+        let paired = exchange(&state, &link, None).map_err(String::from)?;
         store_paired(&app, &link, paired, name, None)
     })
     .await
@@ -946,14 +964,16 @@ fn start_ssh_job(
                 return Ok(machine.public());
             }
             job.message("Pairing this desktop with the host…");
+            // The SSH forward reaches the host over loopback, which its
+            // pairing throttle exempts.
             let paired = match exchange(&state, &link, None) {
                 Ok(paired) => paired,
-                Err(direct) if !direct.starts_with("Host rejected request") => {
+                Err(Failure::Unreachable(_)) | Err(Failure::Throttled(_)) => {
                     job.message("Opening an SSH forward to the host…");
                     let tunnel = Tunnel::start(&target, Some(&job), Some(&askpass))?;
-                    exchange(&state, &link, Some(tunnel))?
+                    exchange(&state, &link, Some(tunnel)).map_err(String::from)?
                 }
-                Err(error) => return Err(error),
+                Err(failure) => return Err(failure.into()),
             };
             store_paired(&app, &link, paired, name, Some(target))
         })();
@@ -1065,6 +1085,14 @@ CgAQCZOp9ryb4fYlBO4HfeeJrWwh6XNlAg5VL5wWSUBdgwZut41c+ND7
         connections: usize,
         reply: &'static str,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        tls_host_with_status(connections, "200 OK", reply)
+    }
+
+    fn tls_host_with_status(
+        connections: usize,
+        status: &'static str,
+        reply: &'static str,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = Arc::new(
             rustls::ServerConfig::builder_with_provider(provider)
@@ -1111,7 +1139,7 @@ CgAQCZOp9ryb4fYlBO4HfeeJrWwh6XNlAg5VL5wWSUBdgwZut41c+ND7
                 bodies.push(String::from_utf8(body).unwrap());
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
                     reply.len()
                 )
                 .unwrap();
@@ -1196,6 +1224,31 @@ CgAQCZOp9ryb4fYlBO4HfeeJrWwh6XNlAg5VL5wWSUBdgwZut41c+ND7
             ),
             Err(Failure::Unreachable(_))
         ));
+    }
+
+    #[test]
+    fn a_throttled_pairing_attempt_can_retry_over_ssh() {
+        let (base, server) = tls_host_with_status(
+            1,
+            "429 Too Many Requests",
+            r#"{"error":"Too many pairing attempts. Wait a minute and try again."}"#,
+        );
+        let link = PairingLink {
+            name: "host".into(),
+            environment_id: "env".into(),
+            fingerprint: FINGERPRINT.into(),
+            code: "code".into(),
+            endpoints: vec![base],
+        };
+        // SSH setup falls back to its loopback forward for this failure,
+        // which the host's pairing throttle exempts.
+        match exchange(&RemoteConnections::default(), &link, None) {
+            Err(Failure::Throttled(error)) => {
+                assert!(error.contains("Too many pairing attempts"), "{error}")
+            }
+            other => panic!("expected a throttled pairing, got {:?}", other.err()),
+        }
+        assert!(server.join().unwrap()[0].contains("pair.exchange"));
     }
 
     #[test]
@@ -1337,7 +1390,7 @@ CgAQCZOp9ryb4fYlBO4HfeeJrWwh6XNlAg5VL5wWSUBdgwZut41c+ND7
         .unwrap();
         assert_eq!(idle["sessions"], json!([]));
         assert!(started.elapsed() >= Duration::from_millis(250));
-        match exchange(&state, &link, None) {
+        match exchange(&state, &link, None).map_err(String::from) {
             Err(error) => assert!(error.contains("already used"), "{error}"),
             Ok(_) => panic!("a pairing code must work once"),
         }

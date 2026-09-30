@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr.
 - A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it.
 - A remote turn that finishes now plays the same notification or sound as a local turn. Remote tabs that are not showing also update when their turn starts or ends, instead of keeping a stale busy indicator until they are opened.
-- Replacing a macOS host's launch agent retries registration while launchd finishes removing the previous one, and waits out launchd's 10 second restart delay, instead of falling back to a detached host. If setup still falls back, it removes the half-installed service first so two hosts do not compete for the data directory.
+- Replacing a macOS host's launch agent retries registration while launchd finishes removing the previous one, and waits out launchd's 10-second restart delay, instead of falling back to a detached host. If setup still falls back, it first removes the half-installed service and waits for any host it started to exit, so two hosts never share the data directory.
 
 ### Changed
 
