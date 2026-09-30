@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Claude Code 2.1.284 and later no longer list `[1m]` model variants, so the Context option disappeared from the model picker. MonoCode keeps offering 1M for models Claude Code runs at 1M by default (Opus 5.5, Opus 5, Fable 5.1, Fable 5, Opus 4.6), starting at 200k as the listed model does. Selecting 1M launches the `[1m]` variant, which those versions still accept.
 - A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules.
 - Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr.
 - A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it.

@@ -523,6 +523,30 @@ describe("list_models catalog", () => {
     expect(haiku?.settings).toBeUndefined();
   });
 
+  it("keeps offering 1M context when Claude Code lists only the base model", () => {
+    // Claude Code 2.1.284 lists no `[1m]` variants but still accepts them.
+    const models = modelsFromClaudeListModels([
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportsEffort: true, supportsFastMode: true },
+      { value: "claude-fable-5-1", resolvedModel: "claude-fable-5-1", displayName: "Fable 5.1", supportsEffort: true },
+      { value: "claude-opus-4-8", resolvedModel: "claude-opus-4-8", displayName: "Opus 4.8", supportsEffort: true },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", supportsEffort: true },
+      { value: "claude-opus-5-5[1m]", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5 (1M)", supportsEffort: true },
+    ]);
+    const context = (id: string) =>
+      models
+        .find((model) => model.nativeId === id)
+        ?.settings?.find((setting) => setting.id === "context");
+    expect(context("opus")).toMatchObject({
+      value: "200k",
+      options: [{ value: "200k" }, { value: "1m" }],
+    });
+    expect(context("claude-fable-5-1")).toMatchObject({ value: "200k" });
+    expect(context("claude-opus-4-8")).toBeUndefined();
+    expect(context("sonnet")).toBeUndefined();
+    // A listed 1M variant still starts at 1M.
+    expect(context("claude-opus-5-5")).toMatchObject({ value: "1m" });
+  });
+
   it("adds resolved versions to generic live-catalog alias labels", () => {
     const models = modelsFromClaudeListModels([
       {

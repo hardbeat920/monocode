@@ -341,6 +341,22 @@ function withTimeout<T>(
   });
 }
 
+/**
+ * Models whose 1M context window Claude Code offers by default: the built-in
+ * entries that default to 1M, plus Fable 5.1, which Claude Code lists as
+ * `claude-fable-5-1[1m]`. Claude Code 2.1.284 and later stop listing `[1m]`
+ * variants but still accept them as `--model`, so the picker keeps offering
+ * the choice, starting at 200k as the listed model does.
+ */
+const LONG_CONTEXT_MODELS = new Set([
+  ...CLAUDE_MODEL_CATALOG.filter((model) =>
+    model.settings?.some(
+      (setting) => setting.id === "context" && setting.value === "1m",
+    ),
+  ).map((model) => model.nativeId),
+  "claude-fable-5-1",
+]);
+
 /** Map a `list_models` payload into the picker catalog. */
 export function modelsFromClaudeListModels(raw: unknown): AgentModel[] {
   const rows = Array.isArray(raw)
@@ -380,7 +396,11 @@ function modelFromListRow(raw: unknown): AgentModel | null {
   const name = pickerName(displayName, description, nativeId, fromResolved.id);
   const settings = settingsFromListRow(
     rec,
-    fromValue.context1m || fromResolved.context1m,
+    fromValue.context1m || fromResolved.context1m
+      ? "1m"
+      : LONG_CONTEXT_MODELS.has(fromResolved.id || nativeId)
+        ? "200k"
+        : undefined,
   );
 
   return {
@@ -394,7 +414,7 @@ function modelFromListRow(raw: unknown): AgentModel | null {
 
 function settingsFromListRow(
   rec: Record<string, unknown>,
-  context1m: boolean,
+  context: "200k" | "1m" | undefined,
 ): ModelSetting[] {
   const settings: ModelSetting[] = [];
   const levels = advertisedEffortLevels(rec);
@@ -404,7 +424,7 @@ function settingsFromListRow(
     settings.push(THINKING);
   }
   if (rec.supportsFastMode === true) settings.push(FAST_MODE);
-  if (context1m) settings.push(contextWindow("1m"));
+  if (context) settings.push(contextWindow(context));
   return settings;
 }
 
