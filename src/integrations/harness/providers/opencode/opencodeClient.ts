@@ -160,6 +160,15 @@ export class OpenCodeClient {
     ).catch(() => undefined);
   }
 
+  /** Drop a throwaway v2 session. Interrupt only stops the run. */
+  async deleteSession(sessionID: string): Promise<void> {
+    if (this.generation !== "v2") return;
+    await this.request<unknown>(
+      "DELETE",
+      this.path(`/session/${enc(sessionID)}`),
+    ).catch(() => undefined);
+  }
+
   async revertSession(sessionID: string, messageID: string): Promise<void> {
     if (this.generation === "v2") {
       await this.request<unknown>(

@@ -19,13 +19,16 @@ export async function resolveOpenCodeV2ServiceUrl(
   path: string,
   cwd: string,
 ): Promise<string> {
-  const status = await execChild(path, ["service", "status"], cwd).catch(
-    () => "",
-  );
+  const status = await execChild(
+    path,
+    ["service", "status"],
+    cwd,
+    "opencode",
+  ).catch(() => "");
   const existing = parseOpenCodeServiceUrl(status);
   if (existing) return existing;
 
-  const started = await execChild(path, ["service", "start"], cwd).catch(
+  const started = await execChild(path, ["service", "start"], cwd, "opencode").catch(
     (error: unknown) => {
       throw new Error(
         `Could not start the OpenCode background service: ${
@@ -37,7 +40,7 @@ export async function resolveOpenCodeV2ServiceUrl(
   const fromStart = parseOpenCodeServiceUrl(started);
   if (fromStart) return fromStart;
 
-  const refreshed = await execChild(path, ["service", "status"], cwd);
+  const refreshed = await execChild(path, ["service", "status"], cwd, "opencode");
   const url = parseOpenCodeServiceUrl(refreshed);
   if (url) return url;
   throw new Error("OpenCode background service did not report a local URL.");
@@ -49,7 +52,7 @@ export async function resolveOpenCodeV2Service(
 ): Promise<OpenCodeV2Service> {
   const url = await resolveOpenCodeV2ServiceUrl(path, cwd);
   const password = (
-    await execChild(path, ["service", "get", "password"], cwd)
+    await execChild(path, ["service", "get", "password"], cwd, "opencode")
   ).trim();
   if (!password) {
     throw new Error("OpenCode background service did not report a password.");

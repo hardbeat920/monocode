@@ -371,6 +371,7 @@ async function dropLive(): Promise<void> {
   live = null;
   if (current) {
     await current.client.abortSession(current.sessionId);
+    await current.client.deleteSession(current.sessionId);
     await current.client.closeEvents(TEXT_CHILD_ID);
   }
   unwatchChild(TEXT_CHILD_ID);

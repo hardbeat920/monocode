@@ -40,6 +40,7 @@ describe("OpenCode v2 background service", () => {
       "/opencode",
       ["service", "status"],
       "/repo",
+      "opencode",
     );
   });
 
