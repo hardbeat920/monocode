@@ -118,9 +118,18 @@ export class HostStore {
         const cached = row.summary
           ? (JSON.parse(String(row.summary)) as HostSessionSummary)
           : undefined;
-        return cached?.model && cached.needsInput !== undefined
-          ? cached
-          : summary(this.session(String(row.id)));
+        if (
+          cached?.model &&
+          cached.needsInput !== undefined &&
+          cached.providerSessionId !== undefined
+        )
+          return cached;
+        const fresh = summary(this.session(String(row.id)));
+        this.db.prepare("UPDATE sessions SET summary=? WHERE id=?").run(
+          JSON.stringify(fresh),
+          String(row.id),
+        );
+        return fresh;
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -320,6 +329,7 @@ export function summary(value: HostSession): HostSessionSummary {
     harness: value.session.harness as RemoteProvider,
     model: value.session.model,
     runtimeMode: value.session.runtimeMode,
+    providerSessionId: value.session.providerSessionId ?? null,
     createdAt: value.createdAt ?? value.updatedAt,
     archived: value.archived,
     pinned: value.pinned,

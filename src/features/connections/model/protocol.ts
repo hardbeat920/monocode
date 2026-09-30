@@ -4,7 +4,19 @@ import type { AgentModel } from "../../sessions/model/models";
 import type { LinkedWorkItem } from "../../sessions/model/session";
 
 export const HOST_PROTOCOL_VERSION = 1;
-export type RemoteProvider = "codex" | "claude";
+export const REMOTE_PROVIDERS = [
+  "codex",
+  "claude",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+  "omp",
+  "fx",
+  "hermes",
+  "antigravity",
+] as const;
+export type RemoteProvider = (typeof REMOTE_PROVIDERS)[number];
 export type HostDescriptor = {
   protocolVersion: number;
   environmentId: string;
@@ -56,6 +68,7 @@ export type HostSessionSummary = Omit<
   cwd?: string;
   model?: string;
   runtimeMode?: RuntimeMode;
+  providerSessionId?: string | null;
   createdAt?: number;
   linkedWorkItem?: LinkedWorkItem;
   needsInput?: boolean;
@@ -213,7 +226,10 @@ export type SshSetup = {
 };
 
 export function isRemoteProvider(value: unknown): value is RemoteProvider {
-  return value === "codex" || value === "claude";
+  return (
+    typeof value === "string" &&
+    REMOTE_PROVIDERS.some((provider) => provider === value)
+  );
 }
 
 export function requireHostDescriptor(value: HostDescriptor): HostDescriptor {

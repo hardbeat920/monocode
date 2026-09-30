@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
+import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
@@ -42,11 +43,57 @@ import {
 import { WorkspaceCommands } from "./workspace-commands";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
+import { discoverCursorModels } from "../src/integrations/harness/providers/cursor/cursorCatalog";
+import { discoverGrokModels } from "../src/integrations/harness/providers/grok/grokCatalog";
+import { discoverOpenCodeModels } from "../src/integrations/harness/providers/opencode/opencodeCatalog";
+import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
+import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
+import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
+import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
+import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
+import {
+  resolveAntigravityBinary,
+  resolveClaudeBinary,
+  resolveCodexBinary,
+  resolveCursorBinary,
+  resolveFxBinary,
+  resolveGrokBinary,
+  resolveHermesBinary,
+  resolveOmpBinary,
+  resolveOpenCodeBinary,
+  resolvePiBinary,
+} from "../src/integrations/harness/core/child";
 
 const exec = promisify(execFile);
+// Providers also add models server-side, without a CLI update.
+const CATALOG_MAX_AGE_MS = 5 * 60_000;
+const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
+  codex: () => resolveCodexBinary(),
+  claude: () => resolveClaudeBinary(),
+  cursor: () => resolveCursorBinary(),
+  grok: () => resolveGrokBinary(),
+  opencode: () => resolveOpenCodeBinary(),
+  pi: () => resolvePiBinary(),
+  omp: () => resolveOmpBinary(),
+  fx: () => resolveFxBinary(),
+  hermes: () => resolveHermesBinary(),
+  antigravity: () => resolveAntigravityBinary(),
+};
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
+const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel[]>> = {
+  codex: discoverCodexModels,
+  claude: discoverClaudeModels,
+  cursor: discoverCursorModels,
+  grok: discoverGrokModels,
+  opencode: discoverOpenCodeModels,
+  pi: discoverPiModels,
+  omp: discoverOmpModels,
+  fx: discoverFxModels,
+  hermes: discoverHermesModels,
+  antigravity: discoverAntigravityModels,
+};
 
 async function body(
   request: IncomingMessage,
@@ -64,33 +111,57 @@ async function body(
   return value as Record<string, unknown>;
 }
 
+/** Identifies each installed provider CLI. An update changes its real path or
+ * modification time, which invalidates the catalog the old version reported. */
+async function providerBinaries(providers: RemoteProvider[]): Promise<string> {
+  const binaries = await Promise.all(
+    providers.map(async (provider) => {
+      try {
+        const file = await realpath((await resolveBinary[provider]()).path);
+        return `${file}:${(await stat(file)).mtimeMs}`;
+      } catch {
+        return "";
+      }
+    }),
+  );
+  return binaries.join("\n");
+}
+
 export function createHostServer(
   engine: HostEngine,
   providers: RemoteProvider[],
   lifecycle?: (request: IncomingMessage, response: ServerResponse) => void,
 ) {
-  const catalogs = new Map<string, Promise<HostModelCatalog>>();
+  const catalogs = new Map<
+    string,
+    { binaries: string; probed: number; catalog: Promise<HostModelCatalog> }
+  >();
   const transfers = new SyncTransfers();
   const workspace = new WorkspaceCommands(
     engine.store,
     (projectId, action) => engine.withIdleProject(projectId, action),
   );
-  const models = (projectId?: unknown) => {
+  const models = async (projectId?: unknown) => {
     const cwd =
       typeof projectId === "string"
         ? engine.store.project(projectId).cwd
         : homedir();
-    let catalog = catalogs.get(cwd);
+    const binaries = await providerBinaries(providers);
+    const cached = catalogs.get(cwd);
+    let catalog =
+      cached?.binaries === binaries &&
+      Date.now() - cached.probed < CATALOG_MAX_AGE_MS
+        ? cached.catalog
+        : undefined;
     if (!catalog) {
       catalog = (async () => {
         const result: HostModelCatalog = { models: {}, errors: {} };
         await Promise.all(
           providers.map(async (provider) => {
             try {
-              result.models[provider] =
-                provider === "codex"
-                  ? await discoverCodexModels(cwd)
-                  : await discoverClaudeModels(cwd);
+              const discovered = await discoverModels[provider](cwd);
+              result.models[provider] = discovered;
+              if (discovered.length) setHarnessModels(provider, discovered);
             } catch (error) {
               result.errors[provider] =
                 error instanceof Error ? error.message : String(error);
@@ -102,17 +173,17 @@ export function createHostServer(
         (result) => {
           if (
             Object.keys(result.errors).length &&
-            catalogs.get(cwd) === catalog
+            catalogs.get(cwd)?.catalog === catalog
           )
             catalogs.delete(cwd);
           return result;
         },
         (error) => {
-          if (catalogs.get(cwd) === catalog) catalogs.delete(cwd);
+          if (catalogs.get(cwd)?.catalog === catalog) catalogs.delete(cwd);
           throw error;
         },
       );
-      catalogs.set(cwd, catalog);
+      catalogs.set(cwd, { binaries, probed: Date.now(), catalog });
     }
     return catalog;
   };
@@ -184,7 +255,12 @@ export function createHostServer(
               environmentId: engine.store.environmentId,
               name: hostname(),
               platform: process.platform,
-              providers,
+              // Older clients validate this list against Codex and Claude only.
+              providers: providers.filter((provider) =>
+                Array.isArray(params.supportedProviders)
+                  ? params.supportedProviders.includes(provider)
+                  : provider === "codex" || provider === "claude"
+              ),
               capabilities: [
                 "sessions",
                 "projects.browse",

@@ -307,6 +307,38 @@ describe("headless session ownership", () => {
     expect(() => store.session(id)).toThrow("Session not found");
   });
 
+  it("includes the harness ID in remote summaries, including older cached rows", () => {
+    const { store, project, id } = setup();
+    const current = store.session(id);
+    store.save(
+      {
+        ...current,
+        revision: current.revision + 1,
+        session: { ...current.session, providerSessionId: "harness-session" },
+      },
+      { type: "session.test" },
+    );
+    expect(store.summaries(project.id)[0].providerSessionId).toBe(
+      "harness-session",
+    );
+
+    const legacySummary = { ...store.summaries(project.id)[0] };
+    delete legacySummary.providerSessionId;
+    store.db.prepare("UPDATE sessions SET summary=? WHERE id=?").run(
+      JSON.stringify(legacySummary),
+      id,
+    );
+    expect(store.summaries(project.id)[0].providerSessionId).toBe(
+      "harness-session",
+    );
+    const repaired = store.db
+      .prepare("SELECT summary FROM sessions WHERE id=?")
+      .get(id)!;
+    expect(JSON.parse(String(repaired.summary)).providerSessionId).toBe(
+      "harness-session",
+    );
+  });
+
   it("keeps a legacy session's last known timestamp when adding creation time", () => {
     const { directory, store, project, id } = setup();
     const legacy = { ...store.session(id) };

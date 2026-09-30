@@ -46,6 +46,7 @@ import {
 } from "../model/remoteModels";
 import {
   isRemoteProvider,
+  REMOTE_PROVIDERS,
   requireHostDescriptor,
   type CommandReceipt,
   type HostCommand,
@@ -270,7 +271,7 @@ function ConnectedRemoteSession({
     pendingRemoteCommand(project.key, machine.environmentId, sessionId ?? null, shell.id),
   );
   const [draft, setDraft] = useState<Configuration>(() => ({
-    harness: shell.harness === "claude" ? "claude" : "codex",
+    harness: isRemoteProvider(shell.harness) ? shell.harness : "codex",
     model: shell.model,
     settings: shell.modelSettings ?? {},
     mode: shell.runtimeMode,
@@ -367,6 +368,7 @@ function ConnectedRemoteSession({
             await remoteRequest<HostDescriptor>(
               machine.id,
               "environment.describe",
+              { supportedProviders: REMOTE_PROVIDERS },
             ),
           );
           if (host.environmentId !== machine.environmentId)
@@ -462,9 +464,11 @@ function ConnectedRemoteSession({
     [descriptor],
   );
   // A new session starts with the tab's model when the host offers it, and
-  // otherwise with the host's first model.
+  // otherwise with the host's first model. Settings follow the host's entry:
+  // the same id can differ between machines, such as `claude:opus` offering a
+  // 1M context only on an account that has it.
   useEffect(() => {
-    if (sessionId || !catalog || !providers.length) return;
+    if (!online || sessionId || !catalog || !providers.length) return;
     const harness = providers.includes(draft.harness)
       ? draft.harness
       : providers[0];
@@ -474,14 +478,18 @@ function ConnectedRemoteSession({
       (harness === draft.harness ? undefined : models[0]) ??
       models[0];
     if (!model) return;
-    if (harness === draft.harness && model.id === draft.model) return;
-    setDraft((current) => ({
-      ...current,
-      harness,
-      model: model.id,
-      settings: carryModelSettings(model.settings ?? [], current.settings),
-    }));
-  }, [catalog, providers, sessionId, draft.harness, draft.model]);
+    setDraft((current) => {
+      const settings = carryModelSettings(
+        model.settings ?? [],
+        current.settings,
+      );
+      return current.harness === harness &&
+        current.model === model.id &&
+        sameModelSettings(settings, current.settings)
+        ? current
+        : { ...current, harness, model: model.id, settings };
+    });
+  }, [online, catalog, providers, sessionId, draft.harness, draft.model]);
 
   const saved: Configuration | undefined = hostSession && {
     harness: hostSession.harness as RemoteProvider,
@@ -904,7 +912,7 @@ function ConnectedRemoteSession({
       id: `remote:${machine.environmentId}`,
       modelsFor: models,
       resolve: (harness, id = "") => {
-        const provider = harness === "claude" ? "claude" : "codex";
+        const provider = harness as RemoteProvider;
         // Keep the saved model's effort visible even when the host catalog is
         // loading, failed, or no longer lists it.
         const controls = remoteModelControls(
@@ -933,10 +941,9 @@ function ConnectedRemoteSession({
         providers.includes(harness as RemoteProvider) &&
         (!hostSession || hostSession.harness === harness),
       probed: () => !!descriptor,
-      refresh: () => {
-        if (!catalog || catalogError || Object.keys(catalog.errors).length)
-          setCatalogRefresh((value) => value + 1);
-      },
+      // The host re-probes when a provider CLI changes or its catalog ages,
+      // so each picker opening asks again.
+      refresh: () => setCatalogRefresh((value) => value + 1),
     };
   }, [
     catalog,

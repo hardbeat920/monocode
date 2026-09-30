@@ -23,6 +23,17 @@ export function configureChildBackend(next: ChildBackend): void {
   backend = next;
 }
 
+export function hasHeadlessChildBackend(): boolean {
+  return backend !== undefined;
+}
+
+/** Provider-owned transcript files are read on the machine running the child. */
+export function readHarnessTextFile(path: string): Promise<string> {
+  return invoke<string>(backend ? "harness_read_text_file" : "read_text_file", {
+    path,
+  });
+}
+
 function invoke<T>(
   command: string,
   args?: Record<string, unknown>,
