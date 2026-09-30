@@ -4,6 +4,19 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const mcpInvoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@tauri-apps/api/core")>();
+  return {
+    ...original,
+    invoke: (command: string, args?: unknown) =>
+      command === "mcp_discover" || command === "claude_mcp_list"
+        ? mcpInvoke(command, args)
+        : original.invoke(command, args),
+  };
+});
+
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
 }));
@@ -23,6 +36,11 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
 
 import { Composer, ComposerAction } from "./Composer";
 import type { ComposerTurnOptions, Attachment } from "../model/session";
+import {
+  clearComposerDraft,
+  getComposerDraft,
+  setComposerDraft,
+} from "../model/draftCache";
 import type { UserQuestionPrompt } from "../model/userQuestion";
 
 function renderAction(
@@ -66,6 +84,29 @@ describe("Composer question focus", () => {
   let root: Root;
 
   beforeEach(() => {
+    mcpInvoke.mockReset();
+    mcpInvoke.mockImplementation(async (command: string) =>
+      command === "mcp_discover"
+        ? [
+            {
+              provider: "claude",
+              name: "docs",
+              scope: "project",
+              configPath: "/repo/.mcp.json",
+              transport: "stdio",
+            },
+            {
+              provider: "cursor",
+              name: "other",
+              scope: "user",
+              configPath: "/cursor/mcp.json",
+              transport: "stdio",
+            },
+          ]
+        : command === "claude_mcp_list"
+          ? "docs: local - ✔ Connected"
+          : undefined,
+    );
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     container = document.createElement("div");
     document.body.append(container);
@@ -102,17 +143,24 @@ describe("Composer question focus", () => {
       options?: { draft?: boolean },
     ) => boolean | void,
     onSubmit: (text: string, attachments: Attachment[]) => void = () => {},
+    sessionId?: string,
+    harness: "claude" | "codex" = "claude",
   ) {
     await act(async () =>
       root.render(
         createElement(Composer, {
+          key: sessionId,
           focused: true,
           focusToken,
-          harness: "claude",
+          harness,
           model: "claude-sonnet",
           runtimeMode: "supervised",
           executionCwd: "/repo",
           initialDraft,
+          sessionId,
+          onDraftChange: sessionId
+            ? (text) => setComposerDraft(sessionId, text)
+            : undefined,
           hideProjectPicker: true,
           hideBranchPicker: true,
           onFocus: () => {},
@@ -184,6 +232,347 @@ describe("Composer question focus", () => {
     const textarea = container.querySelector("textarea")!;
     await typeInto(textarea, "/btw ");
     expect(textarea.value).toBe("/btw ");
+  });
+
+  it("opens a searchable MCP picker and sends selected context", async () => {
+    const onSubmit = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        "/mcp",
+        undefined,
+        onSubmit,
+      );
+      const textarea = container.querySelector("textarea")!;
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(container.querySelector("[data-mcp-picker]")).not.toBeNull();
+      expect(container.textContent).toContain("docs");
+      expect(container.textContent).toContain("other");
+      const unavailable = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[data-mcp-picker] [role="option"]',
+        ),
+      ].find((button) => button.textContent?.includes("other"))!;
+      expect(unavailable.disabled).toBe(true);
+      const search = container.querySelector<HTMLInputElement>(
+        '[aria-label="Search MCP servers"]',
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(search, "docs");
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(
+        container.querySelector("[data-mcp-picker]")?.textContent,
+      ).not.toContain("other");
+      const available = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[data-mcp-picker] [role="option"]',
+        ),
+      ].find((button) => button.textContent?.includes("docs"))!;
+      await act(async () => available.click());
+      expect(textarea.value).toBe("@mcp/docs ");
+      expect(
+        container.querySelector('[data-mcp-tag="@mcp/docs"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[aria-label="Selected MCP context"]'),
+      ).toBeNull();
+      await typeInto(textarea, `${textarea.value}Find the docs`);
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.stringContaining('"docs" (claude)'),
+        expect.any(Array),
+        expect.any(Object),
+      );
+      expect(container.querySelector('[data-mcp-tag="@mcp/docs"]')).toBeNull();
+      expect(onOpen).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("");
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
+  });
+
+  it("shows four MCP rows at a time and dismisses on outside click or Escape", async () => {
+    mcpInvoke.mockImplementation(async (command: string) =>
+      command === "mcp_discover"
+        ? Array.from({ length: 6 }, (_, index) => ({
+            provider: "claude",
+            name: `server-${index}`,
+            scope: "project",
+            configPath: "/repo/.mcp.json",
+            transport: "stdio",
+          }))
+        : "",
+    );
+    await renderComposer(undefined, vi.fn(), false, 0, "/mcp");
+    const textarea = container.querySelector("textarea")!;
+    const openPicker = async () => {
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+    };
+    await openPicker();
+
+    const list = container.querySelector<HTMLElement>(
+      '[data-mcp-picker] [role="listbox"]',
+    )!;
+    expect(list.querySelectorAll('[role="option"]')).toHaveLength(6);
+    expect(list.classList.contains("max-h-[min(184px,45vh)]")).toBe(true);
+    expect(
+      list.querySelector('[role="option"]')?.classList.contains("h-11"),
+    ).toBe(true);
+    expect(container.querySelector("[data-mcp-picker]")?.className).toContain(
+      "bg-content/5",
+    );
+    const searchInput = container.querySelector<HTMLInputElement>(
+      '[aria-label="Search MCP servers"]',
+    )!;
+    const options = list.querySelectorAll<HTMLButtonElement>('[role="option"]');
+    expect(searchInput.getAttribute("aria-controls")).toBe(list.id);
+    await act(async () => options[1].focus());
+    expect(options[1].getAttribute("aria-selected")).toBe("true");
+    expect(searchInput.getAttribute("aria-activedescendant")).toBe(
+      options[1].id,
+    );
+    await act(async () => {
+      searchInput.focus();
+      for (const key of ["ArrowDown", "Enter", "Escape"]) {
+        searchInput.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            isComposing: true,
+          }),
+        );
+      }
+    });
+    expect(container.querySelector("[data-mcp-picker]")).not.toBeNull();
+    expect(container.textContent).not.toContain("MCP: server-");
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () => {
+      outside.focus();
+      outside.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(container.querySelector("[data-mcp-picker]")).toBeNull();
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+
+    await typeInto(textarea, "/mcp");
+    await openPicker();
+    const search = container.querySelector<HTMLInputElement>(
+      '[aria-label="Search MCP servers"]',
+    )!;
+    await act(async () =>
+      search.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(container.querySelector("[data-mcp-picker]")).toBeNull();
+    expect(document.activeElement).toBe(textarea);
+
+    await typeInto(textarea, "/mcp");
+    await openPicker();
+    const close = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Close MCP picker"]',
+    )!;
+    expect(close.title).toContain("Esc");
+    await act(async () => close.click());
+    expect(container.querySelector("[data-mcp-picker]")).toBeNull();
+  });
+
+  it("removes MCP context when its inline tag is deleted", async () => {
+    const onSubmit = vi.fn();
+    await renderComposer(
+      undefined,
+      vi.fn(),
+      false,
+      0,
+      "/mcp",
+      undefined,
+      onSubmit,
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    const docs = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-mcp-picker] [role="option"]',
+      ),
+    ].find((button) => button.textContent?.includes("docs"))!;
+    await act(async () => docs.click());
+    expect(textarea.value).toContain("@mcp/docs");
+    await typeInto(textarea, "Find the docs");
+    expect(container.querySelector("[data-mcp-tag]")).toBeNull();
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(onSubmit).toHaveBeenCalledWith(
+      "Find the docs",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("inserts an MCP tag beside existing composer text", async () => {
+    await renderComposer(undefined, vi.fn());
+    const textarea = container.querySelector("textarea")!;
+    await typeInto(textarea, "sad /mcp");
+    const command = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-skill-picker] [role="option"]',
+      ),
+    ].find((button) => button.textContent?.includes("/mcp"))!;
+    expect(command).toBeDefined();
+    await act(async () => command.click());
+    const docs = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-mcp-picker] [role="option"]',
+      ),
+    ].find((button) => button.textContent?.includes("docs"))!;
+    await act(async () => docs.click());
+    expect(textarea.value).toBe("sad @mcp/docs ");
+    expect(
+      container.querySelector('[data-mcp-tag="@mcp/docs"]'),
+    ).not.toBeNull();
+  });
+
+  it("restores a Codex MCP tag and its context after switching sessions", async () => {
+    mcpInvoke.mockImplementation(async (command: string) =>
+      command === "mcp_discover"
+        ? [
+            {
+              provider: "codex",
+              name: "docs",
+              scope: "user",
+              configPath: "/codex/config.toml",
+              transport: "stdio",
+            },
+          ]
+        : "",
+    );
+    const onSubmit = vi.fn();
+    try {
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        "/mcp",
+        undefined,
+        onSubmit,
+        "mcp-session-one",
+        "codex",
+      );
+      let textarea = container.querySelector("textarea")!;
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      const docs = container.querySelector<HTMLButtonElement>(
+        '[data-mcp-picker] [role="option"]',
+      )!;
+      await act(async () => docs.click());
+      expect(textarea.value).toContain("@mcp/docs");
+      expect(container.querySelector("[data-mcp-tag] svg")).toBeNull();
+
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        "Other draft",
+        undefined,
+        onSubmit,
+        "mcp-session-two",
+        "codex",
+      );
+      expect(container.querySelector("[data-mcp-tag]")).toBeNull();
+
+      await renderComposer(
+        undefined,
+        vi.fn(),
+        false,
+        0,
+        getComposerDraft("mcp-session-one"),
+        undefined,
+        onSubmit,
+        "mcp-session-one",
+        "codex",
+      );
+      textarea = container.querySelector("textarea")!;
+      expect(textarea.value).toContain("@mcp/docs");
+      expect(
+        container.querySelector('[data-mcp-tag="@mcp/docs"]'),
+      ).not.toBeNull();
+      await typeInto(textarea, `${textarea.value}Use docs`);
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.stringContaining('"docs" (codex)'),
+        expect.any(Array),
+        expect.any(Object),
+      );
+    } finally {
+      clearComposerDraft("mcp-session-one");
+      clearComposerDraft("mcp-session-two");
+    }
   });
 
   it("keeps the draft when onBtwCommand rejects the command", async () => {
@@ -1028,5 +1417,67 @@ describe("Composer question focus", () => {
 
     expect(document.activeElement).toBe(searchInput);
     portaledPicker.remove();
+  });
+
+  it("opens the MCP picker in Save draft mode and offers Manage", async () => {
+    const onSaveDraft = vi.fn();
+    const onOpen = vi.fn();
+    window.addEventListener("monocode:open-mcp-settings", onOpen);
+    try {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            canSaveDraft: true,
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit: vi.fn(),
+            onSaveDraft,
+          }),
+        ),
+      );
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Add files or choose a mode"]',
+          )!
+          .click(),
+      );
+      const draftMode = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("Save this message"))!;
+      await act(async () => draftMode.click());
+      const textarea = container.querySelector("textarea")!;
+      await act(async () => {
+        textarea.value = "/mcp";
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+      expect(container.querySelector("[data-mcp-picker]")).not.toBeNull();
+      expect(onSaveDraft).not.toHaveBeenCalled();
+      const manage = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("Manage MCP Servers"))!;
+      await act(async () => manage.click());
+      expect(onOpen).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("monocode:open-mcp-settings", onOpen);
+    }
   });
 });

@@ -91,7 +91,7 @@ describe.each([
     "monocode.bodyGlass",
     appearance.loadBodyGlass,
     appearance.saveBodyGlass,
-    true,
+    appearance.BODY_GLASS_DEFAULT,
     undefined,
   ],
   [

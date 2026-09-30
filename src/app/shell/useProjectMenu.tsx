@@ -314,6 +314,12 @@ export function useProjectMenu({
     setNotificationMenu(null);
   };
 
+  const dismiss = () => {
+    close();
+    setRemoving(null);
+    setBackgroundProject(null);
+  };
+
   const groupLabels = projectMenu ? loadTabGroupLabels() : {};
 
   const onPick = (action: string) => {
@@ -586,6 +592,7 @@ export function useProjectMenu({
     openGroupMenu,
     createGroup,
     close,
+    dismiss,
     isOpen: projectMenu != null,
     /** True while any menu or dialog opened from the project menu is showing. */
     isActive:

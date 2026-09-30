@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasLiveCatalog,
   modelsFor,
@@ -47,7 +47,11 @@ vi.mock("./piClient", () => ({
   },
 }));
 
-import { refreshOmpCatalog, refreshPiCatalog } from "./piCatalog";
+import {
+  discoverPiModels,
+  refreshOmpCatalog,
+  refreshPiCatalog,
+} from "./piCatalog";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -96,14 +100,20 @@ beforeEach(() => {
   mocks.watchChild.mockImplementation(() => undefined);
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe.each(flavors)(
   "$name catalog discovery",
   ({ refresh, harness, binary, probeId }) => {
     it("loads extensions without passing --no-extensions", async () => {
       await refresh();
 
+      const childId = mocks.spawnChild.mock.calls[0]![0] as string;
+      expect(childId).toMatch(new RegExp(`^${probeId}-`));
       expect(mocks.spawnChild).toHaveBeenCalledWith(
-        probeId,
+        childId,
         binary,
         ["--mode", "rpc", "--no-session"],
         "/home/test",
@@ -118,8 +128,8 @@ describe.each(flavors)(
         45_000,
       );
       expect(mocks.close).toHaveBeenCalledOnce();
-      expect(mocks.unwatchChild).toHaveBeenCalledWith(probeId);
-      expect(mocks.killChild).toHaveBeenCalledWith(probeId);
+      expect(mocks.unwatchChild).toHaveBeenCalledWith(childId);
+      expect(mocks.killChild).toHaveBeenCalledWith(childId);
     });
 
     it("denies extension UI requests that require a reply", async () => {
@@ -127,6 +137,7 @@ describe.each(flavors)(
       mocks.request.mockReturnValue(response.promise);
       const discovery = refresh();
       await vi.waitFor(() => expect(mocks.frames).toHaveLength(1));
+      const childId = mocks.spawnChild.mock.calls[0]![0] as string;
 
       mocks.frames[0]!({
         type: "extension_ui_request",
@@ -136,7 +147,7 @@ describe.each(flavors)(
       });
       await vi.waitFor(() => expect(mocks.writeChild).toHaveBeenCalledOnce());
       expect(mocks.writeChild).toHaveBeenCalledWith(
-        probeId,
+        childId,
         JSON.stringify({
           type: "extension_ui_response",
           id: "ui-1",
@@ -175,3 +186,12 @@ describe.each(flavors)(
     });
   },
 );
+
+describe("discoverPiModels", () => {
+  it("clears the outer discovery timeout after a successful probe", async () => {
+    vi.useFakeTimers();
+    await discoverPiModels("/workspace");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.killChild).toHaveBeenCalled();
+  });
+});

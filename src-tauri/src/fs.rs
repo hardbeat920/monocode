@@ -8,13 +8,25 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
+use uuid::Uuid;
 
 use crate::dirs_home;
 
 pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_DATA_BYTES: u64 = MAX_GENERATED_IMAGE_BYTES * 4 / 3 + 4;
+const GENERATED_IMAGE_DIR: &str = "generated-images";
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedImageAsset {
+    path: String,
+    mime_type: String,
+    size: u64,
+}
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -4141,14 +4153,29 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
-    // Finder launches get launchd's bare PATH; signers, hooks, and git-lfs need the real one.
-    cmd.env("PATH", crate::harness::gui_search_path());
     crate::hide_window_console(&mut cmd);
     cmd
 }
 
+fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
+    let mut cmd = git_cmd();
+    if matches!(
+        args.first().copied(),
+        Some("commit" | "push" | "pull" | "fetch" | "clone")
+    ) {
+        // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
+        cmd.env("PATH", gui_path());
+    }
+    cmd
+}
+
+fn git_cmd_for_args(args: &[&str]) -> Command {
+    git_cmd_for_args_with_path(args, crate::harness::gui_search_path)
+}
+
 pub(crate) fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
-    let output = git_cmd()
+    let mut cmd = git_cmd_for_args(args);
+    let output = cmd
         .arg("--no-pager")
         .arg("-C")
         .arg(root)
@@ -4182,7 +4209,7 @@ fn git_run(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = git_cmd()
+    let output = git_cmd_for_args(args)
         .arg("--no-pager")
         .arg("-C")
         .arg(root)
@@ -5029,7 +5056,7 @@ fn clone_repo_sync(url: &str, parent: &str) -> Result<String, String> {
         return Err(format!("{} already exists", dest.display()));
     }
     let dest_str = dest.to_str().ok_or("Invalid destination path")?;
-    let output = git_cmd()
+    let output = git_cmd_for_args(&["clone"])
         .args(["clone", "--", url, dest_str])
         .output()
         .map_err(|e| {
@@ -5280,6 +5307,103 @@ fn write_attachment_sync(name: &str, data: &str) -> Result<String, String> {
         .and_then(|mut file| file.write_all(&bytes))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn save_generated_image(
+    app: AppHandle,
+    data: String,
+    name: String,
+) -> Result<GeneratedImageAsset, String> {
+    tauri::async_runtime::spawn_blocking(move || save_generated_image_sync(&app, &data, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_generated_image_sync(
+    app: &AppHandle,
+    data: &str,
+    name: &str,
+) -> Result<GeneratedImageAsset, String> {
+    if data.len() as u64 > MAX_GENERATED_IMAGE_DATA_BYTES {
+        return Err(format!(
+            "Generated image is too large (maximum {} MB).",
+            MAX_GENERATED_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
+    let encoded: String = data
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        .map_err(|_| "Generated image data is not valid base64.".to_string())?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_GENERATED_IMAGE_BYTES {
+        return Err(format!(
+            "Generated image is too large (maximum {} MB).",
+            MAX_GENERATED_IMAGE_BYTES / 1024 / 1024
+        ));
+    }
+    if !is_png(&bytes) {
+        return Err("Generated image data is not a PNG image.".into());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(GENERATED_IMAGE_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe_name = safe_attachment_name(name);
+    let destination = dir.join(format!("{}-{}.png", Uuid::new_v4(), safe_name));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|e| format!("{}: {e}", destination.display()))?;
+    if let Err(error) = file.write_all(&bytes) {
+        let _ = std::fs::remove_file(&destination);
+        return Err(format!("{}: {error}", destination.display()));
+    }
+    Ok(GeneratedImageAsset {
+        path: destination.to_string_lossy().into_owned(),
+        mime_type: "image/png".into(),
+        size: bytes.len() as u64,
+    })
+}
+
+#[tauri::command]
+pub async fn delete_generated_images(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_generated_images_sync(&app, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub(crate) fn delete_generated_images_sync(
+    app: &AppHandle,
+    paths: &[String],
+) -> Result<(), String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(GENERATED_IMAGE_DIR)
+        .canonicalize()
+        .map_err(|error| format!("Generated image directory is unavailable: {error}"))?;
+    for path in paths {
+        let candidate = match PathBuf::from(path).canonicalize() {
+            Ok(candidate) => candidate,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if !candidate.starts_with(&root) || !candidate.is_file() {
+            return Err("Invalid generated image path".into());
+        }
+        std::fs::remove_file(candidate).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 }
 
 fn safe_attachment_name(name: &str) -> String {
@@ -5718,6 +5842,14 @@ mod tests {
             text: text.into(),
             concat: concat.into(),
         }
+    }
+
+    #[test]
+    fn generated_image_validation_accepts_png_only() {
+        assert!(is_png(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        assert!(!is_png(&[0xff, 0xd8, 0xff, 0x00]));
+        assert!(!is_png(b"<html>"));
+        assert!(!is_png(&[]));
     }
 
     #[test]
@@ -8210,11 +8342,33 @@ mod tests {
     }
 
     #[test]
-    fn git_cmd_uses_gui_search_path() {
-        let path = crate::harness::gui_search_path();
-        assert!(git_cmd().get_envs().any(|(key, value)| {
-            key == std::ffi::OsStr::new("PATH") && value == Some(std::ffi::OsStr::new(&path))
-        }));
+    fn read_only_git_cmd_uses_inherited_path() {
+        assert!(!git_cmd()
+            .get_envs()
+            .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn read_only_git_never_resolves_login_shell_path() {
+        for action in ["status", "diff", "rev-parse", "ls-files", "cat-file"] {
+            let cmd = git_cmd_for_args_with_path(&[action], || {
+                panic!("read-only git must not resolve the login-shell PATH")
+            });
+            assert!(!cmd
+                .get_envs()
+                .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+        }
+    }
+
+    #[test]
+    fn git_actions_that_need_helpers_use_login_shell_path() {
+        for action in ["commit", "push", "pull", "fetch", "clone"] {
+            let cmd = git_cmd_for_args_with_path(&[action], || "gui-git-path".into());
+            assert!(cmd.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new("PATH")
+                    && value == Some(std::ffi::OsStr::new("gui-git-path"))
+            }));
+        }
     }
 
     #[test]

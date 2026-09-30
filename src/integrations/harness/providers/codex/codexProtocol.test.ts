@@ -6,6 +6,7 @@ import {
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
+  mapCodexSubagentSteps,
   runtimeModeToCodexConfig,
   toCodexApprovalDecision,
 } from "./codexProtocol";
@@ -276,6 +277,43 @@ describe("mapCodexNotification", () => {
       delta: "\n\n",
     });
     expect(mapped.events).toEqual([{ type: "message.delta", text: "\n\n" }]);
+  });
+
+  it("maps completed image generation items as image events", () => {
+    const item = {
+      id: "image_1",
+      type: "imageGeneration",
+      result: "aW1hZ2U=",
+      revisedPrompt: "A clean product photo",
+      savedPath: "/tmp/image_1.png",
+    };
+
+    expect(
+      mapCodexNotification("item/started", { item }).events,
+    ).toEqual([]);
+    expect(
+      mapCodexNotification("item/completed", { item }).events,
+    ).toEqual([
+      {
+        type: "image.generated",
+        itemId: "image_1",
+        data: "aW1hZ2U=",
+        name: "generated-image",
+        alt: "A clean product photo",
+      },
+    ]);
+  });
+
+  it("does not map an empty image generation result", () => {
+    expect(
+      mapCodexNotification("item/completed", {
+        item: {
+          id: "image_2",
+          type: "imageGeneration",
+          result: "",
+        },
+      }).events,
+    ).toEqual([]);
   });
 
   it("maps reasoning summary deltas", () => {
@@ -845,5 +883,35 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
         tokenUsage: { last: {}, total: {} },
       }).events,
     ).toEqual([]);
+  });
+});
+
+describe("mapCodexSubagentSteps", () => {
+  const subagentBash = (status: string, output?: string) =>
+    mapCodexSubagentSteps("agent-1", "item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "cmd_1",
+        type: "commandExecution",
+        command: "npm test",
+        status,
+        ...(output ? { aggregatedOutput: output } : {}),
+      },
+    });
+
+  it("keeps a failed child tool's output on its step, where it can be read", () => {
+    expect(subagentBash("failed", "Tests failed: assertion error")).toMatchObject([
+      {
+        type: "agent.step",
+        stepId: "cmd_1",
+        status: "failed",
+        detail: "Tests failed: assertion error",
+      },
+    ]);
+  });
+
+  it("leaves a settled child's result off its step", () => {
+    const steps = subagentBash("completed", "12 passed");
+    expect(steps[0]).not.toHaveProperty("detail");
   });
 });

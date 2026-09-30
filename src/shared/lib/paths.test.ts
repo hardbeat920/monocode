@@ -91,6 +91,24 @@ describe("workspace file references", () => {
     );
   });
 
+  it("keeps remote Markdown file links on their machine", () => {
+    const cwd = "remote://env/home/dev/repo";
+    expect(resolveWorkspaceFileReference("src/app.ts:4", cwd)).toEqual({
+      path: "remote://env/home/dev/repo/src/app.ts",
+      navigation: { line: 4 },
+    });
+    expect(resolveWorkspacePath("/home/dev/repo/src/app.ts", cwd)).toBe(
+      "remote://env/home/dev/repo/src/app.ts",
+    );
+    expect(resolveWorkspacePath("~/notes.md", cwd)).toBe(
+      "remote://env/home/dev/notes.md",
+    );
+    expect(resolveWorkspacePath("remote://env/home/dev/repo/src/app.ts", cwd)).toBe(
+      "remote://env/home/dev/repo/src/app.ts",
+    );
+    expect(resolveWorkspacePath("remote://other/repo/app.ts", cwd)).toBeUndefined();
+  });
+
   it.each([
     "file://localhost/%2Fhost/share/file.md",
     "file://localhost/%5Chost/share/file.md",

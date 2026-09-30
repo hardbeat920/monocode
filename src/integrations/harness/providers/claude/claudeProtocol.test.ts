@@ -5,6 +5,7 @@ import {
 } from "./claudeCatalog";
 import {
   applyClaudePromptEffortPrefix,
+  applyClaudeTaskTool,
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -649,6 +650,9 @@ describe("helpers", () => {
     );
     expect(isTodoTool("TodoWrite")).toBe(true);
     expect(toolKindFromName("TodoWrite")).toBe("tasks");
+    expect(toolKindFromName("TaskCreate")).toBe("tasks");
+    expect(toolKindFromName("TaskUpdate")).toBe("tasks");
+    expect(toolKindFromName("TaskOutput")).not.toBe("agent");
     expect(
       taskListFromTodos({
         todos: [
@@ -949,5 +953,35 @@ describe("subagent messages", () => {
       toolUseId: "toolu_agent",
       subagentType: "explore",
     });
+  });
+});
+
+describe("applyClaudeTaskTool", () => {
+  it("creates from the result id, updates, renames and deletes", () => {
+    const tasks = new Map();
+    expect(
+      applyClaudeTaskTool(
+        tasks,
+        "TaskCreate",
+        { subject: "One" },
+        "Task #7 created successfully: One",
+      ),
+    ).toBe(true);
+    expect([...tasks.values()]).toEqual([
+      { id: "7", text: "One", status: "pending" },
+    ]);
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: 7, status: "in_progress" }, "");
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "7", subject: "Uno" }, "");
+    expect(tasks.get("7")).toEqual({ id: "7", text: "Uno", status: "in_progress" });
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "7", status: "deleted" }, "");
+    expect(tasks.size).toBe(0);
+  });
+
+  it("ignores unknown ids, missing result ids and other tools", () => {
+    const tasks = new Map();
+    expect(applyClaudeTaskTool(tasks, "TaskCreate", { subject: "One" }, "error")).toBe(false);
+    expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
+    expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
+    expect(tasks.size).toBe(0);
   });
 });

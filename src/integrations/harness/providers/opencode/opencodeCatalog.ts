@@ -65,9 +65,11 @@ export function refreshOpenCodeCatalog(): Promise<void> {
   return inflight;
 }
 
-async function discoverOpenCodeModels(): Promise<AgentModel[]> {
+export async function discoverOpenCodeModels(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
   const { path } = await resolveOpenCodeBinary();
-  const cwd = await homeDir();
+  const cwd = workingDirectory ?? (await homeDir());
   const versionOut = await execChild(path, ["--version"], cwd, "opencode");
   const version = parseOpenCodeVersion(versionOut);
   if (!version) {
