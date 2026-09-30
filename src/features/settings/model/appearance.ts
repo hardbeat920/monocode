@@ -34,6 +34,7 @@ const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
 let glassFadeTimer: number | undefined;
+let glassSyncGeneration = 0;
 
 export const CHAT_BACKGROUND_PATH_CHANGE_EVENT =
   "monocode:chat-background-path-change";
@@ -396,11 +397,13 @@ function glassFadeMs(): number {
  * `has-native-glass` follows the window, not the platform: Linux can turn glass
  * off in dark mode too. Whichever side moves second has to wait for the other,
  * or one of them shows through the gap - so entering glass settles the window
- * first, and leaving it fades the page first.
+ * first, and leaving it fades the page first. A call that a newer one has
+ * overtaken is dropped rather than left to settle last.
  */
 export function syncNativeGlass(scheme: ColorScheme) {
   const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
   const root = document.documentElement;
+  const generation = ++glassSyncGeneration;
   const setWindow = () =>
     invoke("set_window_glass_enabled", {
       enabled,
@@ -413,7 +416,11 @@ export function syncNativeGlass(scheme: ColorScheme) {
   }
 
   if (enabled) {
-    void setWindow().finally(() => root.classList.add("has-native-glass"));
+    void setWindow().finally(() => {
+      if (generation === glassSyncGeneration) {
+        root.classList.add("has-native-glass");
+      }
+    });
     return;
   }
 

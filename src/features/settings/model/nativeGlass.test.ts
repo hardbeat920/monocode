@@ -148,6 +148,30 @@ describe("native glass", () => {
     );
   });
 
+  it("ignores an enable that a newer disable has overtaken", async () => {
+    let settle = () => {};
+    invoke.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    platform.isLinux = true;
+    localStorage.setItem(BODY_GLASS_KEY, "1");
+    syncNativeGlass("dark");
+    localStorage.setItem(BODY_GLASS_KEY, "0");
+    syncNativeGlass("dark");
+    expect(hasGlass()).toBe(false);
+
+    settle();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(hasGlass()).toBe(false);
+    expect(invoke).toHaveBeenLastCalledWith(
+      "set_window_glass_enabled",
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
   it("still flips the page when the window call fails", async () => {
     invoke.mockRejectedValue(new Error("no window"));
     syncNativeGlass("light");

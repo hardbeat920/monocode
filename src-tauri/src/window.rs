@@ -133,7 +133,8 @@ pub struct Rgb {
     pub b: u8,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+// macOS hands the components to AppKit instead, so it has no use for this.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Rgb {
     fn fill(self) -> Color {
         Color(self.r, self.g, self.b, 255)
