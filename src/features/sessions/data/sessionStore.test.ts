@@ -11,7 +11,14 @@ import {
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
+  shouldPersistSession,
 } from "./sessionStore";
+
+it("keeps host-owned transcripts out of local session storage", () => {
+  const session = newSession("codex", "remote://env/home/me/repo");
+  session.blocks = [{ id: "turn", role: "user", text: "Continue" }];
+  expect(shouldPersistSession(session)).toBe(false);
+});
 
 describe("Claude Shell row recovery", () => {
   it("restores only matching placeholder rows and preserves tool output", () => {
@@ -184,6 +191,60 @@ describe("sanitizeSessionForPersist", () => {
       { id: "sent", role: "user", text: "Start here" },
       { id: "reply", role: "assistant", text: "Done" },
       { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+  });
+
+  it("persists generated image metadata without binary payloads", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[1]).toEqual({
+      id: "image",
+      role: "image",
+      text: "",
+      image: {
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    });
+  });
+
+  it("drops malformed generated image metadata", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 0,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "u", role: "user", text: "Draw this" },
     ]);
   });
 

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { forgetHarnessSession, killAllChildren } from "../../integrations/harness";
+import { forgetHarnessSession } from "../../integrations/harness/core/registry";
+import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
 import { newTab } from "../../features/workspace/model/layout";
 import {
@@ -40,10 +41,12 @@ vi.mock("../../features/sessions/data/sessionStore", async (importOriginal) => {
     getSession: vi.fn().mockResolvedValue(null),
   };
 });
-vi.mock("../../integrations/harness", () => ({
+vi.mock("../../integrations/harness/core/registry", () => ({
   bindHarnessSession: vi.fn(),
   isLiveHarness: vi.fn(),
   forgetHarnessSession: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../integrations/harness/core/child", () => ({
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
 

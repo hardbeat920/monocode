@@ -43,6 +43,43 @@ import {
 } from "./layout";
 
 describe("preview tabs", () => {
+  it("keeps remote files from different machines in distinct editor tabs", () => {
+    const first = newFileTab("remote://machine-a/repo/a.ts", "remote://machine-a/repo");
+    const second = newFileTab("remote://machine-b/repo/a.ts", "remote://machine-b/repo");
+    expect(editorTabKey(first)).not.toBe(editorTabKey(second));
+    let tab = openEditorTab(newTab("s"), first, { pin: true });
+    tab = openEditorTab(tab, second, { pin: true });
+    expect(tab.editorPanes[0]?.files).toHaveLength(2);
+  });
+  it("keeps remote file and review tabs distinct and retargets one unified review", () => {
+    const cwd = "remote://machine/repo";
+    const ordinary = newFileTab(`${cwd}/a.ts`, cwd);
+    const review = {
+      ...ordinary,
+      id: crypto.randomUUID(),
+      review: true,
+      changeKind: "staged" as const,
+    };
+    const changes = newChangesTab(cwd, `${cwd}/a.ts`, "staged");
+    expect(editorTabKey(ordinary)).not.toBe(editorTabKey(review));
+    expect(editorTabKey(review)).not.toBe(editorTabKey(changes));
+    let tab = openEditorTab(newTab("s"), ordinary, { pin: true });
+    tab = openEditorTab(tab, review, { pin: true });
+    tab = openEditorTab(tab, { ...review, changeKind: "unstaged" });
+    expect(
+      tab.editorPanes
+        .flatMap((pane) => pane.files)
+        .find((file) => file.review && !file.changes)?.changeKind,
+    ).toBe("unstaged");
+    tab = openChangesTab(tab, cwd, `${cwd}/a.ts`, "staged");
+    tab = openChangesTab(tab, cwd, `${cwd}/b.ts`, "unstaged");
+    const open = tab.editorPanes.flatMap((pane) => pane.files);
+    expect(open).toHaveLength(2);
+    expect(open.find((file) => file.changes)).toMatchObject({
+      path: `${cwd}/b.ts`,
+      changeKind: "unstaged",
+    });
+  });
   const paths = (tab: WorkspaceTab) =>
     tab.editorPanes[0]?.files.map((file) => [file.path, !!file.preview]);
 
@@ -96,10 +133,7 @@ describe("preview tabs", () => {
   });
 
   it("workspace mode: back-to-back opens share one preview per project", () => {
-    const append = (tabs: WorkspaceTab[], tab: WorkspaceTab) => [
-      ...tabs,
-      tab,
-    ];
+    const append = (tabs: WorkspaceTab[], tab: WorkspaceTab) => [...tabs, tab];
     const open = (
       tabs: WorkspaceTab[],
       path: string,
@@ -263,14 +297,22 @@ describe("openChangesTab", () => {
       "/repo-worktrees/feature",
     ]);
     expect(files).toContainEqual(mainReview);
-    const pane = worktree.editorPanes.find((pane) => pane.id === worktree.focusedId)!;
-    expect(pane.files.find((file) => file.id === pane.activeFileId)).toMatchObject({
+    const pane = worktree.editorPanes.find(
+      (pane) => pane.id === worktree.focusedId,
+    )!;
+    expect(
+      pane.files.find((file) => file.id === pane.activeFileId),
+    ).toMatchObject({
       cwd: "/repo-worktrees/feature",
       projectCwd: "/repo",
     });
     const back = openChangesTab(worktree, "/repo");
-    expect(back.editorPanes.flatMap((pane) => pane.files).filter(isChangesTab)).toHaveLength(2);
-    expect(back.editorPanes[0]?.activeFileId).toBe(main.editorPanes[0]?.activeFileId);
+    expect(
+      back.editorPanes.flatMap((pane) => pane.files).filter(isChangesTab),
+    ).toHaveLength(2);
+    expect(back.editorPanes[0]?.activeFileId).toBe(
+      main.editorPanes[0]?.activeFileId,
+    );
   });
 
   it("reuses one Changes tab and updates the focused file", () => {
@@ -303,9 +345,9 @@ describe("openChangesTab", () => {
     );
     const next = openChangesTab(withReview, cwd, "/repo/b.ts");
     const files = next.editorPanes[0]?.files ?? [];
-    expect(files.some((file) => editorTabKey(file) === `review:${cwd}/a.ts`)).toBe(
-      false,
-    );
+    expect(
+      files.some((file) => editorTabKey(file) === `review:${cwd}/a.ts`),
+    ).toBe(false);
     expect(files.filter(isChangesTab)).toHaveLength(1);
   });
 

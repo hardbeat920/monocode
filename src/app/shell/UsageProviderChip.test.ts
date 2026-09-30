@@ -130,6 +130,9 @@ describe("UsageProviderChip", () => {
 
     const trigger = button("Codex usage details");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.querySelector(".w-8 > span")?.getAttribute("style")).toBe(
+      "width: 19%;",
+    );
     await act(async () => trigger.click());
 
     const dialog = document.querySelector('[role="dialog"]');
@@ -139,11 +142,50 @@ describe("UsageProviderChip", () => {
     expect(dialog?.textContent).toContain("58% remaining");
     expect(dialog?.textContent).toContain("19% remaining");
     expect(dialog?.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    const sessionBar = dialog?.querySelector(
+      '[aria-label="5-hour limit remaining"]',
+    );
+    const weeklyBar = dialog?.querySelector(
+      '[aria-label="Weekly limit remaining"]',
+    );
+    expect(sessionBar?.getAttribute("aria-valuenow")).toBe("58");
+    expect(sessionBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 58%;",
+    );
+    expect(weeklyBar?.getAttribute("aria-valuenow")).toBe("19");
+    expect(weeklyBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 19%;",
+    );
+  });
+
+  it("shows a full bar before usage and an empty bar when exhausted", async () => {
+    const limits = codexLimits();
+    limits.session!.usedPercent = 0;
+    limits.weekly!.usedPercent = 100;
+    act(() => root.render(createElement(UsageProviderChip, { limits, now })));
+
     expect(
-      dialog
-        ?.querySelector('[aria-label="Weekly limit used"]')
-        ?.getAttribute("aria-valuenow"),
-    ).toBe("81");
+      button("Codex usage details")
+        .querySelector(".w-8 > span")
+        ?.getAttribute("style"),
+    ).toBe("width: 0%;");
+    await act(async () => button("Codex usage details").click());
+
+    const dialog = document.querySelector('[role="dialog"]');
+    const sessionBar = dialog?.querySelector(
+      '[aria-label="5-hour limit remaining"]',
+    );
+    const weeklyBar = dialog?.querySelector(
+      '[aria-label="Weekly limit remaining"]',
+    );
+    expect(sessionBar?.getAttribute("aria-valuenow")).toBe("100");
+    expect(sessionBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 100%;",
+    );
+    expect(weeklyBar?.getAttribute("aria-valuenow")).toBe("0");
+    expect(weeklyBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 0%;",
+    );
   });
 
   it("switches between named accounts from the usage popover", async () => {
@@ -173,6 +215,14 @@ describe("UsageProviderChip", () => {
     await act(async () => button("Switch Codex account").click());
     expect(document.body.textContent).toContain("Codex accounts");
     expect(document.body.textContent).toContain("Default account");
+    const accountBar = button("Default account").querySelector(
+      '[aria-label="5h limit remaining"]',
+    );
+    expect(button("Default account").textContent).toContain("58% left");
+    expect(accountBar?.getAttribute("aria-valuenow")).toBe("58");
+    expect(accountBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 58%;",
+    );
     await act(async () => button("Work").click());
 
     expect(onSelectAccount).toHaveBeenCalledWith("account-work");

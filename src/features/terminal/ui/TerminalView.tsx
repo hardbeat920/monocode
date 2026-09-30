@@ -9,7 +9,10 @@ import {
   writePty,
 } from "../../../platform/tauri/pty";
 import { isOscColorQuery, oscColorReply } from "../model/terminalChrome";
-import { macTerminalShortcutData } from "../model/terminalKeys";
+import {
+  isMacTerminalClearShortcut,
+  macTerminalShortcutData,
+} from "../model/terminalKeys";
 import {
   defaultTerminalTitle,
   scanOscCwd,
@@ -189,6 +192,14 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
           event.preventDefault();
           event.stopPropagation();
           term.input(shortcutData);
+        }
+        return false;
+      }
+      if (IS_MAC && isMacTerminalClearShortcut(event)) {
+        if (event.isComposing) return false;
+        if (event.type === "keydown") {
+          event.preventDefault();
+          term.clear();
         }
         return false;
       }

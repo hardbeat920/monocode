@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-29
+
+### Added
+
+- Experimental remote access runs persistent agent sessions on Windows, macOS, and Linux machines through SSH. Settings → Connections installs a version-matched host, pairs the desktop, manages the private tunnel, and can reconnect or update the host. Remote projects and their sessions appear in the normal project rail and session views. In #432.
+- Remote sessions support Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, OMP, fx, Hermes Agent, and Antigravity when installed on the host. The host provides its own model catalog and runs each provider under the remote user's account. In #432 and #539.
+- Remote projects use the normal Explorer, file editor, Go to File, project search, Changes, Git history, branch, and worktree views. File creation and editing, diffs, staging, commits, pushes, and pull request creation operate on the host checkout. In #432.
+- Remote conversations support file and image attachments, saved drafts, Plan mode, and Build from a plan. The release now includes verified host packages for Windows, macOS, and Linux on x64 and arm64. In #432.
+- The Help menu links to the MonoCode website, repository, bug report, and feature request pages.
+
+### Changed
+
+- App startup overlaps workspace loading with optional UI loading. Streaming harness updates are batched, and transcript pools avoid unnecessary rebuilding and session saves.
+- Automation cards have a larger interactive target, a separate enable toggle, and an accessible label.
+- Release publishing waits for host packages before updating the in-app updater feed and can safely resume an interrupted draft release. In #528.
+- Windows integration tests allow more time for PowerShell and cleanup operations and run test files without parallelism.
+
+### Fixed
+
+- Transcript scrolling holds the reader's place when earlier turns resize, does not jump back to the bottom while the reader scrolls up, and clears scroll observer state when turns are removed.
+- Generated Git commit messages can be canceled; canceled or superseded results no longer populate Git dialogs.
+
+## [0.4.3] - 2026-09-28
+
+### Fixed
+
+- Read-only Git checks no longer resolve the login-shell path, which could delay project stats and session saves after a Finder launch. Commits, sync, fetch, and clone still use that path when needed.
+- The hidden project rail suspends its Git-stat listeners and reuses recent stats when reopened.
+- Transcript updates no longer make the composer mascot measure layout on every animation frame.
+- Startup and transcript saves no longer scan or reparse saved sessions for orphaned generated images; deleting a session still removes its referenced image files.
+
+## [0.4.1] - 2026-09-28
+
+### Fixed
+
+- Reopening the project rail with Command/Ctrl+B keeps its project list and scroll position mounted, avoiding repeated Git-stat subscriptions and the delay of rebuilding the rail.
+- The macOS Toggle Sidebar menu command affects only the focused window.
+
+## [0.4.0] - 2026-09-28
+
+### Added
+
+- Operator can create and edit notes with `notes.write`; open Notes views refresh after an update.
+- Operator can list and create project worktrees, start sessions in an existing checkout, and place new sessions in panes to the right or below another session.
+- The project folder picker can open several folders at once, preserving their selection order and activating folders that are already open. In #443.
+- Pasting a screenshot into the main or Quick composer attaches the image. Pasting a file or folder copied in a file manager attaches it to the message, including on Wayland. In #479.
+- Codex-generated images appear in transcripts and persist across restarts, including images produced by subagents and BTW side conversations. Image assets are cleaned up when their messages or sessions are removed. In #399.
+- Settings → Providers and the footer account picker show each Claude and Codex account's readiness and usage. The usage view suggests an account with more headroom when the current one is low or exhausted. In #492.
+- Pi sessions show Anthropic or OpenAI Codex subscription usage when the configured provider supports it. In #431.
+- Fedora and Enterprise Linux 10 users can install a native `.rpm` from GitHub Releases; CI builds and checks the package on Fedora and AlmaLinux. In #362.
+- `Cmd/Ctrl+Shift+C` copies the selected Explorer path. The shortcut also works with non-Latin keyboard layouts and the focused project root. In #404.
+- Completed plan and orchestrator turns have distinct animated celebrations, with their intent preserved in saved transcripts.
+
+### Changed
+
+- Provider usage is cached across Settings and footer views and refreshed on explicit request or appropriate polling intervals, avoiding duplicate CLI probes and unnecessary reloads.
+- Project, session, editor, and transcript searches bound their work and cancel superseded requests. Session search no longer holds the write connection while scanning, and truncated results are indicated in the UI. In #462.
+- Release workflow checkouts no longer persist GitHub credentials.
+
+### Fixed
+
+- Claude sessions keep the full native IDs of versioned models, including models missing from the live catalog, instead of selecting another generation or passing an invalid model name. In #488.
+- The project picker keeps the project name visible when its parent path is long. In #507.
+- `Cmd+K` clears the terminal when App: Search has been disabled or assigned another shortcut. In #491.
+- Git commits launched from Finder or the Dock can find `gpg`, hooks, Git LFS, and credential helpers through the user's shell path. In #484.
+- Codex free-plan monthly usage windows are recognized alongside session and weekly windows.
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
@@ -1070,7 +1137,12 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/hardbeat920/monocode/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/hardbeat920/monocode/compare/v0.4.2...v0.4.3
+[0.4.1]: https://github.com/hardbeat920/monocode/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/hardbeat920/monocode/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/hardbeat920/monocode/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0
 [0.1.56]: https://github.com/hardbeat920/monocode/compare/v0.1.55...v0.1.56
 [0.1.55]: https://github.com/hardbeat920/monocode/compare/v0.1.54...v0.1.55

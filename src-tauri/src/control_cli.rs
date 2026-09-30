@@ -82,13 +82,15 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 11] = [
+const APP_ACTIONS: [&str; 13] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
     "sessions.start",
+    "worktrees.list",
+    "worktrees.create",
     "folders.list",
     "folders.move",
     "notes.list",
@@ -116,15 +118,31 @@ Actions:
                   Reuse --request-id on retries.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
-                  "workspaceMode":"current","draft":false}
-                  Create a tab with the prompt. Set draft:true to save it
-                  unsent; no agent turn runs. Otherwise the turn is submitted.
+                  "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
+                  "placement":"right",
+                  "besideSessionId":"<visible session ID>"}
+                  Create a tab with the prompt, or set placement to right or
+                  down to split a visible session pane. A split defaults to the
+                  calling session; besideSessionId chooses another visible
+                  session in this project, including one just created. Set
+                  draft:true to save the prompt unsent; no agent turn runs.
+                  Otherwise the turn is submitted.
                   Returns after creation/acceptance, not agent completion;
                   use its ID with folders.move immediately. Optional model,
                   effort, modelSettings, permission mode and workspace choice
-                  use composer values. Omit runtimeMode to inherit this
+                  use composer values. Set worktreeCwd to a path from
+                  worktrees.list to choose a specific existing checkout, or
+                  workspaceMode:"worktree" and optional worktreeBase to make
+                  a new worktree with an automatic branch name. Omit
+                  runtimeMode to inherit this
                   session's permission mode; set it to override. Run
                   models.list for allowed IDs. cwd is your project; no attachments.
+  worktrees.list {}  Working copies in this project, with paths and branches.
+  worktrees.create {"branch":"feature/name","base":"HEAD","existing":false}
+                  Create a worktree on a named new branch from base (a branch
+                  or ref). Set existing:true and omit base to use an existing
+                  local branch. Pass the returned path as sessions.start's
+                  worktreeCwd to start there.
   folders.list   {}  Folders in your current project.
   folders.move   {"sessionId":"...","folderId":"..."}
                   Or use "newFolderName":"Research" to create a folder.
@@ -522,6 +540,13 @@ mod tests {
         );
         assert!(app_help().contains("notes.read"));
         assert!(app_help().contains("notes.write"));
+        for action in ["worktrees.list", "worktrees.create"] {
+            assert!(matches!(
+                parse_args_for(&args(&[action]), true),
+                Ok(Parsed::Call(_, _, _))
+            ));
+            assert!(app_help().contains(action));
+        }
     }
 
     #[test]

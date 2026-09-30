@@ -45,47 +45,8 @@ export type ProviderRateLimits = {
 export const SESSION_WINDOW_MINUTES = 300;
 export const WEEKLY_WINDOW_MINUTES = 10_080;
 export const MONTHLY_WINDOW_MINUTES = 43_200;
-
-/** Background poll while the window is visible. */
-export const RATE_LIMIT_POLL_MS = 15 * 60 * 1000;
-/** Skip focus/restore and timer refetches until the snapshot is this old. */
-export const RATE_LIMIT_MIN_REFETCH_MS = 5 * 60 * 1000;
-
-export function isRateLimitSnapshotStale(
-  limits: ProviderRateLimits | null | undefined,
-  now: number,
-  minAgeMs = RATE_LIMIT_MIN_REFETCH_MS,
-): boolean {
-  if (!limits || limits.status === "idle") return true;
-  if (limits.status === "unavailable") return false;
-  if (limits.updatedAt <= 0) return true;
-  return now - limits.updatedAt >= minAgeMs;
-}
-
-export function shouldFetchProvider(
-  limits: ProviderRateLimits,
-  input: { force?: boolean; visible: boolean; now?: number },
-): boolean {
-  if (input.force) return true;
-  if (!input.visible) return false;
-  if (limits.status === "unavailable") return false;
-  return isRateLimitSnapshotStale(limits, input.now ?? Date.now());
-}
-
-export function shouldFetchRateLimits(input: {
-  force?: boolean;
-  visible: boolean;
-  claude: ProviderRateLimits;
-  codex: ProviderRateLimits;
-  opencode?: ProviderRateLimits;
-  now?: number;
-}): boolean {
-  return (
-    shouldFetchProvider(input.claude, input) ||
-    shouldFetchProvider(input.codex, input) ||
-    (input.opencode ? shouldFetchProvider(input.opencode, input) : false)
-  );
-}
+export const RATE_LIMIT_POLL_MS = 15 * 60_000;
+export const RATE_LIMIT_MIN_REFETCH_MS = 5 * 60_000;
 
 const WINDOW_DURATION_TOLERANCE_MINUTES = 1;
 
@@ -110,7 +71,10 @@ export function fetchingRateLimits(
 ): ProviderRateLimits {
   if (
     previous &&
-    (previous.session || previous.weekly || previous.monthly || previous.resetCredits)
+    (previous.session ||
+      previous.weekly ||
+      previous.monthly ||
+      previous.resetCredits)
   ) {
     return { ...previous, status: "fetching" };
   }
@@ -149,7 +113,10 @@ export function errorRateLimits(
 ): ProviderRateLimits {
   if (
     previous &&
-    (previous.session || previous.weekly || previous.monthly || previous.resetCredits)
+    (previous.session ||
+      previous.weekly ||
+      previous.monthly ||
+      previous.resetCredits)
   ) {
     return {
       ...previous,
@@ -253,7 +220,8 @@ export function exhaustedWindowResetAt(
 ): number | null {
   let latest: number | null = null;
   for (const window of [limits.session, limits.weekly, limits.monthly]) {
-    if (!window || window.usedPercent < 100 || window.resetsAt == null) continue;
+    if (!window || window.usedPercent < 100 || window.resetsAt == null)
+      continue;
     latest = Math.max(latest ?? 0, window.resetsAt);
   }
   return latest;
@@ -345,7 +313,7 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
-    monthly: null,
+    monthly: mapCodexSnapshot(classified.monthly, MONTHLY_WINDOW_MINUTES),
     resetCredits: parseResetCredits(
       rec?.rateLimitResetCredits ?? rec?.rate_limit_reset_credits,
     ),
@@ -464,14 +432,17 @@ function classifyCodexWindows(input: {
 }): {
   session: CodexWindowSnapshot | null;
   weekly: CodexWindowSnapshot | null;
+  monthly: CodexWindowSnapshot | null;
 } {
   let session: CodexWindowSnapshot | null = null;
   let weekly: CodexWindowSnapshot | null = null;
+  let monthly: CodexWindowSnapshot | null = null;
   for (const window of [input.primary, input.secondary]) {
     if (!window) continue;
     const kind = classifyWindowDuration(window.windowDurationMins);
     if (kind === "session" && !session) session = window;
     else if (kind === "weekly" && !weekly) weekly = window;
+    else if (kind === "monthly" && !monthly) monthly = window;
   }
   if (
     !session &&
@@ -487,12 +458,12 @@ function classifyCodexWindows(input: {
   ) {
     weekly = input.secondary;
   }
-  return { session, weekly };
+  return { session, weekly, monthly };
 }
 
 function classifyWindowDuration(
   duration: number | null,
-): "session" | "weekly" | null {
+): "session" | "weekly" | "monthly" | null {
   if (duration == null || !Number.isFinite(duration)) return null;
   if (
     Math.abs(duration - SESSION_WINDOW_MINUTES) <=
@@ -505,6 +476,13 @@ function classifyWindowDuration(
     WINDOW_DURATION_TOLERANCE_MINUTES
   ) {
     return "weekly";
+  }
+  // Free plans get a single 30-day window.
+  if (
+    Math.abs(duration - MONTHLY_WINDOW_MINUTES) <=
+    WINDOW_DURATION_TOLERANCE_MINUTES
+  ) {
+    return "monthly";
   }
   return null;
 }

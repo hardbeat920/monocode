@@ -201,6 +201,7 @@ export function consumeBtwPrefix(text: string): string | null {
 const SNAPSHOT_ROLES: Record<Block["role"], true | undefined> = {
   user: true,
   assistant: true,
+  image: true,
   tasks: true,
   plan: true,
   tool: true,
@@ -217,6 +218,7 @@ const PRIVATE_ROLES: Record<Block["role"], true | undefined> = {
   handoff: true,
   user: undefined,
   assistant: undefined,
+  image: undefined,
   tasks: undefined,
   plan: undefined,
   tool: undefined,
@@ -303,6 +305,15 @@ export function serializeBtwBlock(block: Block, cwd?: string): string {
   const body = normalizeText(block.text);
   if (block.role === "tool") {
     return [...toolSummary(block, cwd), ...attachments]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (block.role === "image") {
+    const caption = [block.image?.name, block.image?.alt]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter(Boolean)
+      .join(" — ");
+    return [`Image: ${caption || body}`, ...attachments]
       .filter(Boolean)
       .join("\n");
   }
