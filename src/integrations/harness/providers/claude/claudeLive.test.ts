@@ -697,6 +697,41 @@ describe("claude task tools", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_2" });
   }
 
+  it("rehydrates the bound conversation's panel past a later conversation's panel", async () => {
+    const restored = await conversationWithTasks();
+    const lists = [
+      ...restored.blocks.flatMap((block) =>
+        block.taskList ? [block.taskList] : [],
+      ),
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "Other conversation", status: "pending" as const }],
+      },
+    ];
+
+    await stopClaudeSession("s1");
+    __claudeTestReset();
+    bindClaudeSession("s1", "sess_1", "/repo");
+    restoreClaudeTaskLists("s1", lists);
+
+    const events: HarnessEvent[] = [];
+    const { turn } = await restartedTurn(events);
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "2", status: "completed" },
+      "Updated task #2 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(lastTaskItems(events)).toEqual([
+      { id: "1", text: "Write tests", status: "pending" },
+      { id: "2", text: "Ship it", status: "completed" },
+    ]);
+  });
+
   it("does not carry tasks to another conversation bound to the same thread", async () => {
     const restored = await conversationWithTasks();
     expect(
