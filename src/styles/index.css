@@ -128,6 +128,8 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 /* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
@@ -163,10 +165,12 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
+/* Tint-less transparent rather than `transparent`, which browsers interpolate
+   through black and would dim the page on the way in and out of glass. */
 html.has-native-glass:not(.theme-light),
 html.has-native-glass:not(.theme-light) body,
 html.has-native-glass:not(.theme-light) #root {
-  background: transparent;
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 .reorder-item {
@@ -223,6 +227,14 @@ html.has-native-glass:not(.theme-light) #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .sidebar-glass,
+  .body-glass {
+    transition: none;
+  }
+
   .tab-motion,
   .tab-motion > button {
     transition: none;
@@ -266,6 +278,8 @@ html.has-native-glass:not(.theme-light) #root {
 
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 html.theme-light .sidebar-glass {
@@ -292,6 +306,8 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
 
 .body-glass {
   background: var(--color-background-base);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 .chat-pane-background::before {

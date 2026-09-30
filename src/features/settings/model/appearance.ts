@@ -33,6 +33,7 @@ const CHANGES_VIEW_KEY = "monocode.changesView";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
+let glassFadeTimer: number | undefined;
 
 export const CHAT_BACKGROUND_PATH_CHANGE_EVENT =
   "monocode:chat-background-path-change";
@@ -382,20 +383,45 @@ function opaqueWindowBackground(): Rgb {
   );
 }
 
+/** How long the page takes to reach opaque, from the same token the CSS uses. */
+function glassFadeMs(): number {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue("--motion-feedback-duration")
+    .trim();
+  const milliseconds = parseFloat(value) * (value.endsWith("ms") ? 1 : 1000);
+  return Number.isFinite(milliseconds) ? Math.max(0, milliseconds) : 0;
+}
+
 /**
  * `has-native-glass` follows the window, not the platform: Linux can turn glass
- * off in dark mode too. It flips only once the window has settled, so neither
- * side is briefly visible through the other.
+ * off in dark mode too. Whichever side moves second has to wait for the other,
+ * or one of them shows through the gap - so entering glass settles the window
+ * first, and leaving it fades the page first.
  */
 export function syncNativeGlass(scheme: ColorScheme) {
   const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
   const root = document.documentElement;
-  void invoke("set_window_glass_enabled", {
-    enabled,
-    background: opaqueWindowBackground(),
-  })
-    .catch(() => {})
-    .finally(() => root.classList.toggle("has-native-glass", enabled));
+  const setWindow = () =>
+    invoke("set_window_glass_enabled", {
+      enabled,
+      background: opaqueWindowBackground(),
+    }).catch(() => {});
+
+  if (glassFadeTimer !== undefined) {
+    window.clearTimeout(glassFadeTimer);
+    glassFadeTimer = undefined;
+  }
+
+  if (enabled) {
+    void setWindow().finally(() => root.classList.add("has-native-glass"));
+    return;
+  }
+
+  root.classList.remove("has-native-glass");
+  glassFadeTimer = window.setTimeout(() => {
+    glassFadeTimer = undefined;
+    void setWindow();
+  }, glassFadeMs());
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
