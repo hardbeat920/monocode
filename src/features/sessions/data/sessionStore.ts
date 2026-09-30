@@ -390,7 +390,9 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     const saved = backfillCodexShellCommands(session.blocks);
     if (saved !== session.blocks) {
       session.blocks = saved;
-      await upsertSession(session);
+      // A failed write must not cost the reader the session. The repair stays
+      // in memory and the next load retries it.
+      await upsertSession(session).catch(() => undefined);
     }
     const missing = unrecoverableShellPlaceholderIds(session.blocks);
     if (session.providerSessionId && missing.length) {
