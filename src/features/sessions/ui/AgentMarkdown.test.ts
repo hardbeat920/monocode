@@ -171,3 +171,61 @@ describe("AgentMarkdown note images", () => {
     expect(markup).toContain('alt="Diagram"');
   });
 });
+
+describe("AgentMarkdown math", () => {
+  const render = (text: string, streaming = false) =>
+    renderToStaticMarkup(createElement(AgentMarkdown, { text, streaming }));
+
+  it("typesets inline $...$ math with KaTeX", () => {
+    const markup = render("Energy is $E = mc^2$ here.");
+
+    expect(markup).toContain('class="katex"');
+    expect(markup).not.toContain("$E = mc^2$");
+  });
+
+  it("typesets $$...$$ blocks as display math", () => {
+    const markup = render("$$\n\\int_0^1 x^2\\,dx = \\frac{1}{3}\n$$");
+
+    expect(markup).toContain("katex-display");
+    expect(markup).toContain("<math");
+  });
+
+  it("typesets math while a reply is still streaming", () => {
+    const markup = render("So $a^2 + b^2 = c^2$ holds.", true);
+
+    expect(markup).toContain('class="katex"');
+  });
+
+  it("leaves dollar amounts as plain text", () => {
+    const markup = render("It costs $5 and $10 per seat.");
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain("$5 and $10");
+  });
+
+  it("keeps markdown formatting between two dollar amounts", () => {
+    const markup = render(
+      "Pay $5 for `npm ci` and **fast** builds, $10 otherwise.",
+    );
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain(">npm ci</code>");
+    expect(markup).toContain('data-streamdown="strong">fast<');
+    expect(markup).not.toContain("**");
+    expect(markup).toContain("$5 for ");
+  });
+
+  it("does not typeset a math span followed by a digit", () => {
+    const markup = render("Between $x$5 and more.");
+
+    expect(markup).not.toContain("katex");
+  });
+
+  it("shows oversized math as code instead of typesetting it", () => {
+    const huge = "x".repeat(6000);
+    const markup = render(`Inline $${huge}$ and\n\n$$\n${huge}\n$$`);
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain(huge);
+  });
+});
