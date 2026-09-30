@@ -94,6 +94,17 @@ it("refreshes an open note after an Operator write", async () => {
   expect(container.textContent).toContain("New text");
 });
 
+// https://github.com/hardbeat920/monocode/issues/591
+it("keeps a note's consecutive lines on their own lines", async () => {
+  stored = { ...stored, body: "> first line\n> second line\n> third line" };
+  await render();
+
+  const preview = container.querySelector<HTMLElement>('[data-streamdown="blockquote"]')!;
+  expect(preview.querySelector("p")?.innerHTML).toBe(
+    "first line<br>second line<br>third line",
+  );
+});
+
 it("uses the searchable rail project picker when moving a note", async () => {
   const projects = [
     ...recents,
