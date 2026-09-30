@@ -30,7 +30,7 @@ pub struct AzureDevOpsStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct AzureDevOpsConfig {
+pub(crate) struct AzureDevOpsConfig {
     url: String,
     token: String,
 }
@@ -286,8 +286,9 @@ pub async fn azure_devops_mr_diff(
 }
 
 /// Create a pull request on Azure Repos and return its web URL.
-/// Returns `Ok(None)` when the checkout has no Azure DevOps remote, so
-/// callers can fall back to the GitHub flow.
+/// Returns `Ok(None)` when the push remote is not an Azure DevOps remote or
+/// no Azure DevOps configuration matches, so callers fall back to the
+/// GitHub flow.
 pub(crate) fn try_create_pull_request(
     app: &AppHandle,
     root: &Path,
@@ -311,7 +312,10 @@ pub(crate) fn try_create_pull_request(
     if base == head {
         return Err("Pull request base and head branches must differ".into());
     }
-    let config = require_config(app)?;
+    // No stored PAT: keep the GitHub CLI fallback instead of failing.
+    let Some(config) = read_config(app)? else {
+        return Ok(None);
+    };
     if !config.url.trim().eq_ignore_ascii_case(&org_key) {
         return Err(format!(
             "Azure DevOps is connected to {} but this repository belongs to {org_key}. Update the organization in Settings.",
@@ -351,12 +355,14 @@ pub(crate) fn try_create_pull_request(
     }
 }
 
-/// Azure DevOps remote for the branch's effective push destination.
-/// Uses the configured upstream remote when one exists, `origin` otherwise.
+/// Azure DevOps coordinates of the branch's push destination, resolved with
+/// the same remote `git push` uses (upstream remote, else default remote).
 /// Returns `Ok(None)` when that push remote is not an Azure DevOps remote,
 /// so callers fall back to the GitHub CLI path.
 fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, String> {
-    let remote = effective_push_remote(root).unwrap_or_else(|| "origin".to_string());
+    let Some(remote) = crate::fs::git_push_remote_name(root) else {
+        return Ok(None);
+    };
     let url = git_remote_url(root, &remote)?;
     let Some(parsed) = parse_azure_remote(&url) else {
         return Ok(None);
@@ -367,26 +373,8 @@ fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, Str
     Ok(Some(parsed))
 }
 
-/// Remote that `git push` would use: the upstream's remote, else `origin`.
-fn effective_push_remote(root: &Path) -> Option<String> {
-    let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
-    let output = cmd
-        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let upstream = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    upstream
-        .split('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-}
-
+/// URL of a git remote. Unknown remotes yield an empty string so the caller
+/// treats them as non-Azure instead of failing.
 fn git_remote_url(root: &Path, remote: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
     crate::hide_window_console(&mut cmd);
@@ -2008,15 +1996,23 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
                     repo,
                 ));
             }
-            // On-premises scp-style SSH: user@host:{collection/...}/{project}/_git/{repo}
-            let host = left
+            // On-premises scp-style SSH: user@host[:port]:{collection/...}/{project}/_git/{repo}
+            let mut host = left
                 .rsplit('@')
                 .next()
                 .unwrap_or(left)
                 .trim()
                 .to_ascii_lowercase();
+            let mut scp_path = path;
+            // A leading numeric segment is the SSH port (host:port/path).
+            if let Some((maybe_port, rest)) = scp_path.split_once('/') {
+                if !maybe_port.is_empty() && maybe_port.bytes().all(|b| b.is_ascii_digit()) {
+                    host = format!("{host}:{maybe_port}");
+                    scp_path = rest;
+                }
+            }
             if !host.is_empty() {
-                let segments: Vec<String> = path
+                let segments: Vec<String> = scp_path
                     .split('/')
                     .filter(|part| !part.is_empty())
                     .map(percent_decode)
@@ -2158,7 +2154,7 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("azure-devops-config.json"))
 }
 
-fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
+pub(crate) fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
     let path = config_path(app)?;
     match fs::read_to_string(path) {
         Ok(raw) => {
@@ -2303,6 +2299,32 @@ mod tests {
             project_repo_from_remote("https://dev.azure.com/other/platform/_git/web", org)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn parses_on_premises_scp_style_ssh_remotes() {
+        // user@host:{collection}/{project}/_git/{repo}, no scheme.
+        assert_eq!(
+            parse_azure_remote("git@tfs.contoso.com:DefaultCollection/platform/_git/web"),
+            Some((
+                "https://tfs.contoso.com/defaultcollection".to_string(),
+                "platform".to_string(),
+                "web".to_string(),
+            ))
+        );
+        assert_eq!(
+            parse_azure_remote(
+                "deploy@tfs.contoso.com:8080/tfs/DefaultCollection/platform/_git/web.git"
+            ),
+            Some((
+                "https://tfs.contoso.com:8080/tfs/defaultcollection".to_string(),
+                "platform".to_string(),
+                "web".to_string(),
+            ))
+        );
+        // Without a collection/project/_git path there is nothing to resolve.
+        assert!(parse_azure_remote("git@tfs.contoso.com:platform/web.git").is_none());
+        assert!(parse_azure_remote("git@github.com:acme/web.git").is_none());
     }
 
     #[test]

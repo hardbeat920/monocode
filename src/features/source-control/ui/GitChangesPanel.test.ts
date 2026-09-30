@@ -50,6 +50,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
 import { GitChangesPanel } from "./GitChangesPanel";
 import { gitDiffIndex, gitPrCreate, gitPull, gitPush, gitRangeContext } from "../../../platform/tauri/fs";
 import { generatePrContent } from "../../../integrations/harness";
+import { recordInboxSelfActivity } from "../../inbox/model/inboxSelfActivity";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { GitDiffIndex } from "../../../platform/tauri/fs";
 
@@ -203,5 +204,39 @@ describe("GitChangesPanel remote pull request", () => {
       "feature/pull",
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
+  });
+
+  it("records Azure self-activity with the azuredevops provider", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ remote: "origin", upstream: "origin/feature/pull", ahead: 1, aheadOfDefault: 1 }),
+    );
+    vi.mocked(generatePrContent).mockResolvedValue({
+      title: "Add login",
+      body: "Details",
+      base: "main",
+      head: "feature/pull",
+    });
+    vi.mocked(gitPrCreate).mockResolvedValue(
+      "https://dev.azure.com/acme/shop/_git/web/pullrequest/12",
+    );
+    await renderPanel("/repo");
+
+    const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "Create PR");
+    expect(button?.disabled).toBe(false);
+    await act(async () => {
+      button!.click();
+      await Promise.resolve();
+    });
+
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://dev.azure.com/acme/shop/_git/web/pullrequest/12",
+    );
+    expect(recordInboxSelfActivity).toHaveBeenCalledWith({
+      provider: "azuredevops",
+      kind: "pr",
+      number: 12,
+      projectPath: "/repo",
+    });
   });
 });
