@@ -372,6 +372,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       "account sign in login rename remove delete credentials profile usage limit quota exhausted",
   },
   {
+    id: "show-remaining-usage",
+    section: "providers",
+    label: "Show remaining usage",
+    keywords: "usage limit meter bar left used quota percent",
+  },
+  {
+    id: "mask-emails",
+    section: "providers",
+    label: "Mask account emails",
+    keywords: "email privacy blur hide screenshot account",
+  },
+  {
     id: "claude-hooks",
     section: "providers",
     label: "Claude Code hooks",

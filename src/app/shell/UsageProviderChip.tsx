@@ -52,6 +52,7 @@ import {
   type ProviderAccountIdentity,
 } from "../../features/providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../features/providers/ui/ProviderAccountSubtitle";
+import { useShowRemainingUsage } from "../../features/settings/model/displayPrefs";
 
 type UsageWindowEntry = {
   key: "session" | "weekly" | "monthly";
@@ -759,8 +760,10 @@ function UsageWindowCard({
   window: RateLimitWindow;
   now: number;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
+  const shown = showRemaining ? remaining : pct;
   const title =
     kind === "session"
       ? "5-hour limit"
@@ -780,14 +783,14 @@ function UsageWindowCard({
       <div
         className="mt-2 h-1.5 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} remaining`}
+        aria-label={`${title} ${showRemaining ? "remaining" : "used"}`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(remaining)}
+        aria-valuenow={Math.round(shown)}
       >
         <span
           className={`block h-full rounded-full ${barClass(pct)}`}
-          style={{ width: `${remaining}%` }}
+          style={{ width: `${shown}%` }}
         />
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] leading-4 text-content/40">
@@ -1146,6 +1149,7 @@ function emptyUsageLabel(limits: ProviderRateLimits): string {
 }
 
 function MiniBar({ usedPct }: { usedPct: number }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(usedPct);
   return (
     <span
@@ -1154,7 +1158,7 @@ function MiniBar({ usedPct }: { usedPct: number }) {
     >
       <span
         className={`block h-full rounded-full ${barClass(pct)}`}
-        style={{ width: `${100 - pct}%` }}
+        style={{ width: `${showRemaining ? 100 - pct : pct}%` }}
       />
     </span>
   );

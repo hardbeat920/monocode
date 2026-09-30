@@ -1,8 +1,20 @@
 import { useState } from "react";
+import { useMaskEmails } from "../../features/settings/model/displayPrefs";
 
-/** Keep account emails private in screenshots until explicitly revealed. */
+/**
+ * With email masking on, keep account emails private in screenshots until
+ * explicitly revealed; otherwise show them as plain text.
+ */
 export function PrivateEmail({ email }: { email: string }) {
+  const masked = useMaskEmails();
   const [revealed, setRevealed] = useState(false);
+  if (!masked) {
+    return (
+      <span className="min-w-0 truncate" title={email}>
+        {email}
+      </span>
+    );
+  }
   const action = revealed ? "Hide email" : "Reveal email";
 
   return (
