@@ -91,21 +91,38 @@ fn menu_item(
 
 pub fn dispatch(app: &AppHandle, id: &str) {
     match id {
+        "help_website" => {
+            let _ = open::that("https://usemono.dev");
+        }
+        "help_github" => {
+            let _ = open::that("https://github.com/hardbeat920/monocode");
+        }
+        "help_report_bug" => {
+            let _ = open::that(
+                "https://github.com/hardbeat920/monocode/issues/new?template=bug_report.yml",
+            );
+        }
+        "help_request_feature" => {
+            let _ = open::that(
+                "https://github.com/hardbeat920/monocode/issues/new?template=feature_request.yml",
+            );
+        }
         "new_window" => {
             let _ = crate::window::open_new_window(app);
         }
         "quit" => crate::window::request_quit(app),
         "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
         | "forward_tab" | "split_right" | "split_down" | "focus_left" | "focus_right"
-        | "focus_up" | "focus_down" | "toggle_sidebar" | "sidebar_opacity" | "open_project"
-        | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
-        | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" => {
+        | "focus_up" | "focus_down" | "sidebar_opacity" | "open_project" | "go_to_file"
+        | "open_search" | "open_inbox" | "open_notes" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" | "toggle_terminal" | "open_model_picker"
+        | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
         // Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
         // make every window act on a single menu click.
-        "toggle_session_sidebar"
+        "toggle_sidebar"
+        | "toggle_session_sidebar"
         | "zoom_in"
         | "zoom_out"
         | "zoom_reset"
@@ -470,7 +487,19 @@ fn build(
             .minimize()
             .maximize()
             .build()?;
-        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu]);
+        let website = MenuItemBuilder::with_id("help_website", "MonoCode Website").build(app)?;
+        let github = MenuItemBuilder::with_id("help_github", "View on GitHub").build(app)?;
+        let report_bug = MenuItemBuilder::with_id("help_report_bug", "Report a Bug…").build(app)?;
+        let request_feature =
+            MenuItemBuilder::with_id("help_request_feature", "Request a Feature…").build(app)?;
+        let help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, "Help")
+            .item(&website)
+            .item(&github)
+            .separator()
+            .item(&report_bug)
+            .item(&request_feature)
+            .build()?;
+        return Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window_menu, &help]);
     }
 
     #[allow(unreachable_code)]

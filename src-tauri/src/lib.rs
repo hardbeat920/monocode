@@ -31,9 +31,12 @@ mod pty;
 mod quick_composer;
 mod rate_limits;
 mod reminders;
+mod remote;
+mod remote_ssh;
 mod search;
 mod session_store;
 mod skills;
+pub mod ssh_askpass;
 #[cfg(target_os = "windows")]
 mod tray;
 mod window;
@@ -221,11 +224,10 @@ pub fn run() {
         )
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
-            // Start loading the login-shell PATH before the first git call needs it.
-            std::thread::spawn(harness::gui_search_path);
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
@@ -254,6 +256,15 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            remote::remote_machines,
+            remote::remote_connect,
+            remote::remote_disconnect,
+            remote::remote_request,
+            remote::remote_ssh_begin,
+            remote::remote_ssh_reconnect,
+            remote::remote_ssh_poll,
+            remote::remote_ssh_answer,
+            remote::remote_ssh_cancel,
             control::control_enable,
             control::control_disable,
             control::control_reply,
@@ -392,6 +403,8 @@ pub fn run() {
             fs::read_file_base64,
             fs::read_binary_file,
             fs::write_attachment,
+            fs::save_generated_image,
+            fs::delete_generated_images,
             fs::read_text_file,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
@@ -563,6 +576,7 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
+            handle.state::<remote::RemoteConnections>().shutdown();
             reap_harness_children(handle);
         }
         _ => {}

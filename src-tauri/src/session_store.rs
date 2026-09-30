@@ -73,9 +73,23 @@ impl SessionStore {
 }
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let store = SessionStore::open(data_dir.join("monocode.db"))?;
-    app.manage(store);
+    init_with(
+        || app.path().app_data_dir().map_err(|e| e.to_string()),
+        SessionStore::open,
+        |store| {
+            app.manage(store);
+        },
+    )
+}
+
+// Keep the complete startup path here so the transcript-read test covers it.
+fn init_with(
+    data_dir: impl FnOnce() -> Result<PathBuf, String>,
+    open: impl FnOnce(PathBuf) -> Result<SessionStore, String>,
+    manage: impl FnOnce(SessionStore),
+) -> Result<(), String> {
+    let store = open(data_dir()?.join("monocode.db"))?;
+    manage(store);
     Ok(())
 }
 
@@ -217,7 +231,24 @@ pub fn session_upsert(
     }
 
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    upsert_session(&conn, &session).map_err(|e| e.to_string())
+    let summary = upsert_session(&conn, &session).map_err(|e| e.to_string())?;
+    Ok(summary)
+}
+
+fn generated_image_paths(blocks: &Value) -> Vec<String> {
+    blocks
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("role").and_then(Value::as_str) == Some("image"))
+        .filter_map(|block| {
+            block
+                .get("image")
+                .and_then(|image| image.get("path"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 #[tauri::command(async)]
@@ -457,11 +488,23 @@ pub fn session_delete(
     app: AppHandle,
     store: State<'_, SessionStore>,
     session_id: String,
+    mut image_paths: Vec<String>,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    let persisted_paths = get_session(&conn, &session_id)
+        .ok()
+        .flatten()
+        .map(|record| generated_image_paths(&record.blocks))
+        .unwrap_or_default();
+    image_paths.extend(persisted_paths);
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
     drop(conn);
+    if !image_paths.is_empty() {
+        if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {
+            eprintln!("Generated image cleanup will need a retry: {error}");
+        }
+    }
     let _ = app.emit(crate::reminders::CHANGED, ());
     Ok(())
 }
@@ -1417,7 +1460,10 @@ fn block_hits(blocks: &Value, needle: &str) -> Vec<(String, String, String)> {
             .get("role")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(role, "user" | "assistant" | "tool" | "tasks" | "plan") {
+        if !matches!(
+            role,
+            "user" | "assistant" | "tool" | "tasks" | "plan" | "image"
+        ) {
             continue;
         }
         let id = block
@@ -1442,6 +1488,10 @@ fn block_hits(blocks: &Value, needle: &str) -> Vec<(String, String, String)> {
 fn block_texts(block: &Value) -> Vec<String> {
     let mut texts = Vec::new();
     push_text(&mut texts, block.get("text"));
+    if let Some(image) = block.get("image") {
+        push_text(&mut texts, image.get("name"));
+        push_text(&mut texts, image.get("alt"));
+    }
     if let Some(tool) = block.get("tool") {
         push_text(&mut texts, tool.get("title"));
         push_text(&mut texts, tool.get("detail"));
@@ -1929,7 +1979,68 @@ pub(crate) fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::hooks::{AuthAction, Authorization};
     use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn startup_does_not_read_saved_transcripts() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "monocode-startup-transcripts-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = data_dir.join("monocode.db");
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            conn.execute(
+                "INSERT INTO sessions (
+                   id, cwd, harness, model, runtime_mode, title,
+                   blocks_json, created_at, updated_at
+                 ) VALUES ('large', '/tmp', 'codex', 'test', 'supervised', 'Large', ?1, 1, 1)",
+                ["x".repeat(8_000_000)],
+            )
+            .unwrap();
+        }
+
+        let transcript_reads = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::clone(&transcript_reads);
+        let mut managed = None;
+        init_with(
+            || Ok(data_dir.clone()),
+            |requested_path| {
+                assert_eq!(requested_path, path);
+                let store = SessionStore::open(requested_path)?;
+                store
+                    .lock_conn()?
+                    .authorizer(Some(move |context: rusqlite::hooks::AuthContext<'_>| {
+                        if matches!(
+                            context.action,
+                            AuthAction::Read {
+                                table_name: "sessions",
+                                column_name: "blocks_json"
+                            }
+                        ) {
+                            reads.fetch_add(1, Ordering::Relaxed);
+                            Authorization::Deny
+                        } else {
+                            Authorization::Allow
+                        }
+                    }))
+                    .map_err(|error| error.to_string())?;
+                Ok(store)
+            },
+            |store| managed = Some(store),
+        )
+        .unwrap();
+        assert_eq!(transcript_reads.load(Ordering::Relaxed), 0);
+        drop(managed);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 
     fn sample(id: &str, cwd: &str, title: &str) -> SessionUpsert {
         SessionUpsert {

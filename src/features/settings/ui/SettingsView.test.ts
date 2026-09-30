@@ -16,6 +16,10 @@ import {
   saveProviderAccount,
 } from "../../providers/model/providerAccounts";
 import {
+  clearCachedRateLimits,
+  setCachedRateLimits,
+} from "../../providers/model/rateLimitsCache";
+import {
   HARNESSES,
   HARNESS_TITLE,
 } from "../../sessions/model/session";
@@ -101,6 +105,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  clearCachedRateLimits();
   localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -108,6 +113,32 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("shows account usage bars as remaining capacity", async () => {
+    setCachedRateLimits("claude", "default", {
+      provider: "claude",
+      session: {
+        usedPercent: 23,
+        windowMinutes: 300,
+        resetsAt: Date.now() + 3_600_000,
+      },
+      weekly: null,
+      monthly: null,
+      resetCredits: null,
+      updatedAt: Date.now(),
+      error: null,
+      status: "ok",
+    });
+
+    await render("providers");
+
+    const bar = container.querySelector('[aria-label="5h limit remaining"]');
+    expect(bar?.getAttribute("aria-valuenow")).toBe("77");
+    expect(bar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 77%;",
+    );
+    expect(bar?.parentElement?.textContent).toContain("77% left");
+  });
+
   it("shows background effect choices above scope when artwork is available", async () => {
     localStorage.setItem(
       "monocode.chatBackgroundPath",
@@ -399,7 +430,7 @@ describe("settings pages", () => {
     )!;
     expect(retry).not.toBeNull();
     await act(async () => retry.click());
-    expect(invoke).toHaveBeenCalledWith("harness_resolve_codex");
+    expect(invoke).toHaveBeenCalledWith("harness_resolve_codex", undefined);
   });
 
   it("reopens, scrolls to, focuses and highlights the same project on a repeated notification settings request", async () => {

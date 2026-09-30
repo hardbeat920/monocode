@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 
 /** Transcripts kept mounted after their pane closes, so a revisit skips the rebuild. */
-export const TRANSCRIPT_POOL_LIMIT = 6;
+export const TRANSCRIPT_POOL_LIMIT = 12;
 
 type PooledProps = { visible?: boolean; parked?: boolean };
 

@@ -11,13 +11,14 @@ import {
 } from "../model/projectGroups";
 import { savePinnedProjects } from "../model/recents";
 import { ProjectRail } from "../../../app/shell/ProjectRail";
+import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
   convertFileSrc: (path: string) => path,
 }));
 vi.mock("../../source-control/hooks/useProjectDiffStats", () => ({
-  useProjectDiffStats: () => null,
+  useProjectDiffStats: vi.fn(() => null),
 }));
 
 let container: HTMLDivElement;
@@ -25,6 +26,7 @@ let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(useProjectDiffStats).mockClear();
   localStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
@@ -37,10 +39,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function renderRail() {
+async function renderRail(visible = true) {
   await act(async () =>
     root.render(
       createElement(ProjectRail, {
+        visible,
         cwd: "/work/personal",
         recents: [
           { path: "/work/client", openedAt: 1 },
@@ -52,6 +55,17 @@ async function renderRail() {
     ),
   );
 }
+
+it("suspends project Git stats while the rail is hidden", async () => {
+  await renderRail();
+  expect(vi.mocked(useProjectDiffStats).mock.calls.some(([, enabled]) => enabled)).toBe(true);
+
+  vi.mocked(useProjectDiffStats).mockClear();
+  await renderRail(false);
+  expect(vi.mocked(useProjectDiffStats).mock.calls.length).toBeGreaterThan(0);
+  expect(vi.mocked(useProjectDiffStats).mock.calls.every(([, enabled]) => !enabled)).toBe(true);
+  expect(container.querySelector('nav[aria-label="Projects"]')).not.toBeNull();
+});
 
 function button(label: string): HTMLButtonElement {
   const found = [

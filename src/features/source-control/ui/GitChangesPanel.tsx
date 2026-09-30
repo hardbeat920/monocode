@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Undo2,
   WandSparkles,
+  X,
 } from "../../../shared/ui/icons";
 import {
   useCallback,
@@ -48,6 +49,7 @@ import {
   gitPrStatus,
   gitPull,
   gitPush,
+  gitRangeContext,
   gitStageAll,
   gitStageFile,
   gitSync,
@@ -68,11 +70,15 @@ import {
   saveChangesView,
   type ChangesView,
 } from "../../settings/model/appearance";
-import { generateCommitMessage, generatePrContent } from "../../../integrations/harness";
+import {
+  generateCommitMessage,
+  generatePrContent,
+} from "../../../integrations/harness";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { MOD } from "../../../platform/tauri/platform";
 import { applyProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { isRemoteProjectPath } from "../../projects/model/recents";
 
 const GIT_POLL_MS = 2000;
 
@@ -248,7 +254,10 @@ export function GitChangesPanel({
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
                 >
                   {busy === "pull" ? (
-                    <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+                    <Loader
+                      className="size-3.5 animate-spin"
+                      strokeWidth={1.75}
+                    />
                   ) : (
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
                   )}
@@ -282,22 +291,19 @@ export function GitChangesPanel({
         }}
       />
       {graphExpanded ? (
-      <GraphResizeSash
-        height={graphHeight}
-        onHeightPaint={setGraphHeight}
-        onHeightCommit={(next) => {
-          setGraphHeight(next);
-          saveGraphPanelHeight(next);
-        }}
-        maxHeight={() => {
-          const pane = paneRef.current;
-          if (!pane) return GRAPH_PANEL_DEFAULT * 2;
-          return Math.max(
-            GRAPH_PANEL_MIN,
-            pane.clientHeight - 160,
-          );
-        }}
-      />
+        <GraphResizeSash
+          height={graphHeight}
+          onHeightPaint={setGraphHeight}
+          onHeightCommit={(next) => {
+            setGraphHeight(next);
+            saveGraphPanelHeight(next);
+          }}
+          maxHeight={() => {
+            const pane = paneRef.current;
+            if (!pane) return GRAPH_PANEL_DEFAULT * 2;
+            return Math.max(GRAPH_PANEL_MIN, pane.clientHeight - 160);
+          }}
+        />
       ) : null}
       <div
         className={`shrink-0 overflow-hidden border-t border-stroke ${
@@ -353,6 +359,7 @@ function ChangedFiles({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
+  const generateAbortRef = useRef<AbortController | null>(null);
   const [message, setMessage] = useState("");
   const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;
@@ -373,11 +380,13 @@ function ChangedFiles({
     !!index?.branch &&
     !!index.defaultBranch &&
     index.branch === index.defaultBranch;
-  const canGenerate = files.length > 0 && !busy;
+  const canGenerate = files.length > 0 && !busy && !isRemoteProjectPath(cwd);
   const canCommit =
     (staged.length > 0 || amend) && message.trim().length > 0 && !busy;
   const canCreatePr =
     hasRemote &&
+    !!index?.branch &&
+    !!index.defaultBranch &&
     !hasOpenPr &&
     !onDefault &&
     !diverged &&
@@ -397,7 +406,10 @@ function ChangedFiles({
 
   useEffect(() => {
     if (!amendTarget) return;
-    if (amendTarget.branch === index?.branch && amendTarget.head === index?.head) {
+    if (
+      amendTarget.branch === index?.branch &&
+      amendTarget.head === index?.head
+    ) {
       return;
     }
     setAmendTarget(null);
@@ -412,6 +424,17 @@ function ChangedFiles({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [message, enabled]);
+
+  useEffect(
+    () => () => {
+      if (generateAbortRef.current) {
+        generateAbortRef.current.abort();
+        generateAbortRef.current = null;
+        setBusy(null);
+      }
+    },
+    [cwd, setBusy],
+  );
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -514,15 +537,31 @@ function ChangedFiles({
   };
 
   const generate = async () => {
-    if (!canGenerate) return;
+    if (!canGenerate || generateAbortRef.current) return;
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     setBusy("generate");
     try {
-      setMessage(await generateCommitMessage(cwd, textHarness));
+      const generated = await generateCommitMessage(
+        cwd,
+        textHarness,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) setMessage(generated);
     } catch (error) {
-      fail(error);
+      if (!controller.signal.aborted) fail(error);
     } finally {
-      setBusy(null);
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null;
+        setBusy(null);
+      }
     }
+  };
+
+  const cancelGenerate = () => {
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+    setBusy(null);
   };
 
   const toggleAmend = async () => {
@@ -601,7 +640,9 @@ function ChangedFiles({
   };
 
   const openCreatedPr = async () => {
-    const content = await generatePrContent(cwd, textHarness);
+    const content = isRemoteProjectPath(cwd)
+      ? await remotePrContent(cwd)
+      : await generatePrContent(cwd, textHarness);
     if (!content) throw new Error("Could not prepare pull request content");
     const url = await gitPrCreate(
       cwd,
@@ -663,14 +704,33 @@ function ChangedFiles({
           />
           <button
             type="button"
-            title="Generate commit message"
-            aria-label="Generate commit message"
-            disabled={!canGenerate}
-            onClick={() => void generate()}
-            className="absolute top-1 right-1 grid size-5 place-items-center rounded-md text-content bg-content/10 hover:bg-content/20 hover:text-content disabled:opacity-40"
+            title={
+              busy === "generate"
+                ? "Cancel commit message generation"
+                : "Generate commit message"
+            }
+            aria-label={
+              busy === "generate"
+                ? "Cancel commit message generation"
+                : "Generate commit message"
+            }
+            disabled={busy !== "generate" && !canGenerate}
+            onClick={() =>
+              busy === "generate" ? cancelGenerate() : void generate()
+            }
+            className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 hover:text-content disabled:opacity-40"
           >
             {busy === "generate" ? (
-              <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
+              <>
+                <Loader
+                  className="size-3.5 animate-spin group-hover:hidden group-focus-visible:hidden"
+                  strokeWidth={1.75}
+                />
+                <X
+                  className="hidden size-3.5 group-hover:block group-focus-visible:block"
+                  strokeWidth={1.75}
+                />
+              </>
             ) : (
               <WandSparkles className="size-3" strokeWidth={1} />
             )}
@@ -1069,7 +1129,7 @@ function GitSyncActions({
   );
 }
 
-function FileSection({
+export function FileSection({
   title,
   count,
   open,
@@ -1149,6 +1209,23 @@ type ChangeDir = {
   status: string | null;
 };
 
+async function remotePrContent(cwd: string) {
+  const range = await gitRangeContext(cwd);
+  const commits = range.commitSummary.trim();
+  const firstCommit = commits
+    .split(/\r?\n/, 1)[0]
+    ?.replace(/^[0-9a-f]+\s+/i, "")
+    .trim();
+  const title = firstCommit || `Changes on ${range.head}`;
+  const body = [
+    commits && `## Commits\n\n${commits}`,
+    range.diffSummary.trim() && `## Changes\n\n${range.diffSummary.trim()}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return { title, body: body || title, base: range.base, head: range.head };
+}
+
 type ChangeRowProps = {
   files: GitChangedFile[];
   view: ChangesView;
@@ -1163,7 +1240,7 @@ type ChangeRowProps = {
   ) => void;
 };
 
-function ChangeList({ files, view, ...rest }: ChangeRowProps) {
+export function ChangeList({ files, view, ...rest }: ChangeRowProps) {
   const tree = useMemo(() => buildChangeTree(files), [files]);
   if (view === "tree") {
     return <ChangeDirChildren dir={tree} depth={0} {...rest} />;
@@ -1494,8 +1571,8 @@ function useDiffIndex(
   index: GitDiffIndex | null;
   reload: () => void;
 } {
-  const [index, setIndex] = useState<GitDiffIndex | null>(
-    () => cachedIndex(cwd),
+  const [index, setIndex] = useState<GitDiffIndex | null>(() =>
+    cachedIndex(cwd),
   );
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((value) => value + 1), []);

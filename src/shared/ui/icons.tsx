@@ -55,6 +55,7 @@ import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestC
 import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
 import GlobeIcon from "@hugeicons/core-free-icons/GlobeIcon";
+import InternetIcon from "@hugeicons/core-free-icons/InternetIcon";
 import HelpCircleIcon from "@hugeicons/core-free-icons/HelpCircleIcon";
 import ImageAdd01Icon from "@hugeicons/core-free-icons/ImageAdd01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
@@ -213,6 +214,7 @@ export const GitPullRequestDraft = wrap(
 );
 export const GripVertical = wrap(DragDropVerticalIcon, "GripVertical");
 export const Globe = wrap(GlobeIcon, "Globe");
+export const Internet = wrap(InternetIcon, "Internet");
 export const ImagePlus = wrap(ImageAdd01Icon, "ImagePlus");
 export const Inbox = wrap(InboxIcon, "Inbox");
 export const BellOff = wrap(NotificationOff01Icon, "BellOff");
