@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   defaultModelId,
   loadLastModelChoice,
@@ -11,7 +11,13 @@ import {
 import { initialQuickChoice, resolveQuickModel } from "./quickComposer";
 
 beforeEach(() => {
-  localStorage.clear();
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear(),
+  });
   resetHarnessModelOverlays();
 });
 afterEach(() => resetHarnessModelOverlays());

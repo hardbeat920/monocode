@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -5,7 +6,7 @@ export async function pickAndSaveChatBackground(): Promise<string | null> {
   const sourcePath = await open({
     multiple: false,
     directory: false,
-    title: "Choose chat background",
+    title: t("projects.chooseChatBackground", "Choose chat background"),
     filters: [
       {
         name: "Images",
@@ -27,7 +28,7 @@ export async function pickAndSaveProjectChatBackground(
   const sourcePath = await open({
     multiple: false,
     directory: false,
-    title: "Choose project chat background",
+    title: t("projects.chooseProjectChatBackground", "Choose project chat background"),
     filters: [
       {
         name: "Images",

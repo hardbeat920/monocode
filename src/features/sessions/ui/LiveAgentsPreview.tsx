@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation, t } from "../../i18n/model/i18n";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
 import { projectKey, projectName } from "../../../shared/lib/paths";
@@ -50,6 +51,7 @@ export function LiveAgentsPreview({
   const groupMascots = groupMascotsProp ?? loadedGroupMascots;
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const { t } = useTranslation();
   const lockList = useLockOverscroll<HTMLDivElement>();
   const ticking =
     agents.length >= LIVE_AGENT_MIN &&
@@ -69,12 +71,12 @@ export function LiveAgentsPreview({
 
   return (
     <section
-      aria-label="Working agents"
+      aria-label={t("liveAgents.workingAgents", "Working agents")}
       className={`shrink-0 px-2 ${bottomSpacing ? "pb-2" : ""}`}
       data-live-agents-preview="full"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {agents.length} working agents
+        {t("liveAgents.workingAgentsCount", "{count} working agents", { count: agents.length })}
       </span>
       <div className="overflow-hidden rounded-lg bg-content/5">
         <div className="flex items-center gap-2 px-3.5 py-1.5">
@@ -83,7 +85,7 @@ export function LiveAgentsPreview({
             className="size-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] motion-safe:animate-pulse"
           />
           <span className="min-w-0 flex-1 truncate text-xs text-content/50">
-            Working
+            {t("liveAgents.working", "Working")}
           </span>
           <span className="text-[11px] tabular-nums text-content/40">
             {agents.length}
@@ -121,7 +123,7 @@ export function LiveAgentsPreview({
             ) : (
               <ChevronDown className="size-3" strokeWidth={1.75} />
             )}
-            {expanded ? "Show less" : `${extra} more`}
+            {expanded ? t("common.showLess", "Show less") : t("common.moreCount", "{count} more", { count: extra })}
           </button>
         ) : null}
       </div>
@@ -160,9 +162,9 @@ function LiveAgentCard({
       ? formatLiveElapsed(agent.startedAt, now)
       : "";
   const activity = agent.needsApproval
-    ? "Need approval"
+    ? t("liveAgents.needApproval", "Need approval")
     : agent.done
-      ? "Done"
+      ? t("common.done", "Done")
       : agent.activity;
   const live = !agent.needsApproval && !agent.done;
   const title = [agent.title, project, activity, elapsed]

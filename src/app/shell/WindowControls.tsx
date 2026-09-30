@@ -1,8 +1,10 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Minus, Square, X } from "../../shared/ui/icons";
 import { useEffect, useState } from "react";
 
 export function WindowControls() {
+  const { t } = useTranslation();
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -58,7 +60,7 @@ export function WindowControls() {
     >
       <button
         type="button"
-        title="Minimize"
+        title={t("shell.minimize", "Minimize")}
         aria-label="Minimize window"
         data-tauri-drag-region="false"
         onClick={handleMinimize}
@@ -68,7 +70,7 @@ export function WindowControls() {
       </button>
       <button
         type="button"
-        title={isMaximized ? "Restore" : "Maximize"}
+        title={isMaximized ? t("shell.restore", "Restore") : t("shell.maximize", "Maximize")}
         aria-label={isMaximized ? "Restore window" : "Maximize window"}
         data-tauri-drag-region="false"
         onClick={handleToggleMaximize}
@@ -82,7 +84,7 @@ export function WindowControls() {
       </button>
       <button
         type="button"
-        title="Close"
+        title={t("common.close", "Close")}
         aria-label="Close window"
         data-tauri-drag-region="false"
         onClick={handleClose}

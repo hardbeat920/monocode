@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useId, useState, useSyncExternalStore } from "react";
 import {
   getCiRepairs,
@@ -171,80 +172,80 @@ const states: Record<
   { label: string; summary: string; Icon: IconComponent; color: string }
 > = {
   repairing: {
-    label: "Repairing",
-    summary: "Repair in progress",
+    get label() { return t("inbox.checkStatus.repairing", "Repairing"); },
+    get summary() { return t("inbox.repairProgress.repairingSummary", "Repair in progress"); },
     Icon: LoaderCircle,
     color: active,
   },
   waiting: {
-    label: "Awaiting CI",
-    summary: "Awaiting new GitHub checks",
+    get label() { return t("inbox.checkStatus.awaitingCi", "Awaiting CI"); },
+    get summary() { return t("inbox.repairProgress.waitingSummary", "Awaiting new GitHub checks"); },
     Icon: CircleDashed,
     color: neutral,
   },
   refreshing: {
-    label: "Refreshing",
-    summary: "Refreshing GitHub checks",
+    get label() { return t("inbox.checkStatus.refreshing", "Refreshing"); },
+    get summary() { return t("inbox.repairProgress.refreshingSummary", "Refreshing GitHub checks"); },
     Icon: LoaderCircle,
     color: neutral,
   },
   stale: {
-    label: "Out of date",
-    summary: "GitHub results are out of date",
+    get label() { return t("inbox.checkStatus.outOfDate", "Out of date"); },
+    get summary() { return t("inbox.repairProgress.staleSummary", "GitHub results are out of date"); },
     Icon: CircleDashed,
     color: neutral,
   },
   pass: {
-    label: "CI passed",
+    get label() { return t("inbox.checkStatus.ciPassed", "CI passed"); },
     summary: "passed",
     Icon: CheckCircle,
     color: positive,
   },
   fail: {
-    label: "Still failing",
-    summary: "still failing",
+    get label() { return t("inbox.repairStillFailing", "Still failing"); },
+    get summary() { return t("inbox.repairStillFailingSummary", "still failing"); },
     Icon: CircleX,
     color: negative,
   },
   pending: {
-    label: "CI running",
+    get label() { return t("inbox.checkStatus.ciRunning", "CI running"); },
     summary: "running",
     Icon: LoaderCircle,
     color: active,
   },
   cancel: {
-    label: "CI cancelled",
+    get label() { return t("inbox.checkStatus.ciCancelled", "CI cancelled"); },
     summary: "cancelled",
     Icon: CircleDashed,
     color: neutral,
   },
   skipping: {
-    label: "CI skipped",
+    get label() { return t("inbox.checkStatus.ciSkipped", "CI skipped"); },
     summary: "skipped",
     Icon: CircleDashed,
     color: neutral,
   },
   unknown: {
-    label: "Unknown",
+    get label() { return t("inbox.checkStatus.unknown", "Unknown"); },
     summary: "unknown",
     Icon: CircleDashed,
     color: neutral,
   },
   stopped: {
-    label: "Stopped",
-    summary: "Repair stopped",
+    get label() { return t("inbox.checkStatus.stopped", "Stopped"); },
+    get summary() { return t("inbox.repairProgress.stoppedSummary", "Repair stopped"); },
     Icon: CircleDashed,
     color: neutral,
   },
   interrupted: {
-    label: "Interrupted",
-    summary: "Tracking interrupted",
+    get label() { return t("inbox.repairInterrupted", "Interrupted"); },
+    get summary() { return t("inbox.repairTrackingInterrupted", "Tracking interrupted"); },
     Icon: CircleDashed,
     color: neutral,
   },
   "agent-error": {
-    label: "Agent stopped",
-    summary: "Agent could not finish",
+    get label() { return t("inbox.checkStatus.agentStopped", "Agent stopped"); },
+    get summary() { return t("inbox.repairAgentCouldNotFinish", "Agent could not finish"); },
     Icon: CircleX,
     color: negative,
   },
@@ -375,7 +376,7 @@ function RepairCard({
             onClick={() => onShowCheck?.(single.check)}
             className="shrink-0 rounded-md px-2 py-1.5 text-[11px] text-content/70 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
-            Show check
+            {t("inbox.showCheck", "Show check")}
           </button>
         ) : null}
         {repair.onOpenSession ? (
@@ -385,7 +386,7 @@ function RepairCard({
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-stroke px-2.5 py-1.5 text-[11px] text-content/70 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
             <MessageSquare aria-hidden="true" className="size-3.5" />
-            Open conversation
+            {t("inbox.openConversation", "Open conversation")}
           </button>
         ) : null}
       </div>
@@ -394,7 +395,7 @@ function RepairCard({
           id={detailsId}
           className="space-y-2 border-t border-stroke px-3 py-2.5 text-[11px] text-content/55"
         >
-          <p>Included checks</p>
+          <p>{t("inbox.checkStatus.includedChecks", "Included checks")}</p>
           <ul className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
             {group.items.map(({ check }) => (
               <li
@@ -407,9 +408,9 @@ function RepairCard({
             ))}
           </ul>
           <p>
-            Latest PR commit:{" "}
+            {t("inbox.checkStatus.latestPrCommit", "Latest PR commit:")}{" "}
             <span className="font-mono">
-              {view.checks?.headOid.slice(0, 7) || "Unavailable"}
+              {view.checks?.headOid.slice(0, 7) || t("common.unavailable", "Unavailable")}
             </span>
             . Results appear in the checks below.
           </p>

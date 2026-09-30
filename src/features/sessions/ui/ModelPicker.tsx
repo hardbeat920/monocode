@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   Check,
   ChevronDown,
@@ -628,7 +629,7 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
-        title={`${triggerTitle} · Recent models: right-click or ${MOD}.`}
+        title={t("sessions.modelTriggerTooltip", `${triggerTitle} · Recent models: right-click or ${MOD}.`, { title: triggerTitle, mod: MOD })}
         aria-label={`${HARNESS_TITLE[current.harness]}${
           current.provider ? `, ${current.provider.name},` : ""
         } ${current.name}${
@@ -726,7 +727,7 @@ export function ModelPicker({
                         : "text-content hover:bg-content/5"
                     }`}
                   >
-                    <span className="min-w-0 flex-1">Model</span>
+                    <span className="min-w-0 flex-1">{t("sessions.models.model", "Model")}</span>
                     <span className="flex min-w-0 max-w-36 items-center gap-1 text-content/55">
                       <HarnessIcon
                         harness={current.harness}
@@ -1329,7 +1330,7 @@ function ModelFlyout({
         className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-stroke p-1.5"
       >
         <ProviderTabButton
-          title="Favorites"
+          title={t("sessions.favorites", "Favorites")}
           selected={tab === "favorites"}
           onSelect={() => onSelectTab("favorites")}
         >
@@ -1358,7 +1359,7 @@ function ModelFlyout({
             ref={searchRef}
             type="text"
             value={query}
-            placeholder="Search models"
+            placeholder={t("sessions.searchModelsPlaceholder", "Search models")}
             aria-label="Search models"
             autoFocus={autoFocusSearch}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
@@ -1376,12 +1377,12 @@ function ModelFlyout({
           {models.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-content/50">
               {tab === "favorites" && !query.trim()
-                ? "No favorite models"
+                ? t("sessions.models.noFavoriteModels", "No favorite models")
                 : tab !== "favorites" && !source.available(tab)
                   ? harnessUnavailableHint(tab)
                   : tab === "codex" && !query.trim()
-                    ? "Loading Codex models…"
-                    : "No matching models"}
+                    ? t("session.loadingCodexModels", "Loading Codex models…")
+                    : t("sessions.models.noMatchingModels", "No matching models")}
             </div>
           ) : (
             groups.map((group) => (
@@ -1445,8 +1446,8 @@ function ModelFlyout({
                         type="button"
                         title={
                           favorited
-                            ? "Remove from favorites"
-                            : "Add to favorites"
+                            ? t("sessions.removeFromFavorites", "Remove from favorites")
+                            : t("sessions.addToFavorites", "Add to favorites")
                         }
                         aria-label={
                           favorited

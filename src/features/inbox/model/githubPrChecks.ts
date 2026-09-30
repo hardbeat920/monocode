@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { invoke } from "@tauri-apps/api/core";
 
 export type GithubPrCheckState =
@@ -142,7 +143,7 @@ export function summarizePrChecks(input: {
   checks: readonly GithubPrCheck[] | null;
 }): GithubPrChecksOverall {
   if (input.loading) {
-    return { kind: "loading", description: "Loading checks" };
+    return { kind: "loading", description: t("inbox.loadingChecks", "Loading checks") };
   }
   if (input.error) {
     const counts = input.checks ? countChecks(input.checks) : null;
@@ -150,8 +151,8 @@ export function summarizePrChecks(input: {
     return {
       kind: "error",
       description: saved
-        ? `Checks failed to load, showing saved results that may be out of date: ${saved}`
-        : "Checks failed to load",
+        ? t("inbox.checksFailedToLoadSaved", "Checks failed to load, showing saved results that may be out of date: {saved}", { saved })
+        : t("inbox.checksFailedToLoad", "Checks failed to load"),
     };
   }
   const checks = input.checks ?? [];
@@ -160,31 +161,31 @@ export function summarizePrChecks(input: {
     return {
       kind: "fail",
       failed: counts.fail,
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? t("inbox.noChecksReported", "No checks reported"),
     };
   }
   if (counts.pending > 0) {
     return {
       kind: "pending",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? t("inbox.noChecksReported", "No checks reported"),
     };
   }
   if (counts.cancel > 0 || counts.unknown > 0) {
     return {
       kind: "neutral",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? t("inbox.noChecksReported", "No checks reported"),
     };
   }
   if (counts.pass > 0) {
     return {
       kind: "pass",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? t("inbox.noChecksReported", "No checks reported"),
     };
   }
   // Empty or skipping-only: neutral, but the skipped count still gets said.
   return {
     kind: "neutral",
-    description: describeCheckCounts(counts) ?? "No checks reported",
+    description: describeCheckCounts(counts) ?? t("inbox.noChecksReported", "No checks reported"),
   };
 }
 

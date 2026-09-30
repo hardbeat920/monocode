@@ -6,6 +6,7 @@ import {
   ProviderSignInPanel,
   type ProviderSignInState,
 } from "./ProviderSignInPanel";
+import { useTranslation } from "../../i18n/model/i18n";
 
 type Props = {
   harness: HarnessId;
@@ -13,6 +14,7 @@ type Props = {
 };
 
 export function ProviderSignInDialog({ harness, onClose }: Props) {
+  const { t } = useTranslation();
   const [state, setState] = useState<ProviderSignInState>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +22,8 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
     setState("idle");
     setError(null);
   }, [harness]);
+
+  const providerName = HARNESS_TITLE[harness];
 
   const signIn = useCallback(() => {
     setState("running");
@@ -31,17 +35,23 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
         setError(
           reason instanceof Error
             ? reason.message
-            : `Could not sign in to ${HARNESS_TITLE[harness]}.`,
+            : t("dialogs.providerSignInFailed", `Could not sign in to ${providerName}.`, {
+                provider: providerName,
+              }),
         );
       },
     );
-  }, [harness]);
+  }, [harness, providerName, t]);
 
   return (
     <Modal
       onClose={onClose}
-      title="Authentication required"
-      description={`Sign in to continue using ${HARNESS_TITLE[harness]}.`}
+      title={t("dialogs.providerSignInTitle", "Authentication required")}
+      description={t(
+        "dialogs.providerSignInDescription",
+        `Sign in to continue using ${providerName}.`,
+        { provider: providerName },
+      )}
       size="sm"
       minimalHeader
     >
@@ -51,7 +61,7 @@ export function ProviderSignInDialog({ harness, onClose }: Props) {
         error={error}
         onSignIn={signIn}
         onComplete={onClose}
-        completeActionLabel="Continue"
+        completeActionLabel={t("dialogs.providerSignInContinue", "Continue")}
         autoFocus
       />
     </Modal>

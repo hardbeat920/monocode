@@ -23,6 +23,7 @@ import { isImeComposition } from "../../../shared/lib/keyboard";
 import { SkillPicker } from "./SkillPicker";
 import { Popover } from "../../../shared/ui/Popover";
 import { useComposerSkills } from "../../sessions/ui/useComposerSkills";
+import { useTranslation } from "../../i18n/model/i18n";
 
 type Props = {
   value: string;
@@ -33,6 +34,7 @@ type Props = {
 
 /** Automation instructions field with the composer's slash-skill behavior. */
 export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
+  const { t } = useTranslation();
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const slashAnchorRef = useRef<HTMLSpanElement>(null);
   const slashRef = useRef<SlashToken | null>(null);
@@ -184,7 +186,7 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
         ref={fieldRef}
         rows={1}
         spellCheck={false}
-        aria-label="Instructions"
+        aria-label={t("skills.instructionsAriaLabel", "Instructions")}
         aria-haspopup="listbox"
         aria-expanded={slash !== null}
         value={value}
@@ -201,7 +203,7 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
           if (event.key !== "Escape") syncSlashToken(event.currentTarget);
         }}
         onSelect={(event) => syncSlashToken(event.currentTarget)}
-        placeholder="Tell the agent what to do when this automation runs…"
+        placeholder={t("skills.promptPlaceholder", "Tell the agent what to do when this automation runs…")}
         className="composer-field relative min-h-28 w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent px-3 py-3 font-sans text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap"
       />
     </div>

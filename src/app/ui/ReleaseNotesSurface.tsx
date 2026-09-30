@@ -1,3 +1,4 @@
+import { t } from "../../features/i18n/model/i18n";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import {
   releaseNotesMarkdown,
@@ -26,7 +27,7 @@ export function ReleaseNotesSurface({
           <AgentMarkdown text={markdown} streaming={false} />
         ) : (
           <p className="text-[13px] text-content/60">
-            Release notes for this version are not available in this build.
+            {t("app.releaseNotesNotAvailable", "Release notes for this version are not available in this build.")}
           </p>
         )}
       </article>

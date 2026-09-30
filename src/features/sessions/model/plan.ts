@@ -1,10 +1,13 @@
+import { t } from "../../i18n/model/i18n";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const PLAN_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "plan",
   invocation: "plan",
-  description: "Create a reviewable implementation plan before changing files.",
+  get description() {
+    return t("session.commands.plan.description", "Create a reviewable implementation plan before changing files.");
+  },
   scope: "builtin",
   source: "monocode",
 };

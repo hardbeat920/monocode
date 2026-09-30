@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveLanguagePreference } from "../../i18n/model/i18n";
 import {
   adjacentItemId,
   deferUnhandledEscape,
@@ -8,6 +9,7 @@ import {
   tabCommand,
   tabCommandForKeybinding,
   tabCommandKeybinding,
+  tabCommandLabel,
 } from "./tabKeys";
 
 function key(
@@ -391,5 +393,20 @@ describe("deferUnhandledEscape", () => {
     deferUnhandledEscape(escape({ defaultPrevented: true }), () => {}, defer);
     deferUnhandledEscape(escape({ repeat: true }), () => {}, defer);
     expect(scheduled).toBe(0);
+  });
+});
+
+describe("tabCommandLabel", () => {
+  beforeEach(() => {
+    saveLanguagePreference("zh-CN");
+  });
+  afterEach(() => {
+    saveLanguagePreference("en");
+  });
+
+  it("resolves command label for TabCommand", () => {
+    expect(tabCommandLabel("new")).toBe("标签页: 新建");
+    expect(tabCommandLabel("new-terminal")).toBe("终端: 新建");
+    expect(tabCommandLabel("prev-session")).toBe("会话: 上一个");
   });
 });

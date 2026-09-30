@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { LAYER } from "../../../shared/lib/layers";
@@ -80,7 +81,7 @@ export function ReminderNotices({
         <div className="flex items-center gap-2 border-b border-stroke px-3 py-2.5">
           <Clock className="size-3.5 text-amber-400" strokeWidth={1.75} />
           <span className="flex-1 text-[12px] font-semibold">
-            Due reminders
+            {t("sessions.reminders.dueReminders", "Due reminders")}
           </span>
           <span role="status" className="text-[11px] text-content/50">
             {reminders.length || ""}
@@ -88,9 +89,9 @@ export function ReminderNotices({
         </div>
         {error ? (
           <div role="alert" className="px-3 py-2 text-[12px] text-content/70">
-            Couldn’t load reminders.{" "}
+            {t("session.couldNotLoadReminders", "Couldn’t load reminders.")}{" "}
             <button className="underline" onClick={onRetry}>
-              Retry
+              {t("common.retry", "Retry")}
             </button>
           </div>
         ) : null}
@@ -117,7 +118,7 @@ export function ReminderNotices({
                   className="rounded-md bg-content/10 px-2 py-1 hover:bg-content/15"
                   onClick={() => onOpen(reminder)}
                 >
-                  Open session
+                  {t("session.openSession", "Open session")}
                 </button>
                 <button
                   aria-haspopup="menu"
@@ -130,7 +131,7 @@ export function ReminderNotices({
                     setSnooze({ reminder, x: rect.left, y: rect.bottom + 4 });
                   }}
                 >
-                  Snooze
+                  {t("session.snooze", "Snooze")}
                 </button>
                 <button
                   className="ml-auto rounded-md px-2 py-1 text-content/50 hover:bg-content/10"
@@ -138,7 +139,7 @@ export function ReminderNotices({
                     onDismiss([reminder.sessionId], reminder.dueAt)
                   }
                 >
-                  Dismiss
+                  {t("common.dismiss", "Dismiss")}
                 </button>
               </div>
             </article>
@@ -149,7 +150,7 @@ export function ReminderNotices({
             className="w-full border-t border-stroke px-3 py-2 text-left text-[11px] text-content/50 hover:text-content"
             onClick={onOpenSettings}
           >
-            Desktop alerts are off. Enable in Settings.
+            {t("session.desktopAlertsOff", "Desktop alerts are off. Enable in Settings.")}
           </button>
         ) : null}
       </section>

@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   useEffect,
   useMemo,
@@ -119,7 +120,7 @@ export function TranscriptFind({
           type="text"
           value={query}
           aria-label="Find in conversation"
-          placeholder="Find in conversation"
+          placeholder={t("sessions.findInConversationPlaceholder", "Find in conversation")}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
@@ -143,24 +144,24 @@ export function TranscriptFind({
           {query.trim()
             ? matches.length
               ? `${Math.min(active, matches.length - 1) + 1} of ${matches.length}`
-              : "No results"
+              : t("sessions.find.noResults", "No results")
             : ""}
         </span>
         <FindButton
-          label="Previous match"
+          label={t("sessions.find.previousMatch", "Previous match")}
           onClick={() => step(-1)}
           disabled={!matches.length}
         >
           <ChevronUp className="size-3.5" strokeWidth={1.75} />
         </FindButton>
         <FindButton
-          label="Next match"
+          label={t("sessions.find.nextMatch", "Next match")}
           onClick={() => step(1)}
           disabled={!matches.length}
         >
           <ChevronDown className="size-3.5" strokeWidth={1.75} />
         </FindButton>
-        <FindButton label="Close find" onClick={closeFind}>
+        <FindButton label={t("sessions.find.closeFind", "Close find")} onClick={closeFind}>
           <X className="size-3.5" strokeWidth={1.75} />
         </FindButton>
       </div>

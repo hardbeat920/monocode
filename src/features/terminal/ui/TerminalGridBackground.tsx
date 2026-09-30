@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HARNESS_ICONS, MONOCHROME_HARNESSES } from "../../sessions/ui/HarnessIcon";
 import { MASCOT_GRID, PROJECT_MASCOTS } from "../../projects/model/projectMascots";
@@ -533,7 +534,7 @@ export function TerminalGridBackground() {
             score {score}
             {game.lives ? (
               <span className="ml-3 text-content/35">
-                {lives > 0 ? "•".repeat(lives) : "game over"}
+                {lives > 0 ? "•".repeat(lives) : t("terminal.gameOver", "game over")}
               </span>
             ) : null}
           </span>
@@ -582,7 +583,7 @@ export function TerminalGridBackground() {
               className="pointer-events-none flex cursor-pointer items-center gap-2 border border-content/25 bg-background-base/80 px-3 py-1.5 font-mono text-[11px] tracking-[0.16em] text-content/85 shadow-lg backdrop-blur-sm group-hover:pointer-events-auto hover:border-content/45 hover:bg-content/10 hover:text-content"
             >
               <span className="text-content/40">[</span>
-              take control
+              {t("terminal.takeControl", "take control")}
               <span className="text-content/25">·</span>
               {game.label}
               <span

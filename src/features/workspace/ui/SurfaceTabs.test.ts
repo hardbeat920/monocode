@@ -1,3 +1,4 @@
+import { t } from "../../../features/i18n/model/i18n";
 import { describe, expect, it } from "vitest";
 import {
   newChangesTab,
@@ -35,7 +36,7 @@ describe("surfaceTabPresentation", () => {
       name: "Changes",
       label: "Changes",
       iconName: "CHANGES",
-      tooltip: "Working tree changes",
+      tooltip: t("workspace.workingTreeChanges", "Working tree changes"),
     });
   });
 
@@ -48,7 +49,7 @@ describe("surfaceTabPresentation", () => {
       name: "Session Changes",
       label: "Session Changes",
       iconName: "CHANGES",
-      tooltip: "Changes captured for this session only",
+      tooltip: t("workspace.sessionChangesOnly", "Changes captured for this session only"),
     });
   });
 
@@ -97,13 +98,13 @@ describe("surfaceTabMenuItems", () => {
       expect(
         items.flatMap((item) => (item.kind === "item" ? [item.label] : [])),
       ).toEqual([
-        "Open in Default App",
-        expect.stringMatching(/Reveal|Containing Folder/),
-        "Copy Path",
-        "Copy Relative Path",
-        "Copy File Name",
-        "Close",
-        "Close Others",
+        t("files.openInDefaultApp", "Open in Default App"),
+        expect.stringMatching(/Reveal|Containing Folder|在访达中显示|在文件管理器中显示/),
+        t("files.copyPath", "Copy Path"),
+        t("files.copyRelativePath", "Copy Relative Path"),
+        t("files.copyFileName", "Copy File Name"),
+        t("common.close", "Close"),
+        t("workspace.closeOthers", "Close Others"),
       ]);
     }
   });
@@ -120,11 +121,11 @@ describe("surfaceTabMenuItems", () => {
       newTerminalFile("/repo"),
     ]) {
       expect(surfaceTabMenuItems(file)).toEqual([
-        { kind: "item", id: "close", label: "Close" },
+        { kind: "item", id: "close", label: t("common.close", "Close") },
         {
           kind: "item",
           id: "close-others",
-          label: "Close Others",
+          label: t("workspace.closeOthers", "Close Others"),
           disabled: false,
         },
       ]);
@@ -139,7 +140,7 @@ describe("surfaceTabMenuItems", () => {
     expect(items.at(-1)).toEqual({
       kind: "item",
       id: "close-others",
-      label: "Close Others",
+      label: t("workspace.closeOthers", "Close Others"),
       disabled: true,
     });
   });

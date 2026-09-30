@@ -1,3 +1,4 @@
+import { saveLanguagePreference } from "../../i18n/model/i18n";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
@@ -12,6 +13,8 @@ import {
   FOLLOW_UP_BEHAVIOR_DEFAULT,
   GRID_ARCADE_ENABLED_DEFAULT,
   KEYBINDINGS,
+  filterKeybindings,
+  keybindingCommandLabel,
   LIVE_AGENTS_ENABLED_DEFAULT,
   TAB_ANIMATIONS_ENABLED_DEFAULT,
   loadComposerRunner,
@@ -650,5 +653,32 @@ describe("settings search", () => {
 
   it("caps the result list", () => {
     expect(searchSettings("e", 4)).toHaveLength(4);
+  });
+});
+
+describe("keybindingCommandLabel and filterKeybindings", () => {
+  beforeEach(() => {
+    saveLanguagePreference("zh-CN");
+  });
+  afterEach(() => {
+    saveLanguagePreference("en");
+  });
+
+  it("translates keybinding command to Chinese when locale is zh-CN", () => {
+    expect(keybindingCommandLabel("Session: Previous")).toBe("会话: 上一个");
+    expect(keybindingCommandLabel("App: Settings")).toBe("应用: 设置");
+    expect(keybindingCommandLabel("Terminal: New")).toBe("终端: 新建");
+    expect(keybindingCommandLabel("Tab: New")).toBe("标签页: 新建");
+  });
+
+  it("filters keybindings by both English and Chinese command names", () => {
+    const enMatch = filterKeybindings(KEYBINDINGS, "Session: Previous");
+    expect(enMatch.some((row) => row.command === "Session: Previous")).toBe(true);
+
+    const zhMatch = filterKeybindings(KEYBINDINGS, "会话");
+    expect(zhMatch.some((row) => row.command === "Session: Previous")).toBe(true);
+
+    const termMatch = filterKeybindings(KEYBINDINGS, "终端");
+    expect(termMatch.some((row) => row.command === "Terminal: New")).toBe(true);
   });
 });

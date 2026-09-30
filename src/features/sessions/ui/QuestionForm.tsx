@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   useEffect,
   useMemo,
@@ -125,7 +126,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
             className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-content/55 hover:bg-content/10 hover:text-content"
             onClick={skipCurrent}
           >
-            Skip
+            {t("session.skip", "Skip")}
           </button>
         </div>
         <div className="mt-2">
@@ -169,10 +170,10 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
           {prompt.autoResolveAt != null ? (
             <span
               className="mr-auto text-[11px] text-content/40"
-              title="Interact to keep this question open."
+              title={t("sessions.interactToKeepQuestionOpen", "Interact to keep this question open.")}
             >
               {prompt.autoResolveAt - now > 60_000
-                ? "Optional question"
+                ? t("sessions.questions.optionalQuestion", "Optional question")
                 : `Continues without an answer in ${Math.max(0, Math.ceil((prompt.autoResolveAt - now) / 1000))}s`}
             </span>
           ) : null}
@@ -181,7 +182,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
             disabled={!ready}
             className="h-6 rounded-md bg-content px-2.5 text-[11px] font-medium text-background-base hover:bg-content/80 disabled:opacity-40"
           >
-            Continue
+            {t("common.continue", "Continue")}
           </button>
         </div>
       </form>
@@ -260,13 +261,13 @@ function QuestionFields({
         {question.prompt}
       </p>
       {question.multiSelect ? (
-        <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
+        <p className="mt-0.5 text-[11px] text-content/40">{t("sessions.questions.selectAllThatApply", "Select all that apply")}</p>
       ) : null}
       {options.length === 0 && question.allowCustom ? (
         <input
           value={custom}
           onChange={(event) => onCustom(event.target.value)}
-          placeholder="Type your answer"
+          placeholder={t("turn.typeYourAnswerPlaceholder", "Type your answer")}
           className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
         />
       ) : (
@@ -334,7 +335,7 @@ function QuestionFields({
                   <input
                     value={custom}
                     onChange={(event) => onCustom(event.target.value)}
-                    placeholder="Type your answer"
+                    placeholder={t("turn.typeYourAnswerPlaceholder", "Type your answer")}
                     className="mt-1 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
                     onClick={(event) => event.stopPropagation()}
                     onFocus={() => {
@@ -356,7 +357,7 @@ function displayOptions(question: UserQuestion): UserQuestion["options"] {
   if (question.options.some(isOtherOption) || !question.allowCustom) {
     return question.options;
   }
-  return [...question.options, { id: CUSTOM_OPTION_ID, label: "Other" }];
+  return [...question.options, { id: CUSTOM_OPTION_ID, label: t("session.other", "Other") }];
 }
 
 function customOptionId(question: UserQuestion): string {

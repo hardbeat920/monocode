@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { LAYER } from "../../../shared/lib/layers";
 
 export function FileActionError({
@@ -20,7 +21,7 @@ export function FileActionError({
         className="shrink-0 text-content/60 hover:text-content"
         onClick={onDismiss}
       >
-        Dismiss
+        {t("common.dismiss", "Dismiss")}
       </button>
     </div>
   );

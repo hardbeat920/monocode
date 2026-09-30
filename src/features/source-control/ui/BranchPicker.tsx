@@ -21,6 +21,7 @@ import { useProjectBranchesState } from "../hooks/useProjectBranches";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { GitPickerTrigger } from "./GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
+import { useTranslation } from "../../i18n/model/i18n";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
 
 type Props = {
@@ -61,6 +62,7 @@ export function BranchPicker({
   onOpenChange,
   popoverSide = "top",
 }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -283,11 +285,11 @@ export function BranchPicker({
     ? detached
       ? `detached ${current}`
       : current
-    : "No repo";
+    : t("composer.noRepo", "No repo");
   const title = awaitingBranch
     ? "Loading branch…"
     : missingGit
-      ? "No git repository"
+      ? t("composer.noRepo", "No git repository")
       : label;
   const interactive = enabled && !awaitingBranch && !missingGit;
 
@@ -368,7 +370,7 @@ export function BranchPicker({
           maxHeight={MENU_MAX_HEIGHT}
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="dialog"
-          aria-label="Branch picker"
+          aria-label={t("sourceControl.branchPicker", "Branch picker")}
           data-branch-picker
           className="flex flex-col overflow-hidden"
         >
@@ -378,8 +380,8 @@ export function BranchPicker({
               ref={search}
               type="text"
               value={query}
-              placeholder="Search or create a branch..."
-              aria-label="Search or create a branch"
+              placeholder={t("sourceControl.searchOrCreateBranch", "Search or create a branch...")}
+              aria-label={t("sourceControl.searchOrCreateBranch", "Search or create a branch...")}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -398,7 +400,7 @@ export function BranchPicker({
             rows={rows}
             active={active}
             busy={busy}
-            emptyLabel={query.trim() ? "No matching branches" : "No branches"}
+            emptyLabel={query.trim() ? t("sourceControl.noMatchingBranches", "No matching branches") : t("sourceControl.noBranches", "No branches")}
             onActive={setActive}
             onPick={pick}
           />
@@ -419,8 +421,8 @@ export function BranchPicker({
                 <Plus className="size-4 shrink-0" strokeWidth={1.75} />
                 <span className="min-w-0 truncate">
                   {createRow.name
-                    ? `Create and checkout ${createRow.name}`
-                    : "New branch"}
+                    ? t("sourceControl.createAndCheckout", `Create and checkout ${createRow.name}`, { name: createRow.name })
+                    : t("sourceControl.newBranch", "New branch")}
                 </span>
               </button>
             </div>
@@ -446,6 +448,7 @@ function BranchList({
   onActive: (index: number) => void;
   onPick: (row: BranchRow) => void;
 }) {
+  const { t } = useTranslation();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
 
@@ -465,7 +468,7 @@ function BranchList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Branches"
+      aria-label={t("sourceControl.branches", "Branches")}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-1.5 py-1.5"
     >
       {rows.map((row, index) => {

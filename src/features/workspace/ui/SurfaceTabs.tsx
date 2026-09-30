@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import {
   GitCompare,
   GripVertical,
@@ -82,12 +83,12 @@ export function surfaceTabMenuItems(
   const close: ExplorerMenuItem = {
     kind: "item",
     id: "close",
-    label: "Close",
+    label: t("common.close", "Close"),
   };
   const closeOthers: ExplorerMenuItem = {
     kind: "item",
     id: "close-others",
-    label: "Close Others",
+    label: t("workspace.closeOthers", "Close Others"),
     disabled: !canCloseOthers,
   };
   if (!isFilesystemTab(file) || isChangesTab(file)) {
@@ -95,16 +96,16 @@ export function surfaceTabMenuItems(
   }
 
   return [
-    { kind: "item", id: "open-default", label: "Open in Default App" },
+    { kind: "item", id: "open-default", label: t("files.openInDefaultApp", "Open in Default App") },
     { kind: "item", id: "reveal", label: REVEAL_LABEL },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
+    { kind: "item", id: "copy-path", label: t("files.copyPath", "Copy Path") },
     {
       kind: "item",
       id: "copy-relative-path",
-      label: "Copy Relative Path",
+      label: t("files.copyRelativePath", "Copy Relative Path"),
     },
-    { kind: "item", id: "copy-name", label: "Copy File Name" },
+    { kind: "item", id: "copy-name", label: t("files.copyFileName", "Copy File Name") },
     { kind: "sep" },
     close,
     closeOthers,
@@ -127,18 +128,18 @@ export function surfaceTabPresentation(
   if (isChangesTab(file)) {
     return {
       name: "Changes",
-      label: "Changes",
+      label: t("workspace.changes", "Changes"),
       iconName: "CHANGES",
-      tooltip: "Working tree changes",
+      tooltip: t("workspace.workingTreeChanges", "Working tree changes"),
     };
   }
 
   if (isSessionChangesTab(file)) {
     return {
       name: "Session Changes",
-      label: "Session Changes",
+      label: t("workspace.sessionChanges", "Session Changes"),
       iconName: "CHANGES",
-      tooltip: "Changes captured for this session only",
+      tooltip: t("workspace.sessionChangesOnly", "Changes captured for this session only"),
     };
   }
 
@@ -148,7 +149,7 @@ export function surfaceTabPresentation(
       name,
       label: name,
       iconName: "AGENT",
-      tooltip: `${name} — orchestration agent`,
+      tooltip: t("workspace.orchestrationAgentSuffix", "{name} — orchestration agent", { name }),
     };
   }
 
@@ -275,7 +276,7 @@ export function SurfaceTabs({
         {onPaneDragStart ? (
           <div
             role="button"
-            title="Drag to reorder pane"
+            title={t("workspace.dragToReorderPane", "Drag to reorder pane")}
             aria-label="Drag to reorder pane"
             tabIndex={-1}
             className="grid h-7.5 w-5 shrink-0 cursor-grab place-items-center rounded-md text-content/35 hover:bg-content/5 hover:text-content/70 active:cursor-grabbing touch-none"
@@ -396,14 +397,14 @@ export function SurfaceTabs({
                 {dirty ? (
                   <span
                     className="size-1.5 shrink-0 rounded-full bg-content/70"
-                    title="Unsaved changes"
+                    title={t("workspace.unsavedChanges", "Unsaved changes")}
                     aria-label="Unsaved changes"
                   />
                 ) : null}
               </button>
               <button
                 type="button"
-                title={`Close ${label}`}
+                title={t("workspace.closeFile", `Close ${label}`, { name: label })}
                 aria-label={`Close ${label}`}
                 data-no-drag
                 onPointerDown={(event) => event.stopPropagation()}

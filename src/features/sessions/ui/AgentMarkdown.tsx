@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -139,19 +140,19 @@ function fileLinkMenuItems(
     {
       kind: "item",
       id: "open-monocode",
-      label: "Open in MonoCode",
+      label: t("files.openInMonoCode", "Open in MonoCode"),
       disabled: !canOpenInMonoCode,
     },
-    { kind: "item", id: "open-default", label: "Open in Default App" },
+    { kind: "item", id: "open-default", label: t("files.openInDefaultApp", "Open in Default App") },
     { kind: "item", id: "reveal", label: REVEAL_LABEL },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
+    { kind: "item", id: "copy-path", label: t("files.copyPath", "Copy Path") },
     ...(canCopyRelativePath
       ? [
           {
             kind: "item" as const,
             id: "copy-relative-path",
-            label: "Copy Relative Path",
+            label: t("files.copyRelativePath", "Copy Relative Path"),
           },
         ]
       : []),
@@ -370,7 +371,7 @@ function CodeCopyButton({ code }: { code: string }) {
   return (
     <button
       type="button"
-      title={copied ? "Copied" : "Copy code"}
+      title={copied ? t("common.copied", "Copied") : t("common.copyCode", "Copy code")}
       aria-label={copied ? "Copied" : "Copy code"}
       className={`markdown-code-copy ${copied ? "is-copied" : ""}`}
       onClick={() => {

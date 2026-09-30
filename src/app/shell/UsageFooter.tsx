@@ -1,3 +1,4 @@
+import { useTranslation } from "../../features/i18n/model/i18n";
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
@@ -83,6 +84,7 @@ export function UsageFooter({
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
 }) {
+  const { t } = useTranslation();
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
@@ -355,7 +357,7 @@ export function UsageFooter({
             type="button"
             className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
             aria-label="Refresh usage"
-            title="Refresh usage"
+            title={t("usage.refreshUsage", "Refresh usage")}
             disabled={refreshing}
             onClick={() => void refresh()}
           >
@@ -391,7 +393,7 @@ export function UsageFooter({
               onClick={onTerminalClick}
             >
               <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
-              <span>Terminal</span>
+              <span>{t("usage.terminal", "Terminal")}</span>
             </button>
           ) : null}
         </div>
@@ -411,6 +413,7 @@ function TerminalLiveMark() {
 }
 
 function SessionChip({ session }: { session: UsageFooterSession }) {
+  const { t } = useTranslation();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
@@ -469,14 +472,14 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
         aria-label={`${HARNESS_TITLE[session.harness]} sign-in required`}
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={`${HARNESS_TITLE[session.harness]} sign-in required`}
+        title={t("usage.signInRequired", `${HARNESS_TITLE[session.harness]} sign-in required`, { provider: HARNESS_TITLE[session.harness] })}
         onClick={() => setOpen((value) => !value)}
       >
         <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
         <span>{HARNESS_LABEL[session.harness]}</span>
         {authRequired ? (
           <span className="text-[10px] text-amber-600 dark:text-amber-300">
-            sign in
+            {t("usage.signIn", "sign in")}
           </span>
         ) : null}
       </button>

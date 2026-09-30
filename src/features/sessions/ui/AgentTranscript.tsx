@@ -37,6 +37,7 @@ import { OrchestratorConstellation } from "./OrchestratorConstellation";
 import { PlanStepsBurst } from "./PlanStepsBurst";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { t } from "../../i18n/model/i18n";
 import { ToolDiffPreview } from "./ToolDiffPreview";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
@@ -658,7 +659,7 @@ function AgentTranscriptComponent({
               className="rounded-md bg-content/8 px-2.5 py-1.5 font-sans text-[12px] text-content/60 hover:bg-content/12 hover:text-content"
               onClick={loadEarlier}
             >
-              Load earlier messages
+              {t("sessions.loadEarlierMessages", "Load earlier messages")}
             </button>
           </div>
         ) : null}
@@ -717,9 +718,9 @@ function AgentTranscriptComponent({
               paused={waitingForApproval}
               waitingLabel={
                 managed && waitingForApproval
-                  ? "Waiting for orchestrator"
+                  ? t("sessions.waitingForOrchestrator", "Waiting for orchestrator")
                   : pendingQuestion
-                    ? "Waiting for answers"
+                    ? t("sessions.waitingForAnswers", "Waiting for answers")
                     : undefined
               }
               background={backgroundTasks}
@@ -1003,7 +1004,7 @@ function InitialThinking({
     <div
       className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
     >
-      {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
+      {live ? <Shimmer duration={1.6}>{t("sessions.thinking", "Thinking…")}</Shimmer> : t("sessions.thinking", "Thinking…")}
     </div>
   );
 }
@@ -1031,7 +1032,7 @@ function LiveFoldTitle({
   // Yielding with a command still going is not the end of the turn. The clock
   // keeps running and the line says what it is waiting on.
   const text = paused
-    ? (waitingLabel ?? "Waiting for approval")
+    ? (waitingLabel ?? t("turn.waitingForApproval", "Waiting for approval"))
     : background?.length
       ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
       : formatWorkingDuration(elapsedMs, modelName);
@@ -1169,27 +1170,38 @@ function TurnMetricsBadge({
   const headline =
     [
       metrics.cacheHitPercent != null
-        ? `Cache hit ${Math.round(metrics.cacheHitPercent)}%`
+        ? t("turn.cacheHit", `Cache hit ${Math.round(metrics.cacheHitPercent)}%`, {
+            percent: Math.round(metrics.cacheHitPercent),
+          })
         : null,
       outputRate != null
-        ? `Output ${formatMetricCount(outputRate)} tok/s`
+        ? t("turn.outputRate", `Output ${formatMetricCount(outputRate)} tok/s`, {
+            rate: formatMetricCount(outputRate),
+          })
         : null,
     ]
       .filter(Boolean)
-      .join(" · ") || "Turn tokens";
+      .join(" · ") || t("turn.turnTokens", "Turn tokens");
   const detail = [
     metrics.inputTokens != null
-      ? `${formatMetricCount(metrics.inputTokens)} input`
+      ? t("turn.inputTokens", `${formatMetricCount(metrics.inputTokens)} input`, {
+          count: formatMetricCount(metrics.inputTokens),
+        })
       : null,
     metrics.outputTokens != null
-      ? `${formatMetricCount(metrics.outputTokens)} output`
+      ? t("turn.outputTokens", `${formatMetricCount(metrics.outputTokens)} output`, {
+          count: formatMetricCount(metrics.outputTokens),
+        })
       : null,
     metrics.cacheReadTokens != null
-      ? `${formatMetricCount(metrics.cacheReadTokens)} cached`
+      ? t("turn.cachedTokens", `${formatMetricCount(metrics.cacheReadTokens)} cached`, {
+          count: formatMetricCount(metrics.cacheReadTokens),
+        })
       : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const metricsLabel = t("turn.metrics", "Turn metrics");
   const label = [headline, detail].filter(Boolean).join(". ");
 
   return (
@@ -1204,8 +1216,8 @@ function TurnMetricsBadge({
       <span
         role="img"
         tabIndex={0}
-        aria-label={`Turn metrics: ${label}`}
-        title="Turn metrics"
+        aria-label={`${metricsLabel}: ${label}`}
+        title={metricsLabel}
         className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
         <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
@@ -1257,12 +1269,13 @@ function formatClockTime(epochMs: number): string {
 function CopyTurnButton({
   text,
   attachments,
-  label = "Copy response",
+  label,
 }: {
   text: string;
   attachments?: Attachment[];
   label?: string;
 }) {
+  const defaultLabel = label ?? t("turn.copyResponse", "Copy response");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1276,13 +1289,15 @@ function CopyTurnButton({
     };
   }, [text, attachments]);
 
+  const buttonLabel = copied ? t("turn.copied", "Copied") : defaultLabel;
+
   return (
     <>
       <button
         type="button"
         disabled={pending}
-        title={copied ? "Copied" : label}
-        aria-label={copied ? "Copied" : label}
+        title={buttonLabel}
+        aria-label={buttonLabel}
         className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={(event) => {
           event.stopPropagation();
@@ -1312,7 +1327,7 @@ function CopyTurnButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Copy failed. {error}
+          {t("turn.copyFailed", "Copy failed.")} {error}
         </span>
       )}
     </>
@@ -1339,13 +1354,17 @@ function SaveNoteButton({
     };
   }, [text]);
 
+  const saveLabel = saved
+    ? t("turn.savedToNotes", "Saved to Notes")
+    : t("turn.saveAsNote", "Save as note");
+
   return (
     <>
       <button
         type="button"
         disabled={pending}
-        title={saved ? "Saved to Notes" : "Save as note"}
-        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        title={saveLabel}
+        aria-label={saveLabel}
         className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={async () => {
           setError(null);
@@ -1372,7 +1391,7 @@ function SaveNoteButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Could not save note. {error}
+          {t("turn.couldNotSaveNote", "Could not save note.")} {error}
         </span>
       )}
     </>
@@ -1386,7 +1405,9 @@ function EditLastTurnButton({
   onEdit: () => void;
   editing?: boolean;
 }) {
-  const label = editing ? "Cancel edit" : "Edit and resend";
+  const label = editing
+    ? t("turn.cancelEdit", "Cancel edit")
+    : t("turn.editAndResend", "Edit and resend");
   return (
     <button
       type="button"
@@ -1741,7 +1762,7 @@ function UserMessageBlock({
               className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
               onClick={toggle}
             >
-              {expanded ? "Show less" : "Show more"}
+              {expanded ? t("common.showLess", "Show less") : t("common.showMore", "Show more")}
             </button>
           ) : null}
           {block.ciContext ? (
@@ -1751,10 +1772,10 @@ function UserMessageBlock({
             >
               <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
                 <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
-                <span>CI context</span>
+                <span>{t("sessions.ciContext", "CI context")}</span>
               </summary>
               <p className="mt-2 text-xs text-content/50">
-                CI instructions and failure details included with this request.
+                {t("session.ciContextIncluded", "CI instructions and failure details included with this request.")}
               </p>
               <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
                 {block.ciContext}
@@ -1765,27 +1786,27 @@ function UserMessageBlock({
             <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
               <span className="flex items-center gap-1.5 text-xs text-content/50">
                 <CircleDashed className="size-3.5" strokeWidth={1.75} />
-                Draft
+                {t("sessions.draft", "Draft")}
               </span>
               <span className="flex items-center gap-1">
                 <button
                   type="button"
-                  title="Remove draft"
+                  title={t("sessions.removeDraft", "Remove draft")}
                   aria-label="Remove draft"
                   onClick={() => onRemoveDraft?.(block)}
                   className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
                 >
                   <Trash2 className="size-3.5" strokeWidth={1.75} />
-                  Remove
+                  {t("common.remove", "Remove")}
                 </button>
                 <button
                   type="button"
-                  title="Send draft"
+                  title={t("sessions.sendDraft", "Send draft")}
                   aria-label="Send draft"
                   onClick={() => onSendDraft?.(block)}
                   className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
                 >
-                  Send
+                  {t("common.send", "Send")}
                   <ArrowUp className="size-3.5" strokeWidth={2.25} />
                 </button>
               </span>
@@ -1811,7 +1832,7 @@ function UserMessageBlock({
               <CopyTurnButton
                 text={text}
                 attachments={block.attachments}
-                label="Copy message"
+                label={t("turn.copyMessage", "Copy message")}
               />
             ) : null}
             {onEdit ? (
@@ -2575,7 +2596,7 @@ function SubagentPanel({
       {model || status ? (
         <span className="flex min-w-0 max-w-[55%] shrink-0 items-baseline gap-2 font-sans text-[12px] text-content/40">
           {model ? (
-            <span className="truncate" title={`Model: ${model}`}>
+            <span className="truncate" title={t("sessions.modelLabel", `Model: ${model}`, { model })}>
               {model}
             </span>
           ) : null}
@@ -3307,12 +3328,24 @@ function formatWorkingDuration(
 ): string {
   const who = modelName?.trim();
   const elapsed = formatElapsed(elapsedMs);
-  const verb = done ? (who ? "worked" : "Worked") : who ? "working" : "Working";
   if (elapsed == null) {
-    if (done) return who ? `${who} ${verb}` : verb;
-    return who ? `${who} ${verb}…` : `${verb}…`;
+    if (done) {
+      return who
+        ? t("turn.worked", `${who} worked`, { who })
+        : t("turn.workedNoWho", "Worked");
+    }
+    return who
+      ? t("turn.working", `${who} working…`, { who })
+      : t("turn.workingNoWho", "Working…");
   }
-  return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
+  if (done) {
+    return who
+      ? t("turn.workedFor", `${who} worked for ${elapsed}`, { who, elapsed })
+      : t("turn.workedForNoWho", `Worked for ${elapsed}`, { elapsed });
+  }
+  return who
+    ? t("turn.workingFor", `${who} working for ${elapsed}`, { who, elapsed })
+    : t("turn.workingForNoWho", `Working for ${elapsed}`, { elapsed });
 }
 
 function formatElapsed(elapsedMs: number | null): string | null {
@@ -3605,14 +3638,14 @@ function ApprovalControls({
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
         onClick={() => onApproval(approval.requestId, "allow")}
       >
-        Allow
+        {t("session.allow", "Allow")}
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
         onClick={() => onApproval(approval.requestId, "deny")}
       >
-        Deny
+        {t("session.deny", "Deny")}
       </button>
     </div>
   );
@@ -3748,7 +3781,7 @@ function InterjectionDivider({ block }: { block: Block }) {
               onClick={() => setExpanded((value) => !value)}
               className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
             >
-              {expanded ? "Show less" : "Show more"}
+              {expanded ? t("common.showLess", "Show less") : t("common.showMore", "Show more")}
             </button>
           ) : null}
         </div>

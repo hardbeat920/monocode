@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import type { HarnessId } from "./session";
 import { HARNESSES } from "./session";
 import { loadProjectProviderSettings } from "./projectProviders";
@@ -119,14 +120,14 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: "Reasoning",
+        get label() { return t("models.settings.reasoning", "Reasoning"); },
         kind: "select",
         value: "high",
         options: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High" },
-          { value: "medium", label: "Medium" },
-          { value: "low", label: "Low" },
+          { value: "xhigh", get label() { return t("models.options.extraHigh", "Extra High"); } },
+          { value: "high", get label() { return t("models.options.high", "High"); } },
+          { value: "medium", get label() { return t("models.options.medium", "Medium"); } },
+          { value: "low", get label() { return t("models.options.low", "Low"); } },
         ],
       },
     ],
@@ -140,13 +141,13 @@ export const MODELS: AgentModel[] = [
     settings: [
       {
         id: "effort",
-        label: "Reasoning",
+        get label() { return t("models.settings.reasoning", "Reasoning"); },
         kind: "select",
         value: "high",
         options: [
-          { value: "high", label: "High" },
-          { value: "medium", label: "Medium" },
-          { value: "low", label: "Low" },
+          { value: "high", get label() { return t("models.options.high", "High"); } },
+          { value: "medium", get label() { return t("models.options.medium", "Medium"); } },
+          { value: "low", get label() { return t("models.options.low", "Low"); } },
         ],
       },
     ],

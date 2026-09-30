@@ -2,6 +2,7 @@ import { StickyNote } from "../../../shared/ui/icons";
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import type { RankedFile } from "../../files/model/fileIndex";
 import { isNoteMentionPath } from "../../notes";
+import { useTranslation } from "../../i18n/model/i18n";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { MatchText } from "../../../shared/ui/MatchText";
@@ -25,6 +26,7 @@ export function FileMentionPicker({
   onActive,
   onPick,
 }: Props) {
+  const { t } = useTranslation();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
   const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
@@ -64,20 +66,20 @@ export function FileMentionPicker({
       {files.length === 0 ? (
         <p className="px-3 py-2.5 text-[12px] text-content/50">
             {loading
-              ? "Indexing files…"
+              ? t("files.indexingFiles", "Indexing files…")
               : query.trim()
                 ? includeNotes
-                  ? "No matching files or notes"
-                  : "No matching files or folders"
+                  ? t("files.noMatchingFilesOrNotes", "No matching files or notes")
+                  : t("files.noMatchingFilesOrFolders", "No matching files or folders")
                 : includeNotes
-                  ? "No files or notes found"
-                  : "No files or folders found"}
+                  ? t("files.noFilesOrNotesFound", "No files or notes found")
+                  : t("files.noFilesOrFoldersFound", "No files or folders found")}
         </p>
       ) : (
         <div
           ref={lockOverscroll}
           role="listbox"
-          aria-label={includeNotes ? "Files and notes" : "Files and folders"}
+          aria-label={includeNotes ? t("files.filesAndNotes", "Files and notes") : t("files.filesAndFolders", "Files and folders")}
           onMouseMove={onListMouseMove}
           className="max-h-[min(240px,40vh)] overflow-y-auto overscroll-none px-1 py-1"
         >
@@ -131,7 +133,7 @@ export function FileMentionPicker({
                 </span>
                 {note ? (
                   <span className="shrink-0 font-mono text-[11px] text-content/40">
-                    Note
+                    {t("sessions.note", "Note")}
                   </span>
                 ) : dir ? (
                   <span className="min-w-0 max-w-[45%] truncate font-mono text-[11px] text-content/40">

@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { CircleDashed, X } from "../../../shared/ui/icons";
 import { MAX_PREVIEW_LINES } from "../../../integrations/harness/core/preview";
 import { formatInteger } from "../../../shared/lib/numbers";
@@ -143,7 +144,7 @@ export function FilePreview({
           >
             {preview.contentOnly && !lines.length ? (
               <p className="px-3 py-2 font-mono text-xs text-content/50">
-                Empty file
+                {t("files.emptyFile", "Empty file")}
               </p>
             ) : null}
             {lines.map((line, index) => (

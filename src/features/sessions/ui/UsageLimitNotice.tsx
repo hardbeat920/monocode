@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { useEffect, useState } from "react";
 import { Clock, Gauge, Play, X } from "../../../shared/ui/icons";
 import type { UsageLimit } from "../model/session";
@@ -30,43 +31,43 @@ export function UsageLimitNotice({
     <div className="px-2 text-content/55" data-usage-limit>
       <div className="relative z-0 flex h-8 items-center gap-2 rounded-t-[10px] border border-b-0 border-amber-400/25 bg-amber-400/10 px-2 text-[12px]">
         <Gauge className="size-3.5 shrink-0 text-amber-400" />
-        <span className="shrink-0 text-content/85">Usage limit reached</span>
+        <span className="shrink-0 text-content/85">{t("usage.usageLimitReached", "Usage limit reached")}</span>
         <span className="min-w-0 flex-1 truncate">
           {limit.resetsAt == null
             ? ""
             : waiting
               ? `Resets ${formatUsageLimitReset(limit.resetsAt, now)}`
-              : "Limit has reset"}
+              : t("sessions.usageLimit.limitHasReset", "Limit has reset")}
         </span>
         {!waiting ? (
           <button type="button" onClick={onResume} className={BUTTON}>
             <Play className="size-3.5" />
-            Resume
+            {t("common.resume", "Resume")}
           </button>
         ) : limit.resumeAtReset ? (
           <button
             type="button"
-            title="Cancel the automatic resume"
+            title={t("sessions.cancelAutoResume", "Cancel the automatic resume")}
             onClick={() => onResumeAtReset?.(false)}
             className={`${BUTTON} text-amber-400`}
           >
             <Clock className="size-3.5" />
-            Resuming at reset
+            {t("sessions.usageLimit.resumingAtReset", "Resuming at reset")}
           </button>
         ) : (
           <button
             type="button"
-            title="Continue this session once the limit resets"
+            title={t("sessions.continueAtReset", "Continue this session once the limit resets")}
             onClick={() => onResumeAtReset?.(true)}
             className={BUTTON}
           >
             <Clock className="size-3.5" />
-            Resume at reset
+            {t("session.resumeAtReset", "Resume at reset")}
           </button>
         )}
         <button
           type="button"
-          title="Dismiss"
+          title={t("common.dismiss", "Dismiss")}
           aria-label="Dismiss usage limit notice"
           onClick={onDismiss}
           className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"

@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
@@ -47,6 +48,7 @@ export function QuickPermissions({
   onClose: () => void;
   embedded?: boolean;
 }) {
+  const { t } = useTranslation();
   const root = useRef<HTMLDivElement>(null);
   const id = useId();
   const [active, setActive] = useState(RUNTIME_MODES.indexOf(value));
@@ -62,7 +64,7 @@ export function QuickPermissions({
     <div
       ref={root}
       role="listbox"
-      aria-label="Permissions"
+      aria-label={t("quickComposer.permissionsAriaLabel", "Permissions")}
       aria-activedescendant={`${id}-${active}`}
       tabIndex={embedded ? 0 : -1}
       className={`min-h-0 overflow-y-auto overscroll-none p-2 outline-none ${embedded ? "" : "border-t border-stroke"}`}
@@ -103,10 +105,10 @@ export function QuickPermissions({
           <QuickPermissionIcon mode={mode} className="size-4 shrink-0" />
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-medium">
-              {RUNTIME_MODE_LABEL[mode]}
+              {t(`runtimeMode.${mode}`, RUNTIME_MODE_LABEL[mode])}
             </span>
             <span className="mt-0.5 block text-[11px] text-content/45">
-              {RUNTIME_MODE_HINT[mode]}
+              {t(`runtimeModeHints.${mode}`, RUNTIME_MODE_HINT[mode])}
             </span>
           </span>
           {value === mode ? (

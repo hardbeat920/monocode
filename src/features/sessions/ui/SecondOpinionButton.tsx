@@ -44,6 +44,7 @@ import {
 } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
+import { t } from "../../i18n/model/i18n";
 
 type Props = {
   from: HarnessId;
@@ -85,10 +86,10 @@ export function HandoffButton({
       from={from}
       onPick={onPick}
       icon={Replace}
-      title="Handoff"
-      disabledTitle="Install another provider to hand off"
-      description="Hand this session to another agent to continue the work."
-      menuLabel="Hand this session to another agent"
+      title={t("turn.handoff", "Handoff")}
+      disabledTitle={t("turn.handoffDisabled", "Install another provider to hand off")}
+      description={t("turn.handoffDesc", "Hand this session to another agent to continue the work.")}
+      menuLabel={t("turn.handoffMenuLabel", "Hand this session to another agent")}
     />
   );
 }
@@ -113,10 +114,10 @@ export function BuildTargetButton({
       fromSettings={settings}
       onPick={onPick}
       icon={ChevronDown}
-      title="Build with another model"
-      disabledTitle="No build providers are available"
-      description="Choose the model and provider that should build this plan."
-      menuLabel="Build this plan with another model or provider"
+      title={t("turn.buildTarget", "Build with another model")}
+      disabledTitle={t("turn.buildTargetDisabled", "No build providers are available")}
+      description={t("turn.buildTargetDesc", "Choose the model and provider that should build this plan.")}
+      menuLabel={t("turn.buildTargetMenuLabel", "Build this plan with another model or provider")}
       includeCurrent
       disabled={disabled}
       triggerClassName="flex h-6 w-6 shrink-0 items-center justify-center rounded-r-md border-l border-background-base/20 bg-content text-background-base hover:bg-content/90 disabled:pointer-events-none disabled:opacity-40"
@@ -130,10 +131,10 @@ export function SecondOpinionButton({
   fromSettings,
   onPick,
   icon: Icon = MessageMultiple,
-  title = "Second opinion",
-  disabledTitle = "No different model available for a second opinion",
-  description = "Send this turn to another agent to review the work.",
-  menuLabel = "Send this turn to another agent",
+  title,
+  disabledTitle,
+  description,
+  menuLabel,
   includeCurrent = false,
   excludeFromModel = false,
   disabled: disabledByCaller = false,
@@ -166,6 +167,17 @@ export function SecondOpinionButton({
   const [activeModelRow, setActiveModelRow] =
     useState<HTMLButtonElement | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+
+  const resolvedTitle = title ?? t("turn.secondOpinion", "Second opinion");
+  const resolvedDisabledTitle =
+    disabledTitle ??
+    t("turn.secondOpinionDisabled", "No different model available for a second opinion");
+  const resolvedDescription =
+    description ??
+    t("turn.secondOpinionDesc", "Send this turn to another agent to review the work.");
+  const resolvedMenuLabel =
+    menuLabel ??
+    t("turn.secondOpinionMenuLabel", "Send this turn to another agent");
 
   const probed = hasProbedHarnessAvailability();
   const targets = useMemo(() => {
@@ -275,7 +287,7 @@ export function SecondOpinionButton({
         });
   const noTargets = targets.length === 0 || !hasSelectableModel;
   const disabled = disabledByCaller || noTargets;
-  const label = noTargets ? disabledTitle : title;
+  const label = noTargets ? resolvedDisabledTitle : resolvedTitle;
 
   const pick = (model: (typeof models)[number], effortValue?: string) => {
     const effort = modelEffortSetting(model);
@@ -415,20 +427,20 @@ export function SecondOpinionButton({
             onDismiss={(reason) => dismiss(reason === "escape")}
             role="menu"
             tabIndex={-1}
-            aria-label={menuLabel}
+            aria-label={resolvedMenuLabel}
             onKeyDown={onMenuKey}
             data-provider-target
             className="p-1 font-sans"
           >
             <div className="px-1.5 pb-2 pt-1.5">
               <p className="text-[11px] leading-3 text-content/50 text-balance">
-                {description}
+                {resolvedDescription}
               </p>
             </div>
             <div className="mx-1 mb-1 h-px bg-content/10" />
             {targets.length === 0 ? (
               <div className="px-2.5 py-2 text-[12px] leading-4 text-content/50">
-                {disabledTitle}
+                {resolvedDisabledTitle}
               </div>
             ) : (
               targets.map((harness, index) => {
@@ -491,7 +503,7 @@ export function SecondOpinionButton({
               maxHeight={SUBMENU_MAX_HEIGHT}
               layer={LAYER.submenu}
               role="menu"
-              aria-label={`${HARNESS_TITLE[activeHarness]} models`}
+              aria-label={t("turn.providerModels", "{provider} models", { provider: HARNESS_TITLE[activeHarness] })}
               ignore={SELF}
               onMouseEnter={() =>
                 setMenuLevel((level) =>
@@ -564,7 +576,7 @@ export function SecondOpinionButton({
               width={EFFORT_MENU_WIDTH}
               layer={LAYER.submenu + 1}
               role="menu"
-              aria-label={`${activeModel.name} effort`}
+              aria-label={t("turn.modelEffort", "{model} effort", { model: activeModel.name })}
               ignore={SELF}
               onMouseEnter={() => setMenuLevel("effort")}
               data-provider-target

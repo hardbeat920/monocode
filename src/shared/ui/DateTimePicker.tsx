@@ -1,3 +1,4 @@
+import { t } from "../../features/i18n/model/i18n";
 import {
   useId,
   useLayoutEffect,
@@ -240,10 +241,10 @@ export function DateTimePicker({
               className="size-3 shrink-0 text-content/40"
               aria-hidden="true"
             />
-            Time
+            {t("dateTime.time", "Time")}
           </label>
           <p id={timeHintId} className="mt-0.5 text-[10px] text-content/40">
-            Local time, 24-hour
+            {t("dateTime.localTime24", "Local time, 24-hour")}
           </p>
         </div>
         <div className="w-20 rounded border border-content/10 bg-content/5 focus-within:border-content/40 focus-within:outline-2 focus-within:outline-accent">

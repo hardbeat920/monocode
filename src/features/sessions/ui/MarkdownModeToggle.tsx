@@ -1,3 +1,4 @@
+import { useTranslation } from "../../i18n/model/i18n";
 import { useEffect, useState, type ReactNode } from "react";
 
 export type MarkdownViewMode = "preview" | "source";
@@ -30,6 +31,7 @@ type ToggleProps = {
 };
 
 export function MarkdownModeToggle({ mode, onChange }: ToggleProps) {
+  const { t } = useTranslation();
   return (
     <div
       role="tablist"
@@ -37,12 +39,12 @@ export function MarkdownModeToggle({ mode, onChange }: ToggleProps) {
       className="flex rounded-md border border-content/10 bg-content/10 p-0.5 backdrop-blur-md"
     >
       <ModeTab
-        label="Preview"
+        label={t("sessions.markdown.preview", "Preview")}
         selected={mode === "preview"}
         onSelect={() => onChange("preview")}
       />
       <ModeTab
-        label="Source"
+        label={t("sessions.markdown.source", "Source")}
         selected={mode === "source"}
         onSelect={() => onChange("source")}
       />

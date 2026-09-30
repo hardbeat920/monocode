@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { CircleAlert } from "../../../shared/ui/icons";
 import { useState } from "react";
 import { createPortal } from "react-dom";
@@ -110,7 +111,7 @@ function ApprovalToastCard({
           </span>
           <span className="flex shrink-0 items-center gap-1 text-[11px] text-amber-400">
             <CircleAlert className="size-3.5" strokeWidth={1.75} />
-            <span>{notice.kind === "question" ? "Question" : "Approval"}</span>
+            <span>{notice.kind === "question" ? t("notifications.question", "Question") : t("liveAgents.needApproval", "Approval")}</span>
           </span>
         </span>
         <span className="line-clamp-3 text-[12px] leading-relaxed text-content/70">
@@ -125,14 +126,14 @@ function ApprovalToastCard({
             className="flex-1 rounded-md bg-content px-2.5 py-1 text-[11px] font-medium text-background-base hover:bg-content/80"
             onClick={() => onApproval(session.id, requestId, "allow")}
           >
-            Allow
+            {t("session.allow", "Allow")}
           </button>
           <button
             type="button"
             className="flex-1 rounded-md bg-content/10 px-2.5 py-1 text-[11px] font-medium text-content/70 hover:bg-content/20"
             onClick={() => onApproval(session.id, requestId, "deny")}
           >
-            Deny
+            {t("session.deny", "Deny")}
           </button>
         </div>
       )}

@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { ChevronDown, ChevronRight, GitBranch } from "../../../shared/ui/icons";
+import { useTranslation } from "../../i18n/model/i18n";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { suppressTextSelection } from "../../../shared/lib/drag";
 import {
@@ -41,6 +42,7 @@ export function GitHistoryGraph({
   onToggleExpanded,
   onOpenCommit,
 }: Props) {
+  const { t } = useTranslation();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const { commits } = useGitHistory(cwd, enabled && expanded);
   const rows = useMemo(() => layoutGitGraph(commits), [commits]);
@@ -51,13 +53,13 @@ export function GitHistoryGraph({
         type="button"
         onClick={onToggleExpanded}
         aria-expanded={expanded}
-        aria-label={expanded ? "Collapse graph" : "Expand graph"}
+        aria-label={expanded ? t("sourceControl.collapseGraph", "Collapse graph") : t("sourceControl.expandGraph", "Expand graph")}
         className={`flex w-full shrink-0 items-center gap-1 px-3 text-left leading-none hover:bg-content/5 ${
           expanded ? "h-7" : "h-full"
         }`}
       >
         <span className="text-[10px] font-semibold tracking-[0.04em] text-content/55 uppercase">
-          Graph
+          {t("sourceControl.history", "Graph")}
         </span>
         {expanded ? (
           <ChevronDown
@@ -77,9 +79,9 @@ export function GitHistoryGraph({
           className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-none"
         >
           {!cwd || cwd === "~" ? (
-            <p className="px-3 py-2 text-[12px] text-content/45">No project folder</p>
+            <p className="px-3 py-2 text-[12px] text-content/45">{t("sourceControl.noProjectFolder", "No project folder")}</p>
           ) : commits.length === 0 ? (
-            <p className="px-3 py-2 text-[12px] text-content/45">No commits yet</p>
+            <p className="px-3 py-2 text-[12px] text-content/45">{t("sourceControl.noCommitsYet", "No commits yet")}</p>
           ) : (
             <ul className="min-w-0 max-w-full">
               {commits.map((commit, index) => {
@@ -302,6 +304,7 @@ export function GraphResizeSash({
   onHeightCommit: (height: number) => void;
   maxHeight: () => number;
 }) {
+  const { t } = useTranslation();
   const drag = useRef<{ start: number; size: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const paintedRef = useRef(height);
@@ -368,7 +371,7 @@ export function GraphResizeSash({
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize graph"
+      aria-label={t("sourceControl.resizeGraph", "Resize graph")}
       aria-valuenow={height}
       className={`z-10 h-1.5 shrink-0 cursor-row-resize touch-none ${
         dragging ? "bg-content/15" : "hover:bg-content/10"

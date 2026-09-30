@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   useCallback,
@@ -367,7 +368,10 @@ function GithubWorkItemCard({
       ) : (
         <div className="mt-2">
           <h3 className="text-[13px] font-semibold text-content">
-            {parsed.kind === "pr" ? "Pull request" : "Issue"} #{parsed.number}
+            {parsed.kind === "pr"
+              ? t("inbox.pullRequest", "Pull request")
+              : t("inbox.issue", "Issue")}{" "}
+            #{parsed.number}
           </h3>
           {summary ? (
             <p className="mt-1.5 line-clamp-3 text-[11px] leading-[1.45] text-content/55">
@@ -375,8 +379,7 @@ function GithubWorkItemCard({
             </p>
           ) : (
             <p className="mt-1 text-[11px] leading-relaxed text-content/50">
-              Details aren&apos;t available here, but the link can still be
-              opened on GitHub.
+              {t("session.detailsNotAvailableOnGitHub", "Details aren't available here, but the link can still be opened on GitHub.")}
             </p>
           )}
         </div>
@@ -391,7 +394,7 @@ function GithubWorkItemCard({
             />
           ) : null}
           {details?.author && updated ? <span aria-hidden>·</span> : null}
-          {updated ? <span className="shrink-0">Updated {updated}</span> : null}
+          {updated ? <span className="shrink-0">{t("sessions.links.updated", "Updated")} {updated}</span> : null}
         </div>
       ) : null}
 
@@ -446,7 +449,7 @@ function GithubWorkItemCard({
 
       <div className="mt-3 flex items-center gap-1.5 border-t border-content/[0.07] pt-2 text-[10px] text-content/35">
         <ExternalLink className="size-3" aria-hidden="true" />
-        Click the chip to open on GitHub
+        {t("session.clickChipToOpenOnGitHub", "Click the chip to open on GitHub")}
       </div>
     </div>
   );
@@ -526,34 +529,37 @@ function workItemStatus(
   if (!item) {
     return {
       Icon: kind === "pr" ? GitPullRequest : CircleDot,
-      label: kind === "pr" ? "Pull request" : "Issue",
+      label:
+        kind === "pr"
+          ? t("inbox.pullRequest", "Pull request")
+          : t("inbox.issue", "Issue"),
       className: "text-content/50",
     };
   }
   if (item?.draft) {
     return {
       Icon: GitPullRequestDraft,
-      label: "Draft",
+      label: t("sessions.links.draft", "Draft"),
       className: "text-content/50",
     };
   }
   if (item?.state === "merged") {
     return {
       Icon: GitMerge,
-      label: "Merged",
+      label: t("sessions.links.merged", "Merged"),
       className: "text-violet-400/90",
     };
   }
   if (item?.state === "closed") {
     return {
       Icon: kind === "pr" ? GitPullRequestClosed : CircleX,
-      label: "Closed",
+      label: t("sessions.links.closed", "Closed"),
       className: "text-rose-400/90",
     };
   }
   return {
     Icon: kind === "pr" ? GitPullRequest : CircleDot,
-    label: "Open",
+    label: t("sessions.links.open", "Open"),
     className: "text-emerald-400/90",
   };
 }

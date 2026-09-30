@@ -1,3 +1,4 @@
+import { t } from "../../i18n/model/i18n";
 import { acceptCompletion, completionStatus } from "@codemirror/autocomplete";
 import { indentLess, indentMore } from "@codemirror/commands";
 import {
@@ -412,7 +413,7 @@ export function FileEditor({
   if (loadState.status === "loading") {
     return (
       <div className="grid h-full place-items-center text-[12px] text-content/45">
-        Opening {basename(path)}…
+        {t("files.openingFile", "Opening {filename}…", { filename: basename(path) })}
       </div>
     );
   }
@@ -423,7 +424,7 @@ export function FileEditor({
         <div className="max-w-md text-center">
           <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
           <p className="text-[13px] text-content">
-            Couldn’t open {basename(path)}
+            {t("files.couldNotOpenFile", "Couldn’t open {name}", { name: basename(path) })}
           </p>
           <p className="mt-1 text-[12px] leading-5 text-content/50">
             {loadState.message}
@@ -434,7 +435,7 @@ export function FileEditor({
             className="mx-auto mt-4 flex h-7 items-center gap-1.5 rounded-md bg-content/10 px-2.5 text-[12px] text-content hover:bg-content/15"
           >
             <RotateCcw className="size-3" strokeWidth={1.75} />
-            Retry
+            {t("common.retry", "Retry")}
           </button>
         </div>
       </div>
@@ -448,8 +449,8 @@ export function FileEditor({
           role="status"
           className="shrink-0 border-b border-stroke px-3 py-1 text-[12px] text-content/60"
         >
-          {gitDiff.kind === "staged" ? "Staged" : "Unstaged"} line-ending
-          changes. Line breaks are normalized in this view.
+          {gitDiff.kind === "staged" ? t("files.staged", "Staged") : t("files.unstaged", "Unstaged")}{" "}
+          {t("files.lineEndingChanges", "line-ending changes. Line breaks are normalized in this view.")}
         </p>
       )}
       {markdown || svg ? (
@@ -520,15 +521,15 @@ export function FileEditor({
           {relativePath}
         </span>
         {saveState.status === "saving" ? (
-          <span>Saving…</span>
+          <span>{t("files.saving", "Saving…")}</span>
         ) : saveState.status === "saved" ? (
-          <span>Saved</span>
+          <span>{t("files.saved", "Saved")}</span>
         ) : saveState.status === "error" ? (
           <span
             className="max-w-64 truncate text-red-400"
             title={saveState.message}
           >
-            Save failed: {saveState.message}
+            {t("files.saveFailed", "Save failed: {message}", { message: saveState.message })}
           </span>
         ) : null}
       </footer>
@@ -1046,7 +1047,7 @@ function DiffChunkNav({
       <div className="flex items-center gap-0.5">
         <button
           type="button"
-          title="Previous change"
+          title={t("files.previousChange", "Previous change")}
           aria-label="Previous change"
           disabled={total === 0 || index <= 0}
           onMouseDown={(event) => event.preventDefault()}
@@ -1060,7 +1061,7 @@ function DiffChunkNav({
         </span>
         <button
           type="button"
-          title="Next change"
+          title={t("files.nextChange", "Next change")}
           aria-label="Next change"
           disabled={total === 0 || index >= total - 1}
           onMouseDown={(event) => event.preventDefault()}

@@ -13,6 +13,7 @@ import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { MatchText } from "../../../shared/ui/MatchText";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { OverlayNav } from "../../../app/shell/TitleBar";
+import { useTranslation } from "../../i18n/model/i18n";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import {
@@ -88,6 +89,7 @@ export function SearchView({
   onOpenSession,
   onOpenProject,
 }: Props) {
+  const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const activeProjectSearchId = useRef<string | null>(null);
   const activeSessionOwner = useRef<string | null>(null);
@@ -400,8 +402,8 @@ export function SearchView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search everything..."
-            aria-label="Search"
+            placeholder={t("search.searchEverythingPlaceholder", "Search everything...")}
+            aria-label={t("search.title", "Search")}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -422,6 +424,14 @@ export function SearchView({
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-3">
         {SCOPES.map((item) => {
           const selected = scope === item.id;
+          const label =
+            item.id === "all"
+              ? t("search.all", "All")
+              : item.id === "conversations"
+                ? t("search.conversations", "Conversations")
+                : item.id === "files"
+                  ? t("search.files", "Files")
+                  : t("search.projects", "Projects");
           return (
             <button
               key={item.id}
@@ -434,7 +444,7 @@ export function SearchView({
                   : "text-content/50 hover:bg-content/5 hover:text-content"
               }`}
             >
-              {item.label}
+              {label}
             </button>
           );
         })}
@@ -454,7 +464,7 @@ export function SearchView({
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
           <>
-            <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+            <p className="px-2 py-1.5 text-[12px] text-content/50">{t("search.noResults", "No results")}</p>
             {limitNotice}
           </>
         ) : (
@@ -478,6 +488,7 @@ const EMPTY_DOT_COLS = 27;
 const EMPTY_DOT_ROWS = 19;
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center px-6 pb-24">
       <div className="relative mb-2 grid h-48 w-72 place-items-center">
@@ -503,7 +514,7 @@ function EmptyState() {
       </div>
 
       <p className="max-w-xs text-center text-[13px] text-content/45">
-        Find files, conversations, messages, and projects.
+        {t("search.emptyDescription", "Find files, conversations, messages, and projects.")}
       </p>
     </div>
   );
@@ -522,6 +533,7 @@ function ResultList({
   onActive: (index: number) => void;
   onOpen: (hit: AppSearchHit) => void;
 }) {
+  const { t } = useTranslation();
   const activeRef = useRef<HTMLButtonElement>(null);
   const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
   const fromPointer = useRef(false);
@@ -558,7 +570,7 @@ function ResultList({
   return (
     <div
       role="listbox"
-      aria-label="Search results"
+      aria-label={t("search.searchResults", "Search results")}
       onMouseMove={onListMouseMove}
     >
       {hits.map((hit, index) => {
