@@ -654,11 +654,8 @@ function ChangedFiles({
       content.base,
       content.head,
     );
-    const match = /\/(pull|pullrequest)\/(\d+)(?:[/?#]|$)/.exec(url);
-    const number = Number(match?.[2]);
-    if (Number.isInteger(number) && number > 0) {
-      recordPrActivity(number, match?.[1] === "pullrequest" ? "azuredevops" : "github");
-    }
+    const reference = parseCreatedPrReference(url);
+    if (reference) recordPrActivity(reference.number, reference.provider);
     await openUrl(url.trim());
   };
 
@@ -977,6 +974,25 @@ function cachedPr(
 ): GitPr | null {
   if (!cwd || cwd === "~" || !branch) return null;
   return prByCwd.get(cwd) ?? null;
+}
+
+/** Pull-request number and provider from a creation-result URL. Matches the
+ * final `/pull/<id>` (GitHub) or `/pullrequest/<id>` (Azure Repos) route in
+ * the URL pathname, so intermediate segments and query/fragment suffixes
+ * cannot produce a wrong match. Returns null when there is no PR route. */
+export function parseCreatedPrReference(
+  rawUrl: string,
+): { number: number; provider: "github" | "azuredevops" } | null {
+  let pathname = rawUrl.trim();
+  try {
+    pathname = new URL(pathname).pathname;
+  } catch {
+    // Not an absolute URL: match against the raw string instead.
+  }
+  const match = /\/(pull|pullrequest)\/(\d+)\/?$/.exec(pathname);
+  const number = Number(match?.[2]);
+  if (!match || !Number.isInteger(number) || number <= 0) return null;
+  return { number, provider: match[1] === "pullrequest" ? "azuredevops" : "github" };
 }
 
 function syncStatusLabel(index: GitDiffIndex): string {

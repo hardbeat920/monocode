@@ -224,9 +224,11 @@ export function parseAzureDevOpsRemote(remote: string): AzurePrTarget | null {
   };
 }
 
-/** Canonical Azure Repos pull-request URL for a numeric PR id. */
+/** Canonical Azure Repos pull-request URL for a numeric PR id. Project and
+ * repository names are encoded so spaces or reserved characters (e.g. a
+ * literal `%2F` inside a name) cannot change the repository path. */
 export function azurePrWebUrl(target: AzurePrTarget, id: number): string {
-  return `${target.organizationUrl.replace(/\/+$/, "")}/${target.project}/_git/${target.repo}/pullrequest/${id}`;
+  return `${target.organizationUrl.replace(/\/+$/, "")}/${encodeURIComponent(target.project)}/_git/${encodeURIComponent(target.repo)}/pullrequest/${id}`;
 }
 
 /** Remote name in an `@{upstream}` abbrev ref (`origin/main` -> `origin`).
@@ -683,11 +685,13 @@ export class WorkspaceCommands {
   }
 
   /** Azure DevOps coordinates of the branch's push destination, or null when
-   * the push remote is not an Azure DevOps remote. */
+   * the push remote is not an Azure DevOps remote. Resolves the push URL
+   * (not the fetch URL) so `remote.<name>.pushurl` configurations target
+   * the repository that actually receives the push. */
   private async azurePrTarget(root: string): Promise<AzurePrTarget | null> {
     const remote = await this.gitPushRemote(root);
     if (!remote) return null;
-    const url = await this.gitCommand(root, ["remote", "get-url", remote])
+    const url = await this.gitCommand(root, ["remote", "get-url", "--push", remote])
       .then((output) => output.trim())
       .catch(() => "");
     if (!url) return null;

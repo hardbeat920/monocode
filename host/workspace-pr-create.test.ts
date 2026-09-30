@@ -1,9 +1,72 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { basename, join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+
+type CliStub = {
+  calls: string[][];
+  stdout?: string;
+  fail?: boolean;
+};
+
+const { cliStubs } = vi.hoisted(() => ({ cliStubs: new Map<string, CliStub>() }));
+
+/** Intercepts `az`/`gh` spawned through `execFile` so CLI routing is tested
+ * without real binaries, shells, or PATH manipulation. Real `git` calls
+ * pass through untouched, which keeps these tests portable to Windows. */
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
+  const execFile = (
+    file: string,
+    args: string[],
+    options: unknown,
+    callback: ExecCallback,
+  ): unknown => {
+    const stub = cliStubs.get(
+      basename(String(file)).toLowerCase().replace(/\.(cmd|exe|bat)$/, ""),
+    );
+    if (!stub) {
+      return (actual.execFile as (...call: unknown[]) => unknown)(
+        file,
+        args,
+        options,
+        callback,
+      );
+    }
+    stub.calls.push([...args]);
+    if (stub.fail) {
+      const error = new Error(`Command failed: ${file} ${args.join(" ")}`);
+      callback(error, "", "not logged in");
+    } else {
+      callback(null, stub.stdout ?? "", "");
+    }
+    return undefined;
+  };
+  // `execFile` carries a custom promisify implementation resolving
+  // `{ stdout, stderr }`. A plain wrapper would lose it and resolve the raw
+  // callback values instead, so reattach equivalent behavior.
+  (execFile as unknown as Record<symbol, unknown>)[promisify.custom] = (
+    file: string,
+    args: string[],
+    options: unknown,
+  ) =>
+    new Promise((resolve, reject) => {
+      (execFile as (...call: unknown[]) => unknown)(file, args, options, ((
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => (error ? reject(error) : resolve({ stdout, stderr }))) as unknown);
+    });
+  return {
+    ...actual,
+    execFile,
+  };
+});
+
 import type { HostStore } from "./store";
 import {
   azurePrWebUrl,
@@ -13,16 +76,17 @@ import {
 } from "./workspace-commands";
 
 const dirs: string[] = [];
-let savedPath = "";
-
-beforeEach(() => {
-  savedPath = process.env.PATH ?? "";
-});
 
 afterEach(() => {
-  process.env.PATH = savedPath;
+  cliStubs.clear();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function stubCli(name: string, stub: Omit<CliStub, "calls">): CliStub {
+  const entry: CliStub = { ...stub, calls: [] };
+  cliStubs.set(name, entry);
+  return entry;
+}
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -51,35 +115,21 @@ function trackUpstream(cwd: string, remote: string, branch = "feature") {
   git("branch", "--set-upstream-to", `${remote}/${branch}`);
 }
 
-/** Stub CLI binaries. Each stub needs a POSIX shell script and a Windows
- * batch file, since `execFile` resolves extensionless names on POSIX but
- * requires `.cmd` on Windows. */
-function fakeBin(scripts: Record<string, { sh: string; cmd: string }>): void {
-  const bin = tempDir("monocode-host-bin-");
-  for (const [name, bodies] of Object.entries(scripts)) {
-    const shPath = join(bin, name);
-    writeFileSync(shPath, `#!/bin/sh\n${bodies.sh}\n`);
-    chmodSync(shPath, 0o755);
-    writeFileSync(join(bin, `${name}.cmd`), `@echo off\r\n${bodies.cmd}\r\n`);
-  }
-  process.env.PATH = `${bin}${savedPath ? `${delimiter}${savedPath}` : ""}`;
-}
-
-const azJson = (id: number) => ({
-  sh: `echo '{"pullRequestId": ${id}}'`,
-  cmd: `@echo {"pullRequestId": ${id}}`,
-});
-
-const ghUrl = (url: string) => ({
-  sh: `echo '${url}'`,
-  cmd: `@echo ${url}`,
-});
-
 function commands(cwd: string): WorkspaceCommands {
   const store = {
     projects: () => [{ id: "p1", cwd, name: "repo" }],
   } as unknown as HostStore;
   return new WorkspaceCommands(store, async (_id, action) => action());
+}
+
+async function createPr(cwd: string): Promise<unknown> {
+  return commands(cwd).run("git_pr_create", {
+    cwd,
+    title: "Add login",
+    body: "Details",
+    base: "main",
+    head: "feature",
+  });
 }
 
 const AZURE_URL = "https://dev.azure.com/acme/shop/_git/web";
@@ -141,69 +191,58 @@ it("builds canonical Azure pull-request URLs", () => {
   ).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/12");
 });
 
+it("encodes spaces and reserved characters in PR URLs", () => {
+  expect(
+    azurePrWebUrl(
+      { organizationUrl: "https://dev.azure.com/acme/", project: "My Project", repo: "weird%2Fname" },
+      3,
+    ),
+  ).toBe("https://dev.azure.com/acme/My%20Project/_git/weird%252Fname/pullrequest/3");
+});
+
 it("creates Azure PRs through az on the push remote", async () => {
   const cwd = initRepo({ origin: AZURE_URL });
-  fakeBin({ az: azJson(12) });
-  const url = await commands(cwd).run("git_pr_create", {
-    cwd,
-    title: "Add login",
-    body: "Details",
-    base: "main",
-    head: "feature",
-  });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 12}' });
+  const url = await createPr(cwd);
   expect(url).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/12");
+  expect(az.calls[0]).toEqual(
+    expect.arrayContaining(["--repository", "web", "--source-branch", "feature"]),
+  );
 });
 
 it("uses the upstream remote, not origin, for Azure detection", async () => {
   const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
   trackUpstream(cwd, "azure");
-  const argsFile = join(tempDir("monocode-host-args-"), "az-args.txt");
-  fakeBin({
-    az: {
-      sh: `echo "$@" > "${argsFile}"\necho '{"pullRequestId": 7}'`,
-      cmd: `@echo %* > "${argsFile}"\n@echo {"pullRequestId": 7}`,
-    },
-  });
-  const url = await commands(cwd).run("git_pr_create", {
-    cwd,
-    title: "Add login",
-    body: "Details",
-    base: "main",
-    head: "feature",
-  });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 7}' });
+  const url = await createPr(cwd);
   expect(url).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/7");
-  await expect(readFile(argsFile, "utf8")).resolves.toContain("--repository web");
+  expect(az.calls[0]).toEqual(expect.arrayContaining(["--project", "shop"]));
+});
+
+it("uses the push URL when fetch and push URLs differ", async () => {
+  const cwd = initRepo({ origin: GITHUB_URL });
+  execFileSync("git", ["config", "remote.origin.pushurl", AZURE_URL], { cwd });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 5}' });
+  const url = await createPr(cwd);
+  expect(url).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/5");
+  expect(az.calls).toHaveLength(1);
 });
 
 it("falls back to gh when the push remote is GitHub", async () => {
   const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
   trackUpstream(cwd, "origin");
-  fakeBin({ gh: ghUrl("https://github.com/acme/web/pull/42") });
-  const url = await commands(cwd).run("git_pr_create", {
-    cwd,
-    title: "Add login",
-    body: "Details",
-    base: "main",
-    head: "feature",
-  });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 1}' });
+  stubCli("gh", { stdout: "https://github.com/acme/web/pull/42" });
+  const url = await createPr(cwd);
   expect(url).toBe("https://github.com/acme/web/pull/42");
+  expect(az.calls).toHaveLength(0);
 });
 
 it("falls back to gh when az fails", async () => {
   const cwd = initRepo({ origin: AZURE_URL });
-  fakeBin({
-    az: {
-      sh: `echo 'not logged in' >&2\nexit 1`,
-      cmd: `@echo not logged in 1>&2\nexit /b 1`,
-    },
-    gh: ghUrl("https://github.com/acme/web/pull/9"),
-  });
-  const url = await commands(cwd).run("git_pr_create", {
-    cwd,
-    title: "Add login",
-    body: "Details",
-    base: "main",
-    head: "feature",
-  });
+  const az = stubCli("az", { fail: true });
+  stubCli("gh", { stdout: "https://github.com/acme/web/pull/9" });
+  const url = await createPr(cwd);
   expect(url).toBe("https://github.com/acme/web/pull/9");
+  expect(az.calls).toHaveLength(1);
 });

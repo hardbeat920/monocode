@@ -47,7 +47,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
   recordInboxSelfActivity: vi.fn(),
 }));
 
-import { GitChangesPanel } from "./GitChangesPanel";
+import { GitChangesPanel, parseCreatedPrReference } from "./GitChangesPanel";
 import {
   gitDiffIndex,
   gitPrCreate,
@@ -319,5 +319,64 @@ describe("GitChangesPanel remote pull request", () => {
       number: 12,
       projectPath: "/repo",
     });
+  });
+
+  it("records GitHub self-activity for a /pull/ URL with query and fragment", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ remote: "origin", upstream: "origin/feature/pull", ahead: 1, aheadOfDefault: 1 }),
+    );
+    vi.mocked(generatePrContent).mockResolvedValue({
+      title: "Add login",
+      body: "Details",
+      base: "main",
+      head: "feature/pull",
+    });
+    vi.mocked(gitPrCreate).mockResolvedValue("https://github.com/acme/web/pull/42?diff=split#issue-1");
+    await renderPanel("/repo");
+
+    const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((candidate) => candidate.textContent?.trim() === "Create PR");
+    await act(async () => {
+      button!.click();
+      await Promise.resolve();
+    });
+
+    expect(recordInboxSelfActivity).toHaveBeenCalledWith({
+      provider: "github",
+      kind: "pr",
+      number: 42,
+      projectPath: "/repo",
+    });
+  });
+});
+
+describe("parseCreatedPrReference", () => {
+  it("parses GitHub and Azure PR URLs", () => {
+    expect(parseCreatedPrReference("https://github.com/acme/web/pull/42")).toEqual({
+      number: 42,
+      provider: "github",
+    });
+    expect(
+      parseCreatedPrReference("https://dev.azure.com/acme/shop/_git/web/pullrequest/12"),
+    ).toEqual({ number: 12, provider: "azuredevops" });
+  });
+
+  it("matches the final route, not an intermediate segment", () => {
+    expect(parseCreatedPrReference("https://github.com/pullrequest/12/pull/34")).toEqual({
+      number: 34,
+      provider: "github",
+    });
+  });
+
+  it("ignores query strings and fragments", () => {
+    expect(
+      parseCreatedPrReference("https://github.com/acme/web/pull/42?diff=split#issue-1"),
+    ).toEqual({ number: 42, provider: "github" });
+  });
+
+  it("returns null without a PR route", () => {
+    expect(parseCreatedPrReference("https://github.com/acme/web")).toBeNull();
+    expect(parseCreatedPrReference("not a url")).toBeNull();
+    expect(parseCreatedPrReference("")).toBeNull();
   });
 });

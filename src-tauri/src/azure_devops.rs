@@ -373,13 +373,13 @@ fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, Str
     Ok(Some(parsed))
 }
 
-/// URL of a git remote. Unknown remotes yield an empty string so the caller
-/// treats them as non-Azure instead of failing.
+/// Push URL of a git remote. Unknown remotes yield an empty string so the
+/// caller treats them as non-Azure instead of failing.
 fn git_remote_url(root: &Path, remote: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
     crate::hide_window_console(&mut cmd);
     let output = cmd
-        .args(["remote", "get-url", remote])
+        .args(["remote", "get-url", "--push", remote])
         .current_dir(root)
         .output()
         .map_err(|_| "Could not run git".to_string())?;
@@ -1573,8 +1573,8 @@ fn pr_web_url(config: &AzureDevOpsConfig, project: &str, repo: &str, number: i64
     format!(
         "{}/{}/_git/{}/pullrequest/{}",
         config.url.trim_end_matches('/'),
-        project.trim(),
-        repo.trim(),
+        encode_segment(project.trim()),
+        encode_segment(repo.trim()),
         number
     )
 }
@@ -2325,6 +2325,86 @@ mod tests {
         // Without a collection/project/_git path there is nothing to resolve.
         assert!(parse_azure_remote("git@tfs.contoso.com:platform/web.git").is_none());
         assert!(parse_azure_remote("git@github.com:acme/web.git").is_none());
+    }
+
+    #[test]
+    fn encodes_special_characters_in_pr_urls() {
+        let config = AzureDevOpsConfig {
+            url: "https://dev.azure.com/acme/".to_string(),
+            token: "token".to_string(),
+        };
+        assert_eq!(
+            pr_web_url(&config, "My Project", "weird%2Fname", 3),
+            "https://dev.azure.com/acme/My%20Project/_git/weird%252Fname/pullrequest/3"
+        );
+    }
+
+    #[test]
+    fn resolves_the_push_url_when_fetch_and_push_differ() {
+        let dir = temp_git_dir("azure-push-url");
+        // Fetch from GitHub but push to Azure: the push destination wins.
+        git(
+            &dir,
+            &["remote", "add", "origin", "https://github.com/acme/web.git"],
+        );
+        git(
+            &dir,
+            &[
+                "config",
+                "remote.origin.pushurl",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        );
+        assert_eq!(
+            azure_remote_for(&dir)
+                .unwrap()
+                .as_ref()
+                .map(|remote| remote.1.clone() + "/" + &remote.2),
+            Some("shop/web".to_string())
+        );
+        // Fetch from Azure but push to GitHub: not an Azure push destination.
+        git(&dir, &["remote", "remove", "origin"]);
+        git(
+            &dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        );
+        git(
+            &dir,
+            &[
+                "config",
+                "remote.origin.pushurl",
+                "https://github.com/acme/web.git",
+            ],
+        );
+        assert!(azure_remote_for(&dir).unwrap().is_none());
+    }
+
+    static GIT_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn temp_git_dir(name: &str) -> PathBuf {
+        let id = GIT_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("monocode-{name}-{}-{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init"]);
+        git(&dir, &["config", "user.name", "MonoCode"]);
+        git(&dir, &["config", "user.email", "monocode@test"]);
+        dir
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("git must run in tests");
+        assert!(status.success(), "git {args:?} failed in tests");
     }
 
     #[test]
