@@ -25,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run test:host
       - run: npm run host:package
+      - run: npm run host:npm
 
   check:
     strategy:

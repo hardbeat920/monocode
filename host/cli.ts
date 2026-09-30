@@ -1,18 +1,9 @@
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import type { Server as NetServer } from "node:net";
 import {
   configureChildBackend,
   acquireHarnessBridge,
@@ -30,64 +21,79 @@ import {
 import { connectionInfo, installService, uninstallService } from "./service";
 import { version } from "../package.json";
 import { protectWindowsDirectory } from "./windows";
+import { lifecycle, readRunning, type HostStatus } from "./control";
+import {
+  connect,
+  connectDisable,
+  connectPair,
+  connectStatus,
+  startDetached,
+} from "./connect";
+import { listenHost } from "./listener";
+import {
+  networkEndpoints,
+  readNetworkSettings,
+  tailscaleName,
+  type NetworkSettings,
+} from "./network";
+import { loadHostIdentity } from "./tls";
 
 process.umask(0o077);
 // npm-based providers can launch Node subprocesses without a separate Node
-// installation. Keep the packaged runtime first in the host's own PATH.
+// installation. Keep the host's own Node first in its PATH.
 process.env.PATH = [dirname(process.execPath), process.env.PATH ?? ""].join(
   delimiter,
 );
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
-const option = (name: string, fallback: string): string => {
+const flag = (name: string) => args.includes(`--${name}`);
+const option = (name: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
-  if (i < 0) return fallback;
+  if (i < 0) return undefined;
   if (!args[i + 1] || args[i + 1].startsWith("--"))
     throw new Error(`Missing --${name} value`);
   return args[i + 1];
 };
-const directory = resolve(
-  option("data-dir", join(homedir(), ".monocode-host")),
-);
-const port = Number(option("port", "3774"));
+const directory = resolve(option("data-dir") ?? join(homedir(), ".monocode-host"));
+const requestedPort = option("port") === undefined ? undefined : Number(option("port"));
+const port = requestedPort ?? 3774;
 const statePath = join(directory, "running.json");
-type Running = { pid: number; port: number; secret: string };
-const readRunning = (): Running | undefined => {
-  if (!existsSync(statePath)) return;
-  return JSON.parse(readFileSync(statePath, "utf8")) as Running;
-};
-const lifecycle = async (state: Running, action: "status" | "stop") => {
-  const response = await fetch(`http://127.0.0.1:${state.port}/lifecycle`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${state.secret}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ action }),
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!response.ok) throw new Error("Could not verify the running host");
-};
+const entry = fileURLToPath(import.meta.url);
+
+const HELP = `MonoCode Host ${version}
+
+Set up this machine for MonoCode:
+  npx monocode-host connect           Install the host as a background service, turn on
+                                      network access, and print a pairing link
+    --local-only                      Listen on loopback only; pair over SSH
+    --bind <address>                  Listen on one address instead of all (0.0.0.0)
+    --name <label>                    Name shown in MonoCode (default: hostname)
+    --no-service                      Run detached instead of as a login service
+    --restart                         Reinstall and restart this version
+    --yes                             Restart without asking, interrupting running turns
+    --json                            Print one JSON line; progress goes to stderr
+  connect pair [--json]               Print a new one-time pairing link
+  connect status [--json]             Show the host, network access, and paired desktops
+  connect disable                     Turn off network access; SSH pairing keeps working
+
+Manage the host:
+  status | stop | start | serve       Check, stop, start detached, or run in the foreground
+  service install | uninstall         Add or remove the login service; data is kept
+  devices                             List paired desktops
+  revoke <device-id>                  Revoke a desktop's access
+  connection-info                     Print the running host's port (JSON)
+  pair --name <device>                Issue a raw device credential (advanced)
+
+Options: --data-dir <directory> (default ~/.monocode-host) --port <port> (default 3774)
+Requires Node.js 22.13 or newer.`;
 
 async function main() {
-  if (command === "--version") {
+  if (command === "--version" || command === "-v") {
     console.log(version);
     return;
   }
-  if (command === "help" || command === "--help") {
-    console.log(`MonoCode Host (experimental; Node 24+; Windows/Linux/macOS)
-  serve                 Run in foreground on 127.0.0.1
-  start                 Run detached from this terminal
-  service install       Install/start the persistent user service
-  service uninstall     Stop the host and remove its service; keeps data
-  connection-info       Print the running host's port (JSON)
-  status                Check the running host
-  stop                  Stop the host and interrupt its running turns
-  pair --name <device>  Issue a device credential (shown once)
-  devices               List paired devices
-  revoke <device-id>    Revoke a device credential
-Options: --data-dir <directory> --port <port> (default 3774)
-Connect another computer using an SSH forward to the loopback port.`);
+  if (command === "help" || command === "--help" || command === "-h") {
+    console.log(HELP);
     return;
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535)
@@ -95,6 +101,28 @@ Connect another computer using an SSH forward to the loopback port.`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") await protectWindowsDirectory(directory);
   else chmodSync(directory, 0o700);
+
+  if (command === "connect") {
+    const sub = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    if (sub === "pair")
+      return connectPair({ directory, json: flag("json"), name: option("name") });
+    if (sub === "status") return connectStatus({ directory, json: flag("json") });
+    if (sub === "disable") return connectDisable(directory);
+    if (sub) throw new Error(`Unknown connect command: ${sub}. Run with --help.`);
+    return connect({
+      directory,
+      port: requestedPort,
+      version,
+      entry,
+      bind: option("bind"),
+      localOnly: flag("local-only"),
+      json: flag("json"),
+      yes: flag("yes"),
+      service: !flag("no-service"),
+      restart: flag("restart"),
+      name: option("name"),
+    });
+  }
   if (command === "connection-info") {
     console.log(JSON.stringify(await connectionInfo(directory)));
     return;
@@ -102,7 +130,7 @@ Connect another computer using an SSH forward to the loopback port.`);
   if (command === "service" && args[1] === "uninstall") {
     const notes = await uninstallService();
     // Also stops a manually started host, or one the service manager left.
-    const state = readRunning();
+    const state = readRunning(directory);
     if (state) {
       await lifecycle(state, "stop").catch(() => undefined);
       for (let i = 0; i < 200 && existsSync(statePath); i++)
@@ -128,80 +156,53 @@ Connect another computer using an SSH forward to the loopback port.`);
           directory,
           port,
           executable: process.execPath,
-          entry: fileURLToPath(import.meta.url),
+          entry,
         }),
       ),
     );
     return;
   }
   if (command === "status" || command === "stop") {
-    const state = readRunning();
+    const state = readRunning(directory);
     if (!state) {
       console.log("Host is stopped");
       return;
     }
-    await lifecycle(state, command);
+    const status = await lifecycle(state, command);
     console.log(
       command === "stop"
         ? "Host is stopping"
-        : `Host is running (PID ${state.pid}, port ${state.port})`,
+        : `Host${status.version ? ` ${status.version}` : ""} is running (PID ${state.pid}, port ${state.port})`,
     );
     return;
   }
   if (command === "start") {
-    const log = openSync(join(directory, "host.log"), "a", 0o600);
-    const child = spawn(
-      process.execPath,
-      [
-        fileURLToPath(import.meta.url),
-        "serve",
-        "--data-dir",
-        directory,
-        "--port",
-        String(port),
-      ],
-      {
-        detached: true,
-        windowsHide: true,
-        stdio: ["ignore", log, log],
-        env: process.env,
-      },
+    const state = await startDetached({
+      directory,
+      port,
+      executable: process.execPath,
+      entry,
+    });
+    console.log(
+      `Host started on port ${state.port}. It will continue after this terminal closes.`,
     );
-    child.unref();
-    closeSync(log);
-    for (let i = 0; i < (process.platform === "win32" ? 150 : 50); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const state = readRunning();
-      if (state && state.pid === child.pid) {
-        console.log(
-          `Host started on 127.0.0.1:${state.port}. It will continue after this terminal closes.`,
-        );
-        return;
-      }
-    }
-    throw new Error(`Host did not start. See ${join(directory, "host.log")}`);
+    return;
   }
   const store = new HostStore(join(directory, "host.db"));
   if (command === "pair") {
-    const device = store.issueDevice(option("name", "Desktop"));
+    const device = store.issueDevice(option("name") ?? "Desktop");
     console.log(
       JSON.stringify(
         { ...device, environmentId: store.environmentId },
         null,
-        args.includes("--json") ? undefined : 2,
+        flag("json") ? undefined : 2,
       ),
     );
     store.close();
     return;
   }
   if (command === "devices") {
-    console.log(
-      JSON.stringify(
-        store.db.prepare("SELECT id, name FROM devices").all(),
-        null,
-        2,
-      ),
-    );
+    console.log(JSON.stringify(store.devices(), null, 2));
     store.close();
     return;
   }
@@ -218,6 +219,10 @@ Connect another computer using an SSH forward to the loopback port.`);
     store.close();
     throw new Error("Unknown command; run with --help");
   }
+  await serve(store);
+}
+
+async function serve(store: HostStore) {
   const releaseOwner = await acquireHostOwner(directory);
   const backend = new HostChildBackend();
   let cleanup = () => {
@@ -238,53 +243,154 @@ Connect another computer using an SSH forward to the loopback port.`);
       }
     }
     const engine = new HostEngine(store, hostProviders);
+    const identity = loadHostIdentity(directory);
     const secret = randomBytes(32).toString("base64url");
+    let network: NetworkSettings & { error?: string } = readNetworkSettings(directory);
+    let magicDns: string | undefined;
+    void tailscaleName().then((name) => (magicDns = name));
+    let front: NetServer | undefined;
     let stopping = false;
+    let networkRetry: ReturnType<typeof setTimeout> | undefined;
+    let networkChange = Promise.resolve();
     let stop: () => Promise<void>;
+    const status = (): HostStatus => ({
+      version,
+      pid: process.pid,
+      port,
+      runningTurns: store.runningTurns(),
+      providers: available,
+      network,
+    });
     // A separate local administrative credential cannot be used as a paired
     // client credential, and is never sent to the desktop.
-    const server = createHostServer(engine, available, (request, response) => {
-      if (
-        request.method !== "POST" ||
-        request.headers.origin ||
-        request.headers.authorization !== `Bearer ${secret}`
-      ) {
-        response.writeHead(403).end();
-        return;
-      }
-      let body = "";
-      request.on("data", (chunk) => {
-        body += String(chunk);
-        if (body.length > 128) request.destroy();
-      });
-      request.on("end", () => {
-        try {
-          const action = JSON.parse(body).action;
-          if (action !== "status" && action !== "stop") {
+    const server = createHostServer(
+      engine,
+      available,
+      (request, response) => {
+        if (
+          request.method !== "POST" ||
+          request.headers.origin ||
+          request.headers.authorization !== `Bearer ${secret}`
+        ) {
+          response.writeHead(403).end();
+          return;
+        }
+        let body = "";
+        request.on("data", (chunk) => {
+          body += String(chunk);
+          if (body.length > 128) request.destroy();
+        });
+        request.on("end", async () => {
+          let action: unknown;
+          try {
+            action = JSON.parse(body).action;
+          } catch {
             response.writeHead(400).end();
             return;
           }
-          response.end("{}");
+          if (action === "network") {
+            try {
+              await applyNetwork();
+            } catch (error) {
+              networkFailure(error);
+            }
+          } else if (action !== "status" && action !== "stop") {
+            response.writeHead(400).end();
+            return;
+          }
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify(status()));
           if (action === "stop") void stop();
-        } catch {
-          response.writeHead(400).end();
+        });
+      },
+      {
+        endpoints: () =>
+          network.enabled && !network.error
+            ? networkEndpoints(port, network.bind, undefined, magicDns ? [magicDns] : [])
+            : [],
+      },
+    );
+    const open = (settings: NetworkSettings) =>
+      listenHost(server, {
+        port,
+        bind: settings.enabled ? settings.bind : "127.0.0.1",
+        identity,
+      });
+    // Listening on a network address failed, such as when the address no
+    // longer exists. Keep loopback working and report why.
+    const openOrLoopback = async (settings: NetworkSettings) => {
+      try {
+        front = await open(settings);
+        network = settings;
+      } catch (error) {
+        if (!settings.enabled) throw error;
+        front = await open({ ...settings, enabled: false });
+        network = {
+          ...settings,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+    // Rebinds without a restart, so turning network access on or off does
+    // not interrupt agents. Open connections are unaffected.
+    const applyNetwork = () => {
+      clearTimeout(networkRetry);
+      networkRetry = undefined;
+      // Lifecycle requests and background recovery must not rebind together.
+      const pending = networkChange.then(async () => {
+        if (stopping) return;
+        const next = readNetworkSettings(directory);
+        const bind = (settings: NetworkSettings) =>
+          settings.enabled ? settings.bind : "127.0.0.1";
+        if (!network.error && bind(next) === bind(network)) {
+          network = next;
+          return;
+        }
+        front?.close();
+        for (let attempt = 0; ; attempt++) {
+          if (stopping) return;
+          try {
+            await openOrLoopback(next);
+            return;
+          } catch (error) {
+            if (attempt >= 20) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
         }
       });
-    });
+      networkChange = pending.catch(() => {});
+      return pending;
+    };
+    const networkFailure = (error: unknown) => {
+      network = {
+        ...readNetworkSettings(directory),
+        error: error instanceof Error ? error.message : String(error),
+      };
+      console.error("Could not apply network settings:", network.error);
+      // The process and its turns survive even if both listeners failed.
+      // Retry so SSH and new clients can reach it once the port is free.
+      if (!stopping && !networkRetry) {
+        networkRetry = setTimeout(() => {
+          networkRetry = undefined;
+          void applyNetwork().catch(networkFailure);
+        }, 1_000);
+      }
+    };
     stop = async () => {
       if (stopping) return;
       stopping = true;
+      clearTimeout(networkRetry);
+      await networkChange;
+      front?.close();
       server.close();
       server.closeAllConnections();
+      store.changes.close();
       await engine.close();
       await backend.close();
       release();
       cleanup();
     };
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(port, "127.0.0.1", resolve);
-    });
+    await openOrLoopback(network);
     writeFileSync(
       statePath,
       JSON.stringify({ pid: process.pid, port, secret }),
@@ -297,16 +403,13 @@ Connect another computer using an SSH forward to the loopback port.`);
       void stop();
     });
     console.log(
-      `MonoCode Host ${store.environmentId} listening on 127.0.0.1:${port}`,
+      `MonoCode Host ${version} (${store.environmentId}) listening on ${network.enabled && !network.error ? `${network.bind}:${port} (TLS; plain HTTP from loopback)` : `127.0.0.1:${port}`}`,
     );
+    if (network.error)
+      console.log(`Network access failed, serving loopback only: ${network.error}`);
     console.log(
       `Providers: ${available.join(", ") || "none found; install and authenticate a supported provider on this host"}`,
     );
-    cleanup = () => {
-      rmSync(statePath, { force: true });
-      store.close();
-      releaseOwner();
-    };
   } catch (error) {
     await backend.close();
     cleanup();

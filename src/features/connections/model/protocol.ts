@@ -4,6 +4,39 @@ import type { AgentModel } from "../../sessions/model/models";
 import type { LinkedWorkItem } from "../../sessions/model/session";
 
 export const HOST_PROTOCOL_VERSION = 1;
+/** The npm package a machine runs to host sessions for this desktop. */
+export const HOST_PACKAGE = "monocode-host";
+
+/** The command that installs, updates, or pairs a host for this desktop. */
+export const hostConnectCommand = (desktopVersion?: string) =>
+  `npx ${HOST_PACKAGE}${desktopVersion ? `@${desktopVersion}` : ""} connect`;
+
+/** Compares `a.b.c` versions, ignoring prerelease suffixes. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (value: string) =>
+    value.split("-")[0].split(".").map((part) => Number(part) || 0);
+  const left = parts(a);
+  const right = parts(b);
+  for (let i = 0; i < 3; i++) {
+    const delta = (left[i] ?? 0) - (right[i] ?? 0);
+    if (delta) return Math.sign(delta);
+  }
+  return 0;
+}
+
+/** Hosts before this desktop's version, or without pushed changes, should
+ * be updated. */
+export function hostNeedsUpdate(
+  host: HostDescriptor,
+  desktopVersion?: string,
+): boolean {
+  if (!host.capabilities?.includes("changes.wait")) return true;
+  return !!(
+    desktopVersion &&
+    host.hostVersion &&
+    compareVersions(host.hostVersion, desktopVersion) < 0
+  );
+}
 export const REMOTE_PROVIDERS = [
   "codex",
   "claude",
@@ -24,6 +57,10 @@ export type HostDescriptor = {
   providers: RemoteProvider[];
   capabilities: string[];
   platform?: "win32" | "darwin" | "linux";
+  /** The MonoCode Host package version. Hosts from before MonoCode Connect omit it. */
+  hostVersion?: string;
+  /** Network addresses the host listens on, such as `https://10.0.0.5:3774`. */
+  endpoints?: string[];
 };
 export type HostProject = { id: string; cwd: string; name: string };
 export type HostDirectory = {
@@ -201,6 +238,26 @@ export type HostCommand =
       requestId: number;
       reply: UserQuestionReply;
     };
+/** One session write, as reported by `changes.wait`. */
+export type SessionChange = {
+  id: string;
+  projectId: string;
+  revision: number;
+  deleted?: boolean;
+  /** Whether a turn is running after this write. Lets a desktop notice a
+   * finished turn in a tab it is not showing. Absent from older hosts. */
+  status?: HostSession["status"];
+  busy?: boolean;
+};
+/** `reset` means the desktop's cursor is from another host run or too old;
+ * it reloads what it shows and continues from `cursor`. */
+export type SessionChanges = {
+  boot: string;
+  cursor: number;
+  sessions: SessionChange[];
+  reset: boolean;
+};
+
 export type CommandReceipt = {
   commandId: string;
   sessionId: string;
@@ -211,8 +268,12 @@ export type CommandReceipt = {
 export type RemoteMachine = {
   id: string;
   name: string;
+  /** How the desktop reaches the host, for display. */
   endpoint: string;
+  /** Direct TLS addresses; the desktop pins the host certificate. */
+  endpoints?: string[];
   environmentId: string;
+  /** A fallback route through an SSH forward to the host's loopback port. */
   ssh?: { target: string; port?: number | null; remotePort: number } | null;
 };
 

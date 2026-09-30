@@ -49,7 +49,16 @@ try {
   if ($null -eq $lock) { throw 'Another host installation is running. Try again shortly.' }
   $pointer = Join-Path $base 'runtime-path'
   $existed = Test-Path -LiteralPath $pointer
-  if (-not $existed -or $forceUpgrade) {
+  # `connect` needs a host of this version, so install it when the pointer
+  # names another version. Installing does not restart a running host.
+  $installed = $null
+  if ($existed) {
+    try {
+      $current = [IO.File]::ReadAllText($pointer).Trim()
+      $installed = & (Join-Path $current 'node.exe') (Join-Path $current 'host.mjs') --version 2>$null
+    } catch { $installed = $null }
+  }
+  if (-not $existed -or $forceUpgrade -or $installed -ne $version) {
     $arch = $env:PROCESSOR_ARCHITEW6432
     if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
     switch ($arch.ToUpperInvariant()) {
@@ -97,14 +106,44 @@ try {
   $runtime = [IO.File]::ReadAllText($pointer).Trim()
   $node = Join-Path $runtime 'node.exe'
   $entry = Join-Path $runtime 'host.mjs'
-  if ($existed -and $forceUpgrade) {
-    & $node $entry service uninstall | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the old host service.' }
+  # `connect` installs or reuses the scheduled task, turns on network access,
+  # and prints one JSON line with a pairing link. It restarts an older running
+  # host only with --yes, which the desktop passes for Update Host. Its
+  # progress goes to stderr. Read both native streams directly so Windows
+  # PowerShell does not turn progress into error records or re-quote paths.
+  $arguments = @('connect', '--json', '--port', "$hostPort")
+  if ($forceUpgrade) { $arguments += '--yes' }
+  $start = New-Object Diagnostics.ProcessStartInfo
+  $start.FileName = $node
+  $start.Arguments = '"' + $entry + '" ' + ($arguments -join ' ')
+  $start.UseShellExecute = $false
+  $start.CreateNoWindow = $true
+  $start.RedirectStandardInput = $true
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+  $start.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $start
+  try {
+    $null = $process.Start()
+    $process.StandardInput.Close()
+    # Drain both pipes concurrently, including when progress fills a pipe.
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $output = $stdout.GetAwaiter().GetResult()
+    $errorText = $stderr.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) {
+      $lines = @($errorText -split '\r?\n' | Where-Object { $_.Trim() })
+      if (-not $lines.Count) { $lines = @('Host setup failed. Sign in to the Windows desktop as the SSH user and try again.') }
+      throw (($lines | Select-Object -Last 4) -join "`n")
+    }
+    ($output -split '\r?\n' | Where-Object { $_.Trim() }) | Select-Object -Last 1
+  } finally {
+    $process.Dispose()
   }
-  & $node $entry service install --port $hostPort | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Host service setup failed. Check the error above and sign in to the Windows desktop as the SSH user.' }
-  & $node $entry connection-info
-  if ($LASTEXITCODE -ne 0) { throw 'The host did not report a connection.' }
+
 } finally {
   if ($null -ne $lock) { $lock.Dispose() }
   if ($temporary -and (Test-Path -LiteralPath $temporary)) { Remove-Item -LiteralPath $temporary -Recurse -Force }

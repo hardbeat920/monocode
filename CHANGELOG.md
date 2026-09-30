@@ -7,11 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MonoCode Connect: run `npx monocode-host connect` on a Windows, Linux, or macOS machine with Node.js 22.13 or newer. It installs the remote host as a login service and prints a one-time pairing link to paste in Settings → Connections → Add machine. The desktop reaches the host directly over TLS with a pinned certificate, on the LAN or a tailnet, and uses the SSH forward as a fallback for machines set up over SSH.
+- Remote sessions and session lists update as soon as the host saves them. The desktop holds one `changes.wait` request per machine instead of polling each open session every 0.75 s.
+
 ### Fixed
 
+- Failed host network changes return an error without stopping agent turns. The host retries the listener after the port becomes available.
+- SSH pairing stays available when repeated failed network pairing attempts trigger the rate limit.
 - A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules.
 - Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr.
 - A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it.
+- A remote turn that finishes now plays the same notification or sound as a local turn. Remote tabs that are not showing also update when their turn starts or ends, instead of keeping a stale busy indicator until they are opened.
+- Replacing a macOS host's launch agent retries registration while launchd finishes removing the previous one, and waits out launchd's 10-second restart delay, instead of falling back to a detached host. If setup still falls back, it first removes the half-installed service and waits for any host it started to exit, so two hosts never share the data directory.
+
+### Changed
+
+- Desktop releases require the matching host package to be publicly available on npm before desktop publication.
+- SSH setup still installs the verified release archive with its bundled Node, then runs the same `connect` command, so SSH machines also get a pinned TLS address and pushed updates. Update Host restarts the host through `connect --yes`.
+- Pairing by host URL and raw device token is replaced by the pairing link.
 
 ## [0.5.0] - 2026-09-29
 

@@ -29,7 +29,7 @@ function fixture(badChecksum = false) {
   mkdirSync(bin);
   writeFileSync(
     join(source, "monocode-host"),
-    `#!/bin/sh\ncase "$1" in\n--version) printf '%s\\n' ${quote(version)} ;;\nservice) printf 'service %s\\n' "$2" >> "$MONOCODE_TEST_EVENTS" ;;\nconnection-info) printf '{"port":3774,"pid":123}\\n' ;;\n*) exit 1 ;;\nesac\n`,
+    `#!/bin/sh\ncase "$1" in\n--version) printf '%s\\n' ${quote(version)} ;;\nconnect) printf '%s\\n' "$*" >> "$MONOCODE_TEST_EVENTS"; printf 'progress\\n' >&2; printf '{"link":"monocode://pair?v=1","port":3774}\\n' ;;\n*) exit 1 ;;\nesac\n`,
     { mode: 0o755 },
   );
   const archive = join(dir, "host.tar.gz");
@@ -84,9 +84,12 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const { dir, base, run } = fixture();
     const first = await run();
-    expect(first.error).toBe("");
+    expect(first.error).toBe("progress\n");
     expect(first.code).toBe(0);
-    expect(JSON.parse(first.out).port).toBe(3774);
+    expect(JSON.parse(first.out)).toEqual({
+      link: "monocode://pair?v=1",
+      port: 3774,
+    });
     expect(existsSync(join(base, "bin/monocode-host"))).toBe(true);
     expect((await run()).code).toBe(0);
     expect(
@@ -95,7 +98,7 @@ it.skipIf(process.platform === "win32")(
   },
 );
 it.skipIf(process.platform === "win32")(
-  "updates an existing host only when requested, then restarts its service",
+  "updates an existing host only when requested, then lets connect restart it",
   async () => {
     const { dir, base, run } = fixture();
     expect((await run()).code).toBe(0);
@@ -106,7 +109,35 @@ it.skipIf(process.platform === "win32")(
     );
     expect(
       readFileSync(join(dir, "events"), "utf8").trim().split("\n"),
-    ).toEqual(["service install", "service uninstall", "service install"]);
+    ).toEqual([
+      "connect --json --port 3774",
+      "connect --json --port 3774 --yes",
+    ]);
+    expect(
+      readFileSync(join(dir, "downloads"), "utf8").trim().split("\n"),
+    ).toHaveLength(4);
+  },
+);
+it.skipIf(process.platform === "win32")(
+  "installs this version beside a host of another version, leaving the restart to connect",
+  async () => {
+    const { dir, base, run } = fixture();
+    expect((await run()).code).toBe(0);
+    const oldRuntime = readFileSync(join(base, "runtime-path"), "utf8").trim();
+    // A host installed by an older desktop has no `connect` command.
+    writeFileSync(
+      join(oldRuntime, "monocode-host"),
+      "#!/bin/sh\n[ \"$1\" = --version ] && echo 0.0.1\n",
+      { mode: 0o755 },
+    );
+    const second = await run();
+    expect(second.code).toBe(0);
+    expect(readFileSync(join(base, "runtime-path"), "utf8").trim()).not.toBe(
+      oldRuntime,
+    );
+    expect(
+      readFileSync(join(dir, "events"), "utf8").trim().split("\n"),
+    ).toEqual(["connect --json --port 3774", "connect --json --port 3774"]);
     expect(
       readFileSync(join(dir, "downloads"), "utf8").trim().split("\n"),
     ).toHaveLength(4);

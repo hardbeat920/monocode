@@ -28,6 +28,8 @@ base64 = "0.22"
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
+# The same rustls as ureq, to pin remote hosts' self-signed certificates.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 url = "2.5"
 time = { version = "0.3", features = ["parsing"] }
 tauri-plugin-process = "2"
