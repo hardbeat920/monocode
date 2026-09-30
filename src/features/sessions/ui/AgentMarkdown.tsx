@@ -210,6 +210,17 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
   zsh: "code.sh",
 };
 
+// Shiki (via Streamdown's CodeBlock) treats these as plaintext and renders no
+// syntax colors at all, which is common in agent output (pseudocode, file
+// trees, command output) fenced as `text` or left untagged. Falling back to
+// the JS grammar for these still colors strings, numbers, and punctuation,
+// matching what most agent-output fences actually look like.
+const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
+
+function highlightLanguageFor(language: string): string {
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+}
+
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };
 
 function MarkdownLink({
@@ -332,6 +343,15 @@ function MarkdownCode({
     (fence.language ? fileNameForLanguage(fence.language) : "");
   const lineNumbers = !/\bnoLineNumbers\b/.test(meta);
   const code = textContent(children);
+  // highlightLanguageFor swaps the fence language for "js" so Shiki still
+  // colors plaintext fences, but Streamdown's CodeBlock reuses that same
+  // value for the header label. Without this, a `text` fence would show a
+  // "js" header, and an untagged fence would gain a header it never had.
+  // Render our own label with the original language instead, and hide
+  // Streamdown's via CSS (see .markdown-code-fallback-label in index.css).
+  const isPlaintextFallback = PLAINTEXT_FENCE_LANGUAGES.has(
+    fence.language.toLowerCase(),
+  );
 
   return (
     <div className="markdown-code-shell" dir="ltr">
@@ -342,13 +362,15 @@ function MarkdownCode({
       ) : null}
       {fence.filePath ? (
         <MarkdownCodePath path={fence.filePath} startLine={fence.startLine} />
+      ) : isPlaintextFallback ? (
+        <span className="markdown-code-fallback-label">{fence.language}</span>
       ) : null}
       <CodeCopyButton code={code} />
       <CodeBlock
         className={className}
         code={code}
         isIncomplete={incomplete}
-        language={fence.language}
+        language={highlightLanguageFor(fence.language)}
         lineNumbers={lineNumbers}
         startLine={fence.startLine}
       />

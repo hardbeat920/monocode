@@ -305,7 +305,14 @@ function upsertTaskList(
   );
   const existing = lastMatchingBlock(session.blocks, (block, index) => {
     if (block.role !== "tasks") return false;
-    if (key) return block.taskList?.key === key;
+    if (key) {
+      if (block.taskList?.key !== key) return false;
+      // A list from another provider conversation stays as history.
+      return (
+        !event.providerSessionId ||
+        block.taskList?.providerSessionId === event.providerSessionId
+      );
+    }
     return index > lastUser;
   });
   const previousItems =
@@ -313,7 +320,9 @@ function upsertTaskList(
   const items = previousItems
     ? event.merge
       ? mergeTaskListItems(previousItems, event.items)
-      : preserveTaskListLabels(previousItems, event.items)
+      : event.authoritative
+        ? event.items
+        : preserveTaskListLabels(previousItems, event.items)
     : event.items;
 
   if (items.length === 0) {
@@ -326,6 +335,7 @@ function upsertTaskList(
 
   const taskList = {
     ...(key ? { key } : {}),
+    ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
     ...(event.explanation?.trim()
       ? { explanation: event.explanation.trim() }
       : {}),
@@ -1038,12 +1048,14 @@ function recordAgentStep(
   if (!text && event.kind !== "tool") return session;
 
   const run = prev.agentRun;
+  const detail = capToolDetail(event.detail);
   const step: AgentStep = {
     id: event.stepId,
     kind: event.kind,
     text,
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
+    ...(detail ? { detail } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
@@ -1100,6 +1112,7 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
     a.text === b.text &&
     a.toolKind === b.toolKind &&
     a.status === b.status &&
+    a.detail === b.detail &&
     samePreview(a.preview, b.preview)
   );
 }

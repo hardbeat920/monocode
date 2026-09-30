@@ -113,6 +113,42 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "provider_account_identity") {
+        const { provider } = args as { provider: string };
+        return { email: `${provider}@example.com`, plan: "Pro" };
+      }
+      return undefined;
+    });
+    await render("providers");
+
+    const emails = container.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Reveal email"]',
+    );
+    expect(emails).toHaveLength(2);
+    expect(
+      [...emails].every((email) =>
+        email.querySelector("span")?.className.includes("blur-[5px]"),
+      ),
+    ).toBe(true);
+    expect(container.textContent).toContain("Pro");
+    await act(async () => emails[0].click());
+    expect(emails[0].getAttribute("aria-label")).toBe("Hide email");
+    expect(emails[0].querySelector("span")?.className).not.toContain("blur");
+    expect(emails[1].getAttribute("aria-label")).toBe("Reveal email");
+    await act(async () => emails[0].click());
+    expect(emails[0].getAttribute("aria-label")).toBe("Reveal email");
+
+    await act(async () => emails[0].click());
+    await render("general");
+    await render("providers");
+    expect(container.querySelector('[aria-label="Hide email"]')).toBeNull();
+    expect(
+      container.querySelectorAll('[aria-label="Reveal email"]'),
+    ).toHaveLength(2);
+  });
+
   it("shows account usage bars as remaining capacity", async () => {
     setCachedRateLimits("claude", "default", {
       provider: "claude",
@@ -591,6 +627,27 @@ describe("settings pages", () => {
     );
     expect(iconRail?.getAttribute("aria-checked")).toBe("false");
     expect(hidden?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("sets interface scale from a menu instead of a live slider", async () => {
+    await render("appearance");
+    const row = container.querySelector('[data-setting-id="interface-scale"]')!;
+    expect(row.querySelector('input[type="range"]')).toBeNull();
+    const trigger = row.querySelector<HTMLButtonElement>(
+      '[aria-haspopup="listbox"]',
+    )!;
+    expect(trigger.getAttribute("aria-label")).toBe("Interface scale: 100%");
+
+    await act(async () => trigger.click());
+    const option = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((node) => node.textContent?.includes("150%"));
+    expect(option).toBeTruthy();
+    await act(async () => option!.click());
+
+    expect(localStorage.getItem("monocode.uiScale")).toBe("1.5");
+    expect(trigger.getAttribute("aria-label")).toBe("Interface scale: 150%");
+    document.documentElement.style.removeProperty("zoom");
   });
 
   it("reports collapsed project rail changes to the app shell", async () => {

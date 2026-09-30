@@ -3,10 +3,15 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import type { ProviderRateLimits } from "../../features/providers/model/rateLimits";
 import { projectKey } from "../../shared/lib/paths";
 import { saveTabGroupMascot } from "../../features/workspace/model/tabGroups";
 import { needsProviderLogin, UsageProviderChip } from "./UsageProviderChip";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async () => null),
+}));
 
 const now = Date.parse("2026-09-16T12:00:00Z");
 
@@ -58,6 +63,7 @@ let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(invoke).mockReset().mockResolvedValue(null);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -215,10 +221,11 @@ describe("UsageProviderChip", () => {
     await act(async () => button("Switch Codex account").click());
     expect(document.body.textContent).toContain("Codex accounts");
     expect(document.body.textContent).toContain("Default account");
-    const accountBar = button("Default account").querySelector(
+    const accountRow = button("Default account").parentElement!;
+    const accountBar = accountRow.querySelector(
       '[aria-label="5h limit remaining"]',
     );
-    expect(button("Default account").textContent).toContain("58% left");
+    expect(accountRow.textContent).toContain("58% left");
     expect(accountBar?.getAttribute("aria-valuenow")).toBe("58");
     expect(accountBar?.querySelector("span")?.getAttribute("style")).toBe(
       "width: 58%;",
@@ -227,6 +234,75 @@ describe("UsageProviderChip", () => {
 
     expect(onSelectAccount).toHaveBeenCalledWith("account-work");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("reveals emails independently of account switching and hides them on reopening", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "provider_account_identity"
+        ? { email: "user@example.com", plan: "Pro" }
+        : null,
+    );
+    const onSelectAccount = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: codexLimits(),
+          now,
+          accountId: "default",
+          accounts: [
+            {
+              id: "default",
+              provider: "codex",
+              label: "Main",
+              isDefault: true,
+            },
+          ],
+          onSelectAccount,
+          onAddAccount: vi.fn(),
+        }),
+      ),
+    );
+    await act(async () => button("Codex usage details").click());
+
+    const email = button("Reveal email");
+    expect(email.querySelector("span")?.className).toContain("blur-[5px]");
+    expect(email.querySelector("span")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(document.body.textContent).toContain("Pro");
+    await act(async () => email.click());
+    expect(button("Hide email").querySelector("span")?.className).not.toContain(
+      "blur",
+    );
+    expect(document.body.textContent).toContain("Codex usage");
+    expect(document.body.textContent).not.toContain("Codex accounts");
+    expect(onSelectAccount).not.toHaveBeenCalled();
+    await act(async () => button("Hide email").click());
+    expect(button("Reveal email").getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => button("Reveal email").click());
+    await act(async () => button("Codex usage details").click());
+    await act(async () => button("Codex usage details").click());
+    expect(button("Reveal email").getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => button("Switch Codex account").click());
+    expect(button("Reveal email").querySelector("span")?.className).toContain(
+      "blur-[5px]",
+    );
+    expect(document.querySelector("button button")).toBeNull();
+    expect(
+      [...document.querySelectorAll("[title], [aria-label]")].some((element) =>
+        [
+          element.getAttribute("title"),
+          element.getAttribute("aria-label"),
+        ].some((label) => label?.includes("user@example.com")),
+      ),
+    ).toBe(false);
+    await act(async () => button("Reveal email").click());
+    expect(onSelectAccount).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Codex accounts");
+    await act(async () => button("Main").click());
+    expect(onSelectAccount).toHaveBeenCalledWith("default");
   });
 
   it("keeps account switching available when the pinned account was removed", async () => {

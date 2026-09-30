@@ -17,7 +17,10 @@
  * separate, larger change (touches the Rust-side session_upsert schema
  * too).
  */
+import type { McpTag } from "./mcpPicker";
+
 const drafts = new Map<string, string>();
+const mcpTags = new Map<string, McpTag[]>();
 
 export function getComposerDraft(sessionId: string): string | undefined {
   return drafts.get(sessionId);
@@ -28,9 +31,23 @@ export function setComposerDraft(sessionId: string, text: string): void {
     drafts.set(sessionId, text);
   } else {
     drafts.delete(sessionId);
+    mcpTags.delete(sessionId);
+  }
+}
+
+export function getComposerMcpTags(sessionId: string): McpTag[] {
+  return mcpTags.get(sessionId) ?? [];
+}
+
+export function setComposerMcpTags(sessionId: string, tags: McpTag[]): void {
+  if (tags.length > 0) {
+    mcpTags.set(sessionId, tags);
+  } else {
+    mcpTags.delete(sessionId);
   }
 }
 
 export function clearComposerDraft(sessionId: string): void {
   drafts.delete(sessionId);
+  mcpTags.delete(sessionId);
 }

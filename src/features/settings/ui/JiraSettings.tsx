@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import { PrivateEmail } from "../../../shared/ui/PrivateEmail";
 import { clearInboxCache } from "../../inbox/model/githubTasks";
 import {
   disconnectJira,
@@ -101,7 +102,9 @@ export function JiraSettings() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 text-[12px] text-content/65">
             <p className="break-all">{status.site}</p>
-            <p className="break-all">{status.email}</p>
+            <p className="flex min-w-0">
+              <PrivateEmail key={status.email} email={status.email} />
+            </p>
           </div>
           <SecondaryButton onClick={() => void disconnect()} disabled={busy}>
             {busy ? "Disconnecting" : "Disconnect"}

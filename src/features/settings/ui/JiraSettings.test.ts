@@ -74,6 +74,14 @@ it("connects Jira, synchronizes project filters, and disconnects", async () => {
     token: "secret",
   });
   expect(container.textContent).toContain("ada@example.com");
+  const email = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Reveal email"]',
+  )!;
+  expect(email.querySelector("span")?.className).toContain("blur-[5px]");
+  await act(async () => email.click());
+  expect(email.getAttribute("aria-label")).toBe("Hide email");
+  await act(async () => email.click());
+  expect(email.getAttribute("aria-label")).toBe("Reveal email");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   const project = container.querySelector<HTMLInputElement>(
     'input[type="checkbox"]',

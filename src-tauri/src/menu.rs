@@ -3,7 +3,11 @@ use serde::Deserialize;
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
 #[cfg(target_os = "macos")]
-use tauri::menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use tauri::menu::{
+    AboutMetadata, CheckMenuItem, Menu, MenuItem, MenuItemBuilder, MenuItemKind, SubmenuBuilder,
+};
 #[cfg(target_os = "macos")]
 use tauri::Wry;
 use tauri::{AppHandle, Emitter};
@@ -13,6 +17,23 @@ use tauri::{AppHandle, Emitter};
 pub struct KeybindingOverride {
     disabled: Option<bool>,
     shortcut: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+static AUTOSAVE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn set_autosave_menu_checked(app: &AppHandle, enabled: bool) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    let Some(MenuItemKind::Submenu(file)) = menu.get("file") else {
+        return;
+    };
+    let Some(MenuItemKind::Check(item)) = file.get("toggle_autosave") else {
+        return;
+    };
+    let _ = item.set_checked(enabled);
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -69,6 +90,13 @@ pub fn keybindings_set_overrides(
 }
 
 #[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn autosave_set_enabled(app: AppHandle, enabled: bool) {
+    AUTOSAVE_ENABLED.store(enabled, Ordering::Relaxed);
+    set_autosave_menu_checked(&app, enabled);
+}
+
+#[cfg(target_os = "macos")]
 fn menu_item(
     app: &AppHandle,
     id: &str,
@@ -109,6 +137,12 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         }
         "new_window" => {
             let _ = crate::window::open_new_window(app);
+        }
+        #[cfg(target_os = "macos")]
+        "toggle_autosave" => {
+            let enabled = !AUTOSAVE_ENABLED.fetch_xor(true, Ordering::Relaxed);
+            set_autosave_menu_checked(app, enabled);
+            let _ = app.emit("toggle_autosave", enabled);
         }
         "quit" => crate::window::request_quit(app),
         "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
@@ -407,14 +441,24 @@ fn build(
         "App: Find in Files",
         overrides,
     )?;
+    let autosave = CheckMenuItem::with_id(
+        app,
+        "toggle_autosave",
+        "Autosave",
+        true,
+        AUTOSAVE_ENABLED.load(Ordering::Relaxed),
+        None::<&str>,
+    )?;
 
-    let file = SubmenuBuilder::new(app, "File")
+    let file = SubmenuBuilder::with_id(app, "file", "File")
         .item(&new_window)
         .item(&open_project)
         .item(&open_search)
         .item(&go_to_file)
         .item(&command_palette)
         .item(&find_in_project)
+        .separator()
+        .item(&autosave)
         .separator()
         .item(&new_tab)
         .item(&new_terminal)
@@ -481,8 +525,12 @@ fn build(
             .separator()
             .item(&quit)
             .build()?;
-        let window_menu =
-            SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window").build()?;
+        // Tauri registers this submenu via NSApp.setWindowsMenu:, which throws
+        // on macOS 12 when the menu is empty and aborts the app at launch.
+        let window_menu = SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window")
+            .minimize()
+            .maximize()
+            .build()?;
         let website = MenuItemBuilder::with_id("help_website", "MonoCode Website").build(app)?;
         let github = MenuItemBuilder::with_id("help_github", "View on GitHub").build(app)?;
         let report_bug = MenuItemBuilder::with_id("help_report_bug", "Report a Bug…").build(app)?;
