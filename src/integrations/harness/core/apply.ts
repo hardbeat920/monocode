@@ -276,7 +276,14 @@ function upsertTaskList(
   );
   const existing = lastMatchingBlock(session.blocks, (block, index) => {
     if (block.role !== "tasks") return false;
-    if (key) return block.taskList?.key === key;
+    if (key) {
+      if (block.taskList?.key !== key) return false;
+      // A list from another provider conversation stays as history.
+      return (
+        !event.providerSessionId ||
+        block.taskList?.providerSessionId === event.providerSessionId
+      );
+    }
     return index > lastUser;
   });
   const previousItems =

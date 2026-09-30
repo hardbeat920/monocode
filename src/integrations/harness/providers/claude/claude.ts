@@ -410,10 +410,8 @@ export function restoreClaudeTaskLists(
   let items: TaskListItem[] = [];
   for (const entry of lists) {
     if (entry.key !== CLAUDE_TASKS_KEY) continue;
-    items =
-      entry.providerSessionId === providerSessionId
-        ? entry.items.filter((item) => item.id)
-        : [];
+    if (entry.providerSessionId !== providerSessionId) continue;
+    items = entry.items.filter((item) => item.id);
   }
   if (items.length === 0) return;
   tasksByThread.set(threadId, {
