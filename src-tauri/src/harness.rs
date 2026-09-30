@@ -1075,8 +1075,14 @@ const CLAUDE_SHARED_USER_DIRS: [&str; 3] = ["skills", "commands", "agents"];
 /// The config dir the default account uses: `CLAUDE_CONFIG_DIR` when the app
 /// inherited one, otherwise `~/.claude`.
 fn default_claude_config_dir() -> Option<PathBuf> {
-    match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+    claude_config_dir_from(std::env::var_os("CLAUDE_CONFIG_DIR"))
+}
+
+/// A relative `CLAUDE_CONFIG_DIR` is made absolute against the app's working
+/// directory; a symlink to a relative target would resolve inside the profile.
+fn claude_config_dir_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    match value {
+        Some(path) if !path.is_empty() => std::path::absolute(PathBuf::from(path)).ok(),
         _ => dirs_home().map(|home| PathBuf::from(home).join(".claude")),
     }
 }
@@ -3840,6 +3846,22 @@ mod claude_profile_link_tests {
 
         std::fs::remove_dir_all(shared).unwrap();
         std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn relative_config_dir_resolves_against_working_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            claude_config_dir_from(Some("rel/claude".into())),
+            Some(cwd.join("rel/claude"))
+        );
+        assert_eq!(
+            claude_config_dir_from(Some("/abs/claude".into())),
+            Some(PathBuf::from("/abs/claude"))
+        );
+        let home_default = dirs_home().map(|home| PathBuf::from(home).join(".claude"));
+        assert_eq!(claude_config_dir_from(Some("".into())), home_default);
+        assert_eq!(claude_config_dir_from(None), home_default);
     }
 
     #[test]
