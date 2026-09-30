@@ -6,6 +6,7 @@ import {
   killChild,
   resolveClaudeBinary,
   spawnChild,
+  spawnWasCancelled,
   unwatchChild,
   watchChild,
   writeChild,
@@ -184,7 +185,30 @@ const RESUME_GRACE_MS = 15_000;
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+
+// Claude reports an unknown `--resume` target on stderr and exits. Spotting it
+// is the only way to tell a poisoned session id from an ordinary crash.
+const RESUME_MISSING = /no conversation found/i;
 const cancelledThreads = new Set<string>();
+
+// Stopping a turn and stopping the session are different intents, and they need
+// different channels: cancelledThreads says "don't serve this turn" and is
+// consumed by whoever serves it, while this counter says "this thread's startup
+// has been superseded" and is only ever compared against a snapshot. A startup
+// that sees the number move while it was awaiting has been called off. Nothing
+// consumes it, so it cannot leak into a later turn the way a stale marker would.
+const stopEpochs = new Map<string, number>();
+
+function stopEpoch(sessionId: string): number {
+  return stopEpochs.get(sessionId) ?? 0;
+}
+
+/** A session stop overtook a startup that was still in flight. */
+class StartupStopped extends Error {
+  constructor() {
+    super("Claude Code startup was stopped");
+  }
+}
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
   resolveClaudeBinary;
@@ -197,20 +221,35 @@ export function setClaudeBinaryResolver(
 }
 
 export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
+  // Snapshotted before anything is awaited, and re-read after each wait below.
+  // `cancelledThreads` alone cannot answer this: a stop tears the session down,
+  // and the teardown clears that set — so a stop landing while startup was
+  // finishing left nothing behind for the checks after it to find.
+  const epoch = stopEpoch(input.sessionId);
+  const stopped = () => stopEpoch(input.sessionId) !== epoch;
   let live: Live;
   try {
     live = await ensureLive(input);
   } catch (error) {
     cancelledThreads.delete(input.sessionId);
+    if (error instanceof StartupStopped) return;
     throw error;
   }
   if (cancelledThreads.delete(input.sessionId)) return;
+  // The window `ensureLive` cannot cover: the stop arrived after it had a
+  // working child and before the prompt went out. Sending now would run a turn
+  // the user had already called off.
+  if (stopped()) return;
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      // Again here, because this may have waited behind an earlier turn — and
+      // because the reset below clears `cancelled`, which is the only other
+      // record that a stop happened.
+      if (stopped()) return;
       live.cancelled = false;
       live.muteUpdates = false;
       try {
@@ -229,7 +268,12 @@ export async function compactClaudeContext(
   const settingsKey = settingsKeyFor(input);
   let live = liveByThread.get(input.sessionId);
   if (!live || live.cwd !== input.cwd || live.settingsKey !== settingsKey) {
-    live = await ensureLive(input);
+    try {
+      live = await ensureLive(input);
+    } catch (error) {
+      if (error instanceof StartupStopped) return;
+      throw error;
+    }
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
@@ -334,6 +378,15 @@ export async function cancelClaudeTurn(sessionId: string): Promise<void> {
 }
 
 export async function stopClaudeSession(sessionId: string): Promise<void> {
+  // An explicit stop supersedes any startup still in flight for this thread,
+  // including one that has not spawned its child yet and so has nothing here
+  // to tear down.
+  stopEpochs.set(sessionId, stopEpoch(sessionId) + 1);
+  await teardownClaudeSession(sessionId);
+}
+
+/** The teardown half of a stop, without the intent. Internal callers respawn. */
+async function teardownClaudeSession(sessionId: string): Promise<void> {
   cancelledThreads.delete(sessionId);
   const live = liveByThread.get(sessionId);
   liveByThread.delete(sessionId);
@@ -371,9 +424,14 @@ export function bindClaudeSession(
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
-async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+async function ensureLive(
+  input: HarnessSessionInput,
+  retriedWithoutResume = false,
+): Promise<Live> {
   const settingsKey = settingsKeyFor(input);
   const planning = input.intent === "plan";
+  const epoch = stopEpoch(input.sessionId);
+  const superseded = () => stopEpoch(input.sessionId) !== epoch;
   const existing = liveByThread.get(input.sessionId);
   if (
     existing &&
@@ -390,7 +448,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     // they must resume the same provider conversation. Only a cwd change
     // invalidates the stored session because Claude sessions are cwd-bound.
     if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
-    await stopClaudeSession(input.sessionId);
+    await teardownClaudeSession(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
@@ -407,6 +465,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const { path } = await resolveClaudeBinaryImpl();
+  if (superseded()) throw new StartupStopped();
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
@@ -456,6 +515,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   };
   liveRef.current = live;
 
+  const resumeMissing = { current: false };
+
   watchChild(
     input.sessionId,
     (line) => {
@@ -477,16 +538,38 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         current.initDone = null;
       }
     },
+    (line) => {
+      if (RESUME_MISSING.test(line)) resumeMissing.current = true;
+      console.debug(`[monocode] claude stderr ${input.sessionId}`, line);
+    },
   );
 
-  await spawnChild(
-    input.sessionId,
-    path,
-    buildClaudeSpawnArgs(launch),
-    input.cwd,
-    { provider: "claude", id: input.providerAccountId ?? "default" },
-    "claude",
-  );
+  try {
+    await spawnChild(
+      input.sessionId,
+      path,
+      buildClaudeSpawnArgs(launch),
+      input.cwd,
+      { provider: "claude", id: input.providerAccountId ?? "default" },
+      "claude",
+    );
+  } catch (error) {
+    // The host refuses to register a child whose session was torn down while it
+    // forked. That is the stop doing its job, and it reached the user as
+    // "Harness start was cancelled" — an error report for something they asked
+    // for. Every other spawn failure still surfaces.
+    if (spawnWasCancelled(error)) throw new StartupStopped();
+    throw error;
+  }
+
+  // The stop that arrived while this was forking ran its teardown against a
+  // thread that had no child yet, so this one has to be killed here. Checked
+  // before anything is recorded, so no id is stored for a session being torn
+  // down.
+  if (superseded()) {
+    await teardownClaudeSession(input.sessionId);
+    throw new StartupStopped();
+  }
 
   liveByThread.set(input.sessionId, live);
   resumeByThread.set(input.sessionId, {
@@ -501,6 +584,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    // waitForInit resolves on a dead child and on timeout alike, so an
+    // uninitialized Live here means startup failed however it failed —
+    // rejected `--resume`, failed auth, a crash, or never answering at all.
+    // Returning it would hand back a handle over a process that cannot reply,
+    // which surfaces as "Harness process is not running" on the next write.
+    if (!live.initialized) throw new Error("Claude Code did not start");
+    // The last wait of the startup, and so the last chance to notice: a stop
+    // that arrived while the handshake was completing would otherwise be handed
+    // a working child, and the caller would send its prompt into it.
+    if (superseded()) {
+      await teardownClaudeSession(input.sessionId);
+      throw new StartupStopped();
+    }
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -508,7 +604,43 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {
-    await stopClaudeSession(input.sessionId);
+    // A cancelled turn lands either on this Live or, if the child had already
+    // gone, on the pending-cancel set. The teardown clears the latter, so read
+    // both before it runs.
+    const cancelled = live.cancelled || cancelledThreads.has(input.sessionId);
+    // Bail out only if a *different* attempt now owns the thread — not merely
+    // absent, which is the ordinary case: the child's own exit handler deletes
+    // this entry on the way to this same catch. Everything a teardown reaches —
+    // the child, the entry, the pending approvals — is keyed by session id, so
+    // running it here against a thread a newer startup has since taken over
+    // would tear down that startup's live turn instead of this one's wreckage.
+    const owner = liveByThread.get(input.sessionId);
+    if (owner && owner !== live) {
+      // Not this attempt's to touch: `resumeByThread` was already overwritten by
+      // whoever owns the thread now, and clearing it here would erase a binding
+      // that belongs to them, not to this attempt's wreckage.
+      throw error instanceof StartupStopped ? error : new StartupStopped();
+    }
+    await teardownClaudeSession(input.sessionId);
+    // A conversation that never initialized was never written to disk either,
+    // so the id recorded above would poison the next spawn the same way. The
+    // retry below only runs when canResume held, so this never fires on it.
+    if (!canResume) resumeByThread.delete(input.sessionId);
+    // The session itself was stopped while this startup was in flight. Nothing
+    // may be spawned on its behalf now, and the caller asked for the stop, so
+    // it is not a failure to report either.
+    if (superseded()) throw new StartupStopped();
+    // Claude no longer has the conversation we asked to resume. The stored id
+    // would fail the same way on every later spawn, so drop it and start a
+    // fresh conversation once rather than leaving the thread wedged forever.
+    if (resumeMissing.current && canResume && !retriedWithoutResume) {
+      resumeByThread.delete(input.sessionId);
+      // The retry serves the same turn the cancel was aimed at, so carry the
+      // cancel over; otherwise the replacement child is handed the prompt the
+      // user already called off.
+      if (cancelled) cancelledThreads.add(input.sessionId);
+      return ensureLive(input, true);
+    }
     throw error;
   }
 }
@@ -906,8 +1038,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A refused window can still fall back to another model, so only a turn
   // that ended in error was stopped by it.
   const turnErrored = rec.is_error === true || result.status === "failed";
-  const usageLimit =
-    live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
   live.usageLimit = null;
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
@@ -924,10 +1055,7 @@ async function handleControlRequest(
   control: ClaudeControlRequest,
 ): Promise<void> {
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -1333,10 +1461,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1371,10 +1496,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1535,7 +1657,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1549,7 +1672,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
@@ -1740,4 +1865,5 @@ export function __claudeTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();
+  stopEpochs.clear();
 }

@@ -132,7 +132,15 @@ function ensureBridge() {
     register(
       listen<LinePayload>("harness-stderr", (event) => {
         const { sessionId, line } = event.payload;
-        stderrHandlers.get(sessionId)?.(line);
+        const handler = stderrHandlers.get(sessionId);
+        if (handler) {
+          handler(line);
+          return;
+        }
+        // A child that dies on startup explains itself on stderr and nowhere
+        // else; without this the only trace left is the generic
+        // "Harness process is not running" from the next write.
+        console.debug(`[monocode] stderr ${sessionId}`, line);
       }),
     ),
     register(
@@ -278,6 +286,20 @@ export function unwatchSse(sessionId: string) {
   sseHandlers.delete(sessionId);
   sseEndHandlers.delete(sessionId);
   sseBuffer.delete(sessionId);
+}
+
+/**
+ * Whether a spawn failed because the session was stopped while it forked.
+ *
+ * The text comes from `SPAWN_CANCELLED` in `src-tauri/src/harness.rs`, which
+ * refuses to register a child whose session was torn down mid-fork. It is a
+ * stop doing its job, so a caller must not report it as a failure — kept here
+ * because this module is the spawn boundary, and matching the string in two
+ * places would let them drift apart.
+ */
+export function spawnWasCancelled(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("Harness start was cancelled");
 }
 
 export async function spawnChild(
