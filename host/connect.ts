@@ -285,6 +285,9 @@ export async function connect(options: ConnectOptions): Promise<void> {
         out.say(
           `! The background service could not be installed: ${error instanceof Error ? error.message : String(error)}`,
         );
+        // Remove what was installed, so a service that starts late does not
+        // compete with the detached host for the data directory.
+        await uninstallService().catch(() => []);
         await startDetached(target);
         service = "detached";
       }
