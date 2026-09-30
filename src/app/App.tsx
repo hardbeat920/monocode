@@ -3647,16 +3647,14 @@ function Workspace({
       session?: { sessionId: string; cwd: string },
       changeKind?: GitFileDiffKind,
       pin = false,
+      exact = false,
     ) => {
-      void (async () => {
-        const diffCwd = session?.cwd ?? gitCwdRef.current;
-        const diffProjectCwd = session
-          ? sessionsRef.current.find((entry) => entry.id === session.sessionId)
-              ?.cwd
-          : sidebarCwdRef.current;
-        const resolved = path
-          ? ((await resolveOpenablePath(diffCwd, path)) ?? path)
-          : undefined;
+      const diffCwd = session?.cwd ?? gitCwdRef.current;
+      const diffProjectCwd = session
+        ? sessionsRef.current.find((entry) => entry.id === session.sessionId)
+            ?.cwd
+        : sidebarCwdRef.current;
+      const open = (resolved: string | undefined) => {
         if (resolved) rememberOpenedFile(diffCwd, resolved);
         setTabs((prev) =>
           prev.map((tab) => {
@@ -3690,14 +3688,24 @@ function Workspace({
         );
         setSidebarTab("changes", diffProjectCwd);
         setComposerFocused(false);
-      })();
+      };
+      // Source control hands over exact paths from git. Only shortened paths
+      // (a transcript link, a session file) need the project file index, and
+      // waiting on it here held the click until the whole project was listed.
+      if (!path || exact) {
+        open(path);
+        return;
+      }
+      void resolveOpenablePath(diffCwd, path).then((resolved) =>
+        open(resolved ?? path),
+      );
     },
     [activeTabId],
   );
 
   const onOpenWorkingTreeDiff = useCallback(
     (path: string, kind?: GitFileDiffKind, pin?: boolean) =>
-      onOpenDiff(path, undefined, kind, pin),
+      onOpenDiff(path, undefined, kind, pin, true),
     [onOpenDiff],
   );
 
