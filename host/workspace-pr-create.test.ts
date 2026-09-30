@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { HostStore } from "./store";
 import {
@@ -51,15 +51,29 @@ function trackUpstream(cwd: string, remote: string, branch = "feature") {
   git("branch", "--set-upstream-to", `${remote}/${branch}`);
 }
 
-function fakeBin(scripts: Record<string, string>): void {
+/** Stub CLI binaries. Each stub needs a POSIX shell script and a Windows
+ * batch file, since `execFile` resolves extensionless names on POSIX but
+ * requires `.cmd` on Windows. */
+function fakeBin(scripts: Record<string, { sh: string; cmd: string }>): void {
   const bin = tempDir("monocode-host-bin-");
-  for (const [name, body] of Object.entries(scripts)) {
-    const path = join(bin, name);
-    writeFileSync(path, `#!/bin/sh\n${body}\n`);
-    chmodSync(path, 0o755);
+  for (const [name, bodies] of Object.entries(scripts)) {
+    const shPath = join(bin, name);
+    writeFileSync(shPath, `#!/bin/sh\n${bodies.sh}\n`);
+    chmodSync(shPath, 0o755);
+    writeFileSync(join(bin, `${name}.cmd`), `@echo off\r\n${bodies.cmd}\r\n`);
   }
-  process.env.PATH = `${bin}${savedPath ? `:${savedPath}` : ""}`;
+  process.env.PATH = `${bin}${savedPath ? `${delimiter}${savedPath}` : ""}`;
 }
+
+const azJson = (id: number) => ({
+  sh: `echo '{"pullRequestId": ${id}}'`,
+  cmd: `@echo {"pullRequestId": ${id}}`,
+});
+
+const ghUrl = (url: string) => ({
+  sh: `echo '${url}'`,
+  cmd: `@echo ${url}`,
+});
 
 function commands(cwd: string): WorkspaceCommands {
   const store = {
@@ -129,7 +143,7 @@ it("builds canonical Azure pull-request URLs", () => {
 
 it("creates Azure PRs through az on the push remote", async () => {
   const cwd = initRepo({ origin: AZURE_URL });
-  fakeBin({ az: `echo '{"pullRequestId": 12}'` });
+  fakeBin({ az: azJson(12) });
   const url = await commands(cwd).run("git_pr_create", {
     cwd,
     title: "Add login",
@@ -144,7 +158,12 @@ it("uses the upstream remote, not origin, for Azure detection", async () => {
   const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
   trackUpstream(cwd, "azure");
   const argsFile = join(tempDir("monocode-host-args-"), "az-args.txt");
-  fakeBin({ az: `echo "$@" > "${argsFile}"\necho '{"pullRequestId": 7}'` });
+  fakeBin({
+    az: {
+      sh: `echo "$@" > "${argsFile}"\necho '{"pullRequestId": 7}'`,
+      cmd: `@echo %* > "${argsFile}"\n@echo {"pullRequestId": 7}`,
+    },
+  });
   const url = await commands(cwd).run("git_pr_create", {
     cwd,
     title: "Add login",
@@ -159,7 +178,7 @@ it("uses the upstream remote, not origin, for Azure detection", async () => {
 it("falls back to gh when the push remote is GitHub", async () => {
   const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
   trackUpstream(cwd, "origin");
-  fakeBin({ gh: `echo 'https://github.com/acme/web/pull/42'` });
+  fakeBin({ gh: ghUrl("https://github.com/acme/web/pull/42") });
   const url = await commands(cwd).run("git_pr_create", {
     cwd,
     title: "Add login",
@@ -172,7 +191,13 @@ it("falls back to gh when the push remote is GitHub", async () => {
 
 it("falls back to gh when az fails", async () => {
   const cwd = initRepo({ origin: AZURE_URL });
-  fakeBin({ az: `echo 'not logged in' >&2\nexit 1`, gh: `echo 'https://github.com/acme/web/pull/9'` });
+  fakeBin({
+    az: {
+      sh: `echo 'not logged in' >&2\nexit 1`,
+      cmd: `@echo not logged in 1>&2\nexit /b 1`,
+    },
+    gh: ghUrl("https://github.com/acme/web/pull/9"),
+  });
   const url = await commands(cwd).run("git_pr_create", {
     cwd,
     title: "Add login",
