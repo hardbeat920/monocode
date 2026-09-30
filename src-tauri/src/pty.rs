@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dirs_home;
@@ -73,6 +73,28 @@ impl PtyHost {
             .insert(id, live)
     }
 
+    /// Take an id, killing whatever held it.
+    ///
+    /// An id is one slot, and every way to reach a pty goes through it: `pty_kill`,
+    /// `pty_write`, `pty_resize` all look the id up. So a spawn that displaced a
+    /// live pty and dropped the old handle left a process nothing could ever
+    /// address again — running, holding its conversation, and invisible. Measured
+    /// on remote control, whose pty id is derived from the thread: reloading the
+    /// window handed the same threads over again, and each reload orphaned the
+    /// previous CLI. Fifty of them accumulated in one afternoon, and because the
+    /// interactive CLI traps SIGTERM a third of those survived even a direct
+    /// signal.
+    ///
+    /// Callers that mean to replace say so by calling this. Nobody has to remember
+    /// to check a return value.
+    fn replace(&self, id: String, live: Arc<LivePty>) {
+        if let Some(evicted) = self.insert(id, live) {
+            terminate(evicted.pid);
+            #[cfg(unix)]
+            close_fd(evicted.master_fd);
+        }
+    }
+
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
         self.sessions
             .lock()
@@ -124,6 +146,16 @@ impl Drop for PtyHost {
     }
 }
 
+/// What a PTY runs. A terminal omits it and gets the login shell; a caller that
+/// names a program gets it as the PTY's direct child, so killing the PTY kills
+/// the program and no argument passes through shell quoting.
+#[derive(Deserialize)]
+pub struct PtyCommand {
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
 #[tauri::command]
 pub fn pty_spawn(
     app: AppHandle,
@@ -132,7 +164,11 @@ pub fn pty_spawn(
     cwd: String,
     cols: u16,
     rows: u16,
+    command: Option<PtyCommand>,
 ) -> Result<(), String> {
+    // Before the reservation and the kill below: a command we cannot even name
+    // must not take down the terminal that is already running under this id.
+    let command = resolve_command(command)?;
     let workdir = working_dir(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     if let Some(prev) = host.remove(&id) {
@@ -143,17 +179,17 @@ pub fn pty_spawn(
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_unix(app, host, id, command, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_windows(app, host, id, command, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (app, cwd, cols, rows);
+        let _ = (app, command, cwd, cols, rows);
         Err("Terminals are not supported on this platform.".into())
     }
 }
@@ -246,6 +282,7 @@ fn spawn_unix(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
+    command: PtyCommand,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
@@ -255,10 +292,10 @@ fn spawn_unix(
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    let (shell, args) = default_shell();
+    let PtyCommand { program, args } = command;
     let (master, slave) = open_pty(cols, rows)?;
 
-    let mut cmd = Command::new(&shell);
+    let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&workdir)
         .stdin(dup_stdio(slave)?)
@@ -269,6 +306,26 @@ fn spawn_unix(
         .env("COLORFGBG", "15;0")
         .env("TERM_PROGRAM", "MonoCode")
         .env("PATH", crate::harness::gui_search_path());
+    // What makes this child reapable if the app dies without killing it. The
+    // startup reaper reads the marker out of the process and kills what a dead
+    // run left behind; a pty child that carried none was invisible to it, which
+    // is how remote control's CLIs survived app restart after app restart. Its
+    // argv gate decides what is actually worth killing, so a login shell is
+    // marked and never matched.
+    let (marker, parent) = crate::harness::harness_parent_marker();
+    cmd.env(marker, parent);
+    // The same three `apply_gui_env` strips, for the same reason: a Claude
+    // Code child that inherits them refuses to start. That path builds the
+    // harness child's environment and this one does not go through it, so
+    // launching MonoCode from inside a Claude Code session used to make every
+    // hand-over exit at once, reported only as `exited with code 1`.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
     }
@@ -294,7 +351,7 @@ fn spawn_unix(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to start {shell}: {e}"))?;
+        .map_err(|e| format!("Failed to start {program}: {e}"))?;
     close_fd(slave);
     let pid = child.id();
 
@@ -308,7 +365,7 @@ fn spawn_unix(
         master_fd: master,
         pid,
     });
-    host.insert(id.clone(), live);
+    host.replace(id.clone(), live);
 
     let data_app = app.clone();
     let data_id = id.clone();
@@ -375,13 +432,14 @@ fn spawn_windows(
     app: AppHandle,
     host: State<PtyHost>,
     id: String,
+    command: PtyCommand,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-    let (shell, args) = default_shell();
+    let PtyCommand { program, args } = command;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -392,12 +450,27 @@ fn spawn_windows(
         })
         .map_err(|err| format!("Failed to open terminal: {err}"))?;
 
-    let mut cmd = CommandBuilder::new(&shell);
+    let mut cmd = CommandBuilder::new(&program);
     cmd.args(&args);
     cmd.cwd(&workdir);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", "15;0");
+    // See the unix path: the marker is what a later launch recognises.
+    let (marker, parent) = crate::harness::harness_parent_marker();
+    cmd.env(marker, parent);
+    // The same three `apply_gui_env` strips, for the same reason: a Claude
+    // Code child that inherits them refuses to start. That path builds the
+    // harness child's environment and this one does not go through it, so
+    // launching MonoCode from inside a Claude Code session used to make every
+    // hand-over exit at once, reported only as `exited with code 1`.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     cmd.env("TERM_PROGRAM", "MonoCode");
     cmd.env("PATH", crate::harness::gui_search_path());
     if let Some(home) = dirs_home() {
@@ -407,7 +480,7 @@ fn spawn_windows(
     cmd.env("PWD", workdir.to_string_lossy().as_ref());
 
     let mut child = crate::windows::spawn_pty(pair.slave.as_ref(), cmd)
-        .map_err(|err| format!("Failed to start {shell}: {err}"))?;
+        .map_err(|err| format!("Failed to start {program}: {err}"))?;
     let pid = child.process_id().unwrap_or(0);
     let mut reader = pair
         .master
@@ -424,7 +497,7 @@ fn spawn_windows(
         master: Mutex::new(pair.master),
         pid,
     });
-    host.insert(id.clone(), live);
+    host.replace(id.clone(), live);
 
     let data_app = app.clone();
     let data_id = id.clone();
@@ -469,15 +542,52 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
     dirs_home().map(std::path::PathBuf::from).unwrap_or(path)
 }
 
-fn default_shell() -> (String, Vec<String>) {
+/// The login shell unless the caller named a program.
+fn resolve_command(command: Option<PtyCommand>) -> Result<PtyCommand, String> {
+    let Some(command) = command else {
+        return Ok(default_shell());
+    };
+    let program = command.program.trim();
+    if program.is_empty() {
+        return Err("No program to run in the terminal".into());
+    }
+    Ok(PtyCommand {
+        program: program_path(program),
+        args: command.args,
+    })
+}
+
+/// Resolve a bare name against the PATH the app spawns with, not the process
+/// environment: a bundle launched from Finder inherits launchd's PATH, so a CLI
+/// installed by Homebrew or mise is only visible through `gui_search_path` --
+/// which is also the PATH the child below gets.
+fn program_path(program: &str) -> String {
+    if program.starts_with('~') {
+        return expand_home(program).to_string_lossy().into_owned();
+    }
+    if std::path::Path::new(program).components().count() > 1 {
+        return program.to_string();
+    }
+    crate::harness::resolve_gui_binary(program)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| program.to_string())
+}
+
+fn default_shell() -> PtyCommand {
     #[cfg(windows)]
     {
         if let Ok(comspec) = std::env::var("COMSPEC") {
             if !comspec.is_empty() {
-                return (comspec, Vec::new());
+                return PtyCommand {
+                    program: comspec,
+                    args: Vec::new(),
+                };
             }
         }
-        ("powershell.exe".into(), vec!["-NoLogo".into()])
+        PtyCommand {
+            program: "powershell.exe".into(),
+            args: vec!["-NoLogo".into()],
+        }
     }
     #[cfg(not(windows))]
     {
@@ -495,7 +605,10 @@ fn default_shell() -> (String, Vec<String>) {
             .iter()
             .map(|arg| (*arg).to_string())
             .collect();
-        (shell, args)
+        PtyCommand {
+            program: shell,
+            args,
+        }
     }
 }
 
@@ -800,6 +913,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn no_command_runs_the_login_shell() {
+        let shell = default_shell();
+        let command = resolve_command(None).unwrap();
+        assert_eq!(command.program, shell.program);
+        assert_eq!(command.args, shell.args);
+    }
+
+    #[test]
+    fn a_named_command_keeps_its_arguments_verbatim() {
+        let command = resolve_command(Some(PtyCommand {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo 'one two'".into(),
+                "--flag=a b".into(),
+                String::new(),
+            ],
+        }))
+        .unwrap();
+        assert_eq!(command.program, "/bin/sh");
+        assert_eq!(command.args, vec!["-c", "echo 'one two'", "--flag=a b", ""]);
+    }
+
+    #[test]
+    fn a_command_without_arguments_needs_none() {
+        let command: PtyCommand = serde_json::from_str(r#"{"program":"claude"}"#).unwrap();
+        assert!(command.args.is_empty());
+    }
+
+    #[test]
+    fn an_empty_command_is_rejected_before_anything_is_killed() {
+        assert!(resolve_command(Some(PtyCommand {
+            program: "   ".into(),
+            args: Vec::new(),
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn program_path_resolves_a_bare_name_through_the_app_path() {
+        // `/bin` is always on `gui_search_path`, so `sh` must come back as a
+        // real absolute path rather than the bare name.
+        let sh = program_path("sh");
+        assert!(sh.ends_with("/sh"), "{sh}");
+        assert!(std::path::Path::new(&sh).is_file(), "{sh}");
+        assert_eq!(program_path("/usr/bin/env"), "/usr/bin/env");
+        assert_eq!(program_path("./local-agent"), "./local-agent");
+        assert_eq!(
+            program_path("monocode-no-such-binary"),
+            "monocode-no-such-binary"
+        );
+        let home = dirs_home().unwrap();
+        assert_eq!(
+            program_path("~/.claude/local/claude"),
+            format!("{home}/.claude/local/claude")
+        );
+    }
+
+    #[test]
     fn login_args_for_common_shells() {
         assert_eq!(login_args("/bin/zsh"), &["-l"]);
         assert_eq!(login_args("/bin/bash"), &["-l"]);
@@ -812,6 +984,38 @@ mod tests {
         assert!(!pty_should_flush(1, Duration::from_millis(1)));
         assert!(pty_should_flush(READ_CHUNK, Duration::from_millis(1)));
         assert!(pty_should_flush(1, PTY_COALESCE));
+    }
+
+    #[test]
+    fn replace_hands_the_slot_over_and_drops_the_old_handle() {
+        // `pid: 0` for the one being evicted on purpose: `terminate` returns on 0
+        // and 1, so this exercises the slot without signalling anything on the
+        // machine running the test. The kill itself is `terminate`, the same call
+        // `pty_kill` makes.
+        let host = PtyHost::new();
+        host.insert(
+            "term".into(),
+            Arc::new(LivePty {
+                cwd: std::path::PathBuf::from("/old"),
+                writer: Mutex::new(Box::new(std::io::sink())),
+                master_fd: -1,
+                pid: 0,
+            }),
+        );
+        host.replace(
+            "term".into(),
+            Arc::new(LivePty {
+                cwd: std::path::PathBuf::from("/new"),
+                writer: Mutex::new(Box::new(std::io::sink())),
+                master_fd: -1,
+                pid: 0,
+            }),
+        );
+
+        // One slot, one pty: the displaced handle is gone rather than left for
+        // nothing to address.
+        let live = host.get("term").expect("the new pty holds the id");
+        assert_eq!(live.cwd, std::path::PathBuf::from("/new"));
     }
 
     #[test]

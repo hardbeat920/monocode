@@ -77,6 +77,12 @@ import {
   DeleteSessionDialog,
   type SessionDeleteChoice,
 } from "../features/sessions/ui/DeleteSessionDialog";
+import { TrustFolderDialog } from "../features/remoteControl/ui/TrustFolderDialog";
+import {
+  claudeFolderTrusted,
+  claudeTrustFolder,
+} from "../platform/tauri/claudeTrust";
+import { reapRemoteControlSession } from "../platform/tauri/remoteControl";
 import {
   assertWorktreeFilesClosed,
   createOrchestrationWorktree,
@@ -122,16 +128,87 @@ import { resolveZoomKeybinding } from "../features/settings/model/zoomKeybinding
 import { resolveAppShortcut } from "../features/settings/model/appShortcuts";
 import { runUpdateFlow } from "./model/updater";
 import {
+  attachmentPathText,
   displayAttachments,
   prepareAttachments,
 } from "../features/sessions/model/attachments";
 import {
   basename,
+  homeDir,
   notifyGitChanged,
   pickFolders,
+  readFileRange,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
+import {
+  killPty,
+  spawnPty,
+  subscribePty,
+  trimReplay,
+  writePty,
+} from "../platform/tauri/pty";
+import {
+  createScreenBuffer,
+  type PromptScreen,
+} from "../features/remoteControl/model/promptScreen";
+import {
+  remoteControlAction,
+  type RemoteControlAction,
+  type RemoteControlIntent,
+} from "../features/remoteControl/model/action";
+import {
+  createMirrorState,
+  emptyCursor,
+  mapRecord,
+  resolveTurnFromScreen,
+  type BridgeStatus,
+  type MirrorState,
+} from "../features/remoteControl/model/transcript";
+import { claudeTranscriptPath } from "../features/remoteControl/model/transcriptPath";
+import { RemoteControlLink } from "../features/remoteControl/ui/RemoteControlLink";
+import { RemoteControlTerminal } from "./RemoteControlTerminal";
+import {
+  watchTranscript,
+  type TranscriptWatcher,
+} from "../features/remoteControl/model/transcriptWatch";
+import {
+  closeRemoteControl,
+  openRemoteControl,
+  REMOTE_CONTROL_COLS,
+  REMOTE_CONTROL_ROWS,
+} from "../integrations/harness/providers/claude/remoteControl";
+import {
+  autoOpenTargets,
+  createPtyFanout,
+  dismissalsAfterModeChange,
+  emptyApprovalProgress,
+  forEachSafely,
+  injectRemoteText,
+  noteInterruptedTurn,
+  pendingAfter,
+  planRemoteExit,
+  queuedNotice,
+  remoteTurnBusy,
+  reseatEchoedUserMessage,
+  remoteApprovalKeystroke,
+  remoteApprovalReply,
+  remoteApprovalTransition,
+  remoteApprovalView,
+  handoverTiming,
+  readFailedBecauseMissing,
+  remoteControlName,
+  remoteControlStep,
+  remoteControlTarget,
+  remoteControlTargetForRunningHandover,
+  seatRemoteUserMessage,
+  takeInjectedEcho,
+  turnSignal,
+  withClaim,
+  type ApprovalProgress,
+  type PtyFanout,
+  type RemoteAnswer,
+} from "./remoteControlSession";
 import {
   invalidateProjectFiles,
   prefetchProjectFiles,
@@ -594,12 +671,15 @@ import {
   loadDiffViewer,
   loadFollowUpBehavior,
   loadKeybindingOverrides,
+  loadRemoteControl,
   loadSettingsSection,
   keybindingPressed,
   matchCustomKeybinding,
+  REMOTE_CONTROL_DEFAULT,
   saveSettingsSection,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
+  subscribeRemoteControl,
   type CollapsedProjectRailMode,
   type SettingsSectionId,
   type FollowUpBehavior,
@@ -911,6 +991,11 @@ export default function App({
     unusedWorktree: string;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
+  /** Claude Code's folder trust check, put to the user before a hand-over. */
+  const [remoteTrustAsk, setRemoteTrustAsk] = useState<{
+    folder: string;
+    resolve: (trusted: boolean) => void;
+  }>();
   const switchingWorktrees = useRef(new Map<string, string>());
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
@@ -995,6 +1080,13 @@ export default function App({
     subscribeNotesEnabled,
     loadNotesEnabled,
     () => true,
+  );
+  // Switching to `all` has to reach live sessions at once, not on the next
+  // session update.
+  const remoteControlMode = useSyncExternalStore(
+    subscribeRemoteControl,
+    loadRemoteControl,
+    () => REMOTE_CONTROL_DEFAULT,
   );
   const liveAgentsEnabled = useSyncExternalStore(
     subscribeLiveAgentsEnabled,
@@ -1327,10 +1419,1212 @@ export default function App({
     [applyApprovalEvent, flushHarnessEvents],
   );
 
+  // ---------------------------------------------------------------- Remote
+  // One interactive CLI per handed-over conversation. The pty is keyed by the
+  // thread, so nothing here has to survive a reload for the process to be
+  // findable again; what is held is only what a reload would have to rebuild.
+  const remoteControl = useRef(
+    new Map<
+      string,
+      {
+        ptyId: string;
+        name: string;
+        mirror: MirrorState;
+        /**
+         * Outstanding tool calls, from the transcript. This is what says a
+         * prompt may be waiting; the screen only says what it says.
+         */
+        pending: Set<string>;
+        /** Replayed pty bytes, trimmed by the same rule the pty bridge uses. */
+        chunks: string[];
+        /** A holder, so the parser can own it without the map in the way. */
+        screen: { screen: PromptScreen | null };
+        /** How the composer's content is painted — quoted when it is refused. */
+        composerPaint: () => string | null;
+        /**
+         * When the pty last produced output, and `null` until it ever has.
+         * Silence is the only trace an interrupt leaves, and it cannot be seen
+         * from inside a chunk handler — hence the clock below.
+         */
+        spoke: { at: number | null };
+        /**
+         * Move `busy` on a transition of the mirror's turn. Called after every
+         * transcript record and on every liveness tick.
+         */
+        followTurn: () => void;
+        /**
+         * Clear `busy` when neither the mirror, a recent send nor an owed echo
+         * says the session is working. For a send that was refused: the
+         * composer marked the session busy before the send, and this is what
+         * clears it without waiting for the clock.
+         */
+        clearBusyIfIdle: () => void;
+        /**
+         * The one subscription's readers. The parser is built into it and cannot
+         * be detached; see `createPtyFanout`.
+         */
+        fanout: PtyFanout;
+        /**
+         * What is in front of the user and how close the screen is to settling.
+         * Owned by `remoteApprovalTransition`; nothing here interprets it.
+         */
+        approval: ApprovalProgress;
+        stop: () => void;
+      }
+    >(),
+  );
+  const remoteRequestId = useRef(0);
+  // Closed by hand. `all` mode consults this so it does not reopen what the
+  // user just shut, which would be unarguable-with rather than automatic.
+  const remoteControlClosed = useRef(new Set<string>());
+  /**
+   * Hand-overs asked for by hand while a turn was running, waiting for it to end.
+   *
+   * Neither a refusal nor an interruption — see `handoverTiming`. Drained by the
+   * auto-open effect, which already runs on every `sessions` change, and a turn
+   * ending is one.
+   */
+  const remotePending = useRef(new Set<string>());
+  /**
+   * Text this app typed into a pty, waiting for the transcript to echo it.
+   *
+   * See `takeInjectedEcho`. Keyed by session, and each entry is spent by the
+   * first mirrored message that matches it.
+   */
+  const remoteEcho = useRef(new Map<string, string[]>());
+  /**
+   * When this app last sent into each session's pty. Set before the send's
+   * first await, so the window between the composer marking the session busy
+   * and the echo being registered is covered — see `remoteTurnBusy`.
+   */
+  const remoteSentAt = useRef(new Map<string, number>());
+  const [remoteControlIds, setRemoteControlIds] = useState<readonly string[]>(
+    [],
+  );
+  const remoteHome = useRef<string | null>(null);
+  /**
+   * Sessions whose hand-over has started but not finished.
+   *
+   * The finished entry in `remoteControl` is only written after the child is
+   * stopped and the pty spawned, several awaits in. `all` mode reaches
+   * `openRemote` from an effect keyed on `sessions`, and `openRemote` calls
+   * `setSessions` before that entry exists — so the effect re-ran, saw no entry,
+   * and started the hand-over again, unboundedly, until React tore the tree down
+   * for exceeding its update depth. A blank window. The guard has to be set
+   * before the first await, not after the last one.
+   */
+  const remoteOpening = useRef(new Set<string>());
+  /**
+   * The mode the auto-open effect last ran under, so a change into `all` can be
+   * told from a re-run caused by the sessions changing.
+   */
+  const remoteControlModeSeen = useRef(remoteControlMode);
+  /** Sessions showing the raw pty, because MonoCode could not read its screen. */
+  /**
+   * The ref is the authority; the state exists to render — the same split as
+   * `remoteControl`/`remoteControlIds`. It matters because `syncRemoteApproval`
+   * is captured by two long-lived closures per session, the pty parser and the
+   * transcript watcher, so a callback depending on render state is frozen in them
+   * at the moment that session opened. Reading the ref keeps the callback's
+   * identity stable, leaving no stale copy to be wrong about.
+   */
+  const remoteTerminals = useRef(new Set<string>());
+  const [remoteTerminalIds, setRemoteTerminalIds] = useState<readonly string[]>(
+    [],
+  );
+  /**
+   * Terminals hidden by hand while still showing a screen nothing else can
+   * resolve.
+   *
+   * A screen `openTerminal` raised as unreadable stays unreadable until new
+   * pty output or a transcript record runs `syncRemoteApproval` again — and an
+   * unrecognised screen is precisely the one that never repaints on its own.
+   * Removing the id from `remoteTerminalIds` on Hide left nothing to ever
+   * re-add it: the prompt was still there, still unanswerable, with no way
+   * back to it. Minimizing instead of unmounting keeps the pty subscription
+   * and `remoteTerminals` membership untouched — the terminal is still open as
+   * far as the rest of remote control is concerned, only its view is folded.
+   */
+  const [remoteTerminalMinimizedIds, setRemoteTerminalMinimizedIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  /**
+   * The minimized set, readable from the long-lived closures that cannot see
+   * render state. "Open" and "in front of the user" parted ways when Hide
+   * became a minimize: `remoteTerminals` kept the session, so the send gate
+   * went on refusing every message as typed into an open terminal, and the
+   * approval view went on raising nothing, for a terminal nobody could see —
+   * until Remote Control was closed. What the gate is guarding against is a
+   * keystroke landing beside the user's own, and a folded terminal takes none.
+   */
+  const remoteTerminalHidden = useRef<ReadonlySet<string>>(new Set());
+  remoteTerminalHidden.current = remoteTerminalMinimizedIds;
+  const remoteTerminalInFront = useCallback(
+    (sessionId: string) =>
+      remoteTerminals.current.has(sessionId) &&
+      !remoteTerminalHidden.current.has(sessionId),
+    [],
+  );
+  /**
+   * Terminals Remote Control put in front of the user itself, for a screen it
+   * could not read. Those fold away again on their own once the screen reads
+   * as an ordinary composer — the thing they were raised for has been dealt
+   * with, and a terminal left standing in the conversation is the "why is
+   * the terminal window showing" of every session that ever hit a trust
+   * check. A terminal the user opened is theirs to close.
+   */
+  const remoteTerminalAutoOpened = useRef(new Set<string>());
+  /** Per session, so the link can render. `undefined` renders nothing. */
+  const [remoteBridges, setRemoteBridges] = useState<
+    Readonly<Record<string, BridgeStatus>>
+  >({});
+
+  /**
+   * Perform whatever `remoteApprovalTransition` decided.
+   *
+   * Called from both sides because either can change the answer: a transcript
+   * batch can retire a prompt answered on the phone, and a screen repaint can be
+   * the first sight of one — or the second frame that finally settles it.
+   */
+  const syncRemoteApproval = useCallback(
+    (sessionId: string) => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return;
+      const screen = entry.screen.screen;
+      if (
+        screen &&
+        (screen.kind === "idle" || screen.kind === "busy") &&
+        remoteTerminalAutoOpened.current.has(sessionId) &&
+        remoteTerminalInFront(sessionId)
+      ) {
+        // Raised for a screen that is no longer there. Folded, not closed:
+        // `remoteTerminals` keeps the session so the next unreadable screen
+        // can bring it back.
+        remoteTerminalAutoOpened.current.delete(sessionId);
+        setRemoteTerminalMinimizedIds((ids) => new Set(ids).add(sessionId));
+      }
+      const view = screen
+        ? remoteApprovalView({
+            pending: entry.pending.size > 0,
+            screen,
+            terminalOpen: remoteTerminalInFront(sessionId),
+          })
+        : ({ kind: "none" } as const);
+
+      const step = remoteApprovalTransition(
+        entry.approval,
+        view,
+        remoteRequestId.current + 1,
+      );
+      entry.approval = step.progress;
+      if (step.effects.length === 0) return;
+      for (const effect of step.effects) {
+        if (effect.kind === "ask") {
+          remoteRequestId.current = effect.requestId;
+          enqueueHarnessEvent(sessionId, {
+            type: "question.asked",
+            requestId: effect.requestId,
+            title: effect.question.header,
+            questions: [effect.question],
+          });
+          continue;
+        }
+        if (effect.kind === "resolve") {
+          enqueueHarnessEvent(sessionId, {
+            type: "question.resolved",
+            requestId: effect.requestId,
+            decision: effect.decision,
+          });
+          continue;
+        }
+        if (effect.kind === "openTerminal") {
+          // The decided rule is that the user answers it themselves, which needs
+          // the pty in front of them rather than a description of it — so a
+          // terminal folded earlier is unfolded, not merely kept.
+          remoteTerminals.current.add(sessionId);
+          remoteTerminalAutoOpened.current.add(sessionId);
+          setRemoteTerminalIds((ids) =>
+            ids.includes(sessionId) ? ids : [...ids, sessionId],
+          );
+          setRemoteTerminalMinimizedIds((ids) => {
+            if (!ids.has(sessionId)) return ids;
+            const next = new Set(ids);
+            next.delete(sessionId);
+            return next;
+          });
+          continue;
+        }
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "blocker",
+          text: `Remote Control is waiting on something it cannot read (${effect.reason}). Answer it in the terminal:\n\n${effect.lines
+            .map((line) => line.trimEnd())
+            .join("\n")
+            .trim()}`,
+        });
+      }
+      flushHarnessEvents();
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Answer a remote approval by injecting, or say plainly that nothing was sent.
+   *
+   * Returns whether it handled the reply, so the ordinary responder carries on
+   * for everything that is not a remote prompt.
+   */
+  const answerRemoteApproval = useCallback(
+    (
+      sessionId: string,
+      requestId: number,
+      reply: UserQuestionReply,
+    ): boolean => {
+      const entry = remoteControl.current.get(sessionId);
+      const shown = entry?.approval.shown;
+      if (!entry || shown?.kind !== "question") return false;
+      if (shown.requestId !== requestId) return false;
+      const screen = entry.screen.screen;
+      const chosen =
+        reply.kind === "answered"
+          ? reply.answers["remote-approval"]?.[0]
+          : undefined;
+      const answer: RemoteAnswer = chosen
+        ? { kind: "option", id: chosen }
+        : { kind: "cancel" };
+      const bytes = screen ? remoteApprovalKeystroke(screen, answer) : null;
+      entry.approval = emptyApprovalProgress();
+      if (!bytes) {
+        // An option no longer on screen, or a cancel this prompt does not
+        // advertise. An out-of-range digit would be a harmless no-op in the TUI,
+        // but it would leave the user believing they had answered.
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: "That answer is no longer on the screen, so nothing was sent. Answer it in the terminal.",
+        });
+        flushHarnessEvents();
+        return true;
+      }
+      void writePty(entry.ptyId, bytes).catch(() => undefined);
+      // Recorded from what was sent, never read back: Esc and an explicit No
+      // produce byte-identical results, so only this side knows which happened.
+      enqueueHarnessEvent(sessionId, {
+        type: "question.resolved",
+        requestId,
+        decision: remoteApprovalReply(answer).kind,
+      });
+      flushHarnessEvents();
+      return true;
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Wait for the composer to come back empty after a clear.
+   *
+   * Bounded rather than open-ended: a TUI that does not repaint means we do not
+   * know what is in the composer, and not knowing has to end in a refusal rather
+   * than in a send.
+   */
+  /** The send itself, once the text is final. Split out so the echo is of it. */
+  const injectPreparedRemoteTurn = useCallback(
+    (
+      sessionId: string,
+      text: string,
+      files: { handed: number; failed: string[] },
+      note: (body: string) => void,
+    ): Promise<void> => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return Promise.resolve();
+      // Registered before the write, not after it. `injectRemoteText`
+      // resolves once the bytes are out, while the transcript watcher polls on
+      // its own clock — so the record could be read, and the echo looked for,
+      // before any callback of ours had run. Taken back if nothing was sent:
+      // an echo nobody will produce would swallow the next message that
+      // happens to read the same.
+      const echo = text.trim();
+      const echoes = remoteEcho.current.get(sessionId) ?? [];
+      echoes.push(echo);
+      remoteEcho.current.set(sessionId, echoes);
+      let owed = true;
+      const unregister = () => {
+        if (owed) owed = false;
+        else return;
+        takeInjectedEcho(echoes, echo);
+      };
+      return injectRemoteText(text, remoteTerminalInFront(sessionId), {
+        write: (bytes) => writePty(entry.ptyId, bytes),
+        screen: () => entry.screen.screen,
+        settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
+      })
+        .then((outcome) => {
+          if (outcome.kind === "refused") {
+            unregister();
+            // The paint is quoted because the last two texts a composer
+            // "still held" were a hint and a suggested prompt, neither typed
+            // by anyone, and both were told apart from typing by colour alone.
+            const paint = outcome.reason.includes("still holds")
+              ? ` (painted: ${entry.composerPaint() ?? "default"})`
+              : "";
+            note(
+              `Nothing was sent: ${outcome.reason}${paint}. Close Remote Control to send this here, or continue on your phone.`,
+            );
+            flushHarnessEvents();
+            // The composer marked the session busy before the send; with no
+            // echo owed and no turn opened, this is what clears it. The send
+            // stamp goes first, or the grace it grants would keep busy on.
+            remoteSentAt.current.delete(sessionId);
+            entry.clearBusyIfIdle();
+            return;
+          }
+          if (outcome.kind === "stuck") {
+            // The echo is taken back even though the bytes went out, because no
+            // transcript record is coming for a message that was never
+            // submitted — and an echo left owed swallows this same text on the
+            // day the user does submit it by hand.
+            unregister();
+            note(
+              `The message was typed into the terminal, but its composer is still holding "${outcome.held}" (painted: ${entry.composerPaint() ?? "default"}) instead of submitting it. Open the terminal for this session and press Enter to send it, or clear it — while the composer holds text, later sends are refused too.`,
+            );
+            flushHarnessEvents();
+            remoteSentAt.current.delete(sessionId);
+            entry.clearBusyIfIdle();
+            return;
+          }
+          if (files.failed.length > 0) {
+            note(
+              `${files.failed.length === 1 ? "One attachment" : `${files.failed.length} attachments`} could not be handed to the terminal (${files.failed.join(", ")}); the rest of the message was sent.`,
+            );
+          } else if (files.handed > 0) {
+            enqueueHarnessEvent(sessionId, {
+              type: "status",
+              text:
+                files.handed === 1
+                  ? "The attachment was passed to the terminal as a file path for it to read."
+                  : `${files.handed} attachments were passed to the terminal as file paths for it to read.`,
+            });
+          }
+          const queued = queuedNotice(outcome.queued);
+          if (queued) {
+            enqueueHarnessEvent(sessionId, { type: "status", text: queued });
+          }
+          flushHarnessEvents();
+        })
+        .catch((error: unknown) => {
+          unregister();
+          throw error;
+        });
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Type a composer turn into the pty, or `null` when this session is not
+   * remote-controlled and the ordinary harness send should run.
+   *
+   * The sequence lives in `injectRemoteText`, which is where its guarantee is
+   * asserted: no message bytes are written while the composer still holds text.
+   * This is the adapter — ports in, outcome turned into something readable.
+   */
+  const injectRemoteTurn = useCallback(
+    (
+      sessionId: string,
+      text: string,
+      attachments: readonly Attachment[],
+    ): Promise<void> | null => {
+      const entry = remoteControl.current.get(sessionId);
+      if (!entry) return null;
+      remoteSentAt.current.set(sessionId, Date.now());
+      const note = (body: string) => {
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: body,
+        });
+      };
+      // The TUI takes typed text; an attachment has no keystroke to become.
+      // What it can become is a path: a file from disk already has one, and a
+      // pasted image is written to the attachments directory to get one. The
+      // CLI reads either with its own tools, images included. A file that
+      // cannot be handed over is named, not dropped silently.
+      const handOver = async () => {
+        const lines: string[] = [];
+        const failed: string[] = [];
+        for (const file of attachments) {
+          let path = file.path?.trim();
+          if (!path && file.data) {
+            try {
+              path = await invoke<string>("write_attachment", {
+                name: file.name,
+                data: file.data,
+              });
+            } catch {
+              path = undefined;
+            }
+          }
+          if (path) lines.push(attachmentPathText({ ...file, path }));
+          else failed.push(file.name);
+        }
+        const body = text.trim();
+        const full =
+          lines.length === 0
+            ? text
+            : body
+              ? `${body}\n\n${lines.join("\n")}`
+              : lines.join("\n");
+        return { full, handed: lines.length, failed };
+      };
+      return handOver().then(({ full, handed, failed }) =>
+        injectPreparedRemoteTurn(sessionId, full, { handed, failed }, note),
+      );
+    },
+    [enqueueHarnessEvent, injectPreparedRemoteTurn],
+  );
+
+
+  /**
+   * The hand-over itself. Only ever called through `openRemote`, which holds the
+   * claim that keeps `all` mode from starting a second one.
+   */
+  const handOverToRemote = useCallback(
+    async (sessionId: string) => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      const providerSessionId = session?.providerSessionId;
+      if (!session || session.harness !== "claude" || !providerSessionId)
+        return;
+      const cwd = sessionWorkCwd(session);
+      // Claude Code's folder trust check, asked here rather than in a terminal
+      // — see `TrustFolderDialog`. The interactive CLI opens on it in any
+      // folder not yet trusted and waits, which handed over meant a terminal
+      // raised inside MonoCode with the cursor on "No, exit". A read that
+      // fails is treated as trusted: the terminal path still handles the
+      // dialog if it does appear.
+      const trusted = await claudeFolderTrusted(cwd).catch(() => true);
+      if (!trusted) {
+        const yes = await new Promise<boolean>((resolve) =>
+          setRemoteTrustAsk({ folder: cwd, resolve }),
+        );
+        if (!yes) {
+          // Dismissed like a close by hand, so `all` mode does not ask again
+          // on the next `sessions` change.
+          remoteControlClosed.current.add(sessionId);
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Remote Control was not opened: Claude Code needs this folder trusted first.",
+          });
+          flushHarnessEvents();
+          return;
+        }
+        try {
+          await claudeTrustFolder(cwd);
+        } catch (error) {
+          // The hand-over goes on; the dialog will show in the terminal.
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: `Could not record the folder as trusted (${
+              error instanceof Error ? error.message : String(error)
+            }); Claude Code will ask in the terminal.`,
+          });
+          flushHarnessEvents();
+        }
+      }
+      const name = remoteControlName(
+        session.cwd,
+        [...remoteControl.current.values()].map((entry) => entry.name),
+      );
+      if (!remoteHome.current) remoteHome.current = await homeDir();
+      const path = claudeTranscriptPath(
+        remoteHome.current,
+        cwd,
+        providerSessionId,
+      );
+      setSessions((prev) => {
+        const next = prev.map((entry) =>
+          entry.id === sessionId ? noteInterruptedTurn(entry) : entry,
+        );
+        // `map` allocates even when every element is identical, and a fresh
+        // array re-runs every effect keyed on `sessions`. Only a real change
+        // should cost that.
+        return next.some((entry, index) => entry !== prev[index]) ? next : prev;
+      });
+      let handle;
+      try {
+        handle = await openRemoteControl(
+          { sessionId, providerSessionId, cwd, name },
+          {
+            stopSession: (id) => stopHarnessSession("claude", id),
+            reapStale: reapRemoteControlSession,
+            // Byte length, matching the cursor the watcher advances. A
+            // transcript that is not there yet starts the mirror at zero, which
+            // is correct: there is nothing before it to skip.
+            transcriptEnd: async () => {
+              // The size the ranged read already reports, rather than reading
+              // the file in order to count it. `readTextFile` refuses anything
+              // past 8MB and that refusal used to become `0`, which tells the
+              // watcher every record is new and replays the whole conversation
+              // into the thread — worst exactly where the boundary matters most.
+              try {
+                return (await readFileRange(path, 0, 1)).size;
+              } catch (error) {
+                // Nothing written yet is the one honest zero. Anything else has
+                // to stop the hand-over: this is measured between two processes,
+                // and a measurement we failed to make is not a measurement of
+                // zero.
+                if (readFailedBecauseMissing(error)) return 0;
+                throw error;
+              }
+            },
+            spawnPty,
+            killPty,
+          },
+        );
+      } catch (error) {
+        // Only the hand-over failed; the conversation and its binding are
+        // intact, so the thread carries on headless from the next turn.
+        enqueueHarnessEvent(sessionId, {
+          type: "session.error",
+          message: `Could not open Remote Control. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        flushHarnessEvents();
+        return;
+      }
+      const mirror = createMirrorState();
+      // Read in the closure rather than off the map: the watcher polls once
+      // immediately, which can land before the entry below is stored, and a
+      // dropped batch would be lost for good because the cursor has moved.
+      let live = true;
+      /**
+       * Say once what went wrong in the mirror, in the conversation and in
+       * the console. A reply that is in the transcript and not on screen was
+       * traced to nothing at all: the reader's cursor had moved past the
+       * records, and the only handler for a failure was one that discarded
+       * it. Whatever the cause, the second time must be diagnosable.
+       */
+      const mirrorFaults = new Set<string>();
+      const reportMirrorFault = (where: string, error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[remote-control] ${where}`, error);
+        if (mirrorFaults.has(message)) return;
+        mirrorFaults.add(message);
+        enqueueHarnessEvent(sessionId, {
+          type: "interjection",
+          customType: "remote-control",
+          severity: "concern",
+          text: `Remote Control could not mirror part of this conversation (${where}: ${message}). What the terminal did is still in its transcript; what MonoCode shows may be behind it.`,
+        });
+        flushHarnessEvents();
+      };
+      const applyMirrorRecord = (record: Record<string, unknown>) => {
+        const events = mapRecord(mirror, record);
+        const entry = remoteControl.current.get(sessionId);
+        if (entry) {
+          entry.pending = pendingAfter(entry.pending, events);
+          // A result landing can retire the prompt that was on screen.
+          syncRemoteApproval(sessionId);
+        }
+        const bridge = mirror.bridge;
+        setRemoteBridges((current) =>
+          current[sessionId]?.active === bridge.active &&
+          current[sessionId]?.url === bridge.url
+            ? current
+            : { ...current, [sessionId]: bridge },
+        );
+        for (const event of events) {
+          if (event.type === "remote.userMessage") {
+            // Ours coming back. The composer already seated it; seating the
+            // echo too is how one message becomes two. Its record is also
+            // the first word on where it goes: a message queued behind a
+            // running turn was seated above that turn's reply.
+            if (
+              takeInjectedEcho(
+                remoteEcho.current.get(sessionId) ?? [],
+                event.text,
+              )
+            ) {
+              setSessions((prev) =>
+                prev.map((entry) =>
+                  entry.id === sessionId
+                    ? reseatEchoedUserMessage(entry, event.text)
+                    : entry,
+                ),
+              );
+              continue;
+            }
+            setSessions((prev) =>
+              prev.map((entry) =>
+                entry.id === sessionId
+                  ? seatRemoteUserMessage(entry, event)
+                  : entry,
+              ),
+            );
+            continue;
+          }
+          // Everything else is an ordinary harness event, so it goes
+          // through the same queue the headless path uses and renders
+          // identically.
+          enqueueHarnessEvent(sessionId, event);
+        }
+        // After this record's events, so an echo it carried has already
+        // been taken, and per record, so a turn that opens and closes
+        // inside one batch is seen doing both.
+        remoteControl.current.get(sessionId)?.followTurn();
+      };
+      const watcher: TranscriptWatcher = watchTranscript({
+        path,
+        from: emptyCursor(handle.offset),
+        onRecords: (records) => {
+          if (!live) return;
+          console.debug(
+            `[remote-control] ${records.length} record(s), turn ${
+              mirror.turn.active ? "open" : "closed"
+            }`,
+          );
+          for (const record of records) {
+            // One record's failure must not cost the rest of the batch: the
+            // cursor has already moved past all of them, and the one that ends
+            // the turn is as likely to be last as any.
+            try {
+              applyMirrorRecord(record);
+            } catch (error) {
+              reportMirrorFault("applying a transcript record", error);
+            }
+          }
+          flushHarnessEvents();
+        },
+        // `mirror.bridge` carries `{active, url}` from the `bridge_status`
+        // record; `RemoteControlLink` renders it for the focused session (§6).
+        // The URL belongs to the conversation rather than the process, so it
+        // survives a close and reopen — anything rendering a QR from it must not
+        // regenerate the code each time.
+        //
+        // A transcript the pty has not written to yet is the ordinary state at
+        // the moment of a hand-over, not a failure. Anything else is.
+        onError: (error) => {
+          if (readFailedBecauseMissing(error)) return;
+          reportMirrorFault("reading the transcript", error);
+        },
+      });
+      // The screen parser, and the fan-out's one undetachable reader. The pty
+      // was spawned at a fixed size and the parser takes the size as a
+      // parameter, so the constants go in rather than a window measurement: a
+      // disagreement silently moves every column the parser reads.
+      const chunks: string[] = [];
+      // Held across chunks rather than rebuilt from `chunks`, which is bounded:
+      // re-rendering a trimmed buffer loses every row the TUI painted before the
+      // retained window and has not repainted since — the composer's box, while
+      // the `❯` inside it repaints constantly. See `createScreenBuffer`.
+      const painted = createScreenBuffer({
+        cols: REMOTE_CONTROL_COLS,
+        rows: REMOTE_CONTROL_ROWS,
+      });
+      const state: { screen: PromptScreen | null } = { screen: null };
+      const spoke: { at: number | null } = { at: null };
+      /**
+       * Apply whatever the screen and the pty's silence say about the turn.
+       *
+       * Called from the chunk handler for the definite case and from a clock for
+       * the silent one: an interrupt writes no record and produces no output, so
+       * the evidence is an absence and an event handler can never observe it.
+       */
+      /**
+       * The session's `busy` follows the mirror's turn, not the send.
+       *
+       * A remote send resolves once its bytes are verified in the pty, and the
+       * harness path used to treat that as the turn ending: `busy` cleared and
+       * the duration stamped about a second after every remote message, while
+       * the TUI went on for minutes and its output landed under a turn already
+       * marked done. Transitions only — a session sent to locally is busy
+       * before any record exists, and the owed echo is what says so.
+       */
+      /**
+       * Clear `busy` if nothing says the session is working.
+       *
+       * Nothing, not "the mirror": a message just typed into the pty has no
+       * record yet, so the mirror reads idle while the turn is about to start;
+       * the time of the last local send and the owed echo are what say so, on
+       * the terms `remoteTurnBusy` sets out. Called on the mirror's turn
+       * closing, by a send that was refused, and from the liveness clock as a
+       * backstop — a `busy` that nothing will ever clear is the one state
+       * worse than a wrong duration, and the clock is safe now that a send
+       * stamps its time before its first await.
+       */
+      let heldSince: number | null = null;
+      const clearBusyIfIdle = () => {
+        const sentAt = remoteSentAt.current.get(sessionId);
+        const echoes = remoteEcho.current.get(sessionId) ?? [];
+        const sentAgo = sentAt === undefined ? null : Date.now() - sentAt;
+        if (remoteTurnBusy(mirror.turn.active, echoes.length > 0, sentAgo)) {
+          // Held past the mirror's turn for a reason the user cannot see.
+          // The release build has no console, so after a minute the reason
+          // is said once, in the conversation, where it can be reported.
+          if (mirror.turn.active) {
+            heldSince = null;
+          } else if (heldSince === null) {
+            heldSince = Date.now();
+          } else if (Date.now() - heldSince > 60_000) {
+            heldSince = Number.POSITIVE_INFINITY;
+            const why =
+              echoes.length > 0
+                ? `a message sent from here (${JSON.stringify(echoes[0].slice(0, 60))}) has not appeared in the transcript${sentAgo === null ? "" : ` for ${Math.round(sentAgo / 1000)}s`}`
+                : `a send was made ${sentAgo === null ? "" : `${Math.round(sentAgo / 1000)}s `}ago`;
+            enqueueHarnessEvent(sessionId, {
+              type: "status",
+              text: `Still shown as working after the terminal's turn ended: ${why}.`,
+            });
+            flushHarnessEvents();
+          }
+          return;
+        }
+        heldSince = null;
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
+        if (!session?.busy) return;
+        setSessions((prev) =>
+          prev.map((entry) =>
+            entry.id === sessionId && entry.busy ? stopStreaming(entry) : entry,
+          ),
+        );
+        notifyReviewChanged(sessionId);
+        notifyGitChanged();
+        nudgeWorkspace(sessionWorkCwd(session));
+        nudgeWatchedFiles();
+      };
+      // Transitions of the *mirror's* turn, not a copy of `busy`. The composer
+      // sets `busy` on its own before any record exists, so a copy kept here
+      // would read "already idle" on a refused send and never clear it — and
+      // a turn whose user record and `turn_duration` land in one batch opens
+      // and closes between two looks. Hence per record, and against the
+      // mirror.
+      let mirrorWasActive = mirror.turn.active;
+      const followTurn = () => {
+        const active = mirror.turn.active;
+        if (active === mirrorWasActive) return;
+        mirrorWasActive = active;
+        if (active) {
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === sessionId && !session.busy
+                ? { ...session, busy: true }
+                : session,
+            ),
+          );
+          return;
+        }
+        clearBusyIfIdle();
+      };
+      const settleTurn = () => {
+        const ended = resolveTurnFromScreen(
+          mirror,
+          turnSignal(state.screen, spoke.at, Date.now()),
+        );
+        for (const event of ended) {
+          if (event.type !== "remote.userMessage") {
+            enqueueHarnessEvent(sessionId, event);
+          }
+        }
+        if (ended.length > 0) flushHarnessEvents();
+        followTurn();
+      };
+      const parse = (text: string) => {
+        spoke.at = Date.now();
+        // Once, and only here: the buffer is stateful, so a chunk written twice
+        // would paint twice.
+        painted.write(text);
+        chunks.push(text);
+        const trimmed = trimReplay(
+          chunks.map((part) => part.length),
+          chunks.reduce((total, part) => total + part.length, 0),
+        );
+        if (trimmed.drop > 0) chunks.splice(0, trimmed.drop);
+        state.screen = painted.screen();
+        settleTurn();
+        syncRemoteApproval(sessionId);
+      };
+      const fanout = createPtyFanout(parse);
+      const decoder = new TextDecoder();
+
+      // Stored before subscribing: `subscribePty` replays anything it buffered
+      // straight away, and a chunk arriving before the entry exists would be
+      // parsed against nothing.
+      // Ticks faster than the 3s threshold so an interrupt resolves promptly,
+      // and cheaply: one comparison unless a turn is actually open.
+      //
+      // The approval sync rides on the same clock, and has to. A prompt is
+      // raised only once two frames agree on its options, and the second frame
+      // came from the next pty chunk or transcript batch — of which a prompt
+      // produces neither: it paints once and then the pty waits for a human
+      // while the transcript records nothing (§7). A prompt that arrived whole
+      // in one chunk sat at one agreeing frame for as long as nobody repainted,
+      // shown on the phone and nowhere in MonoCode. The same screen read a
+      // second later is better evidence of a settled option set than a repaint
+      // is, and a raised prompt is never raised twice.
+      const liveness = setInterval(() => {
+        settleTurn();
+        syncRemoteApproval(sessionId);
+        clearBusyIfIdle();
+      }, 1000);
+      let unsubscribe = () => undefined as void;
+      remoteControl.current.set(sessionId, {
+        ptyId: handle.ptyId,
+        name,
+        mirror,
+        pending: new Set<string>(),
+        chunks,
+        screen: state,
+        composerPaint: () => painted.composerPaint(),
+        spoke,
+        followTurn,
+        clearBusyIfIdle,
+        fanout,
+        approval: emptyApprovalProgress(),
+        stop: () => {
+          live = false;
+          clearInterval(liveness);
+          watcher.stop();
+          unsubscribe();
+        },
+      });
+      unsubscribe = subscribePty(
+        handle.ptyId,
+        // Streaming decode: a multi-byte character split across two pty reads
+        // would otherwise arrive as a replacement character and cost the line
+        // the parser needs.
+        (chunk) => fanout.dispatch(decoder.decode(chunk, { stream: true })),
+        // The exit was discarded here, and that was the fault behind both
+        // reported symptoms: a pty dying took nothing down, so `remoteControlIds`
+        // still held the session and every menu offered Close for a process that
+        // no longer existed — while `shouldAutoOpen` read the same set as `open`
+        // and `all` mode could never take that session again.
+        (code) => {
+          // `closeRemote` drops the entry before it kills the pty, so an exit we
+          // asked for finds nothing here. This is the unrequested case by
+          // construction rather than by a flag someone has to remember to set.
+          if (!remoteControl.current.has(sessionId)) return;
+          const plan = planRemoteExit(code);
+          // The CLI says why it exited, on its screen, and the notice used to
+          // carry only the code. The last painted lines go with it.
+          const lastLines = (state.screen?.lines ?? [])
+            .map((line) => line.trimEnd())
+            .filter((line) => line.trim().length > 0)
+            .slice(-6)
+            .join("\n");
+          const message =
+            plan.notice === "error" && lastLines
+              ? `${plan.message}\n\nThe terminal's last lines:\n${lastLines}`
+              : plan.message;
+          // Before the teardown: `closeRemote` is what re-runs the auto-open
+          // effect, and it must not find this session eligible on the way past.
+          if (plan.dismissed) remoteControlClosed.current.add(sessionId);
+          void closeRemoteRef.current(sessionId, false);
+          enqueueHarnessEvent(
+            sessionId,
+            plan.notice === "error"
+              ? { type: "session.error", message }
+              : { type: "status", text: message },
+          );
+          flushHarnessEvents();
+        },
+      );
+      setRemoteControlIds((ids) =>
+        ids.includes(sessionId) ? ids : [...ids, sessionId],
+      );
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
+  /**
+   * Hand a session over, claimed for as long as it takes.
+   *
+   * The claim is what stops `all` mode starting a second hand-over for the same
+   * session: the entry in `remoteControl` is written many awaits in, and until it
+   * exists nothing else says this one is being taken. It used to be released on
+   * the two paths that were thought of, so a throw anywhere else — `homeDir`, or
+   * any of the constructors after the spawn — left the id in the set for the life
+   * of the window, and `shouldAutoOpen` read it as `open` forever. Silently, too:
+   * this is async, so the throw is a rejected promise and `forEachSafely` never
+   * sees it.
+   *
+   * Hence a `finally` rather than two remembered call sites, and a report rather
+   * than a swallowed rejection. The cover is continuous: by the time the release
+   * runs on a successful hand-over, `remoteControl` already holds the session, so
+   * one set or the other answers for it throughout.
+   */
+  const openRemote = useCallback(
+    async (sessionId: string) => {
+      if (remoteControl.current.has(sessionId)) return;
+      // A thread being archived or deleted is not a thread to hand over, whoever
+      // asked. Held here as well as in `shouldAutoOpen` because this is the one
+      // door both the by-hand path and the queue drain come through.
+      if (removingSessionIds.current.has(sessionId)) return;
+      const waiting = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      if (waiting && handoverTiming(waiting) === "when-the-turn-ends") {
+        // Held, and the turn left alone. Said once: clicking again while it is
+        // queued is the same instruction, not a second one.
+        if (!remotePending.current.has(sessionId)) {
+          remotePending.current.add(sessionId);
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Remote Control will open as soon as this turn finishes.",
+          });
+          flushHarnessEvents();
+        }
+        return;
+      }
+      remotePending.current.delete(sessionId);
+      await withClaim(
+        remoteOpening.current,
+        sessionId,
+        () => handOverToRemote(sessionId),
+        // Whatever the inner catch did not already report. The conversation and
+        // its binding survive either way, so the thread carries on headless.
+        (error) => {
+          enqueueHarnessEvent(sessionId, {
+            type: "session.error",
+            message: `Could not open Remote Control. ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+          flushHarnessEvents();
+        },
+      );
+    },
+    [enqueueHarnessEvent, flushHarnessEvents, handOverToRemote],
+  );
+
+  /**
+   * Kill every remote-control pty on the way out.
+   *
+   * `reapWindowRuntime` kills terminal ptys only, by id, so these are not
+   * covered by it — and a pty outliving the window is exactly the case §9.6 of
+   * the plan names. Fire-and-forget because the unload handlers cannot await.
+   */
+  const reapRemoteControl = useCallback(() => {
+    for (const [sessionId, entry] of remoteControl.current) {
+      entry.stop();
+      void killPty(entry.ptyId).catch(() => undefined);
+      remoteControl.current.delete(sessionId);
+    }
+  }, []);
+
+  /**
+   * The latest `closeRemote`, for the pty exit handler.
+   *
+   * `openRemote` is declared above `closeRemote` and subscribes the exit handler
+   * from inside its own body, so it cannot name `closeRemote` as a dependency
+   * without reading it before it is initialised. Written every render, so the
+   * handler never holds an older one.
+   */
+  const closeRemoteRef = useRef<
+    (sessionId: string, byUser: boolean) => Promise<void>
+  >(async () => undefined);
+
+  const closeRemote = useCallback(
+    async (sessionId: string, byUser: boolean) => {
+      const entry = remoteControl.current.get(sessionId);
+      // Torn down only if this window built it. An entry is per-window state and
+      // the readers below are its; the pty is not.
+      if (entry) {
+        remoteControl.current.delete(sessionId);
+        setRemoteControlIds((ids) => ids.filter((id) => id !== sessionId));
+        if (byUser) remoteControlClosed.current.add(sessionId);
+        setRemoteBridges(({ [sessionId]: _gone, ...rest }) => rest);
+        remoteTerminals.current.delete(sessionId);
+        setRemoteTerminalIds((ids) => ids.filter((id) => id !== sessionId));
+        setRemoteTerminalMinimizedIds((ids) => {
+          if (!ids.has(sessionId)) return ids;
+          const next = new Set(ids);
+          next.delete(sessionId);
+          return next;
+        });
+        remoteEcho.current.delete(sessionId);
+        remoteSentAt.current.delete(sessionId);
+        remoteTerminalAutoOpened.current.delete(sessionId);
+        entry.stop();
+      } else if (byUser) {
+        remoteControlClosed.current.add(sessionId);
+      }
+      // Always, entry or not. The pty id is derived from the thread precisely so
+      // a close works from a window that never opened it — see
+      // `remoteControlPtyId` — and returning early here threw that away: after a
+      // reload nothing held the handle, so Close killed nothing and the handed-over
+      // CLI went on running, still listed on the phone. A kill for a pty that is
+      // already gone is a no-op.
+      await closeRemoteControl(sessionId, { killPty });
+    },
+    [],
+  );
+  closeRemoteRef.current = closeRemote;
+
+  /**
+   * Register a reader on a session's pty output.
+   *
+   * Stable across renders so the view's effect does not tear down and rebuild
+   * its terminal on every parent render.
+   */
+  const attachRemoteReader = useCallback(
+    (sessionId: string) => (read: (chunk: string) => void) => {
+      const fanout = remoteControl.current.get(sessionId)?.fanout;
+      // Nothing here can reach the parser: `attach` hands back a remover closed
+      // over this viewer alone.
+      return fanout ? fanout.attach(read) : () => undefined;
+    },
+    [],
+  );
+
+  const remoteControlFor = useCallback(
+    (tabId: string): RemoteControlAction | null => {
+      const tab = tabsRef.current.find((entry) => entry.id === tabId);
+      const session = tab
+        ? sessionsRef.current.find((entry) => entry.id === tab.focusedId)
+        : undefined;
+      if (!session) return null;
+      return remoteControlAction(
+        remoteControlTarget(session, remoteControlIds.includes(session.id), {
+          automatic: remoteControlMode === "all",
+          queued: remotePending.current.has(session.id),
+        }),
+      );
+    },
+    [remoteControlIds, remoteControlMode],
+  );
+
+  const onRemoteControl = useCallback(
+    (tabId: string, intent: RemoteControlIntent) => {
+      const tab = tabsRef.current.find((entry) => entry.id === tabId);
+      const sessionId = tab?.focusedId;
+      if (!sessionId) return;
+      const step = remoteControlStep(
+        intent,
+        remoteControl.current.has(sessionId),
+      );
+      if (step === "open") void openRemote(sessionId);
+      if (step === "close") void closeRemote(sessionId, true);
+    },
+    [closeRemote, openRemote],
+  );
+
+  /**
+   * The same entry for the sidebar, which names a session rather than a tab.
+   *
+   * A session the workspace has not loaded is absent rather than disabled: the
+   * rule turns on the harness and the bound `providerSessionId`, and a history
+   * summary carries neither, so there is nothing to decide from.
+   */
+  const remoteControlForSession = useCallback(
+    (sessionId: string): RemoteControlAction | null => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      // A thread the workspace has not loaded still gets an entry when this
+      // window is running a hand-over for it — otherwise closing its tab left the
+      // CLI running with nothing anywhere able to stop it. Opening is what needs
+      // the session; closing does not.
+      if (!session) {
+        return remoteControlIds.includes(sessionId)
+          ? remoteControlAction(remoteControlTargetForRunningHandover())
+          : null;
+      }
+      return remoteControlAction(
+        remoteControlTarget(session, remoteControlIds.includes(session.id), {
+          automatic: remoteControlMode === "all",
+          queued: remotePending.current.has(session.id),
+        }),
+      );
+    },
+    [remoteControlIds, remoteControlMode],
+  );
+
+  const onRemoteControlSession = useCallback(
+    (sessionId: string, intent: RemoteControlIntent) => {
+      const step = remoteControlStep(
+        intent,
+        remoteControl.current.has(sessionId),
+      );
+      if (step === "open") void openRemote(sessionId);
+      if (step === "close") void closeRemote(sessionId, true);
+    },
+    [closeRemote, openRemote],
+  );
+
+  // `all` mode, opened lazily. See `shouldAutoOpen` for why idle-with-a-bound-
+  // conversation is the only moment that works rather than a preference. The
+  // mode is subscribed, so switching it reaches live sessions at once — which is
+  // also why a fault here was visible the instant the user clicked.
+  useEffect(() => {
+    // Before anything is selected, and in this effect rather than its own so the
+    // order cannot drift: a mode change that clears the dismissals has to clear
+    // them for the pass it triggered, not for the one after it.
+    const previous = remoteControlModeSeen.current;
+    remoteControlModeSeen.current = remoteControlMode;
+    if (dismissalsAfterModeChange(previous, remoteControlMode) === "clear") {
+      remoteControlClosed.current.clear();
+    }
+    // Hand-overs held while a turn was running, drained here rather than from an
+    // effect of their own: this one already runs on every `sessions` change, and
+    // a turn ending is one. Before the mode check, because a request made by hand
+    // stands whatever the mode is.
+    for (const sessionId of [...remotePending.current]) {
+      const session = sessions.find((entry) => entry.id === sessionId);
+      if (!session) {
+        remotePending.current.delete(sessionId);
+        continue;
+      }
+      if (handoverTiming(session) !== "now") continue;
+      remotePending.current.delete(sessionId);
+      void openRemote(sessionId);
+    }
+    if (remoteControlMode !== "all") return;
+    const mode = remoteControlMode;
+    const targets = autoOpenTargets(sessions, (session) => ({
+      mode,
+      // In-flight counts as open. The finished entry appears several awaits
+      // later, and treating "not finished" as "not started" is what let one
+      // session be handed over repeatedly.
+      open:
+        remoteControl.current.has(session.id) ||
+        remoteOpening.current.has(session.id),
+      dismissed: remoteControlClosed.current.has(session.id),
+      removing: removingSessionIds.current.has(session.id),
+    }));
+    // One session's failure must cost that session, not the window: this runs
+    // across every thread at once, so a throw here took the React tree with it.
+    forEachSafely(
+      targets,
+      (id) => void openRemote(id),
+      (id, error) => {
+        enqueueHarnessEvent(id, {
+          type: "session.error",
+          message: `Could not open Remote Control. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        flushHarnessEvents();
+      },
+    );
+  }, [
+    enqueueHarnessEvent,
+    flushHarnessEvents,
+    openRemote,
+    remoteControlMode,
+    sessions,
+  ]);
+
   useEffect(() => {
     if (resumed?.sessions.length) bindResumedSessions(resumed.sessions);
     const stopBridge = startHarnessBridge();
     const reap = () => {
+      // Ahead of the quitting guard: the pty has to go either way, and the quit
+      // path below reaps sessions but not these.
+      reapRemoteControl();
       if (isAppQuitting()) return;
       void persistQuitState(
         sessionsRef.current,
@@ -1358,7 +2652,7 @@ export default function App({
       cancelScheduledFlush(harnessFlush.current);
       harnessFlush.current = null;
     };
-  }, [resumed, readProjectReturnMemory]);
+  }, [resumed, readProjectReturnMemory, reapRemoteControl]);
 
   useEffect(() => {
     void probeHarnessAvailability();
@@ -1783,6 +3077,7 @@ export default function App({
           projectTerminalsRef.current,
           lastDockSideRef.current ?? undefined,
         ).finally(() => {
+          if (!toTray) reapRemoteControl();
           void (toTray ? hideCurrentWindow() : closeCurrentWindow());
         });
       })
@@ -1793,7 +3088,7 @@ export default function App({
       releaseQuit();
       unlistenClose?.();
     };
-  }, [flushHarnessEvents, readProjectReturnMemory]);
+  }, [flushHarnessEvents, readProjectReturnMemory, reapRemoteControl]);
 
   const refreshHistory = useCallback(async (cwd: string) => {
     if (!cwd || cwd === "~") return;
@@ -4345,6 +5640,11 @@ export default function App({
           if (!session) continue;
           await flushSessionCheckpoint(id);
           forgottenIds.add(id);
+          // The hand-over goes with the session, as it does for a single
+          // delete; see `onRemoveProject`.
+          if (remoteControl.current.has(id)) {
+            await closeRemote(id, true).catch(() => undefined);
+          }
           for (const harness of sessionChildHarnesses(session)) {
             await forgetHarnessSession(harness, id);
           }
@@ -4415,6 +5715,7 @@ export default function App({
     },
     [
       checkOpenWorktreeFiles,
+      closeRemote,
       invalidateLoadedSession,
       onCheckWorktreeRemoval,
       stopSessionForRemoval,
@@ -4615,6 +5916,15 @@ export default function App({
           stop: stopSessionForRemoval,
         });
         const removed = await remover.remove(sessionId);
+        if (removed) {
+          // Once the removal has settled, and not before it. This used to run
+          // at the top, so cancelling the delete dialog had already killed the
+          // pty and marked the thread dismissed: a cancelled delete ended the
+          // user's live phone session, and `all` would not reopen it. It still
+          // reaches the pty from here even though the tab has gone, because the
+          // id is derived from the thread rather than held.
+          await closeRemote(sessionId, true);
+        }
         if (removed && deleteWorktreePath && seed) {
           try {
             await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
@@ -4639,6 +5949,7 @@ export default function App({
     },
     [
       activateTab,
+      closeRemote,
       history,
       invalidateLoadedSession,
       refreshHistory,
@@ -5351,6 +6662,16 @@ export default function App({
         if (!projectSessionIds.has(session.id)) return true;
         return !options.purgeData && session.busy;
       });
+      // A dropped session's hand-over goes with it. Deleting a single session
+      // has always closed Remote Control for it; removing the whole project
+      // stopped the harness children and left the pty running, listed on the
+      // phone, with its watcher and clock still ticking in this window.
+      const kept = new Set(nextSessions.map((session) => session.id));
+      for (const session of projectSessions) {
+        if (kept.has(session.id)) continue;
+        if (!remoteControl.current.has(session.id)) continue;
+        void closeRemote(session.id, true).catch(() => undefined);
+      }
       let nextActiveTabId = activeTabIdRef.current;
 
       if (nextTabs.length === 0) {
@@ -5399,7 +6720,13 @@ export default function App({
         }
       }
     },
-    [activeTabId, invalidateLoadedSession, onSelectProject, persistSession],
+    [
+      activeTabId,
+      closeRemote,
+      invalidateLoadedSession,
+      onSelectProject,
+      persistSession,
+    ],
   );
 
   const onRestoreProject = useCallback(
@@ -6003,6 +7330,9 @@ export default function App({
         flushHarnessEvents();
         return false;
       }
+      if (remoteControl.current.has(sessionId)) {
+        remoteSentAt.current.set(sessionId, Date.now());
+      }
       const submittedText = intent === "build" ? "Build approved plan" : text;
       const operatorCommand = consumeOperatorCommand(submittedText);
       if (
@@ -6131,18 +7461,25 @@ export default function App({
               sessionId,
               cwd: initialWorkCwd,
             });
-            await steerHarnessTurn({
-              harness: current.harness,
-              sessionId,
-              cwd: initialWorkCwd,
-              model: current.model,
-              modelSettings: current.modelSettings,
-              text: inboxAskPrompt(
-                rawCommand ? undefined : current.inboxAsk,
-                prompt,
-              ),
-              attachments: prepared,
-            });
+            const steerText = inboxAskPrompt(
+              rawCommand ? undefined : current.inboxAsk,
+              prompt,
+            );
+            // Same rule as `sendTurn`: a remote-controlled conversation is owned
+            // by the pty, and steering it through the harness would talk to a
+            // child that no longer has it. `appendUser` sets `busy` before the
+            // send runs, so a follow-up reaches this branch while the hand-over
+            // is live.
+            await (injectRemoteTurn(sessionId, steerText, prepared) ??
+              steerHarnessTurn({
+                harness: current.harness,
+                sessionId,
+                cwd: initialWorkCwd,
+                model: current.model,
+                modelSettings: current.modelSettings,
+                text: steerText,
+                attachments: prepared,
+              }));
           } catch (error: unknown) {
             const message =
               error instanceof Error
@@ -6610,6 +7947,10 @@ export default function App({
         const planEventKey = planTurnKey(gen);
         let nativePlanSeen = false;
         let providerFailureSeen = false;
+        // Set when the text went into a remote-controlled pty rather than the
+        // harness. That promise resolves when the bytes are verified, not when
+        // the turn ends, so the finalisation below must not run on it.
+        let remoteOwned = false;
         const routePlanEvent = (event: HarnessEvent): HarnessEvent | null => {
           if (event.type === "session.error") providerFailureSeen = true;
           if (proposalDraft) {
@@ -6776,8 +8117,17 @@ export default function App({
               return;
             }
           }
-          const sendTurn = (text: string, turnAttachments = prepared) =>
-            sendHarnessTurn({
+          const sendTurn = (text: string, turnAttachments = prepared) => {
+            // A remote-controlled conversation is owned by the pty. Sending it
+            // to the harness would spawn a second process on the same session,
+            // which Claude refuses outright, so the text is typed into the TUI
+            // instead.
+            const injected = injectRemoteTurn(sessionId, text, turnAttachments);
+            if (injected) {
+              remoteOwned = true;
+              return injected;
+            }
+            return sendHarnessTurn({
               harness: current.harness,
               sessionId,
               cwd: workCwd,
@@ -6797,6 +8147,7 @@ export default function App({
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
+          };
           let sendText = orchestrator.prompt(
             sessionId,
             inboxAskPrompt(
@@ -6870,6 +8221,13 @@ export default function App({
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;
           flushHarnessEvents();
+          if (remoteOwned) {
+            // The turn belongs to the pty from here. `busy` and the duration
+            // stamp follow the mirror's turn (`followTurn`), which is the only
+            // thing that knows when the TUI is actually done — the send
+            // resolving says only that the message was handed over.
+            return;
+          }
           controlOutcome = {
             status:
               providerFailureSeen ||
@@ -8572,13 +9930,16 @@ export default function App({
     (sessionId: string, requestId: number, reply: UserQuestionReply) => {
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       if (!session || session.worktreeRemoved) return;
+      // A remote-controlled session has no headless child to answer: its prompt
+      // lives in the pty, so the reply becomes a keystroke instead.
+      if (answerRemoteApproval(sessionId, requestId, reply)) return;
       if (remoteProjectFor(session.cwd)) {
         remoteSessionActions(sessionId)?.answer(requestId, reply);
         return;
       }
       respondHarnessQuestion(session.harness, sessionId, requestId, reply);
     },
-    [],
+    [answerRemoteApproval],
   );
 
   const onQuestionInteraction = useCallback(
@@ -8945,14 +10306,16 @@ export default function App({
         );
         sessionsRef.current = next;
         setSessions(next);
-        await steerHarnessTurn({
-          harness: session.harness,
-          sessionId: id,
-          cwd: sessionWorkCwd(session),
-          model: session.model,
-          modelSettings: session.modelSettings,
-          text,
-        });
+        // A worker can be handed over too, and the pty owns it just the same.
+        await (injectRemoteTurn(id, text, []) ??
+          steerHarnessTurn({
+            harness: session.harness,
+            sessionId: id,
+            cwd: sessionWorkCwd(session),
+            model: session.model,
+            modelSettings: session.modelSettings,
+            text,
+          }));
       },
       respondApproval: (id, requestId, decision) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
@@ -10464,6 +11827,21 @@ export default function App({
   const compactProjectRail = collapsedProjectRailMode === "compact";
   const compactRailActive = compactProjectRail && !projectRailOpen;
   const compactTitleBar = IS_MAC && compactRailActive && !chromeSurfaceOpen;
+
+  const remoteTerminal = useMemo(() => {
+    if (!activeSessionId || !remoteTerminalIds.includes(activeSessionId)) {
+      return null;
+    }
+    const entry = remoteControl.current.get(activeSessionId);
+    if (!entry) return null;
+    return {
+      sessionId: activeSessionId,
+      ptyId: entry.ptyId,
+      replay: entry.chunks.join(""),
+      attach: attachRemoteReader(activeSessionId),
+    };
+  }, [activeSessionId, attachRemoteReader, remoteTerminalIds]);
+
   const workspaceTitleBar = (
     <TitleBar
       tabs={titleTabs}
@@ -10494,6 +11872,8 @@ export default function App({
       onPinFile={onPinFile}
       recents={recents}
       onSelectProject={onSelectProject}
+      remoteControlFor={remoteControlFor}
+      onRemoteControl={onRemoteControl}
     />
   );
 
@@ -10531,6 +11911,8 @@ export default function App({
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
               onRenameSession={onRenameHistorySession}
+              remoteControlForSession={remoteControlForSession}
+              onRemoteControlSession={onRemoteControlSession}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}
@@ -10671,6 +12053,68 @@ export default function App({
                   />
                 ) : null}
                 {compactTitleBar ? null : workspaceTitleBar}
+
+                {activeSessionId ? (
+                  <RemoteControlLink
+                    bridge={remoteBridges[activeSessionId]}
+                    className="mx-2 mb-1"
+                  />
+                ) : null}
+
+                {remoteTerminal ? (
+                  // `hidden`, not unmounted: `replay` is a memo of
+                  // `entry.chunks` that does not depend on the minimized set,
+                  // so a remount here would reopen the terminal seeded from
+                  // whatever `replay` was the last time some *other* dependency
+                  // changed — not what is actually on screen now — while xterm's
+                  // own accumulated grid (cursor, scrollback) is discarded
+                  // outright. `attach`'s live feed has to keep painting into the
+                  // same instance the whole time this session's pty exists.
+                  <div
+                    hidden={remoteTerminalMinimizedIds.has(
+                      remoteTerminal.sessionId,
+                    )}
+                  >
+                    <RemoteControlTerminal
+                      key={remoteTerminal.ptyId}
+                      ptyId={remoteTerminal.ptyId}
+                      replay={remoteTerminal.replay}
+                      attach={remoteTerminal.attach}
+                      cols={REMOTE_CONTROL_COLS}
+                      rows={REMOTE_CONTROL_ROWS}
+                      onClose={() => {
+                        // Minimized, not unmounted: `remoteTerminals` keeps the
+                        // session, so nothing about remote control's own state
+                        // changes. An unreadable screen never repaints on its
+                        // own, so unmounting here left no event left to reopen
+                        // it on.
+                        setRemoteTerminalMinimizedIds(
+                          (ids) => new Set(ids).add(remoteTerminal.sessionId),
+                        );
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {remoteTerminal &&
+                remoteTerminalMinimizedIds.has(remoteTerminal.sessionId) ? (
+                  <button
+                    type="button"
+                    className="mx-2 mb-1 flex items-center justify-between rounded-md border border-border bg-muted/50 px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+                    onClick={() =>
+                      setRemoteTerminalMinimizedIds((ids) => {
+                        const next = new Set(ids);
+                        next.delete(remoteTerminal.sessionId);
+                        return next;
+                      })
+                    }
+                  >
+                    <span>
+                      Remote Control is waiting on something MonoCode could
+                      not read — reopen the terminal to answer it
+                    </span>
+                    <span className="ml-2 shrink-0 underline">Reopen</span>
+                  </button>
+                ) : null}
 
                 <main className="relative flex min-h-0 min-w-0 flex-1">
                   <div
@@ -10975,6 +12419,15 @@ export default function App({
               onClose={(choice) => {
                 sessionDeleteDialog.resolve(choice);
                 setSessionDeleteDialog(undefined);
+              }}
+            />
+          )}
+          {remoteTrustAsk && (
+            <TrustFolderDialog
+              folder={remoteTrustAsk.folder}
+              onClose={(trusted) => {
+                remoteTrustAsk.resolve(trusted);
+                setRemoteTrustAsk(undefined);
               }}
             />
           )}

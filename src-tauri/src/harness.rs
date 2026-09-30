@@ -25,6 +25,13 @@ const SSE_END_EVENT: &str = "harness-sse-end";
 
 const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 
+/// How long the exit event waits for the child's last stderr lines. A child
+/// that dies on startup explains itself on stderr, and the listener has to see
+/// that explanation before the exit that ends the startup attempt. The pipe
+/// closes with the child, so the wait only reaches this bound when something
+/// the child spawned is still holding stderr open.
+const STDERR_DRAIN: Duration = Duration::from_millis(200);
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessAccount {
@@ -542,6 +549,7 @@ pub fn harness_spawn(
 
     let stderr_app = app.clone();
     let stderr_id = session_id.clone();
+    let (stderr_drained, stderr_done) = mpsc::channel::<()>();
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
@@ -553,6 +561,7 @@ pub fn harness_spawn(
                 },
             );
         }
+        drop(stderr_drained);
     });
 
     let wait_app = app.clone();
@@ -565,6 +574,9 @@ pub fn harness_spawn(
                 host.stop_sse(&wait_id);
             }
         }
+        // Dropping the sender ends this wait, so it returns as soon as stderr
+        // has run dry rather than always costing the full bound.
+        let _ = stderr_done.recv_timeout(STDERR_DRAIN);
         let _ = wait_app.emit(
             EXIT_EVENT,
             HarnessExit {
@@ -1010,12 +1022,33 @@ const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 /// gone or already replaced, so callers must not register this child.
 const SPAWN_CANCELLED: &str = "Harness start was cancelled";
 
+/// The marker every child of this run carries: our pid, under a name a later
+/// launch knows to look for.
+///
+/// Shared with the pty spawns rather than kept here, and that is the whole
+/// reason it is a function. `reap_orphaned_harness_processes` finds an orphan by
+/// reading this out of the process, so a child spawned without it is unreapable
+/// — which is exactly what happened to remote control: its CLI runs under a pty,
+/// the pty spawns set none of this, and 50 of them accumulated across app
+/// restarts with nothing able to recognise them. The argv gate
+/// (`looks_like_harness_argv`) is what decides whether a marked process is worth
+/// reaping, so marking a plain login shell costs nothing and marking an agent
+/// CLI is what makes it reachable.
+///
+/// Note for anyone adding a caller: a pty child must NOT go through
+/// `isolate_child`. `process_group(0)` makes it a group leader, and the
+/// `setsid()` the pty needs then fails with EPERM.
+pub(crate) fn harness_parent_marker() -> (&'static str, String) {
+    (HARNESS_PARENT_ENV, std::process::id().to_string())
+}
+
 /// Its own process group, so one signal reaches the whole tree, plus the
 /// marker a later launch reads to recognise what this run left behind. Every
 /// harness spawn goes through here, probes included: a `--help` probe that
 /// hangs is a `node` process too, and an unmarked one is unreapable.
 fn isolate_child(cmd: &mut Command) {
-    cmd.env(HARNESS_PARENT_ENV, std::process::id().to_string());
+    let (key, value) = harness_parent_marker();
+    cmd.env(key, value);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1226,6 +1259,53 @@ struct ProcessSnapshot {
 /// Off-thread: the sweep shells out to `ps` and then waits on a SIGKILL, and
 /// launch would otherwise hold the first window for both. Nothing this run
 /// spawns can be caught by it — our own children carry our pid as the marker.
+/// Whether `args` is a `claude --resume <id> --remote-control …` we started
+/// for this conversation. Ours by construction: nothing else launches the CLI
+/// with `--remote-control` and a name, and the resume id names the thread.
+#[cfg(any(unix, test))]
+fn is_remote_control_for(args: &str, provider_session_id: &str) -> bool {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let resumes = parts
+        .windows(2)
+        .any(|pair| pair[0] == "--resume" && pair[1] == provider_session_id);
+    resumes && parts.contains(&"--remote-control")
+}
+
+/// Kill any earlier hand-over of this conversation before starting another.
+///
+/// The CLI refuses a second interactive process on a session that already has
+/// one, and exits with code 1 — which is all the user saw when a hand-over was
+/// reopened over a process this window had lost track of, or one a previous
+/// window never reaped. Only processes whose argv names this exact resume id
+/// and carries `--remote-control` are touched.
+#[tauri::command]
+pub async fn reap_remote_control_session(provider_session_id: String) -> Result<u32, String> {
+    #[cfg(unix)]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            let ours = std::process::id();
+            let pids: Vec<u32> = snapshot_processes()
+                .into_iter()
+                .filter(|row| {
+                    row.pid != ours
+                        && row.pid > 1
+                        && is_remote_control_for(&row.args, &provider_session_id)
+                })
+                .map(|row| row.pid)
+                .collect();
+            terminate_all(&pids);
+            Ok(pids.len() as u32)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = provider_session_id;
+        Ok(0)
+    }
+}
+
 pub(crate) fn reap_orphaned_harness_processes() {
     #[cfg(unix)]
     {
@@ -2389,6 +2469,17 @@ fn apply_gui_path(cmd: &mut Command) {
 
 pub(crate) fn apply_gui_env(cmd: &mut Command) {
     apply_gui_path(cmd);
+    // MonoCode itself may be started from inside a Claude Code session, and the
+    // inherited marker makes a spawned Claude Code refuse to run at all
+    // ("cannot be launched inside another Claude Code session"). The child dies
+    // before it reads a byte of stdin, leaving only a generic write failure.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+    ] {
+        cmd.env_remove(key);
+    }
     crate::hide_window_console(cmd);
     if let Some(id) = passwd_identity() {
         if std::env::var_os("HOME").is_none() {
@@ -3402,6 +3493,30 @@ mod reap_logic_tests {
     }
 
     #[test]
+    fn should_reap_a_remote_control_cli_a_dead_run_left_behind() {
+        // Verbatim argv of one of the fifty that accumulated: the pty spawns set
+        // no marker, so every one of these was invisible to the reaper and
+        // survived restart after restart. With the marker it is an ordinary
+        // orphan — reaped when its run is gone, kept while the run is alive.
+        let proc = row(
+            10,
+            1,
+            "/Users/n/.nvm/versions/node/v22.19.0/bin/claude --resume \
+             66ea7f68-33df-495f-9b81-68fefa0387c1 --remote-control getSMS",
+            Some(999),
+        );
+        assert!(should_reap_process(&proc, 42, |_| false));
+        assert!(!should_reap_process(&proc, 42, |_| true));
+    }
+
+    #[test]
+    fn harness_parent_marker_names_this_process() {
+        let (key, value) = harness_parent_marker();
+        assert_eq!(key, HARNESS_PARENT_ENV);
+        assert_eq!(value, std::process::id().to_string());
+    }
+
+    #[test]
     fn should_not_reap_our_own_marked_child() {
         let proc = row(10, 42, "/Users/n/.local/bin/cursor-agent acp", Some(42));
         assert!(!should_reap_process(&proc, 42, |_| true));
@@ -3460,6 +3575,21 @@ mod reap_logic_tests {
         assert!(!should_reap_process(&row(10, 42, args, None), 42, |_| true));
         assert!(!is_legacy_orphaned_cursor_acp(
             "node /usr/local/bin/typescript-language-server --stdio"
+        ));
+    }
+
+    #[test]
+    fn recognises_our_own_remote_control_process_for_a_thread() {
+        let args = "/usr/local/bin/claude --resume 66ea7f68-33df --remote-control getSMS";
+        assert!(is_remote_control_for(args, "66ea7f68-33df"));
+        assert!(!is_remote_control_for(args, "other-id"));
+        assert!(!is_remote_control_for(
+            "/usr/local/bin/claude --resume 66ea7f68-33df",
+            "66ea7f68-33df"
+        ));
+        assert!(!is_remote_control_for(
+            "claude -p --resume 66ea7f68-33df --output-format stream-json",
+            "66ea7f68-33df"
         ));
     }
 }

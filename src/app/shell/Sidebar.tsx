@@ -54,6 +54,10 @@ import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { copyText } from "../../platform/tauri/clipboard";
 import { resolveModel } from "../../features/sessions/model/models";
 import type { OpenFileFn } from "../../features/search/model/search";
+import type {
+  RemoteControlAction,
+  RemoteControlIntent,
+} from "../../features/remoteControl/model/action";
 import { sessionDisplayTitle } from "../../features/sessions/model/session";
 import { nextUnseenFinishedSessions } from "../../features/sessions/model/sessionDone";
 import { orchestrationTaskLabel } from "../../features/orchestration/model/orchestrationSummary";
@@ -238,6 +242,17 @@ type Props = {
     edge: PaneEdge,
   ) => void;
   onRenameSession?: (sessionId: string, title: string) => void;
+  /**
+   * The Remote Control entry for one session, or `null` when it must not
+   * appear. Decided by the workspace rather than here: the sidebar lists
+   * history summaries, which carry neither the harness nor the bound
+   * `providerSessionId` the rule turns on.
+   */
+  remoteControlForSession?: (sessionId: string) => RemoteControlAction | null;
+  onRemoteControlSession?: (
+    sessionId: string,
+    intent: RemoteControlIntent,
+  ) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => void;
   onArchiveSessions?: (
     sessionIds: readonly string[],
@@ -333,6 +348,8 @@ function SidebarComponent({
   onPrefetchSession: onPrefetchLocalSession,
   onPlaceSessionOnPane: onPlaceLocalSessionOnPane,
   onRenameSession: onRenameLocalSession,
+  remoteControlForSession,
+  onRemoteControlSession,
   onArchiveSession: onArchiveLocalSession,
   onArchiveSessions: onArchiveLocalSessions,
   onPinSession: onPinLocalSession,
@@ -1032,6 +1049,14 @@ function SidebarComponent({
   const canRemoveMenuSessionsFromFolders = multipleMenuSessions
     ? anyMenuSessionFoldered
     : !!menuSessionFolder;
+  // Single-session only, like Rename: a hand-over names one conversation on the
+  // phone, and there is no meaning to "open Remote Control" for four of them.
+  // A remote project's sessions live on another host, where no local CLI can
+  // take them over.
+  const menuRemoteControl =
+    sessionMenu && !multipleMenuSessions && !remoteProject
+      ? (remoteControlForSession?.(sessionMenu.sessionId) ?? null)
+      : null;
   const menuFolder = folderMenu
     ? sessionFolders.find((folder) => folder.id === folderMenu.folderId)
     : undefined;
@@ -1114,6 +1139,18 @@ function SidebarComponent({
       disabled: !onSetReminders,
       submenu: sessionReminderPresets(),
     },
+    ...(menuRemoteControl
+      ? [
+          { kind: "sep" as const },
+          {
+            kind: "item" as const,
+            id: menuRemoteControl.id,
+            label: menuRemoteControl.label,
+            description: menuRemoteControl.description,
+            disabled: menuRemoteControl.disabled,
+          },
+        ]
+      : []),
     { kind: "sep" as const },
     { kind: "item" as const, id: "folder-new", label: "New folder" },
     ...(sessionFolders.length > 0 ? [{ kind: "sep" as const }] : []),
@@ -1209,6 +1246,7 @@ function SidebarComponent({
     const providerSessionId = menuSessions[0]?.providerSessionId;
     const archived = allMenuSessionsArchived;
     const pinned = allMenuSessionsPinned;
+    const remoteControl = menuRemoteControl;
     closeSessionMenu();
     if (id === "reminder:cancel") {
       onCancelReminders?.(sessionIds);
@@ -1247,6 +1285,14 @@ function SidebarComponent({
     }
     if (id === "link-work-item") {
       setLinkingSession(menuSessions[0] ?? null);
+      return;
+    }
+    if (id === "remote-control") {
+      // The menu already decided which way this goes; passing the intent keeps
+      // a click from flipping if the bridge changed state behind the menu.
+      if (remoteControl && !remoteControl.disabled) {
+        onRemoteControlSession?.(sessionId, remoteControl.intent);
+      }
       return;
     }
     if (id === "folder-new") {

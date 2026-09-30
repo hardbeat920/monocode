@@ -5,6 +5,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+mod claude_trust;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -406,6 +407,9 @@ pub fn run() {
             fs::save_generated_image,
             fs::delete_generated_images,
             fs::read_text_file,
+            fs::read_file_range,
+            claude_trust::claude_folder_trusted,
+            claude_trust::claude_trust_folder,
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
             fs::claude_shell_commands,
@@ -421,6 +425,7 @@ pub fn run() {
             harness::harness_resolve_configured,
             harness::harness_runtime_binary_paths,
             harness::harness_resolve_claude,
+            harness::reap_remote_control_session,
             harness::harness_resolve_omp,
             harness::harness_resolve_pi,
             harness::harness_resolve_fx,
