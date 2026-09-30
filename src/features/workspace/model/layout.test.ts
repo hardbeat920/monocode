@@ -80,6 +80,16 @@ describe("preview tabs", () => {
       changeKind: "unstaged",
     });
   });
+  it("asks the unified review to scroll again when the same file is picked twice", () => {
+    const changes = (tab: WorkspaceTab) =>
+      tab.editorPanes.flatMap((pane) => pane.files).find((file) => file.changes);
+    let tab = openChangesTab(newTab("s"), "/r", "/r/a.ts", "unstaged");
+    const first = changes(tab)?.focusRequest ?? 0;
+    tab = openChangesTab(tab, "/r", "/r/a.ts", "unstaged");
+    expect(changes(tab)?.focusRequest).toBe(first + 1);
+    tab = openChangesTab(tab, "/r", "/r/a.ts", "unstaged");
+    expect(changes(tab)?.focusRequest).toBe(first + 2);
+  });
   const paths = (tab: WorkspaceTab) =>
     tab.editorPanes[0]?.files.map((file) => [file.path, !!file.preview]);
 
