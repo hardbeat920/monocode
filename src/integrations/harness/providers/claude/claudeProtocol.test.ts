@@ -554,18 +554,14 @@ describe("list_models catalog", () => {
     );
   });
 
-  it("offers no Context choice for built-in native 1M models", () => {
-    const context = (id: string) =>
-      CLAUDE_MODEL_CATALOG.find((model) => model.nativeId === id)
-        ?.settings?.find((setting) => setting.id === "context");
-    for (const id of [
-      "claude-fable-5",
-      "claude-opus-5",
-      "claude-opus-5-5",
-      "claude-sonnet-5",
-    ])
-      expect(context(id), id).toBeUndefined();
-    expect(context("claude-sonnet-4-6")).toMatchObject({ value: "200k" });
+  it("offers no Context choice in the built-in catalog", () => {
+    // Native 1M models have nothing to choose, and without a listed `[1m]`
+    // variant nothing shows that the account can use 1M on the others.
+    for (const model of CLAUDE_MODEL_CATALOG)
+      expect(
+        model.settings?.find((setting) => setting.id === "context"),
+        model.id,
+      ).toBeUndefined();
   });
 
   it("adds resolved versions to generic live-catalog alias labels", () => {

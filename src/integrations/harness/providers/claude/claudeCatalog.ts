@@ -102,18 +102,16 @@ const THINKING: ModelSetting = {
   ],
 };
 
-function contextWindow(defaultValue: "200k" | "1m"): ModelSetting {
-  return {
-    id: "context",
-    label: "Context",
-    kind: "select",
-    value: defaultValue,
-    options: [
-      { value: "200k", label: "200k" },
-      { value: "1m", label: "1M" },
-    ],
-  };
-}
+const CONTEXT_WINDOW: ModelSetting = {
+  id: "context",
+  label: "Context",
+  kind: "select",
+  value: "1m",
+  options: [
+    { value: "200k", label: "200k" },
+    { value: "1m", label: "1M" },
+  ],
+};
 
 /**
  * Models Claude Code runs with a 1M context window from the bare model id:
@@ -135,7 +133,11 @@ const NATIVE_1M_MODELS = new Set([
   "claude-sonnet-5-5",
 ]);
 
-/** Fallback catalog when `list_models` is unavailable. */
+/**
+ * Fallback catalog when `list_models` is unavailable. It offers no Context
+ * choice: without a listed `[1m]` variant there is no sign the account can
+ * use 1M.
+ */
 export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
   {
     id: "claude:fable-5",
@@ -184,14 +186,14 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     harness: "claude",
     name: "Claude Opus 4.6",
     nativeId: "claude-opus-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE],
   },
   {
     id: "claude:sonnet-4.6",
     harness: "claude",
     name: "Claude Sonnet 4.6",
     nativeId: "claude-sonnet-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, contextWindow("200k")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK],
   },
   {
     id: "claude:opus-4.5",
@@ -427,7 +429,7 @@ function settingsFromListRow(
     settings.push(THINKING);
   }
   if (rec.supportsFastMode === true) settings.push(FAST_MODE);
-  if (context1m) settings.push(contextWindow("1m"));
+  if (context1m) settings.push(CONTEXT_WINDOW);
   return settings;
 }
 
