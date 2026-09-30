@@ -236,6 +236,82 @@ export function stringField(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/**
+ * Where a Codex item records the commands it parsed out of a script. The
+ * rollout files on disk spell it `parsed_cmd`; the live app-server protocol
+ * uses `commandActions`. `codex_command_text` in src-tauri/src/fs.rs reads the
+ * same keys in the same order, so an item carrying two spellings recovers the
+ * same command on the live and the recovery path.
+ */
+const PARSED_COMMAND_KEYS = ["parsed_cmd", "commandActions", "parsedCmd"] as const;
+
+/** The action's own text. `cmd` is the rollout spelling, `command` the protocol's. */
+const PARSED_COMMAND_FIELDS = ["command", "cmd"] as const;
+
+/**
+ * The command a Codex `commandExecution` item ran. The live app-server sends a
+ * plain string; only the rollout files on disk record the shell's argv
+ * (`["/bin/zsh","-lc","rg --files"]`), which `stringField` silently drops. Both
+ * are handled so the recovery path and the live one agree, with the parsed
+ * actions as the last fallback.
+ */
+export function codexCommandText(
+  item: Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (!item) return undefined;
+  const command = item.command;
+  if (typeof command === "string" && command.trim()) return command.trim();
+  if (Array.isArray(command)) {
+    const parts = command.filter(
+      (part): part is string => typeof part === "string" && !!part.trim(),
+    );
+    // The script is one argv element that keeps its own spaces. Match command
+    // flags for the launcher; other options may also contain "c".
+    const launcher = parts[0]
+      ?.replace(/^(['"])(.*)\1$/, "$2")
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      ?.toLowerCase();
+    const posixShell = ["sh", "bash", "zsh", "dash", "ksh"].includes(
+      launcher ?? "",
+    );
+    const powerShell = ["pwsh", "pwsh.exe", "powershell", "powershell.exe"].includes(
+      launcher ?? "",
+    );
+    const cmd = launcher === "cmd" || launcher === "cmd.exe";
+    let flag = -1;
+    for (let index = 1; index < parts.length - 1; index += 1) {
+      const part = parts[index];
+      if (powerShell && /^-(?:file|f)$/i.test(part)) break;
+      if (
+        (posixShell &&
+          (part.toLowerCase() === "--command" ||
+            /^-[A-Za-z]*c[A-Za-z]*$/.test(part))) ||
+        (powerShell && /^-(?:command|c)$/i.test(part)) ||
+        (cmd && /^\/c$/i.test(part))
+      ) {
+        flag = index;
+        break;
+      }
+    }
+    if (flag > 0 && parts.length > flag + 1) return parts[flag + 1].trim();
+    if (parts.length) return parts.join(" ").trim();
+  }
+  for (const key of PARSED_COMMAND_KEYS) {
+    const actions = item[key];
+    if (!Array.isArray(actions)) continue;
+    for (const raw of actions) {
+      const action = asRecord(raw);
+      for (const field of PARSED_COMMAND_FIELDS) {
+        const found = stringField(action, field);
+        if (found) return found;
+      }
+    }
+  }
+  return undefined;
+}
+
 function numberField(
   rec: Record<string, unknown> | null | undefined,
   key: string,
@@ -651,7 +727,7 @@ function mapToolItem(
   if (!callId) return null;
 
   if (itemType === "commandExecution") {
-    const command = stringField(item, "command") ?? "Shell";
+    const command = codexCommandText(item) ?? "Shell";
     const status = mapItemStatus(stringField(item, "status"), completed);
     const output =
       stringField(item, "aggregatedOutput") ?? stringField(item, "output");
@@ -761,7 +837,7 @@ function mapToolItem(
 }
 
 /** Prefer Codex's own best-effort command parsing, then our legacy fallback. */
-function codexCommandPresentation(
+export function codexCommandPresentation(
   item: Record<string, unknown>,
   command: string,
 ): { title: string; preview?: ToolPreview } {
@@ -795,25 +871,40 @@ function codexCommandPresentation(
       };
     }
     if (type === "listFiles") {
+      // The reported "Shell" row: a path-less listing (`rg --files -g AGENTS.md`)
+      // made this derive a bare "List", and `composeToolTitle` collapses that
+      // weak title to "Shell" because no path is left to show. Fall through so
+      // the command itself — or the intent inferred from it — becomes the label.
+      if (!shownPath) continue;
       return {
-        title: shownPath ? `List ${shownPath}` : "List",
+        title: `List ${shownPath}`,
         preview: shellCommandPreview(command, path),
       };
     }
   }
 
   const inferred = inferShellIntent(command);
-  if (!inferred) return { title: command };
-  const path = inferred.path;
-  const shownPath = path ? displayPath(path, cwd) : undefined;
+  if (inferred) {
+    const path = inferred.path;
+    const shownPath = path ? displayPath(path, cwd) : undefined;
+    const title = formatShellIntent(inferred, shownPath, inferred.query);
+    if (title) {
+      return {
+        title,
+        preview: shellCommandPreview(
+          command,
+          path,
+          inferred.query,
+          inferred.startLine,
+        ),
+      };
+    }
+  }
+  // `ls` with no path derives a bare "List", which the activity stack treats as
+  // an empty placeholder. The command itself is the honest label.
   return {
-    title: formatShellIntent(inferred, shownPath, inferred.query) ?? command,
-    preview: shellCommandPreview(
-      command,
-      path,
-      inferred.query,
-      inferred.startLine,
-    ),
+    title: command,
+    preview: shellCommandPreview(command),
   };
 }
 
@@ -1241,7 +1332,7 @@ export function mapApprovalRequest(
   if (!rec) return null;
 
   if (method === "item/commandExecution/requestApproval") {
-    const command = stringField(rec, "command") ?? "Shell";
+    const command = codexCommandText(rec) ?? "Shell";
     const callId = stringField(rec, "itemId");
     const reason = stringField(rec, "reason");
     const presentation = codexCommandPresentation(rec, command);

@@ -3,6 +3,7 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
+  codexCommandText,
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
@@ -376,6 +377,119 @@ describe("mapCodexNotification", () => {
       status: "completed",
       detail: "ok",
     });
+  });
+
+  it("recovers the command from the argv shape rollout files record", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_arr",
+        type: "commandExecution",
+        command: ["/usr/bin/zsh", "-lc", "rg --files -g AGENTS.md"],
+        status: "inProgress",
+      },
+    });
+    expect(mapped.events[0]).toMatchObject({
+      type: "tool.started",
+      callId: "cmd_arr",
+      kind: "execute",
+    });
+    const event = mapped.events[0] as { title: string; preview?: { title?: string } };
+    expect(event.title).not.toBe("Shell");
+    expect(event.preview?.title).toBe("rg --files -g AGENTS.md");
+  });
+
+  it("finds the command flag past an intervening option", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_pwsh",
+        type: "commandExecution",
+        command: ["pwsh.exe", "-NoProfile", "-Command", "Get-Content package.json"],
+        status: "inProgress",
+      },
+    });
+    expect(
+      (mapped.events[0] as { preview?: { title?: string } }).preview?.title,
+    ).toBe("Get-Content package.json");
+  });
+
+  it("matches command flags for the launcher, not unrelated options", () => {
+    expect(
+      codexCommandText({
+        command: [
+          "pwsh.exe",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "Get-Content package.json",
+        ],
+      }),
+    ).toBe("Get-Content package.json");
+    expect(
+      codexCommandText({
+        command: ["pwsh.exe", "-File", "build.ps1", "-Command", "ignored"],
+      }),
+    ).toBe("pwsh.exe -File build.ps1 -Command ignored");
+    expect(
+      codexCommandText({ command: ["git", "-c", "core.editor=vim", "status"] }),
+    ).toBe("git -c core.editor=vim status");
+    expect(
+      codexCommandText({ command: ["cmd.exe", "/c", "dir /b"] }),
+    ).toBe("dir /b");
+    expect(
+      codexCommandText({ command: ["bash", "-aEc", "echo x"] }),
+    ).toBe("echo x");
+    expect(
+      codexCommandText({ command: ["bash", "--command", "echo x"] }),
+    ).toBe("echo x");
+    expect(
+      codexCommandText({ command: ["bash", "-C", "script.sh"] }),
+    ).toBe("bash -C script.sh");
+    expect(
+      codexCommandText({
+        command: [
+          '"C:\\Program Files\\PowerShell\\7\\pwsh.exe"',
+          "-Command",
+          "Get-Date",
+        ],
+      }),
+    ).toBe("Get-Date");
+  });
+
+  it("falls back to commandActions when the command field is missing", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_actions",
+        type: "commandExecution",
+        status: "inProgress",
+        commandActions: [{ type: "unknown", command: "gh auth status" }],
+      },
+    });
+    expect((mapped.events[0] as { title: string }).title).toBe("gh auth status");
+  });
+
+  it("falls back to the rollout spelling of the parsed actions", () => {
+    expect(
+      codexCommandText({ parsed_cmd: [{ type: "unknown", cmd: "gh auth status" }] }),
+    ).toBe("gh auth status");
+  });
+
+  // The reported "Shell" row: Codex labels `rg --files` a path-less
+  // `listFiles`, which used to derive a bare "List" that the transcript then
+  // collapsed to "Shell" because no path was left to show.
+  it("keeps the command when a path-less listing would hide the row", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_rg",
+        type: "commandExecution",
+        command: `/usr/bin/zsh -lc "rg --files -g AGENTS.md"`,
+        cwd: "/home/me/proj",
+        status: "inProgress",
+        commandActions: [
+          { type: "listFiles", command: "rg --files -g AGENTS.md", path: null },
+        ],
+      },
+    });
+    expect((mapped.events[0] as { title: string }).title).toBe("Find files");
   });
 
   it("uses Codex command actions for readable command rows", () => {

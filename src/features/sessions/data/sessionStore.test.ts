@@ -1,5 +1,7 @@
-import { appendUser } from "../../../integrations/harness/core/apply";
+import { appendUser, applyHarnessEvents } from "../../../integrations/harness/core/apply";
 import { describe, expect, it } from "vitest";
+import { mapCodexNotification } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { toolCallLabel } from "../model/transcriptActivity";
 import {
   newSession,
   type Block,
@@ -8,6 +10,7 @@ import {
 } from "../model/session";
 import {
   backfillClaudeShellCommands,
+  backfillCodexShellCommands,
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
@@ -53,6 +56,101 @@ describe("Claude Shell row recovery", () => {
     });
     expect(repaired[1]).toBe(blocks[1]);
     expect(backfillClaudeShellCommands(repaired, {})).toBe(repaired);
+  });
+});
+
+describe("Codex Shell row recovery", () => {
+  it("labels placeholder rows with the recovered command and rebuilds the preview", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          status: "failed",
+          detail: "exit 1",
+          preview: { kind: "shell", title: "mangled" },
+        },
+      },
+      {
+        id: "read",
+        role: "tool",
+        text: "Read file.ts",
+        tool: { callId: "exec-2", kind: "read" },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks, {
+      "exec-1": "rg --files -g AGENTS.md -g '!node_modules'",
+      "exec-2": "ignore me",
+    });
+    expect(repaired[0]).toMatchObject({
+      text: "Find files",
+      tool: {
+        title: "Find files",
+        status: "failed",
+        detail: "exit 1",
+        preview: { kind: "shell", title: "rg --files -g AGENTS.md -g '!node_modules'" },
+      },
+    });
+    expect(repaired[1]).toBe(blocks[1]);
+    expect(backfillCodexShellCommands(repaired, {})).toBe(repaired);
+  });
+
+  it("keeps the raw command when no readable intent is inferred", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: { callId: "exec-3", title: "Shell", kind: "execute" },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks, {
+      "exec-3": "git commit -m 'Fix shell labels'",
+    });
+    expect(repaired[0].text).toBe("git commit -m 'Fix shell labels'");
+  });
+
+  // A row repaired from the rollout file has to read the same as one rendered
+  // live, or reopening a session would relabel work the user already saw.
+  it("labels a recovered row exactly as the live item does", () => {
+    // Captured from `codex app-server`: the reported session's middle row was
+    // `rg --files -g AGENTS.md`, which Codex labels a path-less `listFiles`.
+    const item = {
+      type: "commandExecution",
+      id: "exec-88885872",
+      status: "inProgress",
+      command: `/usr/bin/zsh -lc "rg --files -g AGENTS.md -g '"'"'!node_modules'"'"'"`,
+      commandActions: [
+        { type: "listFiles", command: "rg --files -g AGENTS.md -g '!node_modules'", path: null },
+      ],
+    };
+    let live = newSession("codex", "/home/me/proj");
+    live = applyHarnessEvents(live, mapCodexNotification("item/started", { item }).events);
+    const liveRow = live.blocks[0];
+
+    // The same row as the buggy build saved it, and the command Rust recovers.
+    const saved: Block[] = [
+      {
+        id: "e84ab067",
+        role: "tool",
+        text: "Shell",
+        tool: { ...liveRow.tool, title: "Shell" },
+      },
+    ];
+    const [recovered] = backfillCodexShellCommands(saved, {
+      "exec-88885872": "rg --files -g AGENTS.md -g '!node_modules'",
+    });
+
+    expect(recovered.text).not.toBe("Shell");
+    expect(recovered.text).toBe(liveRow.text);
+    expect(recovered.tool?.title).toBe(liveRow.tool?.title);
+    expect(toolCallLabel(recovered, "/home/me/proj")).toBe(
+      toolCallLabel(liveRow, "/home/me/proj"),
+    );
   });
 });
 
