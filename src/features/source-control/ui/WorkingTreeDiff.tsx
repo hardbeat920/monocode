@@ -20,6 +20,7 @@ import {
   workingTreeDiffFocusId,
 } from "../model/workingTreeDiff";
 import { stageChunkText } from "../../files/editor/editorGit";
+import { LINE_DIFF_CONFIG } from "../model/lineDiff";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 
 type Props = {
@@ -244,7 +245,14 @@ export function WorkingTreeDiff({ cwd, focusPath, focusKind }: Props) {
       if (!entry || entry.kind !== "unstaged") return;
       const loaded = diffsRef.current.get(id);
       if (!loaded) return;
-      const next = stageChunkText(loaded.original, loaded.current, pos);
+      // Same diff the view used to produce `pos`, so the same hunk is staged.
+      const next = stageChunkText(
+        loaded.original,
+        loaded.current,
+        pos,
+        null,
+        LINE_DIFF_CONFIG,
+      );
       if (next == null) return;
       setBusyId(id);
       try {
