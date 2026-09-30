@@ -39,6 +39,14 @@ import {
   ColorSwatchRow,
 } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
+import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
+import {
+  fontFamilyCss,
+  loadFontFamily,
+  saveFontFamily,
+  subscribeFonts,
+  type FontKind,
+} from "../model/fonts";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
@@ -1952,6 +1960,13 @@ function useAppearanceSettings(
   );
 
   const restoreDefaults = useCallback(() => {
+    for (const kind of ["ui", "code"] as const) {
+      try {
+        saveFontFamily(kind, "");
+      } catch {
+        // A failed font write must not prevent the other appearance resets.
+      }
+    }
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onAccentColor(ACCENT_COLOR_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
@@ -2029,9 +2044,83 @@ function useAppearanceSettings(
   };
 }
 
+function FontPicker({
+  kind,
+  families,
+}: {
+  kind: FontKind;
+  families: string[];
+}) {
+  const value = useSyncExternalStore(subscribeFonts, () =>
+    loadFontFamily(kind),
+  );
+  const [error, setError] = useState(false);
+  const label = kind === "ui" ? "UI font" : "Code font";
+  const names =
+    value && !families.includes(value) ? [value, ...families] : families;
+  return (
+    <div className="w-64 max-w-full">
+      <SearchableSelect
+        label={label}
+        value={value}
+        options={[
+          {
+            value: "",
+            label: kind === "ui" ? "System font" : "System monospace",
+          },
+          ...names.map((name) => ({ value: name, label: name })),
+        ]}
+        searchPlaceholder="Search fonts"
+        emptyLabel="Type a family name and press Enter"
+        allowCustomValue
+        renderLabel={(option) => (
+          <span style={{ fontFamily: fontFamilyCss(kind, option.value) }}>
+            {option.label}
+          </span>
+        )}
+        onChange={(next) => {
+          try {
+            saveFontFamily(kind, next);
+            setError(false);
+          } catch {
+            setError(true);
+          }
+        }}
+      />
+      {error ? (
+        <p role="alert" className="mt-2 text-xs text-red-400">
+          Could not save this font. Try again.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
+  const [fonts, setFonts] = useState<{ all: string[]; monospaced: string[] }>({
+    all: [],
+    monospaced: [],
+  });
+  const [fontStatus, setFontStatus] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  useEffect(() => {
+    let cancelled = false;
+    invoke<{ all: string[]; monospaced: string[] }>("list_font_families")
+      .then((families) => {
+        if (cancelled) return;
+        setFonts(families ?? { all: [], monospaced: [] });
+        setFontStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setFontStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -2065,6 +2154,46 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onAccentColor}
           />
         </Row>
+      </Group>
+
+      <Group
+        title="Fonts"
+        description="Choose installed fonts for the interface and code. Changes apply immediately."
+      >
+        <Row
+          id="ui-font-family"
+          label="UI font"
+          description="Menus, chat messages, and message inputs."
+        >
+          <FontPicker kind="ui" families={fonts.all} />
+        </Row>
+        <Row
+          id="code-font-family"
+          label="Code font"
+          description="Code snippets, editors, diffs, and terminals."
+        >
+          <FontPicker kind="code" families={fonts.monospaced} />
+        </Row>
+        {fontStatus !== "ready" ? (
+          <p role="status" className="px-4 py-2 text-xs text-content/50">
+            {fontStatus === "loading"
+              ? "Loading installed fonts…"
+              : "Could not load installed fonts. Reopen Appearance to try again. System defaults are still available."}
+          </p>
+        ) : null}
+        <div
+          className="mx-4 my-3 overflow-hidden rounded-lg border border-stroke text-[13px]"
+          aria-label="Font preview"
+        >
+          <p className="px-4 py-3 font-sans">
+            The quick brown fox jumps over the lazy dog. 0123456789
+          </p>
+          <pre className="overflow-x-auto border-t border-stroke bg-content/3 px-4 py-3 font-mono">
+            <code>
+              {'const greeting = "Hello, Monocode!";\nconsole.log(greeting);'}
+            </code>
+          </pre>
+        </div>
       </Group>
 
       <Group

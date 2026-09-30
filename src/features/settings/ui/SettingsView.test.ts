@@ -113,6 +113,145 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("continues resetting other fonts and appearance when one font reset fails", async () => {
+    localStorage.setItem("monocode.uiFontFamily", "Georgia");
+    localStorage.setItem("monocode.codeFontFamily", "Menlo");
+    localStorage.setItem("monocode.colorScheme", "light");
+    const remove = localStorage.removeItem.bind(localStorage);
+    vi.spyOn(localStorage, "removeItem").mockImplementation((key) => {
+      if (key === "monocode.uiFontFamily") throw new Error("denied");
+      remove(key);
+    });
+    await render("appearance");
+    const reset = Array.from(container.querySelectorAll("button")).find(
+      (node) => node.textContent?.includes("Restore defaults"),
+    )!;
+    await act(async () => reset.click());
+    expect(localStorage.getItem("monocode.uiFontFamily")).toBe("Georgia");
+    expect(localStorage.getItem("monocode.codeFontFamily")).toBeNull();
+    expect(localStorage.getItem("monocode.colorScheme")).toBe("dark");
+  });
+
+  it("offers only monospaced code fonts while retaining an unavailable saved choice", async () => {
+    localStorage.setItem("monocode.codeFontFamily", "Saved Font");
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "list_font_families"
+        ? { all: ["Georgia", "Menlo"], monospaced: ["Menlo"] }
+        : undefined,
+    );
+    await render("appearance");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Code font: Saved Font"]',
+        )!
+        .click(),
+    );
+    const options = Array.from(
+      document.querySelectorAll('[role="option"]'),
+    ).map((node) => node.textContent);
+    expect(options).toEqual(["System monospace", "Saved Font", "Menlo"]);
+  });
+
+  it("keeps a saved font selectable when font discovery fails", async () => {
+    localStorage.setItem("monocode.uiFontFamily", "Missing Font");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "list_font_families") throw new Error("unavailable");
+      return undefined;
+    });
+    await render("appearance");
+    expect(container.textContent).toContain("Could not load installed fonts");
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="UI font: Missing Font"]',
+    )!;
+    await act(async () => trigger.click());
+    const options = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    );
+    expect(options.map((node) => node.textContent)).toEqual([
+      "System font",
+      "Missing Font",
+    ]);
+    expect(options[1].getAttribute("aria-selected")).toBe("true");
+    const reset = options.find((node) => node.textContent === "System font")!;
+    await act(async () => reset.click());
+    expect(localStorage.getItem("monocode.uiFontFamily")).toBeNull();
+  });
+
+  it("reports a font save failure without changing the selected font", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "list_font_families"
+        ? { all: ["Menlo"], monospaced: ["Menlo"] }
+        : undefined,
+    );
+    await render("appearance");
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Code font: System monospace"]',
+        )!
+        .click(),
+    );
+    const option = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((node) => node.textContent === "Menlo")!;
+    await act(async () => option.click());
+    expect(container.textContent).toContain("Could not save this font");
+    expect(
+      container.querySelector(
+        'button[aria-label="Code font: System monospace"]',
+      ),
+    ).not.toBeNull();
+    expect(localStorage.getItem("monocode.codeFontFamily")).toBeNull();
+  });
+
+  it("selects UI and code fonts independently and restores both defaults", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "list_font_families"
+        ? { all: ["Avenir Next", "Menlo"], monospaced: ["Menlo"] }
+        : undefined,
+    );
+    await render("appearance");
+    const pick = async (label: string, option: string) => {
+      const trigger = container.querySelector<HTMLButtonElement>(
+        `button[aria-label^="${label}:"]`,
+      );
+      expect(trigger).not.toBeNull();
+      await act(async () => trigger!.click());
+      const item = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+      ).find((node) => node.textContent === option);
+      expect(item).toBeDefined();
+      await act(async () => item!.click());
+    };
+    await pick("UI font", "Avenir Next");
+    await pick("Code font", "Menlo");
+    expect(localStorage.getItem("monocode.uiFontFamily")).toBe("Avenir Next");
+    expect(localStorage.getItem("monocode.codeFontFamily")).toBe("Menlo");
+    expect(
+      document.documentElement.style.getPropertyValue("--font-sans"),
+    ).toContain('"Avenir Next"');
+    expect(
+      document.documentElement.style.getPropertyValue("--font-mono"),
+    ).toContain('"Menlo"');
+    const reset = Array.from(container.querySelectorAll("button")).find(
+      (node) => node.textContent?.includes("Restore defaults"),
+    );
+    expect(reset).toBeDefined();
+    await act(async () => reset!.click());
+    expect(localStorage.getItem("monocode.uiFontFamily")).toBeNull();
+    expect(localStorage.getItem("monocode.codeFontFamily")).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--font-sans")).toBe(
+      "",
+    );
+    expect(document.documentElement.style.getPropertyValue("--font-mono")).toBe(
+      "",
+    );
+  });
+
   it("shows account usage bars as remaining capacity", async () => {
     setCachedRateLimits("claude", "default", {
       provider: "claude",

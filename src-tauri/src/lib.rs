@@ -9,6 +9,7 @@ mod control;
 pub mod control_cli;
 mod cursor_store;
 mod external_editor;
+mod fonts;
 mod fs;
 mod gitlab;
 mod harness;
@@ -278,6 +279,7 @@ pub fn run() {
             control::app_cli_path,
             default_cwd,
             home_dir,
+            fonts::list_font_families,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,

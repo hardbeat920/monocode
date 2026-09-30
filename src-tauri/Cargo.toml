@@ -33,6 +33,7 @@ time = { version = "0.3", features = ["parsing"] }
 tauri-plugin-process = "2"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
+fontdb = "0.23"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

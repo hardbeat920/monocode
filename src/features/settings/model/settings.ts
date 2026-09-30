@@ -236,6 +236,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "highlight bubble send button tint",
   },
   {
+    id: "ui-font-family",
+    section: "appearance",
+    label: "UI font",
+    keywords: "fonts custom family typeface menus chat text sans typography",
+  },
+  {
+    id: "code-font-family",
+    section: "appearance",
+    label: "Code font",
+    keywords: "fonts custom family typeface monospace snippets editor diff terminal typography",
+  },
+  {
     id: "hue",
     section: "appearance",
     label: "Hue",
