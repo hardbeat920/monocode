@@ -3,17 +3,17 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Streamdown } from "streamdown";
 import { describe, expect, it } from "vitest";
+import { AgentMarkdown } from "./AgentMarkdown";
 
 /**
  * https://github.com/hardbeat920/monocode/issues/218 - a reply with several
  * "\n\n"-separated sections rendered as one dense block.
  *
- * AgentMarkdown passes dir="auto", so Streamdown puts every block in its own
- * `<div dir="..." style="display: contents">`. A display:contents box drops its
- * own margins, so Streamdown's `space-y-4` on the root, which targets exactly
- * those wrappers, paints no gap. Headings, blockquotes and rules were fine
+ * AgentMarkdown passes dir="auto", so every block sits in its own
+ * `<div dir="..." class="agent-markdown-block">`. Those wrappers carry no margin
+ * (Streamdown's `space-y-4` on the root is cancelled for them), so the gap has
+ * to come from the block inside. Headings, blockquotes and rules were fine
  * because their margin sits on the element itself; paragraphs and lists carry
  * none, so consecutive ones sat flush.
  *
@@ -30,13 +30,7 @@ const CSS_PATH = resolve(process.cwd(), "src/styles/index.css");
 const SAMPLE = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
 
 function renderAgentMarkdown(sample = SAMPLE): string {
-  return renderToStaticMarkup(
-    createElement(
-      Streamdown,
-      { dir: "auto", className: "agent-markdown" },
-      sample,
-    ),
-  );
+  return renderToStaticMarkup(createElement(AgentMarkdown, { text: sample }));
 }
 
 type Rule = { selectors: string[]; body: string };
@@ -110,7 +104,7 @@ describe("agent-markdown Tailwind sources", () => {
 });
 
 describe("agent-markdown paragraph spacing", () => {
-  it("wraps each block in a display:contents div, so space-y-4 cannot space them", () => {
+  it("wraps each block in a real block box with no margin of its own", () => {
     document.body.innerHTML = renderAgentMarkdown();
     const root = document.querySelector(".agent-markdown")!;
     const paragraphs = [...root.querySelectorAll("p")];
@@ -119,8 +113,14 @@ describe("agent-markdown paragraph spacing", () => {
     expect(paragraphs).toHaveLength(3);
     for (const paragraph of paragraphs) {
       const wrapper = paragraph.parentElement!;
-      expect(wrapper.getAttribute("style")).toContain("display:contents");
+      // #496: a display:contents wrapper lets WebKit's triple-click run past
+      // the block to the end of the reply.
+      expect(wrapper.getAttribute("style") ?? "").not.toContain("contents");
+      expect(wrapper.getAttribute("dir")).toBe("ltr");
+      expect(wrapper.className).toBe("agent-markdown-block");
       expect(wrapper.parentElement).toBe(root);
+      expect(declaredMargin(wrapper, "top")).toBe("0");
+      expect(declaredMargin(wrapper, "bottom")).toBe("0");
     }
   });
 

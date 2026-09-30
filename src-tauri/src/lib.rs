@@ -12,6 +12,7 @@ mod external_editor;
 mod fs;
 mod gitlab;
 mod harness;
+mod harness_updates;
 mod inbox_media;
 mod jira;
 mod linear;
@@ -436,6 +437,9 @@ pub fn run() {
             harness::harness_sse_open,
             harness::harness_sse_close,
             harness::harness_exec,
+            harness_updates::harness_latest_version,
+            harness_updates::harness_update_check_claim,
+            harness_updates::harness_update,
             harness::provider_account_remove,
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,
@@ -484,6 +488,8 @@ pub fn run() {
             set_dock_badge,
             #[cfg(target_os = "macos")]
             menu::keybindings_set_overrides,
+            #[cfg(target_os = "macos")]
+            menu::autosave_set_enabled,
             open_new_window,
             window::hide_window,
             window::destroy_window,

@@ -86,6 +86,31 @@ describe("Cursor stored subagents", () => {
     expect(recovered.blocks[0].tool?.status).toBe("failed");
   });
 
+  it("carries a failed step's output onto the row as error detail", async () => {
+    read.mockResolvedValue([
+      {
+        ...run,
+        steps: [
+          {
+            id: "child:tool:shell",
+            kind: "tool",
+            text: "",
+            toolName: "Shell",
+            args: { command: "npm test" },
+            status: "failed",
+            output: "Tests failed: assertion error",
+          },
+        ],
+      },
+    ]);
+    const recovered = await recoverCursorSubagents(savedSession());
+    expect(recovered.blocks[0].agentRun?.steps[0]).toMatchObject({
+      text: "npm test",
+      status: "failed",
+      detail: "Tests failed: assertion error",
+    });
+  });
+
   it("ignores unrelated calls and tolerates an unavailable store", async () => {
     const session = savedSession();
     read.mockResolvedValue([{ ...run, toolCallId: "unrelated" }]);

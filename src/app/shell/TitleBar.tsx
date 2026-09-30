@@ -2,6 +2,7 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  DashboardSquare,
   Inbox,
   PanelLeft,
   Plus,
@@ -935,7 +936,7 @@ function TitleBarComponent({
             label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
             onClick={onToggleSessionSidebar}
           >
-            <PanelLeft className="size-3.5" strokeWidth={1.75} />
+            <DashboardSquare className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         </div>
       ) : null}

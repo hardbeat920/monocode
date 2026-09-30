@@ -879,6 +879,37 @@ export function saveFormatOnSave(value: boolean) {
   writeFlag(FORMAT_ON_SAVE_KEY, value);
 }
 
+const AUTOSAVE_KEY = "monocode.autosave";
+const AUTOSAVE_CHANGE_EVENT = "monocode:autosave-change";
+
+export const AUTOSAVE_DEFAULT = false;
+
+export function loadAutosave(): boolean {
+  return readFlag(AUTOSAVE_KEY) ?? AUTOSAVE_DEFAULT;
+}
+
+export function saveAutosave(value: boolean): boolean {
+  writeFlag(AUTOSAVE_KEY, value);
+  const saved = loadAutosave();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTOSAVE_CHANGE_EVENT));
+  }
+  return saved;
+}
+
+export function subscribeAutosave(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === AUTOSAVE_KEY) onStoreChange();
+  };
+  window.addEventListener(AUTOSAVE_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(AUTOSAVE_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 const CLAUDE_HOOKS_KEY = "monocode.claudeHooks";
 
 export const CLAUDE_HOOKS_DEFAULT = true;
