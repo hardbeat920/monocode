@@ -169,6 +169,13 @@ jobs:
           name: host-npm
           path: build/host-npm-package
 
+      # Every released desktop displays an npm command for its exact version.
+      # Gate all desktop publication on the matching public npm package.
+      - name: Publish and verify monocode-host on npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bash scripts/publish-host-npm.sh "${GITHUB_REF_NAME#v}"
+
       - name: Upload updater packages to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -387,22 +394,6 @@ jobs:
             exit 1
           fi
           verify_release false
-
-      # `npx monocode-host@<version> connect` installs the matching host on a
-      # machine with Node.js. Skipped until the repository has an npm token.
-      - name: Publish monocode-host to npm
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        if: env.NPM_TOKEN != ''
-        run: |
-          set -euo pipefail
-          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
-          VERSION="${GITHUB_REF_NAME#v}"
-          if NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" npm view "monocode-host@$VERSION" version >/dev/null 2>&1; then
-            echo "monocode-host@$VERSION is already published"
-          else
-            NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" npm publish build/host-npm-package/monocode-host-*.tgz --access public
-          fi
 
       - name: Publish updater feed
         env:

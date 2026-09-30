@@ -14,6 +14,8 @@ import { request } from "node:http";
 import { HostEngine } from "./engine";
 import { HostStore } from "./store";
 import { createHostServer } from "./server";
+import { HostChildBackend } from "./child-backend";
+import { configureChildBackend } from "../src/integrations/harness/core/child";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
@@ -21,6 +23,9 @@ const modelProbe = vi.hoisted(() => vi.fn());
 vi.mock("../src/integrations/harness/providers/codex/codexCatalog", () => ({
   discoverCodexModels: modelProbe,
 }));
+// Catalog tests point the host at a stand-in provider CLI.
+const binaries: { codex?: string } = {};
+configureChildBackend(new HostChildBackend(binaries));
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -67,9 +72,19 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/rpc`;
   const first = store.issueDevice("Laptop");
   const second = store.issueDevice("Other computer");
-  const pair = async (params: unknown, method = "pair.exchange") => {
+  const pair = async (
+    params: unknown,
+    method = "pair.exchange",
+    remoteAddress?: string,
+  ) => {
+    // Exercise remote-peer policy over loopback without requiring a LAN peer.
+    const listener = (incoming: import("node:http").IncomingMessage) => {
+      Object.defineProperty(incoming.socket, "remoteAddress", { value: remoteAddress, configurable: true });
+    };
+    if (remoteAddress) server.prependOnceListener("request", listener);
     const response = await fetch(url, {
       method: "POST",
+      headers: { Connection: "close" },
       body: JSON.stringify({ version: 1, method, params }),
     });
     return {
@@ -313,6 +328,46 @@ describe("remote host API", () => {
       supportedProviders: ["codex", "cursor"],
     })).value.result.providers).toEqual(["codex", "cursor"]);
   });
+  it("re-probes models after the provider CLI is updated", async () => {
+    const s = await setup();
+    cleanups.push(async () => {
+      delete binaries.codex;
+    });
+    writeFileSync(join(s.directory, "codex-1"), "");
+    writeFileSync(join(s.directory, "codex-2"), "");
+    binaries.codex = join(s.directory, "codex-1");
+    modelProbe.mockClear();
+    modelProbe.mockResolvedValueOnce([{ id: "codex:old", name: "Old" }]);
+    modelProbe.mockResolvedValueOnce([{ id: "codex:new", name: "New" }]);
+    const list = async () =>
+      (await s.call("models.list", { projectId: s.project.id })).value.result
+        .models.codex;
+    expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+    expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+    binaries.codex = join(s.directory, "codex-2");
+    expect(await list()).toEqual([{ id: "codex:new", name: "New" }]);
+    expect(modelProbe).toHaveBeenCalledTimes(2);
+  });
+  it("re-probes models once the catalog is five minutes old", async () => {
+    const s = await setup();
+    modelProbe.mockClear();
+    modelProbe.mockResolvedValueOnce([{ id: "codex:old", name: "Old" }]);
+    modelProbe.mockResolvedValueOnce([{ id: "codex:new", name: "New" }]);
+    const list = async () =>
+      (await s.call("models.list", { projectId: s.project.id })).value.result
+        .models.codex;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+      vi.setSystemTime(Date.now() + 4 * 60_000);
+      expect(await list()).toEqual([{ id: "codex:old", name: "Old" }]);
+      vi.setSystemTime(Date.now() + 60_000);
+      expect(await list()).toEqual([{ id: "codex:new", name: "New" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(modelProbe).toHaveBeenCalledTimes(2);
+  });
   it("lets an authenticated desktop browse host folders without reading files", async () => {
     const s = await setup();
     mkdirSync(join(s.directory, "checkout"));
@@ -412,12 +467,26 @@ describe("remote host API", () => {
     expect((await s.pair({}, "projects.list")).status).toBe(401);
   });
 
-  it("slows repeated failed pairing attempts", async () => {
+  it("limits network pairing failures while keeping SSH pairing available", async () => {
     const s = await setup();
     for (let attempt = 0; attempt < 30; attempt++)
-      expect((await s.pair({ code: "x".repeat(43) })).status).toBe(401);
+      expect((await s.pair({ code: "x".repeat(43) }, "pair.exchange", "10.0.0.5")).status).toBe(401);
     const { code } = s.store.issuePairing();
-    expect((await s.pair({ code })).status).toBe(429);
+    expect((await s.pair({ code }, "pair.exchange", "10.0.0.6")).status).toBe(429);
+    // Network lockout must not consume the valid code or block the SSH route.
+    expect((await s.pair({ code })).status).toBe(200);
+  });
+
+  it("does not count loopback failures toward the network pairing limit", async () => {
+    const s = await setup();
+    for (const address of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) {
+      for (let attempt = 0; attempt < 31; attempt++)
+        expect((await s.pair({ code: "x".repeat(43) }, "pair.exchange", address)).status).toBe(401);
+      const { code } = s.store.issuePairing();
+      expect((await s.pair({ code }, "pair.exchange", address)).status).toBe(200);
+    }
+    const { code } = s.store.issuePairing();
+    expect((await s.pair({ code }, "pair.exchange", "10.0.0.5")).status).toBe(200);
   });
 
   it("answers a waiting desktop when a session changes", async () => {

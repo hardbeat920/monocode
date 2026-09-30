@@ -499,7 +499,9 @@ function ConnectedRemoteSession({
     [descriptor],
   );
   // A new session starts with the tab's model when the host offers it, and
-  // otherwise with the host's first model.
+  // otherwise with the host's first model. Settings follow the host's entry:
+  // the same id can differ between machines, such as `claude:opus` offering a
+  // 1M context only on an account that has it.
   useEffect(() => {
     if (!online || sessionId || !catalog || !providers.length) return;
     const harness = providers.includes(draft.harness)
@@ -511,13 +513,17 @@ function ConnectedRemoteSession({
       (harness === draft.harness ? undefined : models[0]) ??
       models[0];
     if (!model) return;
-    if (harness === draft.harness && model.id === draft.model) return;
-    setDraft((current) => ({
-      ...current,
-      harness,
-      model: model.id,
-      settings: carryModelSettings(model.settings ?? [], current.settings),
-    }));
+    setDraft((current) => {
+      const settings = carryModelSettings(
+        model.settings ?? [],
+        current.settings,
+      );
+      return current.harness === harness &&
+        current.model === model.id &&
+        sameModelSettings(settings, current.settings)
+        ? current
+        : { ...current, harness, model: model.id, settings };
+    });
   }, [online, catalog, providers, sessionId, draft.harness, draft.model]);
 
   const saved: Configuration | undefined = hostSession && {
@@ -970,10 +976,9 @@ function ConnectedRemoteSession({
         providers.includes(harness as RemoteProvider) &&
         (!hostSession || hostSession.harness === harness),
       probed: () => !!descriptor,
-      refresh: () => {
-        if (!catalog || catalogError || Object.keys(catalog.errors).length)
-          setCatalogRefresh((value) => value + 1);
-      },
+      // The host re-probes when a provider CLI changes or its catalog ages,
+      // so each picker opening asks again.
+      refresh: () => setCatalogRefresh((value) => value + 1),
     };
   }, [
     catalog,

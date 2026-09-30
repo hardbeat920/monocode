@@ -14,11 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Failed host network changes return an error without stopping agent turns. The host retries the listener after the port becomes available.
+- SSH pairing stays available when repeated failed network pairing attempts trigger the rate limit.
+- A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules.
+- Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr.
+- A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it.
 - A remote turn that finishes now plays the same notification or sound as a local turn. Remote tabs that are not showing also update when their turn starts or ends, instead of keeping a stale busy indicator until they are opened.
 - Replacing a macOS host's launch agent retries registration while launchd finishes removing the previous one, instead of falling back to a detached host.
 
 ### Changed
 
+- Desktop releases require the matching host package to be publicly available on npm before desktop publication.
 - SSH setup still installs the verified release archive with its bundled Node, then runs the same `connect` command, so SSH machines also get a pinned TLS address and pushed updates. Update Host restarts the host through `connect --yes`.
 - Pairing by host URL and raw device token is replaced by the pairing link.
 

@@ -250,6 +250,8 @@ async function serve(store: HostStore) {
     void tailscaleName().then((name) => (magicDns = name));
     let front: NetServer | undefined;
     let stopping = false;
+    let networkRetry: ReturnType<typeof setTimeout> | undefined;
+    let networkChange = Promise.resolve();
     let stop: () => Promise<void>;
     const status = (): HostStatus => ({
       version,
@@ -286,8 +288,13 @@ async function serve(store: HostStore) {
             response.writeHead(400).end();
             return;
           }
-          if (action === "network") await applyNetwork();
-          else if (action !== "status" && action !== "stop") {
+          if (action === "network") {
+            try {
+              await applyNetwork();
+            } catch (error) {
+              networkFailure(error);
+            }
+          } else if (action !== "status" && action !== "stop") {
             response.writeHead(400).end();
             return;
           }
@@ -326,28 +333,54 @@ async function serve(store: HostStore) {
     };
     // Rebinds without a restart, so turning network access on or off does
     // not interrupt agents. Open connections are unaffected.
-    const applyNetwork = async () => {
-      const next = readNetworkSettings(directory);
-      const bind = (settings: NetworkSettings) =>
-        settings.enabled ? settings.bind : "127.0.0.1";
-      if (!network.error && bind(next) === bind(network)) {
-        network = next;
-        return;
-      }
-      front?.close();
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await openOrLoopback(next);
+    const applyNetwork = () => {
+      clearTimeout(networkRetry);
+      networkRetry = undefined;
+      // Lifecycle requests and background recovery must not rebind together.
+      const pending = networkChange.then(async () => {
+        if (stopping) return;
+        const next = readNetworkSettings(directory);
+        const bind = (settings: NetworkSettings) =>
+          settings.enabled ? settings.bind : "127.0.0.1";
+        if (!network.error && bind(next) === bind(network)) {
+          network = next;
           return;
-        } catch (error) {
-          if (attempt >= 20) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 100));
         }
+        front?.close();
+        for (let attempt = 0; ; attempt++) {
+          if (stopping) return;
+          try {
+            await openOrLoopback(next);
+            return;
+          } catch (error) {
+            if (attempt >= 20) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+      });
+      networkChange = pending.catch(() => {});
+      return pending;
+    };
+    const networkFailure = (error: unknown) => {
+      network = {
+        ...readNetworkSettings(directory),
+        error: error instanceof Error ? error.message : String(error),
+      };
+      console.error("Could not apply network settings:", network.error);
+      // The process and its turns survive even if both listeners failed.
+      // Retry so SSH and new clients can reach it once the port is free.
+      if (!stopping && !networkRetry) {
+        networkRetry = setTimeout(() => {
+          networkRetry = undefined;
+          void applyNetwork().catch(networkFailure);
+        }, 1_000);
       }
     };
     stop = async () => {
       if (stopping) return;
       stopping = true;
+      clearTimeout(networkRetry);
+      await networkChange;
       front?.close();
       server.close();
       server.closeAllConnections();

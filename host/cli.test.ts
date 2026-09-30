@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer, type AddressInfo } from "node:net";
 import {
@@ -12,6 +12,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { lifecycle, readRunning } from "./control";
+import { writeNetworkSettings } from "./network";
 
 const exec = promisify(execFile);
 
@@ -102,3 +104,92 @@ it(
   },
   process.platform === "win32" ? 60_000 : 20_000,
 );
+
+it("answers failed network changes, keeps the host alive, and recovers its listener", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "monocode-rebind-test-"));
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  const blocked = join(directory, "blocked");
+  const preload = join(directory, "listen-failure.cjs");
+  // Make both the network bind and loopback fallback fail after startup.
+  // This exercises the built CLI's event listener and unhandled-rejection policy.
+  writeFileSync(
+    preload,
+    `
+      const { Server } = require("node:net");
+      const { existsSync } = require("node:fs");
+      const listen = Server.prototype.listen;
+      Server.prototype.listen = function (...args) {
+        if (args[0] === ${port} && existsSync(${JSON.stringify(blocked)})) {
+          queueMicrotask(() => this.emit("error", new Error("Injected port conflict")));
+          return this;
+        }
+        return listen.apply(this, args);
+      };
+    `,
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      "--require",
+      preload,
+      resolve("build/host/monocode-host.mjs"),
+      "serve",
+      "--data-dir",
+      directory,
+      "--port",
+      String(port),
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+  const exited = new Promise<void>((resolve) =>
+    child.once("exit", () => resolve()),
+  );
+  try {
+    await vi.waitFor(() => expect(readRunning(directory)).toBeDefined(), {
+      timeout: 15_000,
+    });
+    const state = readRunning(directory)!;
+    writeNetworkSettings(directory, { enabled: true, bind: "0.0.0.0" });
+    writeFileSync(blocked, "");
+    const failed = await lifecycle(state, "network");
+    expect(failed).toMatchObject({
+      pid: child.pid,
+      network: {
+        enabled: true,
+        bind: "0.0.0.0",
+        error: "Injected port conflict",
+      },
+    });
+    expect(stderr).toContain("Could not apply network settings");
+    expect(child.exitCode).toBeNull();
+    expect(stderr).not.toContain("UnhandledPromiseRejection");
+    // Recovery reads the latest settings, so disabling access while the port
+    // is blocked must restore only loopback, without a process restart.
+    writeNetworkSettings(directory, { enabled: false, bind: "0.0.0.0" });
+    rmSync(blocked);
+    await vi.waitFor(
+      async () => {
+        expect(await lifecycle(state, "status")).toMatchObject({
+          pid: child.pid,
+          network: { enabled: false, bind: "0.0.0.0" },
+        });
+        expect(
+          (await lifecycle(state, "status")).network?.error,
+        ).toBeUndefined();
+      },
+      { timeout: 10_000 },
+    );
+    await lifecycle(state, "stop");
+    await exited;
+    expect(child.exitCode).toBe(0);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    await exited;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 45_000);

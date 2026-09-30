@@ -12,5 +12,7 @@ function Protect-MonoCodeDirectory([string] $Path) {
     $rule = New-Object Security.AccessControl.FileSystemAccessRule($principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
     $acl.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+  # Set-Acl rewrites every section, including the audit list, which needs
+  # SeSecurityPrivilege. The scheduled task's limited token does not have it.
+  $item.SetAccessControl($acl)
 }

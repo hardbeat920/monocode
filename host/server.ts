@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
+import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
@@ -53,8 +54,34 @@ import { setHarnessModels, type AgentModel } from "../src/features/sessions/mode
 import { MAX_WAIT_MS } from "./changes";
 import { isLoopback } from "./listener";
 import { version as hostVersion } from "../package.json";
+import {
+  resolveAntigravityBinary,
+  resolveClaudeBinary,
+  resolveCodexBinary,
+  resolveCursorBinary,
+  resolveFxBinary,
+  resolveGrokBinary,
+  resolveHermesBinary,
+  resolveOmpBinary,
+  resolveOpenCodeBinary,
+  resolvePiBinary,
+} from "../src/integrations/harness/core/child";
 
 const exec = promisify(execFile);
+// Providers also add models server-side, without a CLI update.
+const CATALOG_MAX_AGE_MS = 5 * 60_000;
+const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
+  codex: () => resolveCodexBinary(),
+  claude: () => resolveClaudeBinary(),
+  cursor: () => resolveCursorBinary(),
+  grok: () => resolveGrokBinary(),
+  opencode: () => resolveOpenCodeBinary(),
+  pi: () => resolvePiBinary(),
+  omp: () => resolveOmpBinary(),
+  fx: () => resolveFxBinary(),
+  hermes: () => resolveHermesBinary(),
+  antigravity: () => resolveAntigravityBinary(),
+};
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
@@ -98,6 +125,22 @@ export type HostServerOptions = {
   endpoints?: () => string[];
 };
 
+/** Identifies each installed provider CLI. An update changes its real path or
+ * modification time, which invalidates the catalog the old version reported. */
+async function providerBinaries(providers: RemoteProvider[]): Promise<string> {
+  const binaries = await Promise.all(
+    providers.map(async (provider) => {
+      try {
+        const file = await realpath((await resolveBinary[provider]()).path);
+        return `${file}:${(await stat(file)).mtimeMs}`;
+      } catch {
+        return "";
+      }
+    }),
+  );
+  return binaries.join("\n");
+}
+
 export function createHostServer(
   engine: HostEngine,
   providers: RemoteProvider[],
@@ -107,8 +150,9 @@ export function createHostServer(
   let pairingFailures: number[] = [];
   const pair = async (request: IncomingMessage, response: ServerResponse) => {
     const now = Date.now();
+    const local = isLoopback(request.socket.remoteAddress);
     pairingFailures = pairingFailures.filter((time) => now - time < 60_000);
-    if (pairingFailures.length >= MAX_PAIRING_FAILURES_PER_MINUTE) {
+    if (!local && pairingFailures.length >= MAX_PAIRING_FAILURES_PER_MINUTE) {
       response.writeHead(429).end(
         JSON.stringify({ error: "Too many pairing attempts. Wait a minute and try again." }),
       );
@@ -131,7 +175,7 @@ export function createHostServer(
         ? engine.store.redeemPairing(params.code, name)
         : undefined;
     if (!device) {
-      pairingFailures.push(now);
+      if (!local) pairingFailures.push(now);
       response.writeHead(401).end(
         JSON.stringify({
           error:
@@ -151,18 +195,27 @@ export function createHostServer(
       }),
     );
   };
-  const catalogs = new Map<string, Promise<HostModelCatalog>>();
+  const catalogs = new Map<
+    string,
+    { binaries: string; probed: number; catalog: Promise<HostModelCatalog> }
+  >();
   const transfers = new SyncTransfers();
   const workspace = new WorkspaceCommands(
     engine.store,
     (projectId, action) => engine.withIdleProject(projectId, action),
   );
-  const models = (projectId?: unknown) => {
+  const models = async (projectId?: unknown) => {
     const cwd =
       typeof projectId === "string"
         ? engine.store.project(projectId).cwd
         : homedir();
-    let catalog = catalogs.get(cwd);
+    const binaries = await providerBinaries(providers);
+    const cached = catalogs.get(cwd);
+    let catalog =
+      cached?.binaries === binaries &&
+      Date.now() - cached.probed < CATALOG_MAX_AGE_MS
+        ? cached.catalog
+        : undefined;
     if (!catalog) {
       catalog = (async () => {
         const result: HostModelCatalog = { models: {}, errors: {} };
@@ -183,17 +236,17 @@ export function createHostServer(
         (result) => {
           if (
             Object.keys(result.errors).length &&
-            catalogs.get(cwd) === catalog
+            catalogs.get(cwd)?.catalog === catalog
           )
             catalogs.delete(cwd);
           return result;
         },
         (error) => {
-          if (catalogs.get(cwd) === catalog) catalogs.delete(cwd);
+          if (catalogs.get(cwd)?.catalog === catalog) catalogs.delete(cwd);
           throw error;
         },
       );
-      catalogs.set(cwd, catalog);
+      catalogs.set(cwd, { binaries, probed: Date.now(), catalog });
     }
     return catalog;
   };

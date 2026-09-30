@@ -14,6 +14,7 @@ import {
   powershell,
   powershellArgs,
   powershellEnvironment,
+  powershellErrorText,
   psQuote,
   protectWindowsDirectory,
   runPowerShell,
@@ -81,6 +82,17 @@ it("uses an unlimited, unelevated per-user task and preserves literal paths", ()
       "utf16le",
     ),
   ).toBe("$x = '日本語'");
+});
+
+it("keeps only the text of a PowerShell error written as CLIXML", () => {
+  const privilege =
+    "The process does not possess the 'SeSecurityPrivilege' privilege which is required for this operation.";
+  expect(
+    powershellErrorText(
+      `#< CLIXML\r\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"><TN RefId="0"><T>System.Management.Automation.PSCustomObject</T></TN><MS><PR N="Record"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>${privilege}\r\n`,
+    ),
+  ).toBe(privilege);
+  expect(powershellErrorText("Access denied.\r\n")).toBe("Access denied.");
 });
 
 it.skipIf(process.platform !== "win32")(

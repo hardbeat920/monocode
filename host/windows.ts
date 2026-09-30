@@ -28,6 +28,16 @@ export const powershellEnvironment = (
     Object.entries(env).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"),
   );
 
+/** Windows PowerShell writes progress records to a redirected stderr as
+ * CLIXML. A message that starts with that marker also makes a parent
+ * PowerShell, such as the scheduled task's runner, try to parse it as XML. */
+export function powershellErrorText(stderr: string): string {
+  return stderr
+    .replace(/#< CLIXML\r?\n?/g, "")
+    .replace(/<Objs [\s\S]*?<\/Objs>/g, "")
+    .trim();
+}
+
 export async function runPowerShell(script: string): Promise<string> {
   // Send script contents through stdin, avoiding Windows' command-line limit
   // when the user's PATH or profile directory is long.
@@ -44,7 +54,7 @@ export async function runPowerShell(script: string): Promise<string> {
         maxBuffer: 128 * 1024,
       },
       (error, stdout, stderr) => {
-        if (error) reject(new Error(stderr.trim() || error.message));
+        if (error) reject(new Error(powershellErrorText(stderr) || error.message));
         else resolve(stdout);
       },
     );
