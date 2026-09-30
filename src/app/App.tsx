@@ -4241,6 +4241,7 @@ export default function App({
               pending.fromProviderSessionId,
               sessionWorkCwd(session),
               pending.fromProviderAccountId,
+              session.blocks,
             );
           }
         }
