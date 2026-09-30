@@ -48,6 +48,10 @@ if (action === '--version') console.log(${JSON.stringify(version)});
 else if (action === 'connect') {
   appendFileSync(process.env.MONOCODE_TEST_EVENTS, process.argv.slice(2).join(' ') + '\\n');
   console.error('progress');
+  if (process.env.MONOCODE_TEST_CONNECT_FAIL === '1') {
+    console.error('Injected connection failure');
+    process.exit(1);
+  }
   console.log(JSON.stringify({ link: 'monocode://pair?v=1', port: 3774 }));
 }
 else process.exit(1);
@@ -114,10 +118,11 @@ function Expand-Archive([string] $LiteralPath, [string] $DestinationPath) {
     base,
     downloads,
     events,
-    run: (forceUpgrade = false) =>
+    run: (forceUpgrade = false, failConnect = false) =>
       run(launch, {
         PROCESSOR_ARCHITECTURE: "AMD64",
         MONOCODE_TEST_EVENTS: events,
+        MONOCODE_TEST_CONNECT_FAIL: failConnect ? "1" : "0",
         MONOCODE_HOST_FORCE_UPGRADE: forceUpgrade ? "1" : "0",
       }),
   };
@@ -182,6 +187,16 @@ it.skipIf(!shell)(
     await expect(fixture.run()).rejects.toThrow("checksum mismatch");
     expect(existsSync(join(fixture.base, "runtime-path"))).toBe(false);
     expect(existsSync(fixture.events)).toBe(false);
+  },
+  90_000,
+);
+
+
+it.skipIf(!shell)(
+  "reports native connect errors without PowerShell progress records",
+  async () => {
+    const fixture = await install(false);
+    await expect(fixture.run(false, true)).rejects.toThrow("Injected connection failure");
   },
   90_000,
 );

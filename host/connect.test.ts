@@ -84,7 +84,9 @@ it(
       await run("stop").catch(() => undefined);
       for (let i = 0; i < 50 && existsSync(join(directory, "running.json")); i++)
         await new Promise((resolve) => setTimeout(resolve, 100));
-      rmSync(directory, { recursive: true, force: true });
+      // Windows can keep the runtime executable open briefly after the host
+      // removes running.json. Retry deletion while those handles close.
+      rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
     // Tests never install a login service; `--no-service` also leaves an
     // existing one alone.

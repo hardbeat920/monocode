@@ -109,22 +109,41 @@ try {
   # `connect` installs or reuses the scheduled task, turns on network access,
   # and prints one JSON line with a pairing link. It restarts an older running
   # host only with --yes, which the desktop passes for Update Host. Its
-  # progress goes to stderr; cmd.exe sends that to a file, because Windows
-  # PowerShell would turn each line into an error record.
+  # progress goes to stderr. Read both native streams directly so Windows
+  # PowerShell does not turn progress into error records or re-quote paths.
   $arguments = @('connect', '--json', '--port', "$hostPort")
   if ($forceUpgrade) { $arguments += '--yes' }
-  $log = [IO.Path]::GetTempFileName()
+  $start = New-Object Diagnostics.ProcessStartInfo
+  $start.FileName = $node
+  $start.Arguments = '"' + $entry + '" ' + ($arguments -join ' ')
+  $start.UseShellExecute = $false
+  $start.CreateNoWindow = $true
+  $start.RedirectStandardInput = $true
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+  $start.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $start
   try {
-    $output = & cmd.exe /d /s /c ('""' + $node + '" "' + $entry + '" ' + ($arguments -join ' ') + ' <nul 2>"' + $log + '""')
-    if ($LASTEXITCODE -ne 0) {
-      $lines = @(Get-Content -LiteralPath $log | Where-Object { $_.Trim() })
+    $null = $process.Start()
+    $process.StandardInput.Close()
+    # Drain both pipes concurrently, including when progress fills a pipe.
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $output = $stdout.GetAwaiter().GetResult()
+    $errorText = $stderr.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) {
+      $lines = @($errorText -split '\r?\n' | Where-Object { $_.Trim() })
       if (-not $lines.Count) { $lines = @('Host setup failed. Sign in to the Windows desktop as the SSH user and try again.') }
       throw (($lines | Select-Object -Last 4) -join "`n")
     }
-    $output | Select-Object -Last 1
+    ($output -split '\r?\n' | Where-Object { $_.Trim() }) | Select-Object -Last 1
   } finally {
-    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $log
+    $process.Dispose()
   }
+
 } finally {
   if ($null -ne $lock) { $lock.Dispose() }
   if ($temporary -and (Test-Path -LiteralPath $temporary)) { Remove-Item -LiteralPath $temporary -Recurse -Force }
