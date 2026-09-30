@@ -284,7 +284,9 @@ function upsertTaskList(
   const items = previousItems
     ? event.merge
       ? mergeTaskListItems(previousItems, event.items)
-      : preserveTaskListLabels(previousItems, event.items)
+      : event.authoritative
+        ? event.items
+        : preserveTaskListLabels(previousItems, event.items)
     : event.items;
 
   if (items.length === 0) {

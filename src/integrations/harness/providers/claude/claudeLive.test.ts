@@ -40,6 +40,7 @@ const {
   compactClaudeContext,
   respondClaudeApproval,
   respondClaudeQuestion,
+  restoreClaudeTaskLists,
   sendClaudeTurn,
   stopClaudeSession,
   __claudeTestReset,
@@ -463,6 +464,212 @@ describe("claude task tools", () => {
     expect(lists.at(-1)?.taskList?.items).toEqual([
       { id: "1", text: "Write tests", status: "completed" },
     ]);
+  });
+
+  /** A later turn that must launch a new Claude process. */
+  async function restartedTurn(
+    events: HarnessEvent[],
+    options: { intent?: TurnIntent; providerAccountId?: string } = {},
+  ) {
+    const spawnCount = spawned.length;
+    const userCount = parse().filter(
+      (message) => message.type === "user",
+    ).length;
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      intent: options.intent,
+      providerAccountId: options.providerAccountId,
+      text: "finish it",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => spawned.length === spawnCount + 1,
+      "replacement Claude process",
+    );
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    await waitFor(
+      () =>
+        parse().filter((message) => message.type === "user").length > userCount,
+      "follow-up prompt",
+    );
+    return { turn };
+  }
+
+  function lastTaskItems(events: HarnessEvent[]) {
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    return session.blocks.filter((block) => block.role === "tasks").at(-1)
+      ?.taskList?.items;
+  }
+
+  it("shows a TaskUpdate subject rename in the panel", async () => {
+    const { events, turn } = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests", description: "Cover the parser" },
+      "Task #1 created successfully: Write tests",
+    );
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", subject: "Write parser tests", status: "in_progress" },
+      "Updated task #1 subject, status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(lastTaskItems(events)).toEqual([
+      { id: "1", text: "Write parser tests", status: "in_progress" },
+    ]);
+  });
+
+  it("keeps earlier tasks across a plan to build restart", async () => {
+    const first = await startTurn("s1", { intent: "plan" });
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests" },
+      "Task #1 created successfully: Write tests",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    const events: HarnessEvent[] = [...first.events];
+    const { turn: second } = await restartedTurn(events, { intent: "build" });
+    expect(spawned[1]).toEqual(expect.arrayContaining(["--resume", "sess_1"]));
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+
+    expect(lastTaskItems(events)).toEqual([
+      { id: "1", text: "Write tests", status: "completed" },
+    ]);
+  });
+
+  it("keeps earlier tasks after the Claude child exits", async () => {
+    const first = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests" },
+      "Task #1 created successfully: Write tests",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    onExit!(1);
+
+    const events: HarnessEvent[] = [...first.events];
+    const { turn: second } = await restartedTurn(events);
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+
+    expect(lastTaskItems(events)).toEqual([
+      { id: "1", text: "Write tests", status: "completed" },
+    ]);
+  });
+
+  it("rehydrates tasks from the persisted panel after an app restart", async () => {
+    const first = await startTurn("s1");
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests" },
+      "Task #1 created successfully: Write tests",
+    );
+    emitTaskTool(
+      "toolu_c2",
+      "TaskCreate",
+      { subject: "Ship it" },
+      "Task #2 created successfully: Ship it",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    const restored = first.events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+
+    // App restart: all module state is gone; only the saved transcript remains.
+    await stopClaudeSession("s1");
+    __claudeTestReset();
+    bindClaudeSession("s1", "sess_1", "/repo");
+    restoreClaudeTaskLists(
+      "s1",
+      restored.blocks.flatMap((block) =>
+        block.taskList ? [block.taskList] : [],
+      ),
+    );
+
+    const events: HarnessEvent[] = [...first.events];
+    const { turn: second } = await restartedTurn(events);
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "sess_1"]),
+    );
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emitTaskTool(
+      "toolu_c3",
+      "TaskCreate",
+      { subject: "Tag release" },
+      "Task #3 created successfully: Tag release",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+
+    expect(lastTaskItems(events)).toEqual([
+      { id: "1", text: "Write tests", status: "completed" },
+      { id: "2", text: "Ship it", status: "pending" },
+      { id: "3", text: "Tag release", status: "pending" },
+    ]);
+  });
+
+  it("drops the task map when the conversation cannot resume", async () => {
+    const first = await startTurn("s1", { providerAccountId: "work" });
+    emitTaskTool(
+      "toolu_c1",
+      "TaskCreate",
+      { subject: "Write tests" },
+      "Task #1 created successfully: Write tests",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+
+    const events: HarnessEvent[] = [];
+    const { turn: second } = await restartedTurn(events, { providerAccountId: "home" });
+    expect(spawned.at(-1)).not.toContain("--resume");
+    emitTaskTool(
+      "toolu_u1",
+      "TaskUpdate",
+      { taskId: "1", status: "completed" },
+      "Updated task #1 status",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second;
+
+    expect(events.some((event) => event.type === "tasks.updated")).toBe(false);
   });
 });
 

@@ -334,6 +334,7 @@ export function bindResumedSessions(sessions: Session[]): void {
       session.providerSessionId,
       sessionWorkCwd(session),
       session.providerAccountId,
+      session.blocks,
     );
   }
 }

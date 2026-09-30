@@ -3,6 +3,7 @@ import { sameProviderAccountId } from "../../../../features/providers/model/prov
 import type {
   RuntimeMode,
   TaskListItem,
+  TaskListMeta,
 } from "../../../../features/sessions/model/session";
 import { loadClaudeHooks } from "../../../../features/settings/model/settings";
 import {
@@ -195,6 +196,8 @@ const resumeByThread = new Map<string, Resume>();
  * keeps its task ids, so later TaskUpdate calls must find earlier tasks.
  */
 const tasksByThread = new Map<string, Map<string, TaskListItem>>();
+/** Task-list block key for TaskCreate/TaskUpdate items. */
+const CLAUDE_TASKS_KEY = "claude-tasks";
 const cancelledThreads = new Set<string>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
@@ -381,6 +384,29 @@ export function bindClaudeSession(
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
+}
+
+/**
+ * Seed the task map from a restored session's persisted panel. After an app
+ * restart only the transcript survives, and a resumed conversation still
+ * refers to its earlier task ids.
+ */
+export function restoreClaudeTaskLists(
+  threadId: string,
+  lists: TaskListMeta[],
+): void {
+  if (!threadId || tasksByThread.has(threadId)) return;
+  let items: TaskListItem[] = [];
+  for (const entry of lists) {
+    if (entry.key === CLAUDE_TASKS_KEY) {
+      items = entry.items.filter((item) => item.id);
+    }
+  }
+  if (items.length === 0) return;
+  tasksByThread.set(
+    threadId,
+    new Map(items.map((item) => [item.id!, { ...item }])),
+  );
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
@@ -877,7 +903,9 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
     ) {
       live.onEvent({
         type: "tasks.updated",
-        key: "claude-tasks",
+        key: CLAUDE_TASKS_KEY,
+        // The map is the source of truth, so a TaskUpdate subject is a rename.
+        authoritative: true,
         items: [...live.claudeTasks.values()],
       });
     }
