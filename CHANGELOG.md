@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Claude model picker no longer offers a Context choice that does not change the window. Claude Code runs Fable 5 and 5.1, Opus 4.7 through 5.5, and Sonnet 5 and 5.5 at 1M from the bare model id, so choosing 200k still ran them at 1M. Those models now show no Context choice. Other models, such as Opus 4.6, offer 1M only when Claude Code lists their `[1m]` variant.
 - A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules.
 - Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr.
 - A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it.

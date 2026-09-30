@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLAUDE_MODEL_CATALOG,
   modelsForClaudeVersion,
   modelsFromClaudeListModels,
 } from "./claudeCatalog";
@@ -509,18 +510,58 @@ describe("list_models catalog", () => {
       false,
     );
 
+    // Fable 5 runs at 1M from its bare id, so its `[1m]` row adds no choice.
     const fable = models[1];
     expect(
-      fable?.settings?.find((setting) => setting.id === "context"),
-    ).toMatchObject({
-      value: "1m",
-    });
+      fable?.settings?.some((setting) => setting.id === "context"),
+    ).toBe(false);
 
     const opus = models[2];
     expect(opus?.settings?.some((setting) => setting.id === "fast")).toBe(true);
 
     const haiku = models[3];
     expect(haiku?.settings).toBeUndefined();
+  });
+
+  it("offers Context only where the model id changes the window", () => {
+    const models = modelsFromClaudeListModels([
+      // Native 1M models run at 1M from the bare id; `[1m]` changes nothing.
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", supportsEffort: true },
+      { value: "claude-fable-5-1[1m]", resolvedModel: "claude-fable-5-1", displayName: "Fable 5.1", supportsEffort: true },
+      { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5-5-20260601", displayName: "Sonnet 5.5", supportsEffort: true },
+      // Opus 4.6 runs at 200k and reaches 1M only through a listed variant.
+      { value: "claude-opus-4-6", resolvedModel: "claude-opus-4-6", displayName: "Opus 4.6", supportsEffort: true },
+      { value: "claude-sonnet-4-6[1m]", resolvedModel: "claude-sonnet-4-6", displayName: "Sonnet 4.6 (1M)", supportsEffort: true },
+    ]);
+    const context = (id: string) =>
+      models
+        .find((model) => model.nativeId === id)
+        ?.settings?.find((setting) => setting.id === "context");
+    expect(context("opus")).toBeUndefined();
+    expect(context("claude-fable-5-1")).toBeUndefined();
+    expect(context("sonnet")).toBeUndefined();
+    expect(context("claude-opus-4-6")).toBeUndefined();
+    expect(context("claude-sonnet-4-6")).toMatchObject({
+      value: "1m",
+      options: [{ value: "200k" }, { value: "1m" }],
+    });
+    // Each choice offered launches the window it names.
+    expect(resolveClaudeApiModelId("claude-sonnet-4-6", "1m")).toBe(
+      "claude-sonnet-4-6[1m]",
+    );
+    expect(resolveClaudeApiModelId("claude-sonnet-4-6", "200k")).toBe(
+      "claude-sonnet-4-6",
+    );
+  });
+
+  it("offers no Context choice in the built-in catalog", () => {
+    // Native 1M models have nothing to choose, and without a listed `[1m]`
+    // variant nothing shows that the account can use 1M on the others.
+    for (const model of CLAUDE_MODEL_CATALOG)
+      expect(
+        model.settings?.find((setting) => setting.id === "context"),
+        model.id,
+      ).toBeUndefined();
   });
 
   it("adds resolved versions to generic live-catalog alias labels", () => {
@@ -561,9 +602,10 @@ describe("list_models catalog", () => {
       id: "claude:opus",
       nativeId: "opus",
     });
+    // Opus 5.5 runs at 1M from its bare id, so its `[1m]` alias adds no choice.
     expect(
-      models[0]?.settings?.find((setting) => setting.id === "context")?.value,
-    ).toBe("1m");
+      models[0]?.settings?.find((setting) => setting.id === "context"),
+    ).toBeUndefined();
   });
 
   it("launches a versioned short value with the claude- prefix", () => {
