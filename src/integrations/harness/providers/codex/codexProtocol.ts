@@ -237,23 +237,21 @@ export function stringField(
 }
 
 /**
- * Where a Codex item records the commands it parsed out of a script. The
- * rollout files on disk spell it `parsed_cmd`; the live app-server protocol
- * uses `commandActions`. `codex_command_text` in src-tauri/src/fs.rs reads the
- * same keys in the same order, so an item carrying two spellings recovers the
- * same command on the live and the recovery path.
+ * Where a Codex item records the commands it parsed out of a script. The live
+ * app-server protocol spells it `commandActions`; older rollout files on disk
+ * used `parsed_cmd`/`parsedCmd`, and an item replayed from one still carries
+ * those, so every spelling is read.
  */
-const PARSED_COMMAND_KEYS = ["parsed_cmd", "commandActions", "parsedCmd"] as const;
+const PARSED_COMMAND_KEYS = ["commandActions", "parsed_cmd", "parsedCmd"] as const;
 
-/** The action's own text. `cmd` is the rollout spelling, `command` the protocol's. */
+/** The action's own text. `command` is the protocol's, `cmd` the rollout files'. */
 const PARSED_COMMAND_FIELDS = ["command", "cmd"] as const;
 
 /**
- * The command a Codex `commandExecution` item ran. The live app-server sends a
- * plain string; only the rollout files on disk record the shell's argv
- * (`["/bin/zsh","-lc","rg --files"]`), which `stringField` silently drops. Both
- * are handled so the recovery path and the live one agree, with the parsed
- * actions as the last fallback.
+ * The command a Codex `commandExecution` item ran. The app-server sends a plain
+ * string, but a shell launcher can also reach us as argv
+ * (`["/bin/zsh","-lc","rg --files"]`), which `stringField` silently drops, so
+ * the argv shape is unwrapped too. The parsed actions are the last fallback.
  */
 export function codexCommandText(
   item: Record<string, unknown> | null | undefined,

@@ -60,10 +60,9 @@ describe("Claude Shell row recovery", () => {
 });
 
 describe("Codex Shell row recovery", () => {
-  it("prefers the command already saved on the row over the rollout file", () => {
-    // The command Codex sent with the item is already on the row. Reading it
-    // back means whatever Codex redacted stays redacted, and no secret is
-    // re-read off disk into the transcript store.
+  it("relabels from the command saved on the row, keeping redactions", () => {
+    // The command Codex sent with the item is already on the row as its preview
+    // title. Reading it back means whatever Codex redacted stays redacted.
     const redacted = "/usr/bin/zsh -lc 'curl -H \"token=[redacted]\" example'";
     const blocks: Block[] = [
       {
@@ -78,17 +77,14 @@ describe("Codex Shell row recovery", () => {
         },
       },
     ];
-    const repaired = backfillCodexShellCommands(blocks, {
-      // A rollout holding the unredacted form must not win.
-      "exec-1": "/usr/bin/zsh -lc 'curl -H \"token=sk-live-realsecret\" example'",
-    });
+    const repaired = backfillCodexShellCommands(blocks);
     expect(repaired[0].text).not.toBe("Shell");
     expect(repaired[0].tool?.preview?.title).toContain("[redacted]");
-    expect(repaired[0].tool?.preview?.title).not.toContain("sk-live-realsecret");
   });
 
-  it("falls back to the rollout file when the row saved no usable command", () => {
-    // A weak preview title names no command, so the rollout is the only source.
+  it("leaves a row with no usable saved command as it is", () => {
+    // A weak preview title names no command, so there is nothing to relabel
+    // from and the row keeps its placeholder.
     const blocks: Block[] = [
       {
         id: "shell",
@@ -102,13 +98,10 @@ describe("Codex Shell row recovery", () => {
         },
       },
     ];
-    const repaired = backfillCodexShellCommands(blocks, {
-      "exec-1": "rg --files -g AGENTS.md -g '!node_modules'",
-    });
-    expect(repaired[0].text).toBe("Find files");
+    expect(backfillCodexShellCommands(blocks)).toBe(blocks);
   });
 
-  it("labels placeholder rows with the recovered command and rebuilds the preview", () => {
+  it("labels placeholder rows with the saved command and rebuilds the preview", () => {
     const blocks: Block[] = [
       {
         id: "shell",
@@ -120,6 +113,10 @@ describe("Codex Shell row recovery", () => {
           kind: "execute",
           status: "failed",
           detail: "exit 1",
+          preview: {
+            kind: "shell",
+            title: "rg --files -g AGENTS.md -g '!node_modules'",
+          },
         },
       },
       {
@@ -129,10 +126,7 @@ describe("Codex Shell row recovery", () => {
         tool: { callId: "exec-2", kind: "read" },
       },
     ];
-    const repaired = backfillCodexShellCommands(blocks, {
-      "exec-1": "rg --files -g AGENTS.md -g '!node_modules'",
-      "exec-2": "ignore me",
-    });
+    const repaired = backfillCodexShellCommands(blocks);
     expect(repaired[0]).toMatchObject({
       text: "Find files",
       tool: {
@@ -152,16 +146,19 @@ describe("Codex Shell row recovery", () => {
         id: "shell",
         role: "tool",
         text: "Shell",
-        tool: { callId: "exec-3", title: "Shell", kind: "execute" },
+        tool: {
+          callId: "exec-3",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "git commit -m 'Fix shell labels'" },
+        },
       },
     ];
-    const repaired = backfillCodexShellCommands(blocks, {
-      "exec-3": "git commit -m 'Fix shell labels'",
-    });
+    const repaired = backfillCodexShellCommands(blocks);
     expect(repaired[0].text).toBe("git commit -m 'Fix shell labels'");
   });
 
-  // A row repaired from the rollout file has to read the same as one rendered
+  // A row repaired from the saved preview has to read the same as one rendered
   // live, or reopening a session would relabel work the user already saw.
   it("labels a recovered row exactly as the live item does", () => {
     // Captured from `codex app-server`: the reported session's middle row was

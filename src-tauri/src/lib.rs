@@ -411,7 +411,6 @@ pub fn run() {
             fs::omp_session_interjections,
             fs::omp_active_assistant_texts,
             fs::claude_shell_commands,
-            fs::codex_shell_commands,
             fs::write_text_file,
             skills::list_skills,
             search::search_project,

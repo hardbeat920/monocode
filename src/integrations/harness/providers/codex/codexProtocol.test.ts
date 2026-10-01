@@ -379,7 +379,7 @@ describe("mapCodexNotification", () => {
     });
   });
 
-  it("recovers the command from the argv shape rollout files record", () => {
+  it("recovers the command from the argv a shell launcher sends", () => {
     const mapped = mapCodexNotification("item/started", {
       item: {
         id: "cmd_arr",
@@ -467,7 +467,7 @@ describe("mapCodexNotification", () => {
     expect((mapped.events[0] as { title: string }).title).toBe("gh auth status");
   });
 
-  it("falls back to the rollout spelling of the parsed actions", () => {
+  it("falls back to the older snake_case spelling of the parsed actions", () => {
     expect(
       codexCommandText({ parsed_cmd: [{ type: "unknown", cmd: "gh auth status" }] }),
     ).toBe("gh auth status");

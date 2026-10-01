@@ -10,7 +10,6 @@ import type { ContextUsage } from "../model/contextUsage";
 import { isRemoteProjectPath, normalizeProjectPath } from "../../projects/model/recents";
 import {
   claudeShellCommands,
-  codexShellCommands,
   ompActiveAssistantTexts,
   ompSessionInterjections,
 } from "../../../platform/tauri/fs";
@@ -384,32 +383,15 @@ export async function getSession(sessionId: string): Promise<Session | null> {
     }
   }
   if (session.harness === "codex") {
-    // Relabel from the command already saved on the row. Only a row that never
-    // got one needs the rollout file, so this pass reads no disk at all for a
-    // session Codex labelled itself.
-    const saved = backfillCodexShellCommands(session.blocks);
-    if (saved !== session.blocks) {
-      session.blocks = saved;
+    // Relabel from the command already saved on the row. Codex sends it with
+    // the item and `shellCommandPreview` stores it as the preview title, so
+    // this needs no disk read at all.
+    const blocks = backfillCodexShellCommands(session.blocks);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
       // A failed write must not cost the reader the session. The repair stays
       // in memory and the next load retries it.
       await upsertSession(session).catch(() => undefined);
-    }
-    const missing = unrecoverableShellPlaceholderIds(session.blocks);
-    if (session.providerSessionId && missing.length) {
-      try {
-        const commands = await codexShellCommands(
-          session.providerSessionId,
-          session.providerAccountId,
-          missing,
-        );
-        const blocks = backfillCodexShellCommands(session.blocks, commands);
-        if (blocks !== session.blocks) {
-          session.blocks = blocks;
-          await upsertSession(session);
-        }
-      } catch {
-        // A missing or unreadable Codex rollout must not block the session.
-      }
     }
   }
   if (session.harness !== "omp" || !session.providerSessionId) {
@@ -477,32 +459,16 @@ function shellPlaceholderIds(blocks: Block[]): string[] {
 }
 
 /**
- * Placeholder rows whose command is not on the row itself, so the rollout file
- * is the only place left to read it. A weak preview title ("Shell", "Bash") is
- * no better than none.
- */
-function unrecoverableShellPlaceholderIds(blocks: Block[]): string[] {
-  return shellPlaceholderIds(blocks).filter((callId) => {
-    const block = blocks.find((candidate) => candidate.tool?.callId === callId);
-    const saved = block?.tool?.preview?.title?.trim();
-    return !saved || isWeakToolTitle(saved);
-  });
-}
-
-/**
  * Relabel exec rows that were saved without their command.
  *
  * The command is already on the row: Codex sends it with the item, and
  * `shellCommandPreview` stores it as the preview title. Reading it back from
  * there keeps whatever Codex chose to show the user — including anything it
- * redacted — and never re-reads a secret off disk into the transcript store.
- * Disk recovery stays the last resort for a row saved without a preview, where
- * the command is genuinely gone from the session.
+ * redacted — and never re-reads a secret off disk into the transcript store. A
+ * row saved without a usable preview has no command left to recover, so it keeps
+ * its placeholder label.
  */
-export function backfillCodexShellCommands(
-  blocks: Block[],
-  commands: Record<string, string> = {},
-): Block[] {
+export function backfillCodexShellCommands(blocks: Block[]): Block[] {
   let changed = false;
   const repaired = blocks.map((block) => {
     if (
@@ -512,18 +478,10 @@ export function backfillCodexShellCommands(
     ) {
       return block;
     }
-    const callId = block.tool.callId;
     const saved = block.tool.preview?.title?.trim();
-    const recovered = callId ? commands[callId] : undefined;
-    const command =
-      saved && !isWeakToolTitle(saved)
-        ? saved
-        : typeof recovered === "string" && recovered.trim()
-          ? recovered.trim()
-          : undefined;
-    if (!command) return block;
+    if (!saved || isWeakToolTitle(saved)) return block;
     changed = true;
-    const { title, preview } = codexCommandPresentation({}, command);
+    const { title, preview } = codexCommandPresentation({}, saved);
     return {
       ...block,
       text: title,

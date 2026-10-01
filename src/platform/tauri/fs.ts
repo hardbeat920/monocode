@@ -89,18 +89,6 @@ export function claudeShellCommands(
   });
 }
 
-export function codexShellCommands(
-  providerSessionId: string,
-  providerAccountId: string | undefined,
-  toolIds: string[],
-): Promise<Record<string, string>> {
-  return invoke<Record<string, string>>("codex_shell_commands", {
-    providerSessionId,
-    providerAccountId,
-    toolIds,
-  });
-}
-
 export type FsEntry = {
   name: string;
   path: string;
