@@ -82,11 +82,12 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 14] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
+    "sessions.stop",
     "sessions.draft",
     "sessions.start",
     "worktrees.list",
@@ -104,6 +105,8 @@ Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
   sessions.list  {}  Project sessions with IDs, busy status and hasDraft.
+                  Sessions you started or messaged also show tracked:
+                  status, generation, held and pending updates.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
                   reasoning are omitted. Omit before for the newest page;
@@ -112,6 +115,9 @@ Actions:
   sessions.send  {"sessionId":"...","prompt":"..."}
                   Submit a follow-up to an idle session in this project.
                   A busy session is rejected. Reuse --request-id on retries.
+  sessions.stop  {"sessionId":"..."}
+                  Stop a session you started or messaged. Returns stopped:false
+                  when it was already idle. No session update follows.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
@@ -153,6 +159,11 @@ Actions:
                   to derive it from the body. Use {"id":"...","body":"..."}
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
+
+Sessions you start or message report back: when one finishes, fails, is
+stopped by the user, or waits for the user's approval or answer, MonoCode
+adds a session update turn to this thread. You never need to poll; use
+sessions.read for the full reply.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
@@ -525,7 +536,12 @@ mod tests {
             parse_args_for(&args(&["notes.list"]), true),
             Ok(Parsed::Call(_, _, _))
         ));
-        for action in ["sessions.read", "sessions.send", "sessions.draft"] {
+        for action in [
+            "sessions.read",
+            "sessions.send",
+            "sessions.stop",
+            "sessions.draft",
+        ] {
             assert!(matches!(
                 parse_args_for(&args(&[action, "--json", r#"{"sessionId":"other"}"#]), true),
                 Ok(Parsed::Call(_, _, _))
@@ -533,6 +549,7 @@ mod tests {
             assert!(app_help().contains(action));
         }
         assert!(app_help().contains("draft:true"));
+        assert!(app_help().contains("You never need to poll"));
         assert!(app_help().contains("inherit this"));
         assert!(parse_args_for(&args(&["delegate"]), true).is_err());
         assert!(

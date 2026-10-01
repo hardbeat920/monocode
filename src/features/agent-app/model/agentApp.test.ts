@@ -93,6 +93,8 @@ function fixture() {
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
+    stop: vi.fn(async () => true),
+    tracked: vi.fn(() => []),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     worktrees: vi.fn(async () => ({
       worktrees: [
@@ -129,6 +131,88 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("not found in this project");
+  });
+
+  it("stops another session through the host with the caller as parent", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "stop-self",
+        "sessions.stop",
+        { sessionId: "lead" },
+        host,
+      ),
+    ).rejects.toThrow("Use the Stop button to stop the current session");
+    expect(host.stop).not.toHaveBeenCalled();
+
+    expect(
+      await handleAgentApp(
+        source,
+        "stop-1",
+        "sessions.stop",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", stopped: true });
+    expect(host.stop).toHaveBeenCalledWith("lead", "other");
+
+    host.stop = vi.fn(async () => false);
+    expect(
+      await handleAgentApp(
+        source,
+        "stop-2",
+        "sessions.stop",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", stopped: false });
+  });
+
+  it("lists tracking only for sessions the caller started or messaged", async () => {
+    const { source, host } = fixture();
+    host.sessions = vi.fn(async () => [
+      {
+        id: "other",
+        title: "Other",
+        harness: "codex" as const,
+        model: "codex:test",
+        busy: true,
+        hasDraft: false,
+      },
+      {
+        id: "unrelated",
+        title: "Unrelated",
+        harness: "codex" as const,
+        model: "codex:test",
+        busy: false,
+        hasDraft: false,
+      },
+    ]);
+    host.tracked = vi.fn(() => [
+      {
+        childId: "other",
+        generation: 2,
+        status: "running" as const,
+        held: false,
+        pending: 1,
+      },
+    ]);
+    const result = (await handleAgentApp(
+      source,
+      "list",
+      "sessions.list",
+      {},
+      host,
+    )) as { sessions: { id: string; tracked?: unknown }[] };
+    expect(host.tracked).toHaveBeenCalledWith("lead");
+    expect(result.sessions[0].tracked).toEqual({
+      generation: 2,
+      status: "running",
+      held: false,
+      pending: 1,
+    });
+    expect(result.sessions[1]).not.toHaveProperty("tracked");
   });
 
   it("sends a follow-up only to a listed idle session", async () => {

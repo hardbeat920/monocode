@@ -306,6 +306,30 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("persists a session update's delivery ID only on its user turn", () => {
+    // Restart reconciliation reads it to tell a delivered update from a lost one.
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      {
+        id: "update",
+        role: "user",
+        text: "MonoCode session updates",
+        sessionUpdate: { deliveryId: "0b9d6c1e-8f61-4a7c-9a54-2f1f4d0e7c11" },
+      },
+      {
+        id: "reply",
+        role: "assistant",
+        text: "Noted",
+        sessionUpdate: { deliveryId: "0b9d6c1e-8f61-4a7c-9a54-2f1f4d0e7c11" },
+      },
+    ];
+    const [update, reply] = sanitizeSessionForPersist(session).blocks;
+    expect(update.sessionUpdate).toEqual({
+      deliveryId: "0b9d6c1e-8f61-4a7c-9a54-2f1f4d0e7c11",
+    });
+    expect(reply).not.toHaveProperty("sessionUpdate");
+  });
+
   it("persists the request ID on an unsent agent-created draft", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [

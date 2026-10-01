@@ -32,6 +32,7 @@ import { pathKey } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage } from "./sessionConversation";
+import type { SessionLinkView } from "./sessionLinks";
 
 export type AppSessionListing = {
   id: string;
@@ -40,6 +41,8 @@ export type AppSessionListing = {
   model: string;
   busy: boolean;
   hasDraft: boolean;
+  /** Present when the caller started or messaged this session. */
+  tracked?: Omit<SessionLinkView, "childId">;
 };
 
 export type AppSessionPlacement = {
@@ -62,6 +65,9 @@ export type AgentAppHost = {
     requestId: string,
     parentId?: string,
   ): Promise<{ alreadySubmitted: boolean }>;
+  /** Stop a session the caller started or messaged; true when it was running. */
+  stop(parentId: string, childId: string): Promise<boolean>;
+  tracked(parentId: string): SessionLinkView[];
   draft(
     id: string,
     prompt: string,
@@ -84,6 +90,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.list", []],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
+  ["sessions.stop", ["sessionId"]],
   ["sessions.draft", ["sessionId", "prompt"]],
   [
     "sessions.start",
@@ -309,11 +316,19 @@ export async function handleAgentApp(
           })),
         })),
       };
-    case "sessions.list":
+    case "sessions.list": {
+      const cwd = requireProject(source);
+      const tracked = new Map(
+        host.tracked(source.id).map(({ childId, ...view }) => [childId, view]),
+      );
       return {
-        cwd: requireProject(source),
-        sessions: await host.sessions(source.cwd),
+        cwd,
+        sessions: (await host.sessions(source.cwd)).map((session) => {
+          const view = tracked.get(session.id);
+          return view ? { ...session, tracked: view } : session;
+        }),
       };
+    }
     case "sessions.read": {
       const id = requiredString(input.sessionId, "sessionId", 256);
       const target = await projectSession(source, id, host);
@@ -340,6 +355,12 @@ export async function handleAgentApp(
         source.id,
       );
       return { sessionId: id, submitted: true, ...result };
+    }
+    case "sessions.stop": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Use the Stop button to stop the current session");
+      return { sessionId: id, stopped: await host.stop(source.id, id) };
     }
     case "sessions.draft": {
       const id = requiredString(input.sessionId, "sessionId", 256);

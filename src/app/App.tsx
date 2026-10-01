@@ -4669,7 +4669,16 @@ function Workspace({
               terminals.length === 0 || (await confirmCloseTerminals(terminals))
             );
           },
-          stop: stopSessionForRemoval,
+          stop: async (id) => {
+            // Runs only after every confirmation passed. Recording `removed`
+            // first moves the link past the turn this stop cancels.
+            if (mode === "delete") {
+              if (sessionLinks.parentOf(id))
+                await sessionLinks.removed(id).catch(console.warn);
+              await sessionLinks.parentRemoved(id).catch(console.warn);
+            }
+            return stopSessionForRemoval(id);
+          },
         });
         const removed = await remover.remove(sessionId);
         if (removed && deleteWorktreePath && seed) {
@@ -6891,7 +6900,7 @@ function Workspace({
           );
           if (operatorCommand.matched) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
+            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it. Sessions you start or message report back: when one finishes, fails, is stopped by the user, or waits for the user's approval or answer, MonoCode adds a session update turn to this thread. You never need to poll; use sessions.read for the full reply. Updates wait while this thread is busy, and while its tab is closed they arrive when it is reopened. Use sessions.stop to stop a session you started or messaged; it sends no update.\n</monocode_app>`;
           }
           await sendTurn(sendText);
           acceptEditedResend();
@@ -8596,6 +8605,8 @@ function Workspace({
     },
     [flushHarnessEvents],
   );
+  const onStopRef = useRef(onStop);
+  onStopRef.current = onStop;
 
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
@@ -9128,7 +9139,10 @@ function Workspace({
     sessionLinksBooted.current = true;
     void sessionLinks
       .hydrate({ boot: true })
-      .then(() => setSessionLinksHydrated(true));
+      .catch((error: unknown) =>
+        console.warn("Could not load session links", error),
+      )
+      .finally(() => setSessionLinksHydrated(true));
   }, []);
   const sessionLinksReconciled = useRef(false);
   useEffect(() => {
@@ -9283,7 +9297,7 @@ function Workspace({
                 ? target
                 : null;
             },
-            send: async (id, prompt, requestId) => {
+            send: async (id, prompt, requestId, parentId) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -9310,13 +9324,35 @@ function Workspace({
                 throw new Error(
                   "Session already has a draft; send or remove it first",
                 );
-              const accepted = await submitSessionRef.current(id, prompt, [], {
-                appRequestId: requestId,
-              });
+              // Link right before the turn exists; a refused adoption sends nothing.
+              const rollback = parentId
+                ? await sessionLinks.link(parentId, id, requestId)
+                : undefined;
+              let accepted = false;
+              try {
+                accepted = await submitSessionRef.current(id, prompt, [], {
+                  appRequestId: requestId,
+                });
+              } finally {
+                if (!accepted) await rollback?.().catch(console.warn);
+              }
               if (!accepted)
                 throw new Error("Session could not accept the follow-up");
               return { alreadySubmitted: false };
             },
+            stop: async (parentId, childId) => {
+              if (sessionLinks.parentOf(childId) !== parentId)
+                throw new Error(
+                  `Session ${childId} was not started or messaged by this session`,
+                );
+              await sessionLinks.stop(childId);
+              const busy = !!sessionsRef.current.find(
+                (session) => session.id === childId,
+              )?.busy;
+              if (busy) onStopRef.current(childId);
+              return busy;
+            },
+            tracked: (parentId) => sessionLinks.childrenOf(parentId),
             draft: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
