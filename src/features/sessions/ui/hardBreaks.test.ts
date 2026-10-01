@@ -47,6 +47,35 @@ describe("AgentMarkdown hard breaks", () => {
     );
   });
 
+  // The newline ends the text node that opens the line, so the break it holds
+  // belongs to the line the next element begins.
+  it.each([
+    ["emphasis", "*second*", "<em>"],
+    ["inline code", "`second`", "<code"],
+    ["a link", "[second](https://x.com)", "<a "],
+  ])(
+    "keeps the line %s opens after the break that precedes it",
+    (_what, text, opener) => {
+      const markup = render(`first\n${text}`);
+      expect(markup).toContain(`<p>first<br/>${opener}`);
+      expect(markup).toMatch(/<p>first<br\/>.*second/);
+    },
+  );
+
+  it("keeps a line an inline element opens inside a blockquote", () => {
+    expect(render("> first\n> *second*")).toContain(
+      "<p>first<br/><em>second</em></p>",
+    );
+  });
+
+  // The line after a raw HTML <br> is not a continuation of the one before
+  // it, so only the newline it itself holds is dropped.
+  it("keeps the line after a raw <br> that holds no newline of its own", () => {
+    expect(render("first<br>second\nthird")).toContain(
+      "<p>first<br/>second<br/>third</p>",
+    );
+  });
+
   it("breaks the wrapped lines of a list item", () => {
     expect(render("- first item\n  continued")).toContain(
       ">first item<br/>continued</li>",

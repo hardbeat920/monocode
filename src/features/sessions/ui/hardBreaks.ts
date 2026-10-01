@@ -97,7 +97,13 @@ function walk(
         parent.children[index + 1],
       )
     ) {
-      children.push(...splitLines(child.value, followsBreak));
+      children.push(
+        ...splitLines(
+          child.value,
+          followsBreak,
+          isInline(parent.children[index + 1]),
+        ),
+      );
     } else {
       if (child.type === "element" && !LITERAL_TAGS.has(child.tagName)) {
         walk(child, inside, false);
@@ -136,17 +142,31 @@ function isInline(node: Root["children"][number] | undefined): boolean {
 /**
  * One line's worth of text, in order: the text, then a `<br>` before every
  * line after it. Whitespace around a break is dropped so the break adds no
- * space of its own, and blank lines at the end are left without a break they
- * have nothing to separate.
+ * space of its own.
+ *
+ * A blank line at either end is kept only when it is a real break: the leading
+ * one when it follows a `<br>` (which already broke there), the trailing one
+ * when more prose follows it. Dropping either one unconditionally loses a line,
+ * because a text node can span lines and be followed by an inline element, or
+ * follow a `<br>` that came from raw HTML rather than from Markdown.
  */
-function splitLines(value: string, afterBreak: boolean): ElementContent[] {
+function splitLines(
+  value: string,
+  afterBreak: boolean,
+  followedByInline: boolean,
+): ElementContent[] {
   if (!/\S/.test(value)) {
     // Only a newline between two inline nodes: it is the whole break.
     return afterBreak ? [] : [lineBreak()];
   }
   const lines = value.split("\n");
-  if (afterBreak) lines.shift();
-  while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+  if (afterBreak && lines[0].trim() === "") lines.shift();
+  // A trailing newline ends the block's last line, so it separates nothing.
+  while (
+    !followedByInline &&
+    lines.length > 0 &&
+    lines[lines.length - 1].trim() === ""
+  ) {
     lines.pop();
   }
 
