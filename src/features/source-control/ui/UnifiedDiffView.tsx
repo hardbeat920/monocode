@@ -162,10 +162,17 @@ export function UnifiedDiffView({
     scrollToFocus();
   }, [scrollToFocus]);
 
+  // Only a new selection starts following.
   useEffect(() => {
     followFocusRef.current = resolvedFocusId ?? null;
     revealFocus();
-  }, [resolvedFocusId, focusRequest, fileKey, revealFocus]);
+  }, [resolvedFocusId, focusRequest, revealFocus]);
+
+  // A refreshed file list re-anchors a file still being followed, but never
+  // resumes one the reader already scrolled away from.
+  useEffect(() => {
+    if (followFocusRef.current) revealFocus();
+  }, [fileKey, revealFocus]);
 
   const contentObserverRef = useRef<ResizeObserver | null>(null);
   const bindContent = useCallback(
