@@ -17,6 +17,7 @@ import {
   parseLinearWorkItemUrl,
   relatedSessionsForInboxItem,
   resolveLinkedWorkItem,
+  ticketKeysForTeams,
   ticketKeysInMessage,
 } from "./sessionWorkItem";
 
@@ -232,6 +233,9 @@ describe("session work items", () => {
   it("resolves a ticket key against Linear before trusting the title model", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") {
+        return [{ id: "team-1", key: "SW", name: "Software" }];
+      }
       if (command === "linear_issue_lookup") {
         expect(args).toEqual({ key: "SW-29" });
         return {
@@ -267,6 +271,7 @@ describe("session work items", () => {
   it("does not turn a ticket key into a GitHub issue when Linear cannot resolve it", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") throw new Error("offline");
       if (command === "linear_issue_lookup") throw new Error("not found");
       if (command === "git_github_repo") return "openai/codex";
       throw new Error(`Unexpected command: ${String(command)}`);
@@ -299,6 +304,46 @@ describe("session work items", () => {
       "linear_issue_lookup",
       expect.anything(),
     );
+  });
+
+  it("only looks up ticket keys whose team Linear knows", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") {
+        return [{ id: "team-1", key: "sw", name: "Software" }];
+      }
+      if (command === "linear_issue_lookup") {
+        expect(args).toEqual({ key: "SW-29" });
+        return {
+          id: "issue-uuid",
+          identifier: "SW-29",
+          number: 29,
+          repo: "SW",
+          url: "https://linear.app/acme/issue/SW-29",
+        };
+      }
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    const linked = await resolveLinkedWorkItem(
+      "Hash with SHA-256 then do SW-29",
+      "/tmp/codex",
+      null,
+    );
+    expect(linked?.kind).toBe("linear");
+    expect(invoke).not.toHaveBeenCalledWith("linear_issue_lookup", {
+      key: "SHA-256",
+    });
+  });
+
+  it("keeps every ticket key when the team list is unavailable", () => {
+    expect(ticketKeysForTeams(["SHA-256", "SW-29"], null)).toEqual([
+      "SHA-256",
+      "SW-29",
+    ]);
+    expect(ticketKeysForTeams(["SHA-256", "SW-29"], new Set(["SW"]))).toEqual([
+      "SW-29",
+    ]);
   });
 
   it("lists distinct ticket keys in order of appearance", () => {

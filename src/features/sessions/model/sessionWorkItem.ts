@@ -5,7 +5,11 @@ import {
   type InboxItem,
   type GithubTaskKind,
 } from "../../inbox/model/githubTasks";
-import { linearConnected, lookupLinearIssue } from "../../inbox/model/linear";
+import {
+  linearConnected,
+  linearTeamKeys,
+  lookupLinearIssue,
+} from "../../inbox/model/linear";
 import type {
   GithubLinkedWorkItem,
   LinearLinkedWorkItem,
@@ -101,6 +105,15 @@ export function linkedWorkItemFromLinearIssue(issue: {
   };
 }
 
+/** Keep the keys whose team prefix Linear knows. A missing team list keeps every key. */
+export function ticketKeysForTeams(
+  keys: readonly string[],
+  teamKeys: ReadonlySet<string> | null,
+): string[] {
+  if (!teamKeys) return [...keys];
+  return keys.filter((key) => teamKeys.has(key.slice(0, key.indexOf("-"))));
+}
+
 /** Confirm ticket keys against Linear; the first one that exists wins. */
 async function resolveLinearTicketKey(
   keys: readonly string[],
@@ -111,7 +124,8 @@ async function resolveLinearTicketKey(
   } catch {
     return null;
   }
-  for (const key of keys.slice(0, MAX_TICKET_LOOKUPS)) {
+  const candidates = ticketKeysForTeams(keys, await linearTeamKeys());
+  for (const key of candidates.slice(0, MAX_TICKET_LOOKUPS)) {
     try {
       const linked = linkedWorkItemFromLinearIssue(
         await lookupLinearIssue(key),

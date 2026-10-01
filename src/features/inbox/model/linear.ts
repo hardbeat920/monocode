@@ -86,6 +86,34 @@ export function listLinearTeams(): Promise<LinearTeam[]> {
   return invoke<LinearTeam[]>("linear_list_teams");
 }
 
+const TEAM_KEYS_TTL_MS = 5 * 60_000;
+let teamKeysCache: { keys: Set<string>; fetchedAt: number } | null = null;
+
+export function clearLinearTeamKeysCache() {
+  teamKeysCache = null;
+}
+
+/** Upper-case team keys such as `ENG`, cached briefly. `null` when the list is unavailable. */
+export async function linearTeamKeys(): Promise<Set<string> | null> {
+  if (
+    teamKeysCache &&
+    Date.now() - teamKeysCache.fetchedAt < TEAM_KEYS_TTL_MS
+  ) {
+    return teamKeysCache.keys;
+  }
+  try {
+    const keys = new Set(
+      (await listLinearTeams())
+        .map((team) => team.key.trim().toUpperCase())
+        .filter(Boolean),
+    );
+    teamKeysCache = { keys, fetchedAt: Date.now() };
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
 /** `null` means do not filter by team. `[]` means every known team is hidden. */
 export function linearTeamIdsForFetch(
   teams: readonly LinearTeam[],
@@ -122,6 +150,7 @@ function issueLookupKey(key: string): string {
 
 export function clearLinearIssueCache() {
   issueByKey.clear();
+  clearLinearTeamKeysCache();
 }
 
 /** `key` is a Linear issue UUID or a `TEAM-123` identifier. */
