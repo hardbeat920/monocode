@@ -148,6 +148,15 @@ it("remeasures prompt corners when a pooled tab is shown at a new width", () => 
   show(false);
   expect(bubble().classList).toContain("rounded-xl");
 
+  // Reattached in a narrower pane, so the same prompt wraps onto two lines.
+  textWidth = 260;
+  textHeight = 40;
+  show(true);
+  expect(bubble().classList).toContain("rounded-xl");
+
+  textWidth = 0;
+  textHeight = 0;
+  show(false);
   textWidth = 260;
   textHeight = 20;
   show(true);
