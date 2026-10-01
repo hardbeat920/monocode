@@ -47,6 +47,8 @@ const commits: GitHistoryCommit[] = [
 
 let container: HTMLDivElement;
 let root: Root;
+/** Controls the tests place outside the component, removed after each test. */
+let trailing: HTMLElement[] = [];
 
 function historyRows(): HTMLButtonElement[] {
   return Array.from(
@@ -118,6 +120,27 @@ async function openCardOnHover(row: HTMLElement) {
   });
 }
 
+/** Move the pointer off a row or card, then let the close delay elapse. */
+function pointerLeave(target: HTMLElement) {
+  vi.useFakeTimers();
+  act(() => {
+    target.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+  });
+  act(() => {
+    vi.advanceTimersByTime(300);
+  });
+  vi.useRealTimers();
+}
+
+/** A control after the list, as the panel's own follow-on controls are. */
+function addControlAfterList(label: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.textContent = label;
+  container.after(button);
+  trailing.push(button);
+  return button;
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(gitHistory).mockResolvedValue({ head: commits[0]!.sha, commits });
@@ -128,11 +151,13 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  trailing = [];
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  for (const element of trailing) element.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -297,7 +322,8 @@ it("skips a non-row element when handing focus to the next row", async () => {
   expect(document.activeElement).toBe(rows[1]);
 });
 
-it("lets the final row's card give Tab back to the browser", async () => {
+it("moves focus past the final card to the next control after the list", async () => {
+  const after = addControlAfterList("After the list");
   await mount("/repo/hover-last-row");
   const row = historyRows().at(-1)!;
 
@@ -315,8 +341,73 @@ it("lets the final row's card give Tab back to the browser", async () => {
     last.dispatchEvent(event);
   });
 
-  // Not prevented, so the browser moves focus onward instead of trapping the
-  // user on the last row.
+  // The card is portalled to the body, so the last action is the last tab stop
+  // on the page. Releasing Tab to the browser there only wrapped back to the top.
+  expect(event.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(after);
+});
+
+it("still closes on pointer leave when a click, not the keyboard, focused the row", async () => {
+  await mount("/repo/hover-click-focus");
+  const row = historyRows()[0]!;
+
+  await focusRow(row);
+  // Clicking a row focuses it, and Chromium does not mark that `:focus-visible`.
+  // happy-dom matches it on any `.focus()`, so stub the one selector out.
+  const matches = row.matches.bind(row);
+  row.matches = ((selectors: string) =>
+    selectors === ":focus-visible"
+      ? false
+      : matches(selectors)) as typeof row.matches;
+
+  pointerLeave(row);
+  expect(card()).toBeNull();
+});
+
+it("skips a hidden control when leaving the final row's card", async () => {
+  // Order matters: the hidden one has to come first in the document, or the
+  // scan never reaches it. `addControlAfterList` always inserts directly after
+  // the list, so the visible control is appended to the hidden one instead.
+  const hiddenControl = addControlAfterList("Hidden after the list");
+  hiddenControl.style.display = "none";
+  const after = document.createElement("button");
+  after.textContent = "After the list";
+  hiddenControl.after(after);
+  trailing.push(after);
+
+  await mount("/repo/hover-hidden-control");
+  const row = historyRows().at(-1)!;
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  const last = cardActions().at(-1)!;
+  act(() => last.focus());
+
+  key(last, { key: "Tab" });
+
+  // Focusing the hidden one would put the user somewhere they cannot see.
+  expect(document.activeElement).toBe(after);
+});
+
+it("leaves Tab to the browser when nothing follows the final row", async () => {
+  await mount("/repo/hover-last-row-nowhere");
+  const row = historyRows().at(-1)!;
+
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  const last = cardActions().at(-1)!;
+  act(() => last.focus());
+
+  const event = new KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    last.dispatchEvent(event);
+  });
+
+  // Nothing after the list to hand over to, so intercepting would strand the
+  // user on the final row.
   expect(event.defaultPrevented).toBe(false);
 });
 
@@ -389,10 +480,55 @@ it("does not report the row as expanded until the card has painted", async () =>
   expect(row.getAttribute("aria-controls")).toBe(card()!.id);
 });
 
+it("keeps the card open when the pointer leaves while a copy action has focus", async () => {
+  await mount("/repo/hover-leave-with-focus");
+  const row = historyRows()[0]!;
+
+  await focusRow(row);
+  key(row, { key: "Tab" });
+  expect(document.activeElement).toBe(cardActions()[0]);
+
+  // Closing here unmounted the very copy button that held focus.
+  pointerLeave(row);
+  expect(card()).not.toBeNull();
+  expect(document.activeElement).toBe(cardActions()[0]);
+});
+
+it("keeps the card open when the pointer leaves the row that holds focus", async () => {
+  await mount("/repo/hover-leave-row-focused");
+  const row = historyRows()[0]!;
+
+  await focusRow(row);
+  expect(document.activeElement).toBe(row);
+
+  pointerLeave(row);
+  expect(card()).not.toBeNull();
+});
+
+it("still closes on pointer leave when neither the row nor the card has focus", async () => {
+  await mount("/repo/hover-leave-unfocused");
+  const row = historyRows()[0]!;
+
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  trailing.push(outside);
+  act(() => outside.focus());
+
+  await openCardOnHover(row);
+  expect(card()).not.toBeNull();
+
+  pointerLeave(row);
+  expect(card()).toBeNull();
+  expect(document.activeElement).toBe(outside);
+});
+
 it("drops the expanded state again when the card closes", async () => {
   await mount("/repo/hover-collapse");
   const row = historyRows()[0]!;
-  await focusRow(row);
+
+  // Opened by pointer, not focus: a card the keyboard is holding open survives
+  // the pointer leaving.
+  await openCardOnHover(row);
   expect(row.getAttribute("aria-expanded")).toBe("true");
 
   vi.useFakeTimers();

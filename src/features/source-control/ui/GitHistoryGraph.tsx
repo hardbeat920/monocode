@@ -145,7 +145,7 @@ function HistoryRow({
   // A Tab that arrived while the card was still waiting to paint.
   const pendingTab = useRef(false);
 
-  const { openNow, closeNow, open } = hover;
+  const { openNow, closeNow, open, closeAfterDelay } = hover;
 
   const focusFirstCardAction = useCallback(() => {
     const first = document
@@ -178,6 +178,13 @@ function HistoryRow({
     }
     openNow();
   }, [openNow]);
+
+  // Pointer leave must not close a card the keyboard is still driving. Once
+  // focus truly leaves the row and card, the blur handlers close it.
+  const closeOnPointerLeave = useCallback(() => {
+    if (isRowOrCardFocused(anchorRef.current, cardId)) return;
+    closeAfterDelay();
+  }, [cardId, closeAfterDelay]);
 
   // The card withholds its paint until the commit message arrives, so `open`
   // means "a card is wanted" rather than "a card is on screen". Announcing
@@ -216,8 +223,10 @@ function HistoryRow({
     anchorRef.current?.focus();
   }, []);
   const onTabForward = useCallback(
-    () => focusNextHistoryRow(anchorRef.current),
-    [],
+    () =>
+      focusNextHistoryRow(anchorRef.current) ||
+      focusAfterHistoryRow(anchorRef.current, document.getElementById(cardId)),
+    [cardId],
   );
   const onDismiss = useCallback(
     (reason: PopoverDismissReason) => {
@@ -254,7 +263,7 @@ function HistoryRow({
         onClick={() => onOpen()}
         onDoubleClick={() => onOpen(true)}
         onMouseEnter={hover.openAfterDelay}
-        onMouseLeave={hover.closeAfterDelay}
+        onMouseLeave={closeOnPointerLeave}
         onFocus={openOnFocus}
         onKeyDown={(event) => {
           // Focus opens the card immediately, so the card's actions are always
@@ -369,7 +378,7 @@ function HistoryRow({
           onReturnFocus={onReturnFocus}
           onTabForward={onTabForward}
           onPointerEnter={hover.cancelClose}
-          onPointerLeave={hover.closeAfterDelay}
+          onPointerLeave={closeOnPointerLeave}
         />
       ) : null}
     </li>
@@ -397,6 +406,66 @@ function focusNextHistoryRow(anchor: HTMLElement | null): boolean {
   if (!next) return false;
   next.focus();
   return true;
+}
+
+/** What Tab can land on. `tabindex="-1"` is script-only, so it is excluded. */
+const FOCUSABLE_SELECTOR =
+  "a[href], button, input, select, textarea, [tabindex]";
+
+/** Whether the keyboard is driving this card: focus is on the row or in it. */
+function isRowOrCardFocused(
+  anchor: HTMLElement | null,
+  cardId: string,
+): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return false;
+  // Clicking a row focuses it as surely as Tab does, so testing for focus alone
+  // would pin the card open for a mouse user who clicked a commit and moved on.
+  if (!active.matches(":focus-visible")) return false;
+  if (active === anchor) return true;
+  return Boolean(document.getElementById(cardId)?.contains(active));
+}
+
+/**
+ * Tab out of the final row's card onto whatever follows the list. The card is
+ * portalled to the body, so Tab from its last action would only wrap back to the
+ * top of the page, skipping every control after the list. Walk the document in
+ * order instead, skipping this row's own card.
+ *
+ * Returns false when nothing follows the row, leaving Tab to the browser rather
+ * than trapping focus on the list.
+ */
+function focusAfterHistoryRow(
+  anchor: HTMLElement | null,
+  card: HTMLElement | null,
+): boolean {
+  if (!anchor) return false;
+  const controls = document.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+  let reachedAnchor = false;
+  for (const control of controls) {
+    if (control === anchor) {
+      reachedAnchor = true;
+      continue;
+    }
+    if (!reachedAnchor) continue;
+    if (card?.contains(control)) continue;
+    if (control.hasAttribute("disabled")) continue;
+    if (control.getAttribute("tabindex") === "-1") continue;
+    if (control.closest("[inert], [hidden], [aria-hidden='true']")) continue;
+    // Catches `display: none` and `visibility: hidden`, which Tailwind's `hidden`
+    // class sets and no attribute reveals. Focusing one of these lands the user
+    // somewhere they cannot see. The rects are the half that sees an *ancestor*
+    // hidden, since a child's own computed `display` survives that.
+    if (control.getClientRects().length === 0) continue;
+    const view = control.ownerDocument.defaultView;
+    if (view) {
+      const style = view.getComputedStyle(control);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+    }
+    control.focus();
+    return true;
+  }
+  return false;
 }
 
 function RefPill({ refInfo }: { refInfo: GraphRef }) {
