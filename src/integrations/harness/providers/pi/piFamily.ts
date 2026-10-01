@@ -746,7 +746,7 @@ function handleFrame(
   }
   const ui = parseExtensionUiRequest(rec);
   if (ui) {
-    void handleExtensionUi(flavor, sessionId, live, ui);
+    void handleExtensionUi(sessionId, live, ui);
     return;
   }
   if (live.muteUpdates) return;
@@ -1010,7 +1010,6 @@ async function settleTurn(live: Live): Promise<void> {
 }
 
 async function handleExtensionUi(
-  flavor: PiFlavor,
   sessionId: string,
   live: Live,
   request: PiExtensionUiRequest,
@@ -1030,10 +1029,9 @@ async function handleExtensionUi(
   }
 
   if (
-    flavor.id === "omp" &&
-    (request.method === "select" ||
-      request.method === "input" ||
-      request.method === "editor")
+    request.method === "select" ||
+    request.method === "input" ||
+    request.method === "editor"
   ) {
     const uiId = live.nextApprovalUiId++;
     const replyPromise = new Promise<UserQuestionReply>((resolve) => {
@@ -1060,6 +1058,11 @@ async function handleExtensionUi(
                   }),
                 }))
               : [],
+          ...(request.method !== "select" && {
+            placeholder: request.placeholder,
+            defaultText: request.prefill,
+            multiline: request.method === "editor",
+          }),
         },
       ],
     });

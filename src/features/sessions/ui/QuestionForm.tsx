@@ -25,7 +25,7 @@ type Props = {
 export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
-  const [custom, setCustom] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState(() => defaultCustom(prompt.questions));
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
@@ -42,7 +42,7 @@ export function QuestionForm({ prompt, onReply, onInteraction }: Props) {
   useEffect(() => {
     setStep(0);
     setAnswers({});
-    setCustom({});
+    setCustom(defaultCustom(prompt.questions));
   }, [prompt.requestId]);
 
   const questions = prompt.questions;
@@ -263,12 +263,28 @@ function QuestionFields({
         <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
       ) : null}
       {options.length === 0 && question.allowCustom ? (
-        <input
-          value={custom}
-          onChange={(event) => onCustom(event.target.value)}
-          placeholder="Type your answer"
-          className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
-        />
+        question.multiline ? (
+          <textarea
+            value={custom}
+            onChange={(event) => onCustom(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey))
+                return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
+            placeholder={question.placeholder ?? "Type your answer"}
+            rows={6}
+            className="mt-1.5 w-full resize-y rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
+          />
+        ) : (
+          <input
+            value={custom}
+            onChange={(event) => onCustom(event.target.value)}
+            placeholder={question.placeholder ?? "Type your answer"}
+            className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
+          />
+        )
       ) : (
         <div
           className="mt-1.5 flex max-h-52 flex-col gap-1 overflow-y-auto"
@@ -348,6 +364,12 @@ function QuestionFields({
         </div>
       )}
     </fieldset>
+  );
+}
+
+function defaultCustom(questions: UserQuestion[]): Record<string, string> {
+  return Object.fromEntries(
+    questions.flatMap((q) => (q.defaultText ? [[q.id, q.defaultText]] : [])),
   );
 }
 

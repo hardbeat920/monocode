@@ -136,3 +136,50 @@ describe("QuestionForm keyboard navigation", () => {
     expect(options[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("QuestionForm free text", () => {
+  it("prefills a multi-line answer and submits it untrimmed", () => {
+    const onReply = vi.fn();
+    act(() =>
+      root.render(
+        createElement(QuestionForm, {
+          prompt: {
+            requestId: 8,
+            questions: [
+              {
+                id: "msg",
+                prompt: "Commit message",
+                multiSelect: false,
+                allowCustom: true,
+                options: [],
+                placeholder: "Describe the change",
+                multiline: true,
+                defaultText: "fix: x\n\n  body\n",
+              },
+            ],
+          },
+          onReply,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("fix: x\n\n  body\n");
+    expect(textarea.placeholder).toBe("Describe the change");
+
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(onReply).toHaveBeenCalledWith(8, {
+      kind: "answered",
+      answers: {},
+      custom: { msg: "fix: x\n\n  body\n" },
+    });
+  });
+});

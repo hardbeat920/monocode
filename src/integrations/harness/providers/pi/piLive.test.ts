@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveBinary: vi.fn(),
   spawnChild: vi.fn(),
   killChild: vi.fn(),
+  writeChild: vi.fn(),
   frames: [] as Array<(record: Record<string, unknown>) => void>,
 }));
 
@@ -16,7 +17,7 @@ vi.mock("../../core/child", () => ({
   spawnChild: mocks.spawnChild,
   unwatchChild: vi.fn(),
   watchChild: vi.fn(),
-  writeChild: vi.fn(),
+  writeChild: mocks.writeChild,
 }));
 
 vi.mock("./piClient", () => ({
@@ -35,6 +36,7 @@ vi.mock("./piClient", () => ({
 }));
 
 import { compactPiContext, stopPiSession } from "./pi";
+import { piAdapter } from "./piAdapter";
 import type { HarnessEvent } from "../../core/types";
 
 describe("Pi live session", () => {
@@ -44,6 +46,8 @@ describe("Pi live session", () => {
     mocks.resolveBinary.mockReset();
     mocks.spawnChild.mockReset();
     mocks.killChild.mockReset();
+    mocks.writeChild.mockReset();
+    mocks.writeChild.mockResolvedValue(undefined);
     mocks.frames.length = 0;
     mocks.resolveBinary.mockResolvedValue({ path: "/fake/pi" });
     mocks.spawnChild.mockResolvedValue(undefined);
@@ -162,5 +166,77 @@ describe("Pi live session", () => {
       { type: "status", text: "Plugin ready" },
     ]);
     await stopPiSession("pi-ansi");
+  });
+
+  describe("extension dialogs", () => {
+    const events: HarnessEvent[] = [];
+    const replies = () =>
+      mocks.writeChild.mock.calls.map(([, line]) => JSON.parse(line as string));
+    const asked = () => {
+      const event = events.find((e) => e.type === "question.asked");
+      if (event?.type !== "question.asked") throw new Error("no question");
+      return event;
+    };
+    const open = async (sessionId: string) => {
+      events.length = 0;
+      await compactPiContext({
+        sessionId,
+        cwd: "/repo",
+        model: "pi:default",
+        runtimeMode: "supervised",
+        onEvent: (event) => events.push(event),
+      });
+      return mocks.frames[0]!;
+    };
+
+    it("answers a select with the chosen option", async () => {
+      const frame = await open("pi-select");
+      frame({
+        type: "extension_ui_request",
+        id: "q1",
+        method: "select",
+        title: "Output",
+        options: ["file", "stdout"],
+      });
+      piAdapter.respondQuestion!("pi-select", asked().requestId, {
+        kind: "answered",
+        answers: { q1: ["1"] },
+      });
+      await vi.waitFor(() =>
+        expect(replies()).toContainEqual({
+          type: "extension_ui_response",
+          id: "q1",
+          value: "stdout",
+        }),
+      );
+      await stopPiSession("pi-select");
+    });
+
+    it("shows input placeholders and editor prefill", async () => {
+      const frame = await open("pi-text");
+      frame({
+        type: "extension_ui_request",
+        id: "i1",
+        method: "input",
+        title: "Name",
+        placeholder: "e.g. main",
+      });
+      frame({
+        type: "extension_ui_request",
+        id: "e1",
+        method: "editor",
+        title: "Commit message",
+        prefill: "fix: x\n\n  body",
+      });
+      const questions = events.flatMap((e) =>
+        e.type === "question.asked" ? e.questions : [],
+      );
+      expect(questions[0]).toMatchObject({ placeholder: "e.g. main" });
+      expect(questions[1]).toMatchObject({
+        multiline: true,
+        defaultText: "fix: x\n\n  body",
+      });
+      await stopPiSession("pi-text");
+    });
   });
 });

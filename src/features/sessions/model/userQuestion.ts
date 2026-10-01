@@ -15,6 +15,10 @@ export type UserQuestion = {
   multiSelect: boolean;
   allowCustom: boolean;
   options: UserQuestionOption[];
+  placeholder?: string;
+  defaultText?: string;
+  /** Multi-line free text, returned untrimmed. */
+  multiline?: boolean;
 };
 
 export type UserQuestionPrompt = {
@@ -96,8 +100,9 @@ export function buildQuestionReply(
   for (const question of answered) {
     const selected = answers[question.id];
     if (selected?.length) nextAnswers[question.id] = selected;
-    const text = custom[question.id]?.trim();
-    if (text) nextCustom[question.id] = text;
+    const text = custom[question.id];
+    if (text?.trim())
+      nextCustom[question.id] = question.multiline ? text : text.trim();
   }
   return {
     kind: "answered",

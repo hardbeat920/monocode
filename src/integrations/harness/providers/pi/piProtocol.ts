@@ -57,6 +57,8 @@ export type PiExtensionUiRequest =
       id: string;
       method: "input" | "editor";
       title: string;
+      placeholder?: string;
+      prefill?: string;
     }
   | {
       id: string;
@@ -291,7 +293,13 @@ export function parseExtensionUiRequest(
     };
   }
   if (method === "input" || method === "editor") {
-    return { id, method, title: stringField(rec, "title") ?? method };
+    return {
+      id,
+      method,
+      title: stringField(rec, "title") ?? method,
+      placeholder: stringField(rec, "placeholder"),
+      prefill: stringField(rec, "prefill"),
+    };
   }
   if (
     method === "notify" ||
