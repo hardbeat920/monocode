@@ -114,6 +114,31 @@ export function listLinearIssues(query: {
   });
 }
 
+const issueByKey = new Map<string, LinearIssue>();
+
+function issueLookupKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+export function clearLinearIssueCache() {
+  issueByKey.clear();
+}
+
+/** `key` is a Linear issue UUID or a `TEAM-123` identifier. */
+export function peekLinearIssue(key: string): LinearIssue | null {
+  return issueByKey.get(issueLookupKey(key)) ?? null;
+}
+
+export async function lookupLinearIssue(key: string): Promise<LinearIssue> {
+  const issue = await invoke<LinearIssue>("linear_issue_lookup", {
+    key: key.trim(),
+  });
+  issueByKey.set(issueLookupKey(key), issue);
+  if (issue.identifier) issueByKey.set(issueLookupKey(issue.identifier), issue);
+  if (issue.id) issueByKey.set(issueLookupKey(issue.id), issue);
+  return issue;
+}
+
 export function peekLinearIssueDetails(id: string): LinearIssueDetails | null {
   return detailsById.get(id) ?? null;
 }

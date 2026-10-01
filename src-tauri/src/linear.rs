@@ -159,6 +159,21 @@ pub async fn linear_list_issues(
 }
 
 #[tauri::command]
+pub async fn linear_issue_lookup(app: AppHandle, key: String) -> Result<LinearIssue, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = require_token(&app)?;
+        let key = key.trim();
+        if !valid_linear_id(key) {
+            return Err("Missing Linear issue".into());
+        }
+        let data = graphql_with_token(&token, ISSUE_LOOKUP_QUERY, json!({ "id": key }))?;
+        parse_linear_issue_lookup(&data)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn linear_issue_details(
     app: AppHandle,
     id: String,
@@ -261,6 +276,23 @@ query InboxIssue($id: String!) {
   issue(id: $id) {
     description
     creator { name displayName avatarUrl }
+    assignee { name displayName avatarUrl }
+  }
+}
+"#;
+const ISSUE_LOOKUP_QUERY: &str = r#"
+query LinkedIssue($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    number
+    title
+    url
+    updatedAt
+    state { name type }
+    team { id key name }
+    project { id name }
+    labels { nodes { name color } }
     assignee { name displayName avatarUrl }
   }
 }
@@ -419,6 +451,14 @@ fn parse_linear_issues(data: &Value) -> Result<Vec<LinearIssue>, String> {
         .and_then(Value::as_array)
         .ok_or_else(|| "Linear did not return issues".to_string())?;
     Ok(nodes.iter().filter_map(parse_linear_issue).collect())
+}
+
+/// Linear resolves `issue(id:)` from either the UUID or the `TEAM-123` identifier.
+fn parse_linear_issue_lookup(data: &Value) -> Result<LinearIssue, String> {
+    data.get("issue")
+        .filter(|issue| !issue.is_null())
+        .and_then(parse_linear_issue)
+        .ok_or_else(|| "Linear did not return that issue".to_string())
 }
 
 fn parse_linear_issue(node: &Value) -> Option<LinearIssue> {
@@ -784,6 +824,29 @@ mod tests {
                 name: "Engineering".into(),
             }]
         );
+    }
+
+    #[test]
+    fn parse_linear_issue_lookup_accepts_one_issue() {
+        let data = json!({
+            "issue": {
+                "id": "issue-1",
+                "identifier": "ENG-9",
+                "number": 9,
+                "title": "Fix auth",
+                "url": "https://linear.app/acme/issue/ENG-9",
+                "updatedAt": "2026-08-27T10:00:00.000Z",
+                "state": { "name": "Todo", "type": "unstarted" },
+                "team": { "id": "team-1", "key": "ENG", "name": "Engineering" }
+            }
+        });
+        let issue = parse_linear_issue_lookup(&data).expect("issue");
+        assert_eq!(issue.identifier, "ENG-9");
+        assert_eq!(issue.repo, "ENG");
+        assert_eq!(issue.number, 9);
+
+        let missing = json!({ "issue": null });
+        assert!(parse_linear_issue_lookup(&missing).is_err());
     }
 
     #[test]

@@ -63,8 +63,10 @@ import {
   inboxProjectsForRail,
   listInboxItems,
   peekGithubPrDiff,
+  linearWorkItem,
   peekGithubWorkItem,
   peekGithubWorkItemDetails,
+  peekLinearWorkItem,
   peekGithubWorkItemThread,
   peekInboxList,
   formatRelativeTime,
@@ -117,6 +119,7 @@ import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   inboxItemMatchesLinkedWorkItem,
   linkedWorkItemInboxKey,
+  linkedWorkItemProvider,
   relatedSessionsForInboxItem,
 } from "../../sessions/model/sessionWorkItem";
 import {
@@ -765,14 +768,9 @@ export function InboxView({
       return;
     }
     let cancelled = false;
-    void githubWorkItem(cwd, target.repo, target.kind, target.number)
+    void fetchLinkedWorkItem(cwd, target)
       .then((item) => {
-        if (cancelled) return;
-        setTargetItem({
-          ...item,
-          projectPath: cwd,
-          provider: "github",
-        });
+        if (!cancelled) setTargetItem(item);
       })
       .catch(() => {
         // The normal Inbox remains usable when an exact lookup is unavailable.
@@ -791,7 +789,7 @@ export function InboxView({
       Date.now(),
       source,
     );
-    if (!target || source !== "github") return visible;
+    if (!target || source !== linkedWorkItemProvider(target)) return visible;
     const targeted =
       items.find((item) => inboxItemMatchesLinkedWorkItem(item, target)) ??
       (targetItem && inboxItemMatchesLinkedWorkItem(targetItem, target)
@@ -1232,6 +1230,37 @@ export function InboxView({
   );
 }
 
+function peekLinkedWorkItem(
+  cwd: string,
+  target: LinkedWorkItem,
+): InboxItem | null {
+  if (target.kind === "linear") {
+    const cached = peekLinearWorkItem(target.id ?? target.identifier);
+    return cached
+      ? { ...cached, projectPath: cached.projectPath || cwd }
+      : null;
+  }
+  const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
+  return cached ? { ...cached, projectPath: cwd, provider: "github" } : null;
+}
+
+async function fetchLinkedWorkItem(
+  cwd: string,
+  target: LinkedWorkItem,
+): Promise<InboxItem> {
+  if (target.kind === "linear") {
+    const item = await linearWorkItem(target.id ?? target.identifier);
+    return { ...item, projectPath: item.projectPath || cwd };
+  }
+  const item = await githubWorkItem(
+    cwd,
+    target.repo,
+    target.kind,
+    target.number,
+  );
+  return { ...item, projectPath: cwd, provider: "github" };
+}
+
 export function LinkedWorkItemPanel({
   repairSessions,
   onRepairChecks,
@@ -1262,14 +1291,8 @@ export function LinkedWorkItemPanel({
     () => inboxProjectOptions(projects, logos),
     [logos, projects],
   );
-  const cachedItem = peekGithubWorkItem(
-    target.repo,
-    target.kind,
-    target.number,
-  );
-  const [item, setItem] = useState<InboxItem | null>(() =>
-    cachedItem ? { ...cachedItem, projectPath: cwd, provider: "github" } : null,
-  );
+  const cachedItem = peekLinkedWorkItem(cwd, target);
+  const [item, setItem] = useState<InboxItem | null>(cachedItem);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(cachedItem == null);
   const resize = useDragResize({
@@ -1293,16 +1316,13 @@ export function LinkedWorkItemPanel({
 
   useEffect(() => {
     let cancelled = false;
-    const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
-    setItem(
-      cached ? { ...cached, projectPath: cwd, provider: "github" } : null,
-    );
+    const cached = peekLinkedWorkItem(cwd, target);
+    setItem(cached);
     setError(null);
     setLoading(cached == null);
-    void githubWorkItem(cwd, target.repo, target.kind, target.number)
+    void fetchLinkedWorkItem(cwd, target)
       .then((next) => {
-        if (cancelled) return;
-        setItem({ ...next, projectPath: cwd, provider: "github" });
+        if (!cancelled) setItem(next);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -1314,7 +1334,7 @@ export function LinkedWorkItemPanel({
     return () => {
       cancelled = true;
     };
-  }, [cwd, target.kind, target.number, target.repo]);
+  }, [cwd, target]);
 
   useEffect(() => {
     if (!visible) return;
@@ -1346,10 +1366,12 @@ export function LinkedWorkItemPanel({
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
 
   const kindLabel = target.kind === "pr" ? "Pull request" : "Issue";
+  const targetLabel =
+    target.kind === "linear" ? target.identifier : `#${target.number}`;
   return (
     <aside
       ref={resize.setPaneRef}
-      aria-label={`Linked ${kindLabel.toLowerCase()} #${target.number}`}
+      aria-label={`Linked ${kindLabel.toLowerCase()} ${targetLabel}`}
       aria-busy={loading}
       aria-hidden={!visible}
       inert={!visible || undefined}
