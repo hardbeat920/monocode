@@ -8,6 +8,12 @@ import { useMaskEmails } from "../../features/settings/model/displayPrefs";
 export function PrivateEmail({ email }: { email: string }) {
   const masked = useMaskEmails();
   const [revealed, setRevealed] = useState(false);
+  const [wasMasked, setWasMasked] = useState(masked);
+  if (masked !== wasMasked) {
+    // Turning masking back on hides an email revealed before it was turned off.
+    setWasMasked(masked);
+    setRevealed(false);
+  }
   if (!masked) {
     return (
       <span className="min-w-0 truncate" title={email}>

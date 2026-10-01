@@ -14,16 +14,30 @@ export const SHOW_REMAINING_USAGE_CHANGE_EVENT =
 export const MASK_EMAILS_CHANGE_EVENT = "monocode:maskemailschange";
 
 function flagStore(key: string, fallback: boolean, event: string) {
-  const load = () => readFlag(key) ?? fallback;
+  // Holds a saved value only while storage failed to keep it, so the switch
+  // still flips for this window when localStorage is unavailable.
+  let unsaved: boolean | null = null;
+  const load = () => unsaved ?? readFlag(key) ?? fallback;
   const save = (value: boolean) => {
     writeFlag(key, value);
+    unsaved = readFlag(key) === value ? null : value;
     if (typeof window === "undefined") return;
     window.dispatchEvent(new CustomEvent<boolean>(event, { detail: value }));
   };
   const subscribe = (onStoreChange: () => void) => {
     if (typeof window === "undefined") return () => {};
+    // Other windows write the same localStorage; `storage` reports their saves.
+    const onStorage = (storage: StorageEvent) => {
+      if (storage.key !== key && storage.key !== null) return;
+      unsaved = null;
+      onStoreChange();
+    };
     window.addEventListener(event, onStoreChange);
-    return () => window.removeEventListener(event, onStoreChange);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(event, onStoreChange);
+      window.removeEventListener("storage", onStorage);
+    };
   };
   const useFlag = () => useSyncExternalStore(subscribe, load, () => fallback);
   return { load, save, subscribe, useFlag };
@@ -43,9 +57,11 @@ const maskEmails = flagStore(
 /** Usage meters fill with what is left instead of what is used. */
 export const loadShowRemainingUsage = showRemainingUsage.load;
 export const saveShowRemainingUsage = showRemainingUsage.save;
+export const subscribeShowRemainingUsage = showRemainingUsage.subscribe;
 export const useShowRemainingUsage = showRemainingUsage.useFlag;
 
 /** Account emails stay blurred until clicked. */
 export const loadMaskEmails = maskEmails.load;
 export const saveMaskEmails = maskEmails.save;
+export const subscribeMaskEmails = maskEmails.subscribe;
 export const useMaskEmails = maskEmails.useFlag;
