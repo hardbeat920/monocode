@@ -453,6 +453,55 @@ describe("session work items", () => {
     ).toBe(true);
   });
 
+  it("rejects a persisted Linear link whose identifier disagrees with its URL", () => {
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "SW-29",
+        url: "https://linear.app/acme/issue/ENG-1",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "SW-29",
+        url: "https://linear.app/acme/issue/sw-29/some-title",
+      }),
+    ).toMatchObject({ identifier: "SW-29" });
+  });
+
+  it("does not match an Inbox row from another workspace when no UUID is stored", () => {
+    const linked = {
+      kind: "linear" as const,
+      identifier: "SW-29",
+      repo: "SW",
+      number: 29,
+      url: "https://linear.app/workspace-a/issue/SW-29",
+    };
+    const row = {
+      provider: "linear",
+      kind: "linear",
+      id: "uuid-b",
+      identifier: "SW-29",
+      number: 29,
+      repo: "SW",
+      url: "https://linear.app/workspace-b/issue/SW-29",
+    } as InboxItem;
+    expect(inboxItemMatchesLinkedWorkItem(row, linked)).toBe(false);
+    expect(
+      inboxItemMatchesLinkedWorkItem(
+        { ...row, url: "https://linear.app/workspace-a/issue/SW-29" },
+        linked,
+      ),
+    ).toBe(true);
+    expect(
+      inboxItemMatchesLinkedWorkItem(
+        { ...row, url: "https://linear.app/issue/SW-29" },
+        linked,
+      ),
+    ).toBe(true);
+  });
+
   it("reads the workspace from a Linear URL", () => {
     expect(
       linearWorkspaceFromUrl("https://linear.app/Acme/issue/SW-29/slug"),

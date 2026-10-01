@@ -111,6 +111,9 @@ export function normalizeLinkedWorkItem(
     );
     const url = typeof item.url === "string" ? item.url.trim() : "";
     if (!parsed || !/^https:\/\/linear\.app\//.test(url)) return undefined;
+    // The badge shows the identifier and the URL opens the issue; they must agree.
+    const fromUrl = parseLinearWorkItemUrl(url);
+    if (fromUrl && fromUrl.identifier !== parsed.identifier) return undefined;
     const id = typeof item.id === "string" ? item.id.trim() : "";
     return {
       kind,
@@ -374,7 +377,14 @@ export function inboxItemMatchesLinkedWorkItem(
     if (item.provider !== "linear") return false;
     // Two UUIDs settle it; identifiers can repeat across workspaces.
     if (linked.id && item.id) return linked.id === item.id;
-    return (item.identifier ?? "").trim().toUpperCase() === linked.identifier;
+    if ((item.identifier ?? "").trim().toUpperCase() !== linked.identifier) {
+      return false;
+    }
+    const linkedWorkspace = linearWorkspaceFromUrl(linked.url);
+    const itemWorkspace = linearWorkspaceFromUrl(item.url ?? "");
+    return (
+      !linkedWorkspace || !itemWorkspace || linkedWorkspace === itemWorkspace
+    );
   }
   return (
     item.provider === "github" &&
