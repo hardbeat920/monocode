@@ -100,6 +100,8 @@ export type WorkspaceTab = {
   diffFocused?: boolean;
   /** Explicit tab group; absent means ungrouped. */
   groupId?: string;
+  /** Pane expanded to fill the whole tab, hiding its split siblings. */
+  maximizedId?: string;
 };
 
 const MIN_SIZE = 0.08;
@@ -961,6 +963,38 @@ export function removePane(
 }
 
 /**
+ * Move a tab's focus to `focusedId`. Drops an active maximize when focus
+ * lands on a different pane, so the newly focused pane isn't hidden behind
+ * the stale maximized one.
+ */
+export function setTabFocus(tab: WorkspaceTab, focusedId: string): WorkspaceTab {
+  if (!tab.maximizedId || tab.maximizedId === focusedId) {
+    return { ...tab, focusedId };
+  }
+  const next = { ...tab, focusedId };
+  delete next.maximizedId;
+  return next;
+}
+
+/**
+ * Split `paneId` to the right with a new leaf and focus it, clearing any
+ * maximize so the new pane is visible (second opinion, handoff).
+ */
+export function openPaneBeside(
+  tab: WorkspaceTab,
+  paneId: string,
+  newId: string,
+): WorkspaceTab {
+  return {
+    ...setTabFocus(
+      { ...tab, layout: splitPane(tab.layout, paneId, "right", newId) },
+      newId,
+    ),
+    diffFocused: false,
+  };
+}
+
+/**
  * Close one pane in a tab. Remaining chats, files, and terminals stay;
  * returns null only when this was the last leaf.
  */
@@ -974,7 +1008,9 @@ export function closeLeaf(
     tab.focusedId === leafId
       ? (siblingLeafId(tab.layout, leafId) ?? firstLeafId(nextLayout))
       : tab.focusedId;
-  return { ...tab, layout: nextLayout, focusedId: nextFocus };
+  const next = { ...tab, layout: nextLayout, focusedId: nextFocus };
+  if (tab.maximizedId === leafId) delete next.maximizedId;
+  return next;
 }
 
 /** Close every pane of one surface kind. Returns null only when nothing remains. */
@@ -1432,4 +1468,28 @@ export function replacePaneWithLayout(
       replacePaneWithLayout(child, targetId, incoming),
     ),
   };
+}
+
+/** Exchange two leaves' positions (and their sizes), keeping the tree shape. */
+export function swapLeaves(node: LayoutNode, a: string, b: string): LayoutNode {
+  if (a === b) return node;
+  const placeholder = `__swap__${a}`;
+  return replaceLeafId(
+    replaceLeafId(replaceLeafId(node, a, placeholder), b, a),
+    placeholder,
+    b,
+  );
+}
+
+/** Swap `paneId` into the largest leaf's slot (a no-op if it already is one). */
+export function swapWithLargestLeaf(
+  node: LayoutNode,
+  paneId: string,
+): LayoutNode {
+  const leaves = layoutLeaves(node);
+  if (leaves.length <= 1) return node;
+  const largest = leaves.reduce((best, leaf) =>
+    leaf.rect.w * leaf.rect.h > best.rect.w * best.rect.h ? leaf : best,
+  );
+  return largest.id === paneId ? node : swapLeaves(node, paneId, largest.id);
 }

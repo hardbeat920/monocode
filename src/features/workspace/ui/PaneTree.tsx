@@ -60,6 +60,8 @@ type Shared = {
   dirtyFileIds: Set<string>;
   fileErrorCounts: Map<string, number>;
   focusedId: string;
+  /** Pane expanded to fill the whole tab, hiding its split siblings. */
+  maximizedId?: string;
   addToChatSessionId?: string;
   composerFocused: boolean;
   composerFocusToken?: number;
@@ -178,6 +180,8 @@ type Shared = {
     modelSettings: Record<string, string>,
   ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
+  onMaximizePane: (paneId: string) => void;
+  onSwapToMainPane: (paneId: string) => void;
   onDetachPane: (
     paneId: string,
     targetTabId: string,
@@ -206,6 +210,7 @@ function PaneTreeComponent({
   dirtyFileIds,
   fileErrorCounts,
   focusedId,
+  maximizedId,
   addToChatSessionId,
   composerFocused,
   composerFocusToken,
@@ -268,6 +273,8 @@ function PaneTreeComponent({
   onBtwModelChange,
   onHandoff,
   onMovePane,
+  onMaximizePane,
+  onSwapToMainPane,
   onDetachPane,
   onNewTerminal,
   onTerminalMetaChange,
@@ -307,9 +314,22 @@ function PaneTreeComponent({
   };
 
   const tree = draft ?? layout;
-  const leaves = layoutLeaves(tree);
-  const sashes = layoutSashes(tree);
-  const inSplit = leaves.length > 1;
+  const allLeaves = layoutLeaves(tree);
+  const inSplit = allLeaves.length > 1;
+  const maximizedLeaf =
+    maximizedId != null
+      ? allLeaves.find((leaf) => leaf.id === maximizedId)
+      : undefined;
+  // Siblings of a maximized pane stay mounted (hidden) so unsaved edits,
+  // composer attachments, and running terminals survive maximize/restore.
+  const leaves = maximizedLeaf
+    ? allLeaves.map((leaf) =>
+        leaf.id === maximizedLeaf.id
+          ? { ...leaf, rect: { x: 0, y: 0, w: 1, h: 1 } }
+          : leaf,
+      )
+    : allLeaves;
+  const sashes = maximizedLeaf ? [] : layoutSashes(tree);
 
   const startPaneDrag = useCallback(
     (fromId: string, event: ReactPointerEvent<HTMLElement>) => {
@@ -409,7 +429,9 @@ function PaneTreeComponent({
         const editorPane = editorPanes.find((pane) => pane.id === leaf.id);
         const session = sessions.find((entry) => entry.id === leaf.id);
         const dragging = drop?.fromId === leaf.id;
-        const onPaneDragStart = inSplit ? paneDragStartFor(leaf.id) : undefined;
+        const hidden = maximizedLeaf != null && leaf.id !== maximizedLeaf.id;
+        const onPaneDragStart =
+          inSplit && !maximizedLeaf ? paneDragStartFor(leaf.id) : undefined;
         const backgroundStyle = {
           "--chat-background-left": `${(-leaf.rect.x / leaf.rect.w) * 100}%`,
           "--chat-background-top": `${(-leaf.rect.y / leaf.rect.h) * 100}%`,
@@ -420,7 +442,13 @@ function PaneTreeComponent({
           <div
             key={leaf.id}
             data-pane-id={leaf.id}
-            className={`absolute flex min-h-0 min-w-0 flex-col overflow-hidden ${dragging ? "opacity-40" : ""}`}
+            aria-hidden={hidden || undefined}
+            inert={hidden || undefined}
+            className={
+              hidden
+                ? "hidden"
+                : `absolute flex min-h-0 min-w-0 flex-col overflow-hidden ${dragging ? "opacity-40" : ""}`
+            }
             style={{
               left: `${leaf.rect.x * 100}%`,
               top: `${leaf.rect.y * 100}%`,
@@ -467,10 +495,13 @@ function PaneTreeComponent({
                       sessionWorkCwd(session),
                     ),
                 )}
-                visible={visible}
+                visible={visible && !hidden}
                 focused={focusedId === session.id}
                 addToChatTarget={addToChatSessionId === session.id}
                 inSplit={inSplit}
+                maximized={maximizedId === session.id}
+                onMaximize={onMaximizePane}
+                onSwapToMainPane={onSwapToMainPane}
                 composerFocused={composerFocused}
                 composerFocusToken={composerFocusToken}
                 recents={recents}

@@ -167,6 +167,7 @@ import {
   openCommitTab,
   newAgentTab,
   openEditorTab,
+  openPaneBeside,
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
@@ -176,9 +177,11 @@ import {
   resetTabToSession,
   replaceLeafId,
   setSplitRatio,
+  setTabFocus,
   siblingLeafId,
   splitPane,
   surfacePanes,
+  swapWithLargestLeaf,
   updateTerminalTab,
   withSurfacePanes,
   type EditorPane,
@@ -2164,7 +2167,7 @@ function Workspace({
       setTabs((prev) =>
         prev.map((entry) =>
           entry.id === id
-            ? { ...entry, focusedId: nextFocusedId, diffFocused: false }
+            ? { ...setTabFocus(entry, nextFocusedId), diffFocused: false }
             : entry,
         ),
       );
@@ -2493,11 +2496,10 @@ function Workspace({
       setTabs((prev) =>
         prev.map((t) => {
           if (t.id !== activeTab.id) return t;
-          return {
-            ...t,
-            layout: splitPane(t.layout, t.focusedId, dir, session.id),
-            focusedId: session.id,
-          };
+          return setTabFocus(
+            { ...t, layout: splitPane(t.layout, t.focusedId, dir, session.id) },
+            session.id,
+          );
         }),
       );
       setComposerFocused(true);
@@ -2786,7 +2788,7 @@ function Workspace({
             prev.map((entry) => {
               if (entry.id !== tab.id) return entry;
               return withSurfacePanes(
-                { ...entry, focusedId: pane.id },
+                setTabFocus(entry, pane.id),
                 "terminal",
                 (entry.terminalPanes ?? []).map((item) =>
                   item.id === pane.id
@@ -3518,7 +3520,7 @@ function Workspace({
       setTabs((prev) =>
         prev.map((t) =>
           t.id === activeTabId
-            ? { ...t, focusedId: paneId, diffFocused: false }
+            ? { ...setTabFocus(t, paneId), diffFocused: false }
             : t,
         ),
       );
@@ -3682,17 +3684,44 @@ function Workspace({
       setTabs((prev) =>
         prev.map((tab) => {
           return leafIds(tab.layout).includes(fromId)
-            ? {
-                ...tab,
-                layout: movePane(tab.layout, fromId, toId, edge),
-                focusedId: fromId,
-              }
+            ? setTabFocus(
+                { ...tab, layout: movePane(tab.layout, fromId, toId, edge) },
+                fromId,
+              )
             : tab;
         }),
       );
     },
     [],
   );
+
+  const onMaximizePane = useCallback((paneId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        leafIds(tab.layout).includes(paneId)
+          ? {
+              ...tab,
+              maximizedId: tab.maximizedId === paneId ? undefined : paneId,
+              focusedId: paneId,
+            }
+          : tab,
+      ),
+    );
+  }, []);
+
+  const onSwapToMainPane = useCallback((paneId: string) => {
+    setTabs((prev) =>
+      prev.map((tab) =>
+        leafIds(tab.layout).includes(paneId)
+          ? {
+              ...tab,
+              layout: swapWithLargestLeaf(tab.layout, paneId),
+              focusedId: paneId,
+            }
+          : tab,
+      ),
+    );
+  }, []);
 
   const onDetachPane = useCallback(
     (paneId: string, targetTabId: string, position: "before" | "after") => {
@@ -3723,7 +3752,7 @@ function Workspace({
     setActiveTabId(tab.id);
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
+        entry.id === tab.id ? setTabFocus(entry, sessionId) : entry,
       ),
     );
     setComposerFocused(true);
@@ -3759,11 +3788,13 @@ function Workspace({
     setTabs((prev) =>
       prev.map((entry) =>
         entry.id === tab.id
-          ? {
-              ...entry,
-              layout: replaceLeafId(entry.layout, paneId, session.id),
-              focusedId: session.id,
-            }
+          ? setTabFocus(
+              {
+                ...entry,
+                layout: replaceLeafId(entry.layout, paneId, session.id),
+              },
+              session.id,
+            )
           : entry,
       ),
     );
@@ -7228,21 +7259,21 @@ function Workspace({
           );
           if (!anchor || !sameProjectPath(anchor.cwd, cwd) || !tab)
             throw new Error("The target session must be open in this project");
-          const nextTabs = tabsRef.current.map((entry) =>
-            entry.id === tab.id
-              ? {
-                  ...entry,
-                  layout: splitPane(
-                    entry.layout,
-                    target.besideSessionId,
-                    target.direction,
-                    sessionId,
-                  ),
-                  focusedId: launch.reveal ? sessionId : entry.focusedId,
-                  diffFocused: launch.reveal ? false : entry.diffFocused,
-                }
-              : entry,
-          );
+          const nextTabs = tabsRef.current.map((entry) => {
+            if (entry.id !== tab.id) return entry;
+            const split = {
+              ...entry,
+              layout: splitPane(
+                entry.layout,
+                target.besideSessionId,
+                target.direction,
+                sessionId,
+              ),
+            };
+            return launch.reveal
+              ? { ...setTabFocus(split, sessionId), diffFocused: false }
+              : split;
+          });
           tabsRef.current = nextTabs;
           setTabs(nextTabs);
           return tab.id;
@@ -7716,12 +7747,7 @@ function Workspace({
       if (tab) {
         const nextTabs = tabsRef.current.map((entry) =>
           entry.id === tab.id
-            ? {
-                ...entry,
-                layout: splitPane(entry.layout, sourceId, "right", session.id),
-                focusedId: session.id,
-                diffFocused: false,
-              }
+            ? openPaneBeside(entry, sourceId, session.id)
             : entry,
         );
         tabsRef.current = nextTabs;
@@ -10820,6 +10846,7 @@ function Workspace({
                                     ? tab.focusedId
                                     : ""
                                 }
+                                maximizedId={tab.maximizedId}
                                 addToChatSessionId={
                                   tab.id === activeTabId
                                     ? active?.id
@@ -10843,6 +10870,8 @@ function Workspace({
                                 editorNavigation={editorNavigation}
                                 onUpdatePlan={onUpdatePlan}
                                 onMovePane={onMovePane}
+                                onMaximizePane={onMaximizePane}
+                                onSwapToMainPane={onSwapToMainPane}
                                 onDetachPane={onDetachPane}
                                 onTerminalMetaChange={onTerminalMetaChange}
                               />

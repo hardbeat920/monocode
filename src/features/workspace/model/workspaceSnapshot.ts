@@ -456,6 +456,7 @@ function sanitizeTab(raw: unknown): WorkspaceTab | null {
       ? value.focusedId
       : leafIds(layout)[0];
   if (!focusedId) return null;
+  const leafIdSet = new Set(leafIds(layout));
   return {
     kind: "session",
     id: value.id,
@@ -467,6 +468,9 @@ function sanitizeTab(raw: unknown): WorkspaceTab | null {
     ...(value.diffFocused === true ? { diffFocused: true } : {}),
     ...(typeof value.groupId === "string" && value.groupId
       ? { groupId: value.groupId }
+      : {}),
+    ...(typeof value.maximizedId === "string" && leafIdSet.has(value.maximizedId)
+      ? { maximizedId: value.maximizedId }
       : {}),
   };
 }

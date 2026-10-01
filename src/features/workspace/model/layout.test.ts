@@ -30,6 +30,7 @@ import {
   openChangesTab,
   openCommitTab,
   openEditorTab,
+  openPaneBeside,
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
@@ -38,6 +39,9 @@ import {
   placePane,
   splitPane,
   splitSizesAtBoundary,
+  setTabFocus,
+  swapLeaves,
+  swapWithLargestLeaf,
   updateTerminalTab,
   type WorkspaceTab,
 } from "./layout";
@@ -462,6 +466,69 @@ describe("openTerminalTab", () => {
   });
 });
 
+describe("setTabFocus", () => {
+  it("leaves maximizedId untouched when the tab isn't maximized", () => {
+    const tab = { ...newTab("a"), layout: splitPane(leaf("a"), "a", "right", "b") };
+    const next = setTabFocus(tab, "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBeUndefined();
+  });
+
+  it("keeps the maximize when focus lands back on the maximized pane", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "b"),
+      maximizedId: "b",
+    };
+    const next = setTabFocus(tab, "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBe("b");
+  });
+
+  it("drops the maximize when focus moves to a different pane (directional nav, sidebar selection)", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "b"),
+      maximizedId: "b",
+    };
+    const next = setTabFocus(tab, "a");
+    expect(next.focusedId).toBe("a");
+    expect(next.maximizedId).toBeUndefined();
+  });
+
+  it("reveals a newly split pane instead of leaving it hidden behind the old maximize", () => {
+    const tab = { ...newTab("a"), layout: leaf("a"), maximizedId: "a" };
+    const split = { ...tab, layout: splitPane(tab.layout, "a", "right", "b") };
+    const next = setTabFocus(split, "b");
+    expect(next.maximizedId).toBeUndefined();
+    expect(layoutLeaves(next.layout).map((pane) => pane.id)).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+});
+
+describe("openPaneBeside", () => {
+  // Second opinion and handoff both open their new session through this.
+  it("reveals the new pane when the source pane is maximized", () => {
+    const tab = {
+      ...newTab("a"),
+      layout: splitPane(leaf("a"), "a", "right", "x"),
+      maximizedId: "a",
+      diffFocused: true,
+    };
+    const next = openPaneBeside(tab, "a", "b");
+    expect(next.focusedId).toBe("b");
+    expect(next.maximizedId).toBeUndefined();
+    expect(next.diffFocused).toBe(false);
+    expect(layoutLeaves(next.layout).map((pane) => pane.id)).toEqual([
+      "a",
+      "b",
+      "x",
+    ]);
+  });
+});
+
 describe("closeLeaf", () => {
   it("keeps a file pane when the last chat is closed", () => {
     const file = newFileTab("/repo/App.tsx", "/repo");
@@ -709,6 +776,54 @@ describe("movePane", () => {
     expect(leaves[0]?.rect).toEqual({ x: 0, y: 0, w: 1, h: 0.25 });
     expect(leaves[1]?.rect).toEqual({ x: 0, y: 0.25, w: 1, h: 0.25 });
     expect(leaves[2]?.rect).toEqual({ x: 0, y: 0.5, w: 1, h: 0.5 });
+  });
+});
+
+describe("swapLeaves", () => {
+  it("exchanges two leaves' positions, keeping sizes in place", () => {
+    const tree = splitPane(leaf("a"), "a", "right", "b");
+    const next = swapLeaves(tree, "a", "b");
+    const leaves = layoutLeaves(next);
+    expect(leaves.map((pane) => pane.id)).toEqual(["b", "a"]);
+    expect(leaves[0]?.rect).toEqual({ x: 0, y: 0, w: 0.5, h: 1 });
+    expect(leaves[1]?.rect).toEqual({ x: 0.5, y: 0, w: 0.5, h: 1 });
+  });
+
+  it("is a no-op when swapping a leaf with itself", () => {
+    const tree = splitPane(leaf("a"), "a", "right", "b");
+    expect(swapLeaves(tree, "a", "a")).toBe(tree);
+  });
+});
+
+describe("swapWithLargestLeaf", () => {
+  it("swaps a smaller pane into the largest slot", () => {
+    const uneven = {
+      type: "split" as const,
+      id: "split",
+      dir: "right" as const,
+      children: [leaf("small"), leaf("big")],
+      sizes: [0.3, 0.7],
+    };
+    const next = swapWithLargestLeaf(uneven, "small");
+    const leaves = layoutLeaves(next);
+    expect(leaves.map((pane) => pane.id)).toEqual(["big", "small"]);
+    expect(leaves[1]?.rect).toEqual({ x: 0.3, y: 0, w: 0.7, h: 1 });
+  });
+
+  it("is a no-op when the pane is already the largest", () => {
+    const uneven = {
+      type: "split" as const,
+      id: "split",
+      dir: "right" as const,
+      children: [leaf("small"), leaf("big")],
+      sizes: [0.3, 0.7],
+    };
+    expect(swapWithLargestLeaf(uneven, "big")).toBe(uneven);
+  });
+
+  it("is a no-op on a single-leaf tree", () => {
+    const tree = leaf("only");
+    expect(swapWithLargestLeaf(tree, "only")).toBe(tree);
   });
 });
 

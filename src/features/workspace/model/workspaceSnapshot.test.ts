@@ -491,6 +491,24 @@ describe("parseWorkspaceSnapshot", () => {
     expect(parsed?.tabs[0] && "extra" in parsed.tabs[0]).toBe(false);
   });
 
+  it("keeps a maximizedId that names a leaf and drops one that doesn't", () => {
+    const tab = { ...newTab("s1"), id: "t1", maximizedId: "s1" };
+    const parsed = parseWorkspaceSnapshot({
+      tabs: [tab],
+      activeTabId: "t1",
+      projectCwd: "/tmp/a",
+    });
+    expect(parsed?.tabs[0]?.maximizedId).toBe("s1");
+
+    const stale = { ...newTab("s1"), id: "t1", maximizedId: "no-such-pane" };
+    const droppedParsed = parseWorkspaceSnapshot({
+      tabs: [stale],
+      activeTabId: "t1",
+      projectCwd: "/tmp/a",
+    });
+    expect(droppedParsed?.tabs[0]?.maximizedId).toBeUndefined();
+  });
+
   it.each([
     { releaseNotes: { version: "" } },
     { releaseNotes: { version: 123 } },
