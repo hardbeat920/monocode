@@ -105,6 +105,13 @@ describe("a task received from another session", () => {
     expect(onOpenSession).toHaveBeenCalledWith("lead");
   });
 
+  it("drops the harness prefix a stored title carries, in the sender line and the footer", async () => {
+    await render([task, reply], { ...parent([delivered(2)]), title: "claude · main" });
+    expect(bubble()?.textContent).toContain("Task fromHaiku 4.5 · main");
+    expect(bubble()?.textContent).not.toContain("claude · main");
+    expect(footer()?.textContent).toContain("Sent to main");
+  });
+
   it("names a parent known only from history and still opens it, without claiming delivery", async () => {
     const { blocks: _blocks, ...summary } = parent([delivered(2)]);
     await render([task, reply], summary);

@@ -77,6 +77,7 @@ import {
   type InterjectionMeta,
   type ModelTarget,
   type PlanBuildTarget,
+  sessionDisplayTitle,
   type Session,
   type ToolPreview,
   type TurnMetrics,
@@ -426,7 +427,7 @@ function AgentTranscriptComponent({
             : undefined,
         receiptWorking: !!task,
         receiptStartedAt: task?.startedAt,
-        childTitle: child?.title || undefined,
+        childTitle: child ? sessionDisplayTitle(child.title, child.harness) || undefined : undefined,
         childName: liveName(receipt.parentId, receipt.childId),
       };
     }
@@ -434,7 +435,7 @@ function AgentTranscriptComponent({
       const parent = sessionFor?.(block.acceptedAssignment.parentId);
       return parent
         ? {
-            senderTitle: parent.title,
+            senderTitle: sessionDisplayTitle(parent.title, parent.harness),
             senderModel: parent.model,
             senderHarness: parent.harness,
           }
@@ -839,7 +840,7 @@ function AgentTranscriptComponent({
               `${accepted.childId}:${accepted.generation}`,
             )
               ? {
-                  name: sender.title,
+                  name: sessionDisplayTitle(sender.title, sender.harness),
                   onOpen: onOpenSession
                     ? () => onOpenSession(sender.id)
                     : undefined,

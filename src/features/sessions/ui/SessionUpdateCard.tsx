@@ -10,6 +10,11 @@ import {
   StatusWord,
   useReadableModel,
 } from "./AgentRow";
+import { HARNESSES, sessionDisplayTitle, type HarnessId } from "../model/session";
+
+function isHarness(value: string): value is HarnessId {
+  return (HARNESSES as string[]).includes(value);
+}
 
 /** Session updates as one agent row per child session, in place of the raw tags the agent reads. */
 export function SessionUpdateCard({
@@ -49,7 +54,11 @@ function SessionUpdateRow({
   onOpenSession?: (sessionId: string) => void;
 }) {
   const name =
-    currentName ?? update.assignment?.name ?? (update.title || update.childId);
+    currentName ??
+    update.assignment?.name ??
+    ((isHarness(update.harness)
+      ? sessionDisplayTitle(update.title, update.harness)
+      : update.title) || update.childId);
   const model = useReadableModel(update.harness, update.model);
   const open = onOpenSession
     ? () => onOpenSession(update.childId)
