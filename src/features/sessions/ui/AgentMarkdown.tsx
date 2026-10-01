@@ -1,5 +1,4 @@
 import { code } from "@streamdown/code";
-import { createMathPlugin } from "@streamdown/math";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -48,7 +47,7 @@ import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMe
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
-import { remarkMathGuard } from "./remarkMathGuard";
+import { agentMathPlugin, parseAgentMarkdownBlocks } from "./agentMath";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 import "katex/dist/katex.min.css";
 
@@ -65,10 +64,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-// Agents write inline math as $...$, so single dollars count as math too.
-const math = createMathPlugin({ singleDollarTextMath: true });
-
-const MARKDOWN_PLUGINS = { code, mermaid, math };
+const MARKDOWN_PLUGINS = { code, mermaid, math: agentMathPlugin };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,
@@ -539,8 +535,6 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   const remarkPlugins = useMemo<PluggableList>(
     () => [
       ...Object.values(defaultRemarkPlugins),
-      // Before file links, so links it restores between prices get resolved.
-      remarkMathGuard,
       [remarkWorkspaceFileLinks, { cwd }],
     ],
     [cwd],
@@ -611,6 +605,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
             controls={false}
             dir="auto"
             isAnimating={!!streaming || paced.revealing}
+            parseMarkdownIntoBlocksFn={parseAgentMarkdownBlocks}
             plugins={MARKDOWN_PLUGINS}
             remarkPlugins={remarkPlugins}
             rehypePlugins={rehypePlugins}

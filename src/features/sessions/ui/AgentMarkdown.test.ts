@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { escapeNonMathDollars } from "./agentMath";
 import { AgentMarkdown } from "./AgentMarkdown";
 
 describe("AgentMarkdown text direction", () => {
@@ -227,5 +228,88 @@ describe("AgentMarkdown math", () => {
 
     expect(markup).not.toContain("katex");
     expect(markup).toContain(huge);
+  });
+
+  it("typesets a fenced math block", () => {
+    const markup = render("```math\n\\frac{1}{2}\n```");
+
+    expect(markup).toContain("katex-display");
+  });
+
+  it("does not typeset an oversized fenced math block", () => {
+    const huge = "x".repeat(6000);
+    const markup = render(`\`\`\`math\n${huge}\n\`\`\``);
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain(huge);
+  });
+
+  it("does not typeset oversized raw language-math HTML", () => {
+    const huge = "x".repeat(6000);
+    const markup = render(`<code class="language-math">${huge}</code>`);
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain(huge);
+  });
+
+  it("measures the whole pre that KaTeX would typeset", () => {
+    const huge = "x".repeat(6000);
+    const markup = render(
+      `<pre>${huge}<code class="language-math">y</code></pre>`,
+    );
+
+    expect(markup).not.toContain("katex");
+  });
+
+  it("caps how much math one block typesets", () => {
+    const markup = render(Array.from({ length: 600 }, () => "$x$").join(" "));
+
+    expect(markup.match(/class="katex"/g)).toHaveLength(500);
+  });
+
+  it("leaves dollars inside bare links alone", () => {
+    const markup = render("See https://example.com/?q=$a and $b$ here.");
+
+    expect(markup).toContain('href="https://example.com/?q=$a"');
+    expect(markup.match(/class="katex"/g)).toHaveLength(1);
+    expect(render("See <https://example.com/?q=$x> for $5")).toContain(
+      'href="https://example.com/?q=$x"',
+    );
+  });
+
+  it("keeps markdown that spans a dollar amount", () => {
+    const markup = render("Pay $5 **or $10** today.");
+
+    expect(markup).not.toContain("katex");
+    expect(markup).toContain('data-streamdown="strong">or $10<');
+    expect(markup).toContain("Pay $5 ");
+  });
+
+  it("still typesets math that follows a dollar amount", () => {
+    const markup = render("It costs $5. Use $x^2$ to compute it.");
+
+    expect(markup.match(/class="katex"/g)).toHaveLength(1);
+    expect(markup).toContain("It costs $5. Use ");
+  });
+
+  it("pairs math inside emphasis after a bold price", () => {
+    const markup = render("**$5** or *$x$*");
+
+    expect(markup.match(/class="katex"/g)).toHaveLength(1);
+    expect(markup).toContain('data-streamdown="strong">$5<');
+  });
+});
+
+describe("escapeNonMathDollars", () => {
+  it("leaves display math source untouched", () => {
+    const text = "$$\nx + $y\n$$";
+
+    expect(escapeNonMathDollars(text)).toBe(text);
+  });
+
+  it("leaves dollars in code untouched", () => {
+    const text = "Run `echo $HOME` then\n\n```sh\necho $PATH $5\n```";
+
+    expect(escapeNonMathDollars(text)).toBe(text);
   });
 });
