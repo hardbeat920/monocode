@@ -47,7 +47,9 @@ import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMe
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { agentMathPlugin, parseAgentMarkdownBlocks } from "./agentMath";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
+import "katex/dist/katex.min.css";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -62,7 +64,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-const MARKDOWN_PLUGINS = { code, mermaid };
+const MARKDOWN_PLUGINS = { code, mermaid, math: agentMathPlugin };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,
@@ -603,6 +605,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
             controls={false}
             dir="auto"
             isAnimating={!!streaming || paced.revealing}
+            parseMarkdownIntoBlocksFn={parseAgentMarkdownBlocks}
             plugins={MARKDOWN_PLUGINS}
             remarkPlugins={remarkPlugins}
             rehypePlugins={rehypePlugins}
