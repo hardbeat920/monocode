@@ -122,7 +122,8 @@ export function linkedWorkItemFromAutomationEvent(run: {
   eventKey?: string;
 }): LinkedWorkItem | null {
   if (run.trigger !== "event" || run.eventKind !== "github") return null;
-  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)$/i.exec(
+  // Changes after opening append `:<change>[:<label>]:<timestamp>` to the key.
+  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)(?::[a-z_]+(?::[a-z0-9_-]+)?:\d+)?$/i.exec(
     run.eventKey?.trim() ?? "",
   );
   if (!match) return null;

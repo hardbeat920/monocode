@@ -1676,7 +1676,7 @@ type TriggerEvent = {
   label: string;
 };
 
-const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
+export const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   time: [
     { value: "hourly", label: "Hourly" },
     { value: "daily", label: "Daily" },
@@ -1686,7 +1686,18 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   github: [
     { value: "draft_opened", label: "Draft opened" },
     { value: "pull_request_opened", label: "Pull request opened" },
+    {
+      value: "pull_request_ready_for_review",
+      label: "Pull request ready for review",
+    },
+    { value: "pull_request_reopened", label: "Pull request reopened" },
+    { value: "pull_request_merged", label: "Pull request merged" },
+    { value: "pull_request_closed", label: "Pull request closed" },
+    { value: "pull_request_labeled", label: "Pull request labeled" },
     { value: "issue_opened", label: "Issue opened" },
+    { value: "issue_reopened", label: "Issue reopened" },
+    { value: "issue_closed", label: "Issue closed" },
+    { value: "issue_labeled", label: "Issue labeled" },
   ],
   linear: [{ value: "issue_created", label: "Issue created" }],
   jira: [{ value: "issue_created", label: "Issue appeared" }],
@@ -1875,7 +1886,7 @@ function TimeTriggerSentence({
   );
 }
 
-function EventTriggerSentence({
+export function EventTriggerSentence({
   trigger,
   branchOptions,
   projectChosen,
@@ -1891,9 +1902,33 @@ function EventTriggerSentence({
       ? "Push"
       : (findTriggerEvent(trigger.kind, trigger.event)?.label ?? trigger.event);
   const push = trigger.event === "push_to_branch";
+  const labeled =
+    trigger.event === "issue_labeled" ||
+    trigger.event === "pull_request_labeled";
   return (
     <>
-      <span>{stem}</span>
+      {labeled ? (
+        <>
+          <span>Label</span>
+          <input
+            aria-label="Label"
+            value={trigger.label ?? ""}
+            onChange={(event) =>
+              onChange({ ...trigger, label: event.target.value })
+            }
+            placeholder="any label"
+            spellCheck={false}
+            autoComplete="off"
+            className="h-7 w-32 rounded-md bg-content/10 px-2 text-[12px] text-content outline-none placeholder:text-content/40 hover:bg-content/[0.14] focus:bg-content/[0.14]"
+          />
+          <span>
+            added to{" "}
+            {trigger.event === "issue_labeled" ? "issue" : "pull request"}
+          </span>
+        </>
+      ) : (
+        <span>{stem}</span>
+      )}
       {push ? (
         <>
           <span>on</span>

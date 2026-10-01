@@ -143,6 +143,9 @@ pub struct AutomationTrigger {
     branch: String,
     #[serde(default = "default_actor")]
     actor: String,
+    /// For label-added events: the label to wait for. Empty means any label.
+    #[serde(default)]
+    label: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -325,6 +328,7 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
         || trigger.repo.len() > 400
         || trigger.branch.len() > 400
         || trigger.actor.len() > 200
+        || trigger.label.len() > 200
         || trigger.repos.len() > 50
         || trigger.repos.iter().any(|repo| repo.len() > 400)
     {
@@ -391,6 +395,7 @@ fn normalize_triggers(input: &AutomationUpsert) -> Vec<AutomationTrigger> {
         trigger.repo = trigger.repo.trim().to_string();
         trigger.branch = trigger.branch.trim().to_string();
         trigger.actor = trigger.actor.trim().to_string();
+        trigger.label = trigger.label.trim().to_string();
         if trigger.actor.is_empty() {
             trigger.actor = default_actor();
         }
@@ -429,6 +434,7 @@ fn trigger_from_fields(
         repo: String::new(),
         branch: String::new(),
         actor: default_actor(),
+        label: String::new(),
     }
 }
 
@@ -1298,5 +1304,69 @@ mod tests {
 
         assert_eq!(claim(), 1);
         assert_eq!(claim(), 0);
+    }
+
+    #[test]
+    fn accepts_event_keys_for_changes_after_opening() {
+        assert!(validate_event_key("github:issue:acme/web:12:reopened:1790000000000").is_ok());
+        assert!(validate_event_key(
+            "github:issue:acme/web:12:labeled:good_first_issue:1790000000000"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn stored_triggers_without_a_label_wait_for_any_label() {
+        let trigger: AutomationTrigger =
+            serde_json::from_str(r#"{"id":"t","kind":"github","event":"issue_labeled"}"#).unwrap();
+        assert_eq!(trigger.label, "");
+        assert!(validate_trigger(&trigger).is_ok());
+    }
+
+    #[test]
+    fn saving_keeps_the_trigger_label_and_trims_it() {
+        let upsert: AutomationUpsert = serde_json::from_value(serde_json::json!({
+            "id": "automation-id",
+            "name": "Fix labeled issues",
+            "prompt": "Fix it",
+            "harness": "claude",
+            "model": "model",
+            "cwd": "/tmp",
+            "workspaceMode": "worktree",
+            "runtimeMode": "auto",
+            "scheduleKind": "weekdays",
+            "minute": 0,
+            "time": "09:00",
+            "dayOfWeek": 1,
+            "missedRunGraceMinutes": 60,
+            "nextRunAt": 1,
+            "triggers": [
+                {"id": "t", "kind": "github", "event": "issue_labeled", "label": "  auto-fix "}
+            ]
+        }))
+        .unwrap();
+        let triggers = normalize_triggers(&upsert);
+        assert_eq!(triggers[0].label, "auto-fix");
+        assert_eq!(
+            serde_json::to_value(&triggers[0]).unwrap()["label"],
+            "auto-fix"
+        );
+    }
+
+    #[test]
+    fn rejects_an_overlong_trigger_label() {
+        let mut trigger = trigger_from_fields(
+            "trigger-id",
+            "github",
+            "issue_labeled",
+            "weekdays",
+            0,
+            "09:00",
+            1,
+        );
+        trigger.label = "x".repeat(200);
+        assert!(validate_trigger(&trigger).is_ok());
+        trigger.label = "x".repeat(201);
+        assert!(validate_trigger(&trigger).is_err());
     }
 }

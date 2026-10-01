@@ -7344,10 +7344,13 @@ function Workspace({
     };
   }, [ensureAutomationRecovery, launchAutomation]);
 
-  const onInboxAppeared = useCallback(
-    (items: Parameters<typeof claimInboxAutomationRuns>[0]) => {
+  const onInboxActivity = useCallback(
+    (
+      items: Parameters<typeof claimInboxAutomationRuns>[0],
+      transitions: Parameters<typeof claimInboxAutomationRuns>[2],
+    ) => {
       void ensureAutomationRecovery()
-        .then(() => claimInboxAutomationRuns(items))
+        .then(() => claimInboxAutomationRuns(items, Date.now(), transitions))
         .then((due) => {
           for (const item of due) {
             void launchAutomation(
@@ -9510,7 +9513,7 @@ function Workspace({
     linkedSessionUpdateIds,
     linkedSessionUpdates,
   } = useInboxActivity(recents, sidebarCwd, sidebarHistory, {
-    onAppeared: onInboxAppeared,
+    onActivity: onInboxActivity,
   });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
   const inboxRelatedSessions = useMemo(() => {

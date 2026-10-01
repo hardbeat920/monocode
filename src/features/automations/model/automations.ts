@@ -22,6 +22,8 @@ export type AutomationTrigger = {
   repo: string;
   branch: string;
   actor: string;
+  /** For label-added events: the label to wait for. Empty means any label. */
+  label: string;
 };
 
 export type AutomationRunStatus =
@@ -184,6 +186,7 @@ export function createAutomationTrigger(
     repo: extras.repo ?? "",
     branch: extras.branch ?? "",
     actor: extras.actor ?? "anyone",
+    label: extras.label ?? "",
   };
 }
 
