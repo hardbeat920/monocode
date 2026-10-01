@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The automation gallery has an **Auto-fix GitHub issues** example under Incidents & Triage. When an issue is opened, the agent validates and reproduces it in its own worktree, fixes it, and pushes an `autofix/issue-<number>` branch for review. It never opens a pull request or comments on the issue.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added
