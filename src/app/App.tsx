@@ -2167,6 +2167,17 @@ function Workspace({
     setSessions,
   });
 
+  // The title tabs, explorer, changes and session list all follow
+  // `projectCwd`, so anything that reveals a tab from another project has to
+  // move it along with the active tab.
+  const followProject = useCallback((cwd: string | null | undefined) => {
+    if (!cwd || !looksLikeProject(cwd)) return;
+    const normalized = normalizeProjectPath(cwd);
+    if (sameProjectPath(normalized, projectCwdRef.current)) return;
+    setProjectCwd(normalized);
+    setRecents(rememberProject(normalized));
+  }, []);
+
   const activateTab = useCallback(
     (
       id: string,
@@ -2199,21 +2210,14 @@ function Workspace({
         const focusedTab = nextFocusedId
           ? { ...tab, focusedId: nextFocusedId }
           : tab;
-        const cwd = focusedWorkspaceTabCwd(focusedTab, sessionsRef.current);
-        if (cwd && looksLikeProject(cwd)) {
-          const normalized = normalizeProjectPath(cwd);
-          if (!sameProjectPath(normalized, projectCwdRef.current)) {
-            setProjectCwd(normalized);
-            setRecents(rememberProject(normalized));
-          }
-        }
+        followProject(focusedWorkspaceTabCwd(focusedTab, sessionsRef.current));
       }
       setComposerFocused(
         !!nextFocusedId &&
           sessionsRef.current.some((session) => session.id === nextFocusedId),
       );
     },
-    [],
+    [followProject],
   );
 
   const commitTabVisit = useCallback((history: TabVisitHistory) => {
@@ -3838,9 +3842,15 @@ function Workspace({
         entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
       ),
     );
+    followProject(
+      focusedWorkspaceTabCwd(
+        { ...tab, focusedId: sessionId },
+        sessionsRef.current,
+      ),
+    );
     setComposerFocused(true);
     return true;
-  }, []);
+  }, [followProject]);
 
   const replaceBlankPaneWithSession = useCallback((session: Session) => {
     const tab =
@@ -3856,6 +3866,17 @@ function Workspace({
           isBlankSession(sessionsRef.current.find((entry) => entry.id === id)),
         );
     if (!paneId || paneId === session.id) return false;
+    // A blank pane belongs to its own project; a session from another one
+    // gets its own tab in that project instead.
+    const blankCwd = sessionsRef.current.find(
+      (entry) => entry.id === paneId,
+    )?.cwd;
+    if (
+      blankCwd &&
+      looksLikeProject(blankCwd) &&
+      !sameProjectPath(blankCwd, session.cwd)
+    )
+      return false;
 
     lastPersisted.current.delete(paneId);
     {
@@ -4233,6 +4254,7 @@ function Workspace({
       const tab = newTab(session.id);
       appendTab(tab, session.cwd);
       setActiveTabId(tab.id);
+      followProject(session.cwd);
       setComposerFocused(true);
       if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
     },
@@ -4240,6 +4262,7 @@ function Workspace({
       appendTab,
       ensureOpenSession,
       focusOpenSession,
+      followProject,
       replaceBlankPaneWithSession,
       revealLinkedSessionUpdate,
     ],
