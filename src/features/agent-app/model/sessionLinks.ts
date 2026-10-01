@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Session } from "../../sessions/model/session";
 import type { ControlOutcome } from "../../orchestration/model/orchestration";
 import { pendingApprovalForSession } from "../../notifications/model/approvalToast";
+import { isPreparingHandoff } from "../../sessions/model/handoff";
 
 export type SessionUpdateStatus =
   | "settled"
@@ -265,6 +266,9 @@ export class SessionLinks {
     const previous = this.links.get(childId);
     if (previous && previous.lastRequestKey === requestKey)
       return async () => undefined;
+    // A message to an ancestor is delivered but never tracked: the two would
+    // hold each other forever.
+    if (this.isAncestor(childId, parentId)) return async () => undefined;
     const refused = this.linkError(parentId, childId);
     if (refused) throw new Error(refused);
     const next: SessionLink = previous
@@ -296,14 +300,48 @@ export class SessionLinks {
       }
       throw error;
     }
+    // Undo only what this call changed: updates recorded or put in flight
+    // since then belong to the current record.
     return async () => {
+      const current = this.links.get(childId);
+      if (!current) return;
       if (previous) {
-        await this.put({ ...previous, updatedAt: this.now() });
+        await this.put({
+          ...current,
+          parentId: previous.parentId,
+          generation: previous.generation,
+          status: previous.status,
+          heldOutcome: previous.heldOutcome,
+          lastRequestKey: previous.lastRequestKey,
+          updatedAt: this.now(),
+        });
       } else {
         this.links.delete(childId);
         await this.store.remove(childId);
       }
     };
+  }
+
+  /** Parent-initiated stop, allowed only for the caller's own child. */
+  async stopFor(parentId: string, childId: string): Promise<void> {
+    if (this.parentOf(childId) !== parentId)
+      throw new Error(
+        `Session ${childId} was not started or messaged by this session`,
+      );
+    await this.stop(childId);
+  }
+
+  /** The child's interrupted turn could not be continued. */
+  async interrupted(childId: string): Promise<void> {
+    const link = this.links.get(childId);
+    if (!link || link.status !== "running") return;
+    const update = this.outcomeUpdate(link, link.generation, "interrupted");
+    await this.put(
+      this.isHeld(childId)
+        ? { ...link, heldOutcome: update, updatedAt: this.now() }
+        : this.settled(link, update),
+    );
+    this.sync();
   }
 
   async stop(childId: string): Promise<void> {
@@ -471,6 +509,20 @@ export class SessionLinks {
    * addressed to it. The test is by each update's own parent, never by the
    * link that stores it, because an adopted child keeps its old updates.
    */
+  /** True when `ancestor` is `id` or appears on its parent chain, whatever each link's status. */
+  private isAncestor(ancestor: string, id: string): boolean {
+    const seen = new Set<string>();
+    for (
+      let current: string | undefined = id;
+      current !== undefined && !seen.has(current);
+      current = this.links.get(current)?.parentId
+    ) {
+      if (current === ancestor) return true;
+      seen.add(current);
+    }
+    return false;
+  }
+
   private isHeld(id: string): boolean {
     for (const link of this.links.values()) {
       if (link.parentId === id && link.status === "running") return true;
@@ -553,7 +605,14 @@ export class SessionLinks {
 
   private parentIdle(parentId: string): boolean {
     const parent = this.host?.session(parentId);
-    return !!parent && !parent.busy && !parent.queuedMessages?.length;
+    // submitSession refuses these states; each refusal would count as a retry.
+    return (
+      !!parent &&
+      !parent.busy &&
+      !parent.queuedMessages?.length &&
+      !parent.pendingSwitch &&
+      !isPreparingHandoff(parent)
+    );
   }
 
   private canDeliver(parentId: string): boolean {

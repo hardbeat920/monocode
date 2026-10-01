@@ -717,7 +717,7 @@ describe("SessionLinks", () => {
     await t.links.reconcileAfterBoot();
     expect(t.host.stored).toHaveBeenCalledTimes(2);
 
-    // A turn App submits after awaiting `ready` reports with the persisted generation.
+    // After `ready`, a turn end at the persisted generation records an outcome.
     await t.links.turnEnded(
       "busy",
       t.links.generationOf("busy")!,
@@ -897,5 +897,136 @@ describe("SessionLinks", () => {
       excerpt: "b".repeat(4000),
       truncated: true,
     });
+  });
+
+  it("never tracks a message to an ancestor (two sessions holding each other)", async () => {
+    const t = setup();
+    t.add("a");
+    t.add("b");
+    t.add("c");
+    await t.links.link("a", "b", "app-a-1");
+    await t.links.link("b", "c", "app-b-1");
+    await t.links.link("b", "a", "app-b-2");
+    await t.links.link("c", "a", "app-c-1");
+    expect(t.links.parentOf("a")).toBeUndefined();
+    expect(t.saved.has("a")).toBe(false);
+
+    await t.links.stop("c");
+    await t.links.turnEnded("b", 1, completed("b reply"));
+    expect(t.links.childrenOf("a")).toEqual([
+      expect.objectContaining({ childId: "b", held: false, status: "idle" }),
+    ]);
+    await t.tick();
+    expect(t.submits.map((submit) => submit.parentId)).toEqual(["a"]);
+    expect(t.submits[0].text).toContain("b reply");
+  });
+
+  it("rolls back only the link fields, keeping a batch already in flight (double delivery)", async () => {
+    const t = setup();
+    const lead = t.add("lead", { busy: true });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1");
+    await t.links.turnEnded("c", 1, completed("first"));
+    const rollback = await t.links.link("lead", "c", "app-lead-2");
+    lead.busy = false;
+    t.links.sync();
+    await t.tick();
+    expect(t.submits).toHaveLength(1);
+    const deliveryId = t.submits[0].deliveryId;
+
+    await rollback();
+    expect(t.saved.get("c")).toMatchObject({
+      generation: 1,
+      status: "idle",
+      lastRequestKey: "app-lead-1",
+      inFlight: { deliveryId },
+      pending: [],
+    });
+    await t.settleDelivery(t.submits[0], completed("noted"));
+    t.links.sync();
+    await t.tick();
+    expect(t.submits).toHaveLength(1);
+  });
+
+  it("waits while the parent switches providers or prepares a handoff (wasted retries)", async () => {
+    const t = setup();
+    const lead = t.add("lead", {
+      pendingSwitch: {
+        from: "codex",
+        fromModel: "codex:test",
+        fromSettings: {},
+      },
+    });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1");
+    await t.links.turnEnded("c", 1, completed());
+    await t.tick();
+    expect(t.submits).toHaveLength(0);
+
+    lead.pendingSwitch = undefined;
+    lead.blocks.push({
+      id: "handoff",
+      role: "handoff",
+      text: "",
+      handoff: { status: "preparing" },
+    } as Block);
+    t.links.sync();
+    await t.tick();
+    expect(t.submits).toHaveLength(0);
+    expect(
+      t.host.schedule.mock.calls.filter(([, ms]) => ms !== 0),
+    ).toHaveLength(0);
+
+    lead.blocks.pop();
+    t.links.sync();
+    await t.tick();
+    expect(t.submits).toHaveLength(1);
+  });
+
+  it("records an interrupted outcome when a tracked turn cannot continue (running forever)", async () => {
+    const t = setup();
+    t.add("lead", { busy: true });
+    t.add("b");
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1");
+    await t.links.interrupted("c");
+    expect(t.saved.get("c")).toMatchObject({
+      status: "idle",
+      pending: [
+        expect.objectContaining({
+          id: "c:1:outcome",
+          status: "interrupted",
+          generation: 1,
+        }),
+      ],
+    });
+    await t.links.interrupted("c");
+    expect(t.saved.get("c")?.pending).toHaveLength(1);
+
+    await t.links.link("lead", "b", "app-lead-2");
+    await t.links.link("b", "grandchild", "app-b-1");
+    await t.links.interrupted("b");
+    expect(t.saved.get("b")).toMatchObject({
+      status: "running",
+      heldOutcome: expect.objectContaining({ status: "interrupted" }),
+      pending: [],
+    });
+  });
+
+  it("stops a child only for its own parent (stopping another thread's work)", async () => {
+    const t = setup();
+    t.add("lead", { busy: true });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1");
+    const message = "Session c was not started or messaged by this session";
+    await expect(t.links.stopFor("other", "c")).rejects.toThrow(message);
+    await expect(t.links.stopFor("lead", "missing")).rejects.toThrow(
+      "Session missing was not started or messaged by this session",
+    );
+    expect(t.links.isTracked("c")).toBe(true);
+    expect(t.saved.get("c")?.status).toBe("running");
+
+    await t.links.stopFor("lead", "c");
+    expect(t.saved.get("c")).toMatchObject({ status: "idle", pending: [] });
   });
 });

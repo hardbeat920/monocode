@@ -8463,7 +8463,10 @@ function Workspace({
         ) {
           continue;
         }
-        onSubmit(id, CONTINUE_PROMPT);
+        // A refusal leaves the interrupt notice last, so tracked work would
+        // otherwise stay running on every launch.
+        if (!onSubmit(id, CONTINUE_PROMPT) && sessionLinks.isTracked(id))
+          void sessionLinks.interrupted(id).catch(console.warn);
       }
     }, 0);
     return () => {
@@ -9341,11 +9344,7 @@ function Workspace({
               return { alreadySubmitted: false };
             },
             stop: async (parentId, childId) => {
-              if (sessionLinks.parentOf(childId) !== parentId)
-                throw new Error(
-                  `Session ${childId} was not started or messaged by this session`,
-                );
-              await sessionLinks.stop(childId);
+              await sessionLinks.stopFor(parentId, childId);
               const busy = !!sessionsRef.current.find(
                 (session) => session.id === childId,
               )?.busy;
