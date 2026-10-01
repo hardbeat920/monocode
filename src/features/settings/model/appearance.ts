@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
@@ -353,7 +354,22 @@ export function isLightScheme(): boolean {
   return document.documentElement.classList.contains("theme-light");
 }
 
+/**
+ * On macOS a window theme is app-wide: tao sets it on NSApp, so the theme the
+ * quick composer pins reaches every window's `prefers-color-scheme`. Following
+ * the system has to clear it, or "system" keeps resolving to the pinned scheme.
+ */
+function followSystemWindowTheme() {
+  if (!IS_MAC) return;
+  void getCurrentWindow()
+    .setTheme(null)
+    .catch((error) => {
+      console.error("Failed to clear the window theme:", error);
+    });
+}
+
 export function applyThemePreference(value: ThemePreference): ColorScheme {
+  if (value === "system") followSystemWindowTheme();
   const next = resolveColorScheme(value);
   document.documentElement.classList.toggle("theme-light", next === "light");
   if (nativeGlassReady) syncNativeGlass(next);
