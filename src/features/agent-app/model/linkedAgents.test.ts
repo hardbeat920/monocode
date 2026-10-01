@@ -78,6 +78,9 @@ it("projects only caller-owned tasks and retains removed children until delivery
     tracked: (id) => links.childrenOf(id),
     send: async () => ({ alreadySubmitted: false }),
     stop: async () => true,
+    close: async () => ({ closed: true, deleted: false, wasRunning: false }),
+    focus: async () => ({ reopened: false }),
+    rename: async () => {},
     draft: async () => ({ alreadySaved: false, draft: true }),
     worktrees: async () => {
       throw new Error("not used");

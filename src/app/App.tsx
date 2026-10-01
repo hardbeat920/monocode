@@ -10,7 +10,7 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { sessionLinks } from "../features/agent-app/model/sessionLinks";
-import { persistAcceptedAssignment, repairAssignmentReceipts, type AcceptedReference, type AssignmentReceiptHost } from "../features/agent-app/model/assignments";
+import { persistAcceptedAssignment, renameLinkedAgent, repairAssignmentReceipts, type AcceptedReference, type AssignmentReceiptHost } from "../features/agent-app/model/assignments";
 import { linkedAgentListings } from "../features/agent-app/model/linkedAgents";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
@@ -922,6 +922,9 @@ export default function App(props: AppProps) {
     </Suspense>
   );
 }
+
+/** What a close request did at once; "confirm" leaves it to the user's answer. */
+type CloseOutcome = "closed" | "confirm" | "none";
 
 function Workspace({
   windowTransfer = null,
@@ -2844,17 +2847,17 @@ function Workspace({
   }, [gitCwd, onOpenTerminal]);
 
   const onCloseTab = useCallback(
-    (id: string, opts?: { confirmedTerminalIds?: string[] }) => {
+    (id: string, opts?: { confirmedTerminalIds?: string[] }): CloseOutcome => {
       const current = tabsRef.current;
       const index = current.findIndex((t) => t.id === id);
-      if (index < 0) return;
+      if (index < 0) return "none";
       const closePlan = planWorkspaceTabClose({
         tabs: current,
         sessions: sessionsRef.current,
         closingTabId: id,
         scope: tabCloseScope,
       });
-      if (closePlan.action === "keep") return;
+      if (closePlan.action === "keep") return "none";
       const closing = current[index];
       const closingFiles = [
         ...closing.editorPanes.flatMap((pane) => pane.files),
@@ -2893,6 +2896,10 @@ function Workspace({
         void refreshHistory(sidebarCwd);
       };
 
+      if (unsaved.length === 0 && terminals.length === 0) {
+        finishClose();
+        return "closed";
+      }
       void (async () => {
         if (unsaved.length > 0) {
           const ok = await confirmDiscardUnsaved(
@@ -2906,6 +2913,7 @@ function Workspace({
         }
         finishClose();
       })();
+      return "confirm";
     },
     [activateTab, persistSession, refreshHistory, sidebarCwd, tabCloseScope],
   );
@@ -3178,9 +3186,9 @@ function Workspace({
   }, []);
 
   const onClearTabSession = useCallback(
-    (id: string) => {
+    (id: string): CloseOutcome => {
       const tab = tabs.find((entry) => entry.id === id);
-      if (!tab || isBlankWorkspaceTab(tab, sessionsRef.current)) return;
+      if (!tab || isBlankWorkspaceTab(tab, sessionsRef.current)) return "none";
 
       const closingFiles = [
         ...tab.editorPanes.flatMap((pane) => pane.files),
@@ -3196,7 +3204,7 @@ function Workspace({
       const oldSession = sessionsRef.current.find(
         (session) => session.id === oldSessionId,
       );
-      if (!oldSession) return;
+      if (!oldSession) return "none";
 
       const finishClear = () => {
         persistSession(oldSession);
@@ -3240,11 +3248,12 @@ function Workspace({
 
       if (unsaved.length === 0) {
         finishClear();
-        return;
+        return "closed";
       }
       void confirmDiscardUnsaved(
         "Close this conversation with unsaved files?",
       ).then((ok) => ok && finishClear());
+      return "confirm";
     },
     [tabs, persistSession, refreshHistory, sidebarCwd],
   );
@@ -3403,43 +3412,50 @@ function Workspace({
   }, [onCloseTab, onCloseTabs, onClearTabSession, projectCwd, tabCloseScope]);
 
   const onClosePane = useCallback(
-    (sessionId?: string) => {
+    (sessionId?: string): CloseOutcome => {
       // The project terminal is shared by every workspace tab in the project.
       // Keep the global close command scoped to workspace tabs and panes even
       // while the dock has focus; terminal tabs have their own close buttons.
-      if (!activeTab) return;
+      if (!activeTab) return "none";
       const focusedSurface = findSurfacePane(activeTab, activeTab.focusedId);
       if (sessionId === undefined && focusedSurface) {
         onCloseFile(focusedSurface.pane.id, focusedSurface.pane.activeFileId);
-        return;
+        return "none";
       }
       const closingId = sessionId ?? activeTab.focusedId;
-      const ids = leafIds(activeTab.layout);
+      // A named session may sit in a background tab, as an agent's child does.
+      const tab = leafIds(activeTab.layout).includes(closingId)
+        ? activeTab
+        : tabsRef.current.find((entry) =>
+            leafIds(entry.layout).includes(closingId),
+          );
+      if (!tab) return "none";
+      const ids = leafIds(tab.layout);
       const sessionIds = ids.filter((paneId) =>
         sessionsRef.current.some((session) => session.id === paneId),
       );
-      if (!sessionIds.includes(closingId)) return;
-      const nextTab = closeLeaf(activeTab, closingId);
+      if (!sessionIds.includes(closingId)) return "none";
+      const nextTab = closeLeaf(tab, closingId);
       if (!nextTab) {
         const closePlan = planWorkspaceTabClose({
           tabs: tabsRef.current,
           sessions: sessionsRef.current,
-          closingTabId: activeTab.id,
+          closingTabId: tab.id,
           scope: tabCloseScope,
         });
-        if (closePlan.action === "keep") onClearTabSession(activeTab.id);
-        else onCloseTab(activeTab.id);
-        return;
+        return closePlan.action === "keep"
+          ? onClearTabSession(tab.id)
+          : onCloseTab(tab.id);
       }
       persistSession(sessionsRef.current.find((s) => s.id === closingId));
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === activeTab.id
+          t.id === tab.id
             ? { ...t, layout: nextTab.layout, focusedId: nextTab.focusedId }
             : t,
         ),
       );
-      if (closingId === activeTab.focusedId) {
+      if (tab === activeTab && closingId === activeTab.focusedId) {
         setComposerFocused(
           nextTab &&
             sessionsRef.current.some(
@@ -3448,6 +3464,7 @@ function Workspace({
         );
       }
       void refreshHistory(sidebarCwd);
+      return "closed";
     },
     [
       activeTab,
@@ -4701,7 +4718,7 @@ function Workspace({
               const child = sessionsRef.current.find(session => session.id === id) ?? await getSession(id);
               if (child) await repairAssignmentReceipts(child, assignmentReceiptHost, { skipDeletedParents: true });
               if (sessionLinks.parentOf(id))
-                await sessionLinks.removed(id).catch(console.warn);
+                await sessionLinks.removed(id, child ?? undefined).catch(console.warn);
               await sessionLinks.parentRemoved(id).catch(console.warn);
             }
             return stopSessionForRemoval(id);
@@ -8696,6 +8713,14 @@ function Workspace({
   );
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
+  const onClosePaneRef = useRef(onClosePane);
+  onClosePaneRef.current = onClosePane;
+  const onRemoveHistorySessionRef = useRef(onRemoveHistorySession);
+  onRemoveHistorySessionRef.current = onRemoveHistorySession;
+  const focusOpenSessionRef = useRef(focusOpenSession);
+  focusOpenSessionRef.current = focusOpenSession;
+  const onSelectHistorySessionRef = useRef(onSelectHistorySession);
+  onSelectHistorySessionRef.current = onSelectHistorySession;
 
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
@@ -9333,6 +9358,15 @@ function Workspace({
           }
           return result;
         }
+        // The user's Stop path; the link goes idle, so no update echoes the call.
+        const stopChild = async (parentId: string, childId: string) => {
+          await sessionLinks.stopFor(parentId, childId);
+          const busy = !!sessionsRef.current.find(
+            (session) => session.id === childId,
+          )?.busy;
+          if (busy) onStopRef.current(childId);
+          return busy;
+        };
         const promise = handleAgentApp(
           source,
           payload.requestId,
@@ -9436,7 +9470,7 @@ function Workspace({
                 ? target
                 : null;
             },
-            send: async (id, prompt, requestId, parentId) => {
+            send: async (id, prompt, requestId, parentId, name) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -9467,7 +9501,7 @@ function Workspace({
                 );
               // Link right before the turn exists; a refused adoption sends nothing.
               const rollback = parentId
-                ? await sessionLinks.link(parentId, id, requestId, {})
+                ? await sessionLinks.link(parentId, id, requestId, name ? { name } : {})
                 : undefined;
               let accepted = false;
               try {
@@ -9491,13 +9525,47 @@ function Workspace({
               if (result.persistenceError) void message(result.persistenceError, { title: "MonoCode", kind: "error" });
               return { alreadySubmitted: false, ...result };
             },
-            stop: async (parentId, childId) => {
-              await sessionLinks.stopFor(parentId, childId);
-              const busy = !!sessionsRef.current.find(
+            stop: stopChild,
+            close: async (parentId, childId, remove) => {
+              const wasRunning = !!sessionsRef.current.find(
                 (session) => session.id === childId,
               )?.busy;
-              if (busy) onStopRef.current(childId);
-              return busy;
+              if (remove) {
+                // The delete path stops the turn and reports `removed` to the parent.
+                if (!(await onRemoveHistorySessionRef.current(childId, "delete", true)))
+                  throw new Error(`Session ${childId} could not be deleted`);
+                return { closed: true, deleted: true, wasRunning };
+              }
+              // Only a live turn is stopped: an idle child may still hold an outcome for this parent.
+              if (wasRunning) await stopChild(parentId, childId);
+              const outcome = onClosePaneRef.current(childId);
+              return {
+                closed: outcome === "closed",
+                ...(outcome === "confirm" ? { pending: "confirm" as const } : {}),
+                deleted: false,
+                wasRunning,
+              };
+            },
+            focus: async (id) => {
+              if (focusOpenSessionRef.current(id)) return { reopened: false };
+              if (!(await ensureOpenSessionRef.current(id)))
+                throw new Error(`Session ${id} could not be opened`);
+              await onSelectHistorySessionRef.current(id);
+              return { reopened: true };
+            },
+            rename: async (parentId, childId, name) => {
+              await sessionLinks.renameFor(parentId, childId, name);
+              // The link goes when the child is deleted; the caller's own rows keep the name.
+              const rename = (session: Session) =>
+                session.id === parentId
+                  ? { ...session, blocks: renameLinkedAgent(session.blocks, parentId, childId, name) }
+                  : session;
+              const parent = sessionsRef.current.find((session) => session.id === parentId);
+              if (!parent || renameLinkedAgent(parent.blocks, parentId, childId, name) === parent.blocks) return;
+              sessionsRef.current = sessionsRef.current.map(rename);
+              setSessions((current) => current.map(rename));
+              if (!(await upsertSession(sessionsRef.current.find((session) => session.id === parentId)!)))
+                throw new Error("The name was set, but this thread's copy of it was not saved");
             },
             tracked: (parentId) => sessionLinks.childrenOf(parentId),
             draft: async (id, prompt, requestId) => {
@@ -10815,9 +10883,13 @@ function Workspace({
   const sessionPaneProps = {
     recents,
     linkedAgentsFor,
-    sessionFor: (id: string) =>
-      sessions.find((session) => session.id === id) ??
-      history.find((summary) => summary.id === id),
+    sessionFor: (id: string) => {
+      const peer =
+        sessions.find((session) => session.id === id) ??
+        history.find((summary) => summary.id === id);
+      const linkedName = sessionLinks.linkedName(id);
+      return peer && linkedName ? { ...peer, linkedName } : peer;
+    },
     hideProjectPicker: true,
     onFocus: onFocusPane,
     onClose: onClosePane,

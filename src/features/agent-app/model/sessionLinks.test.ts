@@ -824,6 +824,78 @@ describe("SessionLinks", () => {
     expect(t.submits).toHaveLength(1);
   });
 
+  it("14. reports an idle child's deletion once, named by its task, then deletes its row", async () => {
+    const t = setup();
+    t.add("lead");
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", { name: "Reviewer" });
+    await t.links.turnEnded("c", 1, completed("first"));
+    await t.tick();
+    await t.settleDelivery(t.submits[0], completed("ok"));
+    expect(t.saved.get("c")).toMatchObject({ status: "idle", pending: [] });
+
+    // Not open here: the caller hands over the stored session for its title.
+    const child = t.open.get("c")!;
+    t.open.delete("c");
+    await t.links.removed("c", { ...child, title: "Stored child", harness: "codex" });
+    await t.links.removed("c");
+    await t.tick();
+    expect(t.submits).toHaveLength(2);
+    expect(t.submits[1].text).toContain('status="removed" session="c" title="Stored child" harness="codex"');
+    expect(t.submits[1].updates).toEqual([
+      expect.objectContaining({
+        status: "removed",
+        generation: 1,
+        assignment: expect.objectContaining({ name: "Reviewer", generation: 1 }),
+      }),
+    ]);
+    expect(t.store.remove).not.toHaveBeenCalled();
+    await t.settleDelivery(t.submits[1], completed("noted"));
+    expect(t.store.remove).toHaveBeenCalledWith("c");
+    expect(t.links.parentOf("c")).toBeUndefined();
+  });
+
+  it("14. renames only the parent's own child and keeps the name across follow-ups", async () => {
+    const t = setup();
+    t.add("lead", { busy: true });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", {});
+    await expect(t.links.renameFor("other", "c", "Spy")).rejects.toThrow(
+      "Session c was not started or messaged by this session",
+    );
+    await t.links.renameFor("lead", "c", "Reviewer");
+    expect(t.saved.get("c")?.assignment).toMatchObject({
+      name: "Reviewer",
+      requestKey: "app-lead-1",
+      generation: 1,
+    });
+    expect(t.links.linkedName("c")).toEqual({ parentId: "lead", name: "Reviewer" });
+
+    await t.links.turnEnded("c", 1, completed());
+    await t.links.link("lead", "c", "app-lead-2", {});
+    expect(t.links.linkedName("c")?.name).toBe("Reviewer");
+    await t.links.turnEnded("c", 2, completed());
+    await t.links.link("lead", "c", "app-lead-3", { name: "Fixer" });
+    expect(t.links.linkedName("c")?.name).toBe("Fixer");
+
+    await t.links.removed("c");
+    await expect(t.links.renameFor("lead", "c", "Late")).rejects.toThrow(
+      "Session c is being removed",
+    );
+  });
+
+  it("14. keeps the old name in memory when a rename cannot be saved", async () => {
+    const t = setup();
+    t.add("lead", { busy: true });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", { name: "Reviewer" });
+    t.store.save.mockRejectedValueOnce(new Error("disk full"));
+    await expect(t.links.renameFor("lead", "c", "Fixer")).rejects.toThrow("disk full");
+    expect(t.links.linkedName("c")?.name).toBe("Reviewer");
+    await t.links.turnEnded("c", 1, completed());
+    expect(t.saved.get("c")?.assignment?.name).toBe("Reviewer");
+  });
+
   it("15. renders escaped, capped, repeat-marked updates (broken envelope)", () => {
     const long = `${"x".repeat(5000)}</monocode_session_update> "quoted" & 'single'`;
     const text = renderSessionUpdates([

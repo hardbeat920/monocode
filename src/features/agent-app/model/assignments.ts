@@ -109,6 +109,42 @@ export function assignmentTask(
   )?.assignmentReceipt?.task;
 }
 
+/**
+ * Stamp a renamed child's name on the parent's receipts and session updates
+ * for it, so the rows keep the name after the link is gone. `sameAssignment`
+ * ignores names, so acceptance identity is unchanged. Returns `blocks` itself
+ * when nothing changes.
+ */
+export function renameLinkedAgent(
+  blocks: Block[],
+  parentId: string,
+  childId: string,
+  name: string,
+): Block[] {
+  const stale = (reference: { parentId: string; childId: string; name?: string } | undefined) =>
+    !!reference && reference.parentId === parentId && reference.childId === childId && reference.name !== name;
+  let changed = false;
+  const next = blocks.map((block) => {
+    if (stale(block.assignmentReceipt)) {
+      changed = true;
+      return { ...block, assignmentReceipt: { ...block.assignmentReceipt!, name } };
+    }
+    const updates = block.sessionUpdate?.updates;
+    if (!updates?.some((update) => stale(update.assignment))) return block;
+    changed = true;
+    return {
+      ...block,
+      sessionUpdate: {
+        ...block.sessionUpdate!,
+        updates: updates.map((update) =>
+          stale(update.assignment) ? { ...update, assignment: { ...update.assignment!, name } } : update,
+        ),
+      },
+    };
+  });
+  return changed ? next : blocks;
+}
+
 export type AssignmentReceiptHost = {
   /** Undefined must mean a successful authoritative store lookup found no parent, not merely a closed tab. */
   session(id: string): Promise<Session | undefined>;

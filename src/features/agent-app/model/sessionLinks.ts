@@ -15,7 +15,10 @@ export type SessionUpdateStatus =
   | "question";
 
 export type SessionUpdate = {
-  /** outcome: `${childId}:${generation}:outcome`; blocked: `${childId}:${kind}:${requestId}` */
+  /**
+   * outcome: `${childId}:${generation}:outcome`, or `${childId}:${generation}:removed`
+   * for an idle child's deletion; blocked: `${childId}:${kind}:${requestId}`
+   */
   id: string;
   kind: "outcome" | "blocked";
   status: SessionUpdateStatus;
@@ -374,6 +377,38 @@ export class SessionLinks {
     await this.stop(childId);
   }
 
+  /** Parent-initiated display name for its own child; the parent's rows are renamed by `renameLinkedAgent`. */
+  async renameFor(parentId: string, childId: string, name: string): Promise<void> {
+    const link = this.links.get(childId);
+    if (link?.parentId !== parentId)
+      throw new Error(
+        `Session ${childId} was not started or messaged by this session`,
+      );
+    if (link.removing) throw new Error(`Session ${childId} is being removed`);
+    if (!link.assignment)
+      throw new Error(`Session ${childId} has no task to name`);
+    if (link.assignment.name === name) return;
+    const next: SessionLink = {
+      ...link,
+      assignment: { ...link.assignment, name },
+      updatedAt: this.now(),
+    };
+    try {
+      await this.put(next);
+    } catch (error) {
+      if (this.links.get(childId) === next) this.setLink(childId, link);
+      throw error;
+    }
+  }
+
+  /** The current display name of a linked child, with the parent it belongs to. */
+  linkedName(childId: string): { parentId: string; name: string } | undefined {
+    const link = this.links.get(childId);
+    return link?.assignment?.name
+      ? { parentId: link.parentId, name: link.assignment.name }
+      : undefined;
+  }
+
   /** The child's interrupted turn could not be continued. */
   async interrupted(childId: string): Promise<void> {
     const link = this.links.get(childId);
@@ -423,26 +458,29 @@ export class SessionLinks {
     this.sync();
   }
 
-  async removed(childId: string): Promise<void> {
+  /**
+   * The child was deleted. Its parent always hears once, whether the child was
+   * running or idle. `session` names a child that is not open in this window.
+   */
+  async removed(childId: string, session?: Session): Promise<void> {
     const link = this.links.get(childId);
-    if (!link) return;
+    if (!link || link.removing) return;
     this.awaitingTurnEnd.delete(childId);
     for (const [id, update] of this.blocked)
       if (update.childId === childId) this.blocked.delete(id);
+    const update = this.outcomeUpdate(link, link.generation, "removed", "", undefined, session ?? this.host?.session(childId));
     const next: SessionLink = {
       ...link,
       removing: true,
-      lastOutcome: link.status === "running" ? { generation: link.generation, status: "removed" } : link.lastOutcome,
+      lastOutcome: { generation: link.generation, status: "removed" },
       generation: link.generation + 1,
       status: "idle",
       heldOutcome: undefined,
-      pending:
-        link.status === "running"
-          ? [
-              ...link.pending,
-              this.outcomeUpdate(link, link.generation, "removed"),
-            ]
-          : link.pending,
+      pending: [
+        ...link.pending,
+        // An idle child already reported this generation's outcome under its id.
+        link.status === "running" ? update : { ...update, id: `${childId}:${link.generation}:removed` },
+      ],
       updatedAt: this.now(),
     };
     await this.finish(next);

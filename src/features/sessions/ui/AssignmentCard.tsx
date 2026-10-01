@@ -18,6 +18,7 @@ export function AssignmentCard({
   outcome,
   working,
   childTitle,
+  childName,
   onOpenSession,
 }: {
   receipt: AssignmentReceipt;
@@ -26,9 +27,11 @@ export function AssignmentCard({
   /** The child is working on this task: how long it has been at it. */
   working?: ReactNode;
   childTitle?: string;
+  /** The child's current display name, which outranks the one accepted with the task. */
+  childName?: string;
   onOpenSession?: (id: string) => void;
 }) {
-  const name = receipt.name ?? childTitle ?? receipt.childId;
+  const name = childName ?? receipt.name ?? childTitle ?? receipt.childId;
   const model = useReadableModel(receipt.harness, receipt.model);
   // The CLI keys a launch by the new session's own id; a send uses a fresh request id.
   const newSession = receipt.requestKey === receipt.childId;

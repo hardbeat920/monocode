@@ -94,6 +94,9 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     stop: vi.fn(async () => true),
+    close: vi.fn(async (_parentId, _childId, remove) => ({ closed: true, deleted: remove, wasRunning: false })),
+    focus: vi.fn(async () => ({ reopened: false })),
+    rename: vi.fn(async () => {}),
     tracked: vi.fn(() => []),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     worktrees: vi.fn(async () => ({
@@ -187,7 +190,7 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", stopped: true });
+    ).toEqual({ sessionId: "other", stopped: true, state: "stopped" });
     expect(host.stop).toHaveBeenCalledWith("lead", "other");
 
     host.stop = vi.fn(async () => false);
@@ -199,7 +202,58 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", stopped: false });
+    ).toEqual({ sessionId: "other", stopped: false, state: "idle" });
+  });
+
+  it("closes, focuses and renames only the caller's own linked children", async () => {
+    const { source, host } = fixture();
+    const linked = (removing?: boolean) => [
+      { childId: "other", generation: 1, status: "idle" as const, held: false, pending: 0, ...(removing ? { removing } : {}) },
+    ];
+    const calls = [
+      ["sessions.close", { sessionId: "other" }],
+      ["sessions.focus", { sessionId: "other" }],
+      ["sessions.rename", { sessionId: "other", name: "Reviewer" }],
+    ] as const;
+    for (const [action, input] of calls) {
+      await expect(handleAgentApp(source, "self", action, { ...input, sessionId: "lead" }, host))
+        .rejects.toThrow("cannot");
+      await expect(handleAgentApp(source, "unlinked", action, input, host))
+        .rejects.toThrow("Session other was not started or messaged by this session");
+    }
+    host.tracked = vi.fn(() => linked(true));
+    for (const [action, input] of calls)
+      await expect(handleAgentApp(source, "removing", action, input, host))
+        .rejects.toThrow("Session other is being removed");
+    expect(host.close).not.toHaveBeenCalled();
+    expect(host.focus).not.toHaveBeenCalled();
+    expect(host.rename).not.toHaveBeenCalled();
+
+    host.tracked = vi.fn(() => linked());
+    expect(await handleAgentApp(source, "close-1", "sessions.close", { sessionId: "other" }, host))
+      .toEqual({ sessionId: "other", closed: true, deleted: false, wasRunning: false });
+    expect(host.close).toHaveBeenLastCalledWith("lead", "other", false);
+    expect(await handleAgentApp(source, "close-2", "sessions.close", { sessionId: "other", delete: true }, host))
+      .toEqual({ sessionId: "other", closed: true, deleted: true, wasRunning: false });
+    expect(host.close).toHaveBeenLastCalledWith("lead", "other", true);
+    await expect(handleAgentApp(source, "close-3", "sessions.close", { sessionId: "other", delete: "yes" }, host))
+      .rejects.toThrow("delete must be a boolean");
+    host.close = vi.fn(async () => ({ closed: false, pending: "confirm" as const, deleted: false, wasRunning: true }));
+    expect(await handleAgentApp(source, "close-4", "sessions.close", { sessionId: "other" }, host))
+      .toEqual({ sessionId: "other", closed: false, pending: "confirm", deleted: false, wasRunning: true });
+
+    host.focus = vi.fn(async () => ({ reopened: true }));
+    expect(await handleAgentApp(source, "focus-1", "sessions.focus", { sessionId: "other" }, host))
+      .toEqual({ sessionId: "other", focused: true, reopened: true });
+    expect(host.focus).toHaveBeenCalledWith("other");
+
+    expect(await handleAgentApp(source, "rename-1", "sessions.rename", { sessionId: "other", name: "  Reviewer  " }, host))
+      .toEqual({ sessionId: "other", name: "Reviewer" });
+    expect(host.rename).toHaveBeenCalledWith("lead", "other", "Reviewer");
+    for (const name of [undefined, "", 1, "x".repeat(81)])
+      await expect(handleAgentApp(source, "rename-bad", "sessions.rename", { sessionId: "other", name }, host))
+        .rejects.toThrow("name must be");
+    expect(host.rename).toHaveBeenCalledTimes(1);
   });
 
   it("lists tracking only for sessions the caller started or messaged", async () => {
@@ -284,6 +338,13 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.send).toHaveBeenCalledTimes(1);
+
+    await handleAgentApp(source, "send-named", "sessions.send", { sessionId: "other", prompt: "Review", name: " Reviewer " }, host);
+    expect(host.send).toHaveBeenLastCalledWith("other", "Review", "app-lead-send-named", "lead", "Reviewer");
+    for (const name of ["", 1, "x".repeat(81)])
+      await expect(handleAgentApp(source, "send-bad", "sessions.send", { sessionId: "other", prompt: "Review", name }, host))
+        .rejects.toThrow("name must be");
+    expect(host.send).toHaveBeenCalledTimes(2);
   });
 
   it("saves an unsent draft in another listed project session", async () => {

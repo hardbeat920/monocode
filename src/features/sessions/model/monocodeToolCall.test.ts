@@ -46,6 +46,15 @@ describe("MonoCode CLI tool calls", () => {
       monoCodeToolCall(shell("monocode app sessions.stop --json '{}'"))?.label,
     ).toBe("Stop a session");
     expect(
+      monoCodeToolCall(shell("monocode app sessions.close --json '{}'"))?.label,
+    ).toBe("Close a session");
+    expect(
+      monoCodeToolCall(shell("monocode app sessions.focus --json '{}'"))?.label,
+    ).toBe("Show a session");
+    expect(
+      monoCodeToolCall(shell("monocode app sessions.rename --json '{}'"))?.label,
+    ).toBe("Rename a session");
+    expect(
       monoCodeToolCall(shell("monocode app sessions.draft --json '{}'"))?.label,
     ).toBe("Save a draft");
     expect(

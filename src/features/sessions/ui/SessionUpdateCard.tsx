@@ -14,17 +14,22 @@ import {
 /** Session updates as one agent row per child session, in place of the raw tags the agent reads. */
 export function SessionUpdateCard({
   updates,
+  names,
   onOpenSession,
 }: {
   updates: SessionUpdateView[];
+  /** Current display names by child ID; they outrank the name each update carries. */
+  names?: Record<string, string>;
   onOpenSession?: (sessionId: string) => void;
 }) {
   return (
     <div data-session-updates className="flex min-w-0 flex-col pb-1">
       {updates.map((update) => (
         <SessionUpdateRow
-          key={`${update.childId}:${update.kind}:${update.generation}:${update.requestId ?? ""}`}
+          // An idle child's deletion shares its generation with the reply before it.
+          key={`${update.childId}:${update.kind}:${update.status}:${update.generation}:${update.requestId ?? ""}`}
           update={update}
+          name={names?.[update.childId]}
           onOpenSession={
             update.status === "removed" ? undefined : onOpenSession
           }
@@ -36,12 +41,15 @@ export function SessionUpdateCard({
 
 function SessionUpdateRow({
   update,
+  name: currentName,
   onOpenSession,
 }: {
   update: SessionUpdateView;
+  name?: string;
   onOpenSession?: (sessionId: string) => void;
 }) {
-  const name = update.assignment?.name ?? (update.title || update.childId);
+  const name =
+    currentName ?? update.assignment?.name ?? (update.title || update.childId);
   const model = useReadableModel(update.harness, update.model);
   const open = onOpenSession
     ? () => onOpenSession(update.childId)

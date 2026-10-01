@@ -162,6 +162,10 @@ type OperatorBlockProps = {
   receiptWorking?: boolean;
   receiptStartedAt?: number;
   childTitle?: string;
+  /** The child's current display name, renamed after this task was accepted. */
+  childName?: string;
+  /** Current display names by child ID, as JSON so the memoized block compares them by value. */
+  updateNames?: string;
   /** Who sent a received task, when this app knows that session. */
   senderTitle?: string;
   senderModel?: string;
@@ -173,7 +177,10 @@ type OperatorBlockProps = {
  * blocks and run state; one known only from history carries just its name.
  */
 export type SessionPeer = Pick<Session, "id" | "title" | "harness" | "model"> &
-  Partial<Pick<Session, "busy" | "blocks">>;
+  Partial<Pick<Session, "busy" | "blocks">> & {
+    /** The display name its current link gives it, and that link's parent. */
+    linkedName?: { parentId: string; name: string };
+  };
 
 /**
  * The child's prompt for this task while the task is still the work in hand.
@@ -388,7 +395,21 @@ function AgentTranscriptComponent({
     : undefined;
   // Operator traffic names the session at its other end. What that session is
   // doing comes from the app's open copy of it; a closed one says nothing live.
+  const liveName = (parentId: string, childId: string) => {
+    const linked = sessionFor?.(childId)?.linkedName;
+    return linked?.parentId === parentId ? linked.name : undefined;
+  };
   const operatorProps = (block: Block): OperatorBlockProps => {
+    if (block.role === "user" && block.sessionUpdate?.updates) {
+      const names: Record<string, string> = {};
+      for (const update of block.sessionUpdate.updates) {
+        const name = liveName(update.parentId, update.childId);
+        if (name) names[update.childId] = name;
+      }
+      return Object.keys(names).length
+        ? { updateNames: JSON.stringify(names) }
+        : {};
+    }
     if (block.role === "system" && block.assignmentReceipt) {
       const receipt = block.assignmentReceipt;
       const child = sessionFor?.(receipt.childId);
@@ -406,6 +427,7 @@ function AgentTranscriptComponent({
         receiptWorking: !!task,
         receiptStartedAt: task?.startedAt,
         childTitle: child?.title || undefined,
+        childName: liveName(receipt.parentId, receipt.childId),
       };
     }
     if (block.role === "user" && block.acceptedAssignment) {
@@ -1579,6 +1601,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   receiptWorking = false,
   receiptStartedAt,
   childTitle,
+  childName,
+  updateNames,
   senderTitle,
   senderModel,
   senderHarness,
@@ -1640,6 +1664,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
           ) : undefined
         }
         childTitle={childTitle}
+        childName={childName}
         onOpenSession={onOpenSession}
       />
     );
@@ -1649,7 +1674,11 @@ const TranscriptBlock = memo(function TranscriptBlock({
       parseSessionUpdates(block.text);
     if (updates)
       return (
-        <SessionUpdateCard updates={updates} onOpenSession={onOpenSession} />
+        <SessionUpdateCard
+          updates={updates}
+          names={updateNames ? (JSON.parse(updateNames) as Record<string, string>) : undefined}
+          onOpenSession={onOpenSession}
+        />
       );
   }
   if (block.role === "user") {

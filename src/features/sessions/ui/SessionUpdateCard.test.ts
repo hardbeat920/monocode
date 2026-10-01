@@ -3,11 +3,15 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  SessionLinks,
   renderSessionUpdates,
   type SessionUpdate,
   type SessionUpdateStatus,
 } from "../../agent-app/model/sessionLinks";
-import type { AssignmentReceipt } from "../../agent-app/model/assignments";
+import {
+  renameLinkedAgent,
+  type AssignmentReceipt,
+} from "../../agent-app/model/assignments";
 import type { Block, Session } from "../model/session";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 import { AgentTranscript } from "./AgentTranscript";
@@ -191,6 +195,67 @@ describe("operator agent rows", () => {
       const collapsed = row("Goose stories");
       expect(collapsed.textContent).not.toContain(CHILD);
       expect((await open("Goose stories")).querySelector("p[title]")?.getAttribute("title")).toBe(CHILD);
+    });
+
+    it("renames existing task and update rows from the live link, only for the parent that owns it", async () => {
+      const settled = update("settled", { childId: CHILD, excerpt: "Done" });
+      const blocks = [receipt(), updateBlock(renderSessionUpdates([settled]), [settled])];
+      const linkedTo = (parentId: string) => (id: string) =>
+        id === CHILD
+          ? { id, title: "Goose", harness: "claude" as const, model: "claude:haiku-4.5", linkedName: { parentId, name: "luna-lo" } }
+          : undefined;
+      const names = () =>
+        [...container.querySelectorAll<HTMLElement>("[data-agent-row]")].map((element) =>
+          element.textContent?.includes("luna-lo") ? "luna-lo" : element.textContent?.includes("luna-hi") ? "luna-hi" : "other",
+        );
+      await render(blocks, { sessionFor: linkedTo("other-parent") });
+      expect(names()).toEqual(["luna-hi", "other"]);
+      await render(blocks, { sessionFor: linkedTo("lead") });
+      expect(names()).toEqual(["luna-lo", "luna-lo"]);
+    });
+
+    it("keeps a rename on earlier rows after the deleted child's link is gone", async () => {
+      const lead = session({ id: "lead", blocks: [receipt()] });
+      const links = new SessionLinks({ load: async () => [], save: async () => {}, remove: async () => {} });
+      const deliveries: ((outcome: { status: "completed"; text: string }) => void)[] = [];
+      links.bind({
+        session: (id) => (id === "lead" ? lead : undefined),
+        stored: async () => undefined,
+        canAutoContinue: () => false,
+        submit: (_parentId, text, deliveryId, done, updates) => {
+          lead.blocks = [...lead.blocks, { id: deliveryId, role: "user", text, sessionUpdate: { deliveryId, updates } }];
+          deliveries.push(done);
+        },
+        notice: () => {},
+        schedule: (run) => {
+          void Promise.resolve().then(run);
+          return () => {};
+        },
+        now: () => 1,
+      });
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+      const deliver = async () => {
+        links.sync();
+        await settle();
+        deliveries.shift()!({ status: "completed", text: "ok" });
+        await settle();
+      };
+      await links.link("lead", CHILD, CHILD, { name: "luna-hi" });
+      await links.turnEnded(CHILD, 1, { status: "completed", text: "Done" });
+      await deliver();
+      // What the host does for sessions.rename, then the child is deleted.
+      await links.renameFor("lead", CHILD, "luna-lo");
+      lead.blocks = renameLinkedAgent(lead.blocks, "lead", CHILD, "luna-lo");
+      await links.removed(CHILD);
+      await deliver();
+      expect(links.linkedName(CHILD)).toBeUndefined();
+      await render(lead.blocks, { sessionFor: () => undefined });
+      const rows = [...container.querySelectorAll<HTMLElement>("[data-agent-row]")];
+      expect(rows).toHaveLength(3);
+      for (const element of rows) {
+        expect(element.textContent).toContain("luna-lo");
+        expect(element.textContent).not.toContain("luna-hi");
+      }
     });
 
     it("shows the raw model id until the catalog can place it, then its name, without naming the default", async () => {

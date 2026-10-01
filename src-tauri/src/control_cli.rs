@@ -82,13 +82,16 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 15] = [
+const APP_ACTIONS: [&str; 18] = [
     "capabilities",
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.stop",
+    "sessions.close",
+    "sessions.focus",
+    "sessions.rename",
     "sessions.draft",
     "sessions.start",
     "worktrees.list",
@@ -124,12 +127,27 @@ Actions:
                   reasoning are omitted. Omit before for the newest page;
                   pass nextBefore from a result for older exchanges. maxChars
                   caps each message (200-6000, default 1200).
-  sessions.send  {"sessionId":"...","prompt":"..."}
+  sessions.send  {"sessionId":"...","prompt":"...","name":"reviewer"}
                   Submit a follow-up to an idle session in this project.
-                  A busy session is rejected. Reuse --request-id on retries.
+                  A busy session is rejected. Optional name (max 80) labels
+                  the session as your agent. Reuse --request-id on retries.
   sessions.stop  {"sessionId":"..."}
-                  Stop a session you started or messaged. Returns stopped:false
-                  when it was already idle. No session update follows.
+                  Stop a session you started or messaged that is running in
+                  this window. One not running here is not an error:
+                  stopped:false, state:"idle". It stays linked. No session
+                  update follows.
+  sessions.close {"sessionId":"...","delete":false}
+                  Close the tab in this window of a session you started or
+                  messaged, stopping a turn running here first; history is
+                  kept. closed:false when it has no tab here; with
+                  pending:"confirm" the user must first answer a prompt.
+                  delete:true deletes the session instead, and a removed
+                  update follows.
+  sessions.focus {"sessionId":"..."}
+                  Show that session's tab, reopening it from history if closed.
+  sessions.rename {"sessionId":"...","name":"reviewer"}
+                  Set the display name (max 80) of a session you started or
+                  messaged.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
@@ -175,7 +193,7 @@ Actions:
                   Omitted fields stay unchanged. Reuse --request-id on retries.
 
 Sessions you start or message report back: when one finishes, fails, is
-stopped by the user, or waits for the user's approval or answer, MonoCode
+stopped by the user, is deleted, or waits for the user's approval or answer, MonoCode
 adds a session update turn to this thread. You never need to poll; use
 sessions.read for the full reply.
 
@@ -599,6 +617,37 @@ mod tests {
             "unknown, not success",
         ] {
             assert!(text.contains(contract));
+        }
+    }
+
+    #[test]
+    fn linked_session_lifecycle_actions_are_app_only() {
+        for (action, input) in [
+            ("sessions.close", r#"{"sessionId":"child","delete":true}"#),
+            ("sessions.focus", r#"{"sessionId":"child"}"#),
+            (
+                "sessions.rename",
+                r#"{"sessionId":"child","name":"reviewer"}"#,
+            ),
+        ] {
+            assert!(matches!(
+                parse_args_for(&args(&[action, "--json", input]), true),
+                Ok(Parsed::Call(called, parsed, _))
+                    if called == action && parsed["sessionId"] == "child"
+            ));
+            assert!(parse_args(&args(&[action])).is_err());
+            assert!(app_help().contains(action), "app help omits {action}");
+        }
+        let text = app_help();
+        for contract in [
+            "delete:true deletes",
+            "reopening it from history",
+            r#"stopped:false, state:"idle""#,
+            "It stays linked",
+            r#"pending:"confirm""#,
+            r#""name":"reviewer""#,
+        ] {
+            assert!(text.contains(contract), "app help omits {contract}");
         }
     }
 

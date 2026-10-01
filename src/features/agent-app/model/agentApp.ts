@@ -68,9 +68,29 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
     parentId?: string,
+    name?: string,
   ): Promise<{ alreadySubmitted: boolean; persistenceError?: string }>;
-  /** Stop a session the caller started or messaged; true when it was running. */
+  /** Stop a session the caller started or messaged; true when it was running in this window. */
   stop(parentId: string, childId: string): Promise<boolean>;
+  /**
+   * Close the caller's linked child in this window, stopping a turn running
+   * here first, or delete it. `closed` is false when it has no tab here or the
+   * user must first answer a confirm (`pending`).
+   */
+  close(
+    parentId: string,
+    childId: string,
+    remove: boolean,
+  ): Promise<{
+    closed: boolean;
+    pending?: "confirm";
+    deleted: boolean;
+    wasRunning: boolean;
+  }>;
+  /** Reveal a session's tab, reopening it from history when it is closed. */
+  focus(id: string): Promise<{ reopened: boolean }>;
+  /** Set the display name of the caller's linked child. */
+  rename(parentId: string, childId: string, name: string): Promise<void>;
   tracked(parentId: string): SessionLinkView[];
   draft(
     id: string,
@@ -94,8 +114,11 @@ const FIELDS = new Map<string, readonly string[]>([
   ["models.list", []],
   ["sessions.list", ["linkedOnly"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
-  ["sessions.send", ["sessionId", "prompt"]],
+  ["sessions.send", ["sessionId", "prompt", "name"]],
   ["sessions.stop", ["sessionId"]],
+  ["sessions.close", ["sessionId", "delete"]],
+  ["sessions.focus", ["sessionId"]],
+  ["sessions.rename", ["sessionId", "name"]],
   ["sessions.draft", ["sessionId", "prompt"]],
   [
     "sessions.start",
@@ -191,6 +214,22 @@ async function projectSession(
   const target = await host.session(id);
   if (!target) throw new Error("Session was not found in this project");
   return target;
+}
+
+/** A session the caller started or messaged; being linked is the whole authorization. */
+function linkedChild(
+  source: Session,
+  input: Record<string, unknown>,
+  host: AgentAppHost,
+  verb: string,
+): string {
+  const id = requiredString(input.sessionId, "sessionId", 256);
+  if (id === source.id) throw new Error(`A session cannot ${verb} itself`);
+  const link = host.tracked(source.id).find((view) => view.childId === id);
+  if (!link)
+    throw new Error(`Session ${id} was not started or messaged by this session`);
+  if (link.removing) throw new Error(`Session ${id} is being removed`);
+  return id;
 }
 
 /** Two short body paragraphs, with a hard cap independent of Markdown length. */
@@ -355,6 +394,7 @@ export async function handleAgentApp(
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
       const prompt = agentPrompt(input.prompt);
+      const name = optionalString(input.name, "name", 80);
       if (id === source.id)
         throw new Error(
           "Use the current conversation to continue this session",
@@ -367,6 +407,7 @@ export async function handleAgentApp(
         prompt,
         `app-${source.id}-${requestId}`,
         source.id,
+        ...(name ? [name] : []),
       );
       return { sessionId: id, submitted: true, ...result };
     }
@@ -374,7 +415,25 @@ export async function handleAgentApp(
       const id = requiredString(input.sessionId, "sessionId", 256);
       if (id === source.id)
         throw new Error("Use the Stop button to stop the current session");
-      return { sessionId: id, stopped: await host.stop(source.id, id) };
+      const stopped = await host.stop(source.id, id);
+      return { sessionId: id, stopped, state: stopped ? "stopped" : "idle" };
+    }
+    case "sessions.close": {
+      const remove = input.delete ?? false;
+      if (typeof remove !== "boolean")
+        throw new Error("delete must be a boolean");
+      const id = linkedChild(source, input, host, "close");
+      return { sessionId: id, ...(await host.close(source.id, id, remove)) };
+    }
+    case "sessions.focus": {
+      const id = linkedChild(source, input, host, "focus");
+      return { sessionId: id, focused: true, ...(await host.focus(id)) };
+    }
+    case "sessions.rename": {
+      const name = requiredString(input.name, "name", 80);
+      const id = linkedChild(source, input, host, "rename");
+      await host.rename(source.id, id, name);
+      return { sessionId: id, name };
     }
     case "sessions.draft": {
       const id = requiredString(input.sessionId, "sessionId", 256);
