@@ -312,7 +312,6 @@ const scrollbarTheme = EditorView.theme({
     top: "0",
     left: "3px",
     right: "3px",
-    minHeight: `${MIN_THUMB_HEIGHT}px`,
     borderRadius: "2px",
     backgroundColor:
       "color-mix(in srgb, var(--color-content) 30%, transparent)",

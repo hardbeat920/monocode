@@ -132,8 +132,7 @@ body,
     var(--motion-ease-out);
 }
 
-/* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
-   scrollbars and default text rendering. */
+/* Linux/Windows: explicit sans stack and font-smoothing. macOS keeps default font rendering. */
 html:not(.is-mac),
 html:not(.is-mac) body,
 html:not(.is-mac) #root {
@@ -143,25 +142,27 @@ html:not(.is-mac) #root {
   text-rendering: optimizeLegibility;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar {
+/* Thin scrollbars on every platform. Unlike macOS native overlay scrollbars,
+   these are CSS-sized, so the webview zoom behind Interface scale scales them. */
+::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--color-content) 16%, transparent);
   border-radius: 9999px;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--color-content) 32%, transparent);
 }
 
-html:not(.is-mac) ::-webkit-scrollbar-corner {
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 

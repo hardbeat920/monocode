@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On macOS, scrollbars scale with Settings → Appearance → Interface scale. macOS now uses the same thin CSS scrollbars as Linux and Windows, because the webview zoom does not resize native overlay scrollbars. In #600.
+- The editor scrollbar thumb stays inside a rail shorter than its minimum height.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added
