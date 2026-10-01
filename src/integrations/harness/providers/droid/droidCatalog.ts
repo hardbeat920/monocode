@@ -26,7 +26,7 @@ let inflight: Promise<void> | null = null;
 
 export function refreshDroidCatalog(): Promise<void> {
   if (inflight) return inflight;
-  inflight = discoverDroidModels((models) => {
+  inflight = probeDroidModels((models) => {
     if (models.length > 0) setHarnessModels("droid", models);
   })
     .catch((error: unknown) => {
@@ -38,19 +38,32 @@ export function refreshDroidCatalog(): Promise<void> {
   return inflight;
 }
 
+/** Resolves with the full catalog, including each model's effort choices. */
+export async function discoverDroidModels(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
+  let latest: AgentModel[] = [];
+  await probeDroidModels((models) => {
+    latest = models;
+  }, workingDirectory);
+  return latest;
+}
+
 /**
  * Droid lists its models on session/new but only reports reasoning levels
  * for the selected one. Publish the plain list first, then walk the models on
  * the throwaway probe session (a local switch, no inference) to attach each
  * model's own effort choices.
  */
-async function discoverDroidModels(
+async function probeDroidModels(
   publish: (models: AgentModel[]) => void,
+  workingDirectory?: string,
 ): Promise<void> {
   const { path } = await resolveDroidBinary();
-  const cwd = await homeDir();
+  const cwd = workingDirectory ?? (await homeDir());
+  const probeId = `${PROBE_ID}-${crypto.randomUUID()}`;
   let latestConfig: DroidConfigOption[] | null = null;
-  const acp = new AcpClient(PROBE_ID, {
+  const acp = new AcpClient(probeId, {
     onNotification: (method, params) => {
       if (method !== "session/update") return;
       const options = droidConfigOptionsFrom(params);
@@ -68,18 +81,18 @@ async function discoverDroidModels(
 
   const stop = async () => {
     acp.close();
-    unwatchChild(PROBE_ID);
-    await killChild(PROBE_ID).catch(() => undefined);
+    unwatchChild(probeId);
+    await killChild(probeId).catch(() => undefined);
   };
 
   watchChild(
-    PROBE_ID,
+    probeId,
     (line) => acp.pushLine(line),
     () => acp.close(new Error("Droid catalog probe exited")),
   );
 
   try {
-    await spawnChild(PROBE_ID, path, DROID_ACP_ARGS, cwd, undefined, "droid");
+    await spawnChild(probeId, path, DROID_ACP_ARGS, cwd, undefined, "droid");
     await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

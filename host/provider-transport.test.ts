@@ -96,6 +96,7 @@ describe("existing providers over headless process I/O", () => {
       grok: binary,
       fx: binary,
       hermes: binary,
+      droid: binary,
       antigravity: binary,
     });
     configureChildBackend(backend);
@@ -198,7 +199,7 @@ describe("existing providers over headless process I/O", () => {
     },
   );
 
-  it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
+  it.each(["cursor", "grok", "fx", "hermes", "droid", "antigravity"] as const)(
     "completes a %s turn over the headless ACP transport",
     async (harness) => {
       const project = await engine.openProject(directory);

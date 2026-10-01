@@ -7,6 +7,7 @@ import * as pi from "../src/integrations/harness/providers/pi/pi";
 import * as omp from "../src/integrations/harness/providers/omp/omp";
 import * as fx from "../src/integrations/harness/providers/fx/fx";
 import * as hermes from "../src/integrations/harness/providers/hermes/hermes";
+import * as droid from "../src/integrations/harness/providers/droid/droid";
 import * as antigravity from "../src/integrations/harness/providers/antigravity/antigravity";
 import type {
   SendTurnInput,
@@ -137,6 +138,14 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     stop: hermes.forgetHermesSession,
     bind: hermes.bindHermesSession,
     approve: hermes.respondHermesApproval,
+    answer: unsupportedQuestion,
+  },
+  droid: {
+    send: droid.sendDroidTurn,
+    cancel: droid.cancelDroidTurn,
+    stop: droid.forgetDroidSession,
+    bind: droid.bindDroidSession,
+    approve: droid.respondDroidApproval,
     answer: unsupportedQuestion,
   },
   antigravity: {
