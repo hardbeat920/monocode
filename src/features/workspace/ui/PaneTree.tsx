@@ -48,7 +48,10 @@ import {
   type ComposerTurnOptions,
 } from "../../sessions/model/session";
 import { FilePane } from "../../files/ui/FilePane";
-import { SessionPane } from "../../sessions/ui/SessionPane";
+import {
+  SessionPane,
+  type SessionPaneProps,
+} from "../../sessions/ui/SessionPane";
 import type { TranscriptPool } from "../../sessions/ui/TranscriptPool";
 import type { SessionFolderTarget } from "../../sessions/model/sessionFolders";
 import type { Worktree } from "../../source-control/model/worktrees";
@@ -140,6 +143,10 @@ type Shared = {
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
   onOpenFile: (path: string) => void;
+  /** Operator traffic: open a linked session, list a parent's agents, look up a peer. */
+  onOpenSession?: SessionPaneProps["onOpenSession"];
+  linkedAgentsFor?: SessionPaneProps["linkedAgentsFor"];
+  sessionFor?: SessionPaneProps["sessionFor"];
   editorNavigation?: EditorNavigationTarget | null;
   onOpenDiff: (
     path?: string,
@@ -255,6 +262,9 @@ function PaneTreeComponent({
   onQuestionReply,
   onQuestionInteraction,
   onOpenFile,
+  onOpenSession,
+  linkedAgentsFor,
+  sessionFor,
   editorNavigation,
   onOpenDiff,
   onOpenPlan,
@@ -513,6 +523,9 @@ function PaneTreeComponent({
                 onQuestionReply={onQuestionReply}
                 onQuestionInteraction={onQuestionInteraction}
                 onOpenFile={onOpenFile}
+                onOpenSession={onOpenSession}
+                linkedAgentsFor={linkedAgentsFor}
+                sessionFor={sessionFor}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
                 onBuildPlan={onBuildPlan}
