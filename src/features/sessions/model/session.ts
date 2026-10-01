@@ -338,6 +338,8 @@ export type Block = {
    * conversation rather than the user narrating their own agents.
    */
   internal?: boolean;
+  /** A turn MonoCode wrote to report linked sessions' outcomes to this thread. */
+  sessionUpdate?: { deliveryId: string };
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */

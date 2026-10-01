@@ -9,6 +9,7 @@ import {
   type AppSessionListing,
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
+import { sessionLinks } from "../features/agent-app/model/sessionLinks";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
   submitAfterProjectSync,
@@ -56,6 +57,7 @@ import {
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import {
   startTransition,
@@ -721,6 +723,8 @@ type SubmitOptions = ComposerTurnOptions & {
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
   managed?: boolean;
+  /** A visible turn reporting linked sessions' outcomes to this thread. */
+  sessionUpdate?: { deliveryId: string };
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
   onSettled?: (outcome: ControlOutcome) => void;
@@ -5908,6 +5912,22 @@ function Workspace({
       const remote = sessionsRef.current.find((session) => session.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd))
         return !!remoteSessionActions(sessionId)?.submit(text, attachments, options);
+      // The generation names this turn, so a late settlement of an older turn
+      // cannot report against newer tracked work. The deferred project-sync
+      // retry settles through this call's `settle`, so it takes no snapshot.
+      const linkGeneration = options?.projectLocationReady
+        ? undefined
+        : sessionLinks.generationOf(sessionId);
+      let settled = false;
+      const settle = (outcome: ControlOutcome) => {
+        if (settled) return;
+        settled = true;
+        options?.onSettled?.(outcome);
+        if (linkGeneration !== undefined)
+          void sessionLinks
+            .turnEnded(sessionId, linkGeneration, outcome)
+            .catch(console.warn);
+      };
       if (editedResends.isActive(sessionId)) return false;
       const controlError = orchestrator.submissionError(
         sessionId,
@@ -5918,7 +5938,7 @@ function Workspace({
         flushHarnessEvents();
         return false;
       }
-      if (options?.managed) {
+      if (options?.managed || options?.sessionUpdate) {
         const target = sessionsRef.current.find((s) => s.id === sessionId);
         if (
           !target ||
@@ -5927,7 +5947,7 @@ function Workspace({
           isPreparingHandoff(target) ||
           removingSessionIds.current.has(sessionId)
         ) {
-          options.onSettled?.({
+          settle({
             status: "failed",
             text: "",
             error: "Session is unavailable or already running",
@@ -6235,11 +6255,11 @@ function Workspace({
               sessionId,
               text,
               attachments,
-              { ...options, projectLocationReady: true },
+              { ...options, projectLocationReady: true, onSettled: settle },
             );
             if (!accepted) {
               editedResend?.reject();
-              options?.onSettled?.({
+              settle({
                 status: "failed",
                 text: "",
                 error:
@@ -6259,7 +6279,7 @@ function Workspace({
             });
             flushHarnessEvents();
             editedResend?.reject();
-            options?.onSettled?.({
+            settle({
               status: "failed",
               text: "",
               error: message,
@@ -6328,6 +6348,20 @@ function Workspace({
         ...(options?.appRequestId ? { appRequestId: options.appRequestId } : {}),
         // The orchestrator writes these turns, not the user; hide them.
         ...(options?.managed ? { internal: true } : {}),
+        ...(options?.sessionUpdate
+          ? { sessionUpdate: options.sessionUpdate }
+          : {}),
+      };
+      // appendUser keeps only its own turn fields; mark the block it added.
+      const appendTurn = (session: Session) => {
+        const appended = appendUser(session, visibleText, visible, cards);
+        if (!cards.sessionUpdate) return appended;
+        const blocks = [...appended.blocks];
+        blocks[blocks.length - 1] = {
+          ...blocks[blocks.length - 1],
+          sessionUpdate: cards.sessionUpdate,
+        };
+        return { ...appended, blocks };
       };
       const live = isLiveHarness(current.harness);
       const queuedHandoff =
@@ -6421,23 +6455,15 @@ function Workspace({
                 title: titled,
                 pendingSwitch: undefined,
               });
-              return appendUser(
+              return appendTurn(
                 appendPreparingHandoff(
                   sealed,
                   pendingSwitch.from,
                   next.harness,
                 ),
-                visibleText,
-                visible,
-                cards,
               );
             }
-            return appendUser(
-              { ...next, title: titled },
-              visibleText,
-              visible,
-              cards,
-            );
+            return appendTurn({ ...next, title: titled });
           }),
         );
       };
@@ -6507,7 +6533,7 @@ function Workspace({
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
         editedResend?.reject();
-        options?.onSettled?.({
+        settle({
           status: "failed",
           text: "",
           error: "Harness is not connected",
@@ -6695,10 +6721,9 @@ function Workspace({
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
-          if (options?.onSettled && event.type === "message.delta")
+          if (event.type === "message.delta")
             controlText = (controlText + event.text).slice(-20_000);
-          if (options?.onSettled && event.type === "message.completed")
-            controlText += "\n";
+          if (event.type === "message.completed") controlText += "\n";
           if (event.type === "session.error")
             controlOutcome.error = event.message;
           if (
@@ -7030,7 +7055,7 @@ function Workspace({
         .finally(() => {
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
-          options?.onSettled?.(
+          settle(
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
               : controlOutcome,
@@ -8412,9 +8437,14 @@ function Workspace({
   useEffect(() => {
     if (!autoContinueKey) return;
     const ids = autoContinueKey.split("\n");
+    let cancelled = false;
     // Delay past React StrictMode's dev remount so Continue is not claimed
     // against a discarded tree (sessionStorage also survives Vite reloads).
-    const timer = window.setTimeout(() => {
+    const timer = window.setTimeout(async () => {
+      // A continued turn snapshots its link generation at submit; wait for the
+      // persisted links so tracked work interrupted at quit still reports.
+      await sessionLinks.ready;
+      if (cancelled) return;
       for (const id of ids) {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (
@@ -8427,7 +8457,10 @@ function Workspace({
         onSubmit(id, CONTINUE_PROMPT);
       }
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [autoContinueKey, onSubmit]);
 
   const onCompactContext = useCallback(
@@ -9038,8 +9071,92 @@ function Workspace({
     });
   }, [checkOpenWorktreeFiles, submitSession, onStop]);
 
+  useLayoutEffect(() => {
+    sessionLinks.bind({
+      session: (id) => sessionsRef.current.find((session) => session.id === id),
+      stored: async (id) => (await getSession(id)) ?? undefined,
+      canAutoContinue: (session) =>
+        canAutoContinue(session) && isLiveHarness(session.harness),
+      submit: (id, text, deliveryId, done) => {
+        void submitWithSettlement({
+          submit: (onSettled) => {
+            let acceptance: SubmissionAcceptance = false;
+            flushSync(() => {
+              acceptance = submitSession(id, text, [], {
+                sessionUpdate: { deliveryId },
+                onSettled,
+              });
+            });
+            return acceptance;
+          },
+          onSettled: done,
+          rejectionMessage: "The session could not accept this update.",
+        }).catch(console.error);
+      },
+      notice: (id, text) => {
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === id
+              ? {
+                  ...session,
+                  blocks: [
+                    ...session.blocks,
+                    {
+                      id: crypto.randomUUID(),
+                      role: "system",
+                      text,
+                      notice: "error",
+                    },
+                  ],
+                }
+              : session,
+          ),
+        );
+      },
+      schedule: (run, ms) => {
+        const timer = window.setTimeout(run, ms);
+        return () => window.clearTimeout(timer);
+      },
+      now: () => Date.now(),
+    });
+  }, [submitSession]);
+
+  const [sessionLinksHydrated, setSessionLinksHydrated] = useState(false);
+  const sessionLinksBooted = useRef(false);
+  useEffect(() => {
+    if (sessionLinksBooted.current) return;
+    sessionLinksBooted.current = true;
+    void sessionLinks
+      .hydrate({ boot: true })
+      .then(() => setSessionLinksHydrated(true));
+  }, []);
+  const sessionLinksReconciled = useRef(false);
+  useEffect(() => {
+    if (!sessionLinksHydrated || sessionLinksReconciled.current) return;
+    sessionLinksReconciled.current = true;
+    // Only the window that restored the workspace at launch decides what quit
+    // interrupted; a later window would read a child running elsewhere as idle.
+    if (windowTransfer || getCurrentWebviewWindow().label !== "main") return;
+    void sessionLinks.reconcileAfterBoot().catch(console.warn);
+  }, [sessionLinksHydrated, windowTransfer]);
+
+  useEffect(() => {
+    const label = getCurrentWebviewWindow().label;
+    const listening = listen<{ childId: string; origin: string }>(
+      "monocode-session-links-changed",
+      ({ payload }) => {
+        if (payload.origin === label) return;
+        void sessionLinks.hydrate();
+      },
+    );
+    return () => {
+      void listening.then((unlisten) => unlisten());
+    };
+  }, []);
+
   useEffect(() => {
     orchestrator.sync();
+    sessionLinks.sync();
   }, [sessions]);
 
   useEffect(() => {
@@ -9086,7 +9203,7 @@ function Workspace({
           payload.action,
           payload.input,
           {
-            start: async (launch, id, placement) => {
+            start: async (launch, id, placement, parentId) => {
               const open = sessionsRef.current.find(
                 (session) => session.id === id,
               );
@@ -9113,7 +9230,17 @@ function Workspace({
                 return;
               if (existing && sessionDraftBlock(existing))
                 throw new Error("Session ID already has a different draft");
-              await launchQuickSessionRef.current(launch, id, placement);
+              // Link before the first turn can end; a draft runs no turn.
+              const rollback =
+                parentId && !launch.draft
+                  ? await sessionLinks.link(parentId, id, id)
+                  : undefined;
+              try {
+                await launchQuickSessionRef.current(launch, id, placement);
+              } catch (error) {
+                await rollback?.().catch(console.warn);
+                throw error;
+              }
             },
             sessions: async (cwd): Promise<AppSessionListing[]> => {
               const stored = await listSessionsByProject(cwd);

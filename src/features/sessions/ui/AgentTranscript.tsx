@@ -1613,6 +1613,7 @@ function UserMessageBlock({
   const card = block.secondOpinion;
   const note = block.noteCard;
   const monocode = isOperatorUserTurn(block);
+  const sessionUpdate = !!block.sessionUpdate;
   const text =
     card && card.kind !== "handoff"
       ? ""
@@ -1625,6 +1626,7 @@ function UserMessageBlock({
   const textOnly =
     Boolean(text) &&
     !block.draft &&
+    !sessionUpdate &&
     !block.attachments?.length &&
     !card &&
     !note &&
@@ -1692,7 +1694,8 @@ function UserMessageBlock({
       >
         <div
           data-draft={block.draft ? "true" : undefined}
-          data-monocode={monocode ? "true" : undefined}
+          data-monocode={monocode || sessionUpdate ? "true" : undefined}
+          data-session-update={sessionUpdate ? "true" : undefined}
           className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color] duration-200 ${
             block.draft
               ? "border border-dashed border-content/30 bg-content/4"
@@ -1704,6 +1707,11 @@ function UserMessageBlock({
           }`}
           style={{ zIndex: stickyIndex }}
         >
+          {sessionUpdate ? (
+            <div className="mb-1 text-xs font-medium text-content/55">
+              Session update
+            </div>
+          ) : null}
           {block.attachments?.length ? (
             <div
               className={`flex flex-wrap gap-1.5 ${text || card || note ? "mb-2" : ""}`}

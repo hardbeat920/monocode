@@ -52,6 +52,7 @@ export type AgentAppHost = {
     launch: QuickLaunch,
     id: string,
     placement?: AppSessionPlacement,
+    parentId?: string,
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
@@ -59,6 +60,7 @@ export type AgentAppHost = {
     id: string,
     prompt: string,
     requestId: string,
+    parentId?: string,
   ): Promise<{ alreadySubmitted: boolean }>;
   draft(
     id: string,
@@ -335,6 +337,7 @@ export async function handleAgentApp(
         id,
         prompt,
         `app-${source.id}-${requestId}`,
+        source.id,
       );
       return { sessionId: id, submitted: true, ...result };
     }
@@ -386,11 +389,13 @@ export async function handleAgentApp(
             source.id);
       const id = `app-${source.id}-${requestId}`;
       if (besideSessionId)
-        await host.start(launch, id, {
-          direction: placement as SplitDir,
-          besideSessionId,
-        });
-      else await host.start(launch, id);
+        await host.start(
+          launch,
+          id,
+          { direction: placement as SplitDir, besideSessionId },
+          source.id,
+        );
+      else await host.start(launch, id, undefined, source.id);
       return {
         id,
         cwd: launch.cwd,

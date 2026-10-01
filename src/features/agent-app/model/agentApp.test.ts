@@ -146,6 +146,7 @@ describe("agent app commands", () => {
       "other",
       "Continue the review",
       "app-lead-send-1",
+      "lead",
     );
     await expect(
       handleAgentApp(
@@ -271,6 +272,8 @@ describe("agent app commands", () => {
         reveal: true,
       }),
       "app-lead-request-1",
+      undefined,
+      "lead",
     );
     expect(result).toMatchObject({ id: "app-lead-request-1", submitted: true });
   });
@@ -303,6 +306,8 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeCwd: featureWorktree.path }),
       "app-lead-feature",
+      undefined,
+      "lead",
     );
     await handleAgentApp(
       source,
@@ -317,6 +322,8 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenLastCalledWith(
       expect.objectContaining({ worktreeCwd: undefined }),
       "app-lead-main",
+      undefined,
+      "lead",
     );
   });
 
@@ -416,6 +423,7 @@ describe("agent app commands", () => {
       expect.objectContaining({ draft: true }),
       "app-lead-right",
       { direction: "right", besideSessionId: "lead" },
+      "lead",
     );
     await handleAgentApp(
       source,
@@ -432,6 +440,7 @@ describe("agent app commands", () => {
       expect.anything(),
       "app-lead-down",
       { direction: "down", besideSessionId: "app-lead-right" },
+      "lead",
     );
   });
 
@@ -462,6 +471,8 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenLastCalledWith(
       expect.objectContaining({ runtimeMode: "auto" }),
       "app-lead-inherited-mode",
+      undefined,
+      "lead",
     );
     await handleAgentApp(
       source,
@@ -473,6 +484,8 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenLastCalledWith(
       expect.objectContaining({ runtimeMode: "full-access" }),
       "app-lead-explicit-mode",
+      undefined,
+      "lead",
     );
   });
 
@@ -497,6 +510,8 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "Test prompt", draft: true }),
       result.id,
+      undefined,
+      "lead",
     );
     host.sessions = vi.fn(async () => [
       {

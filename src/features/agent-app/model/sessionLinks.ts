@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Block, Session } from "../../sessions/model/session";
+import type { Session } from "../../sessions/model/session";
 import type { ControlOutcome } from "../../orchestration/model/orchestration";
 import { pendingApprovalForSession } from "../../notifications/model/approvalToast";
 
@@ -110,11 +110,6 @@ type Delivery = {
 
 /** A parent that exhausted its retries waits for its next turn to end. */
 type Stall = { userBlockId?: string; sawBusy: boolean };
-
-function deliveryIdOf(block: Block): string | undefined {
-  return (block as { sessionUpdate?: { deliveryId?: string } }).sessionUpdate
-    ?.deliveryId;
-}
 
 function lastUserBlockId(session: Session | undefined): string | undefined {
   if (!session) return undefined;
@@ -675,7 +670,7 @@ export class SessionLinks {
     // The harness reported no output: the parent never ran this turn.
     const parent = this.host?.session(parentId);
     const shown = !!parent?.blocks.some(
-      (block) => deliveryIdOf(block) === deliveryId,
+      (block) => block.sessionUpdate?.deliveryId === deliveryId,
     );
     const size =
       delivery.blocked.length +
@@ -769,7 +764,7 @@ export class SessionLinks {
       if (!parent || parent.busy) continue;
       this.bootInFlight.delete(flight.deliveryId);
       const delivered = parent.blocks.some(
-        (block) => deliveryIdOf(block) === flight.deliveryId,
+        (block) => block.sessionUpdate?.deliveryId === flight.deliveryId,
       );
       writes.push(
         this.finish({

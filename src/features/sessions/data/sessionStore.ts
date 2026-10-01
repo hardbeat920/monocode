@@ -674,6 +674,13 @@ function sanitizeBlock(
   // Without this the transcript would show the app's orchestration turns as
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
+  // Boot reconciliation reads it to tell a delivered session update from a lost one.
+  if (
+    block.role === "user" &&
+    typeof block.sessionUpdate?.deliveryId === "string" &&
+    isPersistableId(block.sessionUpdate.deliveryId)
+  )
+    next.sessionUpdate = { deliveryId: block.sessionUpdate.deliveryId };
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
