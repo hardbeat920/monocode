@@ -33,11 +33,13 @@ import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage } from "./sessionConversation";
 import type { SessionLinkView } from "./sessionLinks";
+import { linkedAgentListings } from "./linkedAgents";
+import { appCapabilities } from "./capabilities";
 
 export type AppSessionListing = {
   id: string;
   title: string;
-  harness: HarnessId;
+  harness: HarnessId | "unknown";
   model: string;
   busy: boolean;
   hasDraft: boolean;
@@ -56,15 +58,17 @@ export type AgentAppHost = {
     id: string,
     placement?: AppSessionPlacement,
     parentId?: string,
-  ): Promise<void>;
+    assignment?: { name?: string },
+  ): Promise<void | { persistenceError?: string }>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
+  openSession?(id: string): Session | undefined;
   session(id: string): Promise<Session | null>;
   send(
     id: string,
     prompt: string,
     requestId: string,
     parentId?: string,
-  ): Promise<{ alreadySubmitted: boolean }>;
+  ): Promise<{ alreadySubmitted: boolean; persistenceError?: string }>;
   /** Stop a session the caller started or messaged; true when it was running. */
   stop(parentId: string, childId: string): Promise<boolean>;
   tracked(parentId: string): SessionLinkView[];
@@ -86,8 +90,9 @@ export type AgentAppHost = {
 };
 
 const FIELDS = new Map<string, readonly string[]>([
+  ["capabilities", ["harness", "model"]],
   ["models.list", []],
-  ["sessions.list", []],
+  ["sessions.list", ["linkedOnly"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.stop", ["sessionId"]],
@@ -96,6 +101,7 @@ const FIELDS = new Map<string, readonly string[]>([
     "sessions.start",
     [
       "prompt",
+      "name",
       "draft",
       "harness",
       "model",
@@ -299,6 +305,8 @@ export async function handleAgentApp(
 ): Promise<unknown> {
   fields(action, input);
   switch (action) {
+    case "capabilities":
+      return appCapabilities(input);
     case "models.list":
       return {
         runtimeModes: RUNTIME_MODES.map((id) => ({
@@ -318,6 +326,12 @@ export async function handleAgentApp(
       };
     case "sessions.list": {
       const cwd = requireProject(source);
+      if (input.linkedOnly !== undefined && typeof input.linkedOnly !== "boolean") throw new Error("linkedOnly must be a boolean");
+      if (input.linkedOnly) return {
+        cwd,
+        sessions: linkedAgentListings(host.tracked(source.id), await host.sessions(cwd),
+          (await host.session(source.id))?.blocks ?? source.blocks, id => host.openSession?.(id)),
+      };
       const tracked = new Map(
         host.tracked(source.id).map(({ childId, ...view }) => [childId, view]),
       );
@@ -383,6 +397,7 @@ export async function handleAgentApp(
           "request ID must use letters, digits, underscores or hyphens",
         );
       const launch = startLaunch(source, input);
+      const name = optionalString(input.name, "name", 80);
       if (input.worktreeCwd !== undefined) {
         const chosen = (await host.worktrees(launch.cwd)).worktrees.find(
           (tree) =>
@@ -409,14 +424,11 @@ export async function handleAgentApp(
           : (optionalString(input.besideSessionId, "besideSessionId", 256) ??
             source.id);
       const id = `app-${source.id}-${requestId}`;
-      if (besideSessionId)
-        await host.start(
-          launch,
-          id,
-          { direction: placement as SplitDir, besideSessionId },
-          source.id,
-        );
-      else await host.start(launch, id, undefined, source.id);
+      const accepted = await host.start(
+        launch, id,
+        besideSessionId ? { direction: placement as SplitDir, besideSessionId } : undefined,
+        source.id, ...(name ? [{ name }] : []),
+      );
       return {
         id,
         cwd: launch.cwd,
@@ -424,6 +436,7 @@ export async function handleAgentApp(
         model: launch.model,
         submitted: !launch.draft,
         draft: !!launch.draft,
+        ...(accepted ?? {}),
       };
     }
     case "worktrees.list":

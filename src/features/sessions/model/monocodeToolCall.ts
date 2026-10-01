@@ -7,6 +7,7 @@ export type MonoCodeToolCall = {
 };
 
 const ACTION_LABELS: Record<string, string> = {
+  capabilities: "Discover capabilities",
   "models.list": "List models",
   "sessions.list": "List sessions",
   "sessions.read": "Read a session",

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const store = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn() }));
+vi.mock("../../sessions/data/sessionStore", () => ({ listSessionsByProject: store.list, deleteSession: store.remove }));
 import { projectKey } from "../../../shared/lib/paths";
 import {
   loadSessionFolders,
@@ -12,7 +14,7 @@ import {
   loadProjectChatBackgroundSettings,
   saveProjectChatBackgroundSettings,
 } from "./projectChatBackground";
-import { rebaseProjectData } from "./projectData";
+import { rebaseProjectData, removeProjectData } from "./projectData";
 import {
   loadProjectSidebarTab,
   saveProjectSidebarTab,
@@ -44,7 +46,17 @@ function mockBrowserStorage() {
   });
 }
 
-beforeEach(mockBrowserStorage);
+beforeEach(() => { mockBrowserStorage(); store.list.mockReset(); store.remove.mockReset(); });
+
+it("propagates receipt-preservation failures and leaves remaining project data inspectable", async () => {
+  const path = "/work/project";
+  store.list.mockResolvedValue([{ id: "child" }, { id: "another" }]);
+  store.remove.mockRejectedValue(new Error("Parent receipt was not saved"));
+  saveProjectSidebarTab(path, "changes");
+  await expect(removeProjectData(path)).rejects.toThrow("Parent receipt was not saved");
+  expect(store.remove.mock.calls).toEqual([["child"]]);
+  expect(loadProjectSidebarTab(path)).toBe("changes");
+});
 
 describe("rebaseProjectData", () => {
   it("moves path-keyed project settings to the renamed folder", () => {

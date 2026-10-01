@@ -47,6 +47,35 @@ beforeEach(() => {
 
 describe("preparePrompt", () => {
   it.each([
+    [
+      "omp",
+      "  /omp:compact\tcustom @README.md /note:task /skill:review  \n",
+      "  /compact\tcustom @README.md /note:task /skill:review  \n",
+    ],
+    [
+      "omp",
+      "/omp:plan  @README.md\tkeep bytes",
+      "/plan  @README.md\tkeep bytes",
+    ],
+    [
+      "omp",
+      " /workflow\t@README.md /note:task  ",
+      " /workflow\t@README.md /note:task  ",
+    ],
+    ["pi", " /omp:plan  @README.md", " /omp:plan  @README.md"],
+  ] as const)(
+    "prepares raw %s submission %s with only application escape decoding",
+    async (harness, text, expected) => {
+      await expect(
+        preparePrompt(text, { harness, cwd: "/repo" }, { rawCommand: true }),
+      ).resolves.toBe(expected);
+      expect(mocks.warmNativeSkills).not.toHaveBeenCalled();
+      expect(mocks.applyFileMentionsToTurn).not.toHaveBeenCalled();
+      expect(mocks.applyNotesToTurn).not.toHaveBeenCalled();
+      expect(mocks.applySkillsToTurn).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
     "/workflow foo @README.md",
     "/Review_Code a:b",
     "/omp:compact custom instructions",

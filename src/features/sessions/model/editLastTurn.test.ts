@@ -18,13 +18,94 @@ function chat(blocks: Block[]) {
 }
 
 describe("editLastTurn", () => {
+  it("retains outgoing display receipts through parent preparation, replacement and rewind recovery", () => {
+    const receipt: Block = {
+      id: "receipt",
+      role: "system",
+      text: "",
+      assignmentReceipt: {
+        kind: "linked",
+        parentId: "parent",
+        childId: "child",
+        generation: 2,
+        requestKey: "app-parent-2",
+        task: "Original child task",
+      },
+    };
+    const session = chat([
+      { id: "u1", role: "user", text: "old turn" },
+      { id: "a1", role: "assistant", text: "old reply" },
+      { id: "u2", role: "user", text: "edit parent" },
+      receipt,
+      { id: "a2", role: "assistant", text: "latest reply" },
+    ]);
+    const expected = [session.blocks[0], session.blocks[1], receipt];
+    const attempt = createEditedResendAttempt(session)!;
+    expect(lastUserTurnStartIndex(session.blocks)).toBe(2);
+    expect(lastTurnRecall(session)?.text).toBe("edit parent");
+    expect(truncateBeforeLastUserTurn(session.blocks)).toEqual(expected);
+    expect(prepareEditedResend(session)?.blocks).toEqual(expected);
+    expect(attempt.replace(session).blocks).toEqual(expected);
+    attempt.markProviderRewound();
+    expect(attempt.recoverAfterFailure(session).blocks).toEqual(expected);
+    // A receipt arriving after preparation must survive the eventual replacement too.
+    const laterReceipt = {
+      ...receipt,
+      id: "later",
+      assignmentReceipt: {
+        ...receipt.assignmentReceipt!,
+        requestKey: "app-parent-3",
+      },
+    };
+    expect(
+      attempt.replace({ ...session, blocks: [...session.blocks, laterReceipt] })
+        .blocks,
+    ).toEqual([...expected, laterReceipt]);
+  });
+
+  it("retains receipts inside an entire steered Codex turn", () => {
+    const receipt: Block = {
+      id: "receipt",
+      role: "system",
+      text: "",
+      assignmentReceipt: {
+        kind: "message",
+        parentId: "parent",
+        childId: "ancestor",
+        requestKey: "app-parent-1",
+        task: "Untracked original task",
+      },
+    };
+    const session = {
+      ...newSession("codex", "/tmp"),
+      blocks: [
+        {
+          id: "u1",
+          role: "user" as const,
+          text: "first",
+          providerTurnId: "t1",
+        },
+        receipt,
+        {
+          id: "u2",
+          role: "user" as const,
+          text: "steer",
+          providerTurnId: "t1",
+        },
+      ],
+    };
+    expect(lastEditableTurnStartIndex(session)).toBe(0);
+    expect(prepareEditedResend(session)?.blocks).toEqual([receipt]);
+    expect(replaceEditedResend(session).blocks).toEqual([receipt]);
+  });
   it("blocks editing CI repair requests whose context is absent from the composer", () => {
     const session = chat([
       {
         id: "repair",
         role: "user",
         text: "Fix 1 failed CI check for acme/web PR #42.",
-        ciContext: "Checked commit: abc123\nRun tests: expected 200, received 500",
+        ciContext:
+          "Checked commit: abc123\nRun tests: expected 200, received 500",
       },
       { id: "reply", role: "assistant", text: "Fixed the failing check." },
     ]);
@@ -41,10 +122,9 @@ describe("editLastTurn", () => {
       { id: "a2", role: "assistant", text: "done" },
     ];
     expect(lastUserTurnStartIndex(blocks)).toBe(2);
-    expect(truncateBeforeLastUserTurn(blocks).map((block) => block.id)).toEqual([
-      "u1",
-      "a1",
-    ]);
+    expect(truncateBeforeLastUserTurn(blocks).map((block) => block.id)).toEqual(
+      ["u1", "a1"],
+    );
   });
 
   it("ignores draft user blocks when selecting the editable turn", () => {
@@ -116,9 +196,19 @@ describe("editLastTurn", () => {
     const session = {
       ...newSession("codex", "/tmp"),
       blocks: [
-        { id: "u1", role: "user" as const, text: "first", providerTurnId: "t1" },
+        {
+          id: "u1",
+          role: "user" as const,
+          text: "first",
+          providerTurnId: "t1",
+        },
         { id: "a1", role: "assistant" as const, text: "done" },
-        { id: "u2", role: "user" as const, text: "second", providerTurnId: "t2" },
+        {
+          id: "u2",
+          role: "user" as const,
+          text: "second",
+          providerTurnId: "t2",
+        },
         { id: "a2", role: "assistant" as const, text: "working" },
         {
           id: "u3",
@@ -131,21 +221,16 @@ describe("editLastTurn", () => {
     };
 
     expect(lastEditableTurnStartIndex(session)).toBe(2);
-    expect(truncateBeforeLastEditableTurn(session).map((block) => block.id)).toEqual([
-      "u1",
-      "a1",
-    ]);
+    expect(
+      truncateBeforeLastEditableTurn(session).map((block) => block.id),
+    ).toEqual(["u1", "a1"]);
     expect(prepareEditedResend(session)).toMatchObject({
       providerTurnId: "t2",
-      blocks: [
-        { id: "u1" },
-        { id: "a1" },
-      ],
+      blocks: [{ id: "u1" }, { id: "a1" }],
     });
-    expect(replaceEditedResend(session).blocks.map((block) => block.id)).toEqual([
-      "u1",
-      "a1",
-    ]);
+    expect(
+      replaceEditedResend(session).blocks.map((block) => block.id),
+    ).toEqual(["u1", "a1"]);
   });
 
   it("restores edit mode when the provider never rewound", () => {
@@ -231,9 +316,7 @@ describe("editLastTurn", () => {
     expect(
       canEditLastTurn({
         ...base,
-        queuedMessages: [
-          { id: "q1", text: "next", attachments: [] },
-        ],
+        queuedMessages: [{ id: "q1", text: "next", attachments: [] }],
       }),
     ).toBe(false);
     expect(canEditLastTurn({ ...chat([]), harness: "claude" })).toBe(false);

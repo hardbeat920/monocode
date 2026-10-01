@@ -11,7 +11,10 @@ import { nativeCommandPrompt } from "../../../integrations/harness/core/nativeCo
 export async function preparePrompt(
   text: string,
   context: SkillCatalogContext,
+  options: { rawCommand?: boolean } = {},
 ): Promise<string> {
+  // Raw submission bypasses expansion, not Monocode's reserved-name escape.
+  if (options.rawCommand) return nativeCommandPrompt(context.harness, text);
   warmNativeSkills(context);
   if (isNativeCommandPrompt(text, context.harness))
     return nativeCommandPrompt(context.harness, text);

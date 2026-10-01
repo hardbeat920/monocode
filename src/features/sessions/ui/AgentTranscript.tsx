@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleDashed,
   Copy,
+  ExternalLink,
   FilePlusCorner,
   Minus,
   Pencil,
@@ -76,10 +77,23 @@ import {
   type InterjectionMeta,
   type ModelTarget,
   type PlanBuildTarget,
+  type Session,
   type ToolPreview,
   type TurnMetrics,
 } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
+import { SessionUpdateCard } from "./SessionUpdateCard";
+import {
+  parseSessionUpdates,
+  sessionUpdateView,
+  type SessionUpdateStatus,
+} from "../../agent-app/model/sessionLinks";
+import {
+  sameAssignment,
+  type AcceptedReference,
+} from "../../agent-app/model/assignments";
+import { AssignmentCard } from "./AssignmentCard";
+import { useReadableModel } from "./AgentRow";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
@@ -140,6 +154,65 @@ import {
   transcriptWordRanges,
 } from "../model/transcriptHighlights";
 
+/** What a transcript knows about the session at the other end of a block. */
+type OperatorBlockProps = {
+  /** A sent task's outcome, once the child has reported back. */
+  receiptOutcome?: SessionUpdateStatus;
+  /** The child is working on this very task. */
+  receiptWorking?: boolean;
+  receiptStartedAt?: number;
+  childTitle?: string;
+  /** Who sent a received task, when this app knows that session. */
+  senderTitle?: string;
+  senderModel?: string;
+  senderHarness?: HarnessId;
+};
+
+/**
+ * A session at the other end of operator traffic. An open session carries its
+ * blocks and run state; one known only from history carries just its name.
+ */
+export type SessionPeer = Pick<Session, "id" | "title" | "harness" | "model"> &
+  Partial<Pick<Session, "busy" | "blocks">>;
+
+/**
+ * The child's prompt for this task while the task is still the work in hand.
+ * A steer joins the running turn without starting one, and an update resumes
+ * the child on its own children's results; any other prompt replaces the task.
+ */
+function taskInProgress(
+  blocks: Block[],
+  reference: AcceptedReference,
+): Block | undefined {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index];
+    if (block.role !== "user" || block.draft) continue;
+    if (block.acceptedAssignment)
+      return sameAssignment(block.acceptedAssignment, reference)
+        ? block
+        : undefined;
+    if (block.sessionUpdate || block.startedAt == null) continue;
+    return undefined;
+  }
+  return undefined;
+}
+
+const outcomeCache = new WeakMap<Block[], Map<string, SessionUpdateStatus>>();
+
+/** How each child's turn ended, from the updates delivered to a session, keyed `${childId}:${generation}`. */
+function deliveredOutcomes(blocks: Block[]): Map<string, SessionUpdateStatus> {
+  let outcomes = outcomeCache.get(blocks);
+  if (!outcomes) {
+    outcomes = new Map();
+    for (const block of blocks)
+      for (const update of block.sessionUpdate?.updates ?? [])
+        if (update.kind === "outcome")
+          outcomes.set(`${update.childId}:${update.generation}`, update.status);
+    outcomeCache.set(blocks, outcomes);
+  }
+  return outcomes;
+}
+
 const NEAR_BOTTOM_PX = 16;
 /*
  * Tool calls often land in a burst. Each arrival waits for the one before it
@@ -176,6 +249,10 @@ type Props = {
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  /** Focus or reopen another session, such as one a session update names. */
+  onOpenSession?: (sessionId: string) => void;
+  /** The session at the other end of operator traffic, open or from history. */
+  sessionFor?: (sessionId: string) => SessionPeer | undefined;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
@@ -219,6 +296,8 @@ function AgentTranscriptComponent({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onOpenSession,
+  sessionFor,
   onSaveSelectionNote,
   onOpenFile,
   onOpenDiff,
@@ -307,6 +386,40 @@ function AgentTranscriptComponent({
   const currentModelName = harness
     ? resolveModel(harness, model).name
     : undefined;
+  // Operator traffic names the session at its other end. What that session is
+  // doing comes from the app's open copy of it; a closed one says nothing live.
+  const operatorProps = (block: Block): OperatorBlockProps => {
+    if (block.role === "system" && block.assignmentReceipt) {
+      const receipt = block.assignmentReceipt;
+      const child = sessionFor?.(receipt.childId);
+      const task =
+        child?.busy && child.blocks
+          ? taskInProgress(child.blocks, receipt)
+          : undefined;
+      return {
+        receiptOutcome:
+          receipt.kind === "linked"
+            ? deliveredOutcomes(blocks).get(
+                `${receipt.childId}:${receipt.generation}`,
+              )
+            : undefined,
+        receiptWorking: !!task,
+        receiptStartedAt: task?.startedAt,
+        childTitle: child?.title || undefined,
+      };
+    }
+    if (block.role === "user" && block.acceptedAssignment) {
+      const parent = sessionFor?.(block.acceptedAssignment.parentId);
+      return parent
+        ? {
+            senderTitle: parent.title,
+            senderModel: parent.model,
+            senderHarness: parent.harness,
+          }
+        : {};
+    }
+    return {};
+  };
   const waitingForApproval = hasPendingApproval(blocks) || pendingQuestion;
   const preparingHandoff = blocks.some(
     (block) =>
@@ -694,6 +807,22 @@ function AgentTranscriptComponent({
           // New turns carry immutable model provenance. Legacy turns do not,
           // so omit their model instead of rewriting history from the picker.
           const turnModel = userBlock?.turnModel;
+          // A task from another session ends by reporting back to it.
+          const accepted = userBlock?.acceptedAssignment;
+          const sender = accepted ? sessionFor?.(accepted.parentId) : undefined;
+          const sentTo =
+            accepted?.kind === "linked" &&
+            sender?.blocks &&
+            deliveredOutcomes(sender.blocks).has(
+              `${accepted.childId}:${accepted.generation}`,
+            )
+              ? {
+                  name: sender.title,
+                  onOpen: onOpenSession
+                    ? () => onOpenSession(sender.id)
+                    : undefined,
+                }
+              : undefined;
           const turnHarness = harness
             ? (turnModel?.harness ?? harnessForTurn(blocks, turn, harness))
             : undefined;
@@ -781,6 +910,7 @@ function AgentTranscriptComponent({
               <TranscriptBlock
                 key={item.block.id}
                 block={item.block}
+                {...operatorProps(item.block)}
                 layout={transcriptLayout}
                 visible={item.block.role === "user" ? visible : undefined}
                 stickyIndex={firstVisibleTurn + turnIndex + 1}
@@ -797,6 +927,7 @@ function AgentTranscriptComponent({
                 onSaveNote={onSaveNote}
                 onSendDraft={onSendDraft}
                 onRemoveDraft={onRemoveDraft}
+                onOpenSession={onOpenSession}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
@@ -958,6 +1089,7 @@ function AgentTranscriptComponent({
                   }
                   copyText={turnCopyText(turn)}
                   onSaveNote={onSaveNote}
+                  sentTo={sentTo}
                   harness={turnHarness}
                   fromHarness={turnHarness}
                   fromModel={turnModel?.id}
@@ -1071,6 +1203,7 @@ function TurnDuration({
   completedAt,
   copyText: output,
   onSaveNote,
+  sentTo,
   fromHarness,
   fromModel,
   onSecondOpinion,
@@ -1085,6 +1218,8 @@ function TurnDuration({
   completedAt?: number;
   copyText?: string;
   onSaveNote?: (text: string) => void | Promise<void>;
+  /** The session this turn's reply was delivered to. */
+  sentTo?: { name: string; onOpen?: () => void };
   fromHarness?: HarnessId;
   /** The turn's own model, so a same-harness second opinion can hide it. */
   fromModel?: string;
@@ -1149,7 +1284,35 @@ function TurnDuration({
           </span>
         </span>
       ) : null}
+      {sentTo ? (
+        <span className="flex min-w-0 items-center gap-2.5">
+          {dot}
+          {sentTo.onOpen ? (
+            <button
+              type="button"
+              title={`Open ${sentTo.name}`}
+              onClick={sentTo.onOpen}
+              className="flex min-w-0 items-center gap-1 rounded text-content/40 hover:text-content/70"
+            >
+              {sentToLabel(sentTo.name)}
+            </button>
+          ) : (
+            <span className="flex min-w-0 items-center gap-1">
+              {sentToLabel(sentTo.name)}
+            </span>
+          )}
+        </span>
+      ) : null}
     </div>
+  );
+}
+
+function sentToLabel(name: string): ReactNode {
+  return (
+    <>
+      <Check className="size-3 shrink-0 text-emerald-400" strokeWidth={2} />
+      <span className="min-w-0 truncate">Sent to {name}</span>
+    </>
   );
 }
 
@@ -1412,6 +1575,13 @@ function EditLastTurnButton({
 
 const TranscriptBlock = memo(function TranscriptBlock({
   block,
+  receiptOutcome,
+  receiptWorking = false,
+  receiptStartedAt,
+  childTitle,
+  senderTitle,
+  senderModel,
+  senderHarness,
   layout,
   visible,
   stickyIndex,
@@ -1422,6 +1592,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onOpenSession,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -1432,7 +1603,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings,
   onEditLastTurn,
   editing = false,
-}: {
+}: OperatorBlockProps & {
   block: Block;
   layout: TranscriptLayout;
   visible?: boolean;
@@ -1446,6 +1617,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  onOpenSession?: (sessionId: string) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -1457,10 +1629,36 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onEditLastTurn?: () => void;
   editing?: boolean;
 }) {
+  if (block.role === "system" && block.assignmentReceipt)
+    return (
+      <AssignmentCard
+        receipt={block.assignmentReceipt}
+        outcome={receiptOutcome}
+        working={
+          receiptWorking ? (
+            <WorkingFor startedAt={receiptStartedAt} />
+          ) : undefined
+        }
+        childTitle={childTitle}
+        onOpenSession={onOpenSession}
+      />
+    );
+  if (block.role === "user" && block.sessionUpdate) {
+    const updates =
+      block.sessionUpdate.updates?.map(sessionUpdateView) ??
+      parseSessionUpdates(block.text);
+    if (updates)
+      return (
+        <SessionUpdateCard updates={updates} onOpenSession={onOpenSession} />
+      );
+  }
   if (block.role === "user") {
     return (
       <UserMessageBlock
         block={block}
+        senderTitle={senderTitle}
+        senderModel={senderModel}
+        senderHarness={senderHarness}
         layout={layout}
         visible={visible ?? true}
         stickyIndex={stickyIndex}
@@ -1470,6 +1668,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onSaveNote={onSaveNote}
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
+        onOpenSession={onOpenSession}
       />
     );
   }
@@ -1585,6 +1784,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
 
 function UserMessageBlock({
   block,
+  senderTitle,
+  senderModel,
+  senderHarness,
   layout,
   visible,
   stickyIndex,
@@ -1594,8 +1796,12 @@ function UserMessageBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onOpenSession,
 }: {
   block: Block;
+  senderTitle?: string;
+  senderModel?: string;
+  senderHarness?: HarnessId;
   layout: TranscriptLayout;
   visible: boolean;
   stickyIndex: number;
@@ -1605,6 +1811,7 @@ function UserMessageBlock({
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -1614,8 +1821,13 @@ function UserMessageBlock({
   const note = block.noteCard;
   const monocode = isOperatorUserTurn(block);
   const sessionUpdate = !!block.sessionUpdate;
-  const text =
-    card && card.kind !== "handoff"
+  const updates = useMemo(
+    () => (block.sessionUpdate ? parseSessionUpdates(block.text) : null),
+    [block.sessionUpdate, block.text],
+  );
+  const text = updates
+    ? ""
+    : card && card.kind !== "handoff"
       ? ""
       : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
   const messageLink = text ? parseUserMessageLink(text) : null;
@@ -1623,9 +1835,12 @@ function UserMessageBlock({
     ? `${messageLink.beforeText}${messageLink.afterText}`
     : text;
   const chat = layout === "chat";
+  // A task another session sent: the bubble says who it came from.
+  const accepted = block.draft ? undefined : block.acceptedAssignment;
   const textOnly =
     Boolean(text) &&
     !block.draft &&
+    !accepted &&
     !sessionUpdate &&
     !block.attachments?.length &&
     !card &&
@@ -1696,6 +1911,7 @@ function UserMessageBlock({
           data-draft={block.draft ? "true" : undefined}
           data-monocode={monocode || sessionUpdate ? "true" : undefined}
           data-session-update={sessionUpdate ? "true" : undefined}
+          data-from-parent={accepted ? "true" : undefined}
           className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color] duration-200 ${
             block.draft
               ? "border border-dashed border-content/30 bg-content/4"
@@ -1707,10 +1923,26 @@ function UserMessageBlock({
           }`}
           style={{ zIndex: stickyIndex }}
         >
+          {accepted ? (
+            <TaskSender
+              parentId={accepted.parentId}
+              title={senderTitle}
+              model={senderModel}
+              harness={senderHarness}
+              onOpen={
+                senderTitle !== undefined && onOpenSession
+                  ? () => onOpenSession(accepted.parentId)
+                  : undefined
+              }
+            />
+          ) : null}
           {sessionUpdate ? (
-            <div className="mb-1 text-xs font-medium text-content/55">
-              Session update
+            <div className="mb-1.5 text-xs font-medium text-content/55">
+              {updates && updates.length > 1 ? "Session updates" : "Session update"}
             </div>
+          ) : null}
+          {updates ? (
+            <SessionUpdateCard updates={updates} onOpenSession={onOpenSession} />
           ) : null}
           {block.attachments?.length ? (
             <div
@@ -1852,6 +2084,56 @@ function UserMessageBlock({
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** The sender line over a task another session sent, opening that session when the app knows it. */
+function TaskSender({
+  parentId,
+  title,
+  model,
+  harness,
+  onOpen,
+}: {
+  parentId: string;
+  title?: string;
+  model?: string;
+  harness?: HarnessId;
+  onOpen?: () => void;
+}) {
+  const modelName = useReadableModel(harness, model);
+  const name = [modelName, title].filter(Boolean).join(" · ") || parentId;
+  const sender = (
+    <>
+      {harness ? (
+        <HarnessIcon harness={harness} className="size-3 shrink-0" />
+      ) : null}
+      <span className="min-w-0 break-words">{name}</span>
+    </>
+  );
+  return (
+    <div
+      title={parentId}
+      className="mb-1.5 flex min-w-0 items-center gap-1.5 text-xs font-medium text-content/55"
+    >
+      <span className="shrink-0">Task from</span>
+      {onOpen ? (
+        <button
+          type="button"
+          aria-label={`Open ${name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen();
+          }}
+          className="flex min-w-0 items-center gap-1 rounded text-left hover:text-content hover:underline focus-visible:ring-1 focus-visible:ring-content/40"
+        >
+          {sender}
+          <ExternalLink className="size-3 shrink-0" strokeWidth={1.75} />
+        </button>
+      ) : (
+        <span className="flex min-w-0 items-center gap-1">{sender}</span>
+      )}
     </div>
   );
 }
@@ -3326,6 +3608,23 @@ function useElapsedFrom(
   }, [startedAt, paused]);
 
   return elapsedMs;
+}
+
+/**
+ * How long another session has been working on the task this one gave it.
+ * Without a start time there is no honest clock, so it just says working.
+ */
+function WorkingFor({ startedAt }: { startedAt?: number }) {
+  return startedAt == null ? (
+    <span>working</span>
+  ) : (
+    <WorkingClock startedAt={startedAt} />
+  );
+}
+
+function WorkingClock({ startedAt }: { startedAt: number }) {
+  const elapsed = formatElapsed(useElapsedFrom(startedAt, false));
+  return <span>working {elapsed}</span>;
 }
 
 function formatWorkingDuration(

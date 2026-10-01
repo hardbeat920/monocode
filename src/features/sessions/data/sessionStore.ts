@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { repairAssignmentReceipts, sanitizeAcceptedReference, sanitizeAssignmentReceipt } from "../../agent-app/model/assignments";
+import { sanitizeSessionUpdates } from "../../agent-app/model/sessionLinks";
 import {
   isWeakToolTitle,
   titleFromToolInput,
@@ -511,6 +513,12 @@ export async function deleteSession(
       )
       .map(([, pending]) => pending);
     if (pendingWrites.length > 0) await Promise.all(pendingWrites);
+    const child = await getSession(sessionId);
+    if (child) await repairAssignmentReceipts(child, {
+      session: async id => (await getSession(id)) ?? undefined,
+      replace: session => session,
+      persist: upsertSession,
+    }, { skipDeletedParents: true, existingReceiptsDurable: true });
     await enqueueSessionWrite(sessionId, () =>
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
@@ -659,6 +667,11 @@ function sanitizeBlock(
     /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
   )
     next.appRequestId = block.appRequestId;
+  const acceptedAssignment = sanitizeAcceptedReference(block.acceptedAssignment);
+  if (block.role === "user" && !block.draft && acceptedAssignment?.requestKey === next.appRequestId)
+    next.acceptedAssignment = acceptedAssignment;
+  const assignmentReceipt = sanitizeAssignmentReceipt(block.assignmentReceipt);
+  if (block.role === "system" && assignmentReceipt) next.assignmentReceipt = assignmentReceipt;
   if (
     block.role === "user" &&
     typeof block.providerTurnId === "string" &&
@@ -680,7 +693,8 @@ function sanitizeBlock(
     typeof block.sessionUpdate?.deliveryId === "string" &&
     isPersistableId(block.sessionUpdate.deliveryId)
   )
-    next.sessionUpdate = { deliveryId: block.sessionUpdate.deliveryId };
+    next.sessionUpdate = { deliveryId: block.sessionUpdate.deliveryId,
+      ...(sanitizeSessionUpdates(block.sessionUpdate.updates) ? { updates: sanitizeSessionUpdates(block.sessionUpdate.updates) } : {}) };
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;

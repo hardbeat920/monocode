@@ -148,7 +148,7 @@ function isStatusStep(block: Block): boolean {
 export function isActivityBlock(block: Block): boolean {
   if (isThinkingBlock(block)) return true;
   if (block.role === "system") {
-    return !block.interjection && !isNoticeBlock(block);
+    return !block.assignmentReceipt && !block.interjection && !isNoticeBlock(block);
   }
   if (block.role !== "tool" && block.role !== "approval") return false;
   if (

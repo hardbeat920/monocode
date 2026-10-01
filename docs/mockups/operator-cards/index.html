@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>try{if(localStorage.getItem("monocode-mock-theme")==="light")document.documentElement.classList.add("theme-light")}catch(e){}</script>
+<title>Operator cards</title>
+<style>
+/* ------------------------------------------------------------------
+   Monocode tokens, copied from src/styles/index.css (@theme + :root,
+   html.theme-light). Dark is the default, as in the app; the toggle
+   adds html.theme-light exactly like the app does.
+   ------------------------------------------------------------------ */
+:root {
+  --theme-hue: 240;
+  --theme-saturation: 0%;
+  --background-lightness: 9%;        /* --theme-dark-lightness */
+  --content-lightness: 92%;
+  --selection-subtle-strength: 8%;
+  --selection-strength: 10%;
+  --selection-hover-strength: 15%;
+  --link-color: #7dd3fc;
+  --color-background-base: hsl(var(--theme-hue) var(--theme-saturation) var(--background-lightness));
+  --color-content: hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness));
+  --color-stroke: color-mix(in srgb, var(--color-content) 7%, transparent);
+  --color-accent: hsl(211 92% 62%);
+  --color-mention: #38bdf8;
+  /* Status tones: SessionUpdateCard's STATUS map uses text-emerald-400,
+     text-red-400, text-amber-400 and text-content/50. */
+  --tone-ok: #34d399;
+  --tone-err: #f87171;
+  --tone-warn: #fbbf24;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  color-scheme: dark;
+}
+html.theme-light {
+  --background-lightness: 97%;
+  --content-lightness: 18%;
+  --link-color: hsl(211 92% 40%);
+  --color-mention: #0284c7;
+  --selection-subtle-strength: 5%;
+  --selection-strength: 6%;
+  --selection-hover-strength: 10%;
+  /* The -400 tones fail contrast on a 97% canvas; the -600/-700 steps
+     (dark: variants in Tailwind) are what light mode would need. */
+  --tone-ok: #059669;
+  --tone-err: #dc2626;
+  --tone-warn: #b45309;
+  color-scheme: light;
+}
+
+/* text-content/NN, as Tailwind v4 compiles it (color-mix to transparent). */
+.c25 { color: color-mix(in srgb, var(--color-content) 25%, transparent); }
+.c35 { color: color-mix(in srgb, var(--color-content) 35%, transparent); }
+.c40 { color: color-mix(in srgb, var(--color-content) 40%, transparent); }
+.c45 { color: color-mix(in srgb, var(--color-content) 45%, transparent); }
+.c50 { color: color-mix(in srgb, var(--color-content) 50%, transparent); }
+.c55 { color: color-mix(in srgb, var(--color-content) 55%, transparent); }
+.c60 { color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.c70 { color: color-mix(in srgb, var(--color-content) 70%, transparent); }
+.c75 { color: color-mix(in srgb, var(--color-content) 75%, transparent); }
+.c80 { color: color-mix(in srgb, var(--color-content) 80%, transparent); }
+.c90 { color: color-mix(in srgb, var(--color-content) 90%, transparent); }
+.ok { color: var(--tone-ok); }
+.err { color: var(--tone-err); }
+.warn { color: var(--tone-warn); }
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--color-background-base);
+  color: var(--color-content);
+  font: 14px/1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 120ms var(--motion-ease-out);
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 1px solid color-mix(in srgb, var(--color-content) 40%, transparent); outline-offset: 1px; border-radius: 4px; }
+code { font-family: var(--font-mono); font-size: 12px; background: color-mix(in srgb, var(--color-content) 6%, transparent); border-radius: 4px; padding: 1px 4px; }
+
+/* Icons: Lucide symbols from the sprite below. Stroke lives on the outer
+   svg so 1.75 (chevrons, app default) and 2 (status) can both be set. */
+.icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon.thin { stroke-width: 1.75; }
+.icon.s12 { width: 12px; height: 12px; }
+.glyph { width: 14px; height: 14px; flex: none; fill: currentColor; stroke: none; display: block; }
+.glyph.s12 { width: 12px; height: 12px; }
+
+/* ---------- Page shell (mockup chrome, not product UI) ---------- */
+.page { max-width: 960px; margin: 0 auto; padding: 28px 24px 96px; }
+.page-head { display: flex; align-items: center; gap: 12px; }
+.page-head h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; min-width: 0; }
+.page-head a, .tbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 6px; font-size: 12px; }
+.page-head a:hover, .tbtn:hover { background: color-mix(in srgb, var(--color-content) 8%, transparent); color: var(--color-content); }
+.idea { margin: 10px 0 0; max-width: 68ch; }
+.surface { margin-top: 44px; }
+.surface > h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.surface > h2 span { font-weight: 400; }
+.frame-label { margin: 22px 0 8px; font-size: 12px; }
+.frame {
+  border: 1px solid var(--color-stroke);
+  border-radius: 12px;
+  padding: 14px 0 6px;
+  max-width: 872px;            /* chat column: 840px content + row gutters */
+  overflow: hidden;
+}
+.notes { margin-top: 56px; border-top: 1px solid var(--color-stroke); padding-top: 18px; font-size: 13px; line-height: 1.6; }
+.notes h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 4px 0; }
+.theme-label-dark { display: none; }
+html.theme-light .theme-label-light { display: none; }
+html.theme-light .theme-label-dark { display: inline; }
+
+/* ---------- Transcript primitives (AgentTranscript.tsx) ---------- */
+/* UserMessageBlock, chat layout: pt-1.5 pr-4 pb-5 pl-14, bubble bg-content/10 px-3 py-2, rounded-xl / rounded-full, max-w-xl */
+.user-row { display: flex; flex-direction: column; align-items: flex-end; padding: 6px 16px 20px 56px; }
+.bubble { background: color-mix(in srgb, var(--color-content) 10%, transparent); padding: 8px 12px; border-radius: 12px; max-width: 36rem; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble.pill { border-radius: 999px; }
+/* Fold line: px-4 py-1, gap-1.5, text-sm text-content/50, HarnessIcon size-3.5 */
+.fold { display: flex; align-items: center; gap: 6px; padding: 4px 16px; font-size: 14px; min-width: 0; }
+.fold > .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* AgentMarkdown body */
+.prose { padding: 6px 16px 0; font-size: 14px; line-height: 1.7; }
+.prose p { margin: 0 0 10px; }
+/* Turn footer: px-4 pt-1 pb-3, gap-2.5, icons p-1, 3px dot bg-content/25, clock text-content/35 */
+.footer { display: flex; align-items: center; gap: 10px; padding: 2px 16px 14px; font-size: 13px; }
+.footer .acts { display: flex; gap: 4px; }
+.footer .acts span { display: grid; padding: 4px; border-radius: 6px; }
+.dot { width: 3px; height: 3px; border-radius: 50%; background: color-mix(in srgb, var(--color-content) 25%, transparent); flex: none; }
+.truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shrink-0 { flex-shrink: 0; }
+
+/* details/summary as the disclosure primitive: native keyboard + aria-expanded. */
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+.chev { color: color-mix(in srgb, var(--color-content) 35%, transparent); transition: transform 200ms, color 200ms; }
+details[open] > summary .chev { transform: rotate(90deg); }
+
+/* Shimmer (shared/ui/Shimmer.tsx + .shimmer-text). --spread = chars x 2px. */
+.shimmer {
+  --spread: 40px;
+  background-image:
+    linear-gradient(90deg, transparent calc(50% - var(--spread)), var(--color-content) 50%, transparent calc(50% + var(--spread))),
+    linear-gradient(hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness) / 0.4), hsl(var(--theme-hue) var(--theme-saturation) var(--content-lightness) / 0.4));
+  background-size: 250% 100%, auto;
+  background-repeat: no-repeat, padding-box;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text var(--shimmer-duration, 1.6s) linear infinite;
+}
+@keyframes shimmer-text { from { background-position: 100% center; } to { background-position: 0% center; } }
+.spin { animation: zen-spin 3.6s linear infinite; }   /* .zen-tool-spin */
+@keyframes zen-spin { to { transform: rotate(360deg); } }
+
+/* .zen-phase-step rail, verbatim from index.css */
+.rail-step { position: relative; padding-left: 20px; --zen-rail: color-mix(in srgb, var(--color-content) 14%, var(--color-background-base)); }
+.rail-step::before, .rail-step::after { content: ""; position: absolute; left: 6px; }
+.rail-step::before { top: 0; height: 100%; width: 1px; background: var(--zen-rail); }
+.rail-step:last-child::before { height: 7px; }
+.rail-step::after { top: 6px; width: 8px; height: 8px; border-left: 1px solid var(--zen-rail); border-bottom: 1px solid var(--zen-rail); border-bottom-left-radius: 8px; }
+
+/* line-clamp-4 + "Show more" (UpdateReply / UserMessageBlock) */
+.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 4); overflow: hidden; }
+.clamp.clamp-off { display: block; -webkit-line-clamp: unset; }
+.more { margin-top: 4px; padding: 2px 4px; border-radius: 4px; font-size: 12px; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.more:hover { background: color-mix(in srgb, var(--color-content) 8%, transparent); color: var(--color-content); }
+.reply { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+/* Raw identifiers only ever live here, behind an expand. */
+.ids { font-family: var(--font-mono); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; margin: 6px 0 0; }
+/* Small ghost action: rounded-md px-2 h-7 text-xs text-content/55 hover:bg-content/10 */
+.ghost { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 6px; font-size: 12px; color: color-mix(in srgb, var(--color-content) 55%, transparent); }
+.ghost:hover { background: color-mix(in srgb, var(--color-content) 10%, transparent); color: var(--color-content); }
+.ghost.warn-fill { color: var(--tone-warn); background: color-mix(in srgb, var(--tone-warn) 12%, transparent); }
+.ghost.warn-fill:hover { background: color-mix(in srgb, var(--tone-warn) 20%, transparent); }
+.acts-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; margin-left: -8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; color: color-mix(in srgb, var(--color-content) 60%, transparent); background: none; }
+  .spin { animation: none; }
+  .chev { transition: none; }
+}
+@media (max-width: 640px) {
+  .page { padding: 20px 16px 72px; }
+  .user-row { padding-left: 24px; }
+}
+
+/* ---------- Index ---------- */
+.vlist { list-style: none; padding: 0; margin: 28px 0 0; max-width: 760px; }
+.vlist a { display: block; padding: 14px 16px; margin-bottom: 10px; border: 1px solid var(--color-stroke); border-radius: 10px; transition: background-color 200ms; }
+.vlist a:hover { background: color-mix(in srgb, var(--color-content) 4%, transparent); }
+.vname { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.vname .chev { margin-left: auto; }
+.videa { margin: 6px 0 0; }
+.vtrade { margin: 4px 0 0; font-size: 13px; }
+.refs { margin-top: 32px; font-size: 13px; }
+.refs a { text-decoration: underline; text-underline-offset: 2px; }
+</style>
+</head>
+<body>
+<!-- Icon sprite. Lucide paths copied from the bundled pack (the app wraps the
+     Hugeicons set under the same names in src/shared/ui/icons.tsx: ChevronRight,
+     Check, CircleX, Square, CircleAlert, CircleHelp, LoaderCircle, Copy, ExternalLink...).
+     Harness glyphs are copied from src/features/sessions/ui/HarnessIcon.tsx and
+     src/assets/providers/{claude,codex}.svg. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="codex-grad" x1="14.4998" y1="1.0005" x2="14.4998" y2="27.9999" gradientUnits="userSpaceOnUse"><stop stop-color="#B1A7FF"/><stop offset="0.5" stop-color="#7A9DFF"/><stop offset="1" stop-color="#3941FF"/></linearGradient>
+  </defs>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-circle-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="i-square" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></symbol>
+  <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+  <symbol id="i-circle-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-loader-circle" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M9 15h6"/><path d="M12 18v-6"/></symbol>
+  <symbol id="i-git-branch" viewBox="0 0 24 24"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
+  <symbol id="i-message-square" viewBox="0 0 24 24"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></symbol>
+  <!-- Harness glyphs (HarnessIcon): claude is the coloured asset, pi is a MonoIcon in currentColor. -->
+  <symbol id="h-claude" viewBox="-4 -4 37 37"><path fill="#D97757" d="M5.684 19.285L11.397 16.095L11.484 15.805L11.397 15.66H11.107L10.15 15.602L6.902 15.515L4.06 15.37L1.305 15.225L0.609 15.08L0 14.21L0.058 13.775L0.638 13.398L1.479 13.456L3.306 13.601L6.061 13.775L8.062 13.891L11.02 14.239H11.484L11.542 14.036L11.397 13.92L11.281 13.804L8.41 11.89L5.336 9.86L3.712 8.671L2.842 8.091L2.407 7.511L2.233 6.293L3.016 5.423L4.089 5.51L4.35 5.568L5.423 6.409L7.743 8.178L10.73 10.44L11.165 10.788L11.339 10.672L11.368 10.585L11.165 10.266L9.57 7.25L7.83 4.234L7.047 2.987L6.844 2.233C6.757 1.943 6.728 1.653 6.728 1.363L7.598 0.145L8.12 0L9.338 0.174L9.802 0.58L10.556 2.32L11.745 5.017L13.63 8.671L14.21 9.773L14.5 10.759L14.587 11.049H14.79V10.904L14.935 8.816L15.225 6.293L15.515 3.045L15.602 2.117L16.066 1.015L16.936 0.435L17.69 0.754L18.27 1.595L18.183 2.117L17.864 4.35L17.11 7.859L16.675 10.237H16.936L17.226 9.918L18.415 8.352L20.416 5.858L21.286 4.843L22.33 3.77L22.997 3.248H24.244L25.143 4.611L24.737 6.032L23.461 7.656L22.388 9.019L20.851 11.078L19.923 12.731L20.01 12.847H20.213L23.693 12.093L25.549 11.774L27.753 11.397L28.768 11.861L28.884 12.325L28.478 13.311L26.1 13.891L23.316 14.471L19.169 15.428L19.111 15.457L19.169 15.544L21.025 15.718L21.837 15.776H23.809L27.463 16.066L28.42 16.646L28.971 17.429L28.884 18.009L27.405 18.763L25.433 18.299L20.793 17.197L19.227 16.82H18.995V16.936L20.329 18.241L22.736 20.416L25.81 23.229L25.955 23.925L25.578 24.505L25.172 24.447L22.504 22.417L21.46 21.547L19.14 19.575H18.995V19.778L19.517 20.561L22.359 24.824L22.504 26.129L22.301 26.535L21.547 26.825L20.764 26.651L19.082 24.331L17.342 21.721L15.979 19.343L15.834 19.459L14.993 28.217L14.616 28.652L13.746 29L13.021 28.42L12.615 27.55L13.021 25.752L13.485 23.432L13.862 21.576L14.21 19.285L14.413 18.531V18.473H14.21L12.47 20.88L9.86 24.447L7.772 26.651L7.279 26.854L6.409 26.419L6.496 25.607L6.96 24.94L9.86 21.228L11.6 18.937L12.76 17.603L12.731 17.458H12.644L4.988 22.446L3.625 22.62L3.045 22.04L3.103 21.17L3.393 20.88L5.713 19.285H5.684Z"/></symbol>
+  <symbol id="h-pi" viewBox="-4 -4 37 37"><path fill-rule="evenodd" d="M1 1H22V14.4997H14.9998V21.2499H8.0002V28H1V1ZM8.0002 7.75014V14.4997H14.9998V7.75014H8.0002Z"/><path d="M22 15H28V28H22V15Z"/></symbol>
+  <symbol id="h-codex" viewBox="-4 -4 37 37"><circle cx="14" cy="15" r="9" fill="white"/><path fill="url(#codex-grad)" d="M10.0958 1.51649C11.1796 1.07057 12.3596 0.909459 13.5233 1.0485C15.0233 1.22099 16.3598 1.85848 17.5328 2.96096C17.5478 2.97596 17.5688 2.98645 17.5883 2.99245C17.6095 2.99767 17.6316 2.99767 17.6528 2.99245C19.1778 2.59865 20.792 2.74439 22.2218 3.40495L22.2923 3.43794L22.4663 3.52344C23.963 4.28199 25.1304 5.56192 25.7483 7.12186C26.0619 7.88684 26.2178 8.68333 26.2208 9.51431C26.2434 10.1323 26.1757 10.7503 26.0199 11.3488C26.0122 11.379 26.0123 11.4106 26.0201 11.4408C26.028 11.471 26.0434 11.4987 26.0648 11.5213C26.9559 12.4317 27.5469 13.5162 27.8394 14.7762C28.2729 16.9136 27.8289 18.8411 26.5089 20.5571L26.3049 20.8061C25.4306 21.8068 24.2831 22.5304 23.0033 22.888C22.9756 22.8961 22.9501 22.9107 22.929 22.9305C22.9079 22.9503 22.8917 22.9748 22.8818 23.002C22.5953 23.8285 22.3073 24.5365 21.7718 25.243C20.4218 27.0234 18.4388 28.0119 16.2053 27.9999C14.4248 27.9909 12.8468 27.3399 11.4698 26.0469C11.4491 26.0275 11.4236 26.014 11.3959 26.0077C11.3682 26.0014 11.3394 26.0025 11.3123 26.0109C10.7303 26.1984 10.1423 26.2254 9.50627 26.2179C8.49326 26.2098 7.49546 25.9707 6.58875 25.519C5.63899 25.0483 4.81209 24.3627 4.17374 23.5165C3.94574 23.2135 3.71924 22.9285 3.55274 22.591C3.32543 22.1279 3.1397 21.6455 2.99773 21.1495C2.69803 20.021 2.69081 18.8347 2.97673 17.7026C2.98614 17.6757 2.98922 17.6469 2.98573 17.6186C2.9806 17.5908 2.96635 17.5655 2.94523 17.5466C2.25233 16.8453 1.72274 15.9997 1.39423 15.0702C1.17575 14.4976 1.0487 13.8943 1.01772 13.2822C0.96323 12.4761 1.03458 11.6664 1.22922 10.8823C1.73473 9.21431 2.70223 7.90484 4.12874 6.95536C4.44674 6.74387 4.74824 6.57887 5.03024 6.46038C5.35275 6.32688 5.67525 6.21438 5.99925 6.11988C6.0224 6.1127 6.04342 6.09991 6.06043 6.08263C6.07745 6.06536 6.08992 6.04415 6.09675 6.02089C6.34277 5.13747 6.76584 4.31329 7.34026 3.59844C8.06436 2.67897 9.01345 1.96188 10.0958 1.51649ZM15.3188 17.3636C15.075 17.3773 14.8457 17.4838 14.678 17.6612C14.5103 17.8386 14.4168 18.0735 14.4168 18.3176C14.4168 18.5618 14.5103 18.7966 14.678 18.974C14.8457 19.1514 15.075 19.2579 15.3188 19.2716H20.7728C20.9026 19.2789 21.0325 19.2596 21.1546 19.2149C21.2767 19.1703 21.3883 19.1012 21.4828 19.0119C21.5772 18.9226 21.6525 18.815 21.7039 18.6956C21.7553 18.5762 21.7818 18.4476 21.7818 18.3176C21.7818 18.1876 21.7553 18.059 21.7039 17.9396C21.6525 17.8203 21.5772 17.7126 21.4828 17.6233C21.3883 17.534 21.2767 17.4649 21.1546 17.4203C21.0325 17.3756 20.9026 17.3564 20.7728 17.3636H15.3188ZM9.19276 10.3453C9.06296 10.1339 8.856 9.98123 8.61567 9.91965C8.37534 9.85806 8.12048 9.89237 7.90499 10.0153C7.6895 10.1382 7.53028 10.3402 7.461 10.5784C7.39172 10.8166 7.41781 11.0724 7.53376 11.2918L9.44177 14.6277L7.54276 17.8316C7.47884 17.9395 7.43678 18.0588 7.419 18.1829C7.40122 18.307 7.40805 18.4334 7.43911 18.5549C7.47017 18.6763 7.52485 18.7905 7.60003 18.8908C7.67521 18.9911 7.76941 19.0757 7.87726 19.1396C7.98511 19.2035 8.10449 19.2456 8.22859 19.2633C8.35269 19.2811 8.47908 19.2743 8.60054 19.2432C8.722 19.2122 8.83615 19.1575 8.93648 19.0823C9.03681 19.0071 9.12134 18.9129 9.18526 18.8051L11.3663 15.1227C11.4523 14.9776 11.4983 14.8123 11.4996 14.6437C11.5009 14.4751 11.4575 14.3091 11.3738 14.1627L9.19276 10.3453Z"/></symbol>
+</svg>
+<div class="page">
+<header class="page-head">
+  <h1>Operator cards</h1>
+  <button id="theme-toggle" class="tbtn c50" type="button" aria-label="Toggle light and dark"><svg class="icon thin theme-label-light"><use href="#i-sun"/></svg><span class="theme-label-light">Light</span><svg class="icon thin theme-label-dark"><use href="#i-moon"/></svg><span class="theme-label-dark">Dark</span></button>
+</header>
+<p class="idea c60">Four ways to render operator-to-subagent traffic in the chat. Every page shows the same three surfaces (task sent, result received, child tab) with the Luna goose-story exchange, in Monocode's own tokens.</p>
+
+<ul class="vlist">
+  <li><a href="01-agent-row.html">
+    <span class="vname"><span class="c40">01</span>Agent row<svg class="icon thin chev"><use href="#i-chevron-right"/></svg></span>
+    <p class="videa c70">Each task and each update is the one-line row Monocode already draws for a subagent run (glyph, name, model, status, chevron), and the reply only shows when the row is opened.</p>
+    <p class="vtrade c50">Trade-off: closest to existing code and the quietest, but a reply stays hidden until opened, so the operator's own prose has to carry the news.</p>
+  </a></li>
+  <li><a href="02-fold-line.html">
+    <span class="vname"><span class="c40">02</span>Fold line<svg class="icon thin chev"><use href="#i-chevron-right"/></svg></span>
+    <p class="videa c70">No new rows: the child's state is one more segment on the turn's "worked for" line, and the task or reply is a step inside the fold.</p>
+    <p class="vtrade c50">Trade-off: almost no added chrome, but everything rides on one truncating line, blocked children need the fold to auto-open, and it breaks the current "fold line speaks for the main agent only" rule.</p>
+  </a></li>
+  <li><a href="03-thread-rail.html">
+    <span class="vname"><span class="c40">03</span>Thread rail<svg class="icon thin chev"><use href="#i-chevron-right"/></svg></span>
+    <p class="videa c70">A small thread per child on the activity rail (task, working, reply) with the reply's first lines visible, and follow-ups continuing the same thread.</p>
+    <p class="vtrade c50">Trade-off: results read without a click and history stays connected, at two to four lines per child, which gets tall with many children.</p>
+  </a></li>
+  <li><a href="04-digest.html">
+    <span class="vname"><span class="c40">04</span>Digest<svg class="icon thin chev"><use href="#i-chevron-right"/></svg></span>
+    <p class="videa c70">Outgoing tasks are a sentence with agent chips; everything that comes back in a turn is one soft digest, one line per child, with anything waiting on you sorted first.</p>
+    <p class="vtrade c50">Trade-off: best for fan-out and for spotting what needs you, but it brings back a bordered surface, and a one-child turn pays for a box it does not need.</p>
+  </a></li>
+</ul>
+
+<p class="refs c50">What they replace: <a href="refs/parent-task-sent.png">parent chat today</a> and <a href="refs/child-task-received.png">child tab today</a>.</p>
+</div>
+<script>
+(function () {
+  var root = document.documentElement;
+  var toggle = document.getElementById("theme-toggle");
+  if (toggle) toggle.addEventListener("click", function () {
+    var light = root.classList.toggle("theme-light");
+    try { localStorage.setItem("monocode-mock-theme", light ? "light" : "dark"); } catch (e) {}
+  });
+  // "Show more" under a line-clamped reply, as UpdateReply does it.
+  document.querySelectorAll("[data-more]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var target = document.getElementById(button.getAttribute("data-more"));
+      var open = target.classList.toggle("clamp-off");
+      button.textContent = open ? "Show less" : "Show more";
+      button.setAttribute("aria-expanded", String(open));
+    });
+  });
+})();
+</script>
+</body>
+</html>

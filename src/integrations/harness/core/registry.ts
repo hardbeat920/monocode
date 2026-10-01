@@ -86,7 +86,7 @@ export type HarnessAdapter = {
   /** Seed provider task state from a restored session's persisted panels. */
   restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
   /** Refresh the model catalog overlay when supported. */
-  refreshCatalog?(): Promise<void>;
+  refreshCatalog?(): Promise<void | CatalogRefreshResult>;
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
@@ -105,6 +105,13 @@ export type HarnessAdapter = {
   stopTextPrompt?(): Promise<void>;
 };
 
+export type CatalogRefreshResult =
+  | { status: "succeeded" }
+  | { status: "failed"; error: string }
+  | { status: "unknown" }
+  | { status: "unsupported" };
+
+const catalogRefreshResults = new Map<HarnessId, CatalogRefreshResult>();
 const adapters = new Map<HarnessId, HarnessAdapter>();
 
 /**
@@ -188,6 +195,7 @@ export function resetHarnessIdlePark(): void {
 
 export function registerHarness(adapter: HarnessAdapter): void {
   adapters.set(adapter.id, adapter);
+  catalogRefreshResults.delete(adapter.id);
 }
 
 export function getHarness(id: HarnessId): HarnessAdapter | undefined {
@@ -385,21 +393,45 @@ export function bindHarnessSession(
  * extensions can sit at ~1GB) even when the workspace never touched them.
  */
 /** `force` re-reads a catalog that already loaded, e.g. after a CLI update. */
+export function harnessCatalogRefreshResult(
+  id: HarnessId,
+): CatalogRefreshResult | undefined {
+  return catalogRefreshResults.get(id);
+}
+
+/** A legacy adapter's fulfilled void promise is not evidence of refresh success. */
+export async function refreshHarnessCatalog(
+  id: HarnessId,
+): Promise<CatalogRefreshResult> {
+  const adapter = adapters.get(id);
+  let result: CatalogRefreshResult;
+  try {
+    result = adapter?.refreshCatalog
+      ? (await adapter.refreshCatalog()) ?? { status: "unknown" }
+      : { status: "unsupported" };
+  } catch (error: unknown) {
+    console.debug(`[monocode] ${id} catalog`, error);
+    result = {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  catalogRefreshResults.set(id, result);
+  return result;
+}
+
 export async function refreshHarnessCatalogs(
   ids: Iterable<HarnessId>,
   options?: { force?: boolean },
 ): Promise<void> {
   const wanted = new Set(ids);
-  if (wanted.size === 0) return;
   await Promise.all(
     [...adapters.values()]
       .filter((adapter) => wanted.has(adapter.id))
       .map(async (adapter) => {
         if (!adapter.refreshCatalog) return;
         if (!options?.force && hasLiveCatalog(adapter.id)) return;
-        await adapter.refreshCatalog().catch((error: unknown) => {
-          console.debug(`[monocode] ${adapter.id} catalog`, error);
-        });
+        await refreshHarnessCatalog(adapter.id);
       }),
   );
 }

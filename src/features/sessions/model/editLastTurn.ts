@@ -6,6 +6,27 @@ import type {
   Session,
 } from "./session";
 import { isOperatorUserTurn, operatorUserPrompt } from "./operatorCommand";
+import {
+  repairAssignmentReceipts,
+  type AssignmentReceiptHost,
+} from "../../agent-app/model/assignments";
+
+/** Submission boundary before an edit can change provider or local history. */
+export async function submitPreservedEditedResend(
+  session: Session,
+  host: AssignmentReceiptHost,
+  submit: () => boolean,
+): Promise<boolean> {
+  const start = lastEditableTurnStartIndex(session);
+  if (start >= 0) {
+    await repairAssignmentReceipts(
+      { ...session, blocks: session.blocks.slice(start) },
+      host,
+      { skipDeletedParents: true },
+    );
+  }
+  return submit();
+}
 
 /** Harnesses that can rewind provider state before resending an edited prompt. */
 export function harnessSupportsEditLastTurn(harness: HarnessId): boolean {
@@ -31,9 +52,17 @@ export function lastUserTurnBlock(blocks: Block[]): Block | undefined {
   return index >= 0 ? blocks[index] : undefined;
 }
 
+function truncateProviderTurn(blocks: Block[], start: number): Block[] {
+  if (start < 0) return blocks;
+  // Accepted outgoing tasks are application history, never provider-turn history.
+  return blocks.filter(
+    (block, index) =>
+      index < start || (block.role === "system" && !!block.assignmentReceipt),
+  );
+}
+
 export function truncateBeforeLastUserTurn(blocks: Block[]): Block[] {
-  const start = lastUserTurnStartIndex(blocks);
-  return start < 0 ? blocks : blocks.slice(0, start);
+  return truncateProviderTurn(blocks, lastUserTurnStartIndex(blocks));
 }
 
 export function lastEditableTurnStartIndex(session: Session): number {
@@ -57,7 +86,7 @@ export function lastEditableTurnStartIndex(session: Session): number {
 
 export function truncateBeforeLastEditableTurn(session: Session): Block[] {
   const start = lastEditableTurnStartIndex(session);
-  return start < 0 ? session.blocks : session.blocks.slice(0, start);
+  return truncateProviderTurn(session.blocks, start);
 }
 
 export type EditedResendPreparation = {

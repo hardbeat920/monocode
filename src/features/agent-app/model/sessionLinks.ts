@@ -1,3 +1,4 @@
+import { sanitizeAcceptedReference, type AssignmentReference } from "./assignments";
 import { invoke } from "@tauri-apps/api/core";
 import type { Session } from "../../sessions/model/session";
 import type { ControlOutcome } from "../../orchestration/model/orchestration";
@@ -22,6 +23,7 @@ export type SessionUpdate = {
   parentId: string;
   childId: string;
   generation: number;
+  assignment?: AssignmentReference;
   title: string;
   harness: string;
   model?: string;
@@ -44,6 +46,8 @@ export type SessionLink = {
   status: "running" | "idle";
   /** `app-${parentId}-${requestId}` of the last arming request. */
   lastRequestKey?: string;
+  assignment?: AssignmentReference;
+  lastOutcome?: { generation: number; status: SessionUpdateStatus };
   /** Recorded but held until the child's own children have reported to it. */
   heldOutcome?: SessionUpdate;
   /** Child deleted; the row goes once its `removed` update is delivered. */
@@ -61,6 +65,12 @@ export type SessionLinkView = {
   status: "running" | "idle";
   held: boolean;
   pending: number;
+  assignment?: AssignmentReference;
+  lastOutcome?: SessionLink["lastOutcome"];
+  removing?: boolean;
+  title?: string;
+  harness?: string;
+  model?: string;
 };
 
 export type SessionLinkStore = {
@@ -80,6 +90,7 @@ export type SessionLinkHost = {
     text: string,
     deliveryId: string,
     done: (outcome: ControlOutcome) => void,
+    updates?: SessionUpdate[],
   ): void;
   /** Append a system error notice block. */
   notice(parentId: string, text: string): void;
@@ -168,6 +179,20 @@ export class SessionLinks {
     });
   }
 
+  private listeners = new Set<() => void>();
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+  private setLink(id: string, link: SessionLink) {
+    this.links.set(id, link);
+    for (const listener of this.listeners) listener();
+  }
+  private deleteLink(id: string) {
+    this.links.delete(id);
+    for (const listener of this.listeners) listener();
+  }
+
   bind(host: SessionLinkHost) {
     this.host = host;
   }
@@ -243,6 +268,12 @@ export class SessionLinks {
         generation: link.generation,
         status: link.status,
         held: !!link.heldOutcome,
+        assignment: link.assignment,
+        lastOutcome: link.lastOutcome,
+        removing: link.removing,
+        title: link.pending[link.pending.length - 1]?.title ?? link.childId,
+        harness: link.pending[link.pending.length - 1]?.harness,
+        model: link.pending[link.pending.length - 1]?.model,
         pending: [...link.pending, ...(link.inFlight?.updates ?? [])].filter(
           (update) => update.parentId === parentId,
         ).length,
@@ -262,6 +293,7 @@ export class SessionLinks {
     parentId: string,
     childId: string,
     requestKey: string,
+    assignment?: { name?: string },
   ): Promise<() => Promise<void>> {
     const previous = this.links.get(childId);
     if (previous && previous.lastRequestKey === requestKey)
@@ -291,12 +323,17 @@ export class SessionLinks {
           pending: [],
           updatedAt: this.now(),
         };
+    if (assignment) next.assignment = {
+      kind: "linked", parentId, childId, generation: next.generation, requestKey,
+      ...(assignment.name ?? previous?.assignment?.name ? { name: assignment.name ?? previous?.assignment?.name } : {}),
+    };
+    else next.assignment = undefined;
     try {
       await this.put(next);
     } catch (error) {
       if (this.links.get(childId) === next) {
-        if (previous) this.links.set(childId, previous);
-        else this.links.delete(childId);
+        if (previous) this.setLink(childId, previous);
+        else this.deleteLink(childId);
       }
       throw error;
     }
@@ -313,13 +350,19 @@ export class SessionLinks {
           status: previous.status,
           heldOutcome: previous.heldOutcome,
           lastRequestKey: previous.lastRequestKey,
+          assignment: previous.assignment,
           updatedAt: this.now(),
         });
       } else {
-        this.links.delete(childId);
+        this.deleteLink(childId);
         await this.store.remove(childId);
       }
     };
+  }
+
+  assignmentFor(parentId: string, childId: string, requestKey: string): AssignmentReference | undefined {
+    const reference = this.links.get(childId)?.assignment;
+    return reference?.parentId === parentId && reference.requestKey === requestKey ? reference : undefined;
   }
 
   /** Parent-initiated stop, allowed only for the caller's own child. */
@@ -389,6 +432,7 @@ export class SessionLinks {
     const next: SessionLink = {
       ...link,
       removing: true,
+      lastOutcome: link.status === "running" ? { generation: link.generation, status: "removed" } : link.lastOutcome,
       generation: link.generation + 1,
       status: "idle",
       heldOutcome: undefined,
@@ -409,7 +453,7 @@ export class SessionLinks {
     const writes: Promise<void>[] = [];
     for (const link of [...this.links.values()]) {
       if (link.parentId === parentId) {
-        this.links.delete(link.childId);
+        this.deleteLink(link.childId);
         writes.push(this.store.remove(link.childId));
         continue;
       }
@@ -456,14 +500,14 @@ export class SessionLinks {
 
   /** Apply in memory now, then persist. */
   private put(link: SessionLink): Promise<void> {
-    this.links.set(link.childId, link);
+    this.setLink(link.childId, link);
     return this.store.save(link);
   }
 
   /** Persist, or delete a removed child's row once nothing is left to deliver. */
   private finish(link: SessionLink): Promise<void> {
     if (link.removing && !link.pending.length && !link.inFlight) {
-      this.links.delete(link.childId);
+      this.deleteLink(link.childId);
       return this.store.remove(link.childId);
     }
     return this.put(link);
@@ -474,6 +518,7 @@ export class SessionLinks {
       ...link,
       status: "idle",
       heldOutcome: undefined,
+      lastOutcome: { generation: update.generation, status: update.status },
       pending: [...link.pending, update],
       updatedAt: this.now(),
     };
@@ -494,6 +539,7 @@ export class SessionLinks {
       parentId: link.parentId,
       childId: link.childId,
       generation,
+      ...(link.assignment ? { assignment: link.assignment } : {}),
       title: session?.title ?? link.childId,
       harness: session?.harness ?? "unknown",
       ...(session?.model ? { model: session.model } : {}),
@@ -561,6 +607,7 @@ export class SessionLinks {
         parentId: link.parentId,
         childId: link.childId,
         generation: link.generation,
+        ...(link.assignment ? { assignment: link.assignment } : {}),
         title: child.title,
         harness: child.harness,
         model: child.model,
@@ -598,7 +645,7 @@ export class SessionLinks {
       this.put(next).catch((error: unknown) => {
         console.warn("Could not release held session outcome", error);
         if (this.links.get(link.childId) === next)
-          this.links.set(link.childId, link);
+          this.setLink(link.childId, link);
       });
     }
   }
@@ -663,7 +710,7 @@ export class SessionLinks {
           inFlight: { deliveryId, updates },
           updatedAt: this.now(),
         };
-        this.links.set(link.childId, next);
+        this.setLink(link.childId, next);
         return { previous: link, next };
       });
       for (const update of blocked) this.blocked.delete(update.id);
@@ -677,7 +724,7 @@ export class SessionLinks {
         this.deliveries.delete(parentId);
         for (const { previous, next } of written)
           if (this.links.get(previous.childId) === next)
-            this.links.set(previous.childId, previous);
+            this.setLink(previous.childId, previous);
         return;
       }
       if (this.deliveries.get(parentId) !== delivery) return;
@@ -699,6 +746,7 @@ export class SessionLinks {
             console.warn("Could not record session update result", error),
           );
         },
+        [...shares.flatMap((share) => share.updates), ...blocked],
       );
     } catch (error) {
       console.warn("Session update delivery failed", error);
@@ -791,13 +839,13 @@ export class SessionLinks {
         seen.add(row.childId);
         const current = this.links.get(row.childId);
         if (current && current.updatedAt > row.updatedAt) continue;
-        this.links.set(row.childId, row);
+        this.setLink(row.childId, row);
         if (boot && row.inFlight && !this.issued.has(row.inFlight.deliveryId))
           this.bootInFlight.add(row.inFlight.deliveryId);
       }
       for (const [childId, link] of this.links)
         if (!seen.has(childId) && link.updatedAt < started)
-          this.links.delete(childId);
+          this.deleteLink(childId);
       if (boot) await this.reconcileInFlight();
     } catch (error) {
       console.warn("Could not load session links", error);
@@ -879,6 +927,154 @@ export function renderSessionUpdates(updates: SessionUpdate[]): string {
   return [HEADER, "", ...ordered.map(renderUpdate)].join("\n");
 }
 
+/** One update as the transcript shows it, read back from the turn's text. */
+export type SessionUpdateView = {
+  kind: "outcome" | "blocked";
+  status: SessionUpdateStatus;
+  childId: string;
+  title: string;
+  harness: string;
+  generation: number;
+  requestId?: number;
+  repeat: boolean;
+  reply?: string;
+  truncated: boolean;
+  label?: string;
+  error?: string;
+  assignment?: AssignmentReference;
+  task?: string;
+  model?: string;
+};
+
+export function sessionUpdateView(update: SessionUpdate): SessionUpdateView {
+  return { ...update, reply: update.excerpt, repeat: !!update.repeat, truncated: !!update.truncated };
+}
+
+const UPDATE_STATUSES = new Set<string>([
+  "settled",
+  "failed",
+  "stopped",
+  "interrupted",
+  "removed",
+  "approval",
+  "question",
+]);
+
+/**
+ * Read back the text `renderSessionUpdates` wrote. Every value in it is
+ * escaped by `xml`, so no tag or quote inside a reply can end an element
+ * early. Returns null for any other text, so the caller shows it as written.
+ */
+export function parseSessionUpdates(text: string): SessionUpdateView[] | null {
+  if (!text.startsWith(HEADER)) return null;
+  const views: SessionUpdateView[] = [];
+  let remaining = text.slice(HEADER.length).trim();
+  const validXml = (value: string) => !/[<>]|&(?!amp;|lt;|gt;|quot;|apos;)/.test(value);
+  while (remaining) {
+    const element = /^<monocode_session_update ([^>]*)>([\s\S]*?)<\/monocode_session_update>/.exec(remaining);
+    if (!element) return null;
+    const [, source, body] = element;
+    const attributes: Record<string, string> = {};
+    let rest = source;
+    while (rest) {
+      const attribute = /^([a-z_]+)="([^"]*)"(?:\s+|$)/.exec(rest);
+      if (!attribute || attribute[1] in attributes || !validXml(attribute[2]) ||
+          !["kind", "status", "session", "title", "harness", "generation", "request", "repeat"].includes(attribute[1])) return null;
+      attributes[attribute[1]] = unxml(attribute[2]);
+      rest = rest.slice(attribute[0].length);
+    }
+    let content = body.trim();
+    const seen = new Set<string>();
+    while (content) {
+      const child = /^<(reply|label|error)( truncated="true")?>([\s\S]*?)<\/\1>/.exec(content);
+      if (!child || seen.has(child[1]) || (child[2] && child[1] !== "reply") || !validXml(child[3])) return null;
+      seen.add(child[1]);
+      content = content.slice(child[0].length).trim();
+    }
+    remaining = remaining.slice(element[0].length).trim();
+    const { kind, status, session, title, harness } = attributes;
+    const generation = Number(attributes.generation);
+    if (
+      (kind !== "outcome" && kind !== "blocked") ||
+      !UPDATE_STATUSES.has(status) ||
+      !session || attributes.title === undefined || attributes.harness === undefined ||
+      (kind === "blocked" ? !["approval", "question"].includes(status) || attributes.request === undefined : ["approval", "question"].includes(status) || attributes.request !== undefined) ||
+      !/^\d+$/.test(attributes.generation ?? "") ||
+      !Number.isSafeInteger(generation) || generation < 1 ||
+      (attributes.repeat !== undefined && attributes.repeat !== "true") ||
+      (attributes.request !== undefined && (!/^\d+$/.test(attributes.request) || !Number.isSafeInteger(Number(attributes.request))))
+    )
+      return null;
+    const reply = /<reply( truncated="true")?>([\s\S]*?)<\/reply>/.exec(body);
+    const label = /<label>([\s\S]*?)<\/label>/.exec(body);
+    const error = /<error>([\s\S]*?)<\/error>/.exec(body);
+    const requestId = Number(attributes.request);
+    views.push({
+      kind,
+      status: status as SessionUpdateStatus,
+      childId: session,
+      title: title ?? "",
+      harness: harness ?? "",
+      generation,
+      ...(Number.isSafeInteger(requestId) ? { requestId } : {}),
+      repeat: attributes.repeat === "true",
+      ...(reply ? { reply: unxml(reply[2]) } : {}),
+      truncated: Boolean(reply?.[1]),
+      ...(label ? { label: unxml(label[1]) } : {}),
+      ...(error ? { error: unxml(error[1]) } : {}),
+    });
+  }
+  return views.length > 0 ? views : null;
+}
+
+function unxml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+export function sanitizeSessionUpdates(value: unknown): SessionUpdate[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const updates: SessionUpdate[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const row = raw as Record<string, unknown>;
+    const validId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_:-]{1,512}$/.test(value);
+    if (!validId(row.id) || !validId(row.parentId) || !validId(row.childId) ||
+        (row.kind !== "outcome" && row.kind !== "blocked") || typeof row.status !== "string" || !UPDATE_STATUSES.has(row.status) ||
+        (row.kind === "blocked" ? !["approval", "question"].includes(row.status) || row.requestId === undefined : ["approval", "question"].includes(row.status)) ||
+        !Number.isSafeInteger(row.generation) || (row.generation as number) < 1 ||
+        typeof row.title !== "string" || typeof row.harness !== "string" || typeof row.at !== "number" || !Number.isFinite(row.at)) return undefined;
+    const update: SessionUpdate = { id: row.id as string, parentId: row.parentId as string, childId: row.childId as string,
+      kind: row.kind, status: row.status as SessionUpdateStatus, generation: row.generation as number,
+      title: row.title, harness: row.harness, at: row.at };
+    for (const key of ["model", "excerpt", "error", "label"] as const) {
+      if (row[key] !== undefined) {
+        if (typeof row[key] !== "string") return undefined;
+        update[key] = row[key];
+      }
+    }
+    for (const key of ["repeat", "truncated"] as const) {
+      if (row[key] !== undefined) {
+        if (typeof row[key] !== "boolean") return undefined;
+        update[key] = row[key];
+      }
+    }
+    if (row.requestId !== undefined) {
+      if (!Number.isSafeInteger(row.requestId) || (row.requestId as number) < 0) return undefined;
+      update.requestId = row.requestId as number;
+    }
+    const reference = sanitizeAcceptedReference(row.assignment);
+    if (reference?.kind === "linked" && reference.parentId === update.parentId && reference.childId === update.childId && reference.generation === update.generation)
+      update.assignment = reference;
+    updates.push(update);
+  }
+  return updates;
+}
+
 type SessionLinkRow = { childId: string; parentId: string; state: string };
 
 function parseLink(row: SessionLinkRow): SessionLink | undefined {
@@ -888,9 +1084,33 @@ function parseLink(row: SessionLinkRow): SessionLink | undefined {
       link.version === 1 &&
       link.childId === row.childId &&
       link.parentId === row.parentId &&
+      Number.isSafeInteger(link.generation) && link.generation > 0 &&
+      (link.status === "running" || link.status === "idle") &&
+      typeof link.updatedAt === "number" && Number.isFinite(link.updatedAt) &&
       Array.isArray(link.pending)
-    )
-      return link;
+    ) {
+      const reference = sanitizeAcceptedReference(link.assignment);
+      link.assignment = reference?.kind === "linked" && reference.parentId === link.parentId && reference.childId === link.childId && reference.requestKey === link.lastRequestKey && reference.generation === (link.removing ? link.generation - 1 : link.generation) ? reference : undefined;
+      link.pending = link.pending.flatMap(update => sanitizeSessionUpdates([update]) ?? []);
+      if (link.inFlight) link.inFlight.updates = sanitizeSessionUpdates(link.inFlight.updates) ?? [];
+      if (link.heldOutcome) link.heldOutcome = sanitizeSessionUpdates([link.heldOutcome])?.[0];
+      const terminal = link.lastOutcome;
+      const lastOutcome = terminal && Number.isSafeInteger(terminal.generation) && terminal.generation > 0 &&
+        UPDATE_STATUSES.has(terminal.status) && !["approval", "question"].includes(terminal.status)
+        ? { generation: terminal.generation, status: terminal.status } : undefined;
+      return {
+        version: 1, childId: link.childId, parentId: link.parentId, generation: link.generation, status: link.status,
+        ...(typeof link.lastRequestKey === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(link.lastRequestKey) ? { lastRequestKey: link.lastRequestKey } : {}),
+        ...(link.assignment ? { assignment: link.assignment } : {}),
+        ...(lastOutcome ? { lastOutcome } : {}),
+        ...(link.heldOutcome ? { heldOutcome: link.heldOutcome } : {}),
+        ...(link.removing === true ? { removing: true } : {}),
+        pending: link.pending,
+        ...(link.inFlight && typeof link.inFlight.deliveryId === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(link.inFlight.deliveryId)
+          ? { inFlight: { deliveryId: link.inFlight.deliveryId, updates: link.inFlight.updates } } : {}),
+        updatedAt: link.updatedAt,
+      };
+    }
   } catch {
     // Reported below with the row it came from.
   }

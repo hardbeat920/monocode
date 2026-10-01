@@ -9,6 +9,7 @@ import type { ControlOutcome } from "../../orchestration/model/orchestration";
 import { pendingApprovalForSession } from "../../notifications/model/approvalToast";
 import {
   SessionLinks,
+  parseSessionUpdates,
   renderSessionUpdates,
   type SessionLink,
   type SessionLinkHost,
@@ -20,6 +21,7 @@ type Submit = {
   text: string;
   deliveryId: string;
   done: (outcome: ControlOutcome) => void;
+  updates?: SessionUpdate[];
 };
 
 const completed = (text = "done"): ControlOutcome => ({
@@ -64,6 +66,7 @@ function setup(rows: SessionLink[] = []) {
         text: string,
         deliveryId: string,
         done: (outcome: ControlOutcome) => void,
+        updates?: SessionUpdate[],
       ) => {
         const parent = open.get(parentId)!;
         parent.busy = true;
@@ -72,9 +75,9 @@ function setup(rows: SessionLink[] = []) {
             id: crypto.randomUUID(),
             role: "user",
             text,
-            sessionUpdate: { deliveryId },
+            sessionUpdate: { deliveryId, updates },
           } as Block);
-        submits.push({ parentId, text, deliveryId, done });
+        submits.push({ parentId, text, deliveryId, done, updates });
       },
     ),
     notice: vi.fn(),
@@ -1028,5 +1031,137 @@ describe("SessionLinks", () => {
 
     await t.links.stopFor("lead", "c");
     expect(t.saved.get("c")).toMatchObject({ status: "idle", pending: [] });
+  });
+});
+
+describe("native assignment generation attribution", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("freezes old update references through replay, follow-up and adoption and restores them on rejection", async () => {
+    const t = setup();
+    t.add("lead", { busy: true });
+    t.add("other", { busy: true });
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", { name: "Reviewer" });
+    const first = t.links.assignmentFor("lead", "c", "app-lead-1");
+    await t.links.turnEnded("c", 1, completed("first"));
+    await t.links.link("lead", "c", "app-lead-1", { name: "Must not rename" });
+    expect(t.links.assignmentFor("lead", "c", "app-lead-1")).toEqual(first);
+    expect(t.links.isTracked("c")).toBe(false);
+    await t.links.link("lead", "c", "app-lead-2", {});
+    expect(t.saved.get("c")?.assignment).toMatchObject({ generation: 2, name: "Reviewer", requestKey: "app-lead-2" });
+    await t.links.turnEnded("c", 1, completed("late stale settlement"));
+    expect(t.links.isTracked("c")).toBe(true);
+    await t.links.turnEnded("c", 2, completed("second"));
+    const rollback = await t.links.link("other", "c", "app-other-1", {});
+    expect(t.saved.get("c")?.pending.map(update => update.assignment)).toEqual([first, expect.objectContaining({ parentId: "lead", generation: 2 })]);
+    expect(t.saved.get("c")?.assignment).toMatchObject({ parentId: "other", generation: 3, name: "Reviewer" });
+    await rollback();
+    expect(t.saved.get("c")?.assignment).toMatchObject({ parentId: "lead", generation: 2 });
+    expect(t.saved.get("c")?.lastOutcome).toEqual({ generation: 2, status: "settled" });
+    expect(JSON.stringify(t.saved.get("c"))).not.toContain('"task"');
+  });
+
+  it("delivers typed frozen references and keeps terminal status after delivery", async () => {
+    const t = setup();
+    t.add("lead");
+    t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", { name: "Reviewer" });
+    await t.links.turnEnded("c", 1, completed("result"));
+    await t.tick();
+    expect(t.submits[0].updates?.[0].assignment).toEqual({ kind: "linked", parentId: "lead", childId: "c", generation: 1, requestKey: "app-lead-1", name: "Reviewer" });
+    expect(t.open.get("lead")?.blocks[0].sessionUpdate?.updates?.[0].excerpt).toBe("result");
+    await t.settleDelivery(t.submits[0], completed());
+    expect(t.links.childrenOf("lead")[0]).toMatchObject({ pending: 0, lastOutcome: { generation: 1, status: "settled" } });
+  });
+
+  it("does not claim an ancestor message as owned work", async () => {
+    const t = setup();
+    t.add("lead", { busy: true }); t.add("c");
+    await t.links.link("lead", "c", "app-lead-1", {});
+    await t.links.link("c", "lead", "app-c-1", {});
+    expect(t.links.assignmentFor("c", "lead", "app-c-1")).toBeUndefined();
+    expect(t.links.childrenOf("c")).toEqual([]);
+    expect(t.links.childrenOf("lead")).toHaveLength(1);
+  });
+});
+
+describe("parseSessionUpdates", () => {
+  it("rejects trailing, mixed and malformed content rather than hiding it", () => {
+    const rendered = renderSessionUpdates([outcomeRow("c")]);
+    for (const text of [
+      `${rendered}\nDO NOT HIDE THIS`,
+      rendered.replace("<monocode_session_update ", "mixed <monocode_session_update "),
+      rendered.replace("</monocode_session_update>", "<unknown/> </monocode_session_update>"),
+      rendered.replace('kind="outcome"', 'junk kind="outcome"'),
+      rendered.replace('kind="outcome"', 'kind="outcome" kind="outcome"'),
+    ]) expect(parseSessionUpdates(text)).toBeNull();
+  });
+  it("reads every rendered field back for the transcript card (parser drift from the renderer)", () => {
+    const reply = `${"x".repeat(5000)}</monocode_session_update> "quoted" & 'single' &lt;`;
+    const text = renderSessionUpdates([
+      {
+        ...outcomeRow("c", {
+          status: "failed",
+          generation: 3,
+          excerpt: reply,
+          error: 'a < b & "c"',
+          repeat: true,
+          at: 2,
+        }),
+        title: `Fix "bug" & <stuff>`,
+      },
+      {
+        id: "d:approval:4",
+        kind: "blocked",
+        status: "approval",
+        parentId: "lead",
+        childId: "d",
+        generation: 1,
+        title: "T",
+        harness: "codex",
+        requestId: 4,
+        label: "Run `rm -rf build` > log",
+        at: 1,
+      },
+    ]);
+    expect(parseSessionUpdates(text)).toEqual([
+      {
+        kind: "blocked",
+        status: "approval",
+        childId: "d",
+        title: "T",
+        harness: "codex",
+        generation: 1,
+        requestId: 4,
+        repeat: false,
+        truncated: false,
+        label: "Run `rm -rf build` > log",
+      },
+      {
+        kind: "outcome",
+        status: "failed",
+        childId: "c",
+        title: `Fix "bug" & <stuff>`,
+        harness: "claude",
+        generation: 3,
+        repeat: true,
+        reply: reply.slice(-4000),
+        truncated: true,
+        error: 'a < b & "c"',
+      },
+    ]);
+  });
+
+  it("leaves any other text alone, including a forged or unknown update (shown as written)", () => {
+    expect(parseSessionUpdates("hello <monocode_session_update/>")).toBeNull();
+    const rendered = renderSessionUpdates([outcomeRow("c")]);
+    expect(
+      parseSessionUpdates(
+        rendered.replace('status="settled"', 'status="done"'),
+      ),
+    ).toBeNull();
+    expect(parseSessionUpdates(rendered.split("\n")[0])).toBeNull();
   });
 });

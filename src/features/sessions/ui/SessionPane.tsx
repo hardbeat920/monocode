@@ -46,7 +46,9 @@ import {
 } from "../model/session";
 import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
 import { BtwSheet, useBtwConversation } from "./BtwSheet";
-import { AgentTranscript } from "./AgentTranscript";
+import { AgentTranscript, type SessionPeer } from "./AgentTranscript";
+import type { LinkedAgentListing } from "../../agent-app/model/linkedAgents";
+import { assignmentTask } from "../../agent-app/model/assignments";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
 import {
@@ -174,6 +176,11 @@ export type SessionPaneProps = {
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
   onOpenFile: (path: string) => void;
+  /** Focus or reopen another session, such as one a session update names. */
+  onOpenSession?: (sessionId: string) => void;
+  linkedAgentsFor?: (parentId: string) => LinkedAgentListing[];
+  /** The session at the other end of operator traffic, open or from history. */
+  sessionFor?: (sessionId: string) => SessionPeer | undefined;
   onOpenDiff: (
     path?: string,
     session?: { sessionId: string; cwd: string },
@@ -296,6 +303,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onQuestionReply,
   onQuestionInteraction,
   onOpenFile,
+  onOpenSession,
+  linkedAgentsFor,
+  sessionFor,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -310,6 +320,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onPaneDragStart,
   transcriptPool,
 }: Props) {
+  const linkedAgents = linkedAgentsFor?.(session.id) ?? [];
   const orchestrationRuns = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -811,6 +822,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
             )
           ) : (
             <>
+              {linkedAgents.length ? <details className="mx-4 mb-2 min-w-0 rounded-lg border border-content/10 p-2 text-xs">
+                <summary className="cursor-pointer text-content/60">Linked agents</summary>
+                {linkedAgents.map(agent => <div key={agent.id} className="mt-2 min-w-0">
+                  {onOpenSession && !agent.removed ? <button type="button" className="break-all text-left hover:underline focus-visible:ring-1 focus-visible:ring-content/40"
+                    onClick={() => onOpenSession(agent.id)}>{agent.name ?? agent.title}</button> : <span className="break-all">{agent.name ?? agent.title}</span>}
+                  <span className="ml-2 text-content/50">{agent.state} · {agent.activity}{agent.tracked?.lastOutcome ? ` · Last: ${agent.tracked.lastOutcome.status}` : ""}</span>
+                  <p className="break-all text-content/45">{agent.id} · {agent.harness} · {agent.model}</p>
+                  {agent.taskPreview !== undefined ? <details className="min-w-0">
+                    <summary className="cursor-pointer whitespace-pre-wrap break-words text-content/60">Task · {agent.taskPreview}{agent.taskTruncated ? "…" : ""}</summary>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-content/70">{agent.tracked?.assignment ? assignmentTask(session.blocks, agent.tracked.assignment) ?? "Task unavailable" : "Task unavailable"}</p>
+                  </details> : <p className="text-content/45">Task unavailable</p>}
+                </div>)}
+              </details> : null}
               <PooledTranscript
                 pool={transcriptPool}
                 sessionId={session.id}
@@ -854,6 +878,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     notesEnabled ? saveSelectionNote : undefined
                   }
                   onOpenFile={onOpenFile}
+                  onOpenSession={onOpenSession}
+                  sessionFor={sessionFor}
                   onOpenDiff={onOpenDiff}
                   onOpenPlan={openPlan}
                   onBuildPlan={session.worktreeRemoved ? undefined : buildPlan}

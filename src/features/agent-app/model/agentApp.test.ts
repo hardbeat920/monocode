@@ -112,6 +112,39 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("exposes compact capabilities while preserving the old no-argument models.list shape", async () => {
+    const { source, host } = fixture();
+    const legacy = await handleAgentApp(source, "models", "models.list", {}, host) as { harnesses: { id: string; available: boolean; models: unknown[] }[] };
+    const codex = legacy.harnesses.find((entry) => entry.id === "codex")!;
+    expect(Object.keys(codex).sort()).toEqual(["available", "id", "models"]);
+    expect(codex.models).toEqual([{ id: "codex:test", name: "Test model", settings: [expect.objectContaining({ id: "effort" })] }]);
+    const compact = await handleAgentApp(source, "cap", "capabilities", {}, host) as { harnesses: { models?: unknown[] }[]; recentModels: unknown[] };
+    expect(compact.harnesses.every((entry) => !("models" in entry))).toBe(true);
+    expect(compact.recentModels).toEqual([]);
+    await expect(handleAgentApp(source, "bad", "capabilities", { other: true }, host)).rejects.toThrow("Unknown capabilities fields");
+    await expect(handleAgentApp(source, "bad", "models.list", { harness: "codex" }, host)).rejects.toThrow("Unknown models.list fields");
+  });
+  it("requires an exact launch ID even when discovery accepts partial model searches", async () => {
+    const { source, host } = fixture();
+    const result = await handleAgentApp(source, "find", "capabilities", { model: "TEST" }, host) as { harnesses: { id: string; models: { id: string }[] }[] };
+    expect(result.harnesses.find((entry) => entry.id === "codex")?.models[0].id).toBe("codex:test");
+    await expect(handleAgentApp(source, "partial", "sessions.start", { prompt: "Task", model: "test" }, host)).rejects.toThrow("exact model IDs");
+    expect(host.start).not.toHaveBeenCalled();
+    await handleAgentApp(source, "exact", "sessions.start", { prompt: "Task", model: "codex:test" }, host);
+    expect(host.start).toHaveBeenCalledOnce();
+  });
+  it("validates optional display names and reports post-acceptance persistence errors as accepted", async () => {
+    const { source, host } = fixture();
+    const start = vi.fn(async () => ({ persistenceError: "Work was accepted; disk full" }));
+    host.start = start;
+    const result = await handleAgentApp(source, "named", "sessions.start", { prompt: "Task", name: "  Reviewer  " }, host);
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ prompt: "Task" }), "app-lead-named", undefined, "lead", { name: "Reviewer" });
+    expect(result).toMatchObject({ submitted: true, persistenceError: "Work was accepted; disk full" });
+    for (const name of ["", 1, "x".repeat(81)]) {
+      await expect(handleAgentApp(source, "invalid", "sessions.start", { prompt: "Task", name }, host)).rejects.toThrow("name must be");
+    }
+    expect(start).toHaveBeenCalledTimes(1);
+  });
   it("reads a listed project session in bounded pages", async () => {
     const { source, host } = fixture();
     const result = await handleAgentApp(

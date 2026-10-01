@@ -2,6 +2,7 @@ import { appendUser, applyHarnessEvents } from "../../../integrations/harness/co
 import { describe, expect, it } from "vitest";
 import { mapCodexNotification } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { toolCallLabel } from "../model/transcriptActivity";
+import type { SessionUpdate } from "../../agent-app/model/sessionLinks";
 import {
   newSession,
   type Block,
@@ -16,6 +17,27 @@ import {
   sanitizeSessionForPersist,
   shouldPersistSession,
 } from "./sessionStore";
+
+it("round-trips child provenance, system receipts and structured events while stripping unrelated fields", () => {
+  const reference = { kind: "linked" as const, parentId: "parent", childId: "child", generation: 1, requestKey: "app-parent-1", name: "Reviewer" };
+  const update: SessionUpdate = { id: "child:1:outcome", kind: "outcome", status: "settled", parentId: "parent", childId: "child", generation: 1, assignment: reference, title: "Mutable title", harness: "pi", excerpt: "Result", at: 1 };
+  const session = appendUser(newSession("pi", "/tmp/project"), "Exact task", [], { appRequestId: reference.requestKey, acceptedAssignment: reference });
+  session.blocks.push({ id: "receipt", role: "system", text: "", assignmentReceipt: { ...reference, task: "Exact task" } });
+  const event = appendUser(session, "Provider text", [], { sessionUpdate: { deliveryId: "delivery-1", updates: [update] } });
+  const first = sanitizeSessionForPersist(event);
+  const second = sanitizeSessionForPersist(first as Session);
+  expect(second.blocks[0].acceptedAssignment).toEqual(reference);
+  expect(second.blocks[1].assignmentReceipt).toEqual({ ...reference, task: "Exact task" });
+  expect(second.blocks[2].sessionUpdate).toEqual({ deliveryId: "delivery-1", updates: [update] });
+  expect(second.blocks[1].role).toBe("system");
+  const invalid = sanitizeSessionForPersist({ ...event, blocks: [
+    { id: "assistant", role: "assistant", text: "not authority", acceptedAssignment: reference, assignmentReceipt: { ...reference, task: "not a system receipt" } },
+    { id: "bad", role: "user", text: "task", appRequestId: "different", acceptedAssignment: reference },
+  ] });
+  expect(invalid.blocks[0].assignmentReceipt).toBeUndefined();
+  expect(invalid.blocks[0].acceptedAssignment).toBeUndefined();
+  expect(invalid.blocks[1].acceptedAssignment).toBeUndefined();
+});
 
 it("keeps host-owned transcripts out of local session storage", () => {
   const session = newSession("codex", "remote://env/home/me/repo");

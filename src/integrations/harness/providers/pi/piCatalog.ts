@@ -6,23 +6,31 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import type { CatalogRefreshResult } from "../../core/registry";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
 
 const DISCOVERY_TIMEOUT_MS = 45_000;
 
-const inflight = new Map<string, Promise<void>>();
+const inflight = new Map<string, Promise<CatalogRefreshResult>>();
 
-function refreshCatalog(flavor: PiFlavor): Promise<void> {
+function refreshCatalog(flavor: PiFlavor): Promise<CatalogRefreshResult> {
   const running = inflight.get(flavor.id);
   if (running) return running;
   const run = discoverModels(flavor)
-    .then((models) => {
-      if (models.length > 0) setHarnessModels(flavor.id, models);
+    .then((models): CatalogRefreshResult => {
+      if (models.length === 0)
+        return { status: "failed", error: `${flavor.label} catalog returned no models` };
+      setHarnessModels(flavor.id, models);
+      return { status: "succeeded" };
     })
-    .catch((error: unknown) => {
+    .catch((error: unknown): CatalogRefreshResult => {
       console.debug(`[monocode] ${flavor.id} catalog`, error);
+      return {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
     })
     .finally(() => {
       inflight.delete(flavor.id);
@@ -75,11 +83,11 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
   }
 }
 
-export function refreshPiCatalog(): Promise<void> {
+export function refreshPiCatalog(): Promise<CatalogRefreshResult> {
   return refreshCatalog(PI_FLAVOR);
 }
 
-export function refreshOmpCatalog(): Promise<void> {
+export function refreshOmpCatalog(): Promise<CatalogRefreshResult> {
   return refreshCatalog(OMP_FLAVOR);
 }
 

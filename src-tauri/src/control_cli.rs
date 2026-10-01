@@ -82,7 +82,8 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 14] = [
+const APP_ACTIONS: [&str; 15] = [
+    "capabilities",
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -103,9 +104,20 @@ const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /o
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
 Actions:
+  capabilities   {}  Compact harness availability, catalog source/refresh status,
+                  counts, permission modes and ten actual-use recentModels.
+                  {"harness":"pi"} refreshes only Pi and lists its full catalog.
+                  Add "model":"partial ID/name/native/provider" to search.
+                  Model-only search uses loaded catalogs of available harnesses;
+                  it never probes. No-argument output has no model arrays.
+                  Failed refresh can retain old live data; void adapter outcomes
+                  are unknown, not success. Availability is not authentication.
+                  Launch requires an exact returned model ID, not a partial name.
   models.list    {}  Available providers, models, settings and permission modes.
-  sessions.list  {}  Project sessions with IDs, busy status and hasDraft.
-                  Sessions you started or messaged also show tracked:
+  sessions.list  {"linkedOnly":true}  Only this caller's linked agents, with
+                  name, task preview (max 240 characters), state and activity.
+                  Omit linkedOnly for project sessions with IDs, busy status
+                  and hasDraft. Sessions you started or messaged show tracked:
                   status, generation, held and pending updates.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
@@ -122,17 +134,18 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
-  sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
+  sessions.start {"prompt":"...","name":"worker","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
-                  "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
-                  "placement":"right",
-                  "besideSessionId":"<visible session ID>"}
-                  Create a tab with the prompt, or set placement to right or
-                  down to split a visible session pane. A split defaults to the
-                  calling session; besideSessionId chooses another visible
-                  session in this project, including one just created. Set
+                  "workspaceMode":"current","worktreeCwd":"<path>","draft":false}
+                  Opens the session in a new tab. Only when the user asks for
+                  a split, add "placement":"right" or "down" to split a
+                  visible session pane instead. A split defaults to the
+                  calling session; "besideSessionId":"<visible session ID>"
+                  chooses another visible session in this project, including
+                  one just created. Set
                   draft:true to save the prompt unsent; no agent turn runs.
-                  Otherwise the turn is submitted.
+                  Otherwise the turn is submitted. Optional name (max 80
+                  characters) is a display label, not a session title.
                   Returns after creation/acceptance, not agent completion;
                   use its ID with folders.move immediately. Optional model,
                   effort, modelSettings, permission mode and workspace choice
@@ -142,7 +155,8 @@ Actions:
                   a new worktree with an automatic branch name. Omit
                   runtimeMode to inherit this
                   session's permission mode; set it to override. Run
-                  models.list for allowed IDs. cwd is your project; no attachments.
+                  capabilities with harness for exact allowed model IDs.
+                  cwd is your project; no attachments.
   worktrees.list {}  Working copies in this project, with paths and branches.
   worktrees.create {"branch":"feature/name","base":"HEAD","existing":false}
                   Create a worktree on a named new branch from base (a branch
@@ -563,6 +577,28 @@ mod tests {
                 Ok(Parsed::Call(_, _, _))
             ));
             assert!(app_help().contains(action));
+        }
+    }
+
+    #[test]
+    fn capabilities_is_an_app_only_discovery_action() {
+        assert!(matches!(
+            parse_args_for(
+                &args(&["capabilities", "--json", r#"{"harness":"pi","model":"opus"}"#]),
+                true
+            ),
+            Ok(Parsed::Call(action, input, _))
+                if action == "capabilities" && input["harness"] == "pi" && input["model"] == "opus"
+        ));
+        assert!(parse_args(&args(&["capabilities"])).is_err());
+        let text = app_help();
+        for contract in [
+            "actual-use",
+            "never probes",
+            "exact returned model ID",
+            "unknown, not success",
+        ] {
+            assert!(text.contains(contract));
         }
     }
 

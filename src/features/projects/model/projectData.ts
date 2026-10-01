@@ -34,7 +34,7 @@ export async function removeProjectData(path: string): Promise<void> {
   const key = projectKey(normalized);
   const sessions = await listSessionsByProject(normalized).catch(() => []);
   for (const session of sessions) {
-    await deleteSession(session.id).catch(() => undefined);
+    await deleteSession(session.id);
   }
   // Drops the copied image from app data; the localStorage entry goes with it.
   await clearProjectLogo(key).catch(() => undefined);

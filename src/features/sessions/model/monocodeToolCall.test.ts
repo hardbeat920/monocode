@@ -7,6 +7,12 @@ function shell(text: string): Block {
 }
 
 describe("MonoCode CLI tool calls", () => {
+  it("labels compact capabilities and scoped discovery as app calls", () => {
+    const block = shell("monocode app capabilities --json '{\"harness\":\"pi\",\"model\":\"opus\"}'");
+    expect(monoCodeToolCall(block)).toMatchObject({ action: "capabilities", label: "Discover capabilities" });
+    expect(monoCodeWorkSummary([block], false)).toBe("Used MonoCode");
+    expect(monoCodeToolCall(shell("monocode app capabilities && echo extra"))).toBeUndefined();
+  });
   it("recognizes app actions with absolute, quoted, or bare executables", () => {
     expect(
       monoCodeToolCall(

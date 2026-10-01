@@ -1,3 +1,5 @@
+import type { AcceptedReference, AssignmentReceipt } from "../../agent-app/model/assignments";
+import type { SessionUpdate } from "../../agent-app/model/sessionLinks";
 import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
@@ -309,6 +311,10 @@ export type Block = {
   intent?: Extract<TurnIntent, "plan" | "orchestrate">;
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
+  /** Stamped on the exact accepted child user block. */
+  acceptedAssignment?: AcceptedReference;
+  /** Display-only system receipt; never a provider turn. */
+  assignmentReceipt?: AssignmentReceipt;
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {
@@ -339,7 +345,7 @@ export type Block = {
    */
   internal?: boolean;
   /** A turn MonoCode wrote to report linked sessions' outcomes to this thread. */
-  sessionUpdate?: { deliveryId: string };
+  sessionUpdate?: { deliveryId: string; updates?: SessionUpdate[] };
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */

@@ -62,6 +62,7 @@ describe("session persistence concurrency", () => {
     expect(commands).toEqual([
       "session_upsert",
       "session_upsert",
+      "session_get",
       "session_delete",
     ]);
     await upsertSession(worker);
@@ -100,7 +101,7 @@ describe("session persistence concurrency", () => {
     });
     await Promise.all([writing, lateWrite, deleting]);
 
-    expect(commands).toEqual(["session_upsert", "session_delete"]);
+    expect(commands).toEqual(["session_upsert", "session_get", "session_delete"]);
   });
 
   it("discards a draft-only record before reusing its open session id", async () => {

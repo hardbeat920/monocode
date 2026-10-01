@@ -427,6 +427,8 @@ type UserTurnExtra = {
   monocode?: boolean;
   intent?: Block["intent"];
   appRequestId?: string;
+  acceptedAssignment?: Block["acceptedAssignment"];
+  sessionUpdate?: Block["sessionUpdate"];
 };
 
 function userTurnFields(extra?: UserTurnExtra) {
@@ -438,6 +440,8 @@ function userTurnFields(extra?: UserTurnExtra) {
     ...(extra?.monocode ? { monocode: true } : {}),
     ...(extra?.intent ? { intent: extra.intent } : {}),
     ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
+    ...(extra?.acceptedAssignment ? { acceptedAssignment: extra.acceptedAssignment } : {}),
+    ...(extra?.sessionUpdate ? { sessionUpdate: extra.sessionUpdate } : {}),
   };
 }
 

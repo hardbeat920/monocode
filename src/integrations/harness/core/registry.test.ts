@@ -15,6 +15,8 @@ import {
   isLiveHarness,
   listHarnesses,
   refreshHarnessCatalogs,
+  refreshHarnessCatalog,
+  harnessCatalogRefreshResult,
   registerHarness,
   resetHarnessIdlePark,
   sendHarnessTurn,
@@ -265,6 +267,19 @@ describe("harness registry", () => {
     await refreshHarnessCatalogs(["pi"]);
 
     expect(pi).toHaveBeenCalledOnce();
+  });
+
+  it("observes refresh outcomes honestly, without inferring success from an old overlay or void result", async () => {
+    setHarnessModels("pi", [{ id: "pi:old", harness: "pi", name: "Old" }]);
+    registerHarness(stub("pi", { refreshCatalog: vi.fn(async () => undefined) }));
+    expect(await refreshHarnessCatalog("pi")).toEqual({ status: "unknown" });
+    registerHarness(stub("pi", { refreshCatalog: vi.fn(async () => ({ status: "failed", error: "Probe refused" })) }));
+    await refreshHarnessCatalogs(["pi"], { force: true });
+    expect(harnessCatalogRefreshResult("pi")).toEqual({ status: "failed", error: "Probe refused" });
+    registerHarness(stub("pi", { refreshCatalog: vi.fn(async () => { throw new Error("Spawn failed"); }) }));
+    expect(await refreshHarnessCatalog("pi")).toEqual({ status: "failed", error: "Spawn failed" });
+    registerHarness(stub("pi"));
+    expect(await refreshHarnessCatalog("pi")).toEqual({ status: "unsupported" });
   });
 
   it("skips catalog refresh when no harness is in use", async () => {
