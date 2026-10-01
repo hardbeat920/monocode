@@ -43,6 +43,21 @@ describe("session title metadata", () => {
     expect(buildThreadTitlePrompt("SW-29")).toContain("ticket key");
   });
 
+  it("still accepts a number that also stands alone or follows a plain hyphenated word", () => {
+    expect(
+      parseGeneratedSessionTitle(
+        '{"title":"Fix issue 29","workItem":{"kind":"issue","number":29}}',
+        "SW-29 is about issue 29",
+      )?.workItem,
+    ).toEqual({ kind: "issue", number: 29 });
+    expect(
+      parseGeneratedSessionTitle(
+        '{"title":"Fix issue 29","workItem":{"kind":"issue","number":29}}',
+        "Fix issue-29",
+      )?.workItem,
+    ).toEqual({ kind: "issue", number: 29 });
+  });
+
   it("keeps compatibility with a bare generated title", () => {
     expect(parseGeneratedSessionTitle("Fix session links", "anything")).toEqual(
       { title: "Fix session links", workItem: null },

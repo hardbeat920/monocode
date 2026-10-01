@@ -64,9 +64,14 @@ export function sanitizeThreadTitle(raw: string): string {
   return `${normalized.slice(0, TITLE_LIMIT - 3).trimEnd()}...`;
 }
 
-/** True when the number stands alone, not as the tail of a ticket key such as `SW-29`. */
+/** True when the number stands alone somewhere, not only as the tail of a ticket key such as `SW-29`. */
 function referencedNumber(message: string, number: number): boolean {
-  return new RegExp(`(?<!\\d)(?<![A-Za-z0-9]-)${number}(?!\\d)`).test(message);
+  const occurrences = new RegExp(`(^|\\D)${number}(?=\\D|$)`, "g");
+  for (const match of message.matchAll(occurrences)) {
+    const before = message.slice(0, match.index + match[1].length);
+    if (!/[A-Z][A-Z0-9]{0,9}-$/.test(before)) return true;
+  }
+  return false;
 }
 
 export function parseGeneratedSessionTitle(

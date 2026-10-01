@@ -118,6 +118,7 @@ import {
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
   inboxItemMatchesLinkedWorkItem,
+  linearWorkspaceFromUrl,
   linkedWorkItemInboxKey,
   linkedWorkItemProvider,
   relatedSessionsForInboxItem,
@@ -1236,9 +1237,10 @@ function peekLinkedWorkItem(
 ): InboxItem | null {
   if (target.kind === "linear") {
     const cached = peekLinearWorkItem(target.id ?? target.identifier);
-    return cached
-      ? { ...cached, projectPath: cached.projectPath || cwd }
-      : null;
+    const expected = linearWorkspaceFromUrl(target.url);
+    const actual = cached ? linearWorkspaceFromUrl(cached.url) : null;
+    if (!cached || (expected && actual && expected !== actual)) return null;
+    return { ...cached, projectPath: cached.projectPath || cwd };
   }
   const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
   return cached ? { ...cached, projectPath: cwd, provider: "github" } : null;
@@ -1250,6 +1252,13 @@ async function fetchLinkedWorkItem(
 ): Promise<InboxItem> {
   if (target.kind === "linear") {
     const item = await linearWorkItem(target.id ?? target.identifier);
+    const expected = linearWorkspaceFromUrl(target.url);
+    const actual = linearWorkspaceFromUrl(item.url);
+    if (expected && actual && expected !== actual) {
+      throw new Error(
+        `${target.identifier} belongs to a different Linear workspace than the one connected here.`,
+      );
+    }
     return { ...item, projectPath: item.projectPath || cwd };
   }
   const item = await githubWorkItem(
@@ -1444,7 +1453,7 @@ export function LinkedWorkItemPanel({
                 className={ACTION_OUTLINE}
               >
                 <ExternalLink className="size-3.5" strokeWidth={1.75} />
-                Open on GitHub
+                {target.kind === "linear" ? "Open in Linear" : "Open on GitHub"}
               </button>
             </div>
           ) : (

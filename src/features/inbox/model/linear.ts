@@ -101,13 +101,17 @@ export async function linearTeamKeys(): Promise<Set<string> | null> {
   ) {
     return teamKeysCache.keys;
   }
+  const generation = cacheGeneration;
   try {
     const keys = new Set(
       (await listLinearTeams())
         .map((team) => team.key.trim().toUpperCase())
         .filter(Boolean),
     );
-    teamKeysCache = { keys, fetchedAt: Date.now() };
+    if (keys.size === 0) return null;
+    if (generation === cacheGeneration) {
+      teamKeysCache = { keys, fetchedAt: Date.now() };
+    }
     return keys;
   } catch {
     return null;
@@ -143,12 +147,15 @@ export function listLinearIssues(query: {
 }
 
 const issueByKey = new Map<string, LinearIssue>();
+/** Bumped on every invalidation so a request started under an old token cannot refill the caches. */
+let cacheGeneration = 0;
 
 function issueLookupKey(key: string): string {
   return key.trim().toLowerCase();
 }
 
 export function clearLinearIssueCache() {
+  cacheGeneration += 1;
   issueByKey.clear();
   clearLinearTeamKeysCache();
 }
@@ -159,9 +166,11 @@ export function peekLinearIssue(key: string): LinearIssue | null {
 }
 
 export async function lookupLinearIssue(key: string): Promise<LinearIssue> {
+  const generation = cacheGeneration;
   const issue = await invoke<LinearIssue>("linear_issue_lookup", {
     key: key.trim(),
   });
+  if (generation !== cacheGeneration) return issue;
   issueByKey.set(issueLookupKey(key), issue);
   if (issue.identifier) issueByKey.set(issueLookupKey(issue.identifier), issue);
   if (issue.id) issueByKey.set(issueLookupKey(issue.id), issue);

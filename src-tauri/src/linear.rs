@@ -126,8 +126,17 @@ pub async fn linear_set_token(app: AppHandle, token: String) -> Result<LinearSta
 pub async fn linear_list_teams(app: AppHandle) -> Result<Vec<LinearTeam>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let token = require_token(&app)?;
-        let data = graphql_with_token(&token, TEAMS_QUERY, json!({}))?;
-        parse_linear_teams(&data)
+        let mut teams = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..TEAM_PAGE_LIMIT {
+            let data = graphql_with_token(&token, TEAMS_QUERY, json!({ "after": after }))?;
+            teams.extend(parse_linear_teams(&data)?);
+            after = next_team_cursor(&data);
+            if after.is_none() {
+                break;
+            }
+        }
+        Ok(teams)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -245,9 +254,12 @@ pub async fn linear_issue_comment(
 }
 
 const VIEWER_QUERY: &str = "query { viewer { id } }";
+/// Pages of 50 teams; a workspace with more than 50 teams needs several requests.
+const TEAM_PAGE_LIMIT: usize = 20;
 const TEAMS_QUERY: &str = r#"
-query {
-  teams(first: 50) {
+query InboxTeams($after: String) {
+  teams(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes { id key name }
   }
 }
@@ -424,6 +436,14 @@ fn graphql_error_message_from_value(parsed: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map(|message| message.trim().to_string())
         .filter(|message| !message.is_empty())
+}
+
+fn next_team_cursor(data: &Value) -> Option<String> {
+    let page = data.pointer("/teams/pageInfo")?;
+    if page.get("hasNextPage").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    string_field(page, "endCursor").filter(|cursor| !cursor.is_empty())
 }
 
 fn parse_linear_teams(data: &Value) -> Result<Vec<LinearTeam>, String> {
@@ -803,6 +823,15 @@ mod tests {
     fn issue_filter_all_states_no_team() {
         let filter = issue_filter(false, "all", &[]);
         assert_eq!(filter, json!({}));
+    }
+
+    #[test]
+    fn next_team_cursor_follows_has_next_page() {
+        let more = json!({ "teams": { "pageInfo": { "hasNextPage": true, "endCursor": "abc" } } });
+        assert_eq!(next_team_cursor(&more), Some("abc".into()));
+        let done = json!({ "teams": { "pageInfo": { "hasNextPage": false, "endCursor": "abc" } } });
+        assert_eq!(next_team_cursor(&done), None);
+        assert_eq!(next_team_cursor(&json!({ "teams": {} })), None);
     }
 
     #[test]

@@ -19,12 +19,13 @@ import type { GeneratedWorkItemHint } from "./sessionTitle";
 
 const GITHUB_URL_RE =
   /https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)\b/i;
+/** Workspace-scoped or org-less issue URLs; a trailing title slug is ignored. */
 const LINEAR_URL_RE =
-  /https?:\/\/linear\.app\/([A-Za-z0-9_.-]+)\/issue\/([A-Za-z][A-Za-z0-9]{0,6}-\d+)\b/i;
+  /https?:\/\/linear\.app\/(?:([A-Za-z0-9_.-]+)\/)?issue\/([A-Za-z][A-Za-z0-9]{0,9}-[1-9]\d*)\b/i;
 /** A ticket key such as `ENG-42`. Also matches things like `UTF-8`, so callers verify with Linear. */
-const TICKET_KEY_RE = /\b([A-Z][A-Z0-9]{0,6})-(\d+)\b/g;
-const TICKET_KEY_EXACT_RE = /^([A-Z][A-Z0-9]{0,6})-(\d+)$/;
-const MAX_TICKET_LOOKUPS = 3;
+const TICKET_KEY_RE = /\b([A-Za-z][A-Za-z0-9]{0,9})-([1-9]\d*)\b/g;
+const TICKET_KEY_EXACT_RE = /^([A-Z][A-Z0-9]{0,9})-([1-9]\d*)$/;
+const MAX_TICKET_LOOKUPS = 5;
 
 function validNumber(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
@@ -64,10 +65,11 @@ export function parseLinearWorkItemUrl(
   if (!match) return null;
   const parsed = parseLinearIdentifier(match[2]);
   if (!parsed) return null;
+  const workspace = match[1] ? `${match[1]}/` : "";
   return {
     kind: "linear",
     ...parsed,
-    url: `https://linear.app/${match[1]}/issue/${parsed.identifier}`,
+    url: `https://linear.app/${workspace}issue/${parsed.identifier}`,
   };
 }
 
@@ -80,10 +82,76 @@ export function parseWorkItemUrl(message: string): LinkedWorkItem | null {
 export function ticketKeysInMessage(message: string): string[] {
   const keys: string[] = [];
   for (const match of message.matchAll(TICKET_KEY_RE)) {
-    const key = `${match[1]}-${Number(match[2])}`;
+    const key = `${match[1].toUpperCase()}-${Number(match[2])}`;
     if (validNumber(Number(match[2])) && !keys.includes(key)) keys.push(key);
   }
   return keys;
+}
+
+/** The persisted shape, or undefined when the value is not a usable link. */
+export function normalizeLinkedWorkItem(
+  value: unknown,
+): LinkedWorkItem | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const item = value as {
+    kind?: unknown;
+    repo?: unknown;
+    number?: unknown;
+    url?: unknown;
+    identifier?: unknown;
+    id?: unknown;
+  };
+  const kind = item.kind;
+  const repo = typeof item.repo === "string" ? item.repo.trim() : "";
+  if (kind === "linear") {
+    const parsed = parseLinearIdentifier(
+      typeof item.identifier === "string" ? item.identifier : "",
+    );
+    const url = typeof item.url === "string" ? item.url.trim() : "";
+    if (!parsed || !/^https:\/\/linear\.app\//.test(url)) return undefined;
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    return {
+      kind,
+      identifier: parsed.identifier,
+      ...(id ? { id } : {}),
+      repo: repo || parsed.repo,
+      number: parsed.number,
+      url,
+    };
+  }
+  const number = item.number;
+  if (
+    (kind !== "issue" && kind !== "pr") ||
+    !validRepo(repo) ||
+    typeof number !== "number" ||
+    !validNumber(number)
+  ) {
+    return undefined;
+  }
+  return { kind, repo, number, url: githubUrl(repo, kind, number) };
+}
+
+export function linkedWorkItemsEqual(
+  left: LinkedWorkItem,
+  right: LinkedWorkItem,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "linear" && right.kind === "linear") {
+    return (
+      left.identifier === right.identifier &&
+      (left.id ?? "") === (right.id ?? "") &&
+      left.repo === right.repo &&
+      left.number === right.number &&
+      left.url === right.url
+    );
+  }
+  return (
+    left.repo === right.repo &&
+    left.number === right.number &&
+    left.url === right.url
+  );
 }
 
 export function linkedWorkItemFromLinearIssue(issue: {
@@ -114,28 +182,68 @@ export function ticketKeysForTeams(
   return keys.filter((key) => teamKeys.has(key.slice(0, key.indexOf("-"))));
 }
 
+type TicketKeyResolution = {
+  linked: LinearLinkedWorkItem | null;
+  /** Numbers of the keys that looked like real Linear tickets. */
+  ticketNumbers: ReadonlySet<number>;
+};
+
+const NO_TICKETS: ReadonlySet<number> = new Set();
+
+function ticketNumbers(keys: readonly string[]): ReadonlySet<number> {
+  return new Set(keys.map((key) => Number(key.slice(key.indexOf("-") + 1))));
+}
+
+/** The workspace segment of a linear.app issue URL, or null for an org-less URL. */
+export function linearWorkspaceFromUrl(url: string): string | null {
+  const match = LINEAR_URL_RE.exec(url);
+  return match?.[1] ? match[1].toLowerCase() : null;
+}
+
 /** Confirm ticket keys against Linear; the first one that exists wins. */
 async function resolveLinearTicketKey(
   keys: readonly string[],
-): Promise<LinearLinkedWorkItem | null> {
-  if (keys.length === 0) return null;
+): Promise<TicketKeyResolution> {
+  if (keys.length === 0) return { linked: null, ticketNumbers: NO_TICKETS };
   try {
-    if (!(await linearConnected()).connected) return null;
+    if (!(await linearConnected()).connected) {
+      return { linked: null, ticketNumbers: NO_TICKETS };
+    }
   } catch {
-    return null;
+    return { linked: null, ticketNumbers: NO_TICKETS };
   }
   const candidates = ticketKeysForTeams(keys, await linearTeamKeys());
+  const numbers = ticketNumbers(candidates);
   for (const key of candidates.slice(0, MAX_TICKET_LOOKUPS)) {
     try {
       const linked = linkedWorkItemFromLinearIssue(
         await lookupLinearIssue(key),
       );
-      if (linked) return linked;
+      if (linked) return { linked, ticketNumbers: numbers };
     } catch {
       // An unknown key such as `UTF-8`; try the next one.
     }
   }
-  return null;
+  return { linked: null, ticketNumbers: numbers };
+}
+
+async function resolveCurrentPr(
+  cwd: string,
+): Promise<GithubLinkedWorkItem | null> {
+  try {
+    const pr = await gitPrStatus(cwd);
+    if (!pr || !validNumber(pr.number)) return null;
+    const repo = repoFromGithubUrl(pr.url) ?? (await githubRepo(cwd));
+    if (!validRepo(repo)) return null;
+    return {
+      kind: "pr",
+      repo,
+      number: pr.number,
+      url: pr.url || githubUrl(repo, "pr", pr.number),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function explicitHint(message: string): GeneratedWorkItemHint | null {
@@ -173,42 +281,33 @@ export async function resolveLinkedWorkItem(
   const fromUrl = parseWorkItemUrl(message);
   if (fromUrl) return fromUrl;
 
+  // Explicit GitHub references ("issue #12", "PR 42", "this PR") win over a
+  // ticket key so an existing PR workflow keeps its PR link.
   const explicit = explicitHint(message);
-  const ticketKeys = ticketKeysInMessage(message);
+  if (!explicit && referencesCurrentPr(message)) {
+    const pr = await resolveCurrentPr(cwd);
+    if (pr) return pr;
+  }
+
+  let ticketNumbersSeen: ReadonlySet<number> = NO_TICKETS;
   if (!explicit) {
-    const linear = await resolveLinearTicketKey(ticketKeys);
-    if (linear) return linear;
+    const ticket = await resolveLinearTicketKey(ticketKeysInMessage(message));
+    if (ticket.linked) return ticket.linked;
+    ticketNumbersSeen = ticket.ticketNumbers;
   }
 
   // A ticket key such as `SW-29` is the usual source of an invented GitHub
-  // issue number, so the model's guess is ignored whenever one is present.
-  const hint = explicit ?? (ticketKeys.length > 0 ? null : generatedHint);
-  if (hint && validNumber(hint.number)) {
-    try {
-      const repo = await githubRepo(cwd);
-      if (!validRepo(repo)) return null;
-      return {
-        ...hint,
-        repo,
-        url: githubUrl(repo, hint.kind, hint.number),
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  if (!referencesCurrentPr(message)) return null;
+  // issue number, so a model guess that repeats a ticket number is dropped.
+  const hint =
+    explicit ??
+    (generatedHint && !ticketNumbersSeen.has(generatedHint.number)
+      ? generatedHint
+      : null);
+  if (!hint || !validNumber(hint.number)) return null;
   try {
-    const pr = await gitPrStatus(cwd);
-    if (!pr || !validNumber(pr.number)) return null;
-    const repo = repoFromGithubUrl(pr.url) ?? (await githubRepo(cwd));
+    const repo = await githubRepo(cwd);
     if (!validRepo(repo)) return null;
-    return {
-      kind: "pr",
-      repo,
-      number: pr.number,
-      url: pr.url || githubUrl(repo, "pr", pr.number),
-    };
+    return { ...hint, repo, url: githubUrl(repo, hint.kind, hint.number) };
   } catch {
     return null;
   }
@@ -273,7 +372,8 @@ export function inboxItemMatchesLinkedWorkItem(
 ): boolean {
   if (linked.kind === "linear") {
     if (item.provider !== "linear") return false;
-    if (linked.id && item.id && linked.id === item.id) return true;
+    // Two UUIDs settle it; identifiers can repeat across workspaces.
+    if (linked.id && item.id) return linked.id === item.id;
     return (item.identifier ?? "").trim().toUpperCase() === linked.identifier;
   }
   return (

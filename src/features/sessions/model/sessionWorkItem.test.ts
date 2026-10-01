@@ -10,11 +10,13 @@ import {
 } from "../../inbox/model/githubTasks";
 import {
   inboxItemMatchesLinkedWorkItem,
+  linearWorkspaceFromUrl,
   linkedWorkItemInboxKey,
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   parseGithubWorkItemUrl,
   parseLinearWorkItemUrl,
+  normalizeLinkedWorkItem,
   relatedSessionsForInboxItem,
   resolveLinkedWorkItem,
   ticketKeysForTeams,
@@ -348,8 +350,168 @@ describe("session work items", () => {
 
   it("lists distinct ticket keys in order of appearance", () => {
     expect(
-      ticketKeysInMessage("Fix SW-29 and ENG-4, then SW-29 again"),
+      ticketKeysInMessage("Fix sw-29 and ENG-4, then SW-29 again, not SW-007"),
     ).toEqual(["SW-29", "ENG-4"]);
+  });
+
+  it("keeps the current PR link when the message also names a ticket", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "git_pr_status") {
+        return { number: 2022, url: "https://github.com/acme/app/pull/2022" };
+      }
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    await expect(
+      resolveLinkedWorkItem("Review this PR against SW-29", "/tmp/app", null),
+    ).resolves.toEqual({
+      kind: "pr",
+      repo: "acme/app",
+      number: 2022,
+      url: "https://github.com/acme/app/pull/2022",
+    });
+    expect(invoke).not.toHaveBeenCalledWith("linear_status");
+  });
+
+  it("keeps the model hint when the only ticket-shaped text is not a known team", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") {
+        return [{ id: "team-1", key: "SW", name: "Software" }];
+      }
+      if (command === "git_github_repo") return "acme/app";
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    await expect(
+      resolveLinkedWorkItem("Fix #29 UTF-8 handling", "/tmp/app", {
+        kind: "issue",
+        number: 29,
+      }),
+    ).resolves.toEqual({
+      kind: "issue",
+      repo: "acme/app",
+      number: 29,
+      url: "https://github.com/acme/app/issues/29",
+    });
+    expect(invoke).not.toHaveBeenCalledWith(
+      "linear_issue_lookup",
+      expect.anything(),
+    );
+  });
+
+  it("drops only a model hint that repeats a plausible ticket number", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") throw new Error("offline");
+      if (command === "linear_issue_lookup") throw new Error("not found");
+      if (command === "git_github_repo") return "acme/app";
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    await expect(
+      resolveLinkedWorkItem(
+        "Fix GitHub #42: handle UTF-8 decoding",
+        "/tmp/app",
+        {
+          kind: "issue",
+          number: 42,
+        },
+      ),
+    ).resolves.toMatchObject({ kind: "issue", number: 42 });
+    await expect(
+      resolveLinkedWorkItem("Handle UTF-8 decoding", "/tmp/app", {
+        kind: "issue",
+        number: 8,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("does not match a Linear row whose UUID differs even when identifiers repeat", () => {
+    const linked = {
+      kind: "linear" as const,
+      identifier: "SW-29",
+      id: "workspace-a-uuid",
+      repo: "SW",
+      number: 29,
+      url: "https://linear.app/a/issue/SW-29",
+    };
+    const sameIdentifier = {
+      provider: "linear",
+      kind: "linear",
+      id: "workspace-b-uuid",
+      identifier: "SW-29",
+      number: 29,
+      repo: "SW",
+    } as InboxItem;
+    expect(inboxItemMatchesLinkedWorkItem(sameIdentifier, linked)).toBe(false);
+    expect(
+      inboxItemMatchesLinkedWorkItem(
+        { ...sameIdentifier, id: undefined },
+        linked,
+      ),
+    ).toBe(true);
+  });
+
+  it("reads the workspace from a Linear URL", () => {
+    expect(
+      linearWorkspaceFromUrl("https://linear.app/Acme/issue/SW-29/slug"),
+    ).toBe("acme");
+    expect(linearWorkspaceFromUrl("https://linear.app/issue/SW-29")).toBeNull();
+    expect(linearWorkspaceFromUrl("https://example.com")).toBeNull();
+  });
+
+  it("parses an org-less Linear URL and rejects leading zeros", () => {
+    expect(parseLinearWorkItemUrl("https://linear.app/issue/LIN-123")).toEqual({
+      kind: "linear",
+      identifier: "LIN-123",
+      repo: "LIN",
+      number: 123,
+      url: "https://linear.app/issue/LIN-123",
+    });
+    expect(
+      parseLinearWorkItemUrl("https://linear.app/acme/issue/SW-00029"),
+    ).toBeNull();
+  });
+
+  it("normalizes persisted links of both kinds and rejects the rest", () => {
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "pr",
+        repo: "acme/app",
+        number: 7,
+        url: "https://example.com",
+      }),
+    ).toEqual({
+      kind: "pr",
+      repo: "acme/app",
+      number: 7,
+      url: "https://github.com/acme/app/pull/7",
+    });
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "sw-29",
+        url: "https://linear.app/acme/issue/SW-29",
+      }),
+    ).toEqual({
+      kind: "linear",
+      identifier: "SW-29",
+      repo: "SW",
+      number: 29,
+      url: "https://linear.app/acme/issue/SW-29",
+    });
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "SW-29",
+        url: "https://evil.example/SW-29",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeLinkedWorkItem({ kind: "jira", repo: "x/y", number: 1 }),
+    ).toBeUndefined();
+    expect(normalizeLinkedWorkItem("SW-29")).toBeUndefined();
   });
 
   it("finds sessions related to the same GitHub Inbox item", () => {
