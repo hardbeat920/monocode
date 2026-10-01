@@ -8,7 +8,18 @@ import { AgentTranscript } from "./AgentTranscript";
 let container: HTMLDivElement;
 let root: Root;
 
+// Claude yielded with a command still running, then the person replied. The
+// reply is steered into the run in flight, so it has no clock of its own.
+const startedAt = Date.UTC(2026, 8, 30, 10, 0, 0);
+const blocks: Block[] = [
+  { id: "prompt", role: "user", text: "start the dev server", startedAt },
+  { id: "answer", role: "assistant", text: "It is running." },
+  { id: "steer", role: "user", text: "is it up yet?" },
+];
+
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(startedAt + 95_000);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -21,19 +32,11 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
-// Claude yielded with a command still running, then the person replied. The
-// reply is steered into the run in flight, so it has no clock of its own.
-const startedAt = Date.now() - 95_000;
-const blocks: Block[] = [
-  { id: "prompt", role: "user", text: "start the dev server", startedAt },
-  { id: "answer", role: "assistant", text: "It is running." },
-  { id: "steer", role: "user", text: "is it up yet?" },
-];
 
 function render(visible: boolean) {
   act(() =>
