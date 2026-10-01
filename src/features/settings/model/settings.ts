@@ -313,7 +313,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "chat-background",
     section: "appearance",
     label: "Chat background",
-    keywords: "wallpaper image picture opacity backdrop",
+    keywords: "wallpaper image picture opacity backdrop blur",
   },
   {
     id: "transcript-layout",

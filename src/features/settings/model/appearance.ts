@@ -29,6 +29,7 @@ const CHAT_BACKGROUND_EMPTY_OPACITY_KEY = "monocode.chatBackgroundEmptyOpacity";
 const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
   "monocode.chatBackgroundSessionOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
+const CHAT_BACKGROUND_BLUR_KEY = "monocode.chatBackgroundBlur";
 const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const CHANGES_VIEW_KEY = "monocode.changesView";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
@@ -145,6 +146,10 @@ export const BODY_GLASS_DEFAULT = !IS_LINUX;
 export const CHAT_BACKGROUND_OPACITY_MIN = 0.05;
 export const CHAT_BACKGROUND_OPACITY_MAX = 0.65;
 export const CHAT_BACKGROUND_OPACITY_DEFAULT = 0.24;
+export const CHAT_BACKGROUND_BLUR_MIN = 0;
+export const CHAT_BACKGROUND_BLUR_MAX = 40;
+export const CHAT_BACKGROUND_BLUR_DEFAULT = 0;
+
 export const CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT =
   CHAT_BACKGROUND_OPACITY_DEFAULT;
 export const CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT =
@@ -318,6 +323,7 @@ export function initAppearance() {
   applyChatBackgroundEmptyOpacity(loadChatBackgroundEmptyOpacity());
   applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
   applyChatBackgroundScope(loadChatBackgroundScope());
+  applyChatBackgroundBlur(loadChatBackgroundBlur());
   void applyUiScale(loadUiScale());
 }
 
@@ -715,6 +721,36 @@ export function applyChatBackgroundSessionOpacity(value: number) {
     "--chat-background-session-opacity",
     value,
   );
+}
+
+export function loadChatBackgroundBlur(): number {
+  return Math.round(
+    clamp(
+      readNumber(CHAT_BACKGROUND_BLUR_KEY) ?? CHAT_BACKGROUND_BLUR_DEFAULT,
+      CHAT_BACKGROUND_BLUR_MIN,
+      CHAT_BACKGROUND_BLUR_MAX,
+    ),
+  );
+}
+
+export function saveChatBackgroundBlur(value: number) {
+  writeNumber(
+    CHAT_BACKGROUND_BLUR_KEY,
+    Math.round(
+      clamp(value, CHAT_BACKGROUND_BLUR_MIN, CHAT_BACKGROUND_BLUR_MAX),
+    ),
+  );
+}
+
+/** Zero drops the filter entirely so an unblurred image costs nothing extra. */
+export function applyChatBackgroundBlur(value: number) {
+  const next = Math.round(
+    clamp(value, CHAT_BACKGROUND_BLUR_MIN, CHAT_BACKGROUND_BLUR_MAX),
+  );
+  const root = document.documentElement;
+  root.style.setProperty("--chat-background-blur", `${next}px`);
+  root.classList.toggle("chat-background-blurred", next > 0);
+  return next;
 }
 
 function isChatBackgroundScope(value: unknown): value is ChatBackgroundScope {

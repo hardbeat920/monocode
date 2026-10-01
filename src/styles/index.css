@@ -84,6 +84,7 @@
   --main-opacity: 0.85;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
+  --chat-background-blur: 0px;
   --selection-subtle-strength: 8%;
   --selection-strength: 10%;
   --selection-strong-strength: 12%;
@@ -328,6 +329,20 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   opacity: 0;
   transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
   pointer-events: none;
+}
+
+/* Blur fades the image toward its edges, so grow it past the pane on every
+   side. The pane clips the overflow. */
+html.chat-background-blurred .chat-pane-background::before {
+  left: calc(var(--chat-background-left, 0%) - 2 * var(--chat-background-blur));
+  top: calc(var(--chat-background-top, 0%) - 2 * var(--chat-background-blur));
+  width: calc(
+    var(--chat-background-width, 100%) + 4 * var(--chat-background-blur)
+  );
+  height: calc(
+    var(--chat-background-height, 100%) + 4 * var(--chat-background-blur)
+  );
+  filter: blur(var(--chat-background-blur));
 }
 
 /* Each masked copy samples the same artwork; only the image is blurred. */

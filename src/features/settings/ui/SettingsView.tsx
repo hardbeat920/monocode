@@ -50,6 +50,7 @@ import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import {
   applyChatBackground,
+  applyChatBackgroundBlur,
   applyChatBackgroundEmptyOpacity,
   applyChatBackgroundSessionOpacity,
   applyChatBackgroundScope,
@@ -63,6 +64,9 @@ import {
   applyThemeTint,
   BODY_GLASS_DEFAULT,
   ACCENT_COLOR_DEFAULT,
+  CHAT_BACKGROUND_BLUR_DEFAULT,
+  CHAT_BACKGROUND_BLUR_MAX,
+  CHAT_BACKGROUND_BLUR_MIN,
   CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT,
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
@@ -72,6 +76,7 @@ import {
   chatBackgroundSrc,
   loadBodyGlass,
   loadAccentColor,
+  loadChatBackgroundBlur,
   loadChatBackgroundEmptyOpacity,
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
@@ -88,6 +93,7 @@ import {
   loadTranscriptAnchor,
   saveBodyGlass,
   saveAccentColor,
+  saveChatBackgroundBlur,
   saveChatBackgroundEmptyOpacity,
   saveChatBackgroundPath,
   saveChatBackgroundSessionOpacity,
@@ -1822,6 +1828,9 @@ function useAppearanceSettings(
   );
   const [chatBackgroundSessionOpacity, setChatBackgroundSessionOpacity] =
     useState(loadChatBackgroundSessionOpacity);
+  const [chatBackgroundBlur, setChatBackgroundBlur] = useState(
+    loadChatBackgroundBlur,
+  );
   const [chatBackgroundScope, setChatBackgroundScope] =
     useState<ChatBackgroundScope>(loadChatBackgroundScope);
   const [newThreadBackgroundEffect, setBackgroundEffect] =
@@ -1941,6 +1950,12 @@ function useAppearanceSettings(
     setChatBackgroundSessionOpacity(next);
   }, []);
 
+  const onChatBackgroundBlur = useCallback((radius: number) => {
+    const next = applyChatBackgroundBlur(radius);
+    saveChatBackgroundBlur(next);
+    setChatBackgroundBlur(next);
+  }, []);
+
   const onChatBackgroundScope = useCallback((next: ChatBackgroundScope) => {
     applyChatBackgroundScope(next);
     saveChatBackgroundScope(next);
@@ -1987,6 +2002,7 @@ function useAppearanceSettings(
       Math.round(CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT * 100),
     );
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
+    onChatBackgroundBlur(CHAT_BACKGROUND_BLUR_DEFAULT);
     onNewThreadBackgroundEffect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
@@ -1998,6 +2014,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onChatBackgroundBlur,
     onNewThreadBackgroundEffect,
     onClearChatBackground,
     onAccentColor,
@@ -2026,6 +2043,7 @@ function useAppearanceSettings(
     chatBackgroundEmptyOpacity,
     chatBackgroundSessionOpacity,
     chatBackgroundScope,
+    chatBackgroundBlur,
     newThreadBackgroundEffect,
     chatBackgroundBusy,
     chatBackgroundError,
@@ -2045,6 +2063,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onChatBackgroundBlur,
     onNewThreadBackgroundEffect,
     onUiScale,
     onCollapsedProjectRailMode,
@@ -2409,6 +2428,19 @@ function ChatBackgroundCard({
               min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
               max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
               onChange={appearance.onChatBackgroundSessionOpacity}
+            />
+          </Row>
+          <Row
+            label="Background blur"
+            description="Blurs the image behind chat panes, including project images. Haze keeps its own blur."
+          >
+            <Slider
+              label="Chat background blur"
+              value={appearance.chatBackgroundBlur}
+              display={`${appearance.chatBackgroundBlur}px`}
+              min={CHAT_BACKGROUND_BLUR_MIN}
+              max={CHAT_BACKGROUND_BLUR_MAX}
+              onChange={appearance.onChatBackgroundBlur}
             />
           </Row>
         </>
