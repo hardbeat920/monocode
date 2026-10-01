@@ -6,6 +6,7 @@ import {
   isRecoverableThreadResumeError,
   mapApprovalRequest,
   mapCodexNotification,
+  mapCodexSubagentSteps,
   runtimeModeToCodexConfig,
   toCodexApprovalDecision,
 } from "./codexProtocol";
@@ -882,5 +883,35 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
         tokenUsage: { last: {}, total: {} },
       }).events,
     ).toEqual([]);
+  });
+});
+
+describe("mapCodexSubagentSteps", () => {
+  const subagentBash = (status: string, output?: string) =>
+    mapCodexSubagentSteps("agent-1", "item/completed", {
+      threadId: "thr_1",
+      item: {
+        id: "cmd_1",
+        type: "commandExecution",
+        command: "npm test",
+        status,
+        ...(output ? { aggregatedOutput: output } : {}),
+      },
+    });
+
+  it("keeps a failed child tool's output on its step, where it can be read", () => {
+    expect(subagentBash("failed", "Tests failed: assertion error")).toMatchObject([
+      {
+        type: "agent.step",
+        stepId: "cmd_1",
+        status: "failed",
+        detail: "Tests failed: assertion error",
+      },
+    ]);
+  });
+
+  it("leaves a settled child's result off its step", () => {
+    const steps = subagentBash("completed", "12 passed");
+    expect(steps[0]).not.toHaveProperty("detail");
   });
 });

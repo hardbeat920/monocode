@@ -4,7 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ConnectionsSettings } from "./ConnectionsSettings";
-import type { RemoteMachine, SshSetup } from "../model/protocol";
+import {
+  REMOTE_PROVIDERS,
+  type RemoteMachine,
+  type SshSetup,
+} from "../model/protocol";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "1.2.3" }));
@@ -187,6 +191,16 @@ it("offers an explicit host update for an SSH machine without pushed changes", a
   expect(invoke).toHaveBeenCalledWith("remote_ssh_reconnect", {
     machineId: machine.id,
     upgrade: true,
+  });
+});
+
+it("advertises every supported provider when checking a host", async () => {
+  machines = [machine];
+  await render();
+  expect(invoke).toHaveBeenCalledWith("remote_request", {
+    machineId: machine.id,
+    method: "environment.describe",
+    params: { supportedProviders: REMOTE_PROVIDERS },
   });
 });
 const requested = (method: string) =>

@@ -163,7 +163,7 @@ jobs:
           name: host-npm
           path: build
 
-      - name: Upload to R2
+      - name: Upload updater packages to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -280,7 +280,6 @@ jobs:
           # retain an older release under these mutable names.
           aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" --content-type "application/json" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
 
       - name: GitHub Release
         env:
@@ -320,16 +319,59 @@ jobs:
           cp "$ARM_SIG" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
           cp "$INTEL_TAR" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz"
           cp "$INTEL_SIG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "MonoCode $VERSION" \
-            --notes "See CHANGELOG.md for details." \
-            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
-            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
-            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" \
-            build/monocode-host-*.tgz
+          HOST_PACKAGES=(build/monocode-host-*.tgz)
+          if (( ${#HOST_PACKAGES[@]} != 1 )); then
+            echo "Expected exactly one monocode-host package" >&2
+            exit 1
+          fi
+          RELEASE_FILES=(
+            "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
+            "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
+            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_PACKAGES[@]}"
+          )
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "MonoCode $VERSION" \
+              --notes "See CHANGELOG.md for details."
+          fi
+          verify_release() {
+            local expected_draft="$1"
+            gh release view "$GITHUB_REF_NAME" --json isDraft,assets > "$RUNNER_TEMP/release-state.json"
+            node - "$RUNNER_TEMP/release-state.json" "$expected_draft" "${RELEASE_FILES[@]}" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (release.isDraft !== (process.argv[3] === "true")) {
+            console.error("GitHub Release publication state is unexpected.");
+            process.exit(1);
+          }
+          const names = new Set(release.assets.map((asset) => asset.name));
+          for (const file of process.argv.slice(4)) {
+            const name = path.basename(file);
+            if (!names.has(name)) {
+              console.error(`GitHub Release is missing ${name}.`);
+              process.exit(1);
+            }
+          }
+          NODE
+          }
+          IS_DRAFT=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)
+          if [[ "$IS_DRAFT" == true ]]; then
+            # Draft assets can be replaced after an interrupted upload. A
+            # published release is immutable, so only resume drafts.
+            gh release upload "$GITHUB_REF_NAME" "${RELEASE_FILES[@]}" --clobber
+            verify_release true
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          elif [[ "$IS_DRAFT" != false ]]; then
+            echo "Unexpected GitHub Release state: $IS_DRAFT" >&2
+            exit 1
+          fi
+          verify_release false
 
       # Desktops run `npx monocode-host@<version> connect` on hosts, so
-      # publish the matching package. Skipped when no npm token is set.
+      # publish the matching package before the updater feed points desktops
+      # at this version. Skipped when no npm token is set.
       - name: Publish monocode-host to npm
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -337,6 +379,21 @@ jobs:
         run: |
           printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
           NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" npm publish build/monocode-host-*.tgz --access public
+
+      - name: Publish updater feed
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" \
+            --content-type "application/json" \
+            --cache-control "no-store,max-age=0,must-revalidate" \
+            --endpoint-url "$ENDPOINT"
 
   host:
     name: Host npm package

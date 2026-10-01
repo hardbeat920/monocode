@@ -17,6 +17,7 @@ import { createHostServer } from "./server";
 import { HostChildBackend } from "./child-backend";
 import { configureChildBackend } from "../src/integrations/harness/core/child";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
+import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
 const modelProbe = vi.hoisted(() => vi.fn());
 vi.mock("../src/integrations/harness/providers/codex/codexCatalog", () => ({
@@ -31,7 +32,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function setup() {
+async function setup(providers: RemoteProvider[] = ["codex"]) {
   const directory = mkdtempSync(join(tmpdir(), "monocode-server-test-"));
   const store = new HostStore(join(directory, "host.db"));
   let turn: SendTurnInput | undefined;
@@ -55,7 +56,7 @@ async function setup() {
   // Follow production's canonicalization, including Windows 8.3 paths such
   // as RUNNER~1 in the CI runner's temporary directory.
   const project = await engine.openProject(directory);
-  const server = createHostServer(engine, ["codex"], undefined, {
+  const server = createHostServer(engine, providers, undefined, {
     endpoints: () => ["https://10.0.0.5:3774"],
   });
   try {
@@ -308,6 +309,14 @@ describe("remote host API", () => {
       { id: "codex:test", name: "Test" },
     ]);
     expect(modelProbe).toHaveBeenCalledTimes(2);
+  });
+  it("advertises newer providers only to desktops that request them", async () => {
+    const s = await setup(["codex", "cursor"]);
+    expect((await s.call("environment.describe")).value.result.providers)
+      .toEqual(["codex"]);
+    expect((await s.call("environment.describe", {
+      supportedProviders: ["codex", "cursor"],
+    })).value.result.providers).toEqual(["codex", "cursor"]);
   });
   it("re-probes models after the provider CLI is updated", async () => {
     const s = await setup();

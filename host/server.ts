@@ -43,17 +43,45 @@ import {
 import { WorkspaceCommands } from "./workspace-commands";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
-import {
-  resolveClaudeBinary,
-  resolveCodexBinary,
-} from "../src/integrations/harness/core/child";
+import { discoverCursorModels } from "../src/integrations/harness/providers/cursor/cursorCatalog";
+import { discoverGrokModels } from "../src/integrations/harness/providers/grok/grokCatalog";
+import { discoverOpenCodeModels } from "../src/integrations/harness/providers/opencode/opencodeCatalog";
+import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
+import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
+import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
+import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
+import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
 import { MAX_WAIT_MS } from "./changes";
 import { isLoopback } from "./listener";
 import { version as hostVersion } from "../package.json";
+import {
+  resolveAntigravityBinary,
+  resolveClaudeBinary,
+  resolveCodexBinary,
+  resolveCursorBinary,
+  resolveFxBinary,
+  resolveGrokBinary,
+  resolveHermesBinary,
+  resolveOmpBinary,
+  resolveOpenCodeBinary,
+  resolvePiBinary,
+} from "../src/integrations/harness/core/child";
 
 const exec = promisify(execFile);
 // Providers also add models server-side, without a CLI update.
 const CATALOG_MAX_AGE_MS = 5 * 60_000;
+const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
+  codex: () => resolveCodexBinary(),
+  claude: () => resolveClaudeBinary(),
+  cursor: () => resolveCursorBinary(),
+  grok: () => resolveGrokBinary(),
+  opencode: () => resolveOpenCodeBinary(),
+  pi: () => resolvePiBinary(),
+  omp: () => resolveOmpBinary(),
+  fx: () => resolveFxBinary(),
+  hermes: () => resolveHermesBinary(),
+  antigravity: () => resolveAntigravityBinary(),
+};
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
@@ -62,6 +90,18 @@ const MAX_PAIRING_BODY = 4 * 1024;
 // Pairing codes carry 256 bits, so this limit is not what protects them. It
 // keeps an unauthenticated caller from spending the host's time and disk.
 const MAX_PAIRING_FAILURES_PER_MINUTE = 30;
+const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel[]>> = {
+  codex: discoverCodexModels,
+  claude: discoverClaudeModels,
+  cursor: discoverCursorModels,
+  grok: discoverGrokModels,
+  opencode: discoverOpenCodeModels,
+  pi: discoverPiModels,
+  omp: discoverOmpModels,
+  fx: discoverFxModels,
+  hermes: discoverHermesModels,
+  antigravity: discoverAntigravityModels,
+};
 
 async function body(
   request: IncomingMessage,
@@ -86,10 +126,7 @@ async function providerBinaries(providers: RemoteProvider[]): Promise<string> {
   const binaries = await Promise.all(
     providers.map(async (provider) => {
       try {
-        const { path } = await (provider === "codex"
-          ? resolveCodexBinary()
-          : resolveClaudeBinary());
-        const file = await realpath(path);
+        const file = await realpath((await resolveBinary[provider]()).path);
         return `${file}:${(await stat(file)).mtimeMs}`;
       } catch {
         return "";
@@ -184,10 +221,9 @@ export function createHostServer(
         await Promise.all(
           providers.map(async (provider) => {
             try {
-              result.models[provider] =
-                provider === "codex"
-                  ? await discoverCodexModels(cwd)
-                  : await discoverClaudeModels(cwd);
+              const discovered = await discoverModels[provider](cwd);
+              result.models[provider] = discovered;
+              if (discovered.length) setHarnessModels(provider, discovered);
             } catch (error) {
               result.errors[provider] =
                 error instanceof Error ? error.message : String(error);
@@ -286,9 +322,14 @@ export function createHostServer(
               environmentId: engine.store.environmentId,
               name: hostname(),
               platform: process.platform,
+              // Older clients validate this list against Codex and Claude only.
+              providers: providers.filter((provider) =>
+                Array.isArray(params.supportedProviders)
+                  ? params.supportedProviders.includes(provider)
+                  : provider === "codex" || provider === "claude"
+              ),
               hostVersion,
               endpoints: options.endpoints?.() ?? [],
-              providers,
               capabilities: [
                 "changes.wait",
                 "sessions",

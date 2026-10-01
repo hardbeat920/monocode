@@ -27,6 +27,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
@@ -42,7 +43,7 @@ import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPrevie
 import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
-import { NoteMiniCard } from "../../notes/ui";
+import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -100,6 +101,7 @@ import {
   groupTurnItems,
   groupTurns,
   initialThinkingIndex,
+  isFailedStatus,
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
@@ -324,10 +326,14 @@ function AgentTranscriptComponent({
 
   const syncPinned = useCallback(
     (el: HTMLElement) => {
-      const near = isNearBottom(el);
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // Scrolling up inside the bottom margin is the reader leaving. Pinning
+      // again here would snap each streamed chunk back down under the wheel.
+      const leaving =
+        !stickToBottom.current && distance > distanceFromBottom.current;
+      const near = isNearBottom(el) && !leaving;
       stickToBottom.current = near;
-      distanceFromBottom.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight;
+      distanceFromBottom.current = distance;
       setShowJump(!near);
     },
     [setShowJump],
@@ -465,6 +471,8 @@ function AgentTranscriptComponent({
     onResize();
     return () => observer.disconnect();
   }, [scrollerEl, setShowJump, visible]);
+
+  useTurnScrollAnchor(scrollerEl, visible, stickToBottom);
 
   const turns = groupTurns(blocks, managed);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
@@ -2073,6 +2081,67 @@ function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
 }
 
 /**
+ * Hold the reader's place while turns above the viewport change height. An
+ * off-screen turn keeps its content-visibility placeholder until it is first
+ * laid out, and the scroller opts out of native scroll anchoring, so scrolling
+ * up through a freshly opened chat would otherwise shove the view down by
+ * each turn's correction.
+ */
+function useTurnScrollAnchor(
+  el: HTMLDivElement | null,
+  enabled: boolean,
+  stickToBottom: RefObject<boolean>,
+) {
+  useLayoutEffect(() => {
+    const inner = el?.firstElementChild;
+    if (!enabled || !el || !inner) return;
+    const heights = new WeakMap<Element, number>();
+    const resize = new ResizeObserver((entries) => {
+      // A parked transcript's scroller is detached and measures zero.
+      if (!el.isConnected) return;
+      const viewportTop = el.getBoundingClientRect().top;
+      let shift = 0;
+      for (const entry of entries) {
+        const height =
+          entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        const previous = heights.get(entry.target);
+        heights.set(entry.target, height);
+        if (previous === undefined || stickToBottom.current) continue;
+        // Only turns that sat wholly above the view. A turn the reader is
+        // looking at grows downward from where they are reading.
+        const top = entry.target.getBoundingClientRect().top;
+        if (top + previous <= viewportTop) shift += height - previous;
+      }
+      if (shift) el.scrollTop += shift;
+    });
+    let observed = new WeakSet<Element>();
+    const observeTurns = () => {
+      for (const turn of inner.children) {
+        if (observed.has(turn) || !turn.classList.contains("transcript-turn"))
+          continue;
+        observed.add(turn);
+        resize.observe(turn);
+      }
+    };
+    const mutations = new MutationObserver((records) => {
+      // Removal is rare (a rewind or edit), so start over rather than hold
+      // detached turns. Re-observed turns report the height already stored.
+      if (records.some((record) => record.removedNodes.length > 0)) {
+        resize.disconnect();
+        observed = new WeakSet();
+      }
+      observeTurns();
+    });
+    mutations.observe(inner, { childList: true });
+    observeTurns();
+    return () => {
+      mutations.disconnect();
+      resize.disconnect();
+    };
+  }, [el, enabled, stickToBottom]);
+}
+
+/**
  * Keep a live phase body on its newest step. Pinning happens in layout
  * before paint so the window follows without a visible hitch; only a real
  * wheel away from the bottom pauses that.
@@ -2104,8 +2173,14 @@ function useLivePhaseScroll(
     const pin = () => {
       if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     };
+    let lastDistance = 0;
     const onScroll = () => {
-      if (isNearBottom(el)) stickToBottom.current = true;
+      // Only a scroll toward the end re-pins; one leaving it must not.
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (isNearBottom(el) && distance <= lastDistance) {
+        stickToBottom.current = true;
+      }
+      lastDistance = distance;
     };
     const onWheel = (e: WheelEvent) => {
       if (!nestedScrollAbsorbsWheel(el, e.deltaY)) return;
@@ -2659,6 +2734,7 @@ function agentStepBlock(step: AgentStep): Block {
       title: step.text,
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
+      ...(step.detail ? { detail: step.detail } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
@@ -2674,7 +2750,14 @@ function subagentStatusLine(block: Block, steps: AgentStep[]): string {
   if (toolCallState(block) === "rejected") return "failed";
   const tools = steps.filter((step) => step.kind === "tool").length;
   if (tools === 0) return "";
-  return tools === 1 ? "1 step" : `${tools} steps`;
+  const count = tools === 1 ? "1 step" : `${tools} steps`;
+  // A step that failed inside a run that went on to finish still has to say so
+  // here, or the row reads clean until someone opens the trail.
+  const failed = steps.filter(
+    (step) => step.kind === "tool" && isFailedStatus(step.status),
+  ).length;
+  if (!failed) return count;
+  return `${count}, ${failed === 1 ? "1 failed" : `${failed} failed`}`;
 }
 
 /** Whether the line that titled a group has more in it than the header shows. */

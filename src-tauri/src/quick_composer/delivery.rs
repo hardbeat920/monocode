@@ -58,6 +58,19 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn launch_mode_fields_survive_the_bridge() {
+        let launch: QuickLaunch = serde_json::from_value(serde_json::json!({
+            "prompt": "p", "cwd": "/repo", "harness": "codex", "reveal": false,
+            "draft": true, "intent": "plan"
+        }))
+        .unwrap();
+        let value = serde_json::to_value(&launch).unwrap();
+        assert_eq!(value["draft"], true);
+        assert_eq!(value["intent"], "plan");
+        let plain = serde_json::to_value(request("p")).unwrap();
+        assert!(plain.get("draft").is_none() && plain.get("intent").is_none());
+    }
+    #[test]
     fn consecutive_submissions_wait_for_successful_acknowledgement() {
         let mut queue = LaunchQueue::default();
         queue.push(request("first"), "booting".into());

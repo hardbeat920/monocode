@@ -3,6 +3,7 @@ import type {
   ModelSetting,
   ModelSettingChoice,
 } from "../../sessions/model/models";
+import { MODELS } from "../../sessions/model/models";
 import { CLAUDE_MODEL_CATALOG } from "../../../integrations/harness/providers/claude/claudeCatalog";
 import type { HostModelCatalog, RemoteProvider } from "./protocol";
 
@@ -89,6 +90,7 @@ function knownSetting(
       };
     return undefined;
   }
+  if (provider !== "claude") return undefined;
   if (id === "effort")
     return effort(id, ["low", "medium", "high", "max", "ultrathink"]);
   if (id === "fast") return toggle(id, "Fast");
@@ -109,12 +111,18 @@ function fallbackSettings(
   modelId: string,
   saved: Record<string, string>,
 ): ModelSetting[] {
-  const known =
+  const known = findRemoteModel(
     provider === "claude"
-      ? findRemoteModel(CLAUDE_MODEL_CATALOG, modelId)?.settings
-      : undefined;
+      ? CLAUDE_MODEL_CATALOG
+      : MODELS.filter((model) => model.harness === provider),
+    modelId,
+  )?.settings;
   const ids = [
-    provider === "codex" ? "reasoningEffort" : "effort",
+    ...(provider === "codex"
+      ? ["reasoningEffort"]
+      : provider === "claude"
+        ? ["effort"]
+        : []),
     ...Object.keys(saved),
   ];
   const settings = [...(known ?? [])];
@@ -122,6 +130,14 @@ function fallbackSettings(
     if (settings.some((setting) => setting.id === id)) continue;
     const setting = knownSetting(provider, id);
     if (setting) settings.push(setting);
+    else if (saved[id])
+      settings.push({
+        id,
+        label: id,
+        kind: "select",
+        value: saved[id],
+        options: [choice(saved[id])],
+      });
   }
   return settings;
 }
@@ -170,8 +186,13 @@ export function remoteModelControls(
   // Saved settings the current catalog entry no longer describes stay visible.
   for (const id of Object.keys(saved)) {
     if (settings.some((setting) => setting.id === id)) continue;
-    const setting = knownSetting(provider, id);
-    if (!setting) continue;
+    const setting = knownSetting(provider, id) ?? {
+      id,
+      label: id,
+      kind: "select" as const,
+      value: saved[id],
+      options: [choice(saved[id])],
+    };
     settings.push(setting);
     fallback ??= "saved";
   }

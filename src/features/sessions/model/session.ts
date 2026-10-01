@@ -67,6 +67,8 @@ export type TaskListItem = {
 export type TaskListMeta = {
   /** Provider identity for replacing later snapshots of the same list. */
   key?: string;
+  /** Provider conversation that produced this list, when the provider scopes task ids to one. */
+  providerSessionId?: string;
   explanation?: string;
   items: TaskListItem[];
 };
@@ -205,6 +207,7 @@ export type AgentStep = {
   text: string;
   toolKind?: string;
   status?: string;
+  detail?: string;
   preview?: ToolPreview;
 };
 

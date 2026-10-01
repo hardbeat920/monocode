@@ -13,6 +13,7 @@ import {
 import {
   hostConnectCommand,
   hostNeedsUpdate,
+  REMOTE_PROVIDERS,
   type HostDescriptor,
   type RemoteMachine,
   type SshSetup,
@@ -157,6 +158,7 @@ export function ConnectionsSettings() {
               const host = await remoteRequest<HostDescriptor>(
                 machine.id,
                 "environment.describe",
+                { supportedProviders: REMOTE_PROVIDERS },
               );
               if (host.environmentId !== machine.environmentId)
                 throw new Error("Host identity changed");
@@ -164,7 +166,7 @@ export function ConnectionsSettings() {
                 `Connected · host ${host.hostVersion ?? "older than 0.5"}`,
               ];
               if (!host.providers.length)
-                parts.push("install Codex or Claude Code on the host");
+                parts.push("install a supported provider on the host");
               if (hostNeedsUpdate(host, version)) parts.push("update available");
               next = { label: parts.join(" · "), host };
             } catch (reason) {

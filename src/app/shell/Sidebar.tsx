@@ -51,6 +51,7 @@ import {
   type GitHistoryCommit,
 } from "../../platform/tauri/fs";
 import { IS_MAC, MOD } from "../../platform/tauri/platform";
+import { copyText } from "../../platform/tauri/clipboard";
 import { resolveModel } from "../../features/sessions/model/models";
 import type { OpenFileFn } from "../../features/search/model/search";
 import { sessionDisplayTitle } from "../../features/sessions/model/session";
@@ -497,6 +498,7 @@ function SidebarComponent({
         harness: session.harness,
         model: session.model ?? "",
         runtimeMode: session.runtimeMode ?? "supervised",
+        providerSessionId: session.providerSessionId ?? undefined,
         title: session.title,
         createdAt: session.createdAt ?? session.updatedAt,
         updatedAt: session.updatedAt,
@@ -1072,6 +1074,28 @@ function SidebarComponent({
           },
         ]
       : []),
+    ...(!multipleMenuSessions
+      ? [
+          {
+            kind: "item" as const,
+            id: "copy-session-id",
+            label: "Copy session ID",
+            submenu: [
+              {
+                kind: "item" as const,
+                id: "copy-harness-session-id",
+                label: "Harness session ID",
+                disabled: !menuSessions[0]?.providerSessionId,
+              },
+              {
+                kind: "item" as const,
+                id: "copy-monocode-session-id",
+                label: "MonoCode session ID",
+              },
+            ],
+          },
+        ]
+      : []),
     ...(!multipleMenuSessions && onSetSessionLinkedWorkItem
       ? [
           {
@@ -1182,6 +1206,7 @@ function SidebarComponent({
     if (!sessionMenu) return;
     const sessionId = sessionMenu.sessionId;
     const sessionIds = menuSessionIds;
+    const providerSessionId = menuSessions[0]?.providerSessionId;
     const archived = allMenuSessionsArchived;
     const pinned = allMenuSessionsPinned;
     closeSessionMenu();
@@ -1208,6 +1233,16 @@ function SidebarComponent({
     }
     if (id === "rename") {
       setRenamingSessionId(sessionId);
+      return;
+    }
+    if (id === "copy-harness-session-id" || id === "copy-monocode-session-id") {
+      const value =
+        id === "copy-harness-session-id" ? providerSessionId : sessionId;
+      if (value) {
+        void copyText(value).catch((error) => {
+          console.error("Failed to copy session ID:", error);
+        });
+      }
       return;
     }
     if (id === "link-work-item") {

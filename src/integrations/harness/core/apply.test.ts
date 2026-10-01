@@ -594,6 +594,48 @@ describe("task list updates", () => {
     ]);
   });
 
+  it("keeps a keyed task list from another provider conversation", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "first");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_1",
+      authoritative: true,
+      items: [{ id: "1", text: "Old task", status: "completed" }],
+    });
+    session = appendUser(session, "second");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "pending" }],
+    });
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "completed" }],
+    });
+
+    const lists = session.blocks
+      .filter((block) => block.role === "tasks")
+      .map((block) => block.taskList);
+    expect(lists).toEqual([
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_1",
+        items: [{ id: "1", text: "Old task", status: "completed" }],
+      },
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "New task", status: "completed" }],
+      },
+    ]);
+  });
+
   it("resets an in-progress task to pending when the turn stops", () => {
     let session = appendUser(newSession("cursor", "/tmp"), "fix it");
     session = applyHarnessEvent(session, {
@@ -1148,6 +1190,38 @@ describe("subagent steps", () => {
         text: "Read src/App.tsx",
       }),
     ).toBe(session);
+  });
+
+  it("caps a failed step's error output like the parent's own", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "boom ".repeat(4_000),
+    });
+
+    const detail = session.blocks[0].agentRun?.steps[0].detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(8_002);
+    expect(detail.endsWith("…")).toBe(true);
+  });
+
+  it("drops a blank error output rather than carrying it around", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "   ",
+    });
+
+    expect(session.blocks[0].agentRun?.steps[0]).not.toHaveProperty("detail");
   });
 
   it("keeps the parent tool block's own identity", () => {

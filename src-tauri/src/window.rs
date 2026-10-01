@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
@@ -124,16 +124,33 @@ pub fn open_session_window(app: &AppHandle, reveal: bool) -> Result<WebviewWindo
     Ok(window)
 }
 
+/// The page colour to fill the window with when glass is off. Not a constant:
+/// Linux can turn glass off in dark mode, not just light.
+#[derive(Clone, Copy, Deserialize)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+// macOS hands the components to AppKit instead, so it has no use for this.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+impl Rgb {
+    fn fill(self) -> Color {
+        Color(self.r, self.g, self.b, 255)
+    }
+}
+
 /// Desktop blur goes on after the first UI paint and only in dark mode.
 #[tauri::command]
-pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool) {
+pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool, background: Rgb) {
     #[cfg(target_os = "macos")]
     {
         if enabled {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 3)));
             crate::macos::enable_glass(&window);
         } else {
-            crate::macos::disable_glass(&window);
+            crate::macos::disable_glass(&window, background.r, background.g, background.b);
         }
     }
     #[cfg(target_os = "windows")]
@@ -143,12 +160,22 @@ pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool) {
             let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Acrylic).build());
         } else {
             let _ = window.set_effects(None);
-            let _ = window.set_background_color(Some(Color(247, 247, 247, 255)));
+            let _ = window.set_background_color(Some(background.fill()));
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = (window, enabled);
+        // No system blur API on Linux: transparency only. The compositor
+        // (e.g. Mutter) blends the translucent CSS glass over the desktop.
+        let _ = window.set_background_color(Some(if enabled {
+            Color(0, 0, 0, 0)
+        } else {
+            background.fill()
+        }));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (window, enabled, background);
     }
 }
 

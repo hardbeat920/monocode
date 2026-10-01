@@ -55,6 +55,25 @@ it("describes a Claude model from built-in metadata when the host cannot", () =>
   ]);
 });
 
+it("keeps another provider's saved settings without inventing Claude controls", () => {
+  const controls = remoteModelControls(
+    undefined,
+    "cursor",
+    "cursor:custom-model",
+    { profile: "fast" },
+    "cursor:custom-model",
+  );
+  expect(controls.settings).toEqual([
+    {
+      id: "profile",
+      label: "profile",
+      kind: "select",
+      value: "fast",
+      options: [{ value: "fast", label: "fast" }],
+    },
+  ]);
+});
+
 it("carries compatible choices to another model and compares settings by value", () => {
   expect(
     carryModelSettings([effort], { effort: "xhigh", fast: "true" }),

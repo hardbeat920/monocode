@@ -124,9 +124,18 @@ export class HostStore {
         const cached = row.summary
           ? (JSON.parse(String(row.summary)) as HostSessionSummary)
           : undefined;
-        return cached?.model && cached.needsInput !== undefined
-          ? cached
-          : summary(this.session(String(row.id)));
+        if (
+          cached?.model &&
+          cached.needsInput !== undefined &&
+          cached.providerSessionId !== undefined
+        )
+          return cached;
+        const fresh = summary(this.session(String(row.id)));
+        this.db.prepare("UPDATE sessions SET summary=? WHERE id=?").run(
+          JSON.stringify(fresh),
+          String(row.id),
+        );
+        return fresh;
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -165,9 +174,14 @@ export class HostStore {
 
   /** Returns the saved value, stamped with per-block change revisions. */
   save(input: HostSession, event: unknown): HostSession {
+    const previous = this.find(input.session.id);
     const value = {
       ...input,
-      blockRevisions: blockRevisions(this.find(input.session.id), input),
+      // Older snapshots have no creation time. Preserve their last recorded
+      // timestamp when they are first written by this version of the host.
+      createdAt:
+        input.createdAt ?? previous?.createdAt ?? previous?.updatedAt ?? input.updatedAt,
+      blockRevisions: blockRevisions(previous, input),
     };
     this.db
       .prepare(
@@ -387,7 +401,8 @@ export function summary(value: HostSession): HostSessionSummary {
     harness: value.session.harness as RemoteProvider,
     model: value.session.model,
     runtimeMode: value.session.runtimeMode,
-    createdAt: value.updatedAt,
+    providerSessionId: value.session.providerSessionId ?? null,
+    createdAt: value.createdAt ?? value.updatedAt,
     archived: value.archived,
     pinned: value.pinned,
     linkedWorkItem: value.session.linkedWorkItem,

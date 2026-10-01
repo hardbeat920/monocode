@@ -17,11 +17,13 @@ import {
 } from "react";
 import { harden } from "rehype-harden";
 import {
+  Block,
   CodeBlock,
   Streamdown,
   defaultRehypePlugins,
   defaultRemarkPlugins,
   useIsCodeFenceIncomplete,
+  type BlockProps,
   type Components,
 } from "streamdown";
 import type { PluggableList } from "unified";
@@ -208,6 +210,17 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
   zsh: "code.sh",
 };
 
+// Shiki (via Streamdown's CodeBlock) treats these as plaintext and renders no
+// syntax colors at all, which is common in agent output (pseudocode, file
+// trees, command output) fenced as `text` or left untagged. Falling back to
+// the JS grammar for these still colors strings, numbers, and punctuation,
+// matching what most agent-output fences actually look like.
+const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
+
+function highlightLanguageFor(language: string): string {
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+}
+
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };
 
 function MarkdownLink({
@@ -330,6 +343,15 @@ function MarkdownCode({
     (fence.language ? fileNameForLanguage(fence.language) : "");
   const lineNumbers = !/\bnoLineNumbers\b/.test(meta);
   const code = textContent(children);
+  // highlightLanguageFor swaps the fence language for "js" so Shiki still
+  // colors plaintext fences, but Streamdown's CodeBlock reuses that same
+  // value for the header label. Without this, a `text` fence would show a
+  // "js" header, and an untagged fence would gain a header it never had.
+  // Render our own label with the original language instead, and hide
+  // Streamdown's via CSS (see .markdown-code-fallback-label in index.css).
+  const isPlaintextFallback = PLAINTEXT_FENCE_LANGUAGES.has(
+    fence.language.toLowerCase(),
+  );
 
   return (
     <div className="markdown-code-shell" dir="ltr">
@@ -340,13 +362,15 @@ function MarkdownCode({
       ) : null}
       {fence.filePath ? (
         <MarkdownCodePath path={fence.filePath} startLine={fence.startLine} />
+      ) : isPlaintextFallback ? (
+        <span className="markdown-code-fallback-label">{fence.language}</span>
       ) : null}
       <CodeCopyButton code={code} />
       <CodeBlock
         className={className}
         code={code}
         isIncomplete={incomplete}
-        language={fence.language}
+        language={highlightLanguageFor(fence.language)}
         lineNumbers={lineNumbers}
         startLine={fence.startLine}
       />
@@ -458,6 +482,25 @@ const MARKDOWN_COMPONENTS = {
   img: MarkdownImage,
 } satisfies Components;
 
+/**
+ * With dir="auto" Streamdown wraps each block in
+ * `<div dir="..." style="display: contents">`. WebKit's triple-click then runs
+ * past the block to the end of the reply, because a contents box gives the
+ * selection no block boundary to stop at (#496). Keep the per-block direction
+ * but put it on a real block box; index.css zeroes its margins so spacing still
+ * comes from the block inside it.
+ */
+function DirectionalBlock({ dir, ...props }: BlockProps) {
+  const block = <Block {...props} />;
+  return dir ? (
+    <div dir={dir} className="agent-markdown-block">
+      {block}
+    </div>
+  ) : (
+    block
+  );
+}
+
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
   streaming,
@@ -554,6 +597,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
             // Streamdown keeps a parsed tree while the text is unchanged, so
             // the plugin swap has to remount it once the fade is over.
             key={fading ? "fade" : "plain"}
+            BlockComponent={DirectionalBlock}
             className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
             components={MARKDOWN_COMPONENTS}
             controls={false}

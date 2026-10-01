@@ -22,6 +22,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
 
+## [0.6.0] - 2026-09-30
+
+### Added
+
+- Settings → MCP discovers connections for Claude Code, Claude Desktop, Codex, Cursor, and OpenCode. Filter by provider, select a project, inspect server configuration and status, and add or remove servers in the scopes each provider supports. In #458.
+- `/mcp` opens a server picker in the composer. Selected servers appear as inline tags, tell the agent which configured servers to use, and stay with saved drafts when switching sessions. In #458.
+- MonoCode checks for Claude Code, Codex, OpenCode, and Pi CLI updates once per app launch and offers in-app updates. An update is confirmed against the installed version, and model catalogs refresh across open windows after it succeeds.
+- File → Autosave saves editor changes after one second without typing. It is off by default, respects Format on save, and pauses when an external file change needs a decision. In #475.
+- `/plan` and `/orchestrator` select the turn's mode, while `/draft` saves the message without starting an agent. Mode commands have autocomplete and completion in the main and Quick composers, with inline command styling and removable mode pills in the main composer.
+- Linux supports transparent glass in dark mode through the Body glass preference. It is off by default; turning it off restores an opaque window that follows the selected theme. In #561.
+- A session's sidebar context menu can copy its harness session ID or MonoCode session ID. Harness IDs are retained in session summaries, including repaired summaries from older caches.
+
+### Changed
+
+- Provider usage bars and labels show the percentage remaining rather than the percentage used.
+- Provider account emails are blurred until revealed, including in Settings and the usage and account pickers. Revealing an email is separate from switching accounts.
+- The session sidebar toggle uses a dashboard icon in the title bar.
+- MCP discovery is shared between Settings and the composer and cached per project, avoiding repeated probes when navigating or remounting views. Claude connection health loads asynchronously, and an explicit refresh reloads discovery results.
+- File editor tests enable fake timers before mounting the editor, avoiding autosave timer races during parallel test runs.
+
+### Fixed
+
+- Settings → Appearance → Interface scale uses a menu instead of a slider, so adjusting it no longer rescales the UI mid-gesture. In #559.
+- MonoCode no longer crashes at launch on macOS 12 when registering an empty Window menu; the menu now includes Minimize and Zoom. In #509.
+- Triple-clicking a paragraph or code line in an agent reply selects that block instead of extending the selection to the end of the reply. In #535.
+- Plaintext and untagged code fences receive JavaScript syntax highlighting while keeping their original language labels. In #471.
+- Claude background subagents appear once instead of showing both a placeholder and an Agent tool row for the same task. In #536.
+- Failed subagent tool calls retain their error output across Claude, Codex, ACP, Cursor, OpenCode, and Pi. Folded subagent rows show the failed-step count, and error details are capped at the same limit as top-level tools. In #569.
+- Claude's `TaskCreate` and `TaskUpdate` tools populate the todo panel instead of appearing as subagents. Task status changes, renames, and deletions are applied, and task state survives resumed process and app restarts without mixing different Claude conversations. In #513.
+- MCP discovery and management use the configured provider CLI binary paths and preserve disabled server state.
+- OpenCode 2 global MCP timeout settings are recognized as settings rather than mistaken for legacy server entries. In #580.
+- Glass transitions respect reduced-motion preferences even after glass-specific styles are applied.
+- Creating a remote session keeps its initial creation and update timestamps aligned instead of immediately marking it as updated.
+- Unix remote-host bootstrap scripts use LF line endings even when generated from a Windows checkout.
+- A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules. In #567.
+- Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr. In #567.
+- A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it. In #567.
+
+## [0.5.0] - 2026-09-29
+
+### Added
+
+- Experimental remote access runs persistent agent sessions on Windows, macOS, and Linux machines through SSH. Settings → Connections installs a version-matched host, pairs the desktop, manages the private tunnel, and can reconnect or update the host. Remote projects and their sessions appear in the normal project rail and session views. In #432.
+- Remote sessions support Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, OMP, fx, Hermes Agent, and Antigravity when installed on the host. The host provides its own model catalog and runs each provider under the remote user's account. In #432 and #539.
+- Remote projects use the normal Explorer, file editor, Go to File, project search, Changes, Git history, branch, and worktree views. File creation and editing, diffs, staging, commits, pushes, and pull request creation operate on the host checkout. In #432.
+- Remote conversations support file and image attachments, saved drafts, Plan mode, and Build from a plan. The release now includes verified host packages for Windows, macOS, and Linux on x64 and arm64. In #432.
+- The Help menu links to the MonoCode website, repository, bug report, and feature request pages.
+
+### Changed
+
+- App startup overlaps workspace loading with optional UI loading. Streaming harness updates are batched, and transcript pools avoid unnecessary rebuilding and session saves.
+- Automation cards have a larger interactive target, a separate enable toggle, and an accessible label.
+- Release publishing waits for host packages before updating the in-app updater feed and can safely resume an interrupted draft release. In #528.
+- Windows integration tests allow more time for PowerShell and cleanup operations and run test files without parallelism.
+
+### Fixed
+
+- Transcript scrolling holds the reader's place when earlier turns resize, does not jump back to the bottom while the reader scrolls up, and clears scroll observer state when turns are removed.
+- Generated Git commit messages can be canceled; canceled or superseded results no longer populate Git dialogs.
+
 ## [0.4.3] - 2026-09-28
 
 ### Fixed
@@ -1130,7 +1190,11 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/hardbeat920/monocode/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/hardbeat920/monocode/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/hardbeat920/monocode/compare/v0.4.2...v0.4.3
+[0.4.1]: https://github.com/hardbeat920/monocode/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/hardbeat920/monocode/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hardbeat920/monocode/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0

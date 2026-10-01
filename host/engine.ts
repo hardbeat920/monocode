@@ -432,12 +432,14 @@ export class HostEngine {
           throw new Error("Wait for the branch switch to finish");
         this.provider(command.harness);
         const cwd = resolveHostWorktree(project.cwd, command.worktreeCwd);
+        const now = Date.now();
         value = {
           projectId: project.id,
           autoWorktreeBranch: command.autoWorktreeBranch,
           revision: 0,
           status: "idle",
-          updatedAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
           session: {
             id: randomUUID(),
             cwd,
@@ -690,7 +692,12 @@ export class HostEngine {
         }
       }
       const saved = this.store.save(
-        { ...value, revision: value.revision + 1, updatedAt: Date.now() },
+        {
+          ...value,
+          revision: value.revision + 1,
+          // Creation already initialized both timestamps from the same clock read.
+          updatedAt: command.type === "create" ? value.updatedAt : Date.now(),
+        },
         { type: "command", command },
       );
       const result = {

@@ -23,6 +23,17 @@ export function configureChildBackend(next: ChildBackend): void {
   backend = next;
 }
 
+export function hasHeadlessChildBackend(): boolean {
+  return backend !== undefined;
+}
+
+/** Provider-owned transcript files are read on the machine running the child. */
+export function readHarnessTextFile(path: string): Promise<string> {
+  return invoke<string>(backend ? "harness_read_text_file" : "read_text_file", {
+    path,
+  });
+}
+
 function invoke<T>(
   command: string,
   args?: Record<string, unknown>,
@@ -486,6 +497,18 @@ export function inspectHarnessBinary(
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  });
+}
+
+/** Runs the CLI's own self-update against the binary MonoCode uses. */
+export async function updateHarnessCli(
+  provider: ConfigurableBinaryProvider,
+): Promise<void> {
+  const resolved = await resolveHarnessBinary(provider);
+  await invoke("harness_update", {
+    command: resolved.path,
+    binaryProvider: provider,
+    binaryPath: runtimeProviderBinaryPath(provider),
   });
 }
 

@@ -1,5 +1,10 @@
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import {
+  cancelScheduledFlush,
+  scheduleHarnessFlush,
+  type ScheduledFlush,
+} from "./model/harnessFlush";
+import {
   handleAgentApp,
   type AppSessionListing,
   type AppSessionPlacement,
@@ -63,6 +68,7 @@ import {
 } from "react";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
@@ -220,6 +226,7 @@ import {
 } from "../features/terminal/model/terminalTab";
 import {
   applyHarnessEvent,
+  applyHarnessEvents,
   appendUser,
   appendSteerUser,
   bindHarnessSession,
@@ -528,12 +535,9 @@ import { PaneTree } from "../features/workspace/ui/PaneTree";
 import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
-import { SearchView } from "../features/search/ui/SearchView";
+import { lazySurface } from "../shared/ui/lazySurface";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
-import {
-  SettingsView,
-  type SettingsAnchor,
-} from "../features/settings/ui/SettingsView";
+import type { SettingsAnchor } from "../features/settings/ui/SettingsView";
 import {
   OPEN_CONNECTIONS_EVENT,
   OPEN_REMOTE_PROJECT_EVENT,
@@ -552,11 +556,8 @@ import { remotePath, remoteProjectFor } from "../features/connections/model/remo
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
-import { InboxView, LinkedWorkItemPanel } from "../features/inbox/ui/InboxView";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "../features/inbox/model/inboxAsk";
-import { NotesView } from "../features/notes/ui";
-import { AutomationsView } from "../features/automations/ui/AutomationsView";
 import {
   githubWorkItemThread,
   inboxComposerCard,
@@ -586,6 +587,7 @@ import {
 } from "../features/inbox/model/azureDevOps";
 import {
   loadCloseToTray,
+  loadAutosave,
   loadCollapsedProjectRailMode,
   loadFileTabMode,
   loadLiveAgentsEnabled,
@@ -597,6 +599,7 @@ import {
   keybindingPressed,
   matchCustomKeybinding,
   saveSettingsSection,
+  saveAutosave,
   subscribeLiveAgentsEnabled,
   subscribeNotesEnabled,
   type CollapsedProjectRailMode,
@@ -650,6 +653,31 @@ import {
   setQuitWorkspace,
   type ResumedWorkspace,
 } from "./model/appLifecycle";
+
+const SearchView = lazySurface(async () => {
+  const module = await import("../features/search/ui/SearchView");
+  return { default: module.SearchView };
+});
+const SettingsView = lazySurface(async () => {
+  const module = await import("../features/settings/ui/SettingsView");
+  return { default: module.SettingsView };
+});
+const InboxView = lazySurface(async () => {
+  const module = await import("../features/inbox/ui/InboxView");
+  return { default: module.InboxView };
+});
+const LinkedWorkItemPanel = lazySurface(async () => {
+  const module = await import("../features/inbox/ui/InboxView");
+  return { default: module.LinkedWorkItemPanel };
+});
+const NotesView = lazySurface(async () => {
+  const module = await import("../features/notes/ui/NotesView");
+  return { default: module.NotesView };
+});
+const AutomationsView = lazySurface(async () => {
+  const module = await import("../features/automations/ui/AutomationsView");
+  return { default: module.AutomationsView };
+});
 
 /** How long a hidden idle session stays attached after it leaves every tab. */
 const SESSION_DETACH_DELAY_MS = 250;
@@ -721,21 +749,6 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
     if (!b.has(value)) return false;
   }
   return true;
-}
-
-type ScheduledFlush = { kind: "raf" | "timeout"; id: number };
-
-function cancelScheduledFlush(handle: ScheduledFlush | null) {
-  if (!handle) return;
-  if (handle.kind === "raf") cancelAnimationFrame(handle.id);
-  else clearTimeout(handle.id);
-}
-
-function scheduleHarnessFlush(run: () => void): ScheduledFlush {
-  if (document.hidden) {
-    return { kind: "timeout", id: window.setTimeout(run, 32) };
-  }
-  return { kind: "raf", id: requestAnimationFrame(run) };
 }
 
 function userTurnCards(
@@ -1092,6 +1105,19 @@ export default function App({
   searchViewOpenRef.current = searchViewOpen;
   const inboxViewOpenRef = useRef(inboxViewOpen);
   inboxViewOpenRef.current = inboxViewOpen;
+  const foregroundSurfaceRef = useRef<{
+    workspaceVisible: boolean;
+    inboxSessionId?: string;
+  }>({ workspaceVisible: true });
+  foregroundSurfaceRef.current = {
+    workspaceVisible:
+      !searchViewOpen &&
+      !inboxViewOpen &&
+      !notesViewOpen &&
+      !automationsViewOpen &&
+      !settingsOpen,
+    inboxSessionId: inboxViewOpen ? inboxAskPortal?.sessionId : undefined,
+  };
   const notesViewOpenRef = useRef(notesViewOpen);
   notesViewOpenRef.current = notesViewOpen;
   const automationsViewOpenRef = useRef(automationsViewOpen);
@@ -1208,7 +1234,7 @@ export default function App({
     const prev = sessionsRef.current;
     const next = prev.map((session) => {
       const events = batches.get(session.id);
-      return events ? events.reduce(applyHarnessEvent, session) : session;
+      return events ? applyHarnessEvents(session, events) : session;
     });
     if (!next.some((session, index) => session !== prev[index])) return;
     sessionsRef.current = next;
@@ -1245,7 +1271,7 @@ export default function App({
       const prev = sessionsRef.current;
       const next = prev.map((session) =>
         session.id === sessionId
-          ? events.reduce(applyHarnessEvent, session)
+          ? applyHarnessEvents(session, events)
           : session,
       );
       if (!next.some((session, index) => session !== prev[index])) return;
@@ -1271,8 +1297,33 @@ export default function App({
       const events = queued.get(sessionId);
       if (events) events.push(event);
       else queued.set(sessionId, [event]);
+      const tab = tabsRef.current.find(
+        (entry) => entry.id === activeTabIdRef.current,
+      );
+      const foreground =
+        !document.hidden &&
+        // Inbox owns its session surfaces outside the workspace tab tree.
+        (foregroundSurfaceRef.current.inboxSessionId === sessionId ||
+          (foregroundSurfaceRef.current.workspaceVisible &&
+            !!tab &&
+            (leafIds(tab.layout).includes(sessionId) ||
+              tab.editorPanes.some((pane) =>
+                pane.files.some(
+                  (file) =>
+                    file.id === pane.activeFileId &&
+                    file.agent?.sessionId === sessionId,
+                ),
+              ))));
+      // A visible stream must not wait for a background-only timer.
+      if (foreground && harnessFlush.current?.kind === "timeout") {
+        cancelScheduledFlush(harnessFlush.current);
+        harnessFlush.current = null;
+      }
       if (!harnessFlush.current) {
-        harnessFlush.current = scheduleHarnessFlush(flushHarnessEvents);
+        harnessFlush.current = scheduleHarnessFlush(
+          flushHarnessEvents,
+          foreground,
+        );
       }
     },
     [applyApprovalEvent, flushHarnessEvents],
@@ -1636,6 +1687,7 @@ export default function App({
     [sessions, activeTabId, tabs, composerFocused],
   );
   const [reminderNoticesHeight, setReminderNoticesHeight] = useState(0);
+  const [harnessUpdateHeight, setHarnessUpdateHeight] = useState(0);
 
   useEffect(() => {
     syncDockBadge(sessions);
@@ -1673,11 +1725,28 @@ export default function App({
 
   useEffect(() => {
     const onVisible = () => {
-      if (!document.hidden) flushHarnessEvents();
+      // Flush on hiding too: WebKit can suspend a pending animation frame,
+      // leaving the last output stranded until another event or activation.
+      flushHarnessEvents();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [flushHarnessEvents]);
+
+  useLayoutEffect(() => {
+    // A newly selected chat catches up before paint, even if its output was
+    // waiting on the background cadence. Draft/composer input stays immediate.
+    flushHarnessEvents();
+  }, [
+    activeTabId,
+    inboxViewOpen,
+    inboxAskPortal?.sessionId,
+    searchViewOpen,
+    notesViewOpen,
+    automationsViewOpen,
+    settingsOpen,
+    flushHarnessEvents,
+  ]);
 
   useEffect(() => {
     let unlistenClose: (() => void) | undefined;
@@ -3739,6 +3808,7 @@ export default function App({
           restored.providerSessionId,
           sessionWorkCwd(restored),
           restored.providerAccountId,
+          restored.blocks,
         );
       }
       lastPersisted.current.set(restored.id, persistFingerprint(restored));
@@ -4339,6 +4409,7 @@ export default function App({
               pending.fromProviderSessionId,
               sessionWorkCwd(session),
               pending.fromProviderAccountId,
+              session.blocks,
             );
           }
         }
@@ -8690,6 +8761,7 @@ export default function App({
             worker.providerSessionId,
             sessionWorkCwd(worker),
             worker.providerAccountId,
+            worker.blocks,
           );
         await upsertSession(worker);
         const next = [...sessionsRef.current, worker];
@@ -9712,6 +9784,12 @@ export default function App({
     return () => window.removeEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
   }, []);
 
+  useEffect(() => {
+    const onOpenMcp = () => openSettings("mcp");
+    window.addEventListener("monocode:open-mcp-settings", onOpenMcp);
+    return () => window.removeEventListener("monocode:open-mcp-settings", onOpenMcp);
+  }, [openSettings]);
+
   const onOpenNotificationSettings = useCallback(
     (path?: string) => {
       openSettings("inbox", "project-notifications");
@@ -9977,6 +10055,9 @@ export default function App({
 
   useEffect(() => {
     if (!IS_MAC) return;
+    void invoke("autosave_set_enabled", { enabled: loadAutosave() }).catch(
+      console.error,
+    );
     void invoke("keybindings_set_overrides", {
       overrides: loadKeybindingOverrides(),
     }).catch(console.error);
@@ -10185,6 +10266,12 @@ export default function App({
         run("close-all", actions.current.onCloseAllTabs),
       ),
       listen("close_tab", () => run("close", actions.current.onClosePane)),
+      listen<boolean>("toggle_autosave", ({ payload }) => {
+        const saved = saveAutosave(payload);
+        if (saved !== payload && IS_MAC) {
+          void invoke("autosave_set_enabled", { enabled: saved });
+        }
+      }),
       listen("next_tab", () => run("next", actions.current.onNext)),
       listen("prev_tab", () => run("prev", actions.current.onPrev)),
       listen("back_tab", () => run("back", actions.current.onVisitBack)),
@@ -10355,6 +10442,11 @@ export default function App({
     known: (shellId) => lastRemoteSnapshot.current.get(shellId),
   });
 
+  const onManageWorktrees = useCallback(
+    () => openSettings("worktrees"),
+    [openSettings],
+  );
+
   const sessionPaneProps = {
     recents,
     hideProjectPicker: true,
@@ -10366,7 +10458,7 @@ export default function App({
     onRemoteSnapshot,
     onWorkspaceModeChange,
     onWorktreeBaseChange,
-    onManageWorktrees: () => openSettings("worktrees"),
+    onManageWorktrees,
     onModelChange,
     onModelSettingsChange,
     onRuntimeModeChange,
@@ -10931,10 +11023,18 @@ export default function App({
               }}
             />
           )}
+          <HarnessUpdateNotice
+            topOffset={
+              12 + (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0)
+            }
+            onHeightChange={setHarnessUpdateHeight}
+          />
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={
-              12 + (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0)
+              12 +
+              (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0) +
+              (harnessUpdateHeight ? harnessUpdateHeight + 8 : 0)
             }
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}

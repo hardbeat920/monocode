@@ -16,6 +16,7 @@ import { REMOTE_CHANGES, rememberRemoteSession, remoteSessionFor } from "../mode
 import "../model/remoteCommands";
 import type {
   HostCommand,
+  HostDescriptor,
   HostModelCatalog,
   HostSession,
   RemoteMachine,
@@ -99,12 +100,19 @@ const gpt: AgentModel = {
   nativeId: "gpt-test",
   settings: [effort("reasoningEffort", "medium")],
 };
+const cursor: AgentModel = {
+  id: "cursor:composer-test",
+  harness: "cursor",
+  name: "Composer Test",
+  nativeId: "composer-test",
+  settings: [],
+};
 
 let root: Root;
 let container: HTMLDivElement;
 let host: HostSession | undefined;
 let catalog: HostModelCatalog | Error;
-let providers: string[];
+let providers: HostDescriptor["providers"];
 let commands: HostCommand[];
 let projectKey: string;
 let syncDelay: Promise<void> | undefined;
@@ -135,6 +143,7 @@ beforeEach(() => {
   deletedSessions = [];
   providers = ["codex"];
   catalog = { models: { codex: [gpt] }, errors: {} };
+  providers = ["codex"];
   projectKey = rememberRemoteProject("env", {
     id: "project",
     name: "repo",
@@ -636,6 +645,26 @@ it("creates the host session with the chosen settings on the first message", asy
   });
   expect(remoteSessionFor("shell")).toBe("host-session");
   expect(container.textContent).toContain("Fix the tests");
+});
+
+it("keeps a new session on its selected remote provider", async () => {
+  providers = ["codex", "cursor"];
+  catalog = {
+    models: { codex: [gpt], cursor: [cursor] },
+    errors: {},
+  };
+  await render({
+    ...shell(),
+    harness: "cursor",
+    model: cursor.id,
+    modelSettings: {},
+  });
+  await send("Use Cursor remotely");
+  expect(commands[0]).toMatchObject({
+    type: "create",
+    harness: "cursor",
+    model: cursor.id,
+  });
 });
 
 it("drops settings from the tab that the host's model does not offer", async () => {

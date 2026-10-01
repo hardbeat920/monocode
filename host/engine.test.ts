@@ -255,10 +255,61 @@ describe("headless session ownership", () => {
     expect(store.session(id).session.title).toBe("codex · My own title");
   });
 
+  it("uses one creation timestamp and advances only updatedAt on later commands", () => {
+    let now = 1_700_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    try {
+      const { engine, store, project, id } = setup();
+      const initial = store.session(id);
+      const timestamps = {
+        createdAt: initial.createdAt,
+        updatedAt: initial.createdAt,
+        revision: 1,
+      };
+      expect(initial).toMatchObject(timestamps);
+      expect(store.sessions(project.id)[0]).toMatchObject(timestamps);
+      expect(store.summaries(project.id)[0]).toMatchObject(timestamps);
+
+      now = initial.updatedAt + 1_000;
+      engine.command({
+        type: "configure",
+        commandId: "configure-timestamps",
+        sessionId: id,
+        model: "codex:updated",
+        modelSettings: {},
+        runtimeMode: "supervised",
+      });
+      const updatedTimestamps = {
+        createdAt: initial.createdAt,
+        updatedAt: initial.updatedAt + 1_000,
+        revision: 2,
+      };
+      expect(store.session(id)).toMatchObject(updatedTimestamps);
+      expect(store.sessions(project.id)[0]).toMatchObject(updatedTimestamps);
+      expect(store.summaries(project.id)[0]).toMatchObject(updatedTimestamps);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps remote card changes in host history and removes deleted sessions", () => {
     const { store, project, id } = setup();
     const initial = store.summaries(project.id)[0];
     expect(initial.model).toBe("codex:test");
+    expect(initial.createdAt).toBe(initial.updatedAt);
+
+    store.save(
+      {
+        ...store.session(id),
+        revision: initial.revision + 1,
+        updatedAt: initial.updatedAt + 1_000,
+      },
+      { type: "session.test" },
+    );
+    expect(store.summaries(project.id)[0]).toMatchObject({
+      createdAt: initial.createdAt,
+      updatedAt: initial.updatedAt + 1_000,
+    });
 
     const updated = store.updateSession(id, {
       title: "Codex · Renamed",
@@ -291,6 +342,64 @@ describe("headless session ownership", () => {
     store.deleteSession(id);
     expect(store.summaries(project.id)).toEqual([]);
     expect(() => store.session(id)).toThrow("Session not found");
+  });
+
+  it("includes the harness ID in remote summaries, including older cached rows", () => {
+    const { store, project, id } = setup();
+    const current = store.session(id);
+    store.save(
+      {
+        ...current,
+        revision: current.revision + 1,
+        session: { ...current.session, providerSessionId: "harness-session" },
+      },
+      { type: "session.test" },
+    );
+    expect(store.summaries(project.id)[0].providerSessionId).toBe(
+      "harness-session",
+    );
+
+    const legacySummary = { ...store.summaries(project.id)[0] };
+    delete legacySummary.providerSessionId;
+    store.db.prepare("UPDATE sessions SET summary=? WHERE id=?").run(
+      JSON.stringify(legacySummary),
+      id,
+    );
+    expect(store.summaries(project.id)[0].providerSessionId).toBe(
+      "harness-session",
+    );
+    const repaired = store.db
+      .prepare("SELECT summary FROM sessions WHERE id=?")
+      .get(id)!;
+    expect(JSON.parse(String(repaired.summary)).providerSessionId).toBe(
+      "harness-session",
+    );
+  });
+
+  it("keeps a legacy session's last known timestamp when adding creation time", () => {
+    const { directory, store, project, id } = setup();
+    const legacy = { ...store.session(id) };
+    delete legacy.createdAt;
+    store.db.prepare("UPDATE sessions SET snapshot=? WHERE id=?").run(
+      JSON.stringify(legacy),
+      id,
+    );
+
+    const reopened = new HostStore(join(directory, "host.db"));
+    cleanups.push(() => reopened.close());
+    const original = reopened.session(id);
+    reopened.save(
+      {
+        ...original,
+        revision: original.revision + 1,
+        updatedAt: original.updatedAt + 1_000,
+      },
+      { type: "session.test" },
+    );
+    expect(reopened.summaries(project.id)[0]).toMatchObject({
+      createdAt: original.updatedAt,
+      updatedAt: original.updatedAt + 1_000,
+    });
   });
 
   it("preserves the transaction error and invalidates cached state if rollback fails", () => {

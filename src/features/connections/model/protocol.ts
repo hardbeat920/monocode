@@ -37,7 +37,19 @@ export function hostNeedsUpdate(
     compareVersions(host.hostVersion, desktopVersion) < 0
   );
 }
-export type RemoteProvider = "codex" | "claude";
+export const REMOTE_PROVIDERS = [
+  "codex",
+  "claude",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+  "omp",
+  "fx",
+  "hermes",
+  "antigravity",
+] as const;
+export type RemoteProvider = (typeof REMOTE_PROVIDERS)[number];
 export type HostDescriptor = {
   protocolVersion: number;
   environmentId: string;
@@ -73,6 +85,8 @@ export type HostSession = {
   revision: number;
   runId?: string;
   status: "idle" | "running" | "interrupted";
+  /** Missing from snapshots written before creation time was stored. */
+  createdAt?: number;
   updatedAt: number;
   archived?: boolean;
   pinned?: boolean;
@@ -91,6 +105,7 @@ export type HostSessionSummary = Omit<
   cwd?: string;
   model?: string;
   runtimeMode?: RuntimeMode;
+  providerSessionId?: string | null;
   createdAt?: number;
   linkedWorkItem?: LinkedWorkItem;
   needsInput?: boolean;
@@ -272,7 +287,10 @@ export type SshSetup = {
 };
 
 export function isRemoteProvider(value: unknown): value is RemoteProvider {
-  return value === "codex" || value === "claude";
+  return (
+    typeof value === "string" &&
+    REMOTE_PROVIDERS.some((provider) => provider === value)
+  );
 }
 
 export function requireHostDescriptor(value: HostDescriptor): HostDescriptor {

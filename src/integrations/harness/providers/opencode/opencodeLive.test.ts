@@ -233,6 +233,9 @@ describe("OpenCode subagent trails", () => {
     const steps = session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.steps;
     expect(steps?.map((step) => step.text)).toEqual(["Trace imports", "Read auth.ts", "Subagent", "Nested answer"]);
     expect(steps?.find((step) => step.toolKind === "read")?.status).toBe("failed");
+    expect(steps?.find((step) => step.toolKind === "read")?.detail).toBe(
+      "File missing",
+    );
     expect(session.blocks.filter((block) => block.role === "assistant")).toEqual([]);
   });
 });

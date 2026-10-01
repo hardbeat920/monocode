@@ -414,12 +414,27 @@ pub fn host_package() -> Result<String, String> {
 /// a pairing link. `upgrade` restarts an older host even with running turns;
 /// the desktop asks the user before setting it.
 pub fn connect_script(platform: HostPlatform, package: &str, upgrade: bool) -> String {
+    let template = match platform {
+        HostPlatform::Unix => include_str!("remote_connect.sh"),
+        HostPlatform::Windows => include_str!("remote_connect.ps1"),
+    };
+    connect_script_from_template(platform, template, package, upgrade)
+}
+
+fn connect_script_from_template(
+    platform: HostPlatform,
+    template: &str,
+    package: &str,
+    upgrade: bool,
+) -> String {
     let flags = if upgrade { " --yes" } else { "" };
     match platform {
-        HostPlatform::Unix => include_str!("remote_connect.sh")
+        // include_str! preserves checkout line endings, including Windows CRLF.
+        HostPlatform::Unix => template
+            .replace("\r\n", "\n")
             .replace("@@PACKAGE@@", &shell_quote(package))
             .replace("@@FLAGS@@", flags),
-        HostPlatform::Windows => include_str!("remote_connect.ps1")
+        HostPlatform::Windows => template
             .replace("@@PACKAGE@@", &powershell_quote(package))
             .replace("@@FLAGS@@", flags),
     }
@@ -790,6 +805,7 @@ mod tests {
         );
         let unix = connect_script(HostPlatform::Unix, "monocode-host@1.2.3", false);
         assert!(!unix.contains("@@"));
+        assert!(!unix.contains('\r'));
         assert!(unix.contains("PACKAGE='monocode-host@1.2.3'"));
         assert!(unix.contains("--package \"$PACKAGE\" monocode-host connect --json <"));
         assert!(!unix.contains("--json --yes"));
@@ -798,6 +814,18 @@ mod tests {
         assert!(!windows.contains("@@"));
         assert!(windows.contains("$package = 'monocode-host@1.2.3'"));
         assert!(windows.contains("connect --json --yes"));
+    }
+    #[test]
+    fn unix_connect_accepts_windows_checkout_line_endings() {
+        let lf_template = include_str!("remote_connect.sh").replace("\r\n", "\n");
+        let crlf_template = lf_template.replace('\n', "\r\n");
+        let script = connect_script_from_template(HostPlatform::Unix, &crlf_template, "p", false);
+        assert!(script.starts_with("set -eu\n"));
+        assert!(!script.contains('\r'));
+        assert_eq!(
+            script,
+            connect_script_from_template(HostPlatform::Unix, &lf_template, "p", false)
+        );
     }
     #[test]
     fn remote_platform_probe_handles_cmd_powershell_and_unix() {

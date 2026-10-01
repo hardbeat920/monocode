@@ -171,6 +171,18 @@ it("leaves the selected project, recents, and active tab unchanged for backgroun
   expect(workspace.revealTab).not.toHaveBeenCalled();
 });
 
+it("starts the first turn in the mode picked in the floating composer", async () => {
+  const { request, workspace } = setup();
+  request.intent = "orchestrate";
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(workspace.submit).toHaveBeenCalledWith(
+    "quick-session",
+    request.prompt,
+    [],
+    { intent: "orchestrate" },
+  );
+});
+
 it("creates a draft-only session without submitting an agent turn", async () => {
   const { state, request, workspace } = setup();
   request.draft = true;
