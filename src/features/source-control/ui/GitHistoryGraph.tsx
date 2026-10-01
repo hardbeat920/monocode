@@ -209,8 +209,11 @@ function HistoryRow({
   // Memoized: `Popover` re-registers its window listeners whenever `onDismiss`
   // changes identity, so an inline arrow re-adds them on every render.
   const onFocusEnter = useCallback(() => {
+    // A pointer-leave close armed before focus arrived would unmount the
+    // control that took it.
+    hover.cancelClose();
     focusInCard.current = true;
-  }, []);
+  }, [hover.cancelClose]);
   const onFocusLeave = useCallback(
     (next: EventTarget | null) => {
       if (next === anchorRef.current) return;

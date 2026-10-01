@@ -494,6 +494,35 @@ it("keeps the card open when the pointer leaves while a copy action has focus", 
   expect(document.activeElement).toBe(cardActions()[0]);
 });
 
+it("keeps the card open when focus enters it during the pointer-leave delay", async () => {
+  await mount("/repo/hover-leave-then-focus");
+  const row = historyRows()[0]!;
+
+  await focusRow(row);
+  // A click, not a Tab, so the pointer-leave guard does not apply.
+  const matches = row.matches.bind(row);
+  row.matches = ((selectors: string) =>
+    selectors === ":focus-visible"
+      ? false
+      : matches(selectors)) as typeof row.matches;
+
+  vi.useFakeTimers();
+  act(() => {
+    row.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+  });
+  expect(card()).not.toBeNull();
+
+  // Tab lands in the card while the close is still pending.
+  key(row, { key: "Tab" });
+  expect(document.activeElement).toBe(cardActions()[0]);
+  act(() => {
+    vi.advanceTimersByTime(300);
+  });
+
+  expect(card()).not.toBeNull();
+  expect(document.activeElement).toBe(cardActions()[0]);
+});
+
 it("keeps the card open when the pointer leaves the row that holds focus", async () => {
   await mount("/repo/hover-leave-row-focused");
   const row = historyRows()[0]!;
