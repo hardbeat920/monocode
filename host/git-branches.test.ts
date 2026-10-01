@@ -46,11 +46,11 @@ it("lists and switches only clean existing local branches", async () => {
   );
   writeFileSync(join(cwd, "file.txt"), "changed");
   await expect(switchHostBranch(cwd, "main")).rejects.toThrow(
-    "Commit or stash",
+    "Commit your changes or stash",
   );
   expect((await hostBranches(cwd)).current).toBe("feature");
   await expect(createHostBranch(cwd, "new-feature")).rejects.toThrow(
-    "Commit or stash",
+    "Commit your changes or stash",
   );
   writeFileSync(join(cwd, "file.txt"), "initial");
   expect(await createHostBranch(cwd, "new-feature")).toMatchObject({

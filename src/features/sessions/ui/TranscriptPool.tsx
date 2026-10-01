@@ -19,6 +19,8 @@ export type TranscriptPoolEntry = {
   element: ReactElement<PooledProps>;
   onMouseDown?: () => void;
   host: HTMLElement | null;
+  /** When a pane last showed it, so the oldest parked ones are dropped first. */
+  shownAt: number;
 };
 
 /**
@@ -31,6 +33,7 @@ export class TranscriptPool {
   private entries = new Map<string, TranscriptPoolEntry>();
   private listeners = new Set<() => void>();
   private snapshot: TranscriptPoolEntry[] = [];
+  private clock = 0;
 
   constructor(private readonly limit = TRANSCRIPT_POOL_LIMIT) {}
 
@@ -54,9 +57,17 @@ export class TranscriptPool {
     // Attach before the pane's passive effects run, so anything that looks
     // for the transcript in the pane already finds a revisited one.
     if (container.parentElement !== host) host.appendChild(container);
-    // Re-inserting keeps the map in least-recently-shown order.
-    this.entries.delete(id);
-    this.entries.set(id, { id, container, element, onMouseDown, host });
+    // Updated in place: panes show on every render, and reordering the outlet
+    // would move a transcript, which re-runs its effects under StrictMode and
+    // replays its entrance animations.
+    this.entries.set(id, {
+      id,
+      container,
+      element,
+      onMouseDown,
+      host,
+      shownAt: ++this.clock,
+    });
     this.emit();
   }
 
@@ -75,14 +86,11 @@ export class TranscriptPool {
   }
 
   private trim() {
-    let parked = 0;
-    for (const entry of this.entries.values()) if (!entry.host) parked += 1;
-    for (const entry of [...this.entries.values()]) {
-      if (parked <= this.limit) break;
-      if (entry.host) continue;
+    const parked = [...this.entries.values()]
+      .filter((entry) => !entry.host)
+      .sort((a, b) => a.shownAt - b.shownAt);
+    for (const entry of parked.slice(0, Math.max(0, parked.length - this.limit)))
       this.entries.delete(entry.id);
-      parked -= 1;
-    }
   }
 
   private emit() {

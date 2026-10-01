@@ -11,7 +11,8 @@ import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
-import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
+import { modelsFromClaudeListModels } from "../../../integrations/harness/providers/claude/claudeCatalog";
+import { REMOTE_CHANGES, rememberRemoteSession, remoteSessionFor } from "../model/connections";
 import "../model/remoteCommands";
 import type {
   HostCommand,
@@ -103,12 +104,15 @@ let root: Root;
 let container: HTMLDivElement;
 let host: HostSession | undefined;
 let catalog: HostModelCatalog | Error;
+let providers: string[];
 let commands: HostCommand[];
 let projectKey: string;
 let syncDelay: Promise<void> | undefined;
 let dispatchDelay: Promise<void> | undefined;
 let branchFailure: string | undefined;
 let branchActionFailure: string | undefined;
+/** Refused unless the request is forced, as a host with a running session does. */
+let runningSessionRefusal: string | undefined;
 let currentBranch: string;
 let createdBranch: string | undefined;
 let createdWorktree: string | undefined;
@@ -124,10 +128,12 @@ beforeEach(() => {
   dispatchDelay = undefined;
   branchFailure = undefined;
   branchActionFailure = undefined;
+  runningSessionRefusal = undefined;
   currentBranch = "main";
   createdBranch = undefined;
   createdWorktree = undefined;
   deletedSessions = [];
+  providers = ["codex"];
   catalog = { models: { codex: [gpt] }, errors: {} };
   projectKey = rememberRemoteProject("env", {
     id: "project",
@@ -152,7 +158,7 @@ beforeEach(() => {
         protocolVersion: 1,
         environmentId: "env",
         name: "home",
-        providers: ["codex"],
+        providers,
         capabilities: ["attachments.upload", "sessions.plan", "sessions.draft"],
       };
     if (method === "models.list") {
@@ -217,6 +223,8 @@ beforeEach(() => {
     if (operation === "git.switch" || operation === "git.createBranch" ||
         operation === "git_checkout" || operation === "git_create_branch") {
       if (branchActionFailure) throw new Error(branchActionFailure);
+      if (runningSessionRefusal && commandParams.force !== true)
+        throw new Error(runningSessionRefusal);
       currentBranch = String(operation.startsWith("git_") ? commandParams.name : params.branch);
       if (operation === "git.createBranch" || operation === "git_create_branch") createdBranch = currentBranch;
       if (workspace) return currentBranch;
@@ -466,6 +474,64 @@ it("opens a host conversation in an already mounted empty tab", async () => {
   expect(commands.some((command) => command.type === "send")).toBe(true);
 });
 
+it("dismisses and resumes a host session's usage limit notice", async () => {
+  dispatch({
+    type: "create",
+    commandId: "limited-session",
+    projectId: "project",
+    harness: "codex",
+    model: gpt.id,
+    runtimeMode: "supervised",
+  });
+  host = {
+    ...host!,
+    session: {
+      ...host!.session,
+      blocks: [{ id: "old-message", role: "user", text: "Earlier message" }],
+      usageLimit: { resetsAt: Date.now() - 60_000 },
+    },
+  };
+  rememberRemoteSession("shell", "host-session");
+  await render();
+  expect(container.textContent).toContain("Limit has reset");
+  await act(async () => byLabel("Dismiss usage limit notice")!.click());
+  expect(container.textContent).not.toContain("Usage limit reached");
+
+  // A later limit shows again, and Resume continues the session on the host.
+  host = {
+    ...host!,
+    revision: host!.revision + 1,
+    session: { ...host!.session, usageLimit: { resetsAt: Date.now() - 1_000 } },
+  };
+  commands = [];
+  await act(async () =>
+    window.dispatchEvent(
+      new CustomEvent(REMOTE_CHANGES, {
+        detail: {
+          machineId: "machine",
+          reset: false,
+          sessions: [{ id: "host-session", projectId: "project", revision: host!.revision }],
+        },
+      }),
+    ),
+  );
+  await settle();
+  expect(container.textContent).toContain("Limit has reset");
+  const resume = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Resume",
+  );
+  await act(async () => resume!.click());
+  await settle();
+  expect(commands).toContainEqual(
+    expect.objectContaining({
+      type: "send",
+      sessionId: "host-session",
+      text: "Continue from where you left off.",
+    }),
+  );
+  expect(container.textContent).not.toContain("Usage limit reached");
+});
+
 it("keeps an unopened remote conversation docked while its transcript loads", async () => {
   dispatch({
     type: "create",
@@ -571,6 +637,58 @@ it("creates the host session with the chosen settings on the first message", asy
   expect(remoteSessionFor("shell")).toBe("host-session");
   expect(container.textContent).toContain("Fix the tests");
 });
+
+it("drops settings from the tab that the host's model does not offer", async () => {
+  await render({
+    ...shell(),
+    harness: "codex",
+    model: "codex:gpt-test",
+    modelSettings: { reasoningEffort: "high", serviceTier: "fast" },
+  });
+  await send("Fix the tests");
+  expect(commands[0]).toMatchObject({ type: "create", model: "codex:gpt-test" });
+  expect(commands[0]).toHaveProperty("modelSettings", {
+    reasoningEffort: "high",
+  });
+});
+
+it.each([
+  // Opus 4.6 reaches 1M only through a variant Claude Code lists.
+  ["claude:opus-4-6", "claude-opus-4-6", undefined],
+  ["claude:opus-4-6", "claude-opus-4-6[1m]", "1m"],
+  // Opus 5.5 runs at 1M from its bare id, so there is nothing to choose.
+  ["claude:opus-5-5", "claude-opus-5-5[1m]", undefined],
+])(
+  "sends a saved 1M context for %s listed as %s only when the host offers it",
+  async (model, listed, context) => {
+    providers = ["claude"];
+    catalog = {
+      models: {
+        claude: modelsFromClaudeListModels([
+          {
+            value: listed,
+            resolvedModel: listed.replace("[1m]", ""),
+            displayName: "Opus",
+            supportsEffort: true,
+          },
+        ]),
+      },
+      errors: {},
+    };
+    await render({
+      ...shell(),
+      harness: "claude",
+      model,
+      modelSettings: { effort: "high", context: "1m" },
+    });
+    await send("Use the long context");
+    expect(commands[0]).toMatchObject({ type: "create", model });
+    expect(commands[0]).toHaveProperty(
+      "modelSettings",
+      context ? { effort: "high", context } : { effort: "high" },
+    );
+  },
+);
 
 it("sends a remote plan turn from the plus menu", async () => {
   await render();
@@ -865,6 +983,42 @@ it("keeps a failed host branch action in the picker", async () => {
     document.body.querySelector('[aria-label="Branch picker"]'),
   ).not.toBeNull();
   expect(document.body.textContent).toContain(branchActionFailure);
+});
+
+it("asks before switching a host branch under a running session", async () => {
+  runningSessionRefusal =
+    'Host rejected request: "Fix the tests" is running on the host. Switching branches changes the files it is working on.';
+  await render();
+  await act(async () => byLabel("Branch main")!.click());
+  const dev = [
+    ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ].find((button) => button.textContent?.includes("dev"));
+  await act(async () => dev!.click());
+  await settle();
+  // The dialog names the running session and nothing has switched yet.
+  expect(document.body.textContent).toContain("Switch to dev anyway?");
+  expect(document.body.textContent).toContain(
+    '"Fix the tests" is running on the host.',
+  );
+  expect(document.body.textContent).not.toContain("Host rejected request");
+  expect(currentBranch).toBe("main");
+  const confirm = [
+    ...document.body.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Switch anyway");
+  await act(async () => confirm!.click());
+  await settle();
+  expect(invoke).toHaveBeenCalledWith(
+    "remote_request",
+    expect.objectContaining({
+      method: "workspace.run",
+      params: expect.objectContaining({
+        command: "git_checkout",
+        args: expect.objectContaining({ name: "dev", force: true }),
+      }),
+    }),
+  );
+  expect(currentBranch).toBe("dev");
+  expect(document.body.textContent).not.toContain("Switch to dev anyway?");
 });
 
 it("locks a started remote session to its worktree like a local session", async () => {

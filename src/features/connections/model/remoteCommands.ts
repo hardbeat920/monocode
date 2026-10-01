@@ -46,6 +46,7 @@ const HOST_COMMANDS = new Set([
   "git_stash",
   "git_worktrees",
   "search_project",
+  "list_skills",
 ]);
 /** Arguments that hold paths; everything else is passed through untouched. */
 const PATH_ARGS = ["path", "cwd", "parent", "from", "destParent", "paths"];
@@ -57,7 +58,12 @@ const PATH_RESULTS = new Set([
   "move_path",
 ]);
 /** Commands whose result entries carry a `path`. */
-const ENTRY_RESULTS = new Set(["list_dir", "list_project_files", "stat_files"]);
+const ENTRY_RESULTS = new Set([
+  "list_dir",
+  "list_project_files",
+  "stat_files",
+  "list_skills",
+]);
 
 const UNAVAILABLE = "This isn’t available for projects on another machine yet.";
 const OUTDATED =

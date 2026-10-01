@@ -6,6 +6,8 @@ import {
   type HostSession,
   type HostSessionSummary,
   type RemoteMachine,
+  type SessionChange,
+  type SessionChanges,
   type SessionSync,
   type SessionSyncChunk,
   type SessionSyncResponse,
@@ -225,16 +227,12 @@ export async function remoteMachineFor(
   return knownRemoteMachine(environmentId);
 }
 
-export async function connectMachine(
-  name: string,
-  url: string,
-  token: string,
+/** Pairs the machine in a `monocode://pair` link from `monocode-host connect`. */
+export async function pairMachine(
+  link: string,
+  name = "",
 ): Promise<RemoteMachine> {
-  const machine = await invoke<RemoteMachine>("remote_connect", {
-    name,
-    url,
-    token,
-  });
+  const machine = await invoke<RemoteMachine>("remote_pair", { link, name });
   cachedMachines = [
     ...cachedMachines.filter((entry) => entry.id !== machine.id),
     machine,
@@ -242,6 +240,11 @@ export async function connectMachine(
   machinesLoaded = true;
   window.dispatchEvent(new Event(CHANGE));
   return machine;
+}
+
+/** Tries every route to the machine again on its next request. */
+export async function retryMachine(machineId: string): Promise<void> {
+  await invoke("remote_retry", { machineId });
 }
 
 export async function disconnectMachine(machineId: string): Promise<void> {
@@ -287,6 +290,92 @@ export function useRemoteMachines(enabled = true): {
     };
   }, [enabled]);
   return state;
+}
+
+/** Dispatched on window when a watched machine reports session writes. */
+export const REMOTE_CHANGES = "monocode:remote-changes";
+export type RemoteChangesDetail = {
+  machineId: string;
+  sessions: SessionChange[];
+  /** The host restarted or the desktop fell behind; reload what is shown. */
+  reset: boolean;
+};
+
+type ChangeWatcher = { count: number; live: boolean; stop: () => void };
+const changeWatchers = new Map<string, ChangeWatcher>();
+
+/** Whether pushed changes for this machine are arriving, so views can poll
+ * rarely. False for hosts before 0.5, which do not support `changes.wait`. */
+export function remoteChangesLive(machineId: string): boolean {
+  return changeWatchers.get(machineId)?.live ?? false;
+}
+
+/**
+ * Holds one `changes.wait` request open per machine while any view watches
+ * it, and dispatches `REMOTE_CHANGES` for each batch of session writes. Views
+ * reload on those events instead of polling every session.
+ */
+export function watchRemoteChanges(machineId: string): () => void {
+  const existing = changeWatchers.get(machineId);
+  if (existing) {
+    existing.count++;
+  } else {
+    let stopped = false;
+    const watcher: ChangeWatcher = {
+      count: 1,
+      live: false,
+      stop: () => {
+        stopped = true;
+      },
+    };
+    changeWatchers.set(machineId, watcher);
+    void (async () => {
+      let boot: string | undefined;
+      let cursor = 0;
+      let failures = 0;
+      while (!stopped) {
+        try {
+          const changes = await remoteRequest<SessionChanges>(
+            machineId,
+            "changes.wait",
+            { boot, after: cursor },
+          );
+          if (stopped) break;
+          failures = 0;
+          watcher.live = true;
+          // The first answer only establishes the cursor. A later reset
+          // means the host restarted, so views reload.
+          if (changes.sessions.length || (changes.reset && boot !== undefined))
+            window.dispatchEvent(
+              new CustomEvent<RemoteChangesDetail>(REMOTE_CHANGES, {
+                detail: {
+                  machineId,
+                  sessions: changes.sessions,
+                  reset: changes.reset && boot !== undefined,
+                },
+              }),
+            );
+          boot = changes.boot;
+          cursor = changes.cursor;
+        } catch (reason) {
+          if (stopped) break;
+          watcher.live = false;
+          // An older host: keep polling in the views instead.
+          if (String(reason).includes("Unsupported host method")) break;
+          failures = Math.min(5, failures + 1);
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(30_000, 1_000 * 2 ** failures)),
+          );
+        }
+      }
+    })();
+  }
+  return () => {
+    const watcher = changeWatchers.get(machineId);
+    if (!watcher || --watcher.count > 0) return;
+    watcher.stop();
+    changeWatchers.delete(machineId);
+  };
 }
 
 const STATUS = "monocode:remote-machine-status";
@@ -412,7 +501,26 @@ export function useRemoteProjectSessions(
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
+    let inFlight = false;
+    let again = false;
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<RemoteChangesDetail>).detail;
+      if (
+        detail.machineId !== machine.id ||
+        (!detail.reset &&
+          !detail.sessions.some((entry) => entry.projectId === remote.projectId))
+      )
+        return;
+      if (inFlight) again = true;
+      else {
+        clearTimeout(timer);
+        void poll();
+      }
+    };
+    window.addEventListener(REMOTE_CHANGES, changed);
+    const unwatch = watchRemoteChanges(machine.id);
     const poll = async () => {
+      inFlight = true;
       try {
         const next = await remoteRequest<HostSessionSummary[]>(
           machine.id,
@@ -430,19 +538,33 @@ export function useRemoteProjectSessions(
           /* the list is refetched next time */
         }
       } catch {
-        // Keep the cached list and back off while SSH is unavailable.
+        // Keep the cached list and back off while the machine is unreachable.
         failures = Math.min(4, failures + 1);
       }
-      if (!disposed)
-        timer = setTimeout(
-          () => void poll(),
-          failures ? Math.min(30_000, 3_000 * 2 ** failures) : 3_000,
-        );
+      inFlight = false;
+      if (disposed) return;
+      if (again) {
+        again = false;
+        timer = setTimeout(() => void poll(), 0);
+        return;
+      }
+      // Pushed changes refresh the list at once; polling only covers a
+      // missed change or an older host.
+      timer = setTimeout(
+        () => void poll(),
+        failures
+          ? Math.min(30_000, 3_000 * 2 ** failures)
+          : remoteChangesLive(machine.id)
+            ? 30_000
+            : 3_000,
+      );
     };
     void poll();
     return () => {
       disposed = true;
       clearTimeout(timer);
+      window.removeEventListener(REMOTE_CHANGES, changed);
+      unwatch();
     };
   }, [project, remote?.projectId, machine?.id, refresh]);
   return { machine, sessions, loaded };

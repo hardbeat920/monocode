@@ -8,6 +8,11 @@ const options = (cwd: string) => ({
   maxBuffer: 1024 * 1024,
 });
 
+// The desktop recognizes "commit your changes or stash" and offers to stash
+// or commit, then retries.
+const DIRTY_CHECKOUT =
+  "Commit your changes or stash them before switching branches on the host.";
+
 export type HostBranches = {
   current: string | null;
   branches: string[];
@@ -79,9 +84,7 @@ export async function switchHostBranch(
     options(cwd),
   );
   if (changes)
-    throw new Error(
-      "Commit or stash changes on the host before switching branches",
-    );
+    throw new Error(DIRTY_CHECKOUT);
   if (remoteRef && !state.branches.includes(branch))
     await exec(
       "git",
@@ -113,9 +116,7 @@ export async function createHostBranch(
     options(cwd),
   );
   if (changes)
-    throw new Error(
-      "Commit or stash changes on the host before switching branches",
-    );
+    throw new Error(DIRTY_CHECKOUT);
   await exec("git", ["switch", "-c", branch], options(cwd));
   return hostBranches(cwd);
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run native SSH transport tests against disposable loopback services.
 
-Requires OpenSSH sshd, a built host package for this platform, and Cargo.
+Requires OpenSSH sshd, a built host (npm run host:build), and Cargo.
 Does not modify HOME, SSH configuration, authorized_keys or OS services.
 """
 import json
@@ -17,9 +17,7 @@ import threading
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SYSTEM = {"Darwin": "darwin", "Linux": "linux"}[platform.system()]
-ARCH = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64"}[platform.machine()]
-LAUNCHER = ROOT / "build" / "host-packages" / f"{SYSTEM}-{ARCH}" / "monocode-host"
+HOST = ROOT / "build" / "host" / "monocode-host.mjs"
 
 
 def free_port():
@@ -29,8 +27,8 @@ def free_port():
 
 
 def main():
-    if not LAUNCHER.is_file():
-        raise RuntimeError("Run npm run host:package first")
+    if not HOST.is_file():
+        raise RuntimeError("Run npm run host:build first")
     sshd = shutil.which("sshd") or "/usr/sbin/sshd"
     with tempfile.TemporaryDirectory(prefix="monocode-ssh-integration-") as directory:
         folder = pathlib.Path(directory)
@@ -42,7 +40,7 @@ def main():
         (folder / "known_hosts").write_text(f"[127.0.0.1]:{ssh_port} " + (folder / "host.pub").read_text())
         daemon = subprocess.Popen([sshd, "-D", "-e", "-f", str(config)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         def host(*args):
-            return subprocess.check_output([str(LAUNCHER), *args, "--data-dir", str(folder / "data"), "--port", str(host_port)], text=True, timeout=15)
+            return subprocess.check_output([shutil.which("node") or "node", str(HOST), *args, "--data-dir", str(folder / "data"), "--port", str(host_port)], text=True, timeout=15)
         try:
             time.sleep(0.3)
             if daemon.poll() is not None:

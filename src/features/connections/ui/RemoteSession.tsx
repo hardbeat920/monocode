@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { SessionPaneProps } from "../../sessions/ui/SessionPane";
 import type {
   Attachment,
@@ -7,9 +14,12 @@ import type {
   HarnessId,
   RuntimeMode,
   Session,
+  UsageLimit,
   WorkspaceMode,
   PlanBuildTarget,
 } from "../../sessions/model/session";
+import { CONTINUE_PROMPT } from "../../sessions/model/inFlight";
+import { usageLimitResumeDue } from "../../sessions/model/usageLimit";
 import { uploadRemoteAttachments } from "../model/remoteAttachments";
 import { temporaryWorktreeBranchName } from "../../source-control/model/worktrees";
 import type { AgentModel } from "../../sessions/model/models";
@@ -29,13 +39,17 @@ import {
   pendingRemoteFollowup,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
+  REMOTE_CHANGES,
   REMOTE_HISTORY_CHANGE,
+  remoteChangesLive,
   remoteRequest,
   reportRemoteMachineStatus,
   remotePendingWorktree,
   remoteSessionFor,
   savePendingRemoteCommand,
   useRemoteMachines,
+  watchRemoteChanges,
+  type RemoteChangesDetail,
 } from "../model/connections";
 import { parseRemotePath, remotePath, remoteProjectFor, type RemoteProject } from "../model/remoteProjects";
 import {
@@ -86,6 +100,14 @@ type OptimisticTurn = {
 };
 
 const noop = () => {};
+/**
+ * What this computer chose for a host session's usage limit notice, kept per
+ * limit so a later limit shows again. The host clears the limit itself when
+ * the next turn starts.
+ */
+type LimitChoice = { limit: string; dismissed?: boolean; resumeAtReset?: boolean };
+const limitChoices = new Map<string, LimitChoice>();
+const limitKey = (limit: UsageLimit) => String(limit.resetsAt ?? "unknown");
 const cachedSessionSnapshots = new Map<string, HostSession>();
 const cachedDescriptors = new Map<string, HostDescriptor>();
 const cachedCatalogs = new Map<string, HostModelCatalog>();
@@ -359,8 +381,29 @@ function ConnectedRemoteSession({
     // Every request carries the expected host identity; describe again only
     // after a failure, when the host may have been replaced.
     let described = false;
+    let inFlight = false;
+    let again = false;
+    // The host reports each write to this session, so the transcript updates
+    // as soon as it changes instead of on the next poll.
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<RemoteChangesDetail>).detail;
+      if (
+        detail.machineId !== machine.id ||
+        !sessionId ||
+        (!detail.reset && !detail.sessions.some((entry) => entry.id === sessionId))
+      )
+        return;
+      if (inFlight) again = true;
+      else {
+        clearTimeout(timer);
+        void poll();
+      }
+    };
+    window.addEventListener(REMOTE_CHANGES, changed);
+    const unwatch = watchRemoteChanges(machine.id);
     const poll = async () => {
       let active = false;
+      inFlight = true;
       try {
         if (!described) {
           const host = requireHostDescriptor(
@@ -405,22 +448,32 @@ function ConnectedRemoteSession({
         described = false;
         failed++;
       }
-      if (!disposed)
-        timer = setTimeout(
-          () => void poll(),
-          failed
-            ? Math.min(10_000, 750 * 2 ** Math.min(failed, 4))
-            : active
-              ? 750
-              : visible
-                ? 3_000
-                : 10_000,
-        );
+      inFlight = false;
+      if (disposed) return;
+      if (again) {
+        again = false;
+        timer = setTimeout(() => void poll(), 0);
+        return;
+      }
+      // With pushed changes, polling only covers a missed change.
+      const pushed = remoteChangesLive(machine.id);
+      timer = setTimeout(
+        () => void poll(),
+        failed
+          ? Math.min(10_000, 750 * 2 ** Math.min(failed, 4))
+          : active
+            ? pushed ? 5_000 : 750
+            : visible
+              ? pushed ? 15_000 : 3_000
+              : pushed ? 30_000 : 10_000,
+      );
     };
     void poll();
     return () => {
       disposed = true;
       clearTimeout(timer);
+      window.removeEventListener(REMOTE_CHANGES, changed);
+      unwatch();
     };
   }, [
     machine.id,
@@ -462,7 +515,9 @@ function ConnectedRemoteSession({
     [descriptor],
   );
   // A new session starts with the tab's model when the host offers it, and
-  // otherwise with the host's first model.
+  // otherwise with the host's first model. Settings follow the host's entry:
+  // the same id can differ between machines, such as `claude:opus` offering a
+  // 1M context only on an account that has it.
   useEffect(() => {
     if (sessionId || !catalog || !providers.length) return;
     const harness = providers.includes(draft.harness)
@@ -474,13 +529,17 @@ function ConnectedRemoteSession({
       (harness === draft.harness ? undefined : models[0]) ??
       models[0];
     if (!model) return;
-    if (harness === draft.harness && model.id === draft.model) return;
-    setDraft((current) => ({
-      ...current,
-      harness,
-      model: model.id,
-      settings: carryModelSettings(model.settings ?? [], current.settings),
-    }));
+    setDraft((current) => {
+      const settings = carryModelSettings(
+        model.settings ?? [],
+        current.settings,
+      );
+      return current.harness === harness &&
+        current.model === model.id &&
+        sameModelSettings(settings, current.settings)
+        ? current
+        : { ...current, harness, model: model.id, settings };
+    });
   }, [catalog, providers, sessionId, draft.harness, draft.model]);
 
   const saved: Configuration | undefined = hostSession && {
@@ -933,10 +992,9 @@ function ConnectedRemoteSession({
         providers.includes(harness as RemoteProvider) &&
         (!hostSession || hostSession.harness === harness),
       probed: () => !!descriptor,
-      refresh: () => {
-        if (!catalog || catalogError || Object.keys(catalog.errors).length)
-          setCatalogRefresh((value) => value + 1);
-      },
+      // The host re-probes when a provider CLI changes or its catalog ages,
+      // so each picker opening asks again.
+      refresh: () => setCatalogRefresh((value) => value + 1),
     };
   }, [
     catalog,
@@ -948,6 +1006,28 @@ function ConnectedRemoteSession({
     hostSession?.model,
     hostSession?.modelSettings,
   ]);
+
+  const [, refreshLimit] = useReducer((count: number) => count + 1, 0);
+  const hostLimit = hostSession?.usageLimit;
+  const limitChoiceKey = hostSession
+    ? snapshotKey(machine.id, hostSession.id)
+    : undefined;
+  const storedChoice = limitChoiceKey
+    ? limitChoices.get(limitChoiceKey)
+    : undefined;
+  const limitChoice =
+    hostLimit && storedChoice?.limit === limitKey(hostLimit)
+      ? storedChoice
+      : undefined;
+  const usageLimit: UsageLimit | undefined =
+    hostLimit && !limitChoice?.dismissed
+      ? { ...hostLimit, resumeAtReset: limitChoice?.resumeAtReset }
+      : undefined;
+  const chooseLimit = (choice: Omit<LimitChoice, "limit">) => {
+    if (!limitChoiceKey || !hostLimit) return;
+    limitChoices.set(limitChoiceKey, { limit: limitKey(hostLimit), ...choice });
+    refreshLimit();
+  };
 
   // Show a message the host has not confirmed yet in the transcript.
   // A draft being sent is replaced by its message at once, as locally.
@@ -1010,8 +1090,32 @@ function ConnectedRemoteSession({
     modelSettings: configuration.settings,
     runtimeMode: configuration.mode,
     busy,
+    usageLimit,
     blocks: unconfirmed ? [...blocks, unconfirmed] : blocks,
   };
+
+  const resumeAfterLimit = () => {
+    if (!usageLimit) return;
+    if (submit(CONTINUE_PROMPT, [])) chooseLimit({ dismissed: true });
+  };
+  // An armed notice resumes the session once its limit has reset, as a
+  // local session does.
+  const [limitTick, setLimitTick] = useState(0);
+  const resumeRef = useRef(resumeAfterLimit);
+  resumeRef.current = resumeAfterLimit;
+  useEffect(() => {
+    if (!usageLimit?.resumeAtReset || usageLimit.resetsAt == null) return;
+    if (usageLimitResumeDue(session, Date.now()) && online && !pending) {
+      resumeRef.current();
+      return;
+    }
+    // Re-check every minute at most: timers drift while the machine sleeps.
+    const timer = window.setTimeout(
+      () => setLimitTick((tick) => tick + 1),
+      Math.max(1_000, Math.min(usageLimit.resetsAt - Date.now(), 60_000)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [usageLimit?.resumeAtReset, usageLimit?.resetsAt, busy, online, pending, limitTick]);
 
   const catalogProblem = catalog?.errors[configuration.harness] ?? catalogError;
   const retryPending = async () => {
@@ -1243,9 +1347,10 @@ function ConnectedRemoteSession({
     onQueuedMessageEditingChange: noop,
     onSteerQueuedMessage: noop,
     onResumeQueue: noop,
-    onUsageLimitResume: noop,
-    onUsageLimitResumeAtReset: noop,
-    onUsageLimitDismiss: noop,
+    onUsageLimitResume: resumeAfterLimit,
+    onUsageLimitResumeAtReset: (_, enabled) =>
+      chooseLimit({ resumeAtReset: enabled }),
+    onUsageLimitDismiss: () => chooseLimit({ dismissed: true }),
     onOpenPlan: (_, blockId) => onOpenPlan(shell.id, blockId),
     onBuildPlan: (_, blockId, target) => buildPlan(blockId, target),
     onSecondOpinion: undefined,

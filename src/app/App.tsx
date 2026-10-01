@@ -547,6 +547,7 @@ import {
 } from "../features/connections/model/connections";
 import { buildRemotePlan, remoteSessionActions } from "../features/connections/model/remoteSessionActions";
 import { remoteSessionState } from "../features/connections/model/remoteSessionState";
+import { useRemoteTurnUpdates } from "../features/connections/model/remoteTurns";
 import { remotePath, remoteProjectFor } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
@@ -10320,6 +10321,11 @@ export default function App({
     }
     if (lastRemoteSnapshot.current.get(shellId) === snapshot) return;
     lastRemoteSnapshot.current.set(shellId, snapshot);
+    // A host turn that ends is announced like a local one, whether or not
+    // its tab is showing.
+    const finished =
+      !!sessionsRef.current.find((entry) => entry.id === shellId)?.busy &&
+      !snapshot.session.busy;
     setSessions((current) => {
       const shell = current.find((entry) => entry.id === shellId);
       if (!shell) return current;
@@ -10329,7 +10335,25 @@ export default function App({
         ? remoteSessionState(entry, snapshot, project)
         : entry);
     });
+    if (finished)
+      window.setTimeout(() => {
+        const session = sessionsRef.current.find((entry) => entry.id === shellId);
+        if (session)
+          void announceSessionFinished(
+            session,
+            shellId === activeSessionIdRef.current,
+          );
+      }, 0);
   }, []);
+  const markRemoteBusy = useCallback((shellId: string) => {
+    setSessions((current) => current.map((entry) =>
+      entry.id === shellId && !entry.busy ? { ...entry, busy: true } : entry));
+  }, []);
+  useRemoteTurnUpdates(sessions, {
+    onBusy: markRemoteBusy,
+    onSnapshot: onRemoteSnapshot,
+    known: (shellId) => lastRemoteSnapshot.current.get(shellId),
+  });
 
   const sessionPaneProps = {
     recents,

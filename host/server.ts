@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
+import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
@@ -42,20 +43,35 @@ import {
 import { WorkspaceCommands } from "./workspace-commands";
 import { discoverCodexModels } from "../src/integrations/harness/providers/codex/codexCatalog";
 import { discoverClaudeModels } from "../src/integrations/harness/providers/claude/claudeCatalog";
+import {
+  resolveClaudeBinary,
+  resolveCodexBinary,
+} from "../src/integrations/harness/core/child";
+import { MAX_WAIT_MS } from "./changes";
+import { isLoopback } from "./listener";
+import { version as hostVersion } from "../package.json";
 
 const exec = promisify(execFile);
+// Providers also add models server-side, without a CLI update.
+const CATALOG_MAX_AGE_MS = 5 * 60_000;
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
+// Requests without a device credential can only redeem a pairing code.
+const MAX_PAIRING_BODY = 4 * 1024;
+// Pairing codes carry 256 bits, so this limit is not what protects them. It
+// keeps an unauthenticated caller from spending the host's time and disk.
+const MAX_PAIRING_FAILURES_PER_MINUTE = 30;
 
 async function body(
   request: IncomingMessage,
+  limit = MAX_BODY,
 ): Promise<Record<string, unknown>> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new Error("Request is too large");
+    if (size > limit) throw new Error("Request is too large");
     chunks.push(chunk);
   }
   const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -64,23 +80,104 @@ async function body(
   return value as Record<string, unknown>;
 }
 
+/** Identifies each installed provider CLI. An update changes its real path or
+ * modification time, which invalidates the catalog the old version reported. */
+async function providerBinaries(providers: RemoteProvider[]): Promise<string> {
+  const binaries = await Promise.all(
+    providers.map(async (provider) => {
+      try {
+        const { path } = await (provider === "codex"
+          ? resolveCodexBinary()
+          : resolveClaudeBinary());
+        const file = await realpath(path);
+        return `${file}:${(await stat(file)).mtimeMs}`;
+      } catch {
+        return "";
+      }
+    }),
+  );
+  return binaries.join("\n");
+}
+
+export type HostServerOptions = {
+  /** Network addresses advertised to paired desktops. */
+  endpoints?: () => string[];
+};
+
 export function createHostServer(
   engine: HostEngine,
   providers: RemoteProvider[],
   lifecycle?: (request: IncomingMessage, response: ServerResponse) => void,
+  options: HostServerOptions = {},
 ) {
-  const catalogs = new Map<string, Promise<HostModelCatalog>>();
+  let pairingFailures: number[] = [];
+  const pair = async (request: IncomingMessage, response: ServerResponse) => {
+    const now = Date.now();
+    pairingFailures = pairingFailures.filter((time) => now - time < 60_000);
+    if (pairingFailures.length >= MAX_PAIRING_FAILURES_PER_MINUTE) {
+      response.writeHead(429).end(
+        JSON.stringify({ error: "Too many pairing attempts. Wait a minute and try again." }),
+      );
+      return;
+    }
+    const input = await body(request, MAX_PAIRING_BODY);
+    const params =
+      input.params && typeof input.params === "object"
+        ? (input.params as Record<string, unknown>)
+        : {};
+    const name =
+      typeof params.name === "string" && params.name.trim()
+        ? params.name.trim().slice(0, 100)
+        : "Desktop";
+    const device =
+      input.version === HOST_PROTOCOL_VERSION &&
+      input.method === "pair.exchange" &&
+      typeof params.code === "string" &&
+      /^[\w-]{43}$/.test(params.code)
+        ? engine.store.redeemPairing(params.code, name)
+        : undefined;
+    if (!device) {
+      pairingFailures.push(now);
+      response.writeHead(401).end(
+        JSON.stringify({
+          error:
+            "This pairing link is invalid, expired, or already used. Run connect on the machine again for a new link.",
+        }),
+      );
+      return;
+    }
+    response.end(
+      JSON.stringify({
+        result: {
+          deviceId: device.id,
+          token: device.token,
+          environmentId: engine.store.environmentId,
+          name: hostname(),
+        },
+      }),
+    );
+  };
+  const catalogs = new Map<
+    string,
+    { binaries: string; probed: number; catalog: Promise<HostModelCatalog> }
+  >();
   const transfers = new SyncTransfers();
   const workspace = new WorkspaceCommands(
     engine.store,
-    (projectId, action) => engine.withIdleProject(projectId, action),
+    (projectId, action, force) => engine.withIdleProject(projectId, action, force),
   );
-  const models = (projectId?: unknown) => {
+  const models = async (projectId?: unknown) => {
     const cwd =
       typeof projectId === "string"
         ? engine.store.project(projectId).cwd
         : homedir();
-    let catalog = catalogs.get(cwd);
+    const binaries = await providerBinaries(providers);
+    const cached = catalogs.get(cwd);
+    let catalog =
+      cached?.binaries === binaries &&
+      Date.now() - cached.probed < CATALOG_MAX_AGE_MS
+        ? cached.catalog
+        : undefined;
     if (!catalog) {
       catalog = (async () => {
         const result: HostModelCatalog = { models: {}, errors: {} };
@@ -102,17 +199,17 @@ export function createHostServer(
         (result) => {
           if (
             Object.keys(result.errors).length &&
-            catalogs.get(cwd) === catalog
+            catalogs.get(cwd)?.catalog === catalog
           )
             catalogs.delete(cwd);
           return result;
         },
         (error) => {
-          if (catalogs.get(cwd) === catalog) catalogs.delete(cwd);
+          if (catalogs.get(cwd)?.catalog === catalog) catalogs.delete(cwd);
           throw error;
         },
       );
-      catalogs.set(cwd, catalog);
+      catalogs.set(cwd, { binaries, probed: Date.now(), catalog });
     }
     return catalog;
   };
@@ -120,7 +217,8 @@ export function createHostServer(
     { requestTimeout: 20_000, headersTimeout: 10_000, maxHeaderSize: 8192 },
     async (request, response) => {
       if (request.url === "/lifecycle" && lifecycle) {
-        lifecycle(request, response);
+        if (isLoopback(request.socket.remoteAddress)) lifecycle(request, response);
+        else response.writeHead(403).end();
         return;
       }
       response.setHeader("Content-Type", "application/json");
@@ -141,7 +239,11 @@ export function createHostServer(
             );
           return;
         }
-        const token = request.headers.authorization?.match(
+        if (!request.headers.authorization) {
+          await pair(request, response);
+          return;
+        }
+        const token = request.headers.authorization.match(
           /^Bearer ([A-Za-z0-9_-]{43})$/,
         )?.[1];
         if (!token || !engine.store.authenticated(token)) {
@@ -184,8 +286,11 @@ export function createHostServer(
               environmentId: engine.store.environmentId,
               name: hostname(),
               platform: process.platform,
+              hostVersion,
+              endpoints: options.endpoints?.() ?? [],
               providers,
               capabilities: [
+                "changes.wait",
                 "sessions",
                 "projects.browse",
                 "models.list",
@@ -318,6 +423,20 @@ export function createHostServer(
             result = value.revision === params.revision ? null : value;
             break;
           }
+          case "changes.wait": {
+            // A desktop that leaves stops waiting at once.
+            const left = new AbortController();
+            response.once("close", () => left.abort());
+            result = await engine.store.changes.wait(
+              params.boot,
+              params.after,
+              Number.isSafeInteger(params.timeoutMs)
+                ? Number(params.timeoutMs)
+                : MAX_WAIT_MS,
+              left.signal,
+            );
+            break;
+          }
           case "events.read": {
             if (!Number.isSafeInteger(params.after) || Number(params.after) < 0)
               throw new Error("Invalid event cursor");
@@ -379,8 +498,10 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
-            result = await engine.withIdleProject(project.id, () =>
-              switchHostBranch(cwd, params.branch, params.remote),
+            result = await engine.withIdleProject(
+              project.id,
+              () => switchHostBranch(cwd, params.branch, params.remote),
+              params.force === true,
             );
             break;
           }
@@ -389,8 +510,10 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
-            result = await engine.withIdleProject(project.id, () =>
-              createHostBranch(cwd, params.branch),
+            result = await engine.withIdleProject(
+              project.id,
+              () => createHostBranch(cwd, params.branch),
+              params.force === true,
             );
             break;
           }

@@ -157,11 +157,11 @@ jobs:
           name: windows-packages
           path: target/release/bundle/nsis
 
-      - name: Download host packages
+      - name: Download the host npm package
         uses: actions/download-artifact@v4
         with:
-          name: host-packages
-          path: build/host-packages
+          name: host-npm
+          path: build
 
       - name: Upload to R2
         env:
@@ -326,10 +326,20 @@ jobs:
             "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig" \
             "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig" \
             "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" \
-            build/host-packages/*.tar.gz build/host-packages/*.zip build/host-packages/*.sha256
+            build/monocode-host-*.tgz
+
+      # Desktops run `npx monocode-host@<version> connect` on hosts, so
+      # publish the matching package. Skipped when no npm token is set.
+      - name: Publish monocode-host to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: env.NPM_TOKEN != ''
+        run: |
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" npm publish build/monocode-host-*.tgz --access public
 
   host:
-    name: Standalone host packages
+    name: Host npm package
     strategy:
       fail-fast: false
       matrix:
@@ -343,18 +353,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:host
-      - run: npm run host:package -- --all
-        if: runner.os == 'Linux'
-      - run: npm run host:package
-        if: runner.os != 'Linux'
+      - run: npm run host:npm
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
-          name: host-packages
-          path: |
-            build/host-packages/*.tar.gz
-            build/host-packages/*.zip
-            build/host-packages/*.sha256
+          name: host-npm
+          path: build/monocode-host-*.tgz
           if-no-files-found: error
 
   linux:

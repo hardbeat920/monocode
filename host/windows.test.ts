@@ -14,6 +14,7 @@ import {
   powershell,
   powershellArgs,
   powershellEnvironment,
+  powershellErrorText,
   psQuote,
   protectWindowsDirectory,
   runPowerShell,
@@ -83,6 +84,17 @@ it("uses an unlimited, unelevated per-user task and preserves literal paths", ()
   ).toBe("$x = '日本語'");
 });
 
+it("keeps only the text of a PowerShell error written as CLIXML", () => {
+  const privilege =
+    "The process does not possess the 'SeSecurityPrivilege' privilege which is required for this operation.";
+  expect(
+    powershellErrorText(
+      `#< CLIXML\r\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"><TN RefId="0"><T>System.Management.Automation.PSCustomObject</T></TN><MS><PR N="Record"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>${privilege}\r\n`,
+    ),
+  ).toBe(privilege);
+  expect(powershellErrorText("Access denied.\r\n")).toBe("Access denied.");
+});
+
 it.skipIf(process.platform !== "win32")(
   "protects Windows credentials and reuses only this user's unlimited task",
   async () => {
@@ -147,13 +159,12 @@ try {
 );
 
 it.skipIf(process.platform !== "win32")(
-  "parses the Windows bootstrap with Windows PowerShell",
+  "parses the Windows connect script with Windows PowerShell",
   () => {
-    const script = readFileSync("src-tauri/src/remote_bootstrap.ps1", "utf8")
-      .replace("@@VERSION@@", "'test'")
-      .replace("@@RELEASE@@", "'https://example.invalid'")
-      .replace("@@ACL@@", readFileSync("host/windows-acl.ps1", "utf8"));
-    const file = join(temporary(), "bootstrap.ps1");
+    const script = readFileSync("src-tauri/src/remote_connect.ps1", "utf8")
+      .replace("@@PACKAGE@@", "'monocode-host@1.0.0'")
+      .replace("@@FLAGS@@", " --yes");
+    const file = join(temporary(), "connect.ps1");
     writeFileSync(file, script);
     const result = execFileSync(
       powershell(),

@@ -48,10 +48,10 @@ it("describes a Claude model from built-in metadata when the host cannot", () =>
     "claude:opus-5-5",
   );
   expect(controls.fallback).toBe("no-catalog");
+  // Opus 5.5 runs at 1M from its bare id, so there is no Context choice.
   expect(controls.settings.map((setting) => setting.id)).toEqual([
     "effort",
     "fast",
-    "context",
   ]);
 });
 

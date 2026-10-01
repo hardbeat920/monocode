@@ -11,10 +11,12 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
+import { listHostSkills } from "./skills";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -76,6 +78,7 @@ export const WORKSPACE_COMMANDS = [
   "git_stash",
   "git_worktrees",
   "search_project",
+  "list_skills",
 ] as const;
 export type WorkspaceCommand = (typeof WORKSPACE_COMMANDS)[number];
 
@@ -105,7 +108,11 @@ export class WorkspaceCommands {
 
   constructor(
     private readonly store: HostStore,
-    private readonly withIdleProject: <T>(projectId: string, action: () => Promise<T>) => Promise<T>,
+    private readonly withIdleProject: <T>(
+      projectId: string,
+      action: () => Promise<T>,
+      force?: boolean,
+    ) => Promise<T>,
   ) {}
 
   run(command: unknown, args: unknown): Promise<unknown> {
@@ -191,10 +198,12 @@ export class WorkspaceCommands {
         return this.gitRangeContext(input.cwd);
       case "git_branches":
         return this.gitBranches(input.cwd);
+      case "list_skills":
+        return this.listSkills(input.cwd, input.disabledPaths);
       case "git_checkout":
-        return this.gitCheckout(input.cwd, input.name, input.remote);
+        return this.gitCheckout(input.cwd, input.name, input.remote, input.force === true);
       case "git_create_branch":
-        return this.gitCreateBranch(input.cwd, input.name);
+        return this.gitCreateBranch(input.cwd, input.name, input.force === true);
       case "git_stash":
         return this.gitStash(input.cwd, input.message);
       case "git_worktrees":
@@ -448,6 +457,19 @@ export class WorkspaceCommands {
     return joined(destParent as string, name);
   }
 
+  /** The skills this machine's agents see in a project, as `list_skills`
+   * lists this computer's for a local one. */
+  private async listSkills(cwd: unknown, disabledPaths: unknown) {
+    const { path } = await this.existing(cwd, true);
+    const disabled = Array.isArray(disabledPaths)
+      ? disabledPaths.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return listHostSkills(path, homedir(), disabled).map((skill) => ({
+      ...skill,
+      path: slashed(skill.path),
+    }));
+  }
+
   private async gitRoot(input: unknown): Promise<string> {
     const { path } = await this.existing(input, true);
     if (!(await stat(path)).isDirectory()) throw new Error("Not a working copy");
@@ -666,24 +688,24 @@ export class WorkspaceCommands {
       ] };
   }
 
-  private async gitCheckout(cwd: unknown, name: unknown, remote: unknown) {
+  private async gitCheckout(cwd: unknown, name: unknown, remote: unknown, force: boolean) {
     const root = await this.gitRoot(cwd);
-    const state = await this.withIdleGitProject(root, () => switchHostBranch(root, name, remote));
+    const state = await this.withIdleGitProject(root, () => switchHostBranch(root, name, remote), force);
     return state.current ?? "HEAD";
   }
 
-  private async gitCreateBranch(cwd: unknown, name: unknown) {
+  private async gitCreateBranch(cwd: unknown, name: unknown, force: boolean) {
     const root = await this.gitRoot(cwd);
-    const state = await this.withIdleGitProject(root, () => createHostBranch(root, name));
+    const state = await this.withIdleGitProject(root, () => createHostBranch(root, name), force);
     return state.current ?? "HEAD";
   }
 
-  private async withIdleGitProject<T>(cwd: string, action: () => Promise<T>): Promise<T> {
+  private async withIdleGitProject<T>(cwd: string, action: () => Promise<T>, force = false): Promise<T> {
     const { root } = await this.locate(cwd);
     const project = this.store.projects().find((candidate) =>
       candidate.cwd === root || this.roots.get(candidate.cwd)?.roots.includes(root));
     if (!project) throw new Error("Project is unavailable");
-    return this.withIdleProject(project.id, action);
+    return this.withIdleProject(project.id, action, force);
   }
 
   private async gitStash(cwd: unknown, message: unknown) {

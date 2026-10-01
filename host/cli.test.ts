@@ -37,7 +37,7 @@ it(
       // A stale legacy PID now belongs to this unrelated test process.
       writeFileSync(join(directory, "owner.lock"), String(process.pid));
       expect((await run("start")).stdout).toContain("Host started");
-      expect((await run("status")).stdout).toContain("Host is running");
+      expect((await run("status")).stdout).toMatch(/Host [\d.]+ is running/);
       await expect(run("serve")).rejects.toThrow("A host already owns");
       const before = JSON.parse((await run("connection-info")).stdout);
       // Connecting to an existing host must not install a service or restart it.

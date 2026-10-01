@@ -396,20 +396,42 @@ export function gitBranches(cwd: string): Promise<GitBranches> {
   return invoke<GitBranches>("git_branches", { cwd });
 }
 
+/** `force` switches even while sessions are running, after the user agreed
+ * to it; only a connected machine refuses without it. */
 export function gitCheckout(
   cwd: string,
   name: string,
   remote?: string | null,
+  force = false,
 ): Promise<string> {
-  return invoke<string>("git_checkout", { cwd, name, remote: remote ?? null });
+  return invoke<string>("git_checkout", {
+    cwd,
+    name,
+    remote: remote ?? null,
+    ...(force ? { force } : {}),
+  });
 }
 
-export function gitCreateBranch(cwd: string, name: string): Promise<string> {
-  return invoke<string>("git_create_branch", { cwd, name });
+export function gitCreateBranch(
+  cwd: string,
+  name: string,
+  force = false,
+): Promise<string> {
+  return invoke<string>("git_create_branch", {
+    cwd,
+    name,
+    ...(force ? { force } : {}),
+  });
 }
 
 export function gitStash(cwd: string, message?: string): Promise<void> {
   return invoke<void>("git_stash", { cwd, message: message ?? null });
+}
+
+/** A connected machine refused a branch change because sessions are running
+ * there (see `runningSessionsMessage` in host/engine.ts). */
+export function isSwitchBlockedByRunningSessions(message: string): boolean {
+  return message.toLowerCase().includes("switching branches changes the files");
 }
 
 /** Git refused a checkout because the working tree would be overwritten. */

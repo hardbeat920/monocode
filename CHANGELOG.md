@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MonoCode Connect: run `npx monocode-host connect` on a Windows, Linux, or macOS machine to install the remote host as a login service and print a one-time pairing link. Paste it in Settings → Connections → Add machine. The desktop reaches the host directly over TLS with a pinned certificate, on the LAN or a tailnet, and falls back to an SSH forward for machines set up over SSH.
+- Remote sessions and session lists update as soon as the host writes them. The desktop holds one `changes.wait` request per machine instead of polling each session every 0.75 s.
+
+### Changed
+
+- SSH setup runs the same `connect` command through npx, so it no longer needs host archives on the GitHub release. The host machine needs Node.js 22.13 or newer.
+
+### Removed
+
+- The standalone host archives with a bundled Node runtime, the release-download bootstrap scripts, and pairing by host URL and device token. The `monocode-host` npm package replaces them.
+
 - Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
 
 ## [0.4.3] - 2026-09-28

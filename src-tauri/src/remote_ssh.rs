@@ -388,36 +388,40 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-pub fn bootstrap_script(platform: HostPlatform) -> String {
-    let version = env!("CARGO_PKG_VERSION");
-    let url = format!("https://github.com/hardbeat920/monocode/releases/download/v{version}");
-    match platform {
-        HostPlatform::Unix => include_str!("remote_bootstrap.sh")
-            .replace("@@VERSION@@", &shell_quote(version))
-            .replace("@@RELEASE@@", &shell_quote(&url)),
-        HostPlatform::Windows => include_str!("remote_bootstrap.ps1")
-            .replace("@@VERSION@@", &powershell_quote(version))
-            .replace("@@RELEASE@@", &powershell_quote(&url))
-            .replace("@@ACL@@", include_str!("../../host/windows-acl.ps1")),
+/// The npm package the desktop installs on hosts: the release matching this
+/// desktop. `MONOCODE_HOST_PACKAGE` overrides it for development, such as a
+/// tarball path on the host or a tarball URL.
+pub fn host_package() -> Result<String, String> {
+    let package = std::env::var("MONOCODE_HOST_PACKAGE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("monocode-host@{}", env!("CARGO_PKG_VERSION")));
+    // Passed through sh, PowerShell, and cmd.exe; keep it to characters that
+    // none of them interpret.
+    if package.is_empty()
+        || package.len() > 1024
+        || !package
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@._-/:+~\\".contains(&b))
+    {
+        return Err("MONOCODE_HOST_PACKAGE contains unsupported characters".into());
     }
+    Ok(package)
 }
 
-pub fn upgrade_script(platform: HostPlatform, port: u16) -> String {
-    let script = bootstrap_script(platform);
+/// Runs `monocode-host connect --json` on the host through npx. The host
+/// installs or reuses its background service and prints one JSON line with
+/// a pairing link. `upgrade` restarts an older host even with running turns;
+/// the desktop asks the user before setting it.
+pub fn connect_script(platform: HostPlatform, package: &str, upgrade: bool) -> String {
+    let flags = if upgrade { " --yes" } else { "" };
     match platform {
-        HostPlatform::Unix => {
-            format!("MONOCODE_HOST_FORCE_UPGRADE=1\nMONOCODE_HOST_PORT={port}\n{script}")
-        }
-        HostPlatform::Windows => format!(
-            "$env:MONOCODE_HOST_FORCE_UPGRADE = '1'\n$env:MONOCODE_HOST_PORT = '{port}'\n{script}"
-        ),
-    }
-}
-
-pub fn pairing_script(platform: HostPlatform, name: &str) -> String {
-    match platform {
-        HostPlatform::Unix => format!("set -eu\n\"$HOME/.monocode-host/bin/monocode-host\" pair --name {} --json\n", shell_quote(name)),
-        HostPlatform::Windows => format!("$ErrorActionPreference = 'Stop'\n$base = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.monocode-host'\n$runtime = [IO.File]::ReadAllText((Join-Path $base 'runtime-path')).Trim()\n& (Join-Path $runtime 'node.exe') (Join-Path $runtime 'host.mjs') pair --name {} --json\nif ($LASTEXITCODE -ne 0) {{ throw 'Host pairing failed.' }}\n", powershell_quote(name)),
+        HostPlatform::Unix => include_str!("remote_connect.sh")
+            .replace("@@PACKAGE@@", &shell_quote(package))
+            .replace("@@FLAGS@@", flags),
+        HostPlatform::Windows => include_str!("remote_connect.ps1")
+            .replace("@@PACKAGE@@", &powershell_quote(package))
+            .replace("@@FLAGS@@", flags),
     }
 }
 
@@ -779,18 +783,21 @@ mod tests {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
     #[test]
-    fn bootstrap_is_versioned_and_only_explicit_upgrade_restarts_the_host() {
-        let script = bootstrap_script(HostPlatform::Unix);
-        assert!(!script.contains("@@"));
-        assert!(script.contains("--proto '=https'"));
-        assert!(script.contains("checksum mismatch"));
-        assert!(script.contains("\"$FORCE_UPGRADE\" = 1"));
-        assert!(script.contains("service uninstall"));
+    fn connect_runs_the_matching_host_package_and_upgrades_only_when_asked() {
+        let package = host_package().unwrap();
         assert!(
-            upgrade_script(HostPlatform::Unix, 3774).starts_with("MONOCODE_HOST_FORCE_UPGRADE=1")
+            package.starts_with("monocode-host@") || std::env::var("MONOCODE_HOST_PACKAGE").is_ok()
         );
-        assert!(upgrade_script(HostPlatform::Windows, 3774)
-            .starts_with("$env:MONOCODE_HOST_FORCE_UPGRADE = '1'"));
+        let unix = connect_script(HostPlatform::Unix, "monocode-host@1.2.3", false);
+        assert!(!unix.contains("@@"));
+        assert!(unix.contains("PACKAGE='monocode-host@1.2.3'"));
+        assert!(unix.contains("--package \"$PACKAGE\" monocode-host connect --json <"));
+        assert!(!unix.contains("--json --yes"));
+        assert!(connect_script(HostPlatform::Unix, "p", true).contains("connect --json --yes"));
+        let windows = connect_script(HostPlatform::Windows, "monocode-host@1.2.3", true);
+        assert!(!windows.contains("@@"));
+        assert!(windows.contains("$package = 'monocode-host@1.2.3'"));
+        assert!(windows.contains("connect --json --yes"));
     }
     #[test]
     fn remote_platform_probe_handles_cmd_powershell_and_unix() {
@@ -808,11 +815,7 @@ mod tests {
         );
         assert!(parse_platform("unrecognized shell").is_err());
         assert!(powershell_reader().len() < 4096);
-        let script = bootstrap_script(HostPlatform::Windows);
-        assert!(!script.contains("@@"));
-        assert!(script.contains("checksum mismatch"));
-        assert!(script.contains("Protect-MonoCodeDirectory"));
-        assert!(pairing_script(HostPlatform::Windows, "Nick's $PC").contains("'Nick''s $PC'"));
+        assert_eq!(powershell_quote("Nick's $PC"), "'Nick''s $PC'");
     }
     #[cfg(windows)]
     #[test]

@@ -40,7 +40,7 @@ Windows (x86_64): download the NSIS installer from [GitHub Releases](https://git
 
 ## Some notes
 
-Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. See [remote access setup and current limitations](docs/remote-access.md).
+Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. Run `npx monocode-host connect` on that machine, then paste the pairing link it prints in Settings → Connections. See [remote access setup and current limitations](docs/remote-access.md).
 
 This is very early and you should expect bugs.
 

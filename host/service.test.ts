@@ -50,7 +50,7 @@ it.skipIf(process.platform === "win32").each(["darwin", "linux"] as const)(
         run: async (command, args) => {
           calls.push([command, ...args]);
           // A service that is not loaded must not block cleanup.
-          if (args.includes("bootout") || args.includes("disable"))
+          if (["bootout", "disable", "print"].some((arg) => args.includes(arg)))
             throw new Error("not loaded");
         },
       });
@@ -68,6 +68,30 @@ it.skipIf(process.platform === "win32").each(["darwin", "linux"] as const)(
         ]);
         expect(notes.join("\n")).toContain("loginctl disable-linger");
       }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "waits for launchd to finish removing the host before returning",
+  async () => {
+    const home = mkdtempSync(join(tmpdir(), "monocode-service-test-"));
+    try {
+      // `bootout` returns while launchd still lists the stopping host.
+      let listed = 2;
+      const calls: string[] = [];
+      await uninstallService({
+        platform: "darwin",
+        home,
+        run: async (_command, args) => {
+          calls.push(args[0]);
+          if (args[0] === "print" && listed-- <= 0)
+            throw new Error("Could not find service");
+        },
+      });
+      expect(calls).toEqual(["bootout", "print", "print", "print"]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
