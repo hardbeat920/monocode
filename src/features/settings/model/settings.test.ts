@@ -637,6 +637,7 @@ describe("settings search", () => {
     expect(searchSettings("glass").map((result) => result.label)).toEqual([
       "Main pane glass",
       "Blur radius",
+      "Main pane opacity",
       "Sidebar opacity",
       "Appearance",
     ]);

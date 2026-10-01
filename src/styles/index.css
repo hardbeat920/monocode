@@ -81,6 +81,7 @@
   --theme-saturation: 0%;
   --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
+  --main-opacity: 0.85;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
   --selection-subtle-strength: 8%;
@@ -1231,6 +1232,16 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
 }
 
 html.has-native-glass.glass-body:not(.theme-light) .body-glass {
+  background: color-mix(
+    in srgb,
+    var(--color-background-base) calc(var(--main-opacity) * 100%),
+    transparent
+  );
+}
+
+/* The session sidebar keeps the main pane's opaque look, but its glass follows
+   the sidebar setting and does not depend on the main pane glass toggle. */
+html.has-native-glass:not(.theme-light) .body-glass.sidebar-pane {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),

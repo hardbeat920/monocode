@@ -271,7 +271,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "sidebar-opacity",
     section: "appearance",
     label: "Sidebar opacity",
-    keywords: "glass translucent transparency vibrancy",
+    keywords: "glass translucent transparency vibrancy rail",
   },
   {
     id: "blur",
@@ -284,6 +284,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "appearance",
     label: "Main pane glass",
     keywords: "translucent transparency body window",
+  },
+  {
+    id: "main-pane-opacity",
+    section: "appearance",
+    label: "Main pane opacity",
+    keywords: "glass translucent transparency body window",
   },
   {
     id: "interface-scale",

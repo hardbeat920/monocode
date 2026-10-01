@@ -13,6 +13,7 @@ const THEME_HUE_KEY = "monocode.themeHue";
 const THEME_SATURATION_KEY = "monocode.themeSaturation";
 const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
 const OPACITY_KEY = "monocode.sidebarOpacity";
+const MAIN_OPACITY_KEY = "monocode.mainOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
 const SESSION_SIDEBAR_OPEN_KEY = "monocode.sessionSidebarOpen";
@@ -126,6 +127,10 @@ export const THEME_DARK_LIGHTNESS_DEFAULT = 9;
 export const SIDEBAR_OPACITY_MIN = 0.15;
 export const SIDEBAR_OPACITY_MAX = 1;
 export const SIDEBAR_OPACITY_DEFAULT = 0.85;
+
+export const MAIN_OPACITY_MIN = 0.15;
+export const MAIN_OPACITY_MAX = 1;
+export const MAIN_OPACITY_DEFAULT = 0.85;
 
 export const SIDEBAR_BLUR_MIN = 1;
 export const SIDEBAR_BLUR_MAX = 64;
@@ -306,6 +311,7 @@ export function initAppearance() {
   applyThemePreference(loadThemePreference());
   watchSystemColorScheme();
   applySidebarOpacity(loadSidebarOpacity());
+  applyMainOpacity(loadMainOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
   applyChatBackground(loadChatBackgroundPath());
@@ -465,6 +471,30 @@ export function saveSidebarOpacity(value: number) {
 export function applySidebarOpacity(value: number) {
   const next = clamp(value, SIDEBAR_OPACITY_MIN, SIDEBAR_OPACITY_MAX);
   document.documentElement.style.setProperty("--sidebar-opacity", String(next));
+  return next;
+}
+
+/** Before this had its own key, the main pane followed the sidebar value. */
+export function loadMainOpacity(): number {
+  return clamp(
+    readNumber(MAIN_OPACITY_KEY) ??
+      readNumber(OPACITY_KEY) ??
+      MAIN_OPACITY_DEFAULT,
+    MAIN_OPACITY_MIN,
+    MAIN_OPACITY_MAX,
+  );
+}
+
+export function saveMainOpacity(value: number) {
+  writeNumber(
+    MAIN_OPACITY_KEY,
+    clamp(value, MAIN_OPACITY_MIN, MAIN_OPACITY_MAX),
+  );
+}
+
+export function applyMainOpacity(value: number) {
+  const next = clamp(value, MAIN_OPACITY_MIN, MAIN_OPACITY_MAX);
+  document.documentElement.style.setProperty("--main-opacity", String(next));
   return next;
 }
 
