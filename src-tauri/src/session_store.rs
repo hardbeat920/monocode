@@ -967,7 +967,9 @@ fn ensure_orchestration_history(conn: &Connection) -> rusqlite::Result<()> {
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS orchestration_runs (lead_id TEXT PRIMARY KEY, state TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS orchestration_sidebar (lead_id TEXT PRIMARY KEY, summary TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);",
+         CREATE TABLE IF NOT EXISTS orchestration_workers (session_id TEXT PRIMARY KEY, lead_id TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS session_links (child_id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, state TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS session_links_parent_idx ON session_links(parent_id);",
     )?;
     if !indexed {
         // One-time compatibility pass for the preview that listed workers as
@@ -1053,6 +1055,57 @@ pub(crate) fn save_orchestration(
     tx.execute("INSERT INTO orchestration_runs(lead_id, state) VALUES (?1, ?2) ON CONFLICT(lead_id) DO UPDATE SET state = excluded.state", params![lead, run.to_string()])?;
     index_orchestration(&tx, lead, run)?;
     tx.commit()
+}
+
+const SESSION_LINK_STATE_LIMIT: usize = 1_000_000;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionLinkRow {
+    pub child_id: String,
+    pub parent_id: String,
+    pub state: String,
+}
+
+pub(crate) fn parse_session_link_state(state: &str) -> Result<Value, String> {
+    if state.len() > SESSION_LINK_STATE_LIMIT {
+        return Err(format!(
+            "Session link state is too large: {} bytes, limit {SESSION_LINK_STATE_LIMIT}",
+            state.len()
+        ));
+    }
+    serde_json::from_str(state).map_err(|_| "Invalid session link state".into())
+}
+
+pub(crate) fn save_session_link(
+    conn: &Connection,
+    child: &str,
+    parent: &str,
+    state: &Value,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO session_links(child_id, parent_id, state) VALUES (?1, ?2, ?3)
+         ON CONFLICT(child_id) DO UPDATE SET parent_id = excluded.parent_id, state = excluded.state",
+        params![child, parent, state.to_string()],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn load_session_links(conn: &Connection) -> rusqlite::Result<Vec<SessionLinkRow>> {
+    conn.prepare("SELECT child_id, parent_id, state FROM session_links")?
+        .query_map([], |row| {
+            Ok(SessionLinkRow {
+                child_id: row.get(0)?,
+                parent_id: row.get(1)?,
+                state: row.get(2)?,
+            })
+        })?
+        .collect()
+}
+
+pub(crate) fn remove_session_link(conn: &Connection, child: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM session_links WHERE child_id = ?1", [child])?;
+    Ok(())
 }
 
 fn worker_parent(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
@@ -1799,6 +1852,12 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
         "DELETE FROM orchestration_workers WHERE session_id = ?1 OR lead_id = ?1",
         [session_id],
     )?;
+    // A child's own row stays: the app reports its removal to the parent and
+    // deletes that row itself.
+    tx.execute(
+        "DELETE FROM session_links WHERE parent_id = ?1",
+        [session_id],
+    )?;
     tx.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
     tx.commit()
 }
@@ -2123,6 +2182,105 @@ mod tests {
         // A later run replaces the card's agents without resurfacing old chats.
         save_orchestration(&conn, "lead", &json!({"status": "active", "tasks": []})).unwrap();
         assert_eq!(list_by_project(&conn, "/tmp/a").unwrap().len(), 2);
+    }
+
+    fn session_link_states(conn: &Connection) -> Vec<(String, String, Value)> {
+        let mut rows: Vec<_> = load_session_links(conn)
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let state = serde_json::from_str(&row.state).unwrap();
+                (row.child_id, row.parent_id, state)
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    }
+
+    #[test]
+    fn session_link_round_trips_and_a_second_save_replaces_it() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        save_session_link(&conn, "child", "parent", &json!({"status": "running"})).unwrap();
+        assert_eq!(
+            session_link_states(&conn),
+            vec![(
+                "child".into(),
+                "parent".into(),
+                json!({"status": "running"})
+            )]
+        );
+        save_session_link(&conn, "child", "parent", &json!({"status": "completed"})).unwrap();
+        assert_eq!(
+            session_link_states(&conn),
+            vec![(
+                "child".into(),
+                "parent".into(),
+                json!({"status": "completed"})
+            )]
+        );
+        remove_session_link(&conn, "child").unwrap();
+        assert!(load_session_links(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_parent_drops_its_session_links_and_keeps_others() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("parent", "/tmp/a", "Parent")).unwrap();
+        save_session_link(&conn, "child-a", "parent", &json!({})).unwrap();
+        save_session_link(&conn, "child-b", "parent", &json!({})).unwrap();
+        save_session_link(&conn, "child-c", "other", &json!({})).unwrap();
+        delete_session(&conn, "parent").unwrap();
+        let children: Vec<_> = session_link_states(&conn)
+            .into_iter()
+            .map(|(child, _, _)| child)
+            .collect();
+        assert_eq!(children, vec!["child-c".to_string()]);
+    }
+
+    #[test]
+    fn deleting_a_child_keeps_its_session_link_for_the_removed_update() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("child", "/tmp/a", "Child")).unwrap();
+        save_session_link(&conn, "child", "parent", &json!({"status": "running"})).unwrap();
+        delete_session(&conn, "child").unwrap();
+        assert_eq!(
+            session_link_states(&conn),
+            vec![(
+                "child".into(),
+                "parent".into(),
+                json!({"status": "running"})
+            )]
+        );
+    }
+
+    #[test]
+    fn session_link_table_creation_is_idempotent() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        save_session_link(&conn, "child", "parent", &json!({"n": 1})).unwrap();
+        ensure_orchestration_history(&conn).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(session_link_states(&conn).len(), 1);
+    }
+
+    #[test]
+    fn session_link_state_is_limited_and_must_be_json() {
+        let limit = SESSION_LINK_STATE_LIMIT;
+        let at_limit = format!("\"{}\"", "a".repeat(limit - 2));
+        assert_eq!(at_limit.len(), limit);
+        assert!(parse_session_link_state(&at_limit).is_ok());
+        let over = format!("\"{}\"", "a".repeat(limit - 1));
+        assert_eq!(
+            parse_session_link_state(&over).unwrap_err(),
+            "Session link state is too large: 1000001 bytes, limit 1000000"
+        );
+        assert_eq!(
+            parse_session_link_state("{not json").unwrap_err(),
+            "Invalid session link state"
+        );
     }
 
     #[test]

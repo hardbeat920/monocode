@@ -546,6 +546,57 @@ pub fn control_load(
         .map_err(|e| e.to_string())
 }
 
+const SESSION_LINKS_CHANGED: &str = "monocode-session-links-changed";
+
+fn session_links_changed(app: &AppHandle, window: &WebviewWindow, child_id: &str) {
+    let _ = app.emit(
+        SESSION_LINKS_CHANGED,
+        json!({ "childId": child_id, "origin": window.label() }),
+    );
+}
+
+#[tauri::command]
+pub fn session_links_load(
+    store: State<'_, crate::session_store::SessionStore>,
+) -> Result<Vec<crate::session_store::SessionLinkRow>, String> {
+    let conn = store.lock_conn()?;
+    crate::session_store::load_session_links(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn session_link_save(
+    app: AppHandle,
+    window: WebviewWindow,
+    store: State<'_, crate::session_store::SessionStore>,
+    child_id: String,
+    parent_id: String,
+    state: String,
+) -> Result<(), String> {
+    let state = crate::session_store::parse_session_link_state(&state)?;
+    {
+        let conn = store.lock_conn()?;
+        crate::session_store::save_session_link(&conn, &child_id, &parent_id, &state)
+            .map_err(|e| e.to_string())?;
+    }
+    session_links_changed(&app, &window, &child_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn session_link_remove(
+    app: AppHandle,
+    window: WebviewWindow,
+    store: State<'_, crate::session_store::SessionStore>,
+    child_id: String,
+) -> Result<(), String> {
+    {
+        let conn = store.lock_conn()?;
+        crate::session_store::remove_session_link(&conn, &child_id).map_err(|e| e.to_string())?;
+    }
+    session_links_changed(&app, &window, &child_id);
+    Ok(())
+}
+
 fn resolve_scope(root: &Path, value: &str) -> Result<String, String> {
     let path = Path::new(value);
     if value.is_empty()
