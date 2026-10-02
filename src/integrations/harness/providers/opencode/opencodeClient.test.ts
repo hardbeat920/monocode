@@ -386,4 +386,39 @@ describe("OpenCodeClient v2", () => {
     expect(bodies.at(-2)).toBe(JSON.stringify({ answer: { confirm: false } }));
     expect(bodies.at(-1)).toBe(JSON.stringify({ answer: { confirm: true } }));
   });
+
+  it("leaves blank number fields unanswered and passes non-numbers through", async () => {
+    let receive: ((data: string) => void) | undefined;
+    mocks.watchSse.mockImplementation(
+      (_id: string, callback: (data: string) => void) => {
+        receive = callback;
+      },
+    );
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+    await client.subscribeEvents("thread", () => undefined);
+    const sendForm = (id: string) =>
+      receive?.(
+        JSON.stringify({
+          type: "form.created",
+          data: {
+            form: {
+              id,
+              sessionID: "ses_1",
+              fields: [
+                { key: "count", type: "integer" },
+                { key: "ratio", type: "number" },
+              ],
+            },
+          },
+        }),
+      );
+    sendForm("frm_1");
+    sendForm("frm_2");
+
+    await client.replyQuestion("frm_1", [[" 3 "], []]);
+    await client.replyQuestion("frm_2", [[""], ["~0.5"]]);
+    const bodies = mocks.harnessHttp.mock.calls.map(([input]) => input.body);
+    expect(bodies.at(-2)).toBe(JSON.stringify({ answer: { count: 3 } }));
+    expect(bodies.at(-1)).toBe(JSON.stringify({ answer: { ratio: "~0.5" } }));
+  });
 });

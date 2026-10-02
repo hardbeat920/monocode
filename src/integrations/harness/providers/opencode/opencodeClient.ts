@@ -337,25 +337,30 @@ export class OpenCodeClient {
     if (this.generation === "v2") {
       const form = this.forms.get(requestID);
       if (!form) throw new Error(`OpenCode form ${requestID} is not pending`);
-      const answer = Object.fromEntries(
-        form.fields.map((field, index) => {
-          const values = answers[index] ?? [];
-          const mapped = values.map(
-            (value) => field.optionValues.get(value) ?? value,
-          );
-          const value =
-            field.type === "multiselect"
-              ? mapped
-              : field.type === "boolean"
-                ? /^(yes|true)$/i.test((mapped[0] ?? "").trim())
-                : field.type === "number" || field.type === "integer"
-                  ? Number(mapped[0] ?? "")
-                  : mapped.length <= 1
-                    ? (mapped[0] ?? "")
-                    : mapped;
-          return [field.key, value];
-        }),
-      );
+      const answer: Record<string, unknown> = {};
+      form.fields.forEach((field, index) => {
+        const values = answers[index] ?? [];
+        const mapped = values.map(
+          (value) => field.optionValues.get(value) ?? value,
+        );
+        if (field.type === "number" || field.type === "integer") {
+          const text = (mapped[0] ?? "").trim();
+          // Blank stays unanswered so the server enforces `required`; text
+          // that is not a number goes through for the server to reject.
+          if (!text) return;
+          const number = Number(text);
+          answer[field.key] = Number.isFinite(number) ? number : text;
+          return;
+        }
+        answer[field.key] =
+          field.type === "multiselect"
+            ? mapped
+            : field.type === "boolean"
+              ? /^(yes|true)$/i.test((mapped[0] ?? "").trim())
+              : mapped.length <= 1
+                ? (mapped[0] ?? "")
+                : mapped;
+      });
       await this.request<unknown>(
         "POST",
         this.path(
