@@ -653,6 +653,7 @@ import {
   workspaceSnapshotKey,
 } from "../features/workspace/model/workspaceSnapshot";
 import type { InstalledUpdate } from "./model/updateNotice";
+import { createDiffOpenRequests } from "./model/diffOpenRequest";
 import {
   bindResumedSessions,
   closeBusyWindow,
@@ -3641,6 +3642,9 @@ function Workspace({
     [activeTabId, inboxAskPortal],
   );
 
+  const [requestDiffOpen] = useState(() =>
+    createDiffOpenRequests(resolveOpenablePath),
+  );
   const onOpenDiff = useCallback(
     (
       path?: string,
@@ -3692,15 +3696,10 @@ function Workspace({
       // Source control hands over exact paths from git. Only shortened paths
       // (a transcript link, a session file) need the project file index, and
       // waiting on it here held the click until the whole project was listed.
-      if (!path || exact) {
-        open(path);
-        return;
-      }
-      void resolveOpenablePath(diffCwd, path).then((resolved) =>
-        open(resolved ?? path),
-      );
+      // A lookup still pending when the next click lands is dropped.
+      requestDiffOpen(diffCwd, path, exact, open);
     },
-    [activeTabId],
+    [activeTabId, requestDiffOpen],
   );
 
   const onOpenWorkingTreeDiff = useCallback(
