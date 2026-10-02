@@ -376,9 +376,10 @@ import {
   applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
-  findOpenSessionTab,
   planWorkspaceTabClose,
   switchSessionInTab,
+  planBlankPaneReplacement,
+  planFocusOpenSession,
   workspaceTabCwd,
   workspaceTabWorktree,
   focusedWorkspaceTabCwd,
@@ -3829,54 +3830,33 @@ function Workspace({
   );
 
   const focusOpenSession = useCallback((sessionId: string) => {
-    const tab = findOpenSessionTab(
+    const plan = planFocusOpenSession(
       tabsRef.current,
       sessionsRef.current,
       sessionId,
     );
-    if (!tab) return false;
+    if (!plan) return false;
     loadedSessionCache.current.delete(sessionId);
-    setActiveTabId(tab.id);
+    setActiveTabId(plan.tabId);
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
+        entry.id === plan.tabId ? { ...entry, focusedId: sessionId } : entry,
       ),
     );
-    followProject(
-      focusedWorkspaceTabCwd(
-        { ...tab, focusedId: sessionId },
-        sessionsRef.current,
-      ),
-    );
+    followProject(plan.projectCwd);
     setComposerFocused(true);
     return true;
   }, [followProject]);
 
   const replaceBlankPaneWithSession = useCallback((session: Session) => {
-    const tab =
-      tabsRef.current.find((entry) => entry.id === activeTabIdRef.current) ??
-      tabsRef.current[0];
-    if (!tab) return false;
-
-    const paneId = isBlankSession(
-      sessionsRef.current.find((entry) => entry.id === tab.focusedId),
-    )
-      ? tab.focusedId
-      : leafIds(tab.layout).find((id) =>
-          isBlankSession(sessionsRef.current.find((entry) => entry.id === id)),
-        );
-    if (!paneId || paneId === session.id) return false;
-    // A blank pane belongs to its own project; a session from another one
-    // gets its own tab in that project instead.
-    const blankCwd = sessionsRef.current.find(
-      (entry) => entry.id === paneId,
-    )?.cwd;
-    if (
-      blankCwd &&
-      looksLikeProject(blankCwd) &&
-      !sameProjectPath(blankCwd, session.cwd)
-    )
-      return false;
+    const plan = planBlankPaneReplacement({
+      tabs: tabsRef.current,
+      sessions: sessionsRef.current,
+      activeTabId: activeTabIdRef.current,
+      session,
+    });
+    if (!plan) return false;
+    const { tabId, paneId } = plan;
 
     lastPersisted.current.delete(paneId);
     {
@@ -3891,7 +3871,7 @@ function Workspace({
     });
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id
+        entry.id === tabId
           ? {
               ...entry,
               layout: replaceLeafId(entry.layout, paneId, session.id),
@@ -3900,10 +3880,11 @@ function Workspace({
           : entry,
       ),
     );
-    setActiveTabId(tab.id);
+    setActiveTabId(tabId);
+    followProject(plan.projectCwd);
     setComposerFocused(true);
     return true;
-  }, []);
+  }, [followProject]);
 
   const invalidateLoadedSession = useCallback((sessionId: string) => {
     openingSessionIds.current.delete(sessionId);
@@ -4248,7 +4229,6 @@ function Workspace({
         return;
       }
       if (replaceBlankPaneWithSession(session)) {
-        followProject(session.cwd);
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
