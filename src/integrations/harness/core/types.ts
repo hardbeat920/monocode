@@ -8,6 +8,7 @@ import type {
   TurnIntent,
   TurnMetrics,
 } from "../../../features/sessions/model/session";
+import type { TurnUsage } from "../../../features/sessions/model/sessionUsage";
 import type { UserQuestion } from "../../../features/sessions/model/userQuestion";
 
 export type HarnessEvent =
@@ -149,6 +150,7 @@ export type HarnessEvent =
     }
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number }
+  | ({ type: "usage" } & TurnUsage)
   /** Provider token accounting for the active user turn. */
   | ({ type: "turn.metrics" } & TurnMetrics);
 

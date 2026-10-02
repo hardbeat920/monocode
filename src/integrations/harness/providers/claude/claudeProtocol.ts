@@ -5,6 +5,7 @@ import type {
   ToolPreview,
   TurnMetrics,
 } from "../../../../features/sessions/model/session";
+import type { TurnUsage } from "../../../../features/sessions/model/sessionUsage";
 import {
   attachmentPathText,
   promptText,
@@ -1190,4 +1191,19 @@ export function contextFromResult(
 
   if (!used && !window) return undefined;
   return { used: used > 0 ? used : undefined, window };
+}
+
+export function usageFromResult(
+  rec: Record<string, unknown>,
+): TurnUsage | undefined {
+  const processCostUsd = optionalNumber(rec.total_cost_usd);
+  const processApiMs = optionalNumber(rec.duration_api_ms);
+  if (processCostUsd == null && processApiMs == null) return undefined;
+  return { processCostUsd, processApiMs };
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
