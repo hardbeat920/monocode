@@ -1,3 +1,4 @@
+import { renameSession } from "./model/renameSession";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import {
@@ -4337,41 +4338,28 @@ function Workspace({
 
   const onRenameHistorySession = useCallback(
     async (sessionId: string, displayTitle: string) => {
-      const trimmed = displayTitle.trim();
-      if (!trimmed) return;
       invalidateLoadedSession(sessionId);
-
-      const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
+      const updated = await renameSession(
+        sessionId,
+        displayTitle,
+        () => sessionsRef.current,
+        (update) => {
+          // Drop a delayed autosave of the pre-rename title.
+          pendingPersist.current.delete(sessionId);
+          sessionsRef.current = update(sessionsRef.current);
+          setSessions(update);
+        },
       );
-      if (open) {
-        const title = formatSessionTitle(open.harness, trimmed);
-        const updated = { ...open, title };
-        setSessions((prev) =>
-          prev.map((session) => (session.id === sessionId ? updated : session)),
-        );
-        loadedSessionCache.current.delete(sessionId);
-        persistSession(updated);
-      } else {
-        const restored = await getSession(sessionId).catch(() => null);
-        if (!restored) {
-          void refreshHistory(sidebarCwd);
-          return;
-        }
-        const updated = {
-          ...restored,
-          title: formatSessionTitle(restored.harness, trimmed),
-        };
-        const saved = await upsertSession(updated).catch(() => null);
-        if (saved) {
-          rememberLoadedSession(loadedSessionCache.current, updated);
-          lastPersisted.current.set(sessionId, persistFingerprint(updated));
-        }
-      }
+      if (!sessionsRef.current.some((session) => session.id === sessionId))
+        rememberLoadedSession(loadedSessionCache.current, updated);
+      lastPersisted.current.set(sessionId, persistFingerprint(updated));
       void refreshHistory(sidebarCwd);
     },
-    [invalidateLoadedSession, persistSession, refreshHistory, sidebarCwd],
+    [invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
+
+  const renameHistorySessionRef = useRef(onRenameHistorySession);
+  renameHistorySessionRef.current = onRenameHistorySession;
 
   const checkOpenWorktreeFiles = useCallback((path: string) => {
     assertWorktreeFilesClosed(path, [
@@ -6005,8 +5993,7 @@ function Workspace({
         return false;
       }
       const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
+        current,
         HARNESS_LABEL[current.harness],
       );
       const title = placeholderTitle
@@ -6467,12 +6454,16 @@ function Workspace({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle =
-        canReplaceSessionTitle(
-          current.title,
-          current.harness,
-          HARNESS_LABEL[current.harness],
-        ) || !!draftBlock;
+      const placeholderTitle = canReplaceSessionTitle(
+        current,
+        draftBlock
+          ? titleFromPrompt(
+              draftBlock.text,
+              current.harness,
+              draftBlock.attachments,
+            )
+          : HARNESS_LABEL[current.harness],
+      );
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -6528,7 +6519,10 @@ function Workspace({
             const selected = options?.buildTarget
               ? withPlanBuildTarget(draftRemoved, options.buildTarget)
               : draftRemoved;
-            const titled = isFirstTurn ? titleSeed : selected.title;
+            const titled =
+              isFirstTurn && !selected.titleIsExplicit
+                ? titleSeed
+                : selected.title;
             let next: Session = {
               ...selected,
               providerAccountId,
@@ -6623,6 +6617,7 @@ function Workspace({
       const launchTitleGeneration = (workCwd: string) => {
         if (
           !live ||
+          current.titleIsExplicit ||
           !shouldGenerateSessionTitle(
             isFirstTurn,
             placeholderTitle,
@@ -6659,8 +6654,9 @@ function Workspace({
                 let next = s;
                 if (
                   generated &&
+                  !s.titleIsExplicit &&
                   (options?.refreshTitle ||
-                    canReplaceSessionTitle(s.title, s.harness, titleSeed))
+                    canReplaceSessionTitle(s, titleSeed))
                 ) {
                   next = {
                     ...next,
@@ -9335,6 +9331,9 @@ function Workspace({
                 ? target
                 : null;
             },
+            rename: async (id, title) => {
+              await renameHistorySessionRef.current(id, title);
+            },
             send: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
@@ -10803,7 +10802,9 @@ function Workspace({
               onPrefetchSession={onPrefetchHistorySession}
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
-              onRenameSession={onRenameHistorySession}
+              onRenameSession={(id, title) => {
+                void onRenameHistorySession(id, title).catch(() => undefined);
+              }}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}

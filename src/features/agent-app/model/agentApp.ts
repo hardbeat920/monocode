@@ -65,6 +65,7 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  rename(id: string, title: string): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -83,10 +84,12 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.rename", ["sessionId", "title"]],
   [
     "sessions.start",
     [
       "prompt",
+      "title",
       "draft",
       "harness",
       "model",
@@ -196,6 +199,7 @@ function startLaunch(
 ): QuickLaunch {
   const cwd = requireProject(source);
   const prompt = agentPrompt(input.prompt);
+  const title = optionalString(input.title, "title");
   const draft = input.draft ?? false;
   if (typeof draft !== "boolean") throw new Error("draft must be a boolean");
   const harness = input.harness ?? source.harness;
@@ -262,6 +266,7 @@ function startLaunch(
   return {
     cwd,
     prompt,
+    ...(title ? { title } : {}),
     ...(draft ? { draft: true } : {}),
     harness: chosenHarness,
     model: model.id,
@@ -352,6 +357,13 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.rename": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const title = requiredString(input.title, "title", 512);
+      await projectSession(source, id, host);
+      await host.rename(id, title);
+      return { sessionId: id, renamed: true };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))

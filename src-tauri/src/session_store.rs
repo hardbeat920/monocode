@@ -104,6 +104,8 @@ pub struct SessionUpsert {
     pub runtime_mode: String,
     pub title: String,
     #[serde(default)]
+    pub title_is_explicit: bool,
+    #[serde(default)]
     pub provider_session_id: Option<String>,
     #[serde(default)]
     pub provider_account_id: Option<String>,
@@ -176,6 +178,8 @@ pub struct SessionRecord {
     pub model_settings: Value,
     pub runtime_mode: String,
     pub title: String,
+    #[serde(default)]
+    pub title_is_explicit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -762,6 +766,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("worktree_removed", "INTEGER NOT NULL DEFAULT 0"),
         ("is_draft", "INTEGER NOT NULL DEFAULT 0"),
         ("automation_id", "TEXT"),
+        ("title_is_explicit", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         ensure_session_column(conn, column, decl)?;
     }
@@ -1164,8 +1169,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            provider_session_id, blocks_json, created_at, updated_at, branch,
            context_used, context_window, worktree_cwd, has_user_message,
            linked_work_item_json, provider_account_id, worktree_removed, is_draft,
-           automation_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+           automation_id, title_is_explicit
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -1185,7 +1190,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            provider_account_id = excluded.provider_account_id,
            worktree_removed = excluded.worktree_removed,
            is_draft = excluded.is_draft,
-           automation_id = excluded.automation_id",
+           automation_id = excluded.automation_id,
+           title_is_explicit = excluded.title_is_explicit",
         params![
             session.id,
             session.cwd,
@@ -1208,6 +1214,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
             i64::from(session.worktree_removed),
             i64::from(is_draft),
             automation_id,
+            session.title_is_explicit,
         ],
     )?;
 
@@ -1841,7 +1848,7 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
                 provider_session_id, blocks_json, created_at, updated_at,
                 context_used, context_window, branch, worktree_cwd,
                 linked_work_item_json, provider_account_id, worktree_removed,
-                automation_id
+                automation_id, title_is_explicit
          FROM sessions
          WHERE id = ?1 AND inbox_ask IS NULL",
         params![session_id],
@@ -1871,6 +1878,7 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
                 model_settings,
                 runtime_mode: row.get(5)?,
                 title: row.get(6)?,
+                title_is_explicit: row.get(19)?,
                 provider_session_id: row.get(7)?,
                 blocks,
                 context_used: row.get(11)?,
@@ -2051,6 +2059,7 @@ mod tests {
             model_settings: json!({ "thinking": "high" }),
             runtime_mode: "supervised".into(),
             title: title.into(),
+            title_is_explicit: false,
             provider_session_id: Some("acp-session-1".into()),
             provider_account_id: None,
             blocks: json!([{ "id": "b1", "role": "user", "text": "hello" }]),
@@ -2062,6 +2071,27 @@ mod tests {
             linked_work_item: None,
             automation_id: None,
         }
+    }
+
+    #[test]
+    fn explicit_titles_round_trip_and_legacy_sessions_default_to_automatic() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("named", "/tmp/project", "cursor · hello");
+        upsert_session(&conn, &session).unwrap();
+        assert!(!get_session(&conn, "named").unwrap().unwrap().title_is_explicit);
+        session.title_is_explicit = true;
+        session.blocks[0]["draft"] = json!(true);
+        upsert_session(&conn, &session).unwrap();
+        let restored = get_session(&conn, "named").unwrap().unwrap();
+        assert!(restored.title_is_explicit);
+        assert_eq!(restored.title, session.title);
+        assert_eq!(
+            list_by_project(&conn, "/tmp/project").unwrap()[0].title,
+            session.title
+        );
+        migrate(&conn).unwrap();
+        assert!(get_session(&conn, "named").unwrap().unwrap().title_is_explicit);
     }
 
     #[test]

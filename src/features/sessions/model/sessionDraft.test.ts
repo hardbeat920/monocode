@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newSession, removeSessionDraft } from "./session";
+import { canReplaceSessionTitle, newSession, removeSessionDraft, titleFromPrompt } from "./session";
 
 describe("removeSessionDraft", () => {
   it("removes a follow-up draft without changing earlier conversation history", () => {
@@ -49,4 +49,17 @@ describe("removeSessionDraft", () => {
     expect(removeSessionDraft(session, "sent")).toBeUndefined();
     expect(removeSessionDraft(session, "missing")).toBeUndefined();
   });
+});
+
+it("preserves an explicit prompt seed when removing a draft, including subsequent naming", () => {
+  const session = newSession("codex", "/repo");
+  session.title = titleFromPrompt("Maybe later", session.harness);
+  session.titleIsExplicit = true;
+  session.blocks = [
+    { id: "draft", role: "user", text: "Maybe later", draft: true },
+  ];
+  const updated = removeSessionDraft(session, "draft")!;
+  expect(updated.title).toBe(session.title);
+  expect(canReplaceSessionTitle(updated, session.title)).toBe(false);
+  expect(updated.blocks).toEqual([]);
 });

@@ -49,6 +49,7 @@ export type WorkspaceSessionStub = {
   modelSettings: Record<string, string>;
   runtimeMode: RuntimeMode;
   title: string;
+  titleIsExplicit?: boolean;
   providerSessionId?: string;
   providerAccountId?: string;
   branch?: string;
@@ -358,6 +359,7 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
     modelSettings: { ...session.modelSettings },
     runtimeMode: session.runtimeMode,
     title: session.title,
+    ...(session.titleIsExplicit ? { titleIsExplicit: true } : {}),
     ...(session.inboxAsk ? { inboxAsk: session.inboxAsk } : {}),
     ...(session.providerSessionId
       ? { providerSessionId: session.providerSessionId }
@@ -387,6 +389,7 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
     model: stub.model || session.model,
     modelSettings: { ...stub.modelSettings },
     title: stub.title,
+    ...(stub.titleIsExplicit ? { titleIsExplicit: true } : {}),
     ...(stub.inboxAsk ? { inboxAsk: stub.inboxAsk } : {}),
     ...(stub.providerSessionId
       ? { providerSessionId: stub.providerSessionId }
@@ -428,6 +431,7 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
     modelSettings,
     runtimeMode,
     title: typeof value.title === "string" ? value.title : "",
+    ...(value.titleIsExplicit === true ? { titleIsExplicit: true } : {}),
     ...(value.inboxAsk && typeof value.inboxAsk === "object"
       ? { inboxAsk: value.inboxAsk as InboxAskContext }
       : {}),

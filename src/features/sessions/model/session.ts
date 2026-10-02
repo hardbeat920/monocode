@@ -404,6 +404,8 @@ export type Session = {
   modelSettings: Record<string, string>;
   runtimeMode: RuntimeMode;
   title: string;
+  /** A UI/operator-assigned title must survive automatic naming. */
+  titleIsExplicit?: boolean;
   /** Project / working directory for this session. */
   cwd: string;
   blocks: Block[];
@@ -602,7 +604,12 @@ export function retargetSessionToProject(
       resolved,
       carriesSeed ? session.modelSettings : undefined,
     ),
-    title: HARNESS_LABEL[harness],
+    title: session.titleIsExplicit
+      ? formatSessionTitle(
+          harness,
+          sessionDisplayTitle(session.title, session.harness),
+        )
+      : HARNESS_LABEL[harness],
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
@@ -656,14 +663,14 @@ export function formatSessionTitle(harness: HarnessId, title: string): string {
 
 /** True when the stored title is still a placeholder the LLM may replace. */
 export function canReplaceSessionTitle(
-  current: string,
-  harness: HarnessId,
+  session: Pick<Session, "title" | "harness" | "titleIsExplicit">,
   seed: string,
 ): boolean {
   return (
-    current === seed ||
-    current === HARNESS_LABEL[harness] ||
-    current === HARNESS_TITLE[harness]
+    !session.titleIsExplicit &&
+    (session.title === seed ||
+      session.title === HARNESS_LABEL[session.harness] ||
+      session.title === HARNESS_TITLE[session.harness])
   );
 }
 
@@ -705,7 +712,9 @@ export function removeSessionDraft(
     ...session,
     blocks,
     title:
-      blocks.length === 0 && session.title === draftTitle
+      !session.titleIsExplicit &&
+      blocks.length === 0 &&
+      session.title === draftTitle
         ? HARNESS_LABEL[session.harness]
         : session.title,
   };

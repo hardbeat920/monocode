@@ -11,6 +11,7 @@ import {
 } from "../../features/sessions/model/models";
 import {
   newSession,
+  formatSessionTitle,
   type Session,
   type Attachment,
 } from "../../features/sessions/model/session";
@@ -77,6 +78,10 @@ export async function acceptQuickLaunch(
       launch,
     );
   session.id = deliveryId;
+  if (!existing && launch.title) {
+    session.title = formatSessionTitle(session.harness, launch.title);
+    session.titleIsExplicit = true;
+  }
   if (launch.modelSettings) {
     session.modelSettings = mergeModelSettings(
       resolveModel(session.harness, session.model),

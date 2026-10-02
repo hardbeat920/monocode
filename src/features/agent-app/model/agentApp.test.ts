@@ -79,6 +79,7 @@ function fixture() {
   source.id = "lead";
   const host: AgentAppHost = {
     start: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
     sessions: vi.fn(async () => [
       {
         id: "other",
@@ -110,6 +111,116 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it.each([false, true])(
+    "renames a project session while busy=%s without sending a turn",
+    async (busy) => {
+      const { source, host } = fixture();
+      vi.mocked(host.session).mockResolvedValue({
+        ...newSession("codex", source.cwd),
+        id: "other",
+        busy,
+      });
+      expect(
+        await handleAgentApp(
+          source,
+          "rename",
+          "sessions.rename",
+          {
+            sessionId: "other",
+            title: "  #123, #124 — Tracking installation  ",
+          },
+          host,
+        ),
+      ).toEqual({ sessionId: "other", renamed: true });
+      expect(host.rename).toHaveBeenCalledExactlyOnceWith(
+        "other",
+        "#123, #124 — Tracking installation",
+      );
+      expect(host.send).not.toHaveBeenCalled();
+      expect(host.start).not.toHaveBeenCalled();
+      expect(host.draft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects inaccessible rename targets and reports save failures", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.rename",
+        {
+          sessionId: "outside-project",
+          title: "New title",
+        },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.rename).not.toHaveBeenCalled();
+    vi.mocked(host.rename).mockRejectedValue(
+      new Error("Session title could not be saved"),
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "failed",
+        "sessions.rename",
+        {
+          sessionId: "other",
+          title: "New title",
+        },
+        host,
+      ),
+    ).rejects.toThrow("could not be saved");
+  });
+
+  it.each(["", "   ", null, 123, "x".repeat(513)])(
+    "rejects invalid titles (%s) before mutation",
+    async (title) => {
+      const { source, host } = fixture();
+      for (const action of ["sessions.start", "sessions.rename"]) {
+        await expect(
+          handleAgentApp(
+            source,
+            "invalid-title",
+            action,
+            action === "sessions.start"
+              ? { prompt: "Fix tracking", title }
+              : { sessionId: "other", title },
+            host,
+          ),
+        ).rejects.toThrow("title must be a non-empty string");
+      }
+      expect(host.start).not.toHaveBeenCalled();
+      expect(host.rename).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "passes an explicit title to a new session with draft=%s",
+    async (draft) => {
+      const { source, host } = fixture();
+      await handleAgentApp(
+        source,
+        "named",
+        "sessions.start",
+        {
+          prompt: "Fix tracking",
+          title: "  #123 — Fix tracking  ",
+          draft,
+        },
+        host,
+      );
+      expect(host.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "#123 — Fix tracking",
+          prompt: "Fix tracking",
+        }),
+        "app-lead-named",
+      );
+    },
+  );
+
   it("reads a listed project session in bounded pages", async () => {
     const { source, host } = fixture();
     const result = await handleAgentApp(
