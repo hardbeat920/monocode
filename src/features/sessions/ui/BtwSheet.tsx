@@ -84,6 +84,8 @@ function reducedMotion() {
 /**
  * State for `/btw` side conversations. The session's own composer asks the
  * questions while this is open; the sheet shows one tab per side thread.
+ * With a session ID, register a parent close guard for all side-tab drafts and
+ * mounted composers, removing that registration when tabs change or on unmount.
  */
 export function useBtwConversation({
   sessionId,

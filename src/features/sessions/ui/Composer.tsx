@@ -504,6 +504,11 @@ function MessageQueue({
   );
 }
 
+/**
+ * Compose turns and unsent drafts, including asynchronous attachment preparation.
+ * While mounted with a session ID, register a close guard for live text,
+ * attachments, pending pastes, and submission; unregister it on cleanup.
+ */
 export function Composer({
   enabled = true,
   focused,

@@ -74,6 +74,7 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Build a project caller and spy-backed host with one accessible peer session. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";

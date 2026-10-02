@@ -25,17 +25,28 @@ type Workspace = {
   activeTabId: string;
 };
 
-/** Persist first, then synchronously remove only this session's view leaves. */
+/**
+ * Close all views of a project-authorized target after saving its transcript.
+ * Reject active work, unsaved input, failed saves, and changes during the save;
+ * no layout is applied on those errors. Return false if no view remains open.
+ * Retain the session for ordinary idle detachment, which may dispose of its
+ * provider process; this function does not cancel a turn or delete history.
+ */
 export async function closeAgentSession(
   source: Session,
   id: string,
   workspace: {
+    /** Read current refs so post-save validation does not use a stale render. */
     snapshot(): Workspace;
+    /** Report removal, worktree switching, or orchestration ownership. */
     unavailable(id: string): boolean;
+    /** Resolve the tab's worktree for the existing close/fallback policy. */
     worktreeOf(tab: WorkspaceTab): string | null;
+    /** Commit the planned layout synchronously, without another async gap. */
     apply(next: Workspace): void;
   },
 ): Promise<{ closed: boolean }> {
+  /** Revalidate access and activity in this snapshot; a detached target is absent. */
   const targetIn = (state: Workspace) => {
     if (id === source.id) throw new Error("Cannot close the calling session");
     const target = state.sessions.find((session) => session.id === id);
@@ -62,8 +73,10 @@ export async function closeAgentSession(
       throw new Error("Session is busy; try again when it finishes");
     return target;
   };
+  /** Check every tab, including shared layouts, for a target session leaf. */
   const isOpen = (state: Workspace) =>
     state.tabs.some((tab) => leafIds(tab.layout).includes(id));
+  /** Refuse input held only in UI memory; persisted draft blocks may close safely. */
   const checkDraft = (target: Session) => {
     if (
       hasUnsavedComposerDraft(id) ||

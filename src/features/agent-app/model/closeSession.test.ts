@@ -20,6 +20,7 @@ import { closeAgentSession } from "./closeSession";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const cwd = "/projects/monocode";
+/** Create a persistable conversation so close tests exercise the real store serializer. */
 function session(id: string): Session {
   return {
     ...newSession("codex", cwd),
@@ -29,6 +30,10 @@ function session(id: string): Session {
     ],
   };
 }
+/**
+ * Pair a busy caller with an idle worktree target in mutable workspace state.
+ * Inject layouts and observe commits while exercising the real close lifecycle.
+ */
 function fixture(tabs?: WorkspaceTab[]) {
   const source = { ...session("source"), busy: true };
   const target = {

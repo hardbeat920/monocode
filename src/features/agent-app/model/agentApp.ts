@@ -65,6 +65,7 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  /** Save and close an authorized target's views, rejecting unsafe live state. */
   close(id: string): Promise<{ closed: boolean }>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
@@ -283,6 +284,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Dispatch an app action for the caller already authenticated by the control bridge.
+ * Validate action fields and project-scoped session access before host mutations;
+ * propagate validation and host failures to the caller as rejected requests.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,

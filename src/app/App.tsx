@@ -921,6 +921,11 @@ export default function App(props: AppProps) {
   );
 }
 
+/**
+ * Own this window's sessions, layouts, persistence, and provider lifecycles.
+ * App CLI handlers read live refs and commit layout changes synchronously;
+ * sessions removed from view remain eligible for ordinary idle detachment.
+ */
 function Workspace({
   windowTransfer = null,
   resumed = null,
