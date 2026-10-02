@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
 import { formatTokens } from "../model/contextUsage";
@@ -16,6 +16,7 @@ import { Check, ChevronDown, ChevronUp, CircleAlert } from "../../../shared/ui/i
 import { HarnessIcon } from "./HarnessIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { TerminalSpinner } from "./TerminalSpinner";
+import { Popover } from "../../../shared/ui/Popover";
 
 const LIVE_AGENT_MIN = 2;
 const LIVE_AGENT_CAP = 4;
@@ -149,6 +150,10 @@ function LiveAgentCard({
   groupCustomColors: Record<string, string>;
   groupMascots: Record<string, string>;
 }) {
+  const root = useRef<HTMLButtonElement>(null);
+  const cacheTooltipId = useId();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const seed = projectName(agent.cwd);
   const key = projectKey(agent.cwd);
   const project = resolveTabGroupLabel(key, groupLabels, seed);
@@ -181,8 +186,12 @@ function LiveAgentCard({
     agent.turnMetrics?.cacheWriteTokens != null
       ? `${formatTokens(agent.turnMetrics.cacheWriteTokens)} cache written`
       : null,
+    agent.turnMetrics?.cacheHitPercent != null
+      ? `Cache hit ${Math.round(agent.turnMetrics.cacheHitPercent)}%`
+      : null,
   ].filter(Boolean);
   const metricsLabel = [...tokenCounts, ...cacheCounts].join(" · ");
+  const showCacheTooltip = cacheCounts.length > 0 && (hovered || focused);
   const title = [agent.title, project, activity, elapsed, metricsLabel]
     .filter(Boolean)
     .join("\n");
@@ -195,9 +204,15 @@ function LiveAgentCard({
         .filter(Boolean)
         .join(", ")}
       aria-current={selected ? "true" : undefined}
+      aria-describedby={showCacheTooltip ? cacheTooltipId : undefined}
       data-live-agent-card={agent.id}
+      ref={root}
       onClick={() => onSelect?.(agent.id)}
-      className={`group relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
         selected ? "bg-selection" : "hover:bg-content/8"
       }`}
     >
@@ -249,10 +264,17 @@ function LiveAgentCard({
           {tokenCounts.join(" · ")}
         </span>
       ) : null}
-      {cacheCounts.length ? (
-        <span className="invisible min-w-0 truncate pl-4 text-[10px] leading-tight text-content/50 group-hover:visible group-focus-visible:visible">
+      {showCacheTooltip ? (
+        <Popover
+          anchor={root}
+          side="top"
+          align="start"
+          id={cacheTooltipId}
+          role="tooltip"
+          className="pointer-events-none w-max max-w-[min(240px,90vw)] px-2.5 py-1.5 text-[11px] leading-4 text-content"
+        >
           {cacheCounts.join(" · ")}
-        </span>
+        </Popover>
       ) : null}
     </button>
   );

@@ -142,16 +142,18 @@ describe("LiveAgentsPreview", () => {
       '[data-live-agent-card="a"]',
     )!;
     expect(card.textContent).toContain("0 input");
-    expect(card.textContent).toContain("1.2K cached");
+    expect(card.textContent).not.toContain("1.2K cached");
     expect(card.getAttribute("aria-label")).toContain("0 input");
     expect(card.getAttribute("aria-label")).not.toContain("output");
     expect(card.getAttribute("aria-label")).toContain("1.2K cached");
     expect(card.title).toContain("1.2K cached");
-    const cacheDetails = Array.from(card.children).find((child) =>
-      child.textContent?.includes("cached"),
-    )!;
-    expect(cacheDetails.className).toContain("group-hover:visible");
-    expect(cacheDetails.className).toContain("group-focus-visible:visible");
+    act(() => card.focus());
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "1.2K cached",
+    );
+    expect(card.getAttribute("aria-describedby")).not.toBeNull();
+    act(() => card.blur());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
     render({
       agents: [
