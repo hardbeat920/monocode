@@ -104,6 +104,7 @@ import {
   worktreeSessionIds,
   type Worktree,
 } from "../features/source-control/model/worktrees";
+import { GradientBlurBackground } from "../features/settings/ui/GradientBlurBackground";
 import { UsageFooter } from "./shell/UsageFooter";
 import { useProjectBranches } from "../features/source-control/hooks/useProjectBranches";
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
@@ -10773,10 +10774,13 @@ function Workspace({
     <OrchestrationActions.Provider value={orchestrationActions}>
       <OrchestrationWorkers.Provider value={orchestrationWorkers}>
         <div
-          className={`flex h-full flex-col text-content ${
+          data-session-empty={!active || active.blocks.length === 0}
+          data-project-chat-background="false"
+          className={`workspace-background chat-pane-background relative isolate flex h-full flex-col text-content ${
             HAS_NATIVE_GLASS ? "bg-background-base/40" : "bg-background-base"
           }`}
         >
+          <GradientBlurBackground />
           {compactTitleBar ? workspaceTitleBar : null}
           <div className="flex min-h-0 min-w-0 flex-1">
             <Sidebar

@@ -16,6 +16,7 @@ const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
 const SESSION_SIDEBAR_OPEN_KEY = "monocode.sessionSidebarOpen";
+const EXTEND_CHAT_BACKGROUND_KEY = "monocode.extendChatBackground";
 const BODY_KEY = "monocode.bodyGlass";
 const SCHEME_KEY = "monocode.colorScheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
@@ -136,6 +137,7 @@ export const PROJECT_RAIL_WIDTH_MAX = 360;
 export const PROJECT_RAIL_WIDTH_DEFAULT = 200;
 
 export const BODY_GLASS_DEFAULT = !IS_LINUX;
+export const EXTEND_CHAT_BACKGROUND_DEFAULT = false;
 
 export const CHAT_BACKGROUND_OPACITY_MIN = 0.05;
 export const CHAT_BACKGROUND_OPACITY_MAX = 0.65;
@@ -308,6 +310,7 @@ export function initAppearance() {
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
+  applyExtendChatBackground(loadExtendChatBackground());
   applyChatBackground(loadChatBackgroundPath());
   applyChatBackgroundEmptyOpacity(loadChatBackgroundEmptyOpacity());
   applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
@@ -489,6 +492,18 @@ export function applySidebarBlur(value: number) {
   const next = Math.round(clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX));
   void invoke("set_window_background_blur", { radius: next });
   return next;
+}
+
+export function loadExtendChatBackground(): boolean {
+  return readFlag(EXTEND_CHAT_BACKGROUND_KEY) ?? EXTEND_CHAT_BACKGROUND_DEFAULT;
+}
+
+export function saveExtendChatBackground(value: boolean) {
+  writeFlag(EXTEND_CHAT_BACKGROUND_KEY, value);
+}
+
+export function applyExtendChatBackground(value: boolean) {
+  document.documentElement.classList.toggle("extend-chat-background", value);
 }
 
 export function loadBodyGlass(): boolean {
