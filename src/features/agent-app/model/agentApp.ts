@@ -31,6 +31,7 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
+import { usageSnapshot } from "./usageSnapshot";
 import { sessionConversationPage } from "./sessionConversation";
 
 export type AppSessionListing = {
@@ -79,6 +80,7 @@ export type AgentAppHost = {
 
 const FIELDS = new Map<string, readonly string[]>([
   ["models.list", []],
+  ["usage.list", ["provider", "accountId", "refresh"]],
   ["sessions.list", []],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
@@ -281,6 +283,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Dispatch an app action for the caller supplied by the authorized control bridge.
+ * Validate allowed fields before reading state or invoking host operations; reject
+ * invalid inputs and propagate host failures to the bridge's response handler.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
@@ -290,6 +297,8 @@ export async function handleAgentApp(
 ): Promise<unknown> {
   fields(action, input);
   switch (action) {
+    case "usage.list":
+      return usageSnapshot(source, input);
     case "models.list":
       return {
         runtimeModes: RUNTIME_MODES.map((id) => ({
