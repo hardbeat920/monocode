@@ -65,6 +65,41 @@ async function installedVersion(harness: HarnessId): Promise<string> {
   throw new Error(inspection.error ?? "The CLI reported no version.");
 }
 
+type FinishedUpdate = {
+  installed: string;
+  latest: string;
+  /** The value of `finishedUpdates` this update set. */
+  order: number;
+};
+
+/**
+ * Counts successful updates in this window. A check that started before an
+ * update finished may have run the old binary, so the version the update
+ * left wins for that harness.
+ */
+let finishedUpdates = 0;
+const lastUpdates = new Map<HarnessId, FinishedUpdate>();
+
+/**
+ * The installed version comes from the update. The release comes from the
+ * check, since its feed lookup is the more recent one, unless the check
+ * failed.
+ */
+function withUpdate(
+  check: HarnessVersionCheck,
+  update: FinishedUpdate,
+): HarnessVersionCheck {
+  const latest = check.status === "unknown" ? update.latest : check.latest;
+  return {
+    harness: check.harness,
+    status: isHarnessVersionBehind(check.harness, update.installed, latest)
+      ? "behind"
+      : "current",
+    installed: update.installed,
+    latest,
+  };
+}
+
 let inflightCheck: Promise<HarnessVersionCheck[]> | null = null;
 
 /**
@@ -81,15 +116,22 @@ export function checkInstalledHarnessVersions(options?: {
       .then(() => checkInstalledHarnessVersions(options));
   }
   inflightCheck ??= (async () => {
+    const startedAfter = finishedUpdates;
     setSnapshot({ checking: true });
     try {
       await probeHarnessAvailability(options);
-      const checks = await checkHarnessVersions({
+      const found = await checkHarnessVersions({
         harnesses: HARNESSES.filter(
           (id) => UPDATABLE_HARNESSES.has(id) && isHarnessAvailable(id),
         ),
         installedVersion,
         latestVersion: fetchLatestHarnessVersion,
+      });
+      const checks = found.map((check) => {
+        const update = lastUpdates.get(check.harness);
+        return update && update.order > startedAfter
+          ? withUpdate(check, update)
+          : check;
       });
       setSnapshot({ checks });
       return checks;
@@ -114,7 +156,7 @@ export function runHarnessUpdate(
     running.delete(update.harness);
     setRun(update.harness, result);
     if (result.status === "updated") {
-      markCurrent(update, result.version);
+      recordUpdate(update, result.version);
     }
     return result;
   });
@@ -126,18 +168,22 @@ function setRun(harness: HarnessId, run: HarnessUpdateRun) {
   setSnapshot({ runs: { ...snapshot.runs, [harness]: run } });
 }
 
-function markCurrent(update: HarnessUpdate, version: string) {
+/**
+ * A check that finished while the update ran may have found a newer release
+ * than the one offered, so the harness can still be behind afterwards.
+ */
+function recordUpdate(update: HarnessUpdate, version: string) {
+  finishedUpdates += 1;
+  const finished = {
+    installed: version,
+    latest: update.latest,
+    order: finishedUpdates,
+  };
+  lastUpdates.set(update.harness, finished);
   if (!snapshot.checks) return;
   setSnapshot({
     checks: snapshot.checks.map((check) =>
-      check.harness === update.harness
-        ? {
-            harness: update.harness,
-            status: "current",
-            installed: version,
-            latest: update.latest,
-          }
-        : check,
+      check.harness === update.harness ? withUpdate(check, finished) : check,
     ),
   });
 }
