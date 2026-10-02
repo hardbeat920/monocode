@@ -71,8 +71,51 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
   );
 }
 
-export type CodexRateLimitResetOutcome =
+export type RateLimitResetOutcome =
   "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
+export type CodexRateLimitResetOutcome = RateLimitResetOutcome;
+
+// Keep the same Cedar idempotency key when a confirmed request has an uncertain
+// transport result. Only a conclusive provider outcome releases it.
+const claudeResetRequests = new Map<string, string>();
+
+export async function consumeClaudeRateLimitResetCredit(
+  creditId: string | undefined,
+  accountId = "default",
+): Promise<RateLimitResetOutcome> {
+  if (!creditId) throw new Error("Select a Claude reset offer first.");
+  const key = JSON.stringify([accountId, creditId]);
+  const requestId = claudeResetRequests.get(key) ?? crypto.randomUUID();
+  claudeResetRequests.set(key, requestId);
+  let result: unknown;
+  try {
+    result = await invoke<unknown>("consume_claude_rate_limit_reset", {
+      accountId,
+      creditId,
+      requestId,
+    });
+  } catch (error) {
+    throw new Error(
+      typeof error === "string"
+        ? error
+        : error instanceof Error
+          ? error.message
+          : "Claude reset was not confirmed. Refresh usage before trying again.",
+    );
+  }
+  if (
+    result === "reset" ||
+    result === "nothingToReset" ||
+    result === "alreadyRedeemed" ||
+    result === "noCredit"
+  ) {
+    claudeResetRequests.delete(key);
+    return result;
+  }
+  throw new Error(
+    "Claude reset was not confirmed. Refresh usage before trying again.",
+  );
+}
 
 type ClaudeUsageFetch = {
   status: "ok" | "error" | "unavailable" | string;

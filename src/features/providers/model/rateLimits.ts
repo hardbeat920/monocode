@@ -1,4 +1,5 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { parseClaudeResetCredits } from "./claudeResetCredits";
 
 export type RateLimitProvider = "claude" | "codex" | "opencode";
 
@@ -14,20 +15,26 @@ export type RateLimitWindow = {
   resetsAt: number | null;
 };
 
+export type ScopedWeeklyRateLimitWindow = RateLimitWindow & { label: string };
+
 export type RateLimitResetCredit = {
   id: string;
-  resetType: "codexRateLimits" | "unknown";
-  status: "available" | "redeeming" | "redeemed" | "unknown";
+  resetType: "codexRateLimits" | "claudeCedar" | "claudeJuniper" | "unknown";
+  status: "available" | "redeeming" | "redeemed" | "unavailable" | "unknown";
   grantedAt: number | null;
   expiresAt: number | null;
   title: string | null;
   description: string | null;
+  remainingCount?: number;
+  unavailableReason?: string;
 };
 
 export type RateLimitResetCredits = {
   availableCount: number;
   /** Optional detail rows; the backend can report only the aggregate count. */
   credits: RateLimitResetCredit[] | null;
+  /** Eligibility or discovery information for Claude reset offers. */
+  notice?: string;
 };
 
 export type ProviderRateLimits = {
@@ -35,7 +42,9 @@ export type ProviderRateLimits = {
   session: RateLimitWindow | null;
   weekly: RateLimitWindow | null;
   monthly: RateLimitWindow | null;
-  /** Codex-only banked rate-limit reset rewards, when supplied by app-server. */
+  /** Model-specific weekly limits, when supplied by the provider. */
+  scopedWeekly?: ScopedWeeklyRateLimitWindow[];
+  /** Saved provider reset offers, when supplied by the provider. */
   resetCredits: RateLimitResetCredits | null;
   updatedAt: number;
   error: string | null;
@@ -58,6 +67,7 @@ export function idleRateLimits(
     session: null,
     weekly: null,
     monthly: null,
+    scopedWeekly: [],
     resetCredits: null,
     updatedAt: 0,
     error: null,
@@ -74,6 +84,7 @@ export function fetchingRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
+      previous.scopedWeekly?.length ||
       previous.resetCredits)
   ) {
     return { ...previous, status: "fetching" };
@@ -83,6 +94,7 @@ export function fetchingRateLimits(
     session: previous?.session ?? null,
     weekly: previous?.weekly ?? null,
     monthly: previous?.monthly ?? null,
+    scopedWeekly: previous?.scopedWeekly ?? [],
     resetCredits: previous?.resetCredits ?? null,
     updatedAt: previous?.updatedAt ?? 0,
     error: null,
@@ -99,6 +111,7 @@ export function unavailableRateLimits(
     session: null,
     weekly: null,
     monthly: null,
+    scopedWeekly: [],
     resetCredits: null,
     updatedAt: Date.now(),
     error,
@@ -116,6 +129,7 @@ export function errorRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
+      previous.scopedWeekly?.length ||
       previous.resetCredits)
   ) {
     return {
@@ -130,6 +144,7 @@ export function errorRateLimits(
     session: null,
     weekly: null,
     monthly: null,
+    scopedWeekly: [],
     resetCredits: null,
     updatedAt: Date.now(),
     error,
@@ -219,7 +234,12 @@ export function exhaustedWindowResetAt(
   limits: ProviderRateLimits,
 ): number | null {
   let latest: number | null = null;
-  for (const window of [limits.session, limits.weekly, limits.monthly]) {
+  for (const window of [
+    limits.session,
+    limits.weekly,
+    ...(limits.scopedWeekly ?? []),
+    limits.monthly,
+  ]) {
     if (!window || window.usedPercent < 100 || window.resetsAt == null)
       continue;
     latest = Math.max(latest ?? 0, window.resetsAt);
@@ -268,7 +288,8 @@ function usedPercentFrom(rec: Record<string, unknown>): number | null {
   const value =
     numberField(rec, "used_percentage") ??
     numberField(rec, "usedPercent") ??
-    numberField(rec, "utilization");
+    numberField(rec, "utilization") ??
+    numberField(rec, "percent");
   if (value == null) return null;
   return value;
 }
@@ -289,11 +310,42 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
     monthly: null,
-    resetCredits: null,
+    scopedWeekly: parseClaudeScopedWeekly(rec),
+    resetCredits: parseClaudeResetCredits(rec),
     updatedAt: Date.now(),
     error: null,
     status: "ok",
   };
+}
+
+function parseClaudeScopedWeekly(
+  rec: Record<string, unknown>,
+): ScopedWeeklyRateLimitWindow[] {
+  const windows = new Map<string, ScopedWeeklyRateLimitWindow>();
+  if (Array.isArray(rec.limits)) {
+    for (const raw of rec.limits) {
+      const limit = asRecord(raw);
+      if (limit?.kind !== "weekly_scoped") continue;
+      const model = asRecord(asRecord(limit.scope)?.model);
+      const label =
+        typeof model?.display_name === "string"
+          ? model.display_name.trim()
+          : "";
+      const window = mapUsageWindow(limit, WEEKLY_WINDOW_MINUTES);
+      if (label && window && !windows.has(label)) {
+        windows.set(label, { ...window, label });
+      }
+    }
+  }
+  // Older accounts expose model quotas as fixed keys instead of limits entries.
+  for (const [key, label] of [
+    ["seven_day_opus", "Opus"],
+    ["seven_day_sonnet", "Sonnet"],
+  ]) {
+    const window = mapUsageWindow(rec[key], WEEKLY_WINDOW_MINUTES);
+    if (window && !windows.has(label)) windows.set(label, { ...window, label });
+  }
+  return [...windows.values()];
 }
 
 type CodexWindowSnapshot = {
@@ -314,6 +366,7 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
     monthly: mapCodexSnapshot(classified.monthly, MONTHLY_WINDOW_MINUTES),
+    scopedWeekly: [],
     resetCredits: parseResetCredits(
       rec?.rateLimitResetCredits ?? rec?.rate_limit_reset_credits,
     ),
@@ -337,6 +390,7 @@ export function parseOpencodeGoUsage(result: unknown): ProviderRateLimits {
     session: mapOpencodeGoWindow(usage?.rolling, SESSION_WINDOW_MINUTES),
     weekly: mapOpencodeGoWindow(usage?.weekly, WEEKLY_WINDOW_MINUTES),
     monthly: mapOpencodeGoWindow(usage?.monthly, MONTHLY_WINDOW_MINUTES),
+    scopedWeekly: [],
     resetCredits: null,
     updatedAt: Date.now(),
     error: null,

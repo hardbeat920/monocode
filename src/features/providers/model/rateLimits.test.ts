@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   clampUsedPercent,
   exhaustedWindowResetAt,
+  errorRateLimits,
+  fetchingRateLimits,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -326,5 +328,99 @@ describe("rateLimitWindowTooltip", () => {
         now,
       ),
     ).toBe("42% used · Resets in 2h 33m");
+  });
+});
+
+describe("Claude scoped weekly usage", () => {
+  it("parses model labels, percentages and resets without a model allowlist", () => {
+    const resetsAt = "2026-10-05T12:00:00Z";
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({
+        limits: [
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: " Fable 5.1 " } },
+            percent: 100,
+            resets_at: resetsAt,
+          },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Future model" } },
+            percent: 0,
+            resets_at: null,
+          },
+        ],
+      }),
+    );
+    expect(limits.scopedWeekly).toEqual([
+      {
+        label: "Fable 5.1",
+        usedPercent: 100,
+        windowMinutes: 10080,
+        resetsAt: Date.parse(resetsAt),
+      },
+      {
+        label: "Future model",
+        usedPercent: 0,
+        windowMinutes: 10080,
+        resetsAt: null,
+      },
+    ]);
+    expect(exhaustedWindowResetAt(limits)).toBe(Date.parse(resetsAt));
+    expect(fetchingRateLimits("claude", limits).scopedWeekly).toEqual(
+      limits.scopedWeekly,
+    );
+    expect(errorRateLimits("claude", "Offline", limits).scopedWeekly).toEqual(
+      limits.scopedWeekly,
+    );
+  });
+
+  it("ignores malformed and unrelated entries and prefers scoped entries over legacy keys", () => {
+    const limits = parseClaudeOAuthUsage(
+      JSON.stringify({
+        limits: [
+          null,
+          {},
+          {
+            kind: "daily",
+            scope: { model: { display_name: "Other" } },
+            percent: 40,
+          },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: " " } },
+            percent: 40,
+          },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Bad" } },
+            percent: "invalid",
+          },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Sonnet" } },
+            percent: 50,
+          },
+          {
+            kind: "weekly_scoped",
+            scope: { model: { display_name: "Sonnet" } },
+            percent: 90,
+          },
+        ],
+        seven_day_sonnet: { utilization: 70 },
+        seven_day_opus: { utilization: 20 },
+      }),
+    );
+    expect(
+      limits.scopedWeekly?.map(({ label, usedPercent }) => ({
+        label,
+        usedPercent,
+      })),
+    ).toEqual([
+      { label: "Sonnet", usedPercent: 50 },
+      { label: "Opus", usedPercent: 20 },
+    ]);
+    expect(parseClaudeOAuthUsage("{}").scopedWeekly).toEqual([]);
+    expect(parseClaudeOAuthUsage('{"limits":{}}').scopedWeekly).toEqual([]);
   });
 });

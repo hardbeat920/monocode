@@ -7,6 +7,7 @@ import {
   unavailableRateLimits,
   type ProviderRateLimits,
   type RateLimitWindow,
+  type ScopedWeeklyRateLimitWindow,
 } from "./rateLimits";
 
 export type PiUsageProvider = "anthropic" | "openai-codex";
@@ -47,11 +48,13 @@ export async function fetchPiUsage(
     const windows = asRecord(result?.windows);
     const session = parseWindow(windows?.session);
     const weekly = parseWindow(windows?.weekly);
+    const scopedWeekly = parseScopedWeekly(windows?.scopedWeekly);
     if (
       result?.status !== "ok" ||
       session === undefined ||
       weekly === undefined ||
-      (!session && !weekly)
+      scopedWeekly === undefined ||
+      (!session && !weekly && scopedWeekly.length === 0)
     ) {
       return errorRateLimits(
         billingProvider,
@@ -63,6 +66,7 @@ export async function fetchPiUsage(
       status: "ok",
       session,
       weekly,
+      scopedWeekly,
       updatedAt: Date.now(),
     };
   } catch {
@@ -93,4 +97,26 @@ function parseWindow(value: unknown): RateLimitWindow | null | undefined {
   )
     return undefined;
   return { usedPercent, windowMinutes, resetsAt };
+}
+
+function parseScopedWeekly(
+  value: unknown,
+): ScopedWeeklyRateLimitWindow[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const windows: ScopedWeeklyRateLimitWindow[] = [];
+  for (const raw of value) {
+    const rec = asRecord(raw);
+    const window = parseWindow(raw);
+    if (
+      !window ||
+      window.windowMinutes !== 10080 ||
+      typeof rec?.label !== "string" ||
+      !rec.label.trim()
+    ) {
+      return undefined;
+    }
+    windows.push({ ...window, label: rec.label.trim() });
+  }
+  return windows;
 }

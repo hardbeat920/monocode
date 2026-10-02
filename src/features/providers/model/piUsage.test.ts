@@ -86,3 +86,34 @@ it("does not expose transport errors in the UI", async () => {
   expect(result.status).toBe("error");
   expect(JSON.stringify(result)).not.toContain("secret-like");
 });
+
+it("keeps Pi model-scoped weekly quotas, including scoped-only snapshots", async () => {
+  const scopedWeekly = [
+    {
+      label: "Fable 5.1",
+      usedPercent: 100,
+      windowMinutes: 10080,
+      resetsAt: 1790700198000,
+    },
+  ];
+  vi.mocked(invoke).mockResolvedValue({
+    status: "ok",
+    windows: { session: null, weekly: null, scopedWeekly },
+  });
+  expect(await fetchPiUsage("anthropic")).toMatchObject({
+    status: "ok",
+    scopedWeekly,
+  });
+  for (const malformed of [
+    null,
+    {},
+    [{ ...scopedWeekly[0], label: "" }],
+    [{ ...scopedWeekly[0], usedPercent: "100" }],
+  ]) {
+    vi.mocked(invoke).mockResolvedValue({
+      status: "ok",
+      windows: { session: null, weekly: null, scopedWeekly: malformed },
+    });
+    expect((await fetchPiUsage("anthropic")).status).toBe("error");
+  }
+});

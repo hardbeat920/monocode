@@ -2,7 +2,12 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { UsageMeter } from "./ProviderAccountUsage";
+import { idleRateLimits } from "../model/rateLimits";
+import {
+  AccountUsageMeters,
+  meterWindows,
+  UsageMeter,
+} from "./ProviderAccountUsage";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -54,4 +59,74 @@ it("flips the meter when another window turns on remaining usage", async () => {
     "width: 77%;",
   );
   expect(container.textContent).toContain("77% left");
+});
+
+it("renders model weekly meters after the shared weekly meter", () => {
+  const now = Date.now();
+  const limits = {
+    ...idleRateLimits("claude"),
+    weekly: { usedPercent: 20, windowMinutes: 10080, resetsAt: null },
+    scopedWeekly: [
+      {
+        label: "Fable 5.1",
+        usedPercent: 75,
+        windowMinutes: 10080,
+        resetsAt: now + 86400000,
+      },
+    ],
+  };
+  act(() => root.render(createElement(AccountUsageMeters, { limits, now })));
+  const bars = container.querySelectorAll('[role="progressbar"]');
+  expect([...bars].map((bar) => bar.getAttribute("aria-label"))).toEqual([
+    "Weekly limit used",
+    "Fable 5.1 limit used",
+  ]);
+  expect(bars[1].getAttribute("aria-valuenow")).toBe("75");
+  expect(container.textContent).toContain("Fable 5.1");
+  expect(container.textContent).toContain("1d");
+});
+
+it("keeps shared and scoped meters distinct when their titles match", () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const window = { usedPercent: 20, windowMinutes: 10080, resetsAt: null };
+    const limits = {
+      ...idleRateLimits("claude"),
+      session: window,
+      weekly: window,
+      monthly: window,
+      scopedWeekly: ["5h", "Weekly", "Monthly"].map((label) => ({
+        ...window,
+        label,
+        usedPercent: 75,
+      })),
+    };
+    expect(meterWindows(limits).map((entry) => entry.key)).toEqual([
+      "session",
+      "weekly",
+      "scoped-weekly:5h",
+      "scoped-weekly:Weekly",
+      "scoped-weekly:Monthly",
+      "monthly",
+    ]);
+    const render = () =>
+      act(() =>
+        root.render(
+          createElement(AccountUsageMeters, { limits, now: Date.now() }),
+        ),
+      );
+    render();
+    limits.scopedWeekly.reverse();
+    render();
+    expect(
+      [...container.querySelectorAll('[role="progressbar"]')].map((bar) =>
+        bar.getAttribute("aria-valuenow"),
+      ),
+    ).toEqual(["20", "20", "75", "75", "75", "20"]);
+    expect(error.mock.calls.flat().join(" ")).not.toMatch(
+      /same key|unique.*key/i,
+    );
+  } finally {
+    error.mockRestore();
+  }
 });

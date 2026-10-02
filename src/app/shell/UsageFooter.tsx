@@ -2,7 +2,10 @@ import { RefreshCw, Terminal } from "../../shared/ui/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
-import { consumeCodexRateLimitResetCredit } from "../../features/providers/model/rateLimitsFetch";
+import {
+  consumeClaudeRateLimitResetCredit,
+  consumeCodexRateLimitResetCredit,
+} from "../../features/providers/model/rateLimitsFetch";
 import {
   errorRateLimits,
   unavailableRateLimits,
@@ -177,30 +180,37 @@ export function UsageFooter({
     return () => window.clearInterval(timer);
   }, []);
 
-  const consumeCodexReset = useCallback(
-    async (creditId?: string) => {
+  const consumeReset = useCallback(
+    async (
+      provider: "claude" | "codex",
+      accountId: string,
+      creditId?: string,
+    ) => {
       while (inflight.current) await inflight.current;
       setRefreshing(true);
       let outcome: Awaited<ReturnType<typeof consumeCodexRateLimitResetCredit>>;
       const operation = (async () => {
         try {
-          outcome = await consumeCodexRateLimitResetCredit(
-            creditId,
-            codexAccountId,
-          );
-          await loadRateLimits("codex", codexAccountId, true);
+          const consume =
+            provider === "claude"
+              ? consumeClaudeRateLimitResetCredit
+              : consumeCodexRateLimitResetCredit;
+          outcome = await consume(creditId, accountId);
+          await loadRateLimits(provider, accountId, true);
         } catch (error) {
           const message =
-            error instanceof Error
-              ? error.message
-              : "Could not use Codex reset";
+            error instanceof Error ? error.message : "Could not use this reset";
+          // An uncertain mutation may have been applied. Re-read before a user
+          // tries again, while the backend still revalidates the selected grant.
+          if (provider === "claude")
+            await loadRateLimits(provider, accountId, true);
           setCachedRateLimits(
-            "codex",
-            codexAccountId,
+            provider,
+            accountId,
             errorRateLimits(
-              "codex",
+              provider,
               message,
-              getCachedRateLimits("codex", codexAccountId),
+              getCachedRateLimits(provider, accountId),
             ),
           );
           throw error;
@@ -214,7 +224,15 @@ export function UsageFooter({
       await tracked;
       return outcome!;
     },
-    [codexAccountId],
+    [],
+  );
+  const consumeCodexReset = useCallback(
+    (creditId?: string) => consumeReset("codex", codexAccountId, creditId),
+    [consumeReset, codexAccountId],
+  );
+  const consumeClaudeReset = useCallback(
+    (creditId?: string) => consumeReset("claude", claudeAccountId, creditId),
+    [consumeReset, claudeAccountId],
   );
 
   const reconnectProvider = useCallback(
@@ -330,6 +348,7 @@ export function UsageFooter({
                 onManageAccounts ? () => onManageAccounts("claude") : undefined
               }
               onReconnect={reconnectClaude}
+              onConsumeReset={consumeClaudeReset}
             />
           ) : null}
           {wantCodex ? (

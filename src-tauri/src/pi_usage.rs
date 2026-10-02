@@ -20,10 +20,18 @@ struct UsageWindow {
     window_minutes: u64,
     resets_at: Option<u64>,
 }
+#[derive(Debug, Serialize)]
+struct ScopedWeeklyWindow {
+    label: String,
+    #[serde(flatten)]
+    window: UsageWindow,
+}
 #[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageWindows {
     session: Option<UsageWindow>,
     weekly: Option<UsageWindow>,
+    scoped_weekly: Vec<ScopedWeeklyWindow>,
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
@@ -244,7 +252,11 @@ fn parse_usage(provider: PiUsageProvider, body: &str) -> PiUsageResult {
         .ok()
         .and_then(|value| parse_windows(provider, &value));
     match parsed {
-        Some(windows) if windows.session.is_some() || windows.weekly.is_some() => {
+        Some(windows)
+            if windows.session.is_some()
+                || windows.weekly.is_some()
+                || !windows.scoped_weekly.is_empty() =>
+        {
             PiUsageResult::Ok { windows }
         }
         _ => error("Pi usage response was unexpected. Try refreshing."),
@@ -259,24 +271,34 @@ fn parse_windows(provider: PiUsageProvider, value: &Value) -> Option<UsageWindow
                 if raw.is_null() {
                     continue;
                 }
-                let window = UsageWindow {
-                    used_percent: percentage(&raw["utilization"])?,
-                    window_minutes: minutes,
-                    resets_at: if raw["resets_at"].is_null() {
-                        None
-                    } else {
-                        let date = time::OffsetDateTime::parse(
-                            raw["resets_at"].as_str()?,
-                            &time::format_description::well_known::Rfc3339,
-                        )
-                        .ok()?;
-                        Some(u64::try_from(date.unix_timestamp_nanos() / 1_000_000).ok()?)
-                    },
-                };
+                let window = anthropic_window(raw, "utilization", minutes)?;
                 if minutes == 300 {
                     windows.session = Some(window);
                 } else {
                     windows.weekly = Some(window);
+                }
+            }
+
+            if let Some(limits) = value["limits"].as_array() {
+                for limit in limits {
+                    if limit["kind"].as_str() != Some("weekly_scoped") {
+                        continue;
+                    }
+                    let Some(label) = limit["scope"]["model"]["display_name"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|label| !label.is_empty())
+                    else {
+                        continue;
+                    };
+                    if let Some(window) = anthropic_window(limit, "percent", 10080) {
+                        push_scoped_weekly(&mut windows, label, window);
+                    }
+                }
+            }
+            for (key, label) in [("seven_day_opus", "Opus"), ("seven_day_sonnet", "Sonnet")] {
+                if let Some(window) = anthropic_window(&value[key], "utilization", 10080) {
+                    push_scoped_weekly(&mut windows, label, window);
                 }
             }
         }
@@ -313,6 +335,36 @@ fn parse_windows(provider: PiUsageProvider, value: &Value) -> Option<UsageWindow
     }
     Some(windows)
 }
+fn push_scoped_weekly(windows: &mut UsageWindows, label: &str, window: UsageWindow) {
+    if !windows
+        .scoped_weekly
+        .iter()
+        .any(|existing| existing.label == label)
+    {
+        windows.scoped_weekly.push(ScopedWeeklyWindow {
+            label: label.into(),
+            window,
+        });
+    }
+}
+
+fn anthropic_window(raw: &Value, percent_key: &str, minutes: u64) -> Option<UsageWindow> {
+    Some(UsageWindow {
+        used_percent: percentage(&raw[percent_key])?,
+        window_minutes: minutes,
+        resets_at: if raw["resets_at"].is_null() {
+            None
+        } else {
+            let date = time::OffsetDateTime::parse(
+                raw["resets_at"].as_str()?,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .ok()?;
+            Some(u64::try_from(date.unix_timestamp_nanos() / 1_000_000).ok()?)
+        },
+    })
+}
+
 fn percentage(value: &Value) -> Option<f64> {
     value
         .as_f64()
@@ -460,6 +512,33 @@ mod tests {
         assert_eq!(value["windows"]["session"]["usedPercent"], 0.0);
         assert_eq!(value["windows"]["weekly"]["windowMinutes"], 10080);
         assert!(!value.to_string().contains("private@example.com"));
+    }
+
+    #[test]
+    fn parses_scoped_weekly_limits_and_legacy_keys_without_duplicates() {
+        let result = parse_usage(PiUsageProvider::Anthropic, &json!({
+            "limits": [null, {},
+                {"kind":"weekly_scoped","scope":{"model":{"display_name":" Fable 5.1 "}},"percent":100,"resets_at":"2026-10-05T12:00:00Z"},
+                {"kind":"weekly_scoped","scope":{"model":{"display_name":"Sonnet"}},"percent":0},
+                {"kind":"weekly_scoped","scope":{"model":{"display_name":"Sonnet"}},"percent":90},
+                {"kind":"daily","scope":{"model":{"display_name":"Other"}},"percent":10},
+                {"kind":"weekly_scoped","scope":{"model":{"display_name":"Bad"}},"percent":"10"},
+                {"kind":"weekly_scoped","scope":{"model":{"display_name":" "}},"percent":10}
+            ],
+            "seven_day_sonnet":{"utilization":50},
+            "seven_day_opus":{"utilization":20}
+        }).to_string());
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["status"], "ok");
+        let scoped = value["windows"]["scopedWeekly"].as_array().unwrap();
+        assert_eq!(scoped.len(), 3);
+        assert_eq!(scoped[0]["label"], "Fable 5.1");
+        assert_eq!(scoped[0]["usedPercent"], 100.0);
+        assert_eq!(scoped[0]["resetsAt"], 1791201600000_u64);
+        assert_eq!(scoped[1]["label"], "Sonnet");
+        assert_eq!(scoped[1]["usedPercent"], 0.0);
+        assert_eq!(scoped[2]["label"], "Opus");
+        assert_eq!(scoped[2]["windowMinutes"], 10080);
     }
 
     #[test]

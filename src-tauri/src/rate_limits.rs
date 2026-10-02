@@ -11,9 +11,6 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::dirs_home;
 
-const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const OAUTH_BETA: &str = "oauth-2025-04-20";
-const USER_AGENT: &str = "claude-code/2.1.0";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(target_os = "macos")]
@@ -377,9 +374,10 @@ pub(crate) fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
     }
 }
 
-struct ClaudeCredentials {
-    access_token: String,
-    expires_at_ms: Option<i64>,
+#[derive(PartialEq)]
+pub(crate) struct ClaudeCredentials {
+    pub(crate) access_token: String,
+    pub(crate) expires_at_ms: Option<i64>,
 }
 
 fn usage_result(
@@ -431,33 +429,14 @@ fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFet
 }
 
 fn fetch_usage_with_token(token: &str) -> ClaudeUsageFetch {
-    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
-    let result = agent
-        .get(OAUTH_USAGE_URL)
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("anthropic-beta", OAUTH_BETA)
-        .set("User-Agent", USER_AGENT)
-        .call();
-
-    match result {
-        Ok(response) => {
-            let http_status = response.status();
-            let body = response.into_string().unwrap_or_default();
-            if (200..300).contains(&http_status) {
-                usage_result("ok", Some(http_status), Some(body), None)
-            } else {
-                usage_error(http_status)
-            }
-        }
-        Err(ureq::Error::Status(status, response)) => {
-            let _ = response.into_string();
-            usage_error(status)
-        }
-        Err(error) => usage_result(
+    match crate::claude_resets::fetch_usage(token) {
+        Ok(value) => usage_result("ok", Some(200), Some(value.to_string()), None),
+        Err(crate::claude_resets::RequestError::Http(status)) => usage_error(status),
+        Err(_) => usage_result(
             "error",
             None,
             None,
-            Some(format!("Claude usage request failed: {error}")),
+            Some("Could not read Claude usage. Try refreshing.".into()),
         ),
     }
 }
@@ -473,7 +452,9 @@ fn usage_error(status: u16) -> ClaudeUsageFetch {
     usage_result("error", Some(status), None, Some(message))
 }
 
-fn read_claude_credentials(config_dir: Option<&std::path::Path>) -> Option<ClaudeCredentials> {
+pub(crate) fn read_claude_credentials(
+    config_dir: Option<&std::path::Path>,
+) -> Option<ClaudeCredentials> {
     #[cfg(target_os = "macos")]
     {
         let service = claude_keychain_service(config_dir);
@@ -551,7 +532,7 @@ pub(crate) fn token_expired(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
     expires_at_ms.is_some_and(|expires| now_ms >= expires)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)

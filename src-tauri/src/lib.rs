@@ -5,6 +5,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+mod claude_resets;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -451,6 +452,7 @@ pub fn run() {
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
+            claude_resets::consume_claude_rate_limit_reset,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
             pty::pty_write,

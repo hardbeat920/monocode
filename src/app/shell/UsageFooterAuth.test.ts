@@ -8,6 +8,7 @@ const auth = vi.hoisted(() => ({
   loginHarness: vi.fn<(_harness: string) => Promise<void>>(),
 }));
 const rateLimitsFetch = vi.hoisted(() => ({
+  consumeClaudeRateLimitResetCredit: vi.fn(),
   consumeCodexRateLimitResetCredit: vi.fn(),
   fetchClaudeRateLimits: vi.fn(),
   fetchCodexRateLimits: vi.fn(),
@@ -45,12 +46,54 @@ beforeEach(() => {
   );
   auth.loginHarness.mockReset();
   rateLimitsFetch.consumeCodexRateLimitResetCredit.mockReset();
+  rateLimitsFetch.consumeClaudeRateLimitResetCredit.mockReset();
   rateLimitsFetch.fetchClaudeRateLimits.mockReset();
   rateLimitsFetch.fetchCodexRateLimits.mockReset();
   clearCachedRateLimits();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+});
+
+it("redeems a confirmed Claude offer and reloads its account usage", async () => {
+  const limits = {
+    ...connectedLimits("claude"),
+    resetCredits: {
+      availableCount: 1,
+      credits: [
+        {
+          id: "cedar_ember:promo",
+          resetType: "claudeCedar" as const,
+          status: "available" as const,
+          grantedAt: null,
+          expiresAt: Date.now() + 86400000,
+          title: "Full reset",
+          description: "Resets session and weekly limits.",
+        },
+      ],
+    },
+  };
+  rateLimitsFetch.fetchClaudeRateLimits
+    .mockResolvedValueOnce(limits)
+    .mockResolvedValue(connectedLimits("claude"));
+  rateLimitsFetch.consumeClaudeRateLimitResetCredit.mockResolvedValue("reset");
+  await act(async () =>
+    root.render(createElement(UsageFooter, { providers: ["claude"] })),
+  );
+  await act(async () => button("Claude Code usage details").click());
+  expect(
+    rateLimitsFetch.consumeClaudeRateLimitResetCredit,
+  ).not.toHaveBeenCalled();
+  await act(async () => button("Use reset").click());
+  expect(
+    rateLimitsFetch.consumeClaudeRateLimitResetCredit,
+  ).not.toHaveBeenCalled();
+  await act(async () => button("Confirm").click());
+  expect(
+    rateLimitsFetch.consumeClaudeRateLimitResetCredit,
+  ).toHaveBeenCalledExactlyOnceWith("cedar_ember:promo", "default");
+  expect(rateLimitsFetch.fetchClaudeRateLimits).toHaveBeenCalledTimes(2);
+  expect(document.body.textContent).toContain("Claude Code usage was reset.");
 });
 
 afterEach(() => {
