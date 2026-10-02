@@ -17,6 +17,7 @@ import {
   nativeCommandsFromUpdate,
   sessionIdFromResult,
 } from "./opencrabsProtocol";
+import { AcpSubagents } from "../../core/acpSubagents";
 import { handlePermission } from "./opencrabsApproval";
 import {
   cacheNativeCommands,
@@ -44,6 +45,7 @@ export type Live = {
   cancelled: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
+  subagents: AcpSubagents;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, (decision: ApprovalDecision) => void>;
   turns: Promise<void>;
@@ -246,6 +248,7 @@ export async function ensureLive(input: SendTurnInput): Promise<Live> {
       cancelled: false,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
+      subagents: new AcpSubagents(),
       onEvent: input.onEvent,
       approvals: new Map(),
       turns: Promise.resolve(),
@@ -333,7 +336,10 @@ function handleNotification(live: Live, method: string, params: unknown) {
     cacheNativeCommands(live.threadId, commands);
     return;
   }
-  for (const event of eventsFromAcpUpdate(params)) {
+  for (const event of live.subagents.route(
+    params,
+    eventsFromAcpUpdate(params),
+  )) {
     live.onEvent(event);
   }
 }
