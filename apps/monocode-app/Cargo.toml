@@ -1,0 +1,23 @@
+[package]
+name = "monocode-app"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "MonoCode, native GPUI app"
+
+[[bin]]
+name = "monocode-app"
+path = "src/main.rs"
+
+[features]
+# Builds the `--screenshot` flag, which needs `Window::render_to_image`.
+screenshot = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+monocode-ui.workspace = true
+anyhow.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }

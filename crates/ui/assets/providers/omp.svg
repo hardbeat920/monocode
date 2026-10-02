@@ -1,0 +1,10 @@
+<svg viewBox="0 0 64 64" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+  <defs>
+    <linearGradient id="pi-mark-1-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f84fcc"/>
+      <stop offset=".5" stop-color="#9362f4"/>
+      <stop offset="1" stop-color="#00dbe4"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pi-mark-1-grad)" d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z"/>
+</svg>

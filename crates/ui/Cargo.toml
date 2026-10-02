@@ -1,0 +1,16 @@
+[package]
+name = "monocode-ui"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rust-embed = { version = "8", features = ["include-exclude"] }
+gpui-component-assets = { git = "https://github.com/zeronsh/gpui-component", rev = "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70" }
