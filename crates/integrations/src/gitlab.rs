@@ -1,3 +1,6 @@
+//! GitLab work items, todos, threads, and merge request diffs. Moved from
+//! src-tauri/src/gitlab.rs.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -5,7 +8,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
 
 const DEFAULT_GITLAB_URL: &str = "https://gitlab.com";
 const DEFAULT_LIMIT: u32 = 40;
@@ -113,9 +115,8 @@ pub struct GitlabMrDiff {
     pub truncated: bool,
 }
 
-#[tauri::command(async)]
-pub fn gitlab_status(app: AppHandle) -> Result<GitlabStatus, String> {
-    let config = read_config(&app)?;
+pub fn gitlab_status(data_dir: &Path) -> Result<GitlabStatus, String> {
+    let config = read_config(data_dir)?;
     Ok(GitlabStatus {
         connected: config.is_some(),
         url: config
@@ -124,148 +125,104 @@ pub fn gitlab_status(app: AppHandle) -> Result<GitlabStatus, String> {
     })
 }
 
-#[tauri::command]
-pub async fn gitlab_set_config(
-    app: AppHandle,
+pub fn gitlab_set_config(
+    data_dir: &Path,
     url: String,
     token: String,
 ) -> Result<GitlabStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let url = normalize_gitlab_url(&url)?;
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            delete_config(&app)?;
-            return Ok(GitlabStatus {
-                connected: false,
-                url,
-            });
-        }
-        let config = GitlabConfig { url, token };
-        let response = gitlab_get(&config, "/user")?;
-        if response.value.get("id").and_then(Value::as_i64).is_none() {
-            return Err("GitLab did not return the current user".into());
-        }
-        write_config(&app, &config)?;
-        Ok(GitlabStatus {
-            connected: true,
-            url: config.url,
-        })
+    let url = normalize_gitlab_url(&url)?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        delete_config(data_dir)?;
+        return Ok(GitlabStatus {
+            connected: false,
+            url,
+        });
+    }
+    let config = GitlabConfig { url, token };
+    let response = gitlab_get(&config, "/user")?;
+    if response.value.get("id").and_then(Value::as_i64).is_none() {
+        return Err("GitLab did not return the current user".into());
+    }
+    write_config(data_dir, &config)?;
+    Ok(GitlabStatus {
+        connected: true,
+        url: config.url,
     })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn gitlab_repo(app: AppHandle, cwd: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        gitlab_repo_for(&expand_home(&cwd), &config.url)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn gitlab_repo(data_dir: &Path, cwd: String) -> Result<String, String> {
+    let config = require_config(data_dir)?;
+    gitlab_repo_for(&expand_home(&cwd), &config.url)
 }
 
-#[tauri::command]
-pub async fn gitlab_list_work_items(
-    app: AppHandle,
+pub fn gitlab_list_work_items(
+    data_dir: &Path,
     cwd: String,
     kind: String,
     assigned_to_me: bool,
     state: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitlabWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
-        gitlab_list_work_items_for(
-            &config,
-            &repo,
-            &kind,
-            assigned_to_me,
-            &state,
-            limit.unwrap_or(DEFAULT_LIMIT),
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = gitlab_repo_for(&expand_home(&cwd), &config.url)?;
+    gitlab_list_work_items_for(
+        &config,
+        &repo,
+        &kind,
+        assigned_to_me,
+        &state,
+        limit.unwrap_or(DEFAULT_LIMIT),
+    )
 }
 
-#[tauri::command]
-pub async fn gitlab_list_todos(
-    app: AppHandle,
+pub fn gitlab_list_todos(
+    data_dir: &Path,
     kind: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitlabWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        gitlab_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    gitlab_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
 }
 
-#[tauri::command]
-pub async fn gitlab_work_item_details(
-    app: AppHandle,
+pub fn gitlab_work_item_details(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitlabWorkItemDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
-        gitlab_work_item_details_for(&config, &repo, &kind, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = validate_repo(&repo)?;
+    gitlab_work_item_details_for(&config, &repo, &kind, number)
 }
 
-#[tauri::command]
-pub async fn gitlab_work_item_thread(
-    app: AppHandle,
+pub fn gitlab_work_item_thread(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitlabWorkItemThread, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
-        gitlab_work_item_thread_for(&config, &repo, &kind, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = validate_repo(&repo)?;
+    gitlab_work_item_thread_for(&config, &repo, &kind, number)
 }
 
-#[tauri::command]
-pub async fn gitlab_work_item_comment(
-    app: AppHandle,
+pub fn gitlab_work_item_comment(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
     body: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
-        gitlab_work_item_comment_for(&config, &repo, &kind, number, &body)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = validate_repo(&repo)?;
+    gitlab_work_item_comment_for(&config, &repo, &kind, number, &body)
 }
 
-#[tauri::command]
-pub async fn gitlab_mr_diff(
-    app: AppHandle,
-    repo: String,
-    number: i64,
-) -> Result<GitlabMrDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
-        gitlab_mr_diff_for(&config, &repo, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn gitlab_mr_diff(data_dir: &Path, repo: String, number: i64) -> Result<GitlabMrDiff, String> {
+    let config = require_config(data_dir)?;
+    let repo = validate_repo(&repo)?;
+    gitlab_mr_diff_for(&config, &repo, number)
 }
 
 fn gitlab_list_work_items_for(
@@ -738,10 +695,10 @@ fn parse_assignees(row: &Value) -> Vec<GitlabAssignee> {
         .and_then(Value::as_array)
         .map(|people| people.iter().collect())
         .unwrap_or_default();
-    if people.is_empty() {
-        if let Some(assignee) = row.get("assignee").filter(|value| value.is_object()) {
-            people.push(assignee);
-        }
+    if people.is_empty()
+        && let Some(assignee) = row.get("assignee").filter(|value| value.is_object())
+    {
+        people.push(assignee);
     }
     people
         .into_iter()
@@ -931,7 +888,7 @@ fn encode_path_component(value: &str) -> String {
 
 fn gitlab_repo_for(root: &Path, gitlab_url: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd
         .args(["config", "--get-regexp", r"^remote\..*\.url$"])
         .current_dir(root)
@@ -1033,16 +990,12 @@ fn valid_project_path(path: &str) -> bool {
         })
 }
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("gitlab-config.json"))
+fn config_path(data_dir: &Path) -> Result<PathBuf, String> {
+    Ok(data_dir.join("gitlab-config.json"))
 }
 
-fn read_config(app: &AppHandle) -> Result<Option<GitlabConfig>, String> {
-    let path = config_path(app)?;
+fn read_config(data_dir: &Path) -> Result<Option<GitlabConfig>, String> {
+    let path = config_path(data_dir)?;
     match fs::read_to_string(path) {
         Ok(raw) => {
             let mut config: GitlabConfig = serde_json::from_str(&raw)
@@ -1060,12 +1013,12 @@ fn read_config(app: &AppHandle) -> Result<Option<GitlabConfig>, String> {
     }
 }
 
-fn require_config(app: &AppHandle) -> Result<GitlabConfig, String> {
-    read_config(app)?.ok_or_else(|| "Connect GitLab in Settings".to_string())
+fn require_config(data_dir: &Path) -> Result<GitlabConfig, String> {
+    read_config(data_dir)?.ok_or_else(|| "Connect GitLab in Settings".to_string())
 }
 
-fn write_config(app: &AppHandle, config: &GitlabConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+fn write_config(data_dir: &Path, config: &GitlabConfig) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -1073,8 +1026,8 @@ fn write_config(app: &AppHandle, config: &GitlabConfig) -> Result<(), String> {
     write_secret_file(&path, &value)
 }
 
-fn delete_config(app: &AppHandle) -> Result<(), String> {
-    let path = config_path(app)?;
+fn delete_config(data_dir: &Path) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1106,12 +1059,12 @@ fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
 
 fn expand_home(input: &str) -> PathBuf {
     if input == "~" {
-        return crate::dirs_home()
+        return monocode_platform::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(input));
     }
     if let Some(rest) = input.strip_prefix("~/") {
-        return crate::dirs_home()
+        return monocode_platform::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("~"))
             .join(rest);
@@ -1182,11 +1135,13 @@ mod tests {
             .as_deref(),
             Some("acme/web")
         );
-        assert!(project_from_remote(
-            "https://code.example.com/gitlab-old/acme/web.git",
-            "https://code.example.com/gitlab"
-        )
-        .is_none());
+        assert!(
+            project_from_remote(
+                "https://code.example.com/gitlab-old/acme/web.git",
+                "https://code.example.com/gitlab"
+            )
+            .is_none()
+        );
     }
 
     #[test]

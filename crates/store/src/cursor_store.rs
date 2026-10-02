@@ -1,3 +1,6 @@
+//! Read-only access to Cursor's local session stores. Moved from
+//! src-tauri/src/cursor_store.rs.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -6,7 +9,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::dirs_home;
+use monocode_platform::dirs_home;
 
 /// Skip huge blobs (reasoning dumps). Everything else is scanned newest-first
 /// until every requested id is found — Cursor writes many non-JSON rows that
@@ -53,8 +56,7 @@ pub struct CursorSubagentStep {
 
 /// Cursor's ACP transport omits child interaction updates. The child's own
 /// store identifies its parent and spawn call in meta[0].subagentInfo.
-#[tauri::command]
-pub async fn cursor_subagent_runs(
+pub fn cursor_subagent_runs(
     session_id: String,
     tool_call_ids: Vec<String>,
     known_revisions: Option<HashMap<String, String>>,
@@ -70,16 +72,12 @@ pub async fn cursor_subagent_runs(
         return Ok(Vec::new());
     }
     let home = dirs_home().ok_or("Home directory is unavailable")?;
-    tauri::async_runtime::spawn_blocking(move || {
-        lookup_subagent_runs(
-            &PathBuf::from(home).join(".cursor"),
-            &session_id,
-            &tool_call_ids,
-            &known_revisions.unwrap_or_default(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())
+    Ok(lookup_subagent_runs(
+        &PathBuf::from(home).join(".cursor"),
+        &session_id,
+        &tool_call_ids,
+        &known_revisions.unwrap_or_default(),
+    ))
 }
 
 fn lookup_subagent_runs(
@@ -210,15 +208,13 @@ fn read_subagent_steps(
     for (blob_id, message) in messages {
         let role = message.get("role").and_then(Value::as_str);
         let content = message.get("content");
-        if role == Some("assistant") {
-            if let Some(id) = message
+        if role == Some("assistant")
+            && let Some(id) = message
                 .pointer("/providerOptions/cursor/systemPromptFingerprint/model")
                 .and_then(Value::as_str)
-            {
-                if !id.trim().is_empty() {
-                    model = Some(cap_text(id.trim(), 200));
-                }
-            }
+            && !id.trim().is_empty()
+        {
+            model = Some(cap_text(id.trim(), 200));
         }
         if role == Some("user") && prompt.is_none() {
             let text = cursor_content_text(content);
@@ -322,8 +318,7 @@ fn cap_text(value: &str, limit: usize) -> String {
 ///
 /// Cursor persists the complete call in a per-session SQLite store before
 /// sending the corresponding result. MonoCode only opens that store read-only.
-#[tauri::command]
-pub async fn cursor_tool_calls(
+pub fn cursor_tool_calls(
     session_id: String,
     tool_call_ids: Vec<String>,
 ) -> Result<Vec<CursorToolCall>, String> {
@@ -334,13 +329,8 @@ pub async fn cursor_tool_calls(
     for tool_call_id in &tool_call_ids {
         validate_id(tool_call_id, "tool call")?;
     }
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let store = find_session_store(&session_id)?;
-        read_tool_calls(&store, &tool_call_ids)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let store = find_session_store(&session_id)?;
+    read_tool_calls(&store, &tool_call_ids)
 }
 
 fn validate_id(value: &str, label: &str) -> Result<(), String> {
@@ -596,13 +586,15 @@ mod tests {
         assert_eq!(runs[0].steps[0].text, "Reviewing.");
         let revisions = HashMap::from([("child".to_owned(), runs[0].revision.clone())]);
         assert!(lookup_subagent_runs(&fixture.0, "parent", &ids, &revisions).is_empty());
-        assert!(lookup_subagent_runs(
-            &fixture.0,
-            "parent",
-            &["missing-call".into()],
-            &HashMap::new()
-        )
-        .is_empty());
+        assert!(
+            lookup_subagent_runs(
+                &fixture.0,
+                "parent",
+                &["missing-call".into()],
+                &HashMap::new()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

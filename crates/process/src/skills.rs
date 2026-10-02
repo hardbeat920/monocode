@@ -1,10 +1,11 @@
+//! Skill discovery. Moved from src-tauri/src/skills.rs.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::dirs_home;
-use crate::fs::expand_home;
+use monocode_platform::{dirs_home, expand_home};
 
 const MAX_SKILLS: usize = 300;
 const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;
@@ -49,12 +50,11 @@ impl DisabledFilter {
         if self.normalized.contains(&normalized) {
             return true;
         }
-        if !self.canonical.is_empty() {
-            if let Ok(canon) = std::fs::canonicalize(path) {
-                if self.canonical.contains(&canon) {
-                    return true;
-                }
-            }
+        if !self.canonical.is_empty()
+            && let Ok(canon) = std::fs::canonicalize(path)
+            && self.canonical.contains(&canon)
+        {
+            return true;
         }
         false
     }
@@ -81,7 +81,6 @@ fn normalize_path_for_compare(path: &str) -> String {
 /// harness folders. Same name: earlier roots win.
 /// Excludes disabled paths before deduplication so lower-priority enabled
 /// same-name files can fall through.
-#[tauri::command(async)]
 pub fn list_skills(
     cwd: String,
     disabled_paths: Option<Vec<String>>,
@@ -95,7 +94,7 @@ pub fn list_skills(
     ))
 }
 
-pub(crate) fn list_skills_from(
+pub fn list_skills_from(
     project: &Path,
     home: Option<&Path>,
     disabled_paths: Option<&[String]>,
@@ -400,7 +399,7 @@ fn scan_root(root: &Path, scope: &str, source: &str) -> Vec<DiscoveredSkill> {
         out.push(DiscoveredSkill {
             name,
             description,
-            path: crate::fs::path_to_js(&skill_md),
+            path: monocode_platform::path_to_js(&skill_md),
             scope: scope.to_string(),
             source: source.to_string(),
         });
@@ -850,9 +849,11 @@ mod tests {
         assert_eq!(skill.description, "Plan from plugin");
         assert_eq!(skill.source, "claude");
         assert_eq!(skill.scope, "user");
-        assert!(skill
-            .path
-            .ends_with("workflow-kit/1.2.3/skills/quick-plan/SKILL.md"));
+        assert!(
+            skill
+                .path
+                .ends_with("workflow-kit/1.2.3/skills/quick-plan/SKILL.md")
+        );
         assert!(skills.iter().any(|skill| skill.name == "quick-plan"));
     }
 
@@ -897,9 +898,11 @@ mod tests {
         assert_eq!(skill.scope, "project");
 
         let unrelated = list_skills_from(&other.0, Some(&home.0), None);
-        assert!(!unrelated
-            .iter()
-            .any(|skill| skill.name == "workflow-kit:feature-delivery"));
+        assert!(
+            !unrelated
+                .iter()
+                .any(|skill| skill.name == "workflow-kit:feature-delivery")
+        );
     }
 
     #[test]
@@ -923,9 +926,11 @@ mod tests {
         write_plugin_setting(&home.0, "settings.json", "workflow-kit@community", false);
 
         let skills = list_skills_from(&project.0, Some(&home.0), None);
-        assert!(!skills
-            .iter()
-            .any(|skill| skill.name == "workflow-kit:quick-plan"));
+        assert!(
+            !skills
+                .iter()
+                .any(|skill| skill.name == "workflow-kit:quick-plan")
+        );
     }
 
     #[test]
@@ -1041,9 +1046,9 @@ mod tests {
         );
 
         let project_skill_path =
-            crate::fs::path_to_js(&project.0.join(".agents/skills/review/SKILL.md"));
+            monocode_platform::path_to_js(&project.0.join(".agents/skills/review/SKILL.md"));
         let personal_skill_path =
-            crate::fs::path_to_js(&home.0.join(".agents/skills/review/SKILL.md"));
+            monocode_platform::path_to_js(&home.0.join(".agents/skills/review/SKILL.md"));
 
         // 1. When neither is disabled, project skill wins.
         let enabled_skills = list_skills_from(&project.0, Some(&home.0), None);
@@ -1138,7 +1143,7 @@ mod tests {
         assert!(skill_with_bs_dir.join("SKILL.md").exists());
         assert!(nested_file.exists());
 
-        let nested_path = crate::fs::path_to_js(&nested_file);
+        let nested_path = monocode_platform::path_to_js(&nested_file);
         let skills = list_skills_from(&project.0, None, Some(&[nested_path]));
         let slash_skill = skills.iter().find(|s| s.name == "slash-skill");
         assert!(

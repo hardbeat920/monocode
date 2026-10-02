@@ -1,21 +1,23 @@
+//! Files, git, `gh` calls, and omp and Claude transcript readers. Moved from
+//! src-tauri/src/fs.rs.
+
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::dirs_home;
+use monocode_platform::dirs_home;
 
-pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
-pub(crate) const MAX_ATTACHMENT_EMBED_BYTES: u64 = 20 * 1024 * 1024;
-pub(crate) const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
+pub const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+pub use monocode_platform::MAX_ATTACHMENT_EMBED_BYTES;
+pub const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_DATA_BYTES: u64 = MAX_GENERATED_IMAGE_BYTES * 4 / 3 + 4;
 const GENERATED_IMAGE_DIR: &str = "generated-images";
@@ -40,7 +42,6 @@ pub struct ProjectLocation {
 /// A rename preserves the directory identity. We only inspect direct siblings
 /// of the missing path, which keeps this bounded and avoids a filesystem watch
 /// or a broad disk search.
-#[tauri::command(async)]
 pub fn resolve_project_location(
     path: String,
     identity: Option<String>,
@@ -104,7 +105,7 @@ fn directory_identity(path: &Path) -> Result<String, String> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
     };
 
     let file = OpenOptions::new()
@@ -164,7 +165,6 @@ pub struct OmpAssistantText {
 /// from their persisted transcript. The provider id is already stored with the
 /// session; matching the original JSONL keeps the repair deterministic instead
 /// of guessing from neighbouring reasoning text.
-#[tauri::command(async)]
 pub fn omp_session_interjections(
     provider_session_id: String,
 ) -> Result<Vec<OmpInterjectionAnchor>, String> {
@@ -174,7 +174,6 @@ pub fn omp_session_interjections(
     parse_omp_interjections(&path)
 }
 
-#[tauri::command(async)]
 pub fn omp_active_assistant_texts(
     provider_session_id: String,
 ) -> Result<Vec<OmpAssistantText>, String> {
@@ -186,9 +185,8 @@ pub fn omp_active_assistant_texts(
 
 /// Recover Bash commands that older UI builds saved as a bare "Shell" row.
 /// Claude's own transcript retains the complete tool input by tool-use id.
-#[tauri::command(async)]
 pub fn claude_shell_commands(
-    app: AppHandle,
+    data_dir: &Path,
     provider_session_id: String,
     provider_account_id: Option<String>,
     tool_ids: Vec<String>,
@@ -204,7 +202,9 @@ pub fn claude_shell_commands(
         return Ok(HashMap::new());
     }
     let config_dir = match provider_account_id.as_deref() {
-        Some(id) if id != "default" => crate::harness::provider_account_path(&app, "claude", id)?,
+        Some(id) if id != "default" => {
+            monocode_process::harness::provider_account_path(data_dir, "claude", id)?
+        }
         _ => match std::env::var_os("CLAUDE_CONFIG_DIR") {
             Some(path) => PathBuf::from(path),
             None => {
@@ -252,14 +252,12 @@ fn claude_shell_commands_from_file(
             };
             if wanted.contains(id)
                 && block.get("name").and_then(serde_json::Value::as_str) == Some("Bash")
-            {
-                if let Some(command) = block
+                && let Some(command) = block
                     .pointer("/input/command")
                     .and_then(serde_json::Value::as_str)
                     .filter(|command| !command.trim().is_empty())
-                {
-                    commands.insert(id.to_owned(), command.to_owned());
-                }
+            {
+                commands.insert(id.to_owned(), command.to_owned());
             }
         }
         if commands.len() == wanted.len() {
@@ -527,12 +525,11 @@ fn parse_omp_interjections(path: &Path) -> Result<Vec<OmpInterjectionAnchor>, St
 }
 
 /// Immediate children of `path` (project tree). Folders first, then files.
-#[tauri::command(async)]
 pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     list_dir_sync(&expand_home(&path))
 }
 
-pub(crate) fn list_dir_sync(dir: &Path) -> Result<Vec<DirEntry>, String> {
+pub fn list_dir_sync(dir: &Path) -> Result<Vec<DirEntry>, String> {
     let reader = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
     let mut out = Vec::new();
@@ -627,21 +624,18 @@ const MAX_WALK_DIRS: usize = 4_000;
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectFile {
-    pub(crate) name: String,
-    pub(crate) path: String,
-    pub(crate) relative: String,
+    pub name: String,
+    pub path: String,
+    pub relative: String,
 }
 
 /// Workspace files for Quick Open. Prefer `git ls-files` (gitignore-aware,
 /// index-backed); otherwise a bounded walk that never descends into vendor dirs.
-#[tauri::command]
-pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_project_files_sync(&cwd))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
+    list_project_files_sync(&cwd)
 }
 
-pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+pub fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
     list_project_files_sync_cancellable(cwd, None)
 }
 
@@ -651,7 +645,7 @@ pub(crate) fn list_project_files_sync(cwd: &str) -> Result<Vec<ProjectFile>, Str
 /// so both take the flag: `git ls-files` and the walk it falls back to. The
 /// walk is the one that can run for minutes, but the listing is the one that
 /// can hold a hundred megabytes, so neither is left uninterruptible.
-pub(crate) fn list_project_files_sync_cancellable(
+pub fn list_project_files_sync_cancellable(
     cwd: &str,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<ProjectFile>, String> {
@@ -780,7 +774,7 @@ fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectF
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GitInfo {
+pub struct GitInfo {
     pub branch: Option<String>,
     pub repo: Option<String>,
 }
@@ -794,7 +788,7 @@ const GIT_INFO_TTL: Duration = Duration::from_secs(3);
 
 static GIT_INFO_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, GitInfo)>>> = Mutex::new(None);
 
-pub(crate) fn git_info_for(root: &Path) -> GitInfo {
+pub fn git_info_for(root: &Path) -> GitInfo {
     if let Ok(mut guard) = GIT_INFO_CACHE.lock() {
         let cache = guard.get_or_insert_with(HashMap::new);
         cache.retain(|_, (at, _)| at.elapsed() < GIT_INFO_TTL);
@@ -837,11 +831,8 @@ pub struct GitDiffStats {
 
 /// Uncommitted line counts for the opened folder: staged + unstaged vs HEAD,
 /// plus untracked (gitignore-aware) files counted as additions.
-#[tauri::command]
-pub async fn git_diff_stats(cwd: String) -> Result<GitDiffStats, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_stats_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())
+pub fn git_diff_stats(cwd: String) -> GitDiffStats {
+    git_diff_stats_for(&expand_home(&cwd))
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -874,19 +865,13 @@ pub struct GitDiffIndex {
 }
 
 /// Changed files in the opened folder, with per-file line counts and status.
-#[tauri::command]
-pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_index_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())
+pub fn git_diff_index(cwd: String) -> GitDiffIndex {
+    git_diff_index_for(&expand_home(&cwd))
 }
 
 /// Changed files and counts without branch/upstream synchronization metadata.
-#[tauri::command]
-pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_files_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())
+pub fn git_diff_files(cwd: String) -> GitDiffIndex {
+    git_diff_files_for(&expand_home(&cwd))
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -903,17 +888,8 @@ pub struct GitFileDiff {
 
 /// Contents for one changed file. Staged diffs compare HEAD to the index;
 /// unstaged diffs compare the index to the working tree.
-#[tauri::command]
-pub async fn git_file_diff(
-    cwd: String,
-    relative: String,
-    staged: bool,
-) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_file_diff_for(&expand_home(&cwd), &relative, staged)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_file_diff(cwd: String, relative: String, staged: bool) -> Result<GitFileDiff, String> {
+    git_file_diff_for(&expand_home(&cwd), &relative, staged)
 }
 
 const GIT_HISTORY_DEFAULT: u32 = 200;
@@ -948,103 +924,57 @@ pub struct GitHistory {
 
 /// Recent commits for the Graph view: HEAD, upstream, and the default
 /// branch. Newest first, with parent SHAs for the graph.
-#[tauri::command]
-pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, String> {
-    tauri::async_runtime::spawn_blocking(move || git_history_for(&expand_home(&cwd), limit))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, String> {
+    git_history_for(&expand_home(&cwd), limit)
 }
 
 /// Files changed in one commit (first parent / root).
-#[tauri::command]
-pub async fn git_commit_files(cwd: String, sha: String) -> Result<Vec<GitChangedFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_files_for(&expand_home(&cwd), &sha))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_commit_files(cwd: String, sha: String) -> Result<Vec<GitChangedFile>, String> {
+    git_commit_files_for(&expand_home(&cwd), &sha)
 }
 
 /// Parent vs commit contents for one path in a historical commit.
-#[tauri::command]
-pub async fn git_commit_file_diff(
+pub fn git_commit_file_diff(
     cwd: String,
     sha: String,
     relative: String,
 ) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_commit_file_diff_for(&expand_home(&cwd), &sha, &relative)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_commit_file_diff_for(&expand_home(&cwd), &sha, &relative)
 }
 
 /// Stage a changed file (`git add`).
-#[tauri::command]
-pub async fn git_stage_file(cwd: String, relative: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_stage_file_for(&expand_home(&cwd), &relative))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_stage_file(cwd: String, relative: String) -> Result<(), String> {
+    git_stage_file_for(&expand_home(&cwd), &relative)
 }
 
 /// Write `contents` into the index for one path, leaving the working tree alone.
-#[tauri::command]
-pub async fn git_stage_contents(
-    cwd: String,
-    relative: String,
-    contents: String,
-) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_stage_contents_for(&expand_home(&cwd), &relative, contents.as_bytes())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_stage_contents(cwd: String, relative: String, contents: String) -> Result<(), String> {
+    git_stage_contents_for(&expand_home(&cwd), &relative, contents.as_bytes())
 }
 
 /// Unstage a file (`git restore --staged`).
-#[tauri::command]
-pub async fn git_unstage_file(cwd: String, relative: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_unstage_file_for(&expand_home(&cwd), &relative)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_unstage_file(cwd: String, relative: String) -> Result<(), String> {
+    git_unstage_file_for(&expand_home(&cwd), &relative)
 }
 
 /// Discard uncommitted changes so the file matches HEAD (or delete if untracked).
-#[tauri::command]
-pub async fn git_discard_file(cwd: String, relative: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_discard_file_for(&expand_home(&cwd), &relative)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_discard_file(cwd: String, relative: String) -> Result<(), String> {
+    git_discard_file_for(&expand_home(&cwd), &relative)
 }
 
 /// Discard every unstaged change (restore tracked files; delete untracked).
-#[tauri::command]
-pub async fn git_discard_all(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_discard_all_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_discard_all(cwd: String) -> Result<(), String> {
+    git_discard_all_for(&expand_home(&cwd))
 }
 
 /// Stage every changed file in the repo.
-#[tauri::command]
-pub async fn git_stage_all(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_checked(&expand_home(&cwd), &["add", "-A", "--", "."])
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_stage_all(cwd: String) -> Result<(), String> {
+    git_checked(&expand_home(&cwd), &["add", "-A", "--", "."])
 }
 
 /// Unstage every staged file.
-#[tauri::command]
-pub async fn git_unstage_all(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_checked(&expand_home(&cwd), &["restore", "--staged", "--", "."])
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_unstage_all(cwd: String) -> Result<(), String> {
+    git_checked(&expand_home(&cwd), &["restore", "--staged", "--", "."])
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1056,60 +986,38 @@ pub struct GitStagedContext {
 }
 
 /// Staged diff (or unstaged vs HEAD if nothing is staged) for commit text generation.
-#[tauri::command]
-pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String> {
-    tauri::async_runtime::spawn_blocking(move || git_staged_context_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_staged_context(cwd: String) -> Result<GitStagedContext, String> {
+    git_staged_context_for(&expand_home(&cwd))
 }
 
 /// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
-#[tauri::command]
-pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = expand_home(&cwd);
-        if amend {
-            git_commit_amend_for(&root, &message)
-        } else {
-            git_commit_for(&root, &message)
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+    let root = expand_home(&cwd);
+    if amend {
+        git_commit_amend_for(&root, &message)
+    } else {
+        git_commit_for(&root, &message)
+    }
 }
 
 /// Full message (subject and body) of the commit at HEAD.
-#[tauri::command]
-pub async fn git_head_message(cwd: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || git_head_message_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_head_message(cwd: String) -> Result<String, String> {
+    git_head_message_for(&expand_home(&cwd))
 }
 
 /// Push the current branch to its upstream, or set upstream on first push.
-#[tauri::command]
-pub async fn git_push(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_push_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_push(cwd: String) -> Result<(), String> {
+    git_push_for(&expand_home(&cwd))
 }
 
 /// Fast-forward the current branch from its upstream.
-#[tauri::command]
-pub async fn git_pull(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_checked(&expand_home(&cwd), &["pull", "--ff-only"])
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_pull(cwd: String) -> Result<(), String> {
+    git_checked(&expand_home(&cwd), &["pull", "--ff-only"])
 }
 
 /// Pull incoming commits, then push local commits.
-#[tauri::command]
-pub async fn git_sync(cwd: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || git_sync_changes_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_sync(cwd: String) -> Result<(), String> {
+    git_sync_changes_for(&expand_home(&cwd))
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1123,11 +1031,8 @@ pub struct GitRangeContext {
 }
 
 /// Commits and diff between the default branch and HEAD, for PR text generation.
-#[tauri::command]
-pub async fn git_range_context(cwd: String) -> Result<GitRangeContext, String> {
-    tauri::async_runtime::spawn_blocking(move || git_range_context_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_range_context(cwd: String) -> Result<GitRangeContext, String> {
+    git_range_context_for(&expand_home(&cwd))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -1140,11 +1045,8 @@ pub struct GitPr {
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
-#[tauri::command]
-pub async fn git_pr_status(cwd: String) -> Result<Option<GitPr>, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(git_pr_status_for(&expand_home(&cwd))))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_pr_status(cwd: String) -> Result<Option<GitPr>, String> {
+    Ok(git_pr_status_for(&expand_home(&cwd)))
 }
 
 #[derive(Deserialize)]
@@ -1156,27 +1058,22 @@ struct GitPrCreateInput {
 }
 
 /// Create a GitHub pull request with `gh` and return its URL.
-#[tauri::command]
-pub async fn git_pr_create(
+pub fn git_pr_create(
     cwd: String,
     title: String,
     body: String,
     base: String,
     head: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_pr_create_for(
-            &expand_home(&cwd),
-            &GitPrCreateInput {
-                title,
-                body,
-                base,
-                head,
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_pr_create_for(
+        &expand_home(&cwd),
+        &GitPrCreateInput {
+            title,
+            body,
+            base,
+            head,
+        },
+    )
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1229,15 +1126,12 @@ pub enum GitHubStarStatus {
 const MONOCODE_STAR_ENDPOINT: &str = "/user/starred/hardbeat920/monocode";
 
 /// Whether the GitHub CLI is installed and has an active authenticated account.
-#[tauri::command]
-pub async fn git_github_status() -> Result<GitHubStatus, String> {
-    tauri::async_runtime::spawn_blocking(git_github_status_for)
-        .await
-        .map_err(|error| error.to_string())
+pub fn git_github_status() -> GitHubStatus {
+    git_github_status_for()
 }
 
 fn git_github_status_for() -> GitHubStatus {
-    let Some(program) = crate::harness::resolve_gui_binary("gh") else {
+    let Some(program) = monocode_process::harness::resolve_gui_binary("gh") else {
         return GitHubStatus {
             connected: false,
             installed: false,
@@ -1250,8 +1144,8 @@ fn git_github_status_for() -> GitHubStatus {
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
-    crate::harness::apply_gui_env(&mut cmd);
-    crate::hide_window_console(&mut cmd);
+    monocode_process::harness::apply_gui_env(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let authenticated = cmd
         .output()
         .map(|output| output.status.success())
@@ -1264,11 +1158,8 @@ fn git_github_status_for() -> GitHubStatus {
 }
 
 /// Whether the active GitHub CLI account has starred the MonoCode repository.
-#[tauri::command]
-pub async fn github_monocode_star_status() -> Result<GitHubStarStatus, String> {
-    tauri::async_runtime::spawn_blocking(github_monocode_star_status_for)
-        .await
-        .map_err(|error| error.to_string())
+pub fn github_monocode_star_status() -> GitHubStarStatus {
+    github_monocode_star_status_for()
 }
 
 fn github_monocode_star_status_for() -> GitHubStarStatus {
@@ -1289,39 +1180,27 @@ fn github_star_status_from_result(result: Result<String, String>) -> GitHubStarS
 }
 
 /// Star the MonoCode repository for the active GitHub CLI account.
-#[tauri::command]
-pub async fn github_star_monocode() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        gh_run(
-            Path::new("."),
-            &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
-            true,
-        )
-        .map(|_| ())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn github_star_monocode() -> Result<(), String> {
+    gh_run(
+        Path::new("."),
+        &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
+        true,
+    )
+    .map(|_| ())
 }
 
 /// `owner/repo` for the GitHub remote of this working copy, via `gh`.
-#[tauri::command]
-pub async fn git_github_repo(cwd: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || git_github_repo_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_github_repo(cwd: String) -> Result<String, String> {
+    git_github_repo_for(&expand_home(&cwd))
 }
 
 /// The GitHub remote of this working copy and, when it is a fork, its parent.
-#[tauri::command]
-pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || git_github_repositories_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_github_repositories(cwd: String) -> Result<Vec<String>, String> {
+    git_github_repositories_for(&expand_home(&cwd))
 }
 
 /// Open issues or pull requests for one GitHub repository, via `gh`.
-#[tauri::command]
-pub async fn git_github_work_items(
+pub fn git_github_work_items(
     cwd: String,
     repo: String,
     kind: String,
@@ -1330,35 +1209,26 @@ pub async fn git_github_work_items(
     search: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitHubWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_items_for(
-            &expand_home(&cwd),
-            &repo,
-            &kind,
-            assigned_to_me,
-            &state,
-            &search,
-            limit.unwrap_or(40),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_work_items_for(
+        &expand_home(&cwd),
+        &repo,
+        &kind,
+        assigned_to_me,
+        &state,
+        &search,
+        limit.unwrap_or(40),
+    )
 }
 
 /// One issue or pull request by number, used when session navigation misses
 /// the existing Inbox cache.
-#[tauri::command]
-pub async fn git_github_work_item(
+pub fn git_github_work_item(
     cwd: String,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItem, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1373,18 +1243,13 @@ pub struct GitHubWorkItemDetails {
 }
 
 /// Issue or pull request body for the inbox detail pane.
-#[tauri::command]
-pub async fn git_github_work_item_details(
+pub fn git_github_work_item_details(
     cwd: String,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1427,23 +1292,17 @@ pub struct GitHubWorkItemThread {
 }
 
 /// Conversation for the inbox detail pane: comments, reviews, and review threads.
-#[tauri::command]
-pub async fn git_github_work_item_thread(
+pub fn git_github_work_item_thread(
     cwd: String,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
 }
 
 /// Post a conversation comment, or a reply on a review thread.
-#[tauri::command]
-pub async fn git_github_work_item_comment(
+pub fn git_github_work_item_comment(
     cwd: String,
     repo: String,
     kind: String,
@@ -1451,33 +1310,24 @@ pub async fn git_github_work_item_comment(
     body: String,
     in_reply_to: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_comment_for(
-            &expand_home(&cwd),
-            &repo,
-            &kind,
-            number,
-            &body,
-            &in_reply_to,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_work_item_comment_for(
+        &expand_home(&cwd),
+        &repo,
+        &kind,
+        number,
+        &body,
+        &in_reply_to,
+    )
 }
 
 /// Merge or change the lifecycle state of a GitHub pull request via `gh`.
-#[tauri::command]
-pub async fn git_github_pr_action(
+pub fn git_github_pr_action(
     cwd: String,
     repo: String,
     number: i64,
     action: String,
 ) -> Result<GitHubWorkItem, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1502,19 +1352,14 @@ const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Unified diff and file stats for a pull request, via `gh`.
 /// When `full_context` is true, prefer a large-context `git diff` between the PR OIDs.
-#[tauri::command]
-pub async fn git_github_pr_diff(
+pub fn git_github_pr_diff(
     cwd: String,
     repo: String,
     number: i64,
     full_context: Option<bool>,
 ) -> Result<GitHubPrDiff, String> {
     let full_context = full_context.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1536,17 +1381,12 @@ pub struct GitHubPrChecks {
 }
 
 /// CI checks for one pull request, targeted explicitly by `repo` and `number` via `gh`.
-#[tauri::command]
-pub async fn git_github_pr_checks(
+pub fn git_github_pr_checks(
     cwd: String,
     repo: String,
     number: i64,
 ) -> Result<GitHubPrChecks, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_checks_for(&expand_home(&cwd), &repo, number)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    git_github_pr_checks_for(&expand_home(&cwd), &repo, number)
 }
 
 #[derive(Serialize, Debug)]
@@ -1578,22 +1418,17 @@ struct GitHubCheckAnnotation {
     level: String,
 }
 
-#[tauri::command]
-pub async fn git_github_check_details(
+pub fn git_github_check_details(
     cwd: String,
     repo: String,
     job_id: String,
 ) -> Result<GitHubCheckDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        github_check_details_with(&repo, &job_id, |endpoint| {
-            gh_checked(
-                &expand_home(&cwd),
-                &["api", "--hostname", "github.com", endpoint],
-            )
-        })
+    github_check_details_with(&repo, &job_id, |endpoint| {
+        gh_checked(
+            &expand_home(&cwd),
+            &["api", "--hostname", "github.com", endpoint],
+        )
     })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 fn github_check_details_with(
@@ -1704,43 +1539,23 @@ pub struct GitBranchEntry {
 }
 
 /// Local branches, plus remote-only branches that can be checked out.
-#[tauri::command]
-pub async fn git_branches(cwd: String) -> Result<GitBranches, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(git_branches_for(&expand_home(&cwd))))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_branches(cwd: String) -> Result<GitBranches, String> {
+    Ok(git_branches_for(&expand_home(&cwd)))
 }
 
 /// Switch to an existing local branch, or create a local tracking branch from a remote.
-#[tauri::command]
-pub async fn git_checkout(
-    cwd: String,
-    name: String,
-    remote: Option<String>,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_checkout_for(&expand_home(&cwd), &name, remote.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_checkout(cwd: String, name: String, remote: Option<String>) -> Result<String, String> {
+    git_checkout_for(&expand_home(&cwd), &name, remote.as_deref())
 }
 
 /// Create a branch from HEAD and switch to it.
-#[tauri::command]
-pub async fn git_create_branch(cwd: String, name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || git_create_branch_for(&expand_home(&cwd), &name))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn git_create_branch(cwd: String, name: String) -> Result<String, String> {
+    git_create_branch_for(&expand_home(&cwd), &name)
 }
 
 /// Stash tracked and untracked local changes so a checkout can proceed.
-#[tauri::command]
-pub async fn git_stash(cwd: String, message: Option<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_stash_for(&expand_home(&cwd), message.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn git_stash(cwd: String, message: Option<String>) -> Result<(), String> {
+    git_stash_for(&expand_home(&cwd), message.as_deref())
 }
 
 fn git_diff_stats_for(root: &Path) -> GitDiffStats {
@@ -1787,12 +1602,12 @@ struct FileAcc {
     unstaged: bool,
 }
 
-pub(crate) fn git_diff_index_for(root: &Path) -> GitDiffIndex {
+pub fn git_diff_index_for(root: &Path) -> GitDiffIndex {
     git_diff_index_with(root, true)
 }
 
 /// File list + counts only. Skips ahead/behind/remote lookups used by Git chrome.
-pub(crate) fn git_diff_files_for(root: &Path) -> GitDiffIndex {
+pub fn git_diff_files_for(root: &Path) -> GitDiffIndex {
     git_diff_index_with(root, false)
 }
 
@@ -2112,11 +1927,7 @@ fn git_file_diff_for(root: &Path, relative: &str, staged: bool) -> Result<GitFil
     let too_large =
         orig.len() as u64 > MAX_TEXT_FILE_BYTES || current.len() as u64 > MAX_TEXT_FILE_BYTES;
     let status = if !had_original && had_current {
-        if staged {
-            "added"
-        } else {
-            "untracked"
-        }
+        if staged { "added" } else { "untracked" }
     } else if had_original && !had_current {
         "deleted"
     } else {
@@ -2148,12 +1959,12 @@ fn git_history_tips(root: &Path) -> Vec<String> {
     if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
         tips.push("@{upstream}".to_string());
     }
-    if let Some(remote) = git_remote_name(root) {
-        if let Some(branch) = git_default_branch(root, Some(remote.as_str())) {
-            let spec = format!("{remote}/{branch}");
-            if git_ref_exists(root, &format!("refs/remotes/{spec}")) {
-                tips.push(spec);
-            }
+    if let Some(remote) = git_remote_name(root)
+        && let Some(branch) = git_default_branch(root, Some(remote.as_str()))
+    {
+        let spec = format!("{remote}/{branch}");
+        if git_ref_exists(root, &format!("refs/remotes/{spec}")) {
+            tips.push(spec);
         }
     }
     tips
@@ -3838,10 +3649,10 @@ fn github_fetch_remote(root: &Path) -> Option<String> {
     if let Some(name) = gh_resolved_remote(root) {
         return Some(name);
     }
-    if let Some(url) = gh_repo_view_url(root) {
-        if let Some(name) = remote_matching_github_url(root, &url) {
-            return Some(name);
-        }
+    if let Some(url) = gh_repo_view_url(root)
+        && let Some(name) = remote_matching_github_url(root, &url)
+    {
+        return Some(name);
     }
     git_remote_name(root)
 }
@@ -4094,7 +3905,7 @@ fn gh_checked(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
-    let program = crate::harness::resolve_gui_binary("gh")
+    let program = monocode_process::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
     cmd.current_dir(root)
@@ -4103,8 +3914,8 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
-    crate::harness::apply_gui_env(&mut cmd);
-    crate::hide_window_console(&mut cmd);
+    monocode_process::harness::apply_gui_env(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd.output().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
@@ -4134,7 +3945,7 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
     Err(detail)
 }
 
-pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
+pub fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
     let relative = normalize_diff_path(relative);
     if relative.is_empty()
         || relative.starts_with('/')
@@ -4153,7 +3964,7 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     cmd
 }
 
@@ -4170,10 +3981,10 @@ fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) 
 }
 
 fn git_cmd_for_args(args: &[&str]) -> Command {
-    git_cmd_for_args_with_path(args, crate::harness::gui_search_path)
+    git_cmd_for_args_with_path(args, monocode_process::harness::gui_search_path)
 }
 
-pub(crate) fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
+pub fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
     let mut cmd = git_cmd_for_args(args);
     let output = cmd
         .arg("--no-pager")
@@ -4238,7 +4049,7 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
 /// case, and `stop` explains why that one is left detached.
 const GIT_OUTPUT_QUEUE_CHUNKS: usize = 16;
 
-pub(crate) fn git_output_capped(
+pub fn git_output_capped(
     root: &Path,
     args: &[&str],
     max_bytes: usize,
@@ -4398,15 +4209,15 @@ fn git_branches_for(root: &Path) -> GitBranches {
         }
     }
 
-    if let Some(name) = &current_branch {
-        if !local_names.contains(name) {
-            local_names.insert(name.clone());
-            branches.push(GitBranchEntry {
-                name: name.clone(),
-                current: true,
-                remote: None,
-            });
-        }
+    if let Some(name) = &current_branch
+        && !local_names.contains(name)
+    {
+        local_names.insert(name.clone());
+        branches.push(GitBranchEntry {
+            name: name.clone(),
+            current: true,
+            remote: None,
+        });
     }
 
     if let Some(text) = git_run(
@@ -4678,11 +4489,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn file_name(path: &Path) -> Option<String> {
@@ -4920,7 +4727,6 @@ fn already_exists(label: &str) -> String {
 
 /// Create a file or folder under `parent`. `name` may contain `/` or `\` to
 /// nest. Returns the created path.
-#[tauri::command(async)]
 pub fn create_path(parent: String, name: String, is_dir: bool) -> Result<String, String> {
     let parent_dir = expand_home(&parent);
     let dest = resolve_under(&parent_dir, &name)?;
@@ -4948,42 +4754,7 @@ pub fn create_path(parent: String, name: String, is_dir: bool) -> Result<String,
     Ok(dest.to_string_lossy().into_owned())
 }
 
-pub(crate) fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        return dirs_home()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(path));
-    }
-    let rest = path.strip_prefix("~/").or_else(|| {
-        if cfg!(windows) {
-            path.strip_prefix("~\\")
-        } else {
-            None
-        }
-    });
-    if let Some(rest) = rest {
-        if let Some(home) = dirs_home() {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
-
-pub(crate) fn path_to_js(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    if cfg!(windows) {
-        text.replace('\\', "/")
-    } else {
-        text.into_owned()
-    }
-}
-
-#[cfg(all(test, unix))]
-#[test]
-fn preserves_unix_backslash_filenames() {
-    assert_eq!(path_to_js(Path::new(r"/tmp/a\b.txt")), r"/tmp/a\b.txt");
-    assert_eq!(expand_home(r"~\literal"), PathBuf::from(r"~\literal"));
-}
+pub use monocode_platform::{expand_home, path_to_js};
 
 /// Name-only `.gitignore` subset for directories outside a git repository.
 /// Inside a repository `git check-ignore` is the source of truth.
@@ -5038,11 +4809,8 @@ fn project_root(start: &Path) -> PathBuf {
 }
 
 /// Clone `url` into `parent`/`<repo-name>` and return the new directory.
-#[tauri::command]
-pub async fn clone_repo(url: String, parent: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || clone_repo_sync(&url, &parent))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn clone_repo(url: String, parent: String) -> Result<String, String> {
+    clone_repo_sync(&url, &parent)
 }
 
 fn clone_repo_sync(url: &str, parent: &str) -> Result<String, String> {
@@ -5100,7 +4868,6 @@ fn git_url_repo_name(url: &str) -> Option<String> {
 }
 
 /// First few lines of a text file for tool previews.
-#[tauri::command(async)]
 pub fn read_file_preview(
     path: String,
     max_lines: usize,
@@ -5157,7 +4924,6 @@ fn file_mtime_ms(meta: &std::fs::Metadata) -> Option<u64> {
 }
 
 /// Metadata only — used to notice disk changes on currently open editors.
-#[tauri::command(async)]
 pub fn stat_files(paths: Vec<String>) -> Result<Vec<FileMtime>, String> {
     if paths.len() > MAX_STAT_FILES {
         return Err("Too many paths".into());
@@ -5185,7 +4951,6 @@ pub struct PathInfo {
 }
 
 /// Metadata for files the composer is attaching (picker, drop, paste).
-#[tauri::command(async)]
 pub fn inspect_paths(paths: Vec<String>) -> Vec<PathInfo> {
     paths
         .into_iter()
@@ -5210,11 +4975,8 @@ fn inspect_path_sync(path: &str) -> Option<PathInfo> {
 }
 
 /// Base64-encode a file so vision images can be sent inline over ACP.
-#[tauri::command]
-pub async fn read_file_base64(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_file_base64_sync(&path))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn read_file_base64(path: String) -> Result<String, String> {
+    read_file_base64_sync(&path)
 }
 
 fn read_file_base64_sync(path: &str) -> Result<String, String> {
@@ -5241,12 +5003,8 @@ fn read_file_base64_sync(path: &str) -> Result<String, String> {
 /// Returns an `ipc::Response`, which reaches the webview as an ArrayBuffer, so
 /// previews skip the 33% base64 inflation that inline attachments pay. The
 /// caller decides what the bytes are by sniffing them; this only guards size.
-#[tauri::command]
-pub async fn read_binary_file(path: String) -> Result<tauri::ipc::Response, String> {
-    let bytes = tauri::async_runtime::spawn_blocking(move || read_binary_file_sync(&path))
-        .await
-        .map_err(|e| e.to_string())??;
-    Ok(tauri::ipc::Response::new(bytes))
+pub fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
+    read_binary_file_sync(&path)
 }
 
 fn read_binary_file_sync(path: &str) -> Result<Vec<u8>, String> {
@@ -5265,11 +5023,8 @@ fn read_binary_file_sync(path: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Persist a pasted blob so non-image attachments have a real path.
-#[tauri::command]
-pub async fn write_attachment(name: String, data: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || write_attachment_sync(&name, &data))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn write_attachment(name: String, data: String) -> Result<String, String> {
+    write_attachment_sync(&name, &data)
 }
 
 fn write_attachment_sync(name: &str, data: &str) -> Result<String, String> {
@@ -5309,19 +5064,16 @@ fn write_attachment_sync(name: &str, data: &str) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
-pub async fn save_generated_image(
-    app: AppHandle,
+pub fn save_generated_image(
+    data_dir: &Path,
     data: String,
     name: String,
 ) -> Result<GeneratedImageAsset, String> {
-    tauri::async_runtime::spawn_blocking(move || save_generated_image_sync(&app, &data, &name))
-        .await
-        .map_err(|e| e.to_string())?
+    save_generated_image_sync(data_dir, &data, &name)
 }
 
 fn save_generated_image_sync(
-    app: &AppHandle,
+    data_dir: &Path,
     data: &str,
     name: &str,
 ) -> Result<GeneratedImageAsset, String> {
@@ -5346,11 +5098,7 @@ fn save_generated_image_sync(
     if !is_png(&bytes) {
         return Err("Generated image data is not a PNG image.".into());
     }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(GENERATED_IMAGE_DIR);
+    let dir = data_dir.join(GENERATED_IMAGE_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let safe_name = safe_attachment_name(name);
     let destination = dir.join(format!("{}-{}.png", Uuid::new_v4(), safe_name));
@@ -5370,21 +5118,12 @@ fn save_generated_image_sync(
     })
 }
 
-#[tauri::command]
-pub async fn delete_generated_images(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || delete_generated_images_sync(&app, &paths))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn delete_generated_images(data_dir: &Path, paths: Vec<String>) -> Result<(), String> {
+    delete_generated_images_sync(data_dir, &paths)
 }
 
-pub(crate) fn delete_generated_images_sync(
-    app: &AppHandle,
-    paths: &[String],
-) -> Result<(), String> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+pub fn delete_generated_images_sync(data_dir: &Path, paths: &[String]) -> Result<(), String> {
+    let root = data_dir
         .join(GENERATED_IMAGE_DIR)
         .canonicalize()
         .map_err(|error| format!("Generated image directory is unavailable: {error}"))?;
@@ -5430,11 +5169,8 @@ fn safe_attachment_name(name: &str) -> String {
 }
 
 /// Read a reasonably sized UTF-8 file for the editor.
-#[tauri::command]
-pub async fn read_text_file(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_text_file_sync(&path))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn read_text_file(path: String) -> Result<String, String> {
+    read_text_file_sync(&path)
 }
 
 fn read_text_file_sync(path: &str) -> Result<String, String> {
@@ -5458,11 +5194,8 @@ fn read_text_file_sync(path: &str) -> Result<String, String> {
 }
 
 /// Atomically replace a text file from a temporary file in the same directory.
-#[tauri::command]
-pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || write_text_file_sync(&path, &content))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn write_text_file(path: String, content: String) -> Result<(), String> {
+    write_text_file_sync(&path, &content)
 }
 
 fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
@@ -5652,11 +5385,8 @@ fn rename_path_sync(path: &str, name: &str) -> Result<String, String> {
 }
 
 /// Rename `path` to `name` (relative to the current parent; `/` nests).
-#[tauri::command]
-pub async fn rename_path(path: String, name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || rename_path_sync(&path, &name))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn rename_path(path: String, name: String) -> Result<String, String> {
+    rename_path_sync(&path, &name)
 }
 
 fn delete_path_sync(path: &str) -> Result<(), String> {
@@ -5671,11 +5401,8 @@ fn delete_path_sync(path: &str) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-pub async fn delete_path(path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || delete_path_sync(&path))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn delete_path(path: String) -> Result<(), String> {
+    delete_path_sync(&path)
 }
 
 fn dir_contains(dir: &Path, dest_parent: &Path) -> bool {
@@ -5706,11 +5433,8 @@ fn copy_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     Ok(dest.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
-pub async fn copy_path(from: String, dest_parent: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || copy_path_sync(&from, &dest_parent))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn copy_path(from: String, dest_parent: String) -> Result<String, String> {
+    copy_path_sync(&from, &dest_parent)
 }
 
 fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
@@ -5737,14 +5461,10 @@ fn move_path_sync(from: &str, dest_parent: &str) -> Result<String, String> {
     Ok(dest.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
-pub async fn move_path(from: String, dest_parent: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || move_path_sync(&from, &dest_parent))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn move_path(from: String, dest_parent: String) -> Result<String, String> {
+    move_path_sync(&from, &dest_parent)
 }
 
-#[tauri::command]
 pub fn reveal_path(path: String) -> Result<(), String> {
     let path = expand_home(&path);
     if !path.exists() {
@@ -5790,27 +5510,22 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-pub async fn open_path_with_default_app(path: String) -> Result<(), String> {
+pub fn open_path_with_default_app(path: String) -> Result<(), String> {
     // The Tauri opener command needs a static path scope, and its detached
     // launcher cannot report a failing `open` process back to the UI.
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = expand_home(&path);
-        if !path.is_absolute() {
-            return Err("Expected an absolute file path".to_string());
-        }
-        std::fs::metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        open::that(&path).map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let path = expand_home(&path);
+    if !path.is_absolute() {
+        return Err("Expected an absolute file path".to_string());
+    }
+    std::fs::metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    open::that(&path).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -6495,16 +6210,20 @@ mod tests {
         // The walk still sees the file, so falling through after a cancelled
         // `git_ls_files` would reintroduce the listing the cancel was meant
         // to drop.
-        assert!(walk_project_files(&dir.0, WalkStop::Never)
-            .iter()
-            .any(|file| file.relative == "tracked.ts"));
+        assert!(
+            walk_project_files(&dir.0, WalkStop::Never)
+                .iter()
+                .any(|file| file.relative == "tracked.ts")
+        );
         let files =
             list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&cancel)).unwrap();
         assert!(files.is_empty());
-        assert!(git_ls_files(&dir.0, None)
-            .unwrap()
-            .iter()
-            .any(|file| file.relative == "tracked.ts"));
+        assert!(
+            git_ls_files(&dir.0, None)
+                .unwrap()
+                .iter()
+                .any(|file| file.relative == "tracked.ts")
+        );
     }
 
     fn init_git(dir: &Path, branch: &str, origin: Option<&str>) -> bool {
@@ -6876,10 +6595,12 @@ mod tests {
         );
         assert!(history.commits[0].head);
         assert!(!history.commits[1].head);
-        assert!(history.commits[0]
-            .refs
-            .iter()
-            .any(|r| r.kind == "local" && r.name == "main"));
+        assert!(
+            history.commits[0]
+                .refs
+                .iter()
+                .any(|r| r.kind == "local" && r.name == "main")
+        );
     }
 
     #[test]
@@ -6999,13 +6720,17 @@ mod tests {
         assert!(subjects.contains(&"main only"));
         assert!(subjects.contains(&"init"));
         assert!(!subjects.iter().any(|s| s.contains("feature only")));
-        assert!(!subjects
-            .iter()
-            .any(|s| s.contains("wip stash") || s.contains("WIP on")));
-        assert!(!history
-            .commits
-            .iter()
-            .any(|commit| commit.refs.iter().any(|r| r.name.contains("stash"))));
+        assert!(
+            !subjects
+                .iter()
+                .any(|s| s.contains("wip stash") || s.contains("WIP on"))
+        );
+        assert!(
+            !history
+                .commits
+                .iter()
+                .any(|commit| commit.refs.iter().any(|r| r.name.contains("stash")))
+        );
     }
 
     #[test]
@@ -7106,10 +6831,12 @@ mod tests {
             .unwrap();
         assert!(file.staged);
         assert!(!file.unstaged);
-        assert!(git_diff_index_for(&dir.0)
-            .files
-            .iter()
-            .all(|file| !file.unstaged));
+        assert!(
+            git_diff_index_for(&dir.0)
+                .files
+                .iter()
+                .all(|file| !file.unstaged)
+        );
     }
 
     #[test]
@@ -8063,7 +7790,9 @@ mod tests {
         let states: Vec<&str> = checks.checks.iter().map(|c| c.state.as_str()).collect();
         assert_eq!(
             states,
-            ["skipping", "cancel", "fail", "unknown", "unknown", "pending"]
+            [
+                "skipping", "cancel", "fail", "unknown", "unknown", "pending"
+            ]
         );
     }
 
@@ -8343,9 +8072,11 @@ mod tests {
 
     #[test]
     fn read_only_git_cmd_uses_inherited_path() {
-        assert!(!git_cmd()
-            .get_envs()
-            .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+        assert!(
+            !git_cmd()
+                .get_envs()
+                .any(|(key, _)| key == std::ffi::OsStr::new("PATH"))
+        );
     }
 
     #[test]
@@ -8354,9 +8085,10 @@ mod tests {
             let cmd = git_cmd_for_args_with_path(&[action], || {
                 panic!("read-only git must not resolve the login-shell PATH")
             });
-            assert!(!cmd
-                .get_envs()
-                .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+            assert!(
+                !cmd.get_envs()
+                    .any(|(key, _)| key == std::ffi::OsStr::new("PATH"))
+            );
         }
     }
 
@@ -8445,10 +8177,11 @@ mod tests {
         let listed = git_branches_for(&dir.0);
         assert_eq!(listed.current.as_deref(), Some("main"));
         assert!(!listed.detached);
-        assert!(listed
-            .branches
-            .iter()
-            .any(|branch| { branch.name == "main" && branch.current && branch.remote.is_none() }));
+        assert!(
+            listed.branches.iter().any(|branch| {
+                branch.name == "main" && branch.current && branch.remote.is_none()
+            })
+        );
     }
 
     #[test]
@@ -8593,10 +8326,12 @@ mod tests {
             .find(|branch| branch.name == "feature")
             .unwrap();
         assert_eq!(remote.remote.as_deref(), Some("origin"));
-        assert!(!listed
-            .branches
-            .iter()
-            .any(|branch| branch.name == "main" && branch.remote.is_some()));
+        assert!(
+            !listed
+                .branches
+                .iter()
+                .any(|branch| branch.name == "main" && branch.remote.is_some())
+        );
         assert_eq!(
             git_checkout_for(&repo.0, "feature", Some("origin")).unwrap(),
             "feature"

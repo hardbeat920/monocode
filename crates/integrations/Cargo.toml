@@ -6,3 +6,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+monocode-git = { path = "../git" }
+monocode-platform = { path = "../platform" }
+monocode-process = { path = "../process" }
+aes-gcm = "0.10"
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+ureq.workspace = true
+url.workspace = true
+uuid.workspace = true

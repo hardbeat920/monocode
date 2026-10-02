@@ -1,9 +1,10 @@
 //! The desktop executable also provides a small, JSON-only control client.
+//! Moved from src-tauri/src/control_cli.rs.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const USAGE: &str = r#"MonoCode local control — supervise this orchestration run from the lead agent.
 
@@ -424,7 +425,7 @@ fn parse_args_for(args: &[String], app_mode: bool) -> Result<Parsed, String> {
             _ => {
                 return Err(format!(
                     "Unknown option: {flag}. Supported: --json, --input, --request-id."
-                ))
+                ));
             }
         }
         index += 2;
@@ -483,16 +484,22 @@ mod tests {
             parse_args(&args(&["delegate", "--help"])),
             Ok(Parsed::Help)
         ));
-        assert!(call(&["get", r#"{"taskId":"x"}"#])
-            .unwrap_err()
-            .contains("--json"));
+        assert!(
+            call(&["get", r#"{"taskId":"x"}"#])
+                .unwrap_err()
+                .contains("--json")
+        );
         assert!(call(&["get", "--json"]).unwrap_err().contains("--help"));
-        assert!(call(&["get", "--taskId", "x"])
-            .unwrap_err()
-            .contains("Unknown option"));
-        assert!(call(&["get", "--json", "{taskId}"])
-            .unwrap_err()
-            .contains("Invalid JSON"));
+        assert!(
+            call(&["get", "--taskId", "x"])
+                .unwrap_err()
+                .contains("Unknown option")
+        );
+        assert!(
+            call(&["get", "--json", "{taskId}"])
+                .unwrap_err()
+                .contains("Invalid JSON")
+        );
     }
     #[test]
     fn help_names_every_action_and_the_real_executable() {

@@ -1,3 +1,6 @@
+//! Pi coding agent usage. Moved from
+//! src-tauri/src/pi_usage.rs.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Read;
@@ -55,21 +58,23 @@ impl PiUsageProvider {
     }
 }
 
-#[tauri::command]
-pub async fn fetch_pi_usage(provider: PiUsageProvider) -> PiUsageResult {
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(dir) = agent_dir(std::env::var_os("PI_CODING_AGENT_DIR"), crate::dirs_home())
-        else {
-            return unavailable(
-                "Pi usage needs an absolute configuration directory. Check PI_CODING_AGENT_DIR.",
-            );
-        };
-        read_usage(&dir, provider, |credential| {
-            request_usage(provider, credential, provider.endpoint())
-        })
+pub fn fetch_pi_usage(provider: PiUsageProvider) -> PiUsageResult {
+    let Some(dir) = agent_dir(
+        std::env::var_os("PI_CODING_AGENT_DIR"),
+        monocode_platform::dirs_home(),
+    ) else {
+        return unavailable(
+            "Pi usage needs an absolute configuration directory. Check PI_CODING_AGENT_DIR.",
+        );
+    };
+    read_usage(&dir, provider, |credential| {
+        request_usage(provider, credential, provider.endpoint())
     })
-    .await
-    .unwrap_or_else(|_| error("Could not read Pi usage. Try refreshing."))
+}
+
+/// The result to show when the blocking task that ran `fetch_pi_usage` failed.
+pub fn fetch_pi_usage_failed() -> PiUsageResult {
+    error("Could not read Pi usage. Try refreshing.")
 }
 
 fn agent_dir(override_dir: Option<std::ffi::OsString>, home: Option<String>) -> Option<PathBuf> {
@@ -117,7 +122,7 @@ fn read_json(path: &Path) -> Result<Option<Value>, PiUsageResult> {
         Err(_) => {
             return Err(error(
                 "Could not read Pi configuration. Check its file permissions.",
-            ))
+            ));
         }
     };
     let text =
@@ -142,12 +147,12 @@ fn has_auth_override(value: &Value) -> bool {
     })
 }
 fn credential(dir: &Path, provider: PiUsageProvider) -> Result<PiOAuth, PiUsageResult> {
-    if let Some(config) = read_json(&dir.join("models.json"))? {
-        if has_auth_override(&config["providers"][provider.key()]) {
-            return Err(unavailable(
-                "Usage is unavailable for custom Pi authentication or endpoints.",
-            ));
-        }
+    if let Some(config) = read_json(&dir.join("models.json"))?
+        && has_auth_override(&config["providers"][provider.key()])
+    {
+        return Err(unavailable(
+            "Usage is unavailable for custom Pi authentication or endpoints.",
+        ));
     }
     let value = read_json(&dir.join("auth.json"))?.unwrap_or(Value::Null);
     let entry = &value[provider.key()];
@@ -227,10 +232,10 @@ fn request_usage(provider: PiUsageProvider, credentials: &PiOAuth, url: &str) ->
     let response = match request.call() {
         Ok(response) if response.status() == 200 => response,
         Err(ureq::Error::Status(401, _)) => {
-            return unavailable("Pi sign-in expired. Sign in through Pi, then refresh usage.")
+            return unavailable("Pi sign-in expired. Sign in through Pi, then refresh usage.");
         }
         Err(ureq::Error::Status(403, _)) => {
-            return unavailable("Usage is unavailable for this Pi account.")
+            return unavailable("Usage is unavailable for this Pi account.");
         }
         _ => return error("Could not fetch Pi usage. Try refreshing."),
     };
@@ -542,9 +547,11 @@ mod tests {
         let request = worker.join().unwrap().to_lowercase();
         assert!(request.contains("authorization: bearer synthetic-pi-token\r\n"));
         assert!(request.contains("chatgpt-account-id: synthetic-pi-account\r\n"));
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains("synthetic"));
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("synthetic")
+        );
     }
 
     #[test]
@@ -571,9 +578,11 @@ mod tests {
         let (url, worker) = serve("401 Unauthorized", "", "private upstream detail".into());
         let result = request_usage(PiUsageProvider::Anthropic, &creds, &url);
         assert!(matches!(result, PiUsageResult::Unavailable { .. }));
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains("private upstream detail"));
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("private upstream detail")
+        );
         worker.join().unwrap();
     }
 

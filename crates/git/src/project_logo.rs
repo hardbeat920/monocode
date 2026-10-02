@@ -1,18 +1,15 @@
+//! Project logo images in the app data directory. Moved from
+//! src-tauri/src/project_logo.rs.
+
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
-
-use crate::fs::expand_home;
+use monocode_platform::expand_home;
 
 const MAX_LOGO_BYTES: u64 = 2 * 1024 * 1024;
 const ALLOWED_EXT: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 
-fn project_logos_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("project-logos");
+fn project_logos_dir(data_dir: &Path) -> Result<PathBuf, String> {
+    let dir = data_dir.join("project-logos");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -80,7 +77,7 @@ fn remove_existing_logos(dir: &Path, project: &str) -> Result<(), String> {
 }
 
 fn save_project_logo_sync(
-    app: &AppHandle,
+    data_dir: &Path,
     project: &str,
     source_path: &str,
 ) -> Result<String, String> {
@@ -105,7 +102,7 @@ fn save_project_logo_sync(
         return Err("Logo must be a PNG, JPG, GIF, WebP, or SVG image.".into());
     }
 
-    let dir = project_logos_dir(app)?;
+    let dir = project_logos_dir(data_dir)?;
     let stem = logo_stem(project);
     let dest = dir.join(format!("{stem}.{ext}"));
     let temp = dir.join(format!(".{stem}-upload"));
@@ -117,29 +114,24 @@ fn save_project_logo_sync(
     Ok(dest.to_string_lossy().into_owned())
 }
 
-fn remove_project_logo_sync(app: &AppHandle, project: &str) -> Result<(), String> {
-    let dir = project_logos_dir(app)?;
+fn remove_project_logo_sync(data_dir: &Path, project: &str) -> Result<(), String> {
+    let dir = project_logos_dir(data_dir)?;
     remove_existing_logos(&dir, project)
 }
 
-#[tauri::command]
-pub async fn save_project_logo(
-    app: AppHandle,
+pub fn save_project_logo(
+    data_dir: &Path,
     project: String,
     source_path: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        save_project_logo_sync(&app, &project, &source_path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    save_project_logo_sync(data_dir, &project, &source_path)
 }
 
 /// Drops a logo file the app itself copied in. Logos saved before the key scheme
 /// changed live under a stem we can no longer derive, so the caller hands us the
 /// path it had stored; anything outside the logo directory is ignored.
-fn forget_logo_file_sync(app: &AppHandle, path: &str) -> Result<(), String> {
-    let dir = project_logos_dir(app)?;
+fn forget_logo_file_sync(data_dir: &Path, path: &str) -> Result<(), String> {
+    let dir = project_logos_dir(data_dir)?;
     let file = expand_home(path);
     if file.parent() != Some(dir.as_path()) || !file.is_file() {
         return Ok(());
@@ -151,18 +143,12 @@ fn forget_logo_file_sync(app: &AppHandle, path: &str) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-pub async fn forget_logo_file(app: AppHandle, path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || forget_logo_file_sync(&app, &path))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn forget_logo_file(data_dir: &Path, path: String) -> Result<(), String> {
+    forget_logo_file_sync(data_dir, &path)
 }
 
-#[tauri::command]
-pub async fn remove_project_logo(app: AppHandle, project: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || remove_project_logo_sync(&app, &project))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn remove_project_logo(data_dir: &Path, project: String) -> Result<(), String> {
+    remove_project_logo_sync(data_dir, &project)
 }
 
 #[cfg(test)]

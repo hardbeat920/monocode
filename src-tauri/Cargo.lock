@@ -2418,25 +2418,21 @@ dependencies = [
 name = "monocode"
 version = "0.6.0"
 dependencies = [
- "aes-gcm",
- "arboard",
  "base64 0.22.1",
- "block2",
- "libc",
- "notify-rust",
+ "monocode-git",
+ "monocode-integrations",
+ "monocode-platform",
+ "monocode-process",
+ "monocode-remote",
+ "monocode-store",
+ "monocode-terminal",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "objc2-user-notifications",
  "open",
- "png 0.18.1",
  "portable-pty",
- "raw-window-handle",
- "rusqlite",
- "rustls",
  "serde",
  "serde_json",
- "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2445,15 +2441,116 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
- "tauri-winrt-notification 0.8.1",
+ "uuid",
+]
+
+[[package]]
+name = "monocode-git"
+version = "0.6.0"
+dependencies = [
+ "base64 0.22.1",
+ "monocode-platform",
+ "monocode-process",
+ "open",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "monocode-integrations"
+version = "0.6.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "monocode-git",
+ "monocode-platform",
+ "monocode-process",
+ "serde",
+ "serde_json",
  "time",
+ "ureq",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "monocode-platform"
+version = "0.6.0"
+dependencies = [
+ "arboard",
+ "block2",
+ "libc",
+ "notify-rust",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-user-notifications",
+ "png 0.18.1",
+ "portable-pty",
+ "raw-window-handle",
+ "serde",
+ "tauri-winrt-notification 0.8.1",
+ "url",
+ "uuid",
+ "windows 0.62.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "monocode-process"
+version = "0.6.0"
+dependencies = [
+ "libc",
+ "monocode-platform",
+ "serde",
+ "serde_json",
+ "sha2",
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
  "ureq",
  "url",
  "uuid",
- "windows 0.62.2",
- "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "monocode-remote"
+version = "0.6.0"
+dependencies = [
+ "base64 0.22.1",
+ "monocode-platform",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "monocode-store"
+version = "0.6.0"
+dependencies = [
+ "monocode-git",
+ "monocode-platform",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "monocode-terminal"
+version = "0.6.0"
+dependencies = [
+ "libc",
+ "monocode-platform",
+ "monocode-process",
+ "portable-pty",
+ "serde",
 ]
 
 [[package]]

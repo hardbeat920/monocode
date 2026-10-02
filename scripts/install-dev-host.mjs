@@ -27,7 +27,7 @@ const ssh = (args, input, stderr = "inherit") =>
 const powershellEncoded = (script) =>
   Buffer.from(script, "utf16le").toString("base64");
 
-// Matches powershell_reader() in src-tauri/src/remote_ssh.rs.
+// Matches powershell_reader() in crates/remote/src/remote_ssh.rs.
 const powershellReader = powershellEncoded(
   "$env:PSModulePath = $PSHOME + '\\Modules;' + $env:PSModulePath; $ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
 );
@@ -79,7 +79,7 @@ function replaceOnce(text, search, replacement) {
 function connectScript(windows, file) {
   if (windows) {
     const script = readFileSync(
-      join(root, "src-tauri/src/remote_connect.ps1"),
+      join(root, "crates/remote/src/remote_connect.ps1"),
       "utf8",
     );
     return replaceOnce(
@@ -93,7 +93,7 @@ function connectScript(windows, file) {
     );
   }
   const script = readFileSync(
-    join(root, "src-tauri/src/remote_connect.sh"),
+    join(root, "crates/remote/src/remote_connect.sh"),
     "utf8",
   );
   return replaceOnce(

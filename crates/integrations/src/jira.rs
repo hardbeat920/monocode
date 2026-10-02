@@ -1,11 +1,13 @@
+//! Jira projects, issues, and threads. Moved from
+//! src-tauri/src/jira.rs.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use serde_json::{Value, json};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_LIMIT: u32 = 40;
@@ -109,145 +111,110 @@ pub struct JiraIssueThread {
     pub head_ref_name: String,
 }
 
-#[tauri::command(async)]
-pub fn jira_status(app: AppHandle) -> Result<JiraStatus, String> {
-    let config = read_config(&app)?;
+pub fn jira_status(data_dir: &Path) -> Result<JiraStatus, String> {
+    let config = read_config(data_dir)?;
     Ok(status_for(config.as_ref()))
 }
 
-#[tauri::command]
-pub async fn jira_set_config(
-    app: AppHandle,
+pub fn jira_set_config(
+    data_dir: &Path,
     site: String,
     email: String,
     token: String,
 ) -> Result<JiraStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            delete_config(&app)?;
-            return Ok(status_for(None));
-        }
-        let email = email.trim().to_string();
-        if email.is_empty() || !email.contains('@') {
-            return Err("Enter the email address of your Atlassian account".into());
-        }
-        let config = JiraConfig {
-            site: normalize_jira_site(&site)?,
-            email,
-            token,
-        };
-        let myself = jira_get(&config, "/rest/api/3/myself")?;
-        if string_field(&myself, "accountId")
-            .unwrap_or_default()
-            .is_empty()
-        {
-            return Err("Jira did not return the current user".into());
-        }
-        write_config(&app, &config)?;
-        Ok(status_for(Some(&config)))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        delete_config(data_dir)?;
+        return Ok(status_for(None));
+    }
+    let email = email.trim().to_string();
+    if email.is_empty() || !email.contains('@') {
+        return Err("Enter the email address of your Atlassian account".into());
+    }
+    let config = JiraConfig {
+        site: normalize_jira_site(&site)?,
+        email,
+        token,
+    };
+    let myself = jira_get(&config, "/rest/api/3/myself")?;
+    if string_field(&myself, "accountId")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err("Jira did not return the current user".into());
+    }
+    write_config(data_dir, &config)?;
+    Ok(status_for(Some(&config)))
 }
 
-#[tauri::command]
-pub async fn jira_list_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        fetch_jira_projects(|start| {
-            jira_get(
-                &config,
-                &format!("/rest/api/3/project/search?maxResults=100&orderBy=name&startAt={start}"),
-            )
-        })
+pub fn jira_list_projects(data_dir: &Path) -> Result<Vec<JiraProject>, String> {
+    let config = require_config(data_dir)?;
+    fetch_jira_projects(|start| {
+        jira_get(
+            &config,
+            &format!("/rest/api/3/project/search?maxResults=100&orderBy=name&startAt={start}"),
+        )
     })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn jira_list_issues(
-    app: AppHandle,
+pub fn jira_list_issues(
+    data_dir: &Path,
     assigned_to_me: bool,
     state: String,
     project_ids: Vec<String>,
     limit: Option<u32>,
 ) -> Result<Vec<JiraIssue>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(config) = read_config(&app)? else {
-            return Ok(Vec::new());
-        };
-        let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
-        let jql = issue_jql(assigned_to_me, &state, &project_ids);
-        let data = jira_post(
-            &config,
-            "/rest/api/3/search/jql",
-            &json!({ "jql": jql, "maxResults": limit, "fields": ISSUE_FIELDS }),
-        )?;
-        parse_jira_issues(&data, &config.site)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let Some(config) = read_config(data_dir)? else {
+        return Ok(Vec::new());
+    };
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
+    let jql = issue_jql(assigned_to_me, &state, &project_ids);
+    let data = jira_post(
+        &config,
+        "/rest/api/3/search/jql",
+        &json!({ "jql": jql, "maxResults": limit, "fields": ISSUE_FIELDS }),
+    )?;
+    parse_jira_issues(&data, &config.site)
 }
 
-#[tauri::command]
-pub async fn jira_issue_details(app: AppHandle, key: String) -> Result<JiraIssueDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let key = require_issue_key(&key)?;
-        let data = jira_get(
-            &config,
-            &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
-        )?;
-        parse_jira_issue_details(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn jira_issue_details(data_dir: &Path, key: String) -> Result<JiraIssueDetails, String> {
+    let config = require_config(data_dir)?;
+    let key = require_issue_key(&key)?;
+    let data = jira_get(
+        &config,
+        &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
+    )?;
+    parse_jira_issue_details(&data)
 }
 
-#[tauri::command]
-pub async fn jira_issue_thread(app: AppHandle, key: String) -> Result<JiraIssueThread, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let key = require_issue_key(&key)?;
-        // Newest first so a long thread keeps its latest comments; re-sorted below.
-        let data = jira_get(
-            &config,
-            &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
-        )?;
-        parse_jira_issue_thread(&data, &config.site, key)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn jira_issue_thread(data_dir: &Path, key: String) -> Result<JiraIssueThread, String> {
+    let config = require_config(data_dir)?;
+    let key = require_issue_key(&key)?;
+    // Newest first so a long thread keeps its latest comments; re-sorted below.
+    let data = jira_get(
+        &config,
+        &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
+    )?;
+    parse_jira_issue_thread(&data, &config.site, key)
 }
 
-#[tauri::command]
-pub async fn jira_issue_comment(
-    app: AppHandle,
-    key: String,
-    body: String,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let key = require_issue_key(&key)?;
-        let body = body.trim();
-        if body.is_empty() {
-            return Err("Comment cannot be empty".into());
-        }
-        let data = jira_post(
-            &config,
-            &format!("/rest/api/3/issue/{key}/comment"),
-            &json!({ "body": text_to_adf(body) }),
-        )?;
-        let id = string_field(&data, "id").unwrap_or_default();
-        if id.is_empty() {
-            return Err("Could not post Jira comment".into());
-        }
-        Ok(comment_url(&config.site, key, &id))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn jira_issue_comment(data_dir: &Path, key: String, body: String) -> Result<String, String> {
+    let config = require_config(data_dir)?;
+    let key = require_issue_key(&key)?;
+    let body = body.trim();
+    if body.is_empty() {
+        return Err("Comment cannot be empty".into());
+    }
+    let data = jira_post(
+        &config,
+        &format!("/rest/api/3/issue/{key}/comment"),
+        &json!({ "body": text_to_adf(body) }),
+    )?;
+    let id = string_field(&data, "id").unwrap_or_default();
+    if id.is_empty() {
+        return Err("Could not post Jira comment".into());
+    }
+    Ok(comment_url(&config.site, key, &id))
 }
 
 fn status_for(config: Option<&JiraConfig>) -> JiraStatus {
@@ -882,16 +849,12 @@ fn normalize_jira_site(raw: &str) -> Result<String, String> {
     })
 }
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("jira-config.json"))
+fn config_path(data_dir: &Path) -> Result<PathBuf, String> {
+    Ok(data_dir.join("jira-config.json"))
 }
 
-fn read_config(app: &AppHandle) -> Result<Option<JiraConfig>, String> {
-    let path = config_path(app)?;
+fn read_config(data_dir: &Path) -> Result<Option<JiraConfig>, String> {
+    let path = config_path(data_dir)?;
     match fs::read_to_string(path) {
         Ok(raw) => {
             let mut config: JiraConfig =
@@ -910,12 +873,12 @@ fn read_config(app: &AppHandle) -> Result<Option<JiraConfig>, String> {
     }
 }
 
-fn require_config(app: &AppHandle) -> Result<JiraConfig, String> {
-    read_config(app)?.ok_or_else(|| "Connect Jira in Settings".to_string())
+fn require_config(data_dir: &Path) -> Result<JiraConfig, String> {
+    read_config(data_dir)?.ok_or_else(|| "Connect Jira in Settings".to_string())
 }
 
-fn write_config(app: &AppHandle, config: &JiraConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+fn write_config(data_dir: &Path, config: &JiraConfig) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -923,8 +886,8 @@ fn write_config(app: &AppHandle, config: &JiraConfig) -> Result<(), String> {
     write_secret_file(&path, &value)
 }
 
-fn delete_config(app: &AppHandle) -> Result<(), String> {
-    let path = config_path(app)?;
+fn delete_config(data_dir: &Path) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -983,10 +946,12 @@ mod tests {
 
     #[test]
     fn rejects_stalled_project_pagination() {
-        assert!(fetch_jira_projects(|_| Ok(json!({
-            "isLast": false, "values": []
-        })))
-        .is_err());
+        assert!(
+            fetch_jira_projects(|_| Ok(json!({
+                "isLast": false, "values": []
+            })))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1022,7 +987,16 @@ mod tests {
     #[test]
     fn issue_jql_combines_filters() {
         assert_eq!(
-            issue_jql(true, "open", &[" 10000 ".into(), "".into(), "10001".into(), "x) OR (1".into()]),
+            issue_jql(
+                true,
+                "open",
+                &[
+                    " 10000 ".into(),
+                    "".into(),
+                    "10001".into(),
+                    "x) OR (1".into()
+                ]
+            ),
             "assignee = currentUser() AND project in (10000, 10001) AND statusCategory != Done ORDER BY updated DESC"
         );
         assert_eq!(

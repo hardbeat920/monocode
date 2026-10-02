@@ -1,3 +1,5 @@
+//! Project text search. Moved from src-tauri/src/search.rs.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs::{expand_home, list_project_files_sync_cancellable, MAX_TEXT_FILE_BYTES};
+use crate::fs::{MAX_TEXT_FILE_BYTES, expand_home, list_project_files_sync_cancellable};
 
 const MAX_MATCHES: usize = 500;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
@@ -49,7 +51,7 @@ pub struct SearchResult {
 type SearchKey = (PathBuf, String);
 static ACTIVE_SEARCHES: Mutex<Option<HashMap<SearchKey, Arc<AtomicBool>>>> = Mutex::new(None);
 
-fn begin_search(root: &Path, search_id: &str) -> Arc<AtomicBool> {
+pub fn begin_search(root: &Path, search_id: &str) -> Arc<AtomicBool> {
     let token = Arc::new(AtomicBool::new(false));
     if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
         let searches = active.get_or_insert_with(HashMap::new);
@@ -62,37 +64,36 @@ fn begin_search(root: &Path, search_id: &str) -> Arc<AtomicBool> {
     token
 }
 
-fn finish_search(root: &Path, search_id: &str, token: &Arc<AtomicBool>) {
-    if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
-        if let Some(searches) = active.as_mut() {
-            let key = (root.to_path_buf(), search_id.to_string());
-            if searches
-                .get(&key)
-                .is_some_and(|current| Arc::ptr_eq(current, token))
-            {
-                searches.remove(&key);
-            }
+pub fn finish_search(root: &Path, search_id: &str, token: &Arc<AtomicBool>) {
+    if let Ok(mut active) = ACTIVE_SEARCHES.lock()
+        && let Some(searches) = active.as_mut()
+    {
+        let key = (root.to_path_buf(), search_id.to_string());
+        if searches
+            .get(&key)
+            .is_some_and(|current| Arc::ptr_eq(current, token))
+        {
+            searches.remove(&key);
         }
     }
 }
 
 fn cancel_search(root: &Path, search_id: &str) {
-    if let Ok(mut active) = ACTIVE_SEARCHES.lock() {
-        if let Some(searches) = active.as_mut() {
-            if let Some(token) = searches.remove(&(root.to_path_buf(), search_id.to_string())) {
-                token.store(true, Ordering::Release);
-            }
-        }
+    if let Ok(mut active) = ACTIVE_SEARCHES.lock()
+        && let Some(searches) = active.as_mut()
+        && let Some(token) = searches.remove(&(root.to_path_buf(), search_id.to_string()))
+    {
+        token.store(true, Ordering::Release);
     }
 }
 
-#[tauri::command]
 pub fn cancel_project_search(cwd: String, search_id: String) {
     cancel_search(&expand_home(&cwd), &search_id);
 }
 
-#[tauri::command]
-pub async fn search_project(options: SearchOptions) -> Result<SearchResult, String> {
+/// Blocking search. The Tauri command runs `search_project_sync` on the
+/// blocking pool itself so it can release the search when that task fails.
+pub fn search_project(options: SearchOptions) -> Result<SearchResult, String> {
     if options.query.trim().is_empty() {
         return Ok(SearchResult {
             matches: Vec::new(),
@@ -105,24 +106,12 @@ pub async fn search_project(options: SearchOptions) -> Result<SearchResult, Stri
     }
     let search_id = options.search_id.clone();
     let token = begin_search(&root, &search_id);
-    let result = match tauri::async_runtime::spawn_blocking({
-        let root = root.clone();
-        let token = token.clone();
-        move || search_project_sync(&root, &options, &token)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(error) => {
-            finish_search(&root, &search_id, &token);
-            return Err(error.to_string());
-        }
-    };
+    let result = search_project_sync(&root, &options, &token);
     finish_search(&root, &search_id, &token);
     result
 }
 
-fn search_project_sync(
+pub fn search_project_sync(
     root: &Path,
     options: &SearchOptions,
     cancel: &AtomicBool,
@@ -570,10 +559,12 @@ mod tests {
         assert!(result.truncated);
         assert!(!result.matches.is_empty());
         assert!(result.matches.len() < 2_000);
-        assert!(result
-            .matches
-            .iter()
-            .all(|found| found.preview == "find me" && found.line > 0));
+        assert!(
+            result
+                .matches
+                .iter()
+                .all(|found| found.preview == "find me" && found.line > 0)
+        );
     }
 
     #[test]

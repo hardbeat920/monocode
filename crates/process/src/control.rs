@@ -1,32 +1,35 @@
 //! Authenticated loopback transport. App windows own execution; callers never
 //! receive arbitrary Tauri command access or direct database write access.
+//! Moved from src-tauri/src/control.rs. A window is an opaque owner id here.
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use serde_json::{Value, json};
+
+use crate::harness::HarnessHost;
+use monocode_platform::expand_home;
 
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
 
 #[derive(Clone)]
 struct Grant {
-    window: String,
+    owner: String,
     session: String,
     cwd: String,
     token: String,
 }
 struct Pending {
-    window: String,
+    owner: String,
     reply: mpsc::Sender<Value>,
 }
 struct ActiveTurn {
-    window: String,
+    owner: String,
     cwd: String,
     app_allowed: bool,
 }
@@ -42,7 +45,7 @@ struct Inner {
 impl Inner {
     // Provider processes can stay alive between turns, so install the token
     // before their first spawn. request_grant still requires an opted-in turn.
-    fn prepare_app_grant(&mut self, session: &str, window: &str, cwd: &str) -> bool {
+    fn prepare_app_grant(&mut self, session: &str, owner: &str, cwd: &str) -> bool {
         if self.workers.contains_key(session) || self.grants.contains_key(session) {
             return false;
         }
@@ -60,7 +63,7 @@ impl Inner {
         self.app_grants.insert(
             session.to_string(),
             Grant {
-                window: window.to_string(),
+                owner: owner.to_string(),
                 session: session.to_string(),
                 cwd: cwd.to_string(),
                 token,
@@ -69,18 +72,18 @@ impl Inner {
         true
     }
 
-    fn window_sessions(&self, label: &str) -> Vec<String> {
+    fn owner_sessions(&self, owner: &str) -> Vec<String> {
         let leads: Vec<String> = self
             .grants
             .values()
-            .filter(|grant| grant.window == label)
+            .filter(|grant| grant.owner == owner)
             .map(|grant| grant.session.clone())
             .collect();
         let mut ids = leads.clone();
         ids.extend(
             self.app_grants
                 .values()
-                .filter(|grant| grant.window == label)
+                .filter(|grant| grant.owner == owner)
                 .map(|grant| grant.session.clone()),
         );
         ids.extend(
@@ -92,22 +95,22 @@ impl Inner {
         ids.extend(
             self.active
                 .iter()
-                .filter(|(_, turn)| turn.window == label)
+                .filter(|(_, turn)| turn.owner == owner)
                 .map(|(id, _)| id.clone()),
         );
         ids.sort();
         ids.dedup();
         ids
     }
-    fn close_window(&mut self, label: &str) -> Vec<String> {
-        let ids = self.window_sessions(label);
+    fn close_owner(&mut self, owner: &str) -> Vec<String> {
+        let ids = self.owner_sessions(owner);
         self.grants.retain(|id, _| !ids.contains(id));
         self.app_grants.retain(|id, _| !ids.contains(id));
         self.workers.retain(|id, _| !ids.contains(id));
         self.scratch.retain(|id, _| !ids.contains(id));
         self.active.retain(|id, _| !ids.contains(id));
         self.pending.retain(|_, pending| {
-            if pending.window != label {
+            if pending.owner != owner {
                 return true;
             }
             let _ = pending
@@ -118,6 +121,12 @@ impl Inner {
         ids
     }
 }
+/// Delivers control requests to the owner that holds the grant. The Tauri app
+/// emits `monocode-control-request` to the owning window.
+pub trait ControlEvents: Send + Sync {
+    fn request(&self, owner: &str, request: ControlRequest) -> Result<(), String>;
+}
+
 pub struct ControlHost {
     endpoint: String,
     inner: Arc<Mutex<Inner>>,
@@ -149,13 +158,13 @@ struct Request {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Event {
-    id: String,
-    namespace: String,
-    session_id: String,
-    request_id: String,
-    action: String,
-    input: Value,
+pub struct ControlRequest {
+    pub id: String,
+    pub namespace: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub action: String,
+    pub input: Value,
 }
 
 fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
@@ -172,25 +181,26 @@ fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, St
             || !host
                 .active
                 .get(&grant.session)
-                .is_some_and(|turn| turn.window == grant.window && turn.app_allowed))
+                .is_some_and(|turn| turn.owner == grant.owner && turn.app_allowed))
     {
         return Err(APP_TURN_INACTIVE.into());
     }
     Ok(grant)
 }
 
-pub fn init(app: &AppHandle) -> Result<(), String> {
+/// Bind the loopback listener and start serving. The caller keeps the host.
+pub fn init(events: Arc<dyn ControlEvents>) -> Result<ControlHost, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let endpoint = listener
         .local_addr()
         .map_err(|e| e.to_string())?
         .to_string();
     let inner = Arc::new(Mutex::new(Inner::default()));
-    app.manage(ControlHost {
+    let host = ControlHost {
         endpoint,
         inner: inner.clone(),
-    });
-    let app = app.clone();
+    };
+    let app = events;
     std::thread::spawn(move || {
         // Limit concurrent readers, including unauthenticated sockets.
         let (tx, rx) = mpsc::sync_channel::<TcpStream>(32);
@@ -199,23 +209,25 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             let rx = rx.clone();
             let app = app.clone();
             let inner = inner.clone();
-            std::thread::spawn(move || loop {
-                let stream = match rx.lock() {
-                    Ok(rx) => rx.recv(),
-                    Err(_) => return,
-                };
-                let Ok(stream) = stream else { return };
-                serve(stream, &app, &inner);
+            std::thread::spawn(move || {
+                loop {
+                    let stream = match rx.lock() {
+                        Ok(rx) => rx.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(stream) = stream else { return };
+                    serve(stream, &app, &inner);
+                }
             });
         }
         for stream in listener.incoming().flatten() {
             let _ = tx.try_send(stream);
         }
     });
-    Ok(())
+    Ok(host)
 }
 
-fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
+fn serve(mut stream: TcpStream, app: &Arc<dyn ControlEvents>, inner: &Arc<Mutex<Inner>>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
     let result = (|| -> Result<Value, String> {
@@ -245,13 +257,13 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
             host.pending.insert(
                 id.clone(),
                 Pending {
-                    window: grant.window.clone(),
+                    owner: grant.owner.clone(),
                     reply: tx,
                 },
             );
             grant
         };
-        let event = Event {
+        let event = ControlRequest {
             id: id.clone(),
             namespace: request.namespace,
             session_id: grant.session,
@@ -259,7 +271,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
             action: request.action,
             input: request.input,
         };
-        let delivered = app.emit_to(grant.window.as_str(), "monocode-control-request", event);
+        let delivered = app.request(&grant.owner, event);
         let result = if delivered.is_err() {
             Err("MonoCode executor is unavailable".into())
         } else {
@@ -281,14 +293,13 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
     let _ = writeln!(stream, "{response}");
 }
 
-#[tauri::command]
 pub fn control_enable(
-    window: WebviewWindow,
-    host: State<'_, ControlHost>,
+    host: &ControlHost,
+    owner: &str,
     session_id: String,
     cwd: String,
 ) -> Result<String, String> {
-    let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
+    let cwd = std::fs::canonicalize(expand_home(&cwd)).map_err(|e| e.to_string())?;
     if !cwd.is_dir() {
         return Err("Choose a project folder first".into());
     }
@@ -306,18 +317,20 @@ pub fn control_enable(
             "Another session ({id}) is running in this checkout. Stop it before enabling orchestration."
         ));
     }
-    if inner.grants.values().any(|g| {
-        paths_overlap(&g.cwd, &cwd) && (g.session != session_id || g.window != window.label())
-    }) {
+    if inner
+        .grants
+        .values()
+        .any(|g| paths_overlap(&g.cwd, &cwd) && (g.session != session_id || g.owner != owner))
+    {
         return Err("This checkout already has an orchestrator in another session".into());
     }
     // A lead may return to ordinary chat without respawning its provider.
     // Keep its app token installed but unusable until a later opted-in turn.
-    inner.prepare_app_grant(&session_id, window.label(), &cwd);
+    inner.prepare_app_grant(&session_id, owner, &cwd);
     inner.grants.insert(
         session_id.clone(),
         Grant {
-            window: window.label().into(),
+            owner: owner.into(),
             session: session_id.clone(),
             cwd,
             token: format!(
@@ -331,12 +344,7 @@ pub fn control_enable(
     Ok(executable.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
-pub fn control_disable(
-    window: WebviewWindow,
-    host: State<'_, ControlHost>,
-    session_id: String,
-) -> Result<(), String> {
+pub fn control_disable(host: &ControlHost, owner: &str, session_id: String) -> Result<(), String> {
     let mut inner = host
         .inner
         .lock()
@@ -344,7 +352,7 @@ pub fn control_disable(
     if inner
         .grants
         .get(&session_id)
-        .is_some_and(|g| g.window == window.label())
+        .is_some_and(|g| g.owner == owner)
     {
         inner.grants.remove(&session_id);
         inner.workers.retain(|_, parent| parent != &session_id);
@@ -354,10 +362,9 @@ pub fn control_disable(
     Ok(())
 }
 
-#[tauri::command]
 pub fn control_attach_worker(
-    window: WebviewWindow,
-    host: State<'_, ControlHost>,
+    host: &ControlHost,
+    owner: &str,
     lead_id: String,
     session_id: String,
 ) -> Result<String, String> {
@@ -368,7 +375,7 @@ pub fn control_attach_worker(
     if inner
         .grants
         .get(&lead_id)
-        .is_none_or(|grant| grant.window != window.label())
+        .is_none_or(|grant| grant.owner != owner)
     {
         return Err("Lead connection is inactive".into());
     }
@@ -402,15 +409,14 @@ fn configure_worker_scratch(cmd: &mut Command, path: &Path) {
     cmd.env("TMPDIR", path).env("TMP", path).env("TEMP", path);
 }
 
-#[tauri::command]
 pub fn control_authorize_turn(
-    window: WebviewWindow,
-    host: State<'_, ControlHost>,
+    host: &ControlHost,
+    owner: &str,
     session_id: String,
     cwd: String,
     app_access: bool,
 ) -> Result<(), String> {
-    let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
+    let cwd = std::fs::canonicalize(expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
     let mut inner = host
         .inner
@@ -420,19 +426,18 @@ pub fn control_authorize_turn(
         .grants
         .values()
         .find(|grant| paths_overlap(&grant.cwd, &cwd))
+        && (lead.owner != owner
+            || (lead.session != session_id
+                && inner.workers.get(&session_id) != Some(&lead.session)))
     {
-        if lead.window != window.label()
-            || (lead.session != session_id && inner.workers.get(&session_id) != Some(&lead.session))
-        {
-            return Err("This checkout is controlled by an orchestrator. Stop that run before starting independent work.".into());
-        }
+        return Err("This checkout is controlled by an orchestrator. Stop that run before starting independent work.".into());
     }
-    let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
+    let eligible = inner.prepare_app_grant(&session_id, owner, &cwd);
     let app_allowed = app_access && eligible;
     inner.active.insert(
         session_id,
         ActiveTurn {
-            window: window.label().to_string(),
+            owner: owner.to_string(),
             cwd,
             app_allowed,
         },
@@ -440,33 +445,33 @@ pub fn control_authorize_turn(
     Ok(())
 }
 
-#[tauri::command]
-pub fn control_turn_finished(host: State<'_, ControlHost>, session_id: String) {
+pub fn control_turn_finished(host: &ControlHost, session_id: String) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.active.remove(&session_id);
     }
 }
 
-pub fn window_closed(app: &AppHandle, label: &str) {
-    let host = app.state::<ControlHost>();
+/// Kill the harness children of every session the owner held, then drop its
+/// grants, turns, and pending requests.
+pub fn owner_closed(host: &ControlHost, harness: &HarnessHost, owner: &str) {
     let ids = {
         let Ok(inner) = host.inner.lock() else { return };
-        inner.window_sessions(label)
+        inner.owner_sessions(owner)
     };
     for id in &ids {
-        let _ = crate::harness::harness_kill(app.state(), id.clone());
+        let _ = crate::harness::harness_kill(harness, id.clone());
     }
     if let Ok(mut inner) = host.inner.lock() {
-        inner.close_window(label);
+        inner.close_owner(owner);
     };
 }
 
-pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
+pub fn configure_child(control: Option<&ControlHost>, session_id: &str, cmd: &mut Command) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
         .env_remove("MONOCODE_CONTROL_TOKEN")
         .env_remove("MONOCODE_APP_ENDPOINT")
         .env_remove("MONOCODE_APP_TOKEN");
-    let Some(host) = app.try_state::<ControlHost>() else {
+    let Some(host) = control else {
         return;
     };
     if let Ok(inner) = host.inner.lock() {
@@ -484,17 +489,15 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     };
 }
 
-#[tauri::command]
 pub fn app_cli_path() -> Result<String, String> {
     std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
 pub fn control_reply(
-    window: WebviewWindow,
-    host: State<'_, ControlHost>,
+    host: &ControlHost,
+    owner: &str,
     id: String,
     response: Value,
 ) -> Result<(), String> {
@@ -502,48 +505,12 @@ pub fn control_reply(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if inner
-        .pending
-        .get(&id)
-        .is_some_and(|p| p.window == window.label())
+    if inner.pending.get(&id).is_some_and(|p| p.owner == owner)
+        && let Some(pending) = inner.pending.remove(&id)
     {
-        if let Some(pending) = inner.pending.remove(&id) {
-            let _ = pending.reply.send(response);
-        }
+        let _ = pending.reply.send(response);
     }
     Ok(())
-}
-
-#[tauri::command]
-pub fn control_save(
-    store: State<'_, crate::session_store::SessionStore>,
-    lead_id: String,
-    state: String,
-) -> Result<(), String> {
-    if state.len() > 8_000_000 {
-        return Err("Orchestration history is too large".into());
-    }
-    let run: Value = serde_json::from_str(&state).map_err(|_| "Invalid run state")?;
-    let conn = store.lock_conn()?;
-    crate::session_store::save_orchestration(&conn, &lead_id, &run).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn control_load(
-    store: State<'_, crate::session_store::SessionStore>,
-    lead_id: String,
-) -> Result<Option<String>, String> {
-    use rusqlite::OptionalExtension;
-    store
-        .lock_conn()?
-        .query_row(
-            "SELECT state FROM orchestration_runs WHERE lead_id=?1",
-            [lead_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())
 }
 
 fn resolve_scope(root: &Path, value: &str) -> Result<String, String> {
@@ -577,7 +544,6 @@ fn resolve_scope(root: &Path, value: &str) -> Result<String, String> {
 
 /// Resolve reported writes as well as scopes: aliases and symlinks must not
 /// turn a private scratch directory into an exemption for another worker's files.
-#[tauri::command]
 pub fn control_write_path(path: String) -> Result<String, String> {
     let path = Path::new(&path);
     if !path.is_absolute() {
@@ -605,7 +571,6 @@ pub fn control_write_path(path: String) -> Result<String, String> {
     Ok(resolved.to_string_lossy().replace('\\', "/"))
 }
 
-#[tauri::command]
 pub fn control_scopes(cwd: String, files: Vec<String>) -> Result<Vec<String>, String> {
     if files.len() > 64 {
         return Err("At most 64 write scopes per task".into());
@@ -613,7 +578,7 @@ pub fn control_scopes(cwd: String, files: Vec<String>) -> Result<Vec<String>, St
     files
         .iter()
         .map(|file| {
-            resolve_scope(&crate::fs::expand_home(&cwd), file)
+            resolve_scope(&expand_home(&cwd), file)
                 .map_err(|error| format!("Invalid write scope \"{file}\": {error}"))
         })
         .collect()
@@ -628,7 +593,7 @@ mod tests {
         inner.app_grants.insert(
             "ordinary".into(),
             Grant {
-                window: "main".into(),
+                owner: "main".into(),
                 session: "ordinary".into(),
                 cwd: "/repo".into(),
                 token: "app-token".into(),
@@ -641,7 +606,7 @@ mod tests {
         inner.active.insert(
             "ordinary".into(),
             ActiveTurn {
-                window: "main".into(),
+                owner: "main".into(),
                 cwd: "/repo".into(),
                 app_allowed: true,
             },
@@ -661,7 +626,7 @@ mod tests {
         inner.active.insert(
             "ordinary".into(),
             ActiveTurn {
-                window: "main".into(),
+                owner: "main".into(),
                 cwd: "/repo".into(),
                 app_allowed: false,
             },
@@ -672,7 +637,7 @@ mod tests {
         inner.grants.insert(
             "ordinary".into(),
             Grant {
-                window: "main".into(),
+                owner: "main".into(),
                 session: "ordinary".into(),
                 cwd: "/repo".into(),
                 token: "control-token".into(),
@@ -716,9 +681,10 @@ mod tests {
         let mut cmd = Command::new("unused");
         configure_worker_scratch(&mut cmd, &first);
         for key in ["TMPDIR", "TMP", "TEMP"] {
-            assert!(cmd
-                .get_envs()
-                .any(|(name, value)| name == key && value == Some(first.as_os_str())));
+            assert!(
+                cmd.get_envs()
+                    .any(|(name, value)| name == key && value == Some(first.as_os_str()))
+            );
         }
         let new_file = first.join("new/helper.py");
         assert_eq!(
@@ -738,13 +704,15 @@ mod tests {
             .unwrap();
             assert_eq!(resolved, second.join("helper.py").to_string_lossy());
             std::os::unix::fs::symlink(first.join("missing"), first.join("dangling")).unwrap();
-            assert!(control_write_path(
-                first
-                    .join("dangling/helper.py")
-                    .to_string_lossy()
-                    .into_owned()
-            )
-            .is_err());
+            assert!(
+                control_write_path(
+                    first
+                        .join("dangling/helper.py")
+                        .to_string_lossy()
+                        .into_owned()
+                )
+                .is_err()
+            );
         }
         std::fs::remove_dir_all(first).unwrap();
         std::fs::remove_dir_all(second).unwrap();
@@ -761,7 +729,7 @@ mod tests {
             inner.active.insert(
                 id.into(),
                 ActiveTurn {
-                    window: window.into(),
+                    owner: window.into(),
                     cwd: format!("/{id}"),
                     app_allowed: false,
                 },
@@ -771,7 +739,7 @@ mod tests {
             inner.grants.insert(
                 id.into(),
                 Grant {
-                    window: window.into(),
+                    owner: window.into(),
                     session: id.into(),
                     cwd: format!("/{id}"),
                     token: id.into(),
@@ -784,7 +752,7 @@ mod tests {
         inner.pending.insert(
             "pending".into(),
             Pending {
-                window: "closing".into(),
+                owner: "closing".into(),
                 reply,
             },
         );
@@ -792,17 +760,14 @@ mod tests {
         inner.pending.insert(
             "other-pending".into(),
             Pending {
-                window: "open".into(),
+                owner: "open".into(),
                 reply,
             },
         );
 
-        assert_eq!(
-            inner.close_window("closing"),
-            ["lead", "ordinary", "worker"]
-        );
+        assert_eq!(inner.close_owner("closing"), ["lead", "ordinary", "worker"]);
         assert_eq!(inner.active.len(), 1);
-        assert_eq!(inner.active["other"].window, "open");
+        assert_eq!(inner.active["other"].owner, "open");
         assert_eq!(inner.grants.len(), 1);
         assert!(inner.grants.contains_key("other"));
         assert_eq!(inner.workers.len(), 1);
@@ -810,7 +775,7 @@ mod tests {
         assert_eq!(response.try_recv().unwrap()["ok"], false);
         assert!(other_response.try_recv().is_err());
         assert!(inner.pending.contains_key("other-pending"));
-        assert!(inner.close_window("closing").is_empty());
+        assert!(inner.close_owner("closing").is_empty());
     }
 
     #[test]
@@ -819,15 +784,19 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         assert!(resolve_scope(&root, "../escape").is_err());
         assert!(resolve_scope(&root, "/absolute").is_err());
-        assert!(control_scopes(
-            root.to_string_lossy().into_owned(),
-            vec!["../escape".into()]
-        )
-        .unwrap_err()
-        .contains("Invalid write scope \"../escape\""));
-        assert!(resolve_scope(&root, "src/new.ts")
-            .unwrap()
-            .ends_with("/src/new.ts"));
+        assert!(
+            control_scopes(
+                root.to_string_lossy().into_owned(),
+                vec!["../escape".into()]
+            )
+            .unwrap_err()
+            .contains("Invalid write scope \"../escape\"")
+        );
+        assert!(
+            resolve_scope(&root, "src/new.ts")
+                .unwrap()
+                .ends_with("/src/new.ts")
+        );
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(std::env::temp_dir(), root.join("outside")).unwrap();

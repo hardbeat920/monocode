@@ -163,7 +163,7 @@ try {
 it.skipIf(process.platform !== "win32")(
   "parses the Windows connect script with Windows PowerShell",
   () => {
-    const script = readFileSync("src-tauri/src/remote_connect.ps1", "utf8")
+    const script = readFileSync("crates/remote/src/remote_connect.ps1", "utf8")
       .replace("@@PACKAGE@@", "'monocode-host@1.0.0'")
       .replace("@@FLAGS@@", " --yes");
     const file = join(temporary(), "connect.ps1");

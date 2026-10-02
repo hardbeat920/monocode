@@ -1,12 +1,13 @@
+//! Notes and their images. Moved from src-tauri/src/notes.rs.
+
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
 
-use crate::fs::expand_home;
-use crate::session_store::{now_millis, validate_id, SessionStore};
+use crate::session_store::{SessionStore, now_millis, validate_id};
+use monocode_platform::expand_home;
 
 const TITLE_MAX: usize = 200;
 const BODY_MAX: usize = 1_000_000;
@@ -83,26 +84,23 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn notes_list(store: State<'_, SessionStore>) -> Result<Vec<Note>, String> {
+pub fn notes_list(store: &SessionStore) -> Result<Vec<Note>, String> {
     let conn = store.lock_conn()?;
     list_notes(&conn).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub fn notes_get(store: State<'_, SessionStore>, id: String) -> Result<Option<Note>, String> {
+pub fn notes_get(store: &SessionStore, id: String) -> Result<Option<Note>, String> {
     validate_id(&id, "note")?;
     let conn = store.lock_conn()?;
     get_note(&conn, &id).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub fn notes_upsert(store: State<'_, SessionStore>, note: NoteUpsert) -> Result<Note, String> {
+pub fn notes_upsert(store: &SessionStore, note: NoteUpsert) -> Result<Note, String> {
     validate_id(&note.id, "note")?;
-    if let Some(session_id) = note.source_session_id.as_deref() {
-        if !session_id.is_empty() {
-            validate_id(session_id, "session")?;
-        }
+    if let Some(session_id) = note.source_session_id.as_deref()
+        && !session_id.is_empty()
+    {
+        validate_id(session_id, "session")?;
     }
     if note.body.len() > BODY_MAX {
         return Err("Note is too large".into());
@@ -111,59 +109,41 @@ pub fn notes_upsert(store: State<'_, SessionStore>, note: NoteUpsert) -> Result<
     upsert_note(&conn, &note).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub fn notes_delete(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
-    id: String,
-) -> Result<(), String> {
+pub fn notes_delete(data_dir: &Path, store: &SessionStore, id: String) -> Result<(), String> {
     validate_id(&id, "note")?;
     let conn = store.lock_conn()?;
     delete_note(&conn, &id).map_err(|e| e.to_string())?;
     drop(conn);
     // The note deletion is authoritative. A cleanup failure should not leave a
     // successfully deleted note visible in the UI.
-    let _ = remove_note_assets(&app, &id);
+    let _ = remove_note_assets(data_dir, &id);
     Ok(())
 }
 
-#[tauri::command]
-pub async fn notes_save_image(
-    app: AppHandle,
+pub fn notes_save_image(
+    data_dir: &Path,
     note_id: String,
     source_path: String,
 ) -> Result<NoteImageAsset, String> {
-    tauri::async_runtime::spawn_blocking(move || save_note_image_sync(&app, &note_id, &source_path))
-        .await
-        .map_err(|e| e.to_string())?
+    save_note_image_sync(data_dir, &note_id, &source_path)
 }
 
-#[tauri::command(async)]
-pub fn notes_image_path(app: AppHandle, asset: String) -> Result<String, String> {
+pub fn notes_image_path(data_dir: &Path, asset: String) -> Result<String, String> {
     let relative = validate_note_asset_path(&asset)?;
-    let path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(relative);
+    let path = data_dir.join(relative);
     if !path.is_file() {
         return Err("Note image was not found".into());
     }
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn note_assets_dir(app: &AppHandle, note_id: &str) -> Result<PathBuf, String> {
+fn note_assets_dir(data_dir: &Path, note_id: &str) -> Result<PathBuf, String> {
     validate_id(note_id, "note")?;
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(NOTE_ASSET_DIR)
-        .join(note_id))
+    Ok(data_dir.join(NOTE_ASSET_DIR).join(note_id))
 }
 
 fn save_note_image_sync(
-    app: &AppHandle,
+    data_dir: &Path,
     note_id: &str,
     source_path: &str,
 ) -> Result<NoteImageAsset, String> {
@@ -180,7 +160,7 @@ fn save_note_image_sync(
     }
 
     let (display_name, safe_name) = note_image_names(&source)?;
-    let dir = note_assets_dir(app, note_id)?;
+    let dir = note_assets_dir(data_dir, note_id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -259,8 +239,8 @@ fn validate_note_asset_path(asset: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
-fn remove_note_assets(app: &AppHandle, note_id: &str) -> Result<(), String> {
-    let dir = note_assets_dir(app, note_id)?;
+fn remove_note_assets(data_dir: &Path, note_id: &str) -> Result<(), String> {
+    let dir = note_assets_dir(data_dir, note_id)?;
     match std::fs::remove_dir_all(dir) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -441,11 +421,7 @@ fn slugify(title: &str) -> String {
         }
     }
     let slug = out.trim_end_matches('-').to_string();
-    if slug.is_empty() {
-        "note".into()
-    } else {
-        slug
-    }
+    if slug.is_empty() { "note".into() } else { slug }
 }
 
 fn unique_slug(conn: &Connection, title: &str) -> rusqlite::Result<String> {

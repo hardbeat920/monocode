@@ -1,3 +1,6 @@
+//! Link previews: fetch a page and read its title, description, and image. Moved from
+//! src-tauri/src/link_preview.rs.
+
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::time::Duration;
@@ -27,11 +30,8 @@ struct FetchedResource {
 
 /// Fetch metadata in the native host so the webview's deliberately narrow CSP
 /// can remain intact. Every hop is checked before a request is made.
-#[tauri::command]
-pub async fn fetch_link_preview(url: String) -> Result<LinkPreviewMetadata, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_link_preview_sync(&url))
-        .await
-        .map_err(|error| error.to_string())?
+pub fn fetch_link_preview(url: String) -> Result<LinkPreviewMetadata, String> {
+    fetch_link_preview_sync(&url)
 }
 
 fn fetch_link_preview_sync(raw: &str) -> Result<LinkPreviewMetadata, String> {
@@ -115,10 +115,9 @@ fn fetch_resource(mut url: Url, accept: &str, max_bytes: usize) -> Result<Fetche
         if let Some(length) = response
             .header("Content-Length")
             .and_then(|value| value.parse::<usize>().ok())
+            && length > max_bytes
         {
-            if length > max_bytes {
-                return Err("Link preview response is too large".into());
-            }
+            return Err("Link preview response is too large".into());
         }
         let content_type = response.header("Content-Type").map(str::to_string);
         let mut reader = response.into_reader().take(max_bytes as u64 + 1);
@@ -284,10 +283,9 @@ fn document_title(html: &str) -> Option<String> {
             if marker
                 .as_deref()
                 .is_some_and(|value| value.eq_ignore_ascii_case(key))
+                && let Some(value) = attribute(tag, "content").and_then(clean_text)
             {
-                if let Some(value) = attribute(tag, "content").and_then(clean_text) {
-                    return Some(value);
-                }
+                return Some(value);
             }
         }
     }
@@ -321,12 +319,12 @@ fn opening_tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
         let start = offset + relative;
         let after = start + needle.len();
         let boundary = lower.as_bytes().get(after).copied();
-        if boundary.is_some_and(|byte| byte.is_ascii_whitespace() || byte == b'/' || byte == b'>') {
-            if let Some(end) = tag_end(html, start) {
-                tags.push(&html[start..=end]);
-                offset = end + 1;
-                continue;
-            }
+        if boundary.is_some_and(|byte| byte.is_ascii_whitespace() || byte == b'/' || byte == b'>')
+            && let Some(end) = tag_end(html, start)
+        {
+            tags.push(&html[start..=end]);
+            offset = end + 1;
+            continue;
         }
         offset = after;
     }

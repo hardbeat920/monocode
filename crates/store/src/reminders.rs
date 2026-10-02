@@ -1,16 +1,19 @@
+//! Session reminders: the table, the due check, and delivery preferences.
+//! Moved from src-tauri/src/reminders.rs. Window choice and the poller thread
+//! stay with the app.
+
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
-use crate::session_store::{now_millis, validate_id, SessionStore};
+use crate::StoreEvents;
+use crate::session_store::{SessionStore, now_millis, validate_id};
 
-pub(crate) const CHANGED: &str = "monocode:reminders-changed";
-const OPEN: &str = "monocode:reminder-open";
-pub(crate) const NOTIFICATION_PREFIX: &str = "reminder:";
+/// Notification identifiers for reminders start with this prefix, followed by
+/// `<session id>:<due at>`.
+pub const NOTIFICATION_PREFIX: &str = "reminder:";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,20 +54,32 @@ impl DeliveryPreferences {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenReminder {
-    session_id: String,
-    due_at: i64,
+    pub session_id: String,
+    pub due_at: i64,
+    /// The owner (window) chosen to open the reminder.
     #[serde(skip)]
-    window_label: Option<String>,
+    pub window_label: Option<String>,
 }
 
+/// Delivery preferences, the reminder an owner should open next, and the
+/// sessions each owner (window) shows.
 #[derive(Default)]
 pub struct ReminderService {
-    preferences: Mutex<Option<DeliveryPreferences>>,
-    pending_open: Mutex<Option<OpenReminder>>,
-    window_sessions: Mutex<HashMap<String, Vec<String>>>,
+    pub preferences: Mutex<Option<DeliveryPreferences>>,
+    pub pending_open: Mutex<Option<OpenReminder>>,
+    pub window_sessions: Mutex<HashMap<String, Vec<String>>>,
 }
 
-pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
+/// A reminder that is due and allowed by the delivery preferences.
+pub struct ReminderNotification {
+    pub identifier: String,
+    pub title: String,
+    pub subtitle: String,
+    pub body: String,
+    pub sound: bool,
+}
+
+pub fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_reminders (
            session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -166,43 +181,39 @@ fn take_due(
     Ok(due)
 }
 
-#[tauri::command(async)]
-pub fn reminder_list(store: State<'_, SessionStore>) -> Result<Vec<Reminder>, String> {
+pub fn reminder_list(store: &SessionStore) -> Result<Vec<Reminder>, String> {
     let conn = store.lock_conn()?;
     list(&conn).map_err(|error| error.to_string())
 }
 
-#[tauri::command(async)]
 pub fn reminder_set(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
+    events: &dyn StoreEvents,
     session_ids: Vec<String>,
     due_at: i64,
 ) -> Result<(), String> {
     let mut conn = store.lock_conn()?;
     set(&mut conn, &session_ids, due_at, now_millis())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.reminders_changed();
     Ok(())
 }
 
-#[tauri::command(async)]
 pub fn reminder_clear(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
+    events: &dyn StoreEvents,
     session_ids: Vec<String>,
     expected_due_at: Option<i64>,
 ) -> Result<(), String> {
     let mut conn = store.lock_conn()?;
     clear(&mut conn, &session_ids, expected_due_at)?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.reminders_changed();
     Ok(())
 }
 
-#[tauri::command]
 pub fn reminder_configure(
-    service: State<'_, ReminderService>,
+    service: &ReminderService,
     preferences: DeliveryPreferences,
 ) -> Result<(), String> {
     *service
@@ -212,31 +223,25 @@ pub fn reminder_configure(
     Ok(())
 }
 
-#[tauri::command]
 pub fn reminder_register_window(
-    window: WebviewWindow,
-    service: State<'_, ReminderService>,
+    service: &ReminderService,
+    owner: &str,
     session_ids: Vec<String>,
 ) -> Result<(), String> {
     service
         .window_sessions
         .lock()
         .map_err(|error| error.to_string())?
-        .insert(window.label().to_string(), session_ids);
+        .insert(owner.to_string(), session_ids);
     Ok(())
 }
 
-#[tauri::command]
-pub fn reminder_open(app: AppHandle, session_id: String, due_at: i64) -> Result<(), String> {
-    validate_id(&session_id, "session")?;
-    queue_open(&app, session_id, due_at)
-}
-
-#[tauri::command]
+/// Hand the pending open request to `owner` if it was chosen, or if the
+/// chosen owner no longer exists.
 pub fn reminder_take_open(
-    app: AppHandle,
-    window: WebviewWindow,
-    service: State<'_, ReminderService>,
+    service: &ReminderService,
+    owner: &str,
+    owner_exists: impl Fn(&str) -> bool,
 ) -> Result<Option<OpenReminder>, String> {
     let mut pending = service
         .pending_open
@@ -246,88 +251,64 @@ pub fn reminder_take_open(
         request
             .window_label
             .as_deref()
-            .is_none_or(|label| label == window.label() || app.get_webview_window(label).is_none())
+            .is_none_or(|label| label == owner || !owner_exists(label))
     }) {
         return Ok(pending.take());
     }
     Ok(None)
 }
 
-/// A notification can outlive its window. Keep the request until the chosen
-/// window has mounted and attached its listeners, then let only that window act.
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-pub(crate) fn open_from_notification(app: &AppHandle, identifier: &str) {
-    let Some((session_id, due_at)) = identifier.rsplit_once(':') else {
-        return;
-    };
-    let Ok(due_at) = due_at.parse::<i64>() else {
-        return;
-    };
+/// Parse a notification identifier (without the prefix) into a session id and
+/// due time.
+pub fn parse_notification(identifier: &str) -> Option<(String, i64)> {
+    let (session_id, due_at) = identifier.rsplit_once(':')?;
+    let due_at = due_at.parse::<i64>().ok()?;
     if validate_id(session_id, "session").is_err() {
+        return None;
+    }
+    Some((session_id.to_string(), due_at))
+}
+
+/// One pass of the reminder poller: claim due reminders, announce the change,
+/// and hand each deliverable one to `notify`. The caller runs this every five
+/// seconds on a background thread.
+pub fn poll_due(
+    service: &ReminderService,
+    store: &SessionStore,
+    events: &dyn StoreEvents,
+    mut notify: impl FnMut(ReminderNotification),
+) {
+    let preferences = service
+        .preferences
+        .lock()
+        .ok()
+        .and_then(|value| value.clone());
+    let Some(preferences) = preferences else {
+        return;
+    };
+    let due = store.lock_conn().and_then(|mut conn| {
+        // Resolve project preferences before claiming a reminder, including
+        // during launch and immediately after a reminder is scheduled.
+        take_due(&mut conn, now_millis(), |reminder| {
+            preferences.project_rules.contains_key(&reminder.session_id)
+        })
+        .map_err(|error| error.to_string())
+    });
+    let due = match due {
+        Ok(due) => due,
+        Err(error) => {
+            eprintln!("Could not check reminders: {error}");
+            return;
+        }
+    };
+    if due.is_empty() {
         return;
     }
-    let _ = queue_open(app, session_id.to_string(), due_at);
-}
-
-fn queue_open(app: &AppHandle, session_id: String, due_at: i64) -> Result<(), String> {
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let mut windows = handle.webview_windows();
-        windows.retain(|label, _| crate::window::is_workspace_window(label));
-        let service = handle.state::<ReminderService>();
-        let owners = service.window_sessions.lock().ok();
-        let owns_session = |window: &&WebviewWindow| {
-            owners.as_ref().is_some_and(|owners| {
-                owners
-                    .get(window.label())
-                    .is_some_and(|ids| ids.contains(&session_id))
-            })
-        };
-        let target = windows
-            .values()
-            .filter(owns_session)
-            .find(|window| window.is_focused().unwrap_or(false))
-            .or_else(|| {
-                windows
-                    .values()
-                    .filter(owns_session)
-                    .min_by_key(|window| window.label())
-            })
-            .or_else(|| {
-                windows
-                    .values()
-                    .find(|window| window.is_focused().unwrap_or(false))
-            })
-            .or_else(|| windows.get("main"))
-            .or_else(|| windows.values().min_by_key(|window| window.label()));
-        let request = OpenReminder {
-            session_id,
-            due_at,
-            window_label: target.map(|window| window.label().to_string()),
-        };
-        drop(owners);
-        if let Ok(mut pending) = service.pending_open.lock() {
-            *pending = Some(request);
-        }
-        if let Some(window) = target {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = window.emit(OPEN, ());
-        } else {
-            let _ = crate::window::open_new_window(&handle);
-        }
-    })
-    .map_err(|error| error.to_string())
-}
-
-pub(crate) fn init(app: &AppHandle) {
-    app.manage(ReminderService::default());
-    let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(5));
-        let preferences = app
-            .state::<ReminderService>()
+    events.reminders_changed();
+    for reminder in due {
+        // A prior platform notification may have blocked while preferences
+        // changed. Take a fresh snapshot without holding the lock for delivery.
+        let preferences = service
             .preferences
             .lock()
             .ok()
@@ -335,64 +316,30 @@ pub(crate) fn init(app: &AppHandle) {
         let Some(preferences) = preferences else {
             continue;
         };
-        let store = app.state::<SessionStore>();
-        let due = store.lock_conn().and_then(|mut conn| {
-            // Resolve project preferences before claiming a reminder, including
-            // during launch and immediately after a reminder is scheduled.
-            take_due(&mut conn, now_millis(), |reminder| {
-                preferences.project_rules.contains_key(&reminder.session_id)
-            })
-            .map_err(|error| error.to_string())
-        });
-        let due = match due {
-            Ok(due) => due,
-            Err(error) => {
-                eprintln!("Could not check reminders: {error}");
-                continue;
-            }
-        };
-        if due.is_empty() {
+        if !preferences.allows(&reminder) {
             continue;
         }
-        let _ = app.emit(CHANGED, ());
-        for reminder in due {
-            // A prior platform notification may have blocked while preferences
-            // changed. Take a fresh snapshot without holding the lock for delivery.
-            let preferences = app
-                .state::<ReminderService>()
-                .preferences
-                .lock()
-                .ok()
-                .and_then(|value| value.clone());
-            let Some(preferences) = preferences else {
-                continue;
-            };
-            if !preferences.allows(&reminder) {
-                continue;
-            }
-            // Cancellation or rescheduling may happen while another banner is
-            // being delivered. Do not announce a stale snapshot of the queue.
-            let current = store.lock_conn().and_then(|conn| conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM session_reminders WHERE session_id = ?1 AND due_at = ?2 AND fired_at IS NOT NULL)",
-                params![reminder.session_id, reminder.due_at], |row| row.get::<_, bool>(0),
-            ).map_err(|error| error.to_string())).unwrap_or(false);
-            if !current {
-                continue;
-            }
-            let identifier = format!(
-                "{NOTIFICATION_PREFIX}{}:{}",
-                reminder.session_id, reminder.due_at
-            );
-            let _ = tauri::async_runtime::block_on(crate::notifications::show_notification(
-                app.clone(),
-                identifier,
-                "MonoCode".into(),
-                reminder.title,
-                "Reminder: continue this conversation.".into(),
-                preferences.sound,
-            ));
+        // Cancellation or rescheduling may happen while another banner is
+        // being delivered. Do not announce a stale snapshot of the queue.
+        let current = store.lock_conn().and_then(|conn| conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_reminders WHERE session_id = ?1 AND due_at = ?2 AND fired_at IS NOT NULL)",
+            params![reminder.session_id, reminder.due_at], |row| row.get::<_, bool>(0),
+        ).map_err(|error| error.to_string())).unwrap_or(false);
+        if !current {
+            continue;
         }
-    });
+        let identifier = format!(
+            "{NOTIFICATION_PREFIX}{}:{}",
+            reminder.session_id, reminder.due_at
+        );
+        notify(ReminderNotification {
+            identifier,
+            title: "MonoCode".into(),
+            subtitle: reminder.title,
+            body: "Reminder: continue this conversation.".into(),
+            sound: preferences.sound,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -435,15 +382,19 @@ mod tests {
         set(&mut conn, &["muted".into(), "timed".into()], 200, 100).unwrap();
         let mut preferences: DeliveryPreferences =
             serde_json::from_str(r#"{"notificationsEnabled":true,"sound":false}"#).unwrap();
-        assert!(take_due(&mut conn, 300, |reminder| {
-            preferences.project_rules.contains_key(&reminder.session_id)
-        })
-        .unwrap()
-        .is_empty());
-        assert!(list(&conn)
+        assert!(
+            take_due(&mut conn, 300, |reminder| {
+                preferences.project_rules.contains_key(&reminder.session_id)
+            })
             .unwrap()
-            .iter()
-            .all(|reminder| reminder.fired_at.is_none()));
+            .is_empty()
+        );
+        assert!(
+            list(&conn)
+                .unwrap()
+                .iter()
+                .all(|reminder| reminder.fired_at.is_none())
+        );
 
         preferences.project_rules.insert(
             "muted".into(),
@@ -474,10 +425,12 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].session_id, "timed");
         assert!(!preferences.allows(&due[0]));
-        assert!(list(&conn)
-            .unwrap()
-            .iter()
-            .all(|reminder| reminder.fired_at.is_some()));
+        assert!(
+            list(&conn)
+                .unwrap()
+                .iter()
+                .all(|reminder| reminder.fired_at.is_some())
+        );
 
         preferences.project_rules.get_mut("muted").unwrap().enabled = true;
         assert!(take_due(&mut conn, 400, |_| true).unwrap().is_empty());

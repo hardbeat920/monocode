@@ -1,27 +1,44 @@
+//! Harness process supervisor, binary resolution, login shell environment,
+//! HTTP and SSE helpers, and the orphan reaper. Moved from
+//! src-tauri/src/harness.rs.
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 #[cfg(not(windows))]
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::dirs_home;
-use crate::fs::expand_home;
-use crate::passwd_identity;
+use crate::control::ControlHost;
+use monocode_platform::{dirs_home, expand_home, passwd_identity};
 
-const STDOUT_EVENT: &str = "harness-stdout";
-const STDERR_EVENT: &str = "harness-stderr";
-const EXIT_EVENT: &str = "harness-exit";
-const SSE_EVENT: &str = "harness-sse";
-const SSE_END_EVENT: &str = "harness-sse-end";
+/// Receives what harness children and OpenCode event streams produce. The
+/// Tauri app emits these as `harness-stdout`, `harness-stderr`,
+/// `harness-exit`, `harness-sse`, and `harness-sse-end`.
+pub trait HarnessEvents: Send + Sync {
+    fn stdout(&self, session_id: &str, line: String);
+    fn stderr(&self, session_id: &str, line: String);
+    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32);
+    fn sse(&self, session_id: &str, data: String);
+    fn sse_end(&self, session_id: &str, error: Option<String>);
+}
+
+struct NoHarnessEvents;
+
+impl HarnessEvents for NoHarnessEvents {
+    fn stdout(&self, _session_id: &str, _line: String) {}
+    fn stderr(&self, _session_id: &str, _line: String) {}
+    fn exit(&self, _session_id: &str, _code: Option<i32>, _pid: u32) {}
+    fn sse(&self, _session_id: &str, _data: String) {}
+    fn sse_end(&self, _session_id: &str, _error: Option<String>) {}
+}
 
 const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 
@@ -30,35 +47,6 @@ const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 pub struct HarnessAccount {
     provider: String,
     id: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct HarnessLine {
-    session_id: String,
-    line: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct HarnessExit {
-    session_id: String,
-    code: Option<i32>,
-    pid: u32,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct HarnessSse {
-    session_id: String,
-    data: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct HarnessSseEnd {
-    session_id: String,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -112,16 +100,52 @@ struct HarnessInner {
     epochs: HashMap<String, u64>,
 }
 
-pub struct HarnessHost {
+/// Supervises harness children. Clones share one set of children; the last
+/// clone to drop kills them.
+#[derive(Clone)]
+pub struct HarnessHost(Arc<HarnessShared>);
+
+pub struct HarnessShared {
     inner: Mutex<HarnessInner>,
     sse: Mutex<HashMap<String, Arc<LiveSse>>>,
     runtime_binary_paths: Mutex<Option<HashMap<String, String>>>,
     /// Bumped by `kill_all` so a spawn that started before quit cannot reinsert.
     kill_all_gen: AtomicU64,
+    events: Arc<dyn HarnessEvents>,
+}
+
+impl std::ops::Deref for HarnessHost {
+    type Target = HarnessShared;
+
+    fn deref(&self) -> &HarnessShared {
+        &self.0
+    }
+}
+
+impl Default for HarnessHost {
+    /// A host whose events go nowhere, for tests and probes.
+    fn default() -> Self {
+        Self::new(Arc::new(NoHarnessEvents))
+    }
 }
 
 impl HarnessHost {
-    pub(crate) fn runtime_binary_path(&self, provider: &str) -> Option<String> {
+    pub fn new(events: Arc<dyn HarnessEvents>) -> Self {
+        Self(Arc::new(HarnessShared {
+            inner: Mutex::new(HarnessInner {
+                children: HashMap::new(),
+                epochs: HashMap::new(),
+            }),
+            sse: Mutex::new(HashMap::new()),
+            runtime_binary_paths: Mutex::new(None),
+            kill_all_gen: AtomicU64::new(0),
+            events,
+        }))
+    }
+}
+
+impl HarnessShared {
+    pub fn runtime_binary_path(&self, provider: &str) -> Option<String> {
         self.runtime_binary_paths
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -131,23 +155,11 @@ impl HarnessHost {
             .filter(|path| !path.is_empty())
     }
 
-    pub(crate) fn has_working_dir(&self, path: &Path) -> bool {
+    pub fn has_working_dir(&self, path: &Path) -> bool {
         self.lock_inner()
             .children
             .values()
-            .any(|child| crate::worktrees::contains_working_dir(path, &child.cwd))
-    }
-
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(HarnessInner {
-                children: HashMap::new(),
-                epochs: HashMap::new(),
-            }),
-            sse: Mutex::new(HashMap::new()),
-            runtime_binary_paths: Mutex::new(None),
-            kill_all_gen: AtomicU64::new(0),
-        }
+            .any(|child| crate::worktree_lifecycle::contains_working_dir(path, &child.cwd))
     }
 
     fn lock_inner(&self) -> std::sync::MutexGuard<'_, HarnessInner> {
@@ -242,7 +254,7 @@ impl HarnessHost {
         terminate_all(&pids);
     }
 
-    pub(crate) fn kill_all(&self) {
+    pub fn kill_all(&self) {
         let kids: Vec<Arc<LiveChild>> = {
             let mut inner = self.lock_inner();
             self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
@@ -284,14 +296,13 @@ impl HarnessHost {
     }
 }
 
-impl Drop for HarnessHost {
+impl Drop for HarnessShared {
     fn drop(&mut self) {
         self.kill_all();
     }
 }
 
 /// Resolve the Cursor CLI (`cursor-agent`), never Grok's `agent` shim.
-#[tauri::command(async)]
 pub fn harness_resolve_cursor() -> Result<CursorBinary, String> {
     resolve_cursor_agent()
         .map(|path| CursorBinary {
@@ -301,7 +312,6 @@ pub fn harness_resolve_cursor() -> Result<CursorBinary, String> {
 }
 
 /// Resolve the Codex CLI (`codex`).
-#[tauri::command(async)]
 pub fn harness_resolve_codex() -> Result<CursorBinary, String> {
     resolve_codex()
         .map(|path| CursorBinary {
@@ -314,7 +324,6 @@ pub fn harness_resolve_codex() -> Result<CursorBinary, String> {
 }
 
 /// Resolve the OpenCode CLI (`opencode`).
-#[tauri::command(async)]
 pub fn harness_resolve_opencode() -> Result<CursorBinary, String> {
     resolve_opencode()
         .map(|path| CursorBinary {
@@ -326,7 +335,6 @@ pub fn harness_resolve_opencode() -> Result<CursorBinary, String> {
         })
 }
 
-#[tauri::command(async)]
 pub fn harness_resolve_configured(
     provider: String,
     binary_path: String,
@@ -350,16 +358,14 @@ fn initialize_runtime_binary_paths(
     runtime.clone().unwrap_or_default()
 }
 
-#[tauri::command]
 pub fn harness_runtime_binary_paths(
-    host: State<'_, HarnessHost>,
+    host: &HarnessHost,
     paths: HashMap<String, String>,
 ) -> HashMap<String, String> {
     initialize_runtime_binary_paths(&host.runtime_binary_paths, paths)
 }
 
 /// Resolve the Claude Code CLI (`claude`).
-#[tauri::command(async)]
 pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
     resolve_claude()
         .map(|path| CursorBinary {
@@ -411,30 +417,25 @@ fn mcp_command(
     Err(format!("{} {}", stderr.trim(), stdout).trim().to_string())
 }
 
-#[tauri::command]
-pub async fn claude_mcp_list(host: State<'_, HarnessHost>, cwd: String) -> Result<String, String> {
+pub fn claude_mcp_list(host: &HarnessHost, cwd: String) -> Result<String, String> {
     let binary_path = host.runtime_binary_path("claude");
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut output = claude_mcp_command(
-            vec!["mcp".into(), "list".into()],
-            cwd.clone(),
-            Duration::from_secs(30),
-            binary_path.as_deref(),
-        )?;
-        for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
-            if !output
-                .lines()
-                .any(|line| line.starts_with(&format!("{name}:")))
-            {
-                output.push_str(&format!(
-                    "\n{name}: WebSocket server (open Claude /mcp for status)"
-                ));
-            }
+    let mut output = claude_mcp_command(
+        vec!["mcp".into(), "list".into()],
+        cwd.clone(),
+        Duration::from_secs(30),
+        binary_path.as_deref(),
+    )?;
+    for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
+        if !output
+            .lines()
+            .any(|line| line.starts_with(&format!("{name}:")))
+        {
+            output.push_str(&format!(
+                "\n{name}: WebSocket server (open Claude /mcp for status)"
+            ));
         }
-        Ok(output)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
+    Ok(output)
 }
 
 fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
@@ -454,17 +455,17 @@ fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
             }
         }
     };
-    if let Some(home) = dirs_home() {
-        if let Some(settings) = read(&Path::new(&home).join(".claude.json")) {
-            collect(settings.get("mcpServers"), &mut names);
-            collect(
-                settings
-                    .get("projects")
-                    .and_then(|projects| projects.get(cwd.to_string_lossy().as_ref()))
-                    .and_then(|project| project.get("mcpServers")),
-                &mut names,
-            );
-        }
+    if let Some(home) = dirs_home()
+        && let Some(settings) = read(&Path::new(&home).join(".claude.json"))
+    {
+        collect(settings.get("mcpServers"), &mut names);
+        collect(
+            settings
+                .get("projects")
+                .and_then(|projects| projects.get(cwd.to_string_lossy().as_ref()))
+                .and_then(|project| project.get("mcpServers")),
+            &mut names,
+        );
     }
     for directory in cwd.ancestors() {
         if let Some(settings) = read(&directory.join(".mcp.json")) {
@@ -477,9 +478,8 @@ fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
     names
 }
 
-#[tauri::command]
-pub async fn claude_mcp_add(
-    host: State<'_, HarnessHost>,
+pub fn claude_mcp_add(
+    host: &HarnessHost,
     cwd: String,
     name: String,
     config: String,
@@ -496,27 +496,23 @@ pub async fn claude_mcp_add(
         return Err("Server configuration must be a JSON object".into());
     }
     let binary_path = host.runtime_binary_path("claude");
-    tauri::async_runtime::spawn_blocking(move || {
-        claude_mcp_command(
-            vec![
-                "mcp".into(),
-                "add-json".into(),
-                name,
-                config,
-                "--scope".into(),
-                scope,
-            ],
-            cwd,
-            Duration::from_secs(30),
-            binary_path.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    claude_mcp_command(
+        vec![
+            "mcp".into(),
+            "add-json".into(),
+            name,
+            config,
+            "--scope".into(),
+            scope,
+        ],
+        cwd,
+        Duration::from_secs(30),
+        binary_path.as_deref(),
+    )?;
     Ok(())
 }
 
-pub(crate) fn add_mcp_via_cli(
+pub fn add_mcp_via_cli(
     provider: &str,
     scope: &str,
     cwd: &str,
@@ -529,7 +525,7 @@ pub(crate) fn add_mcp_via_cli(
     Ok(())
 }
 
-pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Result<u32, String> {
+pub fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Result<u32, String> {
     let binary = resolve_mcp_binary("opencode", binary_path)?;
     let version = mcp_command(
         binary,
@@ -662,9 +658,8 @@ fn mcp_key_values(
     Ok(args)
 }
 
-#[tauri::command]
-pub async fn claude_mcp_remove(
-    host: State<'_, HarnessHost>,
+pub fn claude_mcp_remove(
+    host: &HarnessHost,
     cwd: String,
     name: String,
     scope: String,
@@ -676,22 +671,17 @@ pub async fn claude_mcp_remove(
         return Err("Invalid MCP scope".into());
     }
     let binary_path = host.runtime_binary_path("claude");
-    tauri::async_runtime::spawn_blocking(move || {
-        claude_mcp_command(
-            vec!["mcp".into(), "remove".into(), name, "--scope".into(), scope],
-            cwd,
-            Duration::from_secs(30),
-            binary_path.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    claude_mcp_command(
+        vec!["mcp".into(), "remove".into(), name, "--scope".into(), scope],
+        cwd,
+        Duration::from_secs(30),
+        binary_path.as_deref(),
+    )?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn mcp_provider_login(
-    host: State<'_, HarnessHost>,
+pub fn mcp_provider_login(
+    host: &HarnessHost,
     cwd: String,
     provider: String,
     name: String,
@@ -705,23 +695,19 @@ pub async fn mcp_provider_login(
         return Err("Invalid MCP server name".into());
     }
     let binary_path = host.runtime_binary_path(&provider);
-    tauri::async_runtime::spawn_blocking(move || {
-        let args = match provider.as_str() {
-            "claude" | "codex" | "cursor" => vec!["mcp", "login"],
-            "opencode" => vec!["mcp", "auth"],
-            _ => return Err("Unsupported MCP provider".into()),
-        };
-        let binary = resolve_mcp_binary(&provider, binary_path.as_deref())?;
-        mcp_command(
-            binary,
-            args.into_iter().map(String::from).chain([name]).collect(),
-            cwd,
-            Duration::from_secs(180),
-        )?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let args = match provider.as_str() {
+        "claude" | "codex" | "cursor" => vec!["mcp", "login"],
+        "opencode" => vec!["mcp", "auth"],
+        _ => return Err("Unsupported MCP provider".into()),
+    };
+    let binary = resolve_mcp_binary(&provider, binary_path.as_deref())?;
+    mcp_command(
+        binary,
+        args.into_iter().map(String::from).chain([name]).collect(),
+        cwd,
+        Duration::from_secs(180),
+    )?;
+    Ok(())
 }
 
 fn valid_mcp_name(name: &str) -> bool {
@@ -732,7 +718,6 @@ fn valid_mcp_name(name: &str) -> bool {
 }
 
 /// Resolve the Pi coding agent CLI (`pi`).
-#[tauri::command(async)]
 pub fn harness_resolve_pi() -> Result<CursorBinary, String> {
     resolve_pi()
         .map(|path| CursorBinary {
@@ -745,7 +730,6 @@ pub fn harness_resolve_pi() -> Result<CursorBinary, String> {
 }
 
 /// Resolve the omp (oh-my-pi) coding agent CLI.
-#[tauri::command(async)]
 pub fn harness_resolve_omp() -> Result<CursorBinary, String> {
     resolve_omp()
         .map(|path| CursorBinary {
@@ -758,7 +742,6 @@ pub fn harness_resolve_omp() -> Result<CursorBinary, String> {
 }
 
 /// Resolve the Vercel fx coding agent CLI (`fx`), never the JSON viewer of the same name.
-#[tauri::command(async)]
 pub fn harness_resolve_fx() -> Result<CursorBinary, String> {
     resolve_fx()
         .map(|path| CursorBinary {
@@ -770,7 +753,6 @@ pub fn harness_resolve_fx() -> Result<CursorBinary, String> {
 }
 
 /// Resolve xAI Grok Build (`grok`).
-#[tauri::command(async)]
 pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
     resolve_grok()
         .map(|path| CursorBinary {
@@ -782,7 +764,6 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
 }
 
 /// Resolve Nous Research Hermes Agent (`hermes`).
-#[tauri::command(async)]
 pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
     resolve_hermes()
         .map(|path| CursorBinary {
@@ -795,7 +776,6 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
 }
 
 /// Resolve Factory Droid (`droid`), driven over ACP via `droid exec --output-format acp`.
-#[tauri::command(async)]
 pub fn harness_resolve_droid() -> Result<CursorBinary, String> {
     resolve_droid()
         .map(|path| CursorBinary {
@@ -808,7 +788,6 @@ pub fn harness_resolve_droid() -> Result<CursorBinary, String> {
 }
 
 /// Antigravity's ACP server is separate from the interactive agy CLI.
-#[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
     resolve_antigravity()
         .map(|path| AntigravityBinary {
@@ -821,7 +800,6 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
 }
 
 /// Bind an ephemeral loopback port for `opencode serve`.
-#[tauri::command]
 pub fn harness_free_port() -> Result<u16, String> {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
@@ -832,11 +810,11 @@ pub fn harness_free_port() -> Result<u16, String> {
 /// Off the main thread: fork/exec, and `apply_gui_env` can wait on the first
 /// login-shell read. Callers await this before writing to the child. Kill can
 /// still race the fork, so a cancelled spawn must not reinsert the child.
-#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn harness_spawn(
-    app: AppHandle,
-    host: State<'_, HarnessHost>,
+    host: &HarnessHost,
+    data_dir: &Path,
+    control: Option<&ControlHost>,
     session_id: String,
     command: String,
     args: Vec<String>,
@@ -869,9 +847,9 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
-    apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    apply_provider_account(data_dir, &mut cmd, account.as_ref())?;
 
-    crate::control::configure_child(&app, &session_id, &mut cmd);
+    crate::control::configure_child(control, &session_id, &mut cmd);
 
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
@@ -908,68 +886,50 @@ pub fn harness_spawn(
         return Err(SPAWN_CANCELLED.to_string());
     }
 
-    let stdout_app = app.clone();
+    let stdout_events = host.events.clone();
     let stdout_id = session_id.clone();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            let _ = stdout_app.emit(
-                STDOUT_EVENT,
-                HarnessLine {
-                    session_id: stdout_id.clone(),
-                    line,
-                },
-            );
+            stdout_events.stdout(&stdout_id, line);
         }
     });
 
-    let stderr_app = app.clone();
+    let stderr_events = host.events.clone();
     let stderr_id = session_id.clone();
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
-            let _ = stderr_app.emit(
-                STDERR_EVENT,
-                HarnessLine {
-                    session_id: stderr_id.clone(),
-                    line,
-                },
-            );
+            stderr_events.stderr(&stderr_id, line);
         }
     });
 
-    let wait_app = app.clone();
+    let wait_events = host.events.clone();
+    let wait_host = Arc::downgrade(&host.0);
     let wait_id = session_id;
     let wait_pid = pid;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
-        if let Some(host) = wait_app.try_state::<HarnessHost>() {
-            if host.remove_if_pid(&wait_id, wait_pid).is_some() {
-                host.stop_sse(&wait_id);
-            }
+        if let Some(host) = wait_host.upgrade()
+            && host.remove_if_pid(&wait_id, wait_pid).is_some()
+        {
+            host.stop_sse(&wait_id);
         }
-        let _ = wait_app.emit(
-            EXIT_EVENT,
-            HarnessExit {
-                session_id: wait_id,
-                code,
-                pid: wait_pid,
-            },
-        );
+        wait_events.exit(&wait_id, code, wait_pid);
     });
 
     Ok(pid)
 }
 
-pub(crate) fn provider_account_dir(
-    app: &AppHandle,
+pub fn provider_account_dir(
+    data_dir: &Path,
     provider: &str,
     account_id: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     let Some(account_id) = account_id.filter(|id| *id != DEFAULT_PROVIDER_ACCOUNT_ID) else {
         return Ok(None);
     };
-    let dir = provider_account_path(app, provider, account_id)?;
+    let dir = provider_account_path(data_dir, provider, account_id)?;
     std::fs::create_dir_all(&dir).map_err(|error| {
         format!(
             "Could not create the {provider} account directory {}: {error}",
@@ -979,8 +939,8 @@ pub(crate) fn provider_account_dir(
     Ok(Some(dir))
 }
 
-pub(crate) fn provider_account_path(
-    app: &AppHandle,
+pub fn provider_account_path(
+    data_dir: &Path,
     provider: &str,
     account_id: &str,
 ) -> Result<PathBuf, String> {
@@ -998,28 +958,24 @@ pub(crate) fn provider_account_path(
     {
         return Err("Invalid provider account id".into());
     }
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
+    Ok(data_dir
         .join("provider-accounts")
         .join(provider)
         .join(account_id))
 }
 
-#[tauri::command(async)]
 pub fn provider_account_remove(
-    app: AppHandle,
-    host: State<'_, HarnessHost>,
+    host: &HarnessHost,
+    data_dir: &Path,
     provider: String,
     account_id: String,
 ) -> Result<(), String> {
-    let dir = provider_account_path(&app, &provider, &account_id)?;
+    let dir = provider_account_path(data_dir, &provider, &account_id)?;
     host.kill_account(&provider, &account_id);
 
     #[cfg(target_os = "macos")]
     if provider == "claude" {
-        crate::rate_limits::delete_claude_keychain_credentials(&dir)?;
+        crate::claude_keychain::delete_claude_keychain_credentials(&dir)?;
     }
 
     let metadata = match std::fs::symlink_metadata(&dir) {
@@ -1046,14 +1002,14 @@ pub fn provider_account_remove(
 }
 
 fn apply_provider_account(
-    app: &AppHandle,
+    data_dir: &Path,
     cmd: &mut Command,
     account: Option<&HarnessAccount>,
 ) -> Result<(), String> {
     let Some(account) = account else {
         return Ok(());
     };
-    let Some(dir) = provider_account_dir(app, &account.provider, Some(&account.id))? else {
+    let Some(dir) = provider_account_dir(data_dir, &account.provider, Some(&account.id))? else {
         return Ok(());
     };
     match account.provider.as_str() {
@@ -1081,31 +1037,21 @@ fn apply_provider_account(
 /// A child that stops draining stdin can block `write_all` for minutes, so the
 /// write runs on the blocking pool — never on an async worker or the IPC path,
 /// where it would starve `harness_kill` and make the wedged child unrecoverable.
-#[tauri::command]
-pub async fn harness_write(
-    host: State<'_, HarnessHost>,
-    session_id: String,
-    line: String,
-) -> Result<(), String> {
+pub fn harness_write(host: &HarnessHost, session_id: String, line: String) -> Result<(), String> {
     let live = host
         .get(&session_id)
         .ok_or_else(|| "Harness process is not running".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
-        stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .and_then(|_| stdin.flush())
-            .map_err(|e| format!("Failed to write to harness: {e}"))
-    })
-    .await
-    .map_err(|e| format!("Harness write task failed: {e}"))?
+    let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+    stdin
+        .write_all(line.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|e| format!("Failed to write to harness: {e}"))
 }
 
 /// `async` dispatch keeps kill executable while a sibling `harness_write` is
 /// blocked on a wedged child's stdin.
-#[tauri::command(async)]
-pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
+pub fn harness_kill(host: &HarnessHost, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
     if let Some(live) = host.kill_session(&session_id) {
         terminate(live.pid);
@@ -1115,51 +1061,43 @@ pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<
 
 /// Off the main thread: `kill_all` waits for the children to die before it
 /// returns, and a window close calls this while the app keeps running.
-#[tauri::command(async)]
-pub fn harness_kill_all(host: State<'_, HarnessHost>) -> Result<(), String> {
+pub fn harness_kill_all(host: &HarnessHost) -> Result<(), String> {
     host.kill_all();
     Ok(())
 }
 
-#[tauri::command]
-pub async fn harness_http(
+pub fn harness_http(
     url: String,
     method: String,
     headers: Option<HashMap<String, String>>,
     body: Option<String>,
     timeout_ms: Option<u64>,
 ) -> Result<HarnessHttpResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        assert_loopback(&url)?;
-        let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000).max(1));
-        let agent = ureq::AgentBuilder::new().timeout(timeout).build();
-        let mut request = agent.request(&method, &url);
-        if let Some(headers) = &headers {
-            for (key, value) in headers {
-                request = request.set(key, value);
-            }
+    assert_loopback(&url)?;
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000).max(1));
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    let mut request = agent.request(&method, &url);
+    if let Some(headers) = &headers {
+        for (key, value) in headers {
+            request = request.set(key, value);
         }
-        let result = match body {
-            Some(payload) => request.send_string(&payload),
-            None => request.call(),
-        };
-        match result {
-            Ok(response) => read_http_response(response),
-            Err(ureq::Error::Status(status, response)) => {
-                let body = response.into_string().unwrap_or_default();
-                Ok(HarnessHttpResponse { status, body })
-            }
-            Err(error) => Err(format!("OpenCode HTTP failed: {error}")),
+    }
+    let result = match body {
+        Some(payload) => request.send_string(&payload),
+        None => request.call(),
+    };
+    match result {
+        Ok(response) => read_http_response(response),
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            Ok(HarnessHttpResponse { status, body })
         }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        Err(error) => Err(format!("OpenCode HTTP failed: {error}")),
+    }
 }
 
-#[tauri::command]
 pub fn harness_sse_open(
-    app: AppHandle,
-    host: State<HarnessHost>,
+    host: &HarnessHost,
     session_id: String,
     url: String,
     headers: Option<HashMap<String, String>>,
@@ -1174,7 +1112,9 @@ pub fn harness_sse_open(
         }),
     );
 
+    let events = host.events.clone();
     thread::spawn(move || {
+        let events = events.as_ref();
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout_read(Duration::from_secs(60 * 60 * 6))
@@ -1188,18 +1128,18 @@ pub fn harness_sse_open(
         }
         let result = request.call();
         if stop.load(Ordering::SeqCst) {
-            emit_sse_end(&app, &session_id, None);
+            emit_sse_end(events, &session_id, None);
             return;
         }
         match result {
             Ok(response) => {
                 let reader = BufReader::new(response.into_reader());
-                read_sse(reader, &app, &session_id, &stop);
-                emit_sse_end(&app, &session_id, None);
+                read_sse(reader, events, &session_id, &stop);
+                emit_sse_end(events, &session_id, None);
             }
             Err(error) => {
                 emit_sse_end(
-                    &app,
+                    events,
                     &session_id,
                     Some(format!("OpenCode event stream failed: {error}")),
                 );
@@ -1210,8 +1150,7 @@ pub fn harness_sse_open(
     Ok(())
 }
 
-#[tauri::command]
-pub fn harness_sse_close(host: State<HarnessHost>, session_id: String) -> Result<(), String> {
+pub fn harness_sse_close(host: &HarnessHost, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
     Ok(())
 }
@@ -1224,7 +1163,12 @@ fn read_http_response(response: ureq::Response) -> Result<HarnessHttpResponse, S
     Ok(HarnessHttpResponse { status, body })
 }
 
-fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &AtomicBool) {
+fn read_sse<R: BufRead>(
+    reader: R,
+    events: &dyn HarnessEvents,
+    session_id: &str,
+    stop: &AtomicBool,
+) {
     let mut data = String::new();
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -1239,13 +1183,7 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
                 continue;
             }
             let payload = std::mem::take(&mut data);
-            let _ = app.emit(
-                SSE_EVENT,
-                HarnessSse {
-                    session_id: session_id.to_string(),
-                    data: payload,
-                },
-            );
+            events.sse(session_id, payload);
             continue;
         }
         if let Some(rest) = line.strip_prefix("data:") {
@@ -1258,14 +1196,8 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
     }
 }
 
-fn emit_sse_end(app: &AppHandle, session_id: &str, error: Option<String>) {
-    let _ = app.emit(
-        SSE_END_EVENT,
-        HarnessSseEnd {
-            session_id: session_id.to_string(),
-            error,
-        },
-    );
+fn emit_sse_end(events: &dyn HarnessEvents, session_id: &str, error: Option<String>) {
+    events.sse_end(session_id, error);
 }
 
 fn assert_loopback(url: &str) -> Result<(), String> {
@@ -1298,7 +1230,7 @@ fn exec_args_allowed(args: &[String]) -> bool {
 
 /// Must be a path a resolver would hand back, not an arbitrary binary
 /// that merely shares a file name.
-pub(crate) fn is_resolved_harness_binary(
+pub fn is_resolved_harness_binary(
     command: &str,
     binary_provider: Option<&str>,
     binary_path: Option<&str>,
@@ -1315,8 +1247,7 @@ pub(crate) fn is_resolved_harness_binary(
 }
 
 /// One-shot capture of stdout (used for `cursor-agent --list-models`).
-#[tauri::command]
-pub async fn harness_exec(
+pub fn harness_exec(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
@@ -1326,15 +1257,10 @@ pub async fn harness_exec(
     if !exec_args_allowed(&args) {
         return Err("harness_exec: unsupported arguments".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        if !is_resolved_harness_binary(&command, binary_provider.as_deref(), binary_path.as_deref())
-        {
-            return Err("harness_exec: not a resolved harness CLI".to_string());
-        }
-        exec_capture(&command, &args, cwd.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    if !is_resolved_harness_binary(&command, binary_provider.as_deref(), binary_path.as_deref()) {
+        return Err("harness_exec: not a resolved harness CLI".to_string());
+    }
+    exec_capture(&command, &args, cwd.as_deref())
 }
 
 fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<String, String> {
@@ -1349,7 +1275,7 @@ fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<Str
 
 const EXEC_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub(crate) fn exec_output(
+pub fn exec_output(
     command: &str,
     args: &[String],
     cwd: Option<&str>,
@@ -1430,7 +1356,7 @@ fn isolate_child(cmd: &mut Command) {
 fn spawn_managed(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     #[cfg(windows)]
     {
-        crate::windows::spawn_managed(cmd)
+        monocode_platform::windows::spawn_managed(cmd)
     }
     #[cfg(unix)]
     {
@@ -1491,7 +1417,7 @@ fn terminate_after(pid: u32, escalate: Duration) {
 }
 
 /// SIGTERM every tree, then SIGKILL whatever is still standing, before return.
-pub(crate) fn terminate_all(pids: &[u32]) {
+pub fn terminate_all(pids: &[u32]) {
     let pids: Vec<u32> = pids.iter().copied().filter(|pid| *pid > 1).collect();
     #[cfg(windows)]
     for pid in pids {
@@ -1562,7 +1488,7 @@ fn signal_tree(pid: u32, signal: TreeSignal) {
     {
         let _ = signal;
         let mut cmd = Command::new("taskkill");
-        crate::hide_window_console(&mut cmd);
+        monocode_platform::hide_window_console(&mut cmd);
         cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -1619,7 +1545,7 @@ struct ProcessSnapshot {
 /// Off-thread: the sweep shells out to `ps` and then waits on a SIGKILL, and
 /// launch would otherwise hold the first window for both. Nothing this run
 /// spawns can be caught by it — our own children carry our pid as the marker.
-pub(crate) fn reap_orphaned_harness_processes() {
+pub fn reap_orphaned_harness_processes() {
     #[cfg(unix)]
     {
         let our_pid = std::process::id();
@@ -1980,34 +1906,32 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
-            ))
+            ));
         }
     };
     let path = resolve_configured_harness_binary(binary_path, provider, names)?;
     let fingerprint = configured_binary_fingerprint(&path);
     let key = (provider.to_string(), binary_path.to_string());
     let cache = CONFIGURED_BINARY_VALIDATIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(fingerprint) = fingerprint.as_deref() {
-        if let Ok(cache) = cache.lock() {
-            if cache
-                .get(&key)
-                .is_some_and(|(cached, _)| Some(cached.as_str()) == Some(fingerprint))
-            {
-                return Ok(path);
-            }
-        }
+    if let Some(fingerprint) = fingerprint.as_deref()
+        && let Ok(cache) = cache.lock()
+        && cache
+            .get(&key)
+            .is_some_and(|(cached, _)| Some(cached.as_str()) == Some(fingerprint))
+    {
+        return Ok(path);
     }
     validate_configured_harness_binary_identity(provider, &path, binary_path)?;
     validate_harness_binary_version(provider, &path)?;
-    if let Some(fingerprint) = fingerprint {
-        if let Ok(mut cache) = cache.lock() {
-            if cache.len() >= MAX_CONFIGURED_BINARY_VALIDATIONS {
-                if let Some(oldest) = cache.keys().next().cloned() {
-                    cache.remove(&oldest);
-                }
-            }
-            cache.insert(key, (fingerprint, path.clone()));
+    if let Some(fingerprint) = fingerprint
+        && let Ok(mut cache) = cache.lock()
+    {
+        if cache.len() >= MAX_CONFIGURED_BINARY_VALIDATIONS
+            && let Some(oldest) = cache.keys().next().cloned()
+        {
+            cache.remove(&oldest);
         }
+        cache.insert(key, (fingerprint, path.clone()));
     }
     Ok(path)
 }
@@ -2748,11 +2672,11 @@ fn is_executable_file(path: &Path) -> bool {
 /// Resolve `name` the way a terminal would, then fall back to common install
 /// dirs. Finder-launched apps inherit launchd's PATH (`/usr/bin:/bin/…`), so
 /// Homebrew / mise / `~/.local/bin` tools look missing unless we search here.
-pub(crate) fn resolve_gui_binary(name: &str) -> Option<PathBuf> {
+pub fn resolve_gui_binary(name: &str) -> Option<PathBuf> {
     which_in_path(&gui_search_path(), name)
 }
 
-pub(crate) fn gui_search_path() -> String {
+pub fn gui_search_path() -> String {
     gui_search_path_from(login_shell_path(), dirs_home(), std::env::var("PATH").ok())
 }
 
@@ -2807,9 +2731,9 @@ fn apply_gui_path(cmd: &mut Command) {
     cmd.env("PATH", gui_search_path());
 }
 
-pub(crate) fn apply_gui_env(cmd: &mut Command) {
+pub fn apply_gui_env(cmd: &mut Command) {
     apply_gui_path(cmd);
-    crate::hide_window_console(cmd);
+    monocode_platform::hide_window_console(cmd);
     if let Some(id) = passwd_identity() {
         if std::env::var_os("HOME").is_none() {
             cmd.env("HOME", &id.home);
@@ -2826,10 +2750,10 @@ pub(crate) fn apply_gui_env(cmd: &mut Command) {
         if std::env::var_os("USERPROFILE").is_none() {
             cmd.env("USERPROFILE", &home);
         }
-        if std::env::var_os("USER").is_none() {
-            if let Ok(username) = std::env::var("USERNAME") {
-                cmd.env("USER", username);
-            }
+        if std::env::var_os("USER").is_none()
+            && let Ok(username) = std::env::var("USERNAME")
+        {
+            cmd.env("USER", username);
         }
     }
     if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
@@ -3037,46 +2961,49 @@ mod tests {
 
     #[test]
     fn install_spawn_keeps_a_child_nothing_cancelled() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, _) = host.begin_spawn("s1");
         let (live, child) = live_child();
         let pid = live.pid;
-        assert!(host
-            .install_spawn("s1".into(), epoch, kill_all, live)
-            .is_none());
+        assert!(
+            host.install_spawn("s1".into(), epoch, kill_all, live)
+                .is_none()
+        );
         assert_eq!(host.get("s1").map(|live| live.pid), Some(pid));
         reap(child);
     }
 
     #[test]
     fn install_spawn_rejects_a_child_killed_mid_spawn() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, _) = host.begin_spawn("s1");
         host.kill_session("s1");
         let (live, child) = live_child();
-        assert!(host
-            .install_spawn("s1".into(), epoch, kill_all, live)
-            .is_some());
+        assert!(
+            host.install_spawn("s1".into(), epoch, kill_all, live)
+                .is_some()
+        );
         assert!(host.get("s1").is_none());
         reap(child);
     }
 
     #[test]
     fn install_spawn_rejects_a_child_after_kill_all() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, _) = host.begin_spawn("s1");
         host.kill_all();
         let (live, child) = live_child();
-        assert!(host
-            .install_spawn("s1".into(), epoch, kill_all, live)
-            .is_some());
+        assert!(
+            host.install_spawn("s1".into(), epoch, kill_all, live)
+                .is_some()
+        );
         assert!(host.get("s1").is_none());
         reap(child);
     }
 
     #[test]
     fn kill_during_spawn_invalidates_the_stamp() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, prev) = host.begin_spawn("s1");
         assert!(prev.is_none());
         assert!(host.spawn_stamp_current("s1", epoch, kill_all));
@@ -3086,7 +3013,7 @@ mod tests {
 
     #[test]
     fn overlapping_spawn_invalidates_the_earlier_one() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let first = host.begin_spawn("s1");
         let second = host.begin_spawn("s1");
         assert!(!host.spawn_stamp_current("s1", first.0, first.1));
@@ -3095,7 +3022,7 @@ mod tests {
 
     #[test]
     fn kill_all_rejects_an_in_flight_spawn() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, _) = host.begin_spawn("s1");
         host.kill_all();
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
@@ -3116,7 +3043,7 @@ mod tests {
     #[test]
     fn kill_completes_while_a_stdin_write_is_blocked() {
         use std::io::Write;
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         // `sleep` never drains stdin: filling the pipe wedges the writer while
         // it holds the stdin mutex — the worst case recovery must survive.
         let (live, mut child) = live_child();
@@ -3193,7 +3120,7 @@ mod tests {
 
     #[test]
     fn kill_all_reaps_term_ignoring_children_before_return() {
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let (epoch, kill_all, _) = host.begin_spawn("s1");
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
@@ -3204,9 +3131,10 @@ mod tests {
             let mut child = child;
             let _ = child.wait();
         });
-        assert!(host
-            .install_spawn("s1".into(), epoch, kill_all, live)
-            .is_none());
+        assert!(
+            host.install_spawn("s1".into(), epoch, kill_all, live)
+                .is_none()
+        );
         host.kill_all();
         let alive = tree_alive(pid);
         let _ = waiter.join();
@@ -3315,7 +3243,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("monocode-mcp-binaries-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let host = HarnessHost::new();
+        let host = HarnessHost::default();
         let mut paths = HashMap::new();
         for (provider, filename) in [
             ("claude", "claude"),
@@ -3397,11 +3325,13 @@ mod tests {
             opencode_major_version(&cwd, paths.get("opencode").map(String::as_str)),
             Ok(2)
         );
-        assert!(resolve_mcp_binary(
-            "claude",
-            Some(&root.join("missing/claude").to_string_lossy())
-        )
-        .is_err());
+        assert!(
+            resolve_mcp_binary(
+                "claude",
+                Some(&root.join("missing/claude").to_string_lossy())
+            )
+            .is_err()
+        );
         assert!(resolve_mcp_binary("claude", paths.get("codex").map(String::as_str)).is_err());
         assert!(resolve_mcp_binary("pi", paths.get("claude").map(String::as_str)).is_err());
         std::fs::remove_dir_all(root).unwrap();
@@ -3500,11 +3430,10 @@ mod tests {
             Some(&codex_path)
         ));
         assert!(resolve_harness_binary_override("codex", &opencode.to_string_lossy()).is_err());
-        assert!(resolve_harness_binary_override(
-            "opencode",
-            &dir.join("missing").to_string_lossy()
-        )
-        .is_err());
+        assert!(
+            resolve_harness_binary_override("opencode", &dir.join("missing").to_string_lossy())
+                .is_err()
+        );
         assert!(resolve_harness_binary_override("codex", "codex").is_err());
         assert!(resolve_harness_binary_override("codex", &decoy.to_string_lossy()).is_err());
         assert!(

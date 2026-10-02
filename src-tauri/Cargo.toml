@@ -21,45 +21,27 @@ tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true
 serde_json.workspace = true
-toml = "0.9.12"
-sha2 = "0.10"
-unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri-plugin-dialog = "2"
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
-ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
-# The same rustls as ureq, to pin remote hosts' self-signed certificates.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-url = "2.5"
-time = { version = "0.3", features = ["parsing"] }
 tauri-plugin-process = "2"
-aes-gcm = "0.10"
-arboard = { version = "3.6", features = ["wayland-data-control"] }
-png = "0.18"
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+monocode-platform = { path = "../crates/platform" }
+monocode-process = { path = "../crates/process" }
+monocode-git = { path = "../crates/git" }
+monocode-store = { path = "../crates/store" }
+monocode-terminal = { path = "../crates/terminal" }
+monocode-integrations = { path = "../crates/integrations" }
+monocode-remote = { path = "../crates/remote" }
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
-tauri-winrt-notification = "0.8"
-# WinRT toast settings (Windows.UI.Notifications) to read the per-app block.
-windows = { version = "0.62", features = ["UI_Notifications"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSGraphics", "NSImage", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSError", "NSString"] }
-objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotification", "UNNotificationAction", "UNNotificationCategory", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "block2"] }
-raw-window-handle = "0.6"
 tauri-plugin-global-shortcut = "2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-notify-rust = "4.18"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

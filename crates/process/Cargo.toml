@@ -6,3 +6,17 @@ license.workspace = true
 publish = false
 
 [dependencies]
+monocode-platform = { path = "../platform" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+ureq.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sha2.workspace = true
+unicode-normalization = "0.1"

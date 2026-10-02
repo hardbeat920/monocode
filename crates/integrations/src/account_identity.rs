@@ -1,11 +1,13 @@
+//! Provider account identity (email and plan) read from local credentials. Moved from
+//! src-tauri/src/account_identity.rs.
+
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::AppHandle;
 
-use crate::dirs_home;
+use monocode_platform::dirs_home;
 
 #[derive(Serialize, Default, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -18,20 +20,21 @@ pub struct ProviderAccountIdentity {
 
 /// Read the signed-in identity a provider CLI already cached on disk, so
 /// no token is sent anywhere. Returns `None` when the profile is not signed in.
-#[tauri::command]
-pub async fn provider_account_identity(
-    app: AppHandle,
+pub fn provider_account_identity(
+    data_dir: &Path,
     provider: String,
     account_id: Option<String>,
 ) -> Result<Option<ProviderAccountIdentity>, String> {
-    let dir = crate::harness::provider_account_dir(&app, &provider, account_id.as_deref())?;
-    tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
+    let dir = monocode_process::harness::provider_account_dir(
+        data_dir,
+        &provider,
+        account_id.as_deref(),
+    )?;
+    match provider.as_str() {
         "claude" => Ok(claude_identity(dir)),
         "codex" => Ok(codex_identity(dir)),
         _ => Err("Account identity is not supported for this provider".into()),
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
 }
 
 fn home() -> Option<PathBuf> {

@@ -1,25 +1,21 @@
-use std::path::PathBuf;
+//! Claude, OpenCode Go, and Droid usage and rate limits. Moved from
+//! src-tauri/src/rate_limits.rs.
+
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+use monocode_process::claude_keychain::{KEYCHAIN_TIMEOUT, claude_keychain_service};
 use serde::Serialize;
 use serde_json::Value;
-#[cfg(target_os = "macos")]
-use sha2::{Digest, Sha256};
-use tauri::AppHandle;
-#[cfg(target_os = "macos")]
-use unicode_normalization::UnicodeNormalization;
 
-use crate::dirs_home;
+use monocode_platform::dirs_home;
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const USER_AGENT: &str = "claude-code/2.1.0";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[cfg(target_os = "macos")]
-const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(target_os = "macos")]
-const LEGACY_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 #[cfg(target_os = "macos")]
 const KEYCHAIN_FALLBACK_USER: &str = "claude-code-user";
 
@@ -46,11 +42,8 @@ const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 /// Fetch OpenCode Go 5h / weekly / monthly usage via the local Go API key.
 /// Runs in the host process so the webview CORS policy does not apply.
 /// The key never leaves the host process.
-#[tauri::command]
-pub async fn fetch_opencode_go_usage() -> Result<OpencodeGoUsageFetch, String> {
-    tauri::async_runtime::spawn_blocking(fetch_opencode_go_usage_sync)
-        .await
-        .map_err(|e| e.to_string())?
+pub fn fetch_opencode_go_usage() -> Result<OpencodeGoUsageFetch, String> {
+    fetch_opencode_go_usage_sync()
 }
 
 fn opencode_go_result(
@@ -159,12 +152,11 @@ fn env_var(name: &str) -> Option<String> {
 fn read_opencode_go_api_key() -> Option<String> {
     // Env-injected auth blob is authoritative when it parses: a valid blob
     // without opencode-go means "no key", not "look elsewhere".
-    if let Some(blob) = env_var("OPENCODE_AUTH_CONTENT") {
-        if let Ok(value) = serde_json::from_str::<Value>(&blob) {
-            if value.is_object() {
-                return extract_opencode_go_key(&value);
-            }
-        }
+    if let Some(blob) = env_var("OPENCODE_AUTH_CONTENT")
+        && let Ok(value) = serde_json::from_str::<Value>(&blob)
+        && value.is_object()
+    {
+        return extract_opencode_go_key(&value);
     }
     if let Some(key) = read_opencode_config_api_key() {
         return Some(key);
@@ -196,12 +188,11 @@ fn read_opencode_go_api_key() -> Option<String> {
 /// global `opencode.json`. Only the Go provider IDs are considered so keys
 /// for unrelated providers are never picked up.
 fn read_opencode_config_api_key() -> Option<String> {
-    if let Some(content) = env_var("OPENCODE_CONFIG_CONTENT") {
-        if let Some(value) = parse_opencode_config(&content) {
-            if let Some(key) = config_go_api_key(&value) {
-                return Some(key);
-            }
-        }
+    if let Some(content) = env_var("OPENCODE_CONFIG_CONTENT")
+        && let Some(value) = parse_opencode_config(&content)
+        && let Some(key) = config_go_api_key(&value)
+    {
+        return Some(key);
     }
     opencode_config_paths()
         .iter()
@@ -367,7 +358,7 @@ fn extract_opencode_go_key(value: &Value) -> Option<String> {
     }
 }
 
-pub(crate) fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
+pub fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
     let value: Value = serde_json::from_str(raw.trim()).ok()?;
     let key = value.get("opencode-go")?.get("key")?.as_str()?.trim();
     if key.is_empty() {
@@ -405,11 +396,8 @@ struct DroidCredentials {
 
 /// Fetch Factory Droid 5-hour / weekly / monthly usage via the token the
 /// Droid CLI stores in `~/.factory`. The token never leaves the host process.
-#[tauri::command]
-pub async fn fetch_droid_usage() -> Result<DroidUsageFetch, String> {
-    tauri::async_runtime::spawn_blocking(fetch_droid_usage_sync)
-        .await
-        .map_err(|e| e.to_string())?
+pub fn fetch_droid_usage() -> Result<DroidUsageFetch, String> {
+    fetch_droid_usage_sync()
 }
 
 fn droid_result(
@@ -559,7 +547,7 @@ fn decode_droid_key(raw: &str) -> Option<Vec<u8>> {
 }
 
 /// Droid's format is `base64(iv):base64(tag):base64(ciphertext)`.
-pub(crate) fn decrypt_droid_blob(blob: &str, key: &[u8]) -> Option<String> {
+pub fn decrypt_droid_blob(blob: &str, key: &[u8]) -> Option<String> {
     use aes_gcm::aead::{Aead, KeyInit};
     use base64::Engine;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -634,15 +622,13 @@ fn usage_result(
 
 /// Fetch Claude Code 5-hour / weekly usage via the local OAuth token.
 /// The token never leaves the host process.
-#[tauri::command]
-pub async fn fetch_claude_usage(
-    app: AppHandle,
+pub fn fetch_claude_usage(
+    data_dir: &Path,
     account_id: Option<String>,
 ) -> Result<ClaudeUsageFetch, String> {
-    let config_dir = crate::harness::provider_account_dir(&app, "claude", account_id.as_deref())?;
-    tauri::async_runtime::spawn_blocking(move || fetch_claude_usage_sync(config_dir))
-        .await
-        .map_err(|e| e.to_string())?
+    let config_dir =
+        monocode_process::harness::provider_account_dir(data_dir, "claude", account_id.as_deref())?;
+    fetch_claude_usage_sync(config_dir)
 }
 
 fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFetch, String> {
@@ -745,7 +731,7 @@ fn credentials_from_blob(raw: &str) -> Option<ClaudeCredentials> {
     })
 }
 
-pub(crate) fn extract_access_token(raw: &str) -> Option<String> {
+pub fn extract_access_token(raw: &str) -> Option<String> {
     let value: Value = serde_json::from_str(raw.trim()).ok()?;
     let token = value
         .get("claudeAiOauth")
@@ -783,7 +769,7 @@ fn oauth_expires_at_ms(blob: &Value) -> Option<i64> {
 /// An unknown expiry is treated as usable: the usage request itself will 401
 /// if it is not, which produces the same user-facing result without mutating
 /// credentials owned by another process.
-pub(crate) fn token_expired(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
+pub fn token_expired(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
     expires_at_ms.is_some_and(|expires| now_ms >= expires)
 }
 
@@ -814,10 +800,10 @@ fn read_macos_keychain_credentials(service: &str) -> Option<ClaudeCredentials> {
         },
     ];
     for args in candidates {
-        if let Some(secret) = security_output(&args) {
-            if let Some(creds) = credentials_from_blob(&secret) {
-                return Some(creds);
-            }
+        if let Some(secret) = security_output(&args)
+            && let Some(creds) = credentials_from_blob(&secret)
+        {
+            return Some(creds);
         }
     }
     None
@@ -826,34 +812,6 @@ fn read_macos_keychain_credentials(service: &str) -> Option<ClaudeCredentials> {
 #[cfg(target_os = "macos")]
 fn keychain_find_args(service: &str) -> Vec<String> {
     vec!["find-generic-password".into(), "-s".into(), service.into()]
-}
-
-#[cfg(target_os = "macos")]
-fn claude_keychain_service(config_dir: Option<&std::path::Path>) -> String {
-    let Some(config_dir) = config_dir else {
-        return LEGACY_KEYCHAIN_SERVICE.into();
-    };
-    // Claude Code hashes the exact, NFC-normalized selector string and uses
-    // the first eight lowercase hex characters as its Keychain service suffix.
-    let selector: String = config_dir.to_string_lossy().nfc().collect();
-    let digest = Sha256::digest(selector.as_bytes());
-    let suffix = format!("{digest:x}");
-    format!("{LEGACY_KEYCHAIN_SERVICE}-{}", &suffix[..8])
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn delete_claude_keychain_credentials(
-    config_dir: &std::path::Path,
-) -> Result<(), String> {
-    let service = claude_keychain_service(Some(config_dir));
-    let args = vec![
-        "delete-generic-password".into(),
-        "-s".into(),
-        service.clone(),
-    ];
-    security_delete(&args).map_err(|error| {
-        format!("Could not remove the Claude credentials from Keychain ({service}): {error}")
-    })
 }
 
 #[cfg(target_os = "macos")]
@@ -886,53 +844,6 @@ fn security_run(args: &[String]) -> Option<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     run_with_timeout(&mut cmd, KEYCHAIN_TIMEOUT)
-}
-
-#[cfg(target_os = "macos")]
-fn security_delete(args: &[String]) -> Result<(), String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-
-    let mut child = Command::new("security")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut error = String::new();
-                if let Some(mut stderr) = child.stderr.take() {
-                    let _ = stderr.read_to_string(&mut error);
-                }
-                if status.success()
-                    || error.contains("could not be found")
-                    || error.contains("specified item could not be found")
-                {
-                    return Ok(());
-                }
-                let detail = error.trim();
-                return Err(if detail.is_empty() {
-                    format!("security exited with {status}")
-                } else {
-                    detail.to_string()
-                });
-            }
-            Ok(None) if started.elapsed() < KEYCHAIN_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("security timed out".into());
-            }
-            Err(error) => return Err(error.to_string()),
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1030,9 +941,11 @@ mod tests {
 
     #[test]
     fn opencode_data_dir_prefers_explicit_override() {
-        std::env::set_var("OPENCODE_DATA_DIR", "/tmp/custom-data");
+        // SAFETY: edition 2024 marks environment writes unsafe. Only this test
+        // reads or writes this variable, as before the move.
+        unsafe { std::env::set_var("OPENCODE_DATA_DIR", "/tmp/custom-data") };
         assert_eq!(opencode_data_dir(), Some(PathBuf::from("/tmp/custom-data")));
-        std::env::remove_var("OPENCODE_DATA_DIR");
+        unsafe { std::env::remove_var("OPENCODE_DATA_DIR") };
     }
 
     #[test]
@@ -1080,25 +993,31 @@ mod tests {
                 .unwrap();
         assert_eq!(config_go_api_key(&value), None);
 
-        std::env::set_var("MONOCODE_TEST_GO_KEY", "sk-go-env");
+        // SAFETY: edition 2024 marks environment writes unsafe. Only this test
+        // reads or writes this variable, as before the move.
+        unsafe { std::env::set_var("MONOCODE_TEST_GO_KEY", "sk-go-env") };
         let value: Value = serde_json::from_str(
             r#"{"provider":{"opencode-go":{"options":{"apiKey":"{env:MONOCODE_TEST_GO_KEY}"}}}}"#,
         )
         .unwrap();
         assert_eq!(config_go_api_key(&value).as_deref(), Some("sk-go-env"));
-        std::env::remove_var("MONOCODE_TEST_GO_KEY");
+        unsafe { std::env::remove_var("MONOCODE_TEST_GO_KEY") };
     }
 
     #[test]
     fn auth_content_blob_without_key_stays_authoritative() {
         // A valid blob without opencode-go means "no key", even when disk
         // credentials exist: no fallback to auth.json.
-        std::env::set_var(
-            "OPENCODE_AUTH_CONTENT",
-            r#"{"openai":{"type":"api","key":"sk-openai-x"}}"#,
-        );
+        // SAFETY: edition 2024 marks environment writes unsafe. Only this test
+        // reads or writes this variable, as before the move.
+        unsafe {
+            std::env::set_var(
+                "OPENCODE_AUTH_CONTENT",
+                r#"{"openai":{"type":"api","key":"sk-openai-x"}}"#,
+            )
+        };
         assert_eq!(read_opencode_go_api_key(), None);
-        std::env::remove_var("OPENCODE_AUTH_CONTENT");
+        unsafe { std::env::remove_var("OPENCODE_AUTH_CONTENT") };
     }
 
     fn encrypt_droid_blob(plain: &str, key: &[u8], iv: &[u8; 16]) -> String {
@@ -1180,15 +1099,5 @@ mod tests {
         assert!(token_expired(Some(now), now));
         assert!(token_expired(Some(now - 1), now));
         assert!(!token_expired(None, now));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn custom_config_dir_selects_claudes_hashed_keychain_service() {
-        assert_eq!(
-            claude_keychain_service(Some(std::path::Path::new("/tmp/profile"))),
-            "Claude Code-credentials-902e721c"
-        );
-        assert_eq!(claude_keychain_service(None), "Claude Code-credentials");
     }
 }

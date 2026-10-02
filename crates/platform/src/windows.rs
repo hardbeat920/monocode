@@ -1,14 +1,16 @@
+//! Windows job objects for child processes. Moved from src-tauri/src/windows.rs.
+
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::OnceLock;
 use windows_sys::Win32::System::{
     JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
     },
     LibraryLoader::{
-        SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
     },
 };
 
@@ -16,7 +18,7 @@ static MANAGED_JOB: OnceLock<Result<OwnedHandle, i32>> = OnceLock::new();
 
 /// Restrict DLL lookup before the first PTY is opened. MonoCode itself stays
 /// outside the job so relaunches and external applications do not inherit it.
-pub(crate) fn initialize() -> io::Result<()> {
+pub fn initialize() -> io::Result<()> {
     unsafe {
         if SetDefaultDllDirectories(
             LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -59,14 +61,14 @@ fn create_job() -> io::Result<OwnedHandle> {
 
 /// The app owns the only job handle. OS handle cleanup kills registered trees
 /// after a crash; unrelated children are never enrolled in this job.
-pub(crate) fn assign_child(process: RawHandle) -> io::Result<()> {
+pub fn assign_child(process: RawHandle) -> io::Result<()> {
     if unsafe { AssignProcessToJobObject(managed_job()?.as_raw_handle(), process) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
 }
 
-pub(crate) fn spawn_pty(
+pub fn spawn_pty(
     slave: &dyn portable_pty::SlavePty,
     command: portable_pty::CommandBuilder,
 ) -> Result<Box<dyn portable_pty::Child + Send + Sync>, String> {
@@ -76,9 +78,7 @@ pub(crate) fn spawn_pty(
         .map_err(|err| err.to_string())
 }
 
-pub(crate) fn spawn_managed(
-    command: &mut std::process::Command,
-) -> io::Result<std::process::Child> {
+pub fn spawn_managed(command: &mut std::process::Command) -> io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
@@ -100,7 +100,7 @@ fn resume_child(pid: u32) -> io::Result<()> {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::{
         Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
         Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
     };
@@ -140,8 +140,8 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
-        PROCESS_QUERY_INFORMATION,
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_INFORMATION, TerminateProcess,
+        WaitForSingleObject,
     };
 
     #[test]
@@ -164,10 +164,11 @@ mod tests {
         let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
         let mut command = portable_pty::CommandBuilder::new("cmd.exe");
         command.args(["/D", "/C", "exit", "7"]);
-        assert!(pair
-            .slave
-            .spawn_command_in_job(command, file.as_handle())
-            .is_err());
+        assert!(
+            pair.slave
+                .spawn_command_in_job(command, file.as_handle())
+                .is_err()
+        );
     }
 
     #[test]

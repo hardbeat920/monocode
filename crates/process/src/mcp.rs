@@ -1,11 +1,12 @@
+//! MCP server discovery and config writers. Moved from src-tauri/src/mcp.rs.
+
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::State;
 
-use crate::dirs_home;
-use crate::fs::expand_home;
+use crate::harness::HarnessHost;
+use monocode_platform::{dirs_home, expand_home};
 
 fn claude_desktop_config(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
@@ -53,27 +54,27 @@ fn server_from_json(provider: &str, name: &str, config: &str) -> Result<(String,
     if !server.is_object() {
         return Err("Server configuration must be an object".into());
     }
-    if provider == "opencode" {
-        if let Some(parts) = server.get("command").and_then(Value::as_array) {
-            let parts = parts
-                .iter()
-                .map(|part| {
-                    part.as_str()
-                        .filter(|text| !text.is_empty())
-                        .map(str::to_owned)
-                })
-                .collect::<Option<Vec<_>>>()
-                .ok_or("OpenCode command must contain non-empty strings")?;
-            let (command, args) = parts
-                .split_first()
-                .ok_or("OpenCode command cannot be empty")?;
-            let object = server.as_object_mut().unwrap();
-            if object.contains_key("args") {
-                return Err("Use either a command array or separate args".into());
-            }
-            object.insert("command".into(), Value::String(command.clone()));
-            object.insert("args".into(), serde_json::json!(args));
+    if provider == "opencode"
+        && let Some(parts) = server.get("command").and_then(Value::as_array)
+    {
+        let parts = parts
+            .iter()
+            .map(|part| {
+                part.as_str()
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or("OpenCode command must contain non-empty strings")?;
+        let (command, args) = parts
+            .split_first()
+            .ok_or("OpenCode command cannot be empty")?;
+        let object = server.as_object_mut().unwrap();
+        if object.contains_key("args") {
+            return Err("Use either a command array or separate args".into());
         }
+        object.insert("command".into(), Value::String(command.clone()));
+        object.insert("args".into(), serde_json::json!(args));
     }
     let command = server
         .get("command")
@@ -89,9 +90,8 @@ fn server_from_json(provider: &str, name: &str, config: &str) -> Result<(String,
     Ok((name, server))
 }
 
-#[tauri::command]
-pub async fn mcp_add(
-    host: State<'_, crate::harness::HarnessHost>,
+pub fn mcp_add(
+    host: &HarnessHost,
     cwd: String,
     provider: String,
     scope: String,
@@ -100,52 +100,44 @@ pub async fn mcp_add(
 ) -> Result<(), String> {
     let (name, server) = server_from_json(&provider, &name, &config)?;
     let binary_path = host.runtime_binary_path(&provider);
-    tauri::async_runtime::spawn_blocking(move || {
-        let home = dirs_home().ok_or("Home directory not found")?;
-        let project = expand_home(&cwd);
-        if !project.is_dir() {
-            return Err("Project directory does not exist".into());
-        }
-        match provider.as_str() {
-            "cursor" | "claude_desktop" => {
-                let path = match (provider.as_str(), scope.as_str()) {
-                    ("cursor", "user") => Path::new(&home).join(".cursor/mcp.json"),
-                    ("cursor", "project") => project.join(".cursor/mcp.json"),
-                    ("claude_desktop", "user") => claude_desktop_config(Path::new(&home)),
-                    _ => return Err("Unsupported scope for this provider".into()),
-                };
-                if provider == "claude_desktop" && server.get("command").is_none() {
-                    return Err("Claude Desktop local configuration requires a command".into());
-                }
-                write_json_server(&path, &name, server)
+    let home = dirs_home().ok_or("Home directory not found")?;
+    let project = expand_home(&cwd);
+    if !project.is_dir() {
+        return Err("Project directory does not exist".into());
+    }
+    match provider.as_str() {
+        "cursor" | "claude_desktop" => {
+            let path = match (provider.as_str(), scope.as_str()) {
+                ("cursor", "user") => Path::new(&home).join(".cursor/mcp.json"),
+                ("cursor", "project") => project.join(".cursor/mcp.json"),
+                ("claude_desktop", "user") => claude_desktop_config(Path::new(&home)),
+                _ => return Err("Unsupported scope for this provider".into()),
+            };
+            if provider == "claude_desktop" && server.get("command").is_none() {
+                return Err("Claude Desktop local configuration requires a command".into());
             }
-            "opencode" => {
-                if !matches!(scope.as_str(), "user" | "project") {
-                    return Err("Invalid OpenCode MCP scope".into());
-                }
-                let major = crate::harness::opencode_major_version(&cwd, binary_path.as_deref())?;
-                let override_path = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
-                let path = opencode_config_path(
-                    Path::new(&home),
-                    &project,
-                    &scope,
-                    override_path.as_deref(),
-                );
-                write_opencode_server(&path, &name, server, major)
-            }
-            "claude" | "codex" => crate::harness::add_mcp_via_cli(
-                &provider,
-                &scope,
-                &cwd,
-                &name,
-                &server,
-                binary_path.as_deref(),
-            ),
-            _ => Err("Unsupported MCP provider".into()),
+            write_json_server(&path, &name, server)
         }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        "opencode" => {
+            if !matches!(scope.as_str(), "user" | "project") {
+                return Err("Invalid OpenCode MCP scope".into());
+            }
+            let major = crate::harness::opencode_major_version(&cwd, binary_path.as_deref())?;
+            let override_path = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
+            let path =
+                opencode_config_path(Path::new(&home), &project, &scope, override_path.as_deref());
+            write_opencode_server(&path, &name, server, major)
+        }
+        "claude" | "codex" => crate::harness::add_mcp_via_cli(
+            &provider,
+            &scope,
+            &cwd,
+            &name,
+            &server,
+            binary_path.as_deref(),
+        ),
+        _ => Err("Unsupported MCP provider".into()),
+    }
 }
 
 fn opencode_config_path(
@@ -154,10 +146,10 @@ fn opencode_config_path(
     scope: &str,
     override_path: Option<&Path>,
 ) -> PathBuf {
-    if scope == "user" {
-        if let Some(path) = override_path {
-            return path.to_path_buf();
-        }
+    if scope == "user"
+        && let Some(path) = override_path
+    {
+        return path.to_path_buf();
     }
     let directory = if scope == "user" {
         home.join(".config/opencode")
@@ -431,24 +423,19 @@ pub struct McpConnection {
     enabled: bool,
 }
 
-#[tauri::command]
-pub async fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let home = dirs_home().ok_or("Home directory not found")?;
-        let project = expand_home(&cwd);
-        let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
-        let desktop_config = claude_desktop_config(Path::new(&home));
-        let opencode_config = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
-        Ok(discover(
-            Path::new(&home),
-            &project,
-            codex_home.as_deref(),
-            &desktop_config,
-            opencode_config.as_deref(),
-        ))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn mcp_discover(cwd: String) -> Result<Vec<McpConnection>, String> {
+    let home = dirs_home().ok_or("Home directory not found")?;
+    let project = expand_home(&cwd);
+    let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
+    let desktop_config = claude_desktop_config(Path::new(&home));
+    let opencode_config = std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
+    Ok(discover(
+        Path::new(&home),
+        &project,
+        codex_home.as_deref(),
+        &desktop_config,
+        opencode_config.as_deref(),
+    ))
 }
 
 fn discover(
@@ -589,12 +576,11 @@ fn add_json_servers(
     // OpenCode 2.x nests the map under mcp.servers; older versions use mcp.
     // A server can itself be named "servers", so inspect the nested shape.
     let servers = servers.map(|value| {
-        if provider == "opencode" {
-            if let Some(nested) = value.get("servers").and_then(Value::as_object) {
-                if nested.values().all(Value::is_object) {
-                    return &value["servers"];
-                }
-            }
+        if provider == "opencode"
+            && let Some(nested) = value.get("servers").and_then(Value::as_object)
+            && nested.values().all(Value::is_object)
+        {
+            return &value["servers"];
         }
         value
     });
@@ -746,18 +732,22 @@ mod tests {
         .unwrap();
         assert_eq!(name, "docs");
         assert_eq!(server["command"], "npx");
-        assert!(server_from_json(
-            "claude",
-            "",
-            r#"{"mcpServers":{"one":{"command":"npx"},"two":{"command":"node"}}}"#
-        )
-        .is_err());
-        assert!(server_from_json(
-            "claude",
-            "different",
-            r#"{"mcpServers":{"docs":{"command":"npx"}}}"#
-        )
-        .is_err());
+        assert!(
+            server_from_json(
+                "claude",
+                "",
+                r#"{"mcpServers":{"one":{"command":"npx"},"two":{"command":"node"}}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            server_from_json(
+                "claude",
+                "different",
+                r#"{"mcpServers":{"docs":{"command":"npx"}}}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

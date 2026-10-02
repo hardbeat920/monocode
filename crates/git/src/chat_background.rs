@@ -1,18 +1,15 @@
+//! Chat background images in the app data directory. Moved from
+//! src-tauri/src/chat_background.rs.
+
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
-
-use crate::fs::expand_home;
+use monocode_platform::expand_home;
 
 const MAX_BACKGROUND_BYTES: u64 = 25 * 1024 * 1024;
 const ALLOWED_EXT: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
-fn backgrounds_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("backgrounds");
+fn backgrounds_dir(data_dir: &Path) -> Result<PathBuf, String> {
+    let dir = data_dir.join("backgrounds");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -79,7 +76,7 @@ fn background_extension(source: &Path) -> Result<String, String> {
     }
 }
 
-fn save_chat_background_sync(app: &AppHandle, source_path: &str) -> Result<String, String> {
+fn save_chat_background_sync(data_dir: &Path, source_path: &str) -> Result<String, String> {
     let source = expand_home(source_path);
     let meta = std::fs::metadata(&source).map_err(|e| format!("{}: {e}", source.display()))?;
     if !meta.is_file() {
@@ -92,7 +89,7 @@ fn save_chat_background_sync(app: &AppHandle, source_path: &str) -> Result<Strin
         ));
     }
     let ext = background_extension(&source)?;
-    let dir = backgrounds_dir(app)?;
+    let dir = backgrounds_dir(data_dir)?;
     let dest = dir.join(format!("chat-background.{ext}"));
     let temp = dir.join(".chat-background-upload");
 
@@ -104,7 +101,7 @@ fn save_chat_background_sync(app: &AppHandle, source_path: &str) -> Result<Strin
 }
 
 fn save_project_chat_background_sync(
-    app: &AppHandle,
+    data_dir: &Path,
     project: &str,
     source_path: &str,
 ) -> Result<String, String> {
@@ -123,7 +120,7 @@ fn save_project_chat_background_sync(
         ));
     }
     let ext = background_extension(&source)?;
-    let dir = backgrounds_dir(app)?;
+    let dir = backgrounds_dir(data_dir)?;
     let stem = project_background_stem(project);
     let dest = dir.join(format!("{stem}.{ext}"));
     let temp = dir.join(format!(".{stem}-upload"));
@@ -134,44 +131,26 @@ fn save_project_chat_background_sync(
     Ok(dest.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
-pub async fn save_chat_background(app: AppHandle, source_path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || save_chat_background_sync(&app, &source_path))
-        .await
-        .map_err(|e| e.to_string())?
+pub fn save_chat_background(data_dir: &Path, source_path: String) -> Result<String, String> {
+    save_chat_background_sync(data_dir, &source_path)
 }
 
-#[tauri::command]
-pub async fn remove_chat_background(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = backgrounds_dir(&app)?;
-        remove_existing_backgrounds(&dir)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn remove_chat_background(data_dir: &Path) -> Result<(), String> {
+    let dir = backgrounds_dir(data_dir)?;
+    remove_existing_backgrounds(&dir)
 }
 
-#[tauri::command]
-pub async fn save_project_chat_background(
-    app: AppHandle,
+pub fn save_project_chat_background(
+    data_dir: &Path,
     project: String,
     source_path: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        save_project_chat_background_sync(&app, &project, &source_path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    save_project_chat_background_sync(data_dir, &project, &source_path)
 }
 
-#[tauri::command]
-pub async fn remove_project_chat_background(app: AppHandle, project: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = backgrounds_dir(&app)?;
-        remove_project_background(&dir, &project)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn remove_project_chat_background(data_dir: &Path, project: String) -> Result<(), String> {
+    let dir = backgrounds_dir(data_dir)?;
+    remove_project_background(&dir, &project)
 }
 
 #[cfg(test)]

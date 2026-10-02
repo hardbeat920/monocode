@@ -1,9 +1,12 @@
+//! Images and media referenced by inbox items, fetched through `gh` or HTTP. Moved from
+//! src-tauri/src/inbox_media.rs.
+
 use std::io::Read;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::dirs_home;
-use crate::fs::MAX_PREVIEW_BYTES;
+use monocode_git::fs::MAX_PREVIEW_BYTES;
+use monocode_platform::dirs_home;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_REDIRECTS: usize = 5;
@@ -19,12 +22,8 @@ struct MediaUrl {
 
 /// Fetch an issue/PR image or video through the host, as a blob the webview
 /// can render without opening `img-src` / `media-src` to GitHub's CDNs.
-#[tauri::command]
-pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, String> {
-    let bytes = tauri::async_runtime::spawn_blocking(move || fetch_inbox_media_sync(&url))
-        .await
-        .map_err(|error| error.to_string())??;
-    Ok(tauri::ipc::Response::new(bytes))
+pub fn fetch_inbox_media(url: String) -> Result<Vec<u8>, String> {
+    fetch_inbox_media_sync(&url)
 }
 
 fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
@@ -47,10 +46,10 @@ fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
             .get(&current.url)
             .set("Accept", "image/*,video/*,*/*;q=0.1")
             .set("User-Agent", USER_AGENT);
-        if let Some(token) = token.as_ref() {
-            if github_auth_host(&current.host) {
-                request = request.set("Authorization", &format!("Bearer {token}"));
-            }
+        if let Some(token) = token.as_ref()
+            && github_auth_host(&current.host)
+        {
+            request = request.set("Authorization", &format!("Bearer {token}"));
         }
         // ureq with redirects(0) returns 3xx as Ok, not Err(Status).
         let response = match request.call() {
@@ -97,10 +96,9 @@ fn read_media_body(response: ureq::Response) -> Result<Vec<u8>, String> {
     if let Some(length) = response
         .header("Content-Length")
         .and_then(|value| value.parse::<u64>().ok())
+        && length > MAX_PREVIEW_BYTES
     {
-        if length > MAX_PREVIEW_BYTES {
-            return Err(too_large());
-        }
+        return Err(too_large());
     }
     let mut reader = response.into_reader();
     let mut bytes = Vec::new();
@@ -262,25 +260,21 @@ fn path_has_dotdot(path: &str) -> bool {
 }
 
 fn github_auth_token() -> Option<String> {
-    let program = crate::harness::resolve_gui_binary("gh")?;
+    let program = monocode_process::harness::resolve_gui_binary("gh")?;
     let home = dirs_home()?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&home)
         .args(["auth", "token"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
-    crate::harness::apply_gui_env(&mut cmd);
-    crate::hide_window_console(&mut cmd);
+    monocode_process::harness::apply_gui_env(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    }
+    if token.is_empty() { None } else { Some(token) }
 }
 
 #[cfg(test)]
@@ -289,22 +283,26 @@ mod tests {
 
     #[test]
     fn github_and_linear_attachments_are_allowed() {
-        assert!(parse_allowed_media_url(
-            "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        )
-        .is_ok());
+        assert!(
+            parse_allowed_media_url(
+                "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            )
+            .is_ok()
+        );
         assert!(
             parse_allowed_media_url("https://user-images.githubusercontent.com/1/shot.png").is_ok()
         );
         assert!(parse_allowed_media_url("https://uploads.linear.app/org/uuid/file.png").is_ok());
-        assert!(parse_allowed_media_url(
-            "https://github-production-user-asset-6210df.s3.amazonaws.com/1/shot.png"
-        )
-        .is_ok());
-        assert!(parse_allowed_media_url(
-            "https://github.com/acme/web/assets/12/aaaaaaaa-bbbb-cccc"
-        )
-        .is_ok());
+        assert!(
+            parse_allowed_media_url(
+                "https://github-production-user-asset-6210df.s3.amazonaws.com/1/shot.png"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_allowed_media_url("https://github.com/acme/web/assets/12/aaaaaaaa-bbbb-cccc")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -314,10 +312,10 @@ mod tests {
         assert!(parse_allowed_media_url("https://github.com/user-attachments/../login").is_err());
         assert!(parse_allowed_media_url("http://github.com/user-attachments/assets/x").is_err());
         assert!(parse_allowed_media_url("https://evil.example/shot.png").is_err());
-        assert!(parse_allowed_media_url(
-            "https://github.com@evil.example/user-attachments/assets/x"
-        )
-        .is_err());
+        assert!(
+            parse_allowed_media_url("https://github.com@evil.example/user-attachments/assets/x")
+                .is_err()
+        );
         assert!(parse_allowed_media_url("https://127.0.0.1/shot.png").is_err());
     }
 
@@ -329,11 +327,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(next.host, "objects.githubusercontent.com");
-        assert!(redirect_target(
-            "https://github.com/user-attachments/assets/abcd",
-            "https://evil.example/shot.png"
-        )
-        .is_ok());
+        assert!(
+            redirect_target(
+                "https://github.com/user-attachments/assets/abcd",
+                "https://evil.example/shot.png"
+            )
+            .is_ok()
+        );
         assert!(!is_allowed_media_target(
             &redirect_target(
                 "https://github.com/user-attachments/assets/abcd",
@@ -341,10 +341,12 @@ mod tests {
             )
             .unwrap()
         ));
-        assert!(redirect_target(
-            "https://github.com/user-attachments/assets/abcd",
-            "http://objects.githubusercontent.com/x"
-        )
-        .is_err());
+        assert!(
+            redirect_target(
+                "https://github.com/user-attachments/assets/abcd",
+                "http://objects.githubusercontent.com/x"
+            )
+            .is_err()
+        );
     }
 }

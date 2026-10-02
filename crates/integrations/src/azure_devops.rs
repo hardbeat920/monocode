@@ -1,3 +1,6 @@
+//! Azure DevOps work items, pull requests, threads, and diffs. Moved from
+//! src-tauri/src/azure_devops.rs.
+
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -6,8 +9,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use serde_json::{Value, json};
 
 const DEFAULT_LIMIT: u32 = 40;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -122,9 +124,8 @@ pub struct AzureDevOpsMrDiff {
     pub truncated: bool,
 }
 
-#[tauri::command(async)]
-pub fn azure_devops_status(app: AppHandle) -> Result<AzureDevOpsStatus, String> {
-    let config = read_config(&app)?;
+pub fn azure_devops_status(data_dir: &Path) -> Result<AzureDevOpsStatus, String> {
+    let config = read_config(data_dir)?;
     Ok(AzureDevOpsStatus {
         connected: config.is_some(),
         url: config
@@ -138,151 +139,111 @@ pub fn azure_devops_status(app: AppHandle) -> Result<AzureDevOpsStatus, String> 
     })
 }
 
-#[tauri::command]
-pub async fn azure_devops_set_config(
-    app: AppHandle,
+pub fn azure_devops_set_config(
+    data_dir: &Path,
     url: String,
     token: String,
 ) -> Result<AzureDevOpsStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let url = normalize_azure_devops_url(&url)?;
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            delete_config(&app)?;
-            let organization = organization_from_url(&url);
-            return Ok(AzureDevOpsStatus {
-                connected: false,
-                url,
-                organization,
-            });
-        }
-        let config = AzureDevOpsConfig { url, token };
-        // Validates the PAT and fails fast on 401/203 (non-visualstudio passthrough).
-        let user_id = azure_current_user_id(&config)?;
-        if user_id.trim().is_empty() {
-            return Err("Azure DevOps did not return the current user".into());
-        }
-        write_config(&app, &config)?;
-        Ok(AzureDevOpsStatus {
-            connected: true,
-            organization: organization_from_url(&config.url),
-            url: config.url,
-        })
+    let url = normalize_azure_devops_url(&url)?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        delete_config(data_dir)?;
+        let organization = organization_from_url(&url);
+        return Ok(AzureDevOpsStatus {
+            connected: false,
+            url,
+            organization,
+        });
+    }
+    let config = AzureDevOpsConfig { url, token };
+    // Validates the PAT and fails fast on 401/203 (non-visualstudio passthrough).
+    let user_id = azure_current_user_id(&config)?;
+    if user_id.trim().is_empty() {
+        return Err("Azure DevOps did not return the current user".into());
+    }
+    write_config(data_dir, &config)?;
+    Ok(AzureDevOpsStatus {
+        connected: true,
+        organization: organization_from_url(&config.url),
+        url: config.url,
     })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn azure_devops_repo(app: AppHandle, cwd: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        azure_devops_repo_for(&expand_home(&cwd), &config.url)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn azure_devops_repo(data_dir: &Path, cwd: String) -> Result<String, String> {
+    let config = require_config(data_dir)?;
+    azure_devops_repo_for(&expand_home(&cwd), &config.url)
 }
 
-#[tauri::command]
-pub async fn azure_devops_list_work_items(
-    app: AppHandle,
+pub fn azure_devops_list_work_items(
+    data_dir: &Path,
     cwd: String,
     kind: String,
     assigned_to_me: bool,
     state: String,
     limit: Option<u32>,
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = azure_devops_repo_for(&expand_home(&cwd), &config.url)?;
-        azure_devops_list_work_items_for(
-            &config,
-            &repo,
-            &kind,
-            assigned_to_me,
-            &state,
-            limit.unwrap_or(DEFAULT_LIMIT),
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = azure_devops_repo_for(&expand_home(&cwd), &config.url)?;
+    azure_devops_list_work_items_for(
+        &config,
+        &repo,
+        &kind,
+        assigned_to_me,
+        &state,
+        limit.unwrap_or(DEFAULT_LIMIT),
+    )
 }
 
-#[tauri::command]
-pub async fn azure_devops_list_todos(
-    app: AppHandle,
+pub fn azure_devops_list_todos(
+    data_dir: &Path,
     kind: String,
     limit: Option<u32>,
 ) -> Result<Vec<AzureDevOpsWorkItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        azure_devops_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    azure_devops_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
 }
 
-#[tauri::command]
-pub async fn azure_devops_work_item_details(
-    app: AppHandle,
+pub fn azure_devops_work_item_details(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<AzureDevOpsWorkItemDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        // Boards work items carry only the project name in `repo`, so per-kind
-        // validation happens inside the helper instead of here.
-        azure_devops_work_item_details_for(&config, &repo, &kind, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    // Boards work items carry only the project name in `repo`, so per-kind
+    // validation happens inside the helper instead of here.
+    azure_devops_work_item_details_for(&config, &repo, &kind, number)
 }
 
-#[tauri::command]
-pub async fn azure_devops_work_item_thread(
-    app: AppHandle,
+pub fn azure_devops_work_item_thread(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
 ) -> Result<AzureDevOpsWorkItemThread, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        azure_devops_work_item_thread_for(&config, &repo, &kind, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    azure_devops_work_item_thread_for(&config, &repo, &kind, number)
 }
 
-#[tauri::command]
-pub async fn azure_devops_work_item_comment(
-    app: AppHandle,
+pub fn azure_devops_work_item_comment(
+    data_dir: &Path,
     repo: String,
     kind: String,
     number: i64,
     body: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        azure_devops_work_item_comment_for(&config, &repo, &kind, number, &body)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    azure_devops_work_item_comment_for(&config, &repo, &kind, number, &body)
 }
 
-#[tauri::command]
-pub async fn azure_devops_mr_diff(
-    app: AppHandle,
+pub fn azure_devops_mr_diff(
+    data_dir: &Path,
     repo: String,
     number: i64,
 ) -> Result<AzureDevOpsMrDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = require_config(&app)?;
-        let repo = validate_repo(&repo)?;
-        azure_devops_mr_diff_for(&config, &repo, number)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let config = require_config(data_dir)?;
+    let repo = validate_repo(&repo)?;
+    azure_devops_mr_diff_for(&config, &repo, number)
 }
 
 fn azure_devops_list_work_items_for(
@@ -1164,22 +1125,22 @@ fn sniff_content(bytes: &[u8]) -> FileContent {
         .position(|byte| !byte.is_ascii_whitespace())
         .map(|start| &bytes[start..])
         .unwrap_or(&[]);
-    if trimmed_start.starts_with(b"{") {
-        if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(bytes) {
-            if map
-                .get("isTruncated")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                return FileContent::TooLarge;
+    if trimmed_start.starts_with(b"{")
+        && let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(bytes)
+    {
+        if map
+            .get("isTruncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return FileContent::TooLarge;
+        }
+        if let Some(content) = map.get("content").and_then(Value::as_str) {
+            let text = content.as_bytes();
+            if is_binary_bytes(text) {
+                return FileContent::Binary;
             }
-            if let Some(content) = map.get("content").and_then(Value::as_str) {
-                let text = content.as_bytes();
-                if is_binary_bytes(text) {
-                    return FileContent::Binary;
-                }
-                return FileContent::Text(text.to_vec());
-            }
+            return FileContent::Text(text.to_vec());
         }
     }
     if is_binary_bytes(bytes) {
@@ -1218,17 +1179,17 @@ fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64
     };
     let old_path = dir.join("old");
     let new_path = dir.join("new");
-    if let Some(bytes) = old {
-        if fs::write(&old_path, bytes).is_err() {
-            cleanup();
-            return None;
-        }
+    if let Some(bytes) = old
+        && fs::write(&old_path, bytes).is_err()
+    {
+        cleanup();
+        return None;
     }
-    if let Some(bytes) = new {
-        if fs::write(&new_path, bytes).is_err() {
-            cleanup();
-            return None;
-        }
+    if let Some(bytes) = new
+        && fs::write(&new_path, bytes).is_err()
+    {
+        cleanup();
+        return None;
     }
     // Isolate the subprocess from user configuration: a global
     // `diff.external`, textconv driver, or attributes file could otherwise
@@ -1236,7 +1197,7 @@ fn git_unified_hunks(old: Option<&[u8]>, new: Option<&[u8]>) -> Option<(i64, i64
     let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let null_file: &Path = Path::new(null_device);
     let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd
         .args([
             "-c",
@@ -1362,15 +1323,14 @@ fn parse_pr_assignees(row: &Value) -> Vec<AzureDevOpsAssignee> {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(creator) = row.get("createdBy") {
-        if let Some(login) = string_field(creator, "displayName").filter(|name| !name.is_empty()) {
-            if !people.iter().any(|person| person.login == login) {
-                people.push(AzureDevOpsAssignee {
-                    login,
-                    avatar_url: string_field(creator, "imageUrl").unwrap_or_default(),
-                });
-            }
-        }
+    if let Some(creator) = row.get("createdBy")
+        && let Some(login) = string_field(creator, "displayName").filter(|name| !name.is_empty())
+        && !people.iter().any(|person| person.login == login)
+    {
+        people.push(AzureDevOpsAssignee {
+            login,
+            avatar_url: string_field(creator, "imageUrl").unwrap_or_default(),
+        });
     }
     people
 }
@@ -1829,7 +1789,7 @@ fn encode_segment(value: &str) -> String {
 
 fn azure_devops_repo_for(root: &Path, organization_url: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd
         .args(["config", "--get-regexp", r"^remote\..*\.url$"])
         .current_dir(root)
@@ -1874,23 +1834,24 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
         return None;
     }
     // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo} (no scheme).
-    if !remote.contains("://") && remote.contains('@') {
-        if let Some((_, path)) = remote.split_once(':') {
-            let path = path.strip_prefix("v3/").unwrap_or(path);
-            let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-            if parts.len() >= 3 && remote.contains("dev.azure.com") {
-                let org = parts[0].to_string();
-                let project = percent_decode(parts[1]);
-                let repo = percent_decode(parts[2..].join("/").trim_end_matches(".git"));
-                // Repository names never contain `/`; extra segments belong to
-                // on-prem collection paths, which HTTPS remotes already cover.
-                let repo = repo.split('/').next_back().unwrap_or("").to_string();
-                return Some((
-                    format!("https://dev.azure.com/{}", org.to_ascii_lowercase()),
-                    project,
-                    repo,
-                ));
-            }
+    if !remote.contains("://")
+        && remote.contains('@')
+        && let Some((_, path)) = remote.split_once(':')
+    {
+        let path = path.strip_prefix("v3/").unwrap_or(path);
+        let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+        if parts.len() >= 3 && remote.contains("dev.azure.com") {
+            let org = parts[0].to_string();
+            let project = percent_decode(parts[1]);
+            let repo = percent_decode(parts[2..].join("/").trim_end_matches(".git"));
+            // Repository names never contain `/`; extra segments belong to
+            // on-prem collection paths, which HTTPS remotes already cover.
+            let repo = repo.split('/').next_back().unwrap_or("").to_string();
+            return Some((
+                format!("https://dev.azure.com/{}", org.to_ascii_lowercase()),
+                project,
+                repo,
+            ));
         }
     }
     // HTTPS (credentials stripped first).
@@ -1955,14 +1916,14 @@ fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) =
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                out.push(high * 16 + low);
-                index += 3;
-                continue;
-            }
+        {
+            out.push(high * 16 + low);
+            index += 3;
+            continue;
         }
         out.push(bytes[index]);
         index += 1;
@@ -1998,16 +1959,12 @@ fn valid_repo_parts(project: &str, repo: &str) -> bool {
 
 // ---- Config storage ----
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("azure-devops-config.json"))
+fn config_path(data_dir: &Path) -> Result<PathBuf, String> {
+    Ok(data_dir.join("azure-devops-config.json"))
 }
 
-fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
-    let path = config_path(app)?;
+fn read_config(data_dir: &Path) -> Result<Option<AzureDevOpsConfig>, String> {
+    let path = config_path(data_dir)?;
     match fs::read_to_string(path) {
         Ok(raw) => {
             let mut config: AzureDevOpsConfig = serde_json::from_str(&raw)
@@ -2025,12 +1982,12 @@ fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
     }
 }
 
-fn require_config(app: &AppHandle) -> Result<AzureDevOpsConfig, String> {
-    read_config(app)?.ok_or_else(|| "Connect Azure DevOps in Settings".to_string())
+fn require_config(data_dir: &Path) -> Result<AzureDevOpsConfig, String> {
+    read_config(data_dir)?.ok_or_else(|| "Connect Azure DevOps in Settings".to_string())
 }
 
-fn write_config(app: &AppHandle, config: &AzureDevOpsConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+fn write_config(data_dir: &Path, config: &AzureDevOpsConfig) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -2038,8 +1995,8 @@ fn write_config(app: &AppHandle, config: &AzureDevOpsConfig) -> Result<(), Strin
     write_secret_file(&path, &value)
 }
 
-fn delete_config(app: &AppHandle) -> Result<(), String> {
-    let path = config_path(app)?;
+fn delete_config(data_dir: &Path) -> Result<(), String> {
+    let path = config_path(data_dir)?;
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -2071,12 +2028,12 @@ fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
 
 fn expand_home(input: &str) -> PathBuf {
     if input == "~" {
-        return crate::dirs_home()
+        return monocode_platform::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(input));
     }
     if let Some(rest) = input.strip_prefix("~/") {
-        return crate::dirs_home()
+        return monocode_platform::dirs_home()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("~"))
             .join(rest);

@@ -1,7 +1,12 @@
+//! Spawn and removal reservations for working copies, so a worktree is not
+//! deleted while a process starts in it. Moved from
+//! src-tauri/src/worktree_lifecycle.rs, with `contains_working_dir` from
+//! src-tauri/src/worktrees.rs.
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::worktrees::contains_working_dir;
+use monocode_platform::path_to_js;
 
 #[derive(Default)]
 struct Lifecycle {
@@ -14,7 +19,7 @@ static LIFECYCLE: Lifecycle = Lifecycle {
 
 /// Held from before process creation through host registration, or across the
 /// entire removal. The registry mutex is only held while acquiring/releasing.
-pub(crate) struct Reservation<'a> {
+pub struct Reservation<'a> {
     lifecycle: &'a Lifecycle,
     path: PathBuf,
     removing: bool,
@@ -63,11 +68,23 @@ impl Drop for Reservation<'_> {
     }
 }
 
-pub(crate) fn reserve_spawn(path: &Path) -> Result<Reservation<'static>, String> {
+pub fn contains_working_dir(root: &Path, cwd: &Path) -> bool {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    if cfg!(windows) {
+        let root = path_to_js(&root).to_lowercase();
+        let cwd = path_to_js(&cwd).to_lowercase();
+        cwd == root || cwd.starts_with(&format!("{}/", root.trim_end_matches('/')))
+    } else {
+        cwd.starts_with(root)
+    }
+}
+
+pub fn reserve_spawn(path: &Path) -> Result<Reservation<'static>, String> {
     LIFECYCLE.reserve(path, false)
 }
 
-pub(crate) fn reserve_removal(path: &Path) -> Result<Reservation<'static>, String> {
+pub fn reserve_removal(path: &Path) -> Result<Reservation<'static>, String> {
     LIFECYCLE.reserve(path, true)
 }
 

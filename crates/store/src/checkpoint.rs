@@ -1,3 +1,6 @@
+//! Per-session file checkpoints for undo and keep. Moved from
+//! src-tauri/src/checkpoint.rs.
+
 #[cfg(test)]
 use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -6,13 +9,12 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
 
 #[cfg(test)]
-use crate::fs::GitDiffStats;
-use crate::fs::{
-    expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path, GitChangedFile,
-    GitDiffIndex, MAX_TEXT_FILE_BYTES,
+use monocode_git::fs::GitDiffStats;
+use monocode_git::fs::{
+    GitChangedFile, GitDiffIndex, MAX_TEXT_FILE_BYTES, expand_home, git_checked,
+    git_diff_files_for, path_to_js, resolve_repo_path,
 };
 
 const MAX_SNAPSHOT_FILES: usize = 500;
@@ -560,35 +562,24 @@ pub struct CheckpointApplyResult {
     pub already_applied: usize,
 }
 
-pub fn init(app: &AppHandle) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("checkpoints");
+/// Open the checkpoint store under `<data_dir>/checkpoints`.
+pub fn init(data_dir: &Path) -> Result<CheckpointStore, String> {
+    let dir = data_dir.join("checkpoints");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    app.manage(CheckpointStore::new(dir));
-    Ok(())
+    Ok(CheckpointStore::new(dir))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_ensure(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_ensure(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.ensure(&session_id, &cwd))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.ensure(&session_id, &cwd))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_prepare(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_prepare(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
     paths: Vec<String>,
@@ -597,17 +588,11 @@ pub async fn session_checkpoint_prepare(
     if paths.len() > MAX_SNAPSHOT_FILES {
         return Err("Too many paths".into());
     }
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.prepare(&session_id, &cwd, &paths))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.prepare(&session_id, &cwd, &paths))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_capture(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_capture(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
     paths: Vec<String>,
@@ -616,118 +601,73 @@ pub async fn session_checkpoint_capture(
     if paths.len() > MAX_SNAPSHOT_FILES {
         return Err("Too many paths".into());
     }
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.capture(&session_id, &cwd, &paths))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.capture(&session_id, &cwd, &paths))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_status(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_status(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
 ) -> Result<CheckpointStatus, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.status(&session_id, &cwd))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.status(&session_id, &cwd))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_apply(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_apply(
+    store: &CheckpointStore,
     session_id: String,
     from_cwd: String,
     to_cwd: String,
 ) -> Result<CheckpointApplyResult, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.apply(&session_id, &from_cwd, &to_cwd))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.apply(&session_id, &from_cwd, &to_cwd))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_cleanup_safe(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_cleanup_safe(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
 ) -> Result<bool, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.cleanup_safe(&session_id, &cwd))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.cleanup_safe(&session_id, &cwd))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_forget(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_forget(
+    store: &CheckpointStore,
     session_id: String,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || store.exclusive(|store| store.forget(&session_id)))
-        .await
-        .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.forget(&session_id))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_file_diff(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_file_diff(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
     relative: String,
 ) -> Result<CheckpointFileDiff, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.file_diff(&session_id, &cwd, &relative))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.file_diff(&session_id, &cwd, &relative))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_undo(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_undo(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
     relative: Option<String>,
 ) -> Result<CheckpointStatus, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.undo(&session_id, &cwd, relative.as_deref()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.undo(&session_id, &cwd, relative.as_deref()))
 }
 
-#[tauri::command]
-pub async fn session_checkpoint_keep(
-    store: State<'_, CheckpointStore>,
+pub fn session_checkpoint_keep(
+    store: &CheckpointStore,
     session_id: String,
     cwd: String,
     relative: Option<String>,
 ) -> Result<CheckpointStatus, String> {
     validate_id(&session_id, "session")?;
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.keep(&session_id, &cwd, relative.as_deref()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    store.exclusive(|store| store.keep(&session_id, &cwd, relative.as_deref()))
 }
 
 /// Reconstruct the worker-owned delta and reject anything that was not
@@ -873,7 +813,7 @@ fn path_contains_symlink(root: &Path, relative: &str) -> bool {
 
 fn git_head(root: &Path) -> Result<Vec<u8>, String> {
     let mut command = Command::new("git");
-    crate::hide_window_console(&mut command);
+    monocode_platform::hide_window_console(&mut command);
     let output = command
         .arg("-C")
         .arg(root)
@@ -1068,7 +1008,7 @@ fn calculate_session_stats(dir: &Path, manifest: &Manifest, relative: &str) -> O
 
 fn diff_numstat(before: &Path, after: &Path) -> Option<(i64, i64)> {
     let mut cmd = Command::new("git");
-    crate::hide_window_console(&mut cmd);
+    monocode_platform::hide_window_console(&mut cmd);
     let output = cmd
         .args(["diff", "--no-index", "--no-ext-diff", "--numstat", "--"])
         .arg(before)
@@ -1448,10 +1388,10 @@ mod tests {
         let _ = git(dir, &["config", "core.autocrlf", "false"]);
         for (name, contents) in files {
             let path = dir.join(name);
-            if let Some(parent) = path.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
-                    return false;
-                }
+            if let Some(parent) = path.parent()
+                && std::fs::create_dir_all(parent).is_err()
+            {
+                return false;
             }
             if std::fs::write(&path, contents).is_err() {
                 return false;
@@ -2058,10 +1998,12 @@ mod tests {
 
         std::fs::write(source.0.join("unreported.txt"), "unknown\n").unwrap();
         assert!(!store.cleanup_safe("worker", &from).unwrap());
-        assert!(store
-            .apply("worker", &from, &to)
-            .unwrap_err()
-            .contains("not captured"));
+        assert!(
+            store
+                .apply("worker", &from, &to)
+                .unwrap_err()
+                .contains("not captured")
+        );
     }
 
     #[test]

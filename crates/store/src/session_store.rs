@@ -1,13 +1,17 @@
+//! SQLite storage for sessions, orchestration runs, in-flight turns, and the
+//! workspace snapshot. Moved from src-tauri/src/session_store.rs.
+
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State};
+use serde_json::{Value, json};
+
+use crate::StoreEvents;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
@@ -42,7 +46,7 @@ impl SessionStore {
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
-        crate::worktrees::reconcile_removals(&conn)?;
+        monocode_git::worktrees::reconcile_removals(&conn)?;
         let read_conn = Connection::open(&path).map_err(|e| e.to_string())?;
         read_conn
             .execute_batch("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;")
@@ -53,7 +57,8 @@ impl SessionStore {
         })
     }
 
-    #[cfg(test)]
+    /// An in-memory database with the full schema, for tests here and in
+    /// crates that store sessions.
     pub fn open_in_memory() -> Result<Self, String> {
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")
@@ -65,25 +70,50 @@ impl SessionStore {
         })
     }
 
-    pub(crate) fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+    pub fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.conn
             .lock()
             .map_err(|_| "Session store is locked".into())
     }
 }
 
-pub fn init(app: &AppHandle) -> Result<(), String> {
+/// Persist an orchestration run for its lead session. Moved from
+/// src-tauri/src/control.rs.
+pub fn control_save(store: &SessionStore, lead_id: String, state: String) -> Result<(), String> {
+    if state.len() > 8_000_000 {
+        return Err("Orchestration history is too large".into());
+    }
+    let run: Value = serde_json::from_str(&state).map_err(|_| "Invalid run state")?;
+    let conn = store.lock_conn()?;
+    save_orchestration(&conn, &lead_id, &run).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn control_load(store: &SessionStore, lead_id: String) -> Result<Option<String>, String> {
+    store
+        .lock_conn()?
+        .query_row(
+            "SELECT state FROM orchestration_runs WHERE lead_id=?1",
+            [lead_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+/// Open `monocode.db` in the app data directory.
+pub fn open_in_data_dir(data_dir: &Path) -> Result<SessionStore, String> {
+    let mut opened = None;
     init_with(
-        || app.path().app_data_dir().map_err(|e| e.to_string()),
+        || Ok(data_dir.to_path_buf()),
         SessionStore::open,
-        |store| {
-            app.manage(store);
-        },
-    )
+        |store| opened = Some(store),
+    )?;
+    opened.ok_or_else(|| "Session store did not open".to_string())
 }
 
 // Keep the complete startup path here so the transcript-read test covers it.
-fn init_with(
+pub fn init_with(
     data_dir: impl FnOnce() -> Result<PathBuf, String>,
     open: impl FnOnce(PathBuf) -> Result<SessionStore, String>,
     manage: impl FnOnce(SessionStore),
@@ -199,29 +229,28 @@ pub struct SessionRecord {
     pub updated_at: i64,
 }
 
-#[tauri::command(async)]
 pub fn session_upsert(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     session: SessionUpsert,
 ) -> Result<SessionSummary, String> {
     validate_id(&session.id, "session")?;
     if session.cwd.trim().is_empty() {
         return Err("cwd is required".into());
     }
-    if let Some(provider_session_id) = &session.provider_session_id {
-        if !provider_session_id.is_empty() {
-            validate_id(provider_session_id, "provider session")?;
-        }
+    if let Some(provider_session_id) = &session.provider_session_id
+        && !provider_session_id.is_empty()
+    {
+        validate_id(provider_session_id, "provider session")?;
     }
-    if let Some(provider_account_id) = &session.provider_account_id {
-        if !provider_account_id.is_empty() {
-            validate_id(provider_account_id, "provider account")?;
-        }
+    if let Some(provider_account_id) = &session.provider_account_id
+        && !provider_account_id.is_empty()
+    {
+        validate_id(provider_account_id, "provider account")?;
     }
-    if let Some(automation_id) = &session.automation_id {
-        if !automation_id.is_empty() {
-            validate_id(automation_id, "automation")?;
-        }
+    if let Some(automation_id) = &session.automation_id
+        && !automation_id.is_empty()
+    {
+        validate_id(automation_id, "automation")?;
     }
     if !session.model_settings.is_object() {
         return Err("modelSettings must be an object".into());
@@ -251,9 +280,8 @@ fn generated_image_paths(blocks: &Value) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command(async)]
 pub fn session_list_by_project(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     cwd: String,
 ) -> Result<Vec<SessionSummary>, String> {
     if cwd.trim().is_empty() {
@@ -263,9 +291,8 @@ pub fn session_list_by_project(
     list_by_project(&conn, &cwd).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
 pub fn session_rebase_project(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     from_cwd: String,
     to_cwd: String,
 ) -> Result<(), String> {
@@ -284,15 +311,13 @@ fn rebase_project(conn: &Connection, from_cwd: &str, to_cwd: &str) -> rusqlite::
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn session_list_linked(store: State<'_, SessionStore>) -> Result<Vec<SessionSummary>, String> {
+pub fn session_list_linked(store: &SessionStore) -> Result<Vec<SessionSummary>, String> {
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     list_linked(&conn).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
 pub fn session_get(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     session_id: String,
 ) -> Result<Option<SessionRecord>, String> {
     validate_id(&session_id, "session")?;
@@ -375,10 +400,8 @@ fn end_session_search(token: Option<&SessionSearchToken>) {
         .as_ref()
         .and_then(|tokens| tokens.get(&token.owner))
         .is_some_and(|registered| Arc::ptr_eq(registered, &token.counter) && token.is_current());
-    if ours {
-        if let Some(tokens) = tokens.as_mut() {
-            tokens.remove(&token.owner);
-        }
+    if ours && let Some(tokens) = tokens.as_mut() {
+        tokens.remove(&token.owner);
     }
 }
 
@@ -395,10 +418,10 @@ fn cancel_owned_session_search(owner: &str) {
     if owner.is_empty() {
         return;
     }
-    if let Ok(mut tokens) = SESSION_SEARCH_TOKENS.lock() {
-        if let Some(counter) = tokens.as_mut().and_then(|tokens| tokens.remove(owner)) {
-            counter.fetch_add(1, Ordering::AcqRel);
-        }
+    if let Ok(mut tokens) = SESSION_SEARCH_TOKENS.lock()
+        && let Some(counter) = tokens.as_mut().and_then(|tokens| tokens.remove(owner))
+    {
+        counter.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -441,12 +464,11 @@ pub struct SessionSearchResult {
     pub truncated: bool,
 }
 
-#[tauri::command(async)]
 pub fn session_search(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     options: SessionSearchOptions,
 ) -> Result<SessionSearchResult, String> {
-    search_store(&store, &options)
+    search_store(store, &options)
 }
 
 fn search_store(
@@ -478,15 +500,14 @@ fn search_store(
     }
 }
 
-#[tauri::command(async)]
 pub fn cancel_session_search(search_owner: String) {
     cancel_owned_session_search(&search_owner);
 }
 
-#[tauri::command(async)]
 pub fn session_delete(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
+    data_dir: &Path,
+    events: &dyn StoreEvents,
     session_id: String,
     mut image_paths: Vec<String>,
 ) -> Result<(), String> {
@@ -500,18 +521,17 @@ pub fn session_delete(
     image_paths.extend(persisted_paths);
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
     drop(conn);
-    if !image_paths.is_empty() {
-        if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {
-            eprintln!("Generated image cleanup will need a retry: {error}");
-        }
+    if !image_paths.is_empty()
+        && let Err(error) = monocode_git::fs::delete_generated_images_sync(data_dir, &image_paths)
+    {
+        eprintln!("Generated image cleanup will need a retry: {error}");
     }
-    let _ = app.emit(crate::reminders::CHANGED, ());
+    events.reminders_changed();
     Ok(())
 }
 
-#[tauri::command(async)]
 pub fn session_set_archived(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     session_id: String,
     archived: bool,
 ) -> Result<(), String> {
@@ -520,9 +540,8 @@ pub fn session_set_archived(
     set_archived(&conn, &session_id, archived).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
 pub fn session_set_pinned(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     session_id: String,
     pinned: bool,
 ) -> Result<(), String> {
@@ -531,9 +550,8 @@ pub fn session_set_pinned(
     set_pinned(&conn, &session_id, pinned).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
 pub fn session_set_linked_work_item(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     session_id: String,
     linked_work_item: Option<Value>,
 ) -> Result<(), String> {
@@ -549,9 +567,8 @@ pub struct InFlightSession {
     pub cwd: String,
 }
 
-#[tauri::command(async)]
 pub fn session_set_in_flight(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     sessions: Vec<InFlightSession>,
 ) -> Result<(), String> {
     for session in &sessions {
@@ -566,30 +583,20 @@ pub fn session_set_in_flight(
 
 /// Read the quit snapshot without clearing it. Vite/dev reloads must not
 /// consume the only copy.
-#[tauri::command(async)]
-pub fn session_list_in_flight(
-    store: State<'_, SessionStore>,
-) -> Result<Vec<InFlightSession>, String> {
+pub fn session_list_in_flight(store: &SessionStore) -> Result<Vec<InFlightSession>, String> {
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     list_in_flight(&conn).map_err(|e| e.to_string())
 }
 
 /// Read and clear the quit snapshot so a restored window cannot take it twice.
-#[tauri::command(async)]
-pub fn session_take_in_flight(
-    store: State<'_, SessionStore>,
-) -> Result<Vec<InFlightSession>, String> {
+pub fn session_take_in_flight(store: &SessionStore) -> Result<Vec<InFlightSession>, String> {
     let mut conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     take_in_flight(&mut conn).map_err(|e| e.to_string())
 }
 
 const WORKSPACE_SNAPSHOT_MAX_BYTES: usize = 2_000_000;
 
-#[tauri::command(async)]
-pub fn workspace_set_snapshot(
-    store: State<'_, SessionStore>,
-    snapshot: Value,
-) -> Result<(), String> {
+pub fn workspace_set_snapshot(store: &SessionStore, snapshot: Value) -> Result<(), String> {
     if !snapshot.is_object() {
         return Err("workspace snapshot must be an object".into());
     }
@@ -601,8 +608,7 @@ pub fn workspace_set_snapshot(
     set_workspace_snapshot(&conn, &json).map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub fn workspace_get_snapshot(store: State<'_, SessionStore>) -> Result<Option<Value>, String> {
+pub fn workspace_get_snapshot(store: &SessionStore) -> Result<Option<Value>, String> {
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     let json = get_workspace_snapshot(&conn).map_err(|e| e.to_string())?;
     match json {
@@ -1013,11 +1019,11 @@ fn remember_worker_from_blocks(
 ) -> rusqlite::Result<()> {
     if let Some(blocks) = blocks.as_array() {
         for block in blocks {
-            if block["role"] == "user" {
-                if let Some(lead) = block["orchestrationLeadId"].as_str() {
-                    remember_worker(conn, id, lead)?;
-                    break;
-                }
+            if block["role"] == "user"
+                && let Some(lead) = block["orchestrationLeadId"].as_str()
+            {
+                remember_worker(conn, id, lead)?;
+                break;
             }
         }
     }
@@ -1044,11 +1050,7 @@ fn index_orchestration(conn: &Connection, lead: &str, run: &Value) -> rusqlite::
     Ok(())
 }
 
-pub(crate) fn save_orchestration(
-    conn: &Connection,
-    lead: &str,
-    run: &Value,
-) -> rusqlite::Result<()> {
+pub fn save_orchestration(conn: &Connection, lead: &str, run: &Value) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("INSERT INTO orchestration_runs(lead_id, state) VALUES (?1, ?2) ON CONFLICT(lead_id) DO UPDATE SET state = excluded.state", params![lead, run.to_string()])?;
     index_orchestration(&tx, lead, run)?;
@@ -1102,7 +1104,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
-    let git = crate::fs::git_info_for(&crate::fs::expand_home(
+    let git = monocode_git::fs::git_info_for(&monocode_git::fs::expand_home(
         session
             .worktree_cwd
             .as_deref()
@@ -1562,7 +1564,7 @@ fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
 }
 
 fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<SessionSummary>> {
-    let git = crate::fs::git_info_for(&crate::fs::expand_home(cwd));
+    let git = monocode_git::fs::git_info_for(&monocode_git::fs::expand_home(cwd));
     let mut statement = conn.prepare(
         "SELECT id, cwd, harness, model, runtime_mode, title, provider_session_id,
                 created_at, updated_at, branch, archived, pinned,
@@ -1706,10 +1708,10 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
         })?;
         if let Some(blocks) = blocks.as_array_mut() {
             for block in blocks {
-                if block["orchestrationLeadId"] == session_id {
-                    if let Some(block) = block.as_object_mut() {
-                        block.remove("orchestrationLeadId");
-                    }
+                if block["orchestrationLeadId"] == session_id
+                    && let Some(block) = block.as_object_mut()
+                {
+                    block.remove("orchestrationLeadId");
                 }
             }
         }
@@ -1958,7 +1960,7 @@ fn get_workspace_snapshot(conn: &Connection) -> rusqlite::Result<Option<String>>
     .optional()
 }
 
-pub(crate) fn validate_id(value: &str, label: &str) -> Result<(), String> {
+pub fn validate_id(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty()
         || !value
             .bytes()
@@ -1969,7 +1971,7 @@ pub(crate) fn validate_id(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn now_millis() -> i64 {
+pub fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
@@ -2538,10 +2540,12 @@ mod tests {
             assert!(worker.orchestration_lead_id.is_none());
             assert!(worker.blocks[0].get("orchestrationLeadId").is_none());
             assert_eq!(worker.blocks[0]["text"], "Keep this transcript");
-            assert!(list_by_project(&conn, "/tmp/a")
-                .unwrap()
-                .iter()
-                .any(|row| row.id == id));
+            assert!(
+                list_by_project(&conn, "/tmp/a")
+                    .unwrap()
+                    .iter()
+                    .any(|row| row.id == id)
+            );
             assert!(list_linked(&conn).unwrap().iter().any(|row| row.id == id));
         }
         assert!(orchestration_summary(&conn, "lead").unwrap().is_none());
@@ -3115,10 +3119,12 @@ mod tests {
             },
         )
         .expect("unscoped search must not fail when the index was restored");
-        assert!(result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "s1" && hit.kind == "conversation")
+        );
         drop(conn);
         drop(store);
         let _ = std::fs::remove_file(&path);
@@ -3156,9 +3162,10 @@ mod tests {
         .unwrap();
 
         assert!(result.hits.iter().any(|hit| hit.session_id == "s1"));
-        assert!(conn
-            .execute("UPDATE sessions SET title = 'nope' WHERE id = 's1'", [])
-            .is_err());
+        assert!(
+            conn.execute("UPDATE sessions SET title = 'nope' WHERE id = 's1'", [])
+                .is_err()
+        );
         drop(read_conn);
         drop(store);
         let _ = std::fs::remove_file(&path);
@@ -3197,18 +3204,24 @@ mod tests {
         .unwrap();
 
         assert!(result.truncated);
-        assert!(result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "huge" && hit.kind == "conversation"));
-        assert!(!result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "huge" && hit.kind == "message"));
-        assert!(result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "small" && hit.kind == "message"));
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "huge" && hit.kind == "conversation")
+        );
+        assert!(
+            !result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "huge" && hit.kind == "message")
+        );
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "small" && hit.kind == "message")
+        );
     }
 
     #[test]
@@ -3225,9 +3238,10 @@ mod tests {
             .unwrap()
             .map(|row| row.unwrap())
             .collect();
-        assert!(plan
-            .iter()
-            .any(|step| step.contains("USING INDEX sessions_cwd_cover_idx")));
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("USING INDEX sessions_cwd_cover_idx"))
+        );
         for step in &plan {
             if step.contains("sessions") {
                 assert!(step.contains("USING INDEX"), "table access: {step}");
@@ -3266,10 +3280,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "s1" && hit.kind == "conversation")
+        );
         assert!(!session_search_token_registered(owner));
     }
 
@@ -3366,10 +3382,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "s1" && hit.kind == "conversation")
+        );
         assert!(!session_search_token_registered(owner));
     }
 
@@ -3491,10 +3509,12 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(with_archived
-            .hits
-            .iter()
-            .any(|hit| hit.session_id == "s1" && hit.kind == "conversation"));
+        assert!(
+            with_archived
+                .hits
+                .iter()
+                .any(|hit| hit.session_id == "s1" && hit.kind == "conversation")
+        );
 
         let other = search_sessions(
             &conn,

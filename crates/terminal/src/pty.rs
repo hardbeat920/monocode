@@ -1,3 +1,6 @@
+//! PTY host: spawn, write, resize, kill, and output coalescing. Moved from
+//! src-tauri/src/pty.rs.
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -9,33 +12,30 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::dirs_home;
-use crate::fs::expand_home;
+use monocode_platform::{dirs_home, expand_home};
 
-const DATA_EVENT: &str = "pty-data";
-const EXIT_EVENT: &str = "pty-exit";
+/// Receives terminal output and exits. The Tauri app emits these as
+/// `pty-data` (base64 text) and `pty-exit`.
+pub trait PtyEvents: Send + Sync {
+    /// Coalesced output bytes; never empty.
+    fn data(&self, id: &str, bytes: &[u8]);
+    fn exit(&self, id: &str, code: Option<i32>);
+}
+
+struct NoPtyEvents;
+
+impl PtyEvents for NoPtyEvents {
+    fn data(&self, _id: &str, _bytes: &[u8]) {}
+    fn exit(&self, _id: &str, _code: Option<i32>) {}
+}
+
 const READ_CHUNK: usize = 32 * 1024;
 /// Cap how often a busy PTY hops the webview. Each `emit` is a JS eval; a
 /// flood of small reads was thousands per second and froze input.
 const PTY_COALESCE: Duration = Duration::from_millis(8);
 #[cfg(unix)]
 const KILL_ESCALATE: Duration = Duration::from_secs(1);
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PtyData {
-    id: String,
-    data: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PtyExit {
-    id: String,
-    code: Option<i32>,
-}
 
 struct LivePty {
     cwd: std::path::PathBuf,
@@ -47,23 +47,47 @@ struct LivePty {
     pid: u32,
 }
 
-pub struct PtyHost {
+/// Hosts the open terminals. Clones share one set of PTYs; the last clone to
+/// drop kills them.
+#[derive(Clone)]
+pub struct PtyHost(Arc<PtyShared>);
+
+pub struct PtyShared {
     sessions: Mutex<HashMap<String, Arc<LivePty>>>,
+    events: Arc<dyn PtyEvents>,
+}
+
+impl std::ops::Deref for PtyHost {
+    type Target = PtyShared;
+
+    fn deref(&self) -> &PtyShared {
+        &self.0
+    }
+}
+
+impl Default for PtyHost {
+    /// A host whose events go nowhere, for tests.
+    fn default() -> Self {
+        Self::new(Arc::new(NoPtyEvents))
+    }
 }
 
 impl PtyHost {
-    pub(crate) fn has_working_dir(&self, path: &std::path::Path) -> bool {
+    pub fn new(events: Arc<dyn PtyEvents>) -> Self {
+        Self(Arc::new(PtyShared {
+            sessions: Mutex::new(HashMap::new()),
+            events,
+        }))
+    }
+}
+
+impl PtyShared {
+    pub fn has_working_dir(&self, path: &std::path::Path) -> bool {
         self.sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
-            .any(|live| crate::worktrees::contains_working_dir(path, &live.cwd))
-    }
-
-    pub fn new() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-        }
+            .any(|live| monocode_process::worktree_lifecycle::contains_working_dir(path, &live.cwd))
     }
 
     fn insert(&self, id: String, live: Arc<LivePty>) -> Option<Arc<LivePty>> {
@@ -96,7 +120,7 @@ impl PtyHost {
         sessions.remove(id)
     }
 
-    pub(crate) fn kill_all(&self) {
+    pub fn kill_all(&self) {
         let kids: Vec<Arc<LivePty>> = {
             let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             map.drain().map(|(_, live)| live).collect()
@@ -114,27 +138,25 @@ impl PtyHost {
         // Quit and `Drop` both exit the process, so the SIGKILL has to land
         // before this returns. `terminate`'s detached escalate thread never gets
         // to run, and every shell is its own `setsid` session that outlives us.
-        crate::harness::terminate_all(&pids);
+        monocode_process::harness::terminate_all(&pids);
     }
 }
 
-impl Drop for PtyHost {
+impl Drop for PtyShared {
     fn drop(&mut self) {
         self.kill_all();
     }
 }
 
-#[tauri::command]
 pub fn pty_spawn(
-    app: AppHandle,
-    host: State<PtyHost>,
+    host: &PtyHost,
     id: String,
     cwd: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
     let workdir = working_dir(&cwd);
-    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+    let _reservation = monocode_process::worktree_lifecycle::reserve_spawn(&workdir)?;
     if let Some(prev) = host.remove(&id) {
         terminate(prev.pid);
         #[cfg(unix)]
@@ -143,23 +165,22 @@ pub fn pty_spawn(
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_unix(host, id, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_windows(host, id, workdir, cols.max(2), rows.max(2))
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (app, cwd, cols, rows);
+        let _ = (cwd, cols, rows);
         Err("Terminals are not supported on this platform.".into())
     }
 }
 
-#[tauri::command]
-pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), String> {
+pub fn pty_write(host: &PtyHost, id: String, data: String) -> Result<(), String> {
     let live = host
         .get(&id)
         .ok_or_else(|| "Terminal is not running".to_string())?;
@@ -170,8 +191,7 @@ pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), S
         .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
-#[tauri::command]
-pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+pub fn pty_resize(host: &PtyHost, id: String, cols: u16, rows: u16) -> Result<(), String> {
     let live = host
         .get(&id)
         .ok_or_else(|| "Terminal is not running".to_string())?;
@@ -200,14 +220,13 @@ pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Res
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PtyStatus {
+pub struct PtyStatus {
     foreground: Option<String>,
 }
 
 /// Off the main thread: this forks `ps`, and the title poll calls it once a
 /// second for every open terminal.
-#[tauri::command(async)]
-pub fn pty_status(host: State<'_, PtyHost>, id: String) -> Result<PtyStatus, String> {
+pub fn pty_status(host: &PtyHost, id: String) -> Result<PtyStatus, String> {
     let live = host
         .get(&id)
         .ok_or_else(|| "Terminal is not running".to_string())?;
@@ -223,8 +242,7 @@ pub fn pty_status(host: State<'_, PtyHost>, id: String) -> Result<PtyStatus, Str
     }
 }
 
-#[tauri::command]
-pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
+pub fn pty_kill(host: &PtyHost, id: String) -> Result<(), String> {
     if let Some(live) = host.remove(&id) {
         terminate(live.pid);
         #[cfg(unix)]
@@ -235,16 +253,14 @@ pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
 
 /// Off the main thread: `kill_all` waits for the shells to die before it
 /// returns, and a window close calls this while the app keeps running.
-#[tauri::command(async)]
-pub fn pty_kill_all(host: State<'_, PtyHost>) -> Result<(), String> {
+pub fn pty_kill_all(host: &PtyHost) -> Result<(), String> {
     host.kill_all();
     Ok(())
 }
 
 #[cfg(unix)]
 fn spawn_unix(
-    app: AppHandle,
-    host: State<PtyHost>,
+    host: &PtyHost,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
@@ -268,7 +284,7 @@ fn spawn_unix(
         .env("COLORTERM", "truecolor")
         .env("COLORFGBG", "15;0")
         .env("TERM_PROGRAM", "MonoCode")
-        .env("PATH", crate::harness::gui_search_path());
+        .env("PATH", monocode_process::harness::gui_search_path());
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
     }
@@ -310,7 +326,7 @@ fn spawn_unix(
     });
     host.insert(id.clone(), live);
 
-    let data_app = app.clone();
+    let data_events = host.events.clone();
     let data_id = id.clone();
     thread::spawn(move || {
         let mut file = reader;
@@ -331,7 +347,7 @@ fn spawn_unix(
             } else if pty_should_flush(acc.len(), last_emit.elapsed())
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
-                emit_pty_data(&data_app, &data_id, &acc);
+                emit_pty_data(data_events.as_ref(), &data_id, &acc);
                 acc.clear();
                 last_emit = Instant::now();
             } else {
@@ -342,17 +358,18 @@ fn spawn_unix(
                 }
             }
         }
-        emit_pty_data(&data_app, &data_id, &acc);
+        emit_pty_data(data_events.as_ref(), &data_id, &acc);
     });
 
-    let wait_app = app;
+    let wait_events = host.events.clone();
+    let wait_host = Arc::downgrade(&host.0);
     let wait_id = id;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
         // Only announce this child. A remount/respawn reuses the id, and the
         // previous wait thread must not paint "[process exited]" on the new PTY
         // or yank the replacement out of the host map.
-        let emit = if let Some(host) = wait_app.try_state::<PtyHost>() {
+        let emit = if let Some(host) = wait_host.upgrade() {
             if let Some(live) = host.remove_if_pid(&wait_id, pid) {
                 close_fd(live.master_fd);
                 true
@@ -363,7 +380,7 @@ fn spawn_unix(
             false
         };
         if emit {
-            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+            wait_events.exit(&wait_id, code);
         }
     });
 
@@ -372,14 +389,13 @@ fn spawn_unix(
 
 #[cfg(windows)]
 fn spawn_windows(
-    app: AppHandle,
-    host: State<PtyHost>,
+    host: &PtyHost,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
     let (shell, args) = default_shell();
     let pty_system = native_pty_system();
@@ -399,14 +415,14 @@ fn spawn_windows(
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", "15;0");
     cmd.env("TERM_PROGRAM", "MonoCode");
-    cmd.env("PATH", crate::harness::gui_search_path());
+    cmd.env("PATH", monocode_process::harness::gui_search_path());
     if let Some(home) = dirs_home() {
         cmd.env("HOME", &home);
         cmd.env("USERPROFILE", &home);
     }
     cmd.env("PWD", workdir.to_string_lossy().as_ref());
 
-    let mut child = crate::windows::spawn_pty(pair.slave.as_ref(), cmd)
+    let mut child = monocode_platform::windows::spawn_pty(pair.slave.as_ref(), cmd)
         .map_err(|err| format!("Failed to start {shell}: {err}"))?;
     let pid = child.process_id().unwrap_or(0);
     let mut reader = pair
@@ -426,7 +442,7 @@ fn spawn_windows(
     });
     host.insert(id.clone(), live);
 
-    let data_app = app.clone();
+    let data_events = host.events.clone();
     let data_id = id.clone();
     thread::spawn(move || {
         let mut buf = vec![0_u8; READ_CHUNK];
@@ -437,24 +453,25 @@ fn spawn_windows(
                     // ponytail: caps bridge traffic at 125 emits/s; use a timed
                     // drain only if sustained PTY throughput becomes limiting.
                     thread::sleep(PTY_COALESCE);
-                    emit_pty_data(&data_app, &data_id, &buf[..n]);
+                    emit_pty_data(data_events.as_ref(), &data_id, &buf[..n]);
                 }
                 Err(_) => break,
             }
         }
     });
 
-    let wait_app = app;
+    let wait_events = host.events.clone();
+    let wait_host = Arc::downgrade(&host.0);
     let wait_id = id;
     thread::spawn(move || {
         let code = child.wait().ok().map(|status| status.exit_code() as i32);
-        let emit = if let Some(host) = wait_app.try_state::<PtyHost>() {
+        let emit = if let Some(host) = wait_host.upgrade() {
             host.remove_if_pid(&wait_id, pid).is_some()
         } else {
             false
         };
         if emit {
-            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+            wait_events.exit(&wait_id, code);
         }
     });
 
@@ -548,7 +565,7 @@ fn terminate(pid: u32) {
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("taskkill");
-        crate::hide_window_console(&mut cmd);
+        monocode_platform::hide_window_console(&mut cmd);
         let _ = cmd
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(std::process::Stdio::null())
@@ -665,18 +682,11 @@ fn os_err(ctx: &str) -> String {
     format!("{ctx}: {}", std::io::Error::last_os_error())
 }
 
-fn emit_pty_data(app: &AppHandle, id: &str, bytes: &[u8]) {
+fn emit_pty_data(events: &dyn PtyEvents, id: &str, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-    let _ = app.emit(
-        DATA_EVENT,
-        PtyData {
-            id: id.to_string(),
-            data,
-        },
-    );
+    events.data(id, bytes);
 }
 
 #[cfg(unix)]
@@ -816,7 +826,7 @@ mod tests {
 
     #[test]
     fn remove_if_pid_ignores_a_replaced_session() {
-        let host = PtyHost::new();
+        let host = PtyHost::default();
         host.insert(
             "term".into(),
             Arc::new(LivePty {

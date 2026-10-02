@@ -1,11 +1,13 @@
+//! Linear teams, issues, and threads. Moved from
+//! src-tauri/src/linear.rs.
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use serde_json::{Value, json};
 
 const LINEAR_API: &str = "https://api.linear.app/graphql";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -99,134 +101,100 @@ pub struct LinearIssueThread {
     pub head_ref_name: String,
 }
 
-#[tauri::command(async)]
-pub fn linear_status(app: AppHandle) -> Result<LinearStatus, String> {
+pub fn linear_status(data_dir: &Path) -> Result<LinearStatus, String> {
     Ok(LinearStatus {
-        connected: read_token(&app)?.is_some(),
+        connected: read_token(data_dir)?.is_some(),
     })
 }
 
-#[tauri::command]
-pub async fn linear_set_token(app: AppHandle, token: String) -> Result<LinearStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let trimmed = token.trim().to_string();
-        if trimmed.is_empty() {
-            delete_token(&app)?;
-            return Ok(LinearStatus { connected: false });
-        }
-        graphql_with_token(&trimmed, VIEWER_QUERY, json!({}))?;
-        write_token(&app, &trimmed)?;
-        Ok(LinearStatus { connected: true })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn linear_set_token(data_dir: &Path, token: String) -> Result<LinearStatus, String> {
+    let trimmed = token.trim().to_string();
+    if trimmed.is_empty() {
+        delete_token(data_dir)?;
+        return Ok(LinearStatus { connected: false });
+    }
+    graphql_with_token(&trimmed, VIEWER_QUERY, json!({}))?;
+    write_token(data_dir, &trimmed)?;
+    Ok(LinearStatus { connected: true })
 }
 
-#[tauri::command]
-pub async fn linear_list_teams(app: AppHandle) -> Result<Vec<LinearTeam>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = require_token(&app)?;
-        let data = graphql_with_token(&token, TEAMS_QUERY, json!({}))?;
-        parse_linear_teams(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn linear_list_teams(data_dir: &Path) -> Result<Vec<LinearTeam>, String> {
+    let token = require_token(data_dir)?;
+    let data = graphql_with_token(&token, TEAMS_QUERY, json!({}))?;
+    parse_linear_teams(&data)
 }
 
-#[tauri::command]
-pub async fn linear_list_issues(
-    app: AppHandle,
+pub fn linear_list_issues(
+    data_dir: &Path,
     assigned_to_me: bool,
     state: String,
     team_ids: Vec<String>,
     limit: Option<u32>,
 ) -> Result<Vec<LinearIssue>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(token) = read_token(&app)? else {
-            return Ok(Vec::new());
-        };
-        let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
-        let filter = issue_filter(assigned_to_me, &state, &team_ids);
-        let data = graphql_with_token(
-            &token,
-            ISSUES_QUERY,
-            json!({ "first": limit, "filter": filter }),
-        )?;
-        parse_linear_issues(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let Some(token) = read_token(data_dir)? else {
+        return Ok(Vec::new());
+    };
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
+    let filter = issue_filter(assigned_to_me, &state, &team_ids);
+    let data = graphql_with_token(
+        &token,
+        ISSUES_QUERY,
+        json!({ "first": limit, "filter": filter }),
+    )?;
+    parse_linear_issues(&data)
 }
 
-#[tauri::command]
-pub async fn linear_issue_details(
-    app: AppHandle,
-    id: String,
-) -> Result<LinearIssueDetails, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = require_token(&app)?;
-        let id = id.trim();
-        if id.is_empty() {
-            return Err("Missing Linear issue".into());
-        }
-        let data = graphql_with_token(&token, ISSUE_QUERY, json!({ "id": id }))?;
-        parse_linear_issue_details(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn linear_issue_details(data_dir: &Path, id: String) -> Result<LinearIssueDetails, String> {
+    let token = require_token(data_dir)?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("Missing Linear issue".into());
+    }
+    let data = graphql_with_token(&token, ISSUE_QUERY, json!({ "id": id }))?;
+    parse_linear_issue_details(&data)
 }
 
-#[tauri::command]
-pub async fn linear_issue_thread(app: AppHandle, id: String) -> Result<LinearIssueThread, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = require_token(&app)?;
-        let id = id.trim();
-        if !valid_linear_id(id) {
-            return Err("Missing Linear issue".into());
-        }
-        let data = graphql_with_token(&token, ISSUE_COMMENTS_QUERY, json!({ "id": id }))?;
-        parse_linear_issue_thread(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn linear_issue_thread(data_dir: &Path, id: String) -> Result<LinearIssueThread, String> {
+    let token = require_token(data_dir)?;
+    let id = id.trim();
+    if !valid_linear_id(id) {
+        return Err("Missing Linear issue".into());
+    }
+    let data = graphql_with_token(&token, ISSUE_COMMENTS_QUERY, json!({ "id": id }))?;
+    parse_linear_issue_thread(&data)
 }
 
-#[tauri::command]
-pub async fn linear_issue_comment(
-    app: AppHandle,
+pub fn linear_issue_comment(
+    data_dir: &Path,
     id: String,
     body: String,
     parent_id: String,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = require_token(&app)?;
-        let id = id.trim();
-        if !valid_linear_id(id) {
-            return Err("Missing Linear issue".into());
-        }
-        let body = body.trim();
-        if body.is_empty() {
-            return Err("Comment cannot be empty".into());
-        }
-        let parent = parent_id.trim();
-        if !parent.is_empty() && !valid_linear_id(parent) {
-            return Err("Invalid Linear comment".into());
-        }
-        let mut input = serde_json::Map::new();
-        input.insert("issueId".into(), json!(id));
-        input.insert("body".into(), json!(body));
-        if !parent.is_empty() {
-            input.insert("parentId".into(), json!(parent));
-        }
-        let data = graphql_with_token(
-            &token,
-            COMMENT_CREATE_MUTATION,
-            json!({ "input": Value::Object(input) }),
-        )?;
-        parse_linear_comment_create(&data)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let token = require_token(data_dir)?;
+    let id = id.trim();
+    if !valid_linear_id(id) {
+        return Err("Missing Linear issue".into());
+    }
+    let body = body.trim();
+    if body.is_empty() {
+        return Err("Comment cannot be empty".into());
+    }
+    let parent = parent_id.trim();
+    if !parent.is_empty() && !valid_linear_id(parent) {
+        return Err("Invalid Linear comment".into());
+    }
+    let mut input = serde_json::Map::new();
+    input.insert("issueId".into(), json!(id));
+    input.insert("body".into(), json!(body));
+    if !parent.is_empty() {
+        input.insert("parentId".into(), json!(parent));
+    }
+    let data = graphql_with_token(
+        &token,
+        COMMENT_CREATE_MUTATION,
+        json!({ "input": Value::Object(input) }),
+    )?;
+    parse_linear_comment_create(&data)
 }
 
 const VIEWER_QUERY: &str = "query { viewer { id } }";
@@ -665,16 +633,12 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
         .map(|text| text.trim().to_string())
 }
 
-fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("linear-token"))
+fn token_path(data_dir: &Path) -> Result<PathBuf, String> {
+    Ok(data_dir.join("linear-token"))
 }
 
-fn read_token(app: &AppHandle) -> Result<Option<String>, String> {
-    let path = token_path(app)?;
+fn read_token(data_dir: &Path) -> Result<Option<String>, String> {
+    let path = token_path(data_dir)?;
     match fs::read_to_string(&path) {
         Ok(raw) => {
             let token = raw.trim().to_string();
@@ -689,20 +653,20 @@ fn read_token(app: &AppHandle) -> Result<Option<String>, String> {
     }
 }
 
-fn require_token(app: &AppHandle) -> Result<String, String> {
-    read_token(app)?.ok_or_else(|| "Connect Linear in Settings".to_string())
+fn require_token(data_dir: &Path) -> Result<String, String> {
+    read_token(data_dir)?.ok_or_else(|| "Connect Linear in Settings".to_string())
 }
 
-fn write_token(app: &AppHandle, token: &str) -> Result<(), String> {
-    let path = token_path(app)?;
+fn write_token(data_dir: &Path, token: &str) -> Result<(), String> {
+    let path = token_path(data_dir)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     write_secret_file(&path, token)
 }
 
-fn delete_token(app: &AppHandle) -> Result<(), String> {
-    let path = token_path(app)?;
+fn delete_token(data_dir: &Path) -> Result<(), String> {
+    let path = token_path(data_dir)?;
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

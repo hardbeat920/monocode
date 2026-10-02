@@ -1,3 +1,6 @@
+//! SSH setup jobs, tunnels, and the host connect scripts. Moved from
+//! src-tauri/src/remote_ssh.rs.
+
 use crate::ssh_askpass::Askpass;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -6,8 +9,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex, PoisonError,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -285,7 +288,9 @@ fn powershell_encoded(script: &str) -> String {
 fn powershell_reader() -> String {
     // Prefer this shell's built-in modules if the SSH environment inherited
     // PowerShell 7 module paths through an intermediate process.
-    powershell_encoded("$env:PSModulePath = $PSHOME + '\\Modules;' + $env:PSModulePath; $ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }")
+    powershell_encoded(
+        "$env:PSModulePath = $PSHOME + '\\Modules;' + $env:PSModulePath; $ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); try { & ([ScriptBlock]::Create([Console]::In.ReadToEnd())) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+    )
 }
 
 pub fn run_script(
@@ -577,20 +582,20 @@ impl Tunnels {
     pub fn endpoint(&self, id: &str, target: &SshTarget) -> Result<TunnelLease, String> {
         let slot = self.slots().entry(id.into()).or_default().clone();
         let mut current = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(tunnel) = current.tunnel.as_mut() {
-            if tunnel.alive() {
-                return Ok(TunnelLease {
-                    endpoint: format!("http://127.0.0.1:{}", tunnel.port),
-                    slot: slot.clone(),
-                    generation: current.generation,
-                });
-            }
+        if let Some(tunnel) = current.tunnel.as_mut()
+            && tunnel.alive()
+        {
+            return Ok(TunnelLease {
+                endpoint: format!("http://127.0.0.1:{}", tunnel.port),
+                slot: slot.clone(),
+                generation: current.generation,
+            });
         }
         current.tunnel = None;
-        if let Some((when, error)) = &current.failure {
-            if when.elapsed() < Duration::from_secs(10) {
-                return Err(error.clone());
-            }
+        if let Some((when, error)) = &current.failure
+            && when.elapsed() < Duration::from_secs(10)
+        {
+            return Err(error.clone());
         }
         match Tunnel::start(target, None, None) {
             Ok(tunnel) => {

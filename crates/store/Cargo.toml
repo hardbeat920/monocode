@@ -6,3 +6,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+monocode-git = { path = "../git" }
+monocode-platform = { path = "../platform" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

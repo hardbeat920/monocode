@@ -1,11 +1,16 @@
+//! Git worktrees and their removal alongside the sessions that use them.
+//! Moved from src-tauri/src/worktrees.rs.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use std::ops::Deref;
+
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::fs::{expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path};
-use crate::session_store::SessionStore;
+pub use monocode_process::worktree_lifecycle::contains_working_dir;
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +36,7 @@ pub struct Worktrees {
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new("git");
-    crate::hide_window_console(&mut command);
+    monocode_platform::hide_window_console(&mut command);
     let output = command
         .arg("-C")
         .arg(root)
@@ -88,18 +93,6 @@ fn same_path(a: &Path, b: &Path) -> bool {
     }
 }
 
-pub(crate) fn contains_working_dir(root: &Path, cwd: &Path) -> bool {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    if cfg!(windows) {
-        let root = path_to_js(&root).to_lowercase();
-        let cwd = path_to_js(&cwd).to_lowercase();
-        cwd == root || cwd.starts_with(&format!("{}/", root.trim_end_matches('/')))
-    } else {
-        cwd.starts_with(root)
-    }
-}
-
 fn session_ids(conn: &rusqlite::Connection, path: &Path) -> Result<Vec<String>, String> {
     let mut query = conn
         .prepare("SELECT id, COALESCE(NULLIF(worktree_cwd, ''), cwd) FROM sessions WHERE worktree_removed = 0")
@@ -125,13 +118,17 @@ fn default_root(main: &Path) -> PathBuf {
     main.with_file_name(format!("{name}-worktrees"))
 }
 
-#[tauri::command(async)]
-pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Worktrees, String> {
+/// `lock_conn` opens the session database, which records the sessions that
+/// use each working copy.
+pub fn git_worktrees<C: Deref<Target = Connection>>(
+    cwd: String,
+    lock_conn: impl FnOnce() -> Result<C, String>,
+) -> Result<Worktrees, String> {
     let mut worktrees = list(&expand_home(&cwd))?;
     let main = worktrees.first().ok_or("No working copies found")?;
     let default_root = path_to_js(&default_root(Path::new(&main.path)));
     {
-        let conn = store.lock_conn()?;
+        let conn = lock_conn()?;
         for tree in &mut worktrees {
             tree.session_ids = session_ids(&conn, Path::new(&tree.path))?;
         }
@@ -229,18 +226,13 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
         })
 }
 
-#[tauri::command(async)]
-pub async fn git_worktree_create(
+pub fn git_worktree_create(
     cwd: String,
     branch: String,
     base: String,
     existing: bool,
 ) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        create(&expand_home(&cwd), &branch, &base, existing)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    create(&expand_home(&cwd), &branch, &base, existing)
 }
 
 fn copy_checkout_state(source: &Path, target: &Path) -> Result<(), String> {
@@ -388,14 +380,8 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
 /// Create an isolated worker checkout with the lead checkout's current file
 /// contents as its baseline. Reusing the deterministic branch makes a crash
 /// between Git creation and run-state persistence recoverable.
-#[tauri::command(async)]
-pub async fn git_orchestration_worktree_create(
-    cwd: String,
-    branch: String,
-) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
-        .await
-        .map_err(|error| error.to_string())?
+pub fn git_orchestration_worktree_create(cwd: String, branch: String) -> Result<Worktree, String> {
+    create_seeded(&expand_home(&cwd), branch.trim())
 }
 
 fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, String> {
@@ -425,17 +411,12 @@ fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, Str
         .ok_or_else(|| "Branch renamed, but its worktree could not be found".into())
 }
 
-#[tauri::command(async)]
-pub async fn git_worktree_rename_branch(
+pub fn git_worktree_rename_branch(
     cwd: String,
     path: String,
     branch: String,
 ) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        rename_branch(&expand_home(&cwd), &expand_home(&path), &branch)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    rename_branch(&expand_home(&cwd), &expand_home(&path), &branch)
 }
 
 fn removal_target(root: &Path, path: &Path) -> Result<Worktree, String> {
@@ -456,20 +437,14 @@ fn removal_target(root: &Path, path: &Path) -> Result<Worktree, String> {
     Ok(tree)
 }
 
-#[tauri::command(async)]
 pub fn git_worktree_check_remove(
     cwd: String,
     path: String,
     force: bool,
-    terminals: State<'_, crate::pty::PtyHost>,
+    has_terminals: impl FnOnce(&Path) -> bool,
 ) -> Result<(), String> {
     let path = expand_home(&path);
-    check_removal(
-        &expand_home(&cwd),
-        &path,
-        force,
-        terminals.has_working_dir(&path),
-    )
+    check_removal(&expand_home(&cwd), &path, force, has_terminals(&path))
 }
 
 fn check_removal(root: &Path, path: &Path, force: bool, has_terminals: bool) -> Result<(), String> {
@@ -617,14 +592,13 @@ fn finish_removal(
                 ],
             )
             .map_err(|e| e.to_string())?;
-        if changed > 0 {
-            if let (Some(cwd), Some(index)) = (&session.in_flight_cwd, session.in_flight_sort_index)
-            {
-                tx.execute(
+        if changed > 0
+            && let (Some(cwd), Some(index)) = (&session.in_flight_cwd, session.in_flight_sort_index)
+        {
+            tx.execute(
                     "INSERT OR REPLACE INTO in_flight_sessions (session_id, cwd, sort_index) VALUES (?1, ?2, ?3)",
                     rusqlite::params![session.id, cwd, index],
                 ).map_err(|e| e.to_string())?;
-            }
         }
     }
     tx.execute("DELETE FROM worktree_removals WHERE path = ?1", [path])
@@ -632,7 +606,7 @@ fn finish_removal(
     tx.commit().map_err(|e| e.to_string())
 }
 
-pub(crate) fn reconcile_removals(conn: &rusqlite::Connection) -> Result<(), String> {
+pub fn reconcile_removals(conn: &rusqlite::Connection) -> Result<(), String> {
     let pending = conn
         .prepare("SELECT path, sessions_json FROM worktree_removals")
         .map_err(|e| e.to_string())?
@@ -695,22 +669,20 @@ fn remove_with_sessions(
     })
 }
 
-#[tauri::command(async)]
-pub fn git_worktree_remove(
+pub fn git_worktree_remove<C: Deref<Target = Connection>>(
     cwd: String,
     path: String,
     force: bool,
     keep_sessions: Option<bool>,
-    store: State<'_, SessionStore>,
-    terminals: State<'_, crate::pty::PtyHost>,
-    agents: State<'_, crate::harness::HarnessHost>,
+    in_use: impl FnOnce(&Path) -> bool,
+    lock_conn: impl FnOnce() -> Result<C, String>,
 ) -> Result<WorktreeRemoval, String> {
     let path = expand_home(&path);
-    let _reservation = crate::worktree_lifecycle::reserve_removal(&path)?;
-    if terminals.has_working_dir(&path) || agents.has_working_dir(&path) {
+    let _reservation = monocode_process::worktree_lifecycle::reserve_removal(&path)?;
+    if in_use(&path) {
         return Err("Close the terminals and agent processes using this worktree first.".into());
     }
-    let conn = store.lock_conn()?;
+    let conn = lock_conn()?;
     remove_with_sessions(
         &conn,
         &expand_home(&cwd),
@@ -720,62 +692,57 @@ pub fn git_worktree_remove(
     )
 }
 
-#[tauri::command(async)]
-pub fn git_orchestration_worktree_remove(
+pub fn git_orchestration_worktree_remove<C: Deref<Target = Connection>>(
     cwd: String,
     path: String,
-    store: State<'_, SessionStore>,
-    terminals: State<'_, crate::pty::PtyHost>,
-    agents: State<'_, crate::harness::HarnessHost>,
+    in_use: impl FnOnce(&Path) -> bool,
+    lock_conn: impl FnOnce() -> Result<C, String>,
 ) -> Result<WorktreeRemoval, String> {
     let root = expand_home(&cwd);
     let path = expand_home(&path);
-    let _reservation = crate::worktree_lifecycle::reserve_removal(&path)?;
-    if terminals.has_working_dir(&path) || agents.has_working_dir(&path) {
+    let _reservation = monocode_process::worktree_lifecycle::reserve_removal(&path)?;
+    if in_use(&path) {
         return Err("Close the terminals and agent processes using this worktree first.".into());
     }
     let tree = removal_target(&root, &path)?;
     let branch = tree.branch.clone();
-    let conn = store.lock_conn()?;
+    let conn = lock_conn()?;
     let removed = remove_with_sessions(&conn, &root, &path, true, true)?;
-    if let Some(branch) = branch {
-        if branch.starts_with("mc/orch-") {
-            if let Err(error) = git(Path::new(&removed.project_cwd), &["branch", "-D", &branch]) {
-                eprintln!("Orchestration worktree removed; temporary branch cleanup will need a retry: {error}");
-            }
-        }
+    if let Some(branch) = branch
+        && branch.starts_with("mc/orch-")
+        && let Err(error) = git(Path::new(&removed.project_cwd), &["branch", "-D", &branch])
+    {
+        eprintln!(
+            "Orchestration worktree removed; temporary branch cleanup will need a retry: {error}"
+        );
     }
     Ok(removed)
 }
 
-#[tauri::command(async)]
-pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = expand_home(&cwd);
-        let branch = branch.trim();
-        if !branch.starts_with("mc/orch-") {
-            return Err("Only orchestration temporary branches can be removed here".into());
-        }
-        git(&root, &["check-ref-format", "--branch", branch])?;
-        let branch_ref = format!("refs/heads/{branch}");
-        if git(&root, &["rev-parse", "--verify", &branch_ref]).is_err() {
-            return Ok(());
-        }
-        if list(&root)?
-            .iter()
-            .any(|tree| tree.branch.as_deref() == Some(branch))
-        {
-            return Err("The orchestration branch still has a worktree".into());
-        }
-        git(&root, &["branch", "-D", branch]).map(|_| ())
-    })
-    .await
-    .map_err(|error| error.to_string())?
+pub fn git_orchestration_branch_remove(cwd: String, branch: String) -> Result<(), String> {
+    let root = expand_home(&cwd);
+    let branch = branch.trim();
+    if !branch.starts_with("mc/orch-") {
+        return Err("Only orchestration temporary branches can be removed here".into());
+    }
+    git(&root, &["check-ref-format", "--branch", branch])?;
+    let branch_ref = format!("refs/heads/{branch}");
+    if git(&root, &["rev-parse", "--verify", &branch_ref]).is_err() {
+        return Ok(());
+    }
+    if list(&root)?
+        .iter()
+        .any(|tree| tree.branch.as_deref() == Some(branch))
+    {
+        return Err("The orchestration branch still has a worktree".into());
+    }
+    git(&root, &["branch", "-D", branch]).map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monocode_store::session_store::SessionStore;
 
     struct Repo(PathBuf);
     impl Drop for Repo {
@@ -808,7 +775,9 @@ mod tests {
 
     #[test]
     fn parses_literal_paths_and_worktree_flags() {
-        let trees = parse_worktrees("worktree /repo\0HEAD abc\0branch refs/heads/main\0\0worktree /a\nquoted\"path\0HEAD def\0detached\0locked reason\0prunable missing\0\0");
+        let trees = parse_worktrees(
+            "worktree /repo\0HEAD abc\0branch refs/heads/main\0\0worktree /a\nquoted\"path\0HEAD def\0detached\0locked reason\0prunable missing\0\0",
+        );
         assert!(trees[0].is_main);
         assert_eq!(trees[1].path, "/a\nquoted\"path");
         assert!(trees[1].locked && trees[1].prunable);
@@ -824,9 +793,11 @@ mod tests {
         let tree = create(&root, "feature/test", "main", false).unwrap();
         let path = Path::new(&tree.path);
         assert!(!path.join("main-only").exists());
-        assert!(git(path, &["diff", "--cached", "--name-only"])
-            .unwrap()
-            .is_empty());
+        assert!(
+            git(path, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .is_empty()
+        );
         std::fs::write(path.join("feature-only"), "feature change").unwrap();
         git_checked(path, &["add", "feature-only"]).unwrap();
         git_checked(
@@ -934,11 +905,13 @@ mod tests {
         let tree = create(&root, "mc/12345678", "main", false).unwrap();
         let renamed = rename_branch(&root, Path::new(&tree.path), "mc/faster-worktrees").unwrap();
         assert_eq!(renamed.branch.as_deref(), Some("mc/faster-worktrees"));
-        assert!(git(
-            &root,
-            &["rev-parse", "--verify", "refs/heads/mc/faster-worktrees"]
-        )
-        .is_ok());
+        assert!(
+            git(
+                &root,
+                &["rev-parse", "--verify", "refs/heads/mc/faster-worktrees"]
+            )
+            .is_ok()
+        );
         assert!(rename_branch(&root, &root, "mc/nope").is_err());
 
         let regular = create(&root, "feature/manual", "main", false).unwrap();
@@ -952,9 +925,11 @@ mod tests {
         let tree = create(&root, "feature", "main", false).unwrap();
         let path = Path::new(&tree.path);
         std::fs::write(path.join("keep-me"), "local changes").unwrap();
-        assert!(check_removal(&root, path, true, true)
-            .unwrap_err()
-            .contains("terminals"));
+        assert!(
+            check_removal(&root, path, true, true)
+                .unwrap_err()
+                .contains("terminals")
+        );
         assert!(check_removal(&root, path, false, false).is_err());
         check_removal(&root, path, true, false).unwrap();
         assert!(path.join("keep-me").exists());
@@ -962,9 +937,11 @@ mod tests {
         assert!(check_removal(&root, &root, true, false).is_err());
         assert!(check_removal(&root, &repo.0, true, false).is_err());
         git_checked(&root, &["worktree", "lock", &tree.path]).unwrap();
-        assert!(check_removal(&root, path, true, false)
-            .unwrap_err()
-            .contains("locked"));
+        assert!(
+            check_removal(&root, path, true, false)
+                .unwrap_err()
+                .contains("locked")
+        );
         assert!(path.join("keep-me").exists());
     }
 

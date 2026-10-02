@@ -3,9 +3,11 @@
 //! and CA checks do not apply: the pin is the identity. The handshake
 //! signature is still verified, so only the holder of the certificate's
 //! private key can complete it.
+//!
+//! Moved from src-tauri/src/remote_tls.rs.
 use base64::Engine as _;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
+use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};

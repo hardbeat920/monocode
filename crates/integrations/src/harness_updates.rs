@@ -1,9 +1,12 @@
+//! Harness CLI update checks and updates. Moved from
+//! src-tauri/src/harness_updates.rs.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::harness::{exec_output, is_resolved_harness_binary};
+use monocode_process::harness::{exec_output, is_resolved_harness_binary};
 
 const REGISTRY_URL: &str = "https://registry.npmjs.org";
 const USER_AGENT: &str = "MonoCode";
@@ -40,38 +43,31 @@ static LAUNCH_CHECK_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 /// True for the first caller per app process, so a window opened later in the
 /// same run does not repeat the launch check.
-#[tauri::command]
 pub fn harness_update_check_claim() -> bool {
     !LAUNCH_CHECK_CLAIMED.swap(true, Ordering::SeqCst)
 }
 
-#[tauri::command]
-pub async fn harness_latest_version(provider: String) -> Result<String, String> {
+pub fn harness_latest_version(provider: String) -> Result<String, String> {
     let package =
         npm_package(&provider).ok_or_else(|| format!("No update feed for harness: {provider}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
-        let text = agent
-            .get(&format!("{REGISTRY_URL}/{package}/latest"))
-            .set("User-Agent", USER_AGENT)
-            .set("Accept", "application/json")
-            .call()
-            .map_err(|error| format!("npm registry request failed: {error}"))?
-            .into_string()
-            .map_err(|error| format!("npm registry response unreadable: {error}"))?;
-        let body: Value = serde_json::from_str(&text)
-            .map_err(|error| format!("npm registry returned invalid JSON: {error}"))?;
-        latest_version(&body).ok_or_else(|| "npm registry returned no version".to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+    let text = agent
+        .get(&format!("{REGISTRY_URL}/{package}/latest"))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", "application/json")
+        .call()
+        .map_err(|error| format!("npm registry request failed: {error}"))?
+        .into_string()
+        .map_err(|error| format!("npm registry response unreadable: {error}"))?;
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("npm registry returned invalid JSON: {error}"))?;
+    latest_version(&body).ok_or_else(|| "npm registry returned no version".to_string())
 }
 
 /// Runs the harness's self-update against the binary MonoCode resolved for
 /// it. stdin is closed, so an updater that stops to ask fails instead of
 /// hanging.
-#[tauri::command]
-pub async fn harness_update(
+pub fn harness_update(
     command: String,
     binary_provider: String,
     binary_path: Option<String>,
@@ -81,18 +77,14 @@ pub async fn harness_update(
         .iter()
         .map(|arg| arg.to_string())
         .collect();
-    tauri::async_runtime::spawn_blocking(move || {
-        if !is_resolved_harness_binary(&command, Some(&binary_provider), binary_path.as_deref()) {
-            return Err("harness_update: not a resolved harness CLI".to_string());
-        }
-        let output = exec_output(&command, &args, None, UPDATE_TIMEOUT)?;
-        if output.status.success() {
-            return Ok(());
-        }
-        Err(update_failure(&output.stdout, &output.stderr))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    if !is_resolved_harness_binary(&command, Some(&binary_provider), binary_path.as_deref()) {
+        return Err("harness_update: not a resolved harness CLI".to_string());
+    }
+    let output = exec_output(&command, &args, None, UPDATE_TIMEOUT)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(update_failure(&output.stdout, &output.stderr))
 }
 
 /// Updaters print their reason to either stream; the last line is the one

@@ -1,7 +1,9 @@
 //! Suppress Wry's synchronous application activation only while constructing a
 //! hidden window. Do not change Dock policy or reactivate another application.
+//!
+//! Moved from src-tauri/src/macos_background.rs.
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::{msg_send, sel, MainThreadMarker};
+use objc2::{MainThreadMarker, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use std::cell::Cell;
 use std::ffi::CString;
@@ -103,7 +105,7 @@ pub fn without_activation<T>(run: impl FnOnce() -> Result<T, String>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2::{msg_send, ClassType};
+    use objc2::{ClassType, msg_send};
     use objc2_foundation::NSObject;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static ACTIVATIONS: AtomicUsize = AtomicUsize::new(0);

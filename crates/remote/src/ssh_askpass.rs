@@ -1,12 +1,14 @@
 //! OpenSSH calls the desktop executable in a small, non-GUI askpass mode.
 //! Answers travel over a nonce-authenticated loopback socket, never argv/files.
+//!
+//! Moved from src-tauri/src/ssh_askpass.rs.
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
@@ -75,7 +77,7 @@ fn read_line(stream: &mut TcpStream) -> Result<String, String> {
     Ok(line)
 }
 
-pub(crate) struct Askpass {
+pub struct Askpass {
     address: SocketAddr,
     secret: String,
     stopped: Arc<AtomicBool>,

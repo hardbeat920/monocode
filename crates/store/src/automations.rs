@@ -1,13 +1,14 @@
+//! Automations: tables, CRUD, and run claiming. Moved from
+//! src-tauri/src/automations.rs.
+
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::session_store::{now_millis, validate_id, SessionStore};
-
-pub(crate) const CHANGED: &str = "monocode:automations-changed";
+use crate::StoreEvents;
+use crate::session_store::{SessionStore, now_millis, validate_id};
 
 const MAX_NAME: usize = 200;
 const MAX_PROMPT: usize = 1_000_000;
@@ -186,7 +187,7 @@ fn default_actor() -> String {
     "anyone".into()
 }
 
-pub(crate) fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
+pub fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS automations (
            id TEXT PRIMARY KEY,
@@ -227,10 +228,10 @@ pub(crate) fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     let mut claims = Vec::new();
     for row in rows {
         let (automation_id, created_at, raw) = row?;
-        if let Ok(run) = serde_json::from_str::<AutomationRun>(&raw) {
-            if let Some(event_key) = run.event_key {
-                claims.push((automation_id, event_key, created_at));
-            }
+        if let Ok(run) = serde_json::from_str::<AutomationRun>(&raw)
+            && let Some(event_key) = run.event_key
+        {
+            claims.push((automation_id, event_key, created_at));
         }
     }
     drop(statement);
@@ -636,16 +637,14 @@ fn apply_run_summary(automation: &mut Automation, run: &AutomationRun) {
     }
 }
 
-#[tauri::command(async)]
-pub fn automations_list(store: State<'_, SessionStore>) -> Result<Vec<Automation>, String> {
+pub fn automations_list(store: &SessionStore) -> Result<Vec<Automation>, String> {
     let conn = store.lock_conn()?;
     list(&conn)
 }
 
-#[tauri::command(async)]
 pub fn automations_upsert(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     automation: AutomationUpsert,
 ) -> Result<Automation, String> {
     let now = now_millis();
@@ -698,14 +697,13 @@ pub fn automations_upsert(
     };
     write_automation(&conn, &saved)?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(saved)
 }
 
-#[tauri::command(async)]
 pub fn automations_delete(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     id: String,
 ) -> Result<(), String> {
     validate_id(&id, "automation")?;
@@ -713,13 +711,12 @@ pub fn automations_delete(
     conn.execute("DELETE FROM automations WHERE id = ?1", [id])
         .map_err(|error| error.to_string())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(())
 }
 
-#[tauri::command(async)]
 pub fn automation_runs_list(
-    store: State<'_, SessionStore>,
+    store: &SessionStore,
     automation_id: String,
 ) -> Result<Vec<AutomationRun>, String> {
     validate_id(&automation_id, "automation")?;
@@ -733,10 +730,9 @@ pub fn automation_runs_list(
     Ok(runs)
 }
 
-#[tauri::command(async)]
 pub fn automation_runs_recover(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     started_before: i64,
     now: i64,
 ) -> Result<Vec<DueAutomationRun>, String> {
@@ -805,15 +801,14 @@ pub fn automation_runs_recover(
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
     if changed || !due.is_empty() {
-        let _ = app.emit(CHANGED, ());
+        events.automations_changed();
     }
     Ok(due)
 }
 
-#[tauri::command(async)]
 pub fn automation_run_now(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     automation_id: String,
     now: i64,
 ) -> Result<AutomationRun, String> {
@@ -831,14 +826,13 @@ pub fn automation_run_now(
     trim_history(&tx, &automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(run)
 }
 
-#[tauri::command(async)]
 pub fn automations_claim_due(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     automation_id: String,
     expected_next_run_at: i64,
     next_run_at: i64,
@@ -892,14 +886,13 @@ pub fn automations_claim_due(
     trim_history(&tx, &automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(Some(DueAutomationRun { automation, run }))
 }
 
-#[tauri::command(async)]
 pub fn automations_claim_event(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     automation_id: String,
     claim: AutomationEventClaim,
     now: i64,
@@ -959,14 +952,13 @@ pub fn automations_claim_event(
     trim_history(&tx, &automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(Some(DueAutomationRun { automation, run }))
 }
 
-#[tauri::command(async)]
 pub fn automation_run_update(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
+    events: &dyn StoreEvents,
+    store: &SessionStore,
     run_id: String,
     status: String,
     session_id: Option<String>,
@@ -1017,7 +1009,7 @@ pub fn automation_run_update(
     trim_history(&tx, &run.automation_id)?;
     tx.commit().map_err(|error| error.to_string())?;
     drop(conn);
-    let _ = app.emit(CHANGED, ());
+    events.automations_changed();
     Ok(run)
 }
 
