@@ -14,6 +14,7 @@ import {
   RUNTIME_MODES,
   type HarnessId,
   type Session,
+  type Block,
 } from "../../sessions/model/session";
 import {
   loadSessionFolders,
@@ -32,6 +33,8 @@ import { pathKey } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage } from "./sessionConversation";
+import { btwOpenTargetTurnId, btwTurnHarness } from "../../sessions/model/btw";
+import { groupTurns } from "../../sessions/model/transcriptActivity";
 
 export type AppSessionListing = {
   id: string;
@@ -65,6 +68,13 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  btwAsk(
+    target: Session,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    question: string,
+  ): boolean | Promise<boolean>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -83,6 +93,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.btw", ["sessionId", "question"]],
+  ["btw.get", ["sessionId", "threadId"]],
   [
     "sessions.start",
     [
@@ -352,6 +364,92 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.btw": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const question = requiredString(input.question, "question");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, host);
+      if (target.worktreeRemoved)
+        throw new Error("Session working copy is unavailable");
+      const threadId = `app-${source.id}-btw-${requestId}`;
+      const previous = target.blocks
+        .flatMap((block) => block.btwThreads ?? [])
+        .find((thread) => thread.id === threadId);
+      if (previous) {
+        if (previous.messages[0]?.text !== question)
+          throw new Error("Request ID was already used with another question");
+        return {
+          sessionId: id,
+          threadId,
+          status:
+            previous.status === "running"
+              ? "running"
+              : previous.status === "ready"
+                ? "completed"
+                : "failed",
+        };
+      }
+      const turns = groupTurns(target.blocks);
+      const targetId = btwOpenTargetTurnId(
+        turns,
+        target.blocks,
+        target.harness,
+      );
+      if (!targetId) {
+        const latestCompleted = [...turns]
+          .reverse()
+          .find((turn) =>
+            turn.some(
+              (block) => block.role === "user" && block.durationMs != null,
+            ),
+          );
+        if (
+          latestCompleted &&
+          !btwTurnHarness(target.blocks, latestCompleted, target.harness)
+        )
+          throw new Error(
+            "The completed turn's provider does not support /btw",
+          );
+        throw new Error("No completed turn with /btw context is available");
+      }
+      const turn = turns.find((entry) => entry[0]?.id === targetId);
+      if (!turn) throw new Error("The completed turn context is unavailable");
+      if (!(await host.btwAsk(target, turn, threadId, threadId, question)))
+        throw new Error("MonoCode could not start this side question");
+      return { sessionId: id, threadId, status: "running" };
+    }
+    case "btw.get": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const threadId = requiredString(input.threadId, "threadId", 512);
+      const target = await projectSession(source, id, host);
+      const block = target.blocks.find(
+        (entry) =>
+          entry.role === "user" &&
+          entry.btwThreads?.some((thread) => thread.id === threadId),
+      );
+      const thread = block?.btwThreads?.find((entry) => entry.id === threadId);
+      if (!thread) return { sessionId: id, threadId, status: "closed" };
+      return {
+        sessionId: id,
+        threadId,
+        status:
+          thread.status === "running"
+            ? "running"
+            : thread.status === "ready"
+              ? "completed"
+              : "failed",
+        messages: thread.messages.map(
+          ({ id: messageId, role, text, createdAt }) => ({
+            id: messageId,
+            role,
+            text,
+            createdAt,
+          }),
+        ),
+        ...(thread.error ? { error: thread.error } : {}),
+      };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
