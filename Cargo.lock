@@ -4529,6 +4529,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "image",
+ "libc",
  "monocode-core",
  "monocode-editor",
  "monocode-markdown",
