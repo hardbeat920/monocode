@@ -12,6 +12,10 @@ let openCodeVersion = "opencode 1.14.19";
 let admittedIds: Record<string, string[]> = {};
 /** Runs before an admission response returns, as a fast server would. */
 let onAdmit: ((path: string, id: string) => void) | undefined;
+let v2SessionDirectory = "/repo";
+let v2ForkDirectory: string | undefined;
+let v2MoveApplies = true;
+let v2ForkFailure: { status: number; body: string } | undefined;
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -24,29 +28,42 @@ const harnessHttp = vi.fn(
     body?: string;
   }): Promise<{ status: number; body: string }> => {
     const url = new URL(input.url);
-    if (
-      input.method === "POST" &&
-      (url.pathname === "/session" || url.pathname === "/api/session")
-    ) {
-      const session = { id: "session_1", directory: "/repo" };
-      return {
-        status: 200,
-        body: JSON.stringify(
-          url.pathname.startsWith("/api/") ? { data: session } : session,
-        ),
-      };
+    // v2 reports a session's folder only under `location`.
+    const v2Session = (id: string, directory: string) => ({
+      status: 200,
+      body: JSON.stringify({ data: { id, location: { directory } } }),
+    });
+    if (input.method === "POST" && url.pathname === "/api/session") {
+      return v2Session("session_1", url.searchParams.get("directory") ?? "");
+    }
+    if (input.method === "GET" && url.pathname === "/api/session/session_1") {
+      return v2Session("session_1", v2SessionDirectory);
+    }
+    if (input.method === "POST" && url.pathname === "/api/session/session_1/fork") {
+      if (v2ForkFailure) return v2ForkFailure;
+      v2ForkDirectory = v2SessionDirectory;
+      return v2Session("session_fork", v2ForkDirectory);
+    }
+    if (input.method === "POST" && url.pathname === "/api/session/session_fork/move") {
+      if (v2MoveApplies) {
+        v2ForkDirectory = (JSON.parse(input.body ?? "{}") as { directory: string })
+          .directory;
+      }
+      return { status: 204, body: "" };
+    }
+    if (input.method === "GET" && url.pathname === "/api/session/session_fork") {
+      return v2Session("session_fork", v2ForkDirectory ?? "");
+    }
+    if (input.method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(url.pathname)) {
+      return { status: 200, body: JSON.stringify({ data: [] }) };
     }
     if (
-      input.method === "GET" &&
-      (url.pathname === "/session/session_1" ||
-        url.pathname === "/api/session/session_1")
+      (input.method === "POST" && url.pathname === "/session") ||
+      (input.method === "GET" && url.pathname === "/session/session_1")
     ) {
-      const session = { id: "session_1", directory: "/repo" };
       return {
         status: 200,
-        body: JSON.stringify(
-          url.pathname.startsWith("/api/") ? { data: session } : session,
-        ),
+        body: JSON.stringify({ id: "session_1", directory: "/repo" }),
       };
     }
     if (
@@ -184,6 +201,10 @@ beforeEach(() => {
   openCodeVersion = "opencode 1.14.19";
   admittedIds = {};
   onAdmit = undefined;
+  v2SessionDirectory = "/repo";
+  v2ForkDirectory = undefined;
+  v2MoveApplies = true;
+  v2ForkFailure = undefined;
   spawnChild.mockClear();
   killChild.mockClear();
   closeHarnessSse.mockClear();
@@ -326,6 +347,83 @@ it("surfaces a failed v2 execution as a session error", async () => {
   });
   await done.catch(() => undefined);
   expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
+});
+
+describe("OpenCode 2.x resumed session folders", () => {
+  const paths = () =>
+    harnessHttp.mock.calls.map(
+      ([input]) => `${input.method} ${new URL(input.url).pathname}`,
+    );
+  const resumeTurn = async (events: HarnessEvent[] = []) => {
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+    const done = turn(events);
+    await waitFor(
+      () => paths().some((path) => path.endsWith("/prompt")) || events.some((e) => e.type === "session.error"),
+      "prompt",
+    );
+    onSseEvent?.({
+      type: "session.execution.succeeded",
+      data: { sessionID: paths().some((p) => p.includes("session_fork/prompt")) ? "session_fork" : "session_1" },
+    });
+    return done;
+  };
+
+  beforeEach(() => {
+    openCodeVersion = "opencode v2.0.19";
+  });
+
+  it("adopts a session that already works in the current folder", async () => {
+    v2SessionDirectory = "/repo/";
+    await resumeTurn();
+    expect(paths()).toContain("POST /api/session/session_1/prompt");
+    expect(paths().some((path) => path.includes("/fork"))).toBe(false);
+  });
+
+  it("forks a session from another folder and moves the fork here", async () => {
+    v2SessionDirectory = "/repo-old-worktree";
+    const events: HarnessEvent[] = [];
+    await resumeTurn(events);
+    const move = harnessHttp.mock.calls.find(
+      ([input]) => new URL(input.url).pathname === "/api/session/session_fork/move",
+    );
+    expect(JSON.parse(move?.[0].body ?? "{}")).toMatchObject({ directory: "/repo" });
+    expect(paths()).toContain("POST /api/session/session_fork/prompt");
+    expect(paths()).not.toContain("POST /api/session/session_1/move");
+    expect(paths()).not.toContain("POST /api/session/session_1/prompt");
+    expect(events).toContainEqual({
+      type: "session.providerBound",
+      providerSessionId: "session_fork",
+    });
+  });
+
+  it("deletes the fork and fails when the move does not take effect", async () => {
+    v2SessionDirectory = "/repo-old-worktree";
+    v2MoveApplies = false;
+    bindOpenCodeSession("opencode-live", "session_1", "/repo");
+    await expect(turn([])).rejects.toThrow("did not move the forked session");
+    expect(paths()).toContain("DELETE /api/session/session_fork");
+    expect(paths().some((path) => path.endsWith("/prompt"))).toBe(false);
+  });
+
+  it("starts a new session when the other folder's session has no history", async () => {
+    v2SessionDirectory = "/repo-old-worktree";
+    v2ForkFailure = {
+      status: 400,
+      body: JSON.stringify({
+        _tag: "InvalidRequestError",
+        message: "Cannot fork empty session: session_1",
+        kind: "empty_session",
+      }),
+    };
+    await resumeTurn();
+    const create = harnessHttp.mock.calls.find(
+      ([input]) =>
+        input.method === "POST" && new URL(input.url).pathname === "/api/session",
+    );
+    expect(JSON.parse(create?.[0].body ?? "{}")).toMatchObject({
+      location: { directory: "/repo" },
+    });
+  });
 });
 
 describe("OpenCode 2.x completion correlation", () => {

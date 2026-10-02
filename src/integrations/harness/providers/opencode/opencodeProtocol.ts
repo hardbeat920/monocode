@@ -155,6 +155,12 @@ export function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
 
+export function sameDirectory(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalize(left) === normalize(right);
+}
+
 export function isOpenCodeNotFound(cause: unknown): boolean {
   const seen = new Set<object>();
   const queue: unknown[] = [cause];

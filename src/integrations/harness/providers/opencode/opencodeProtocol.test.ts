@@ -11,6 +11,7 @@ import {
   assertSupportedOpenCodeVersion,
   buildOpenCodePermissionRules,
   compareSemver,
+  sameDirectory,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -62,6 +63,14 @@ describe("eventSessionId", () => {
         properties: { info: { id: "message_1" } },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("sameDirectory", () => {
+  it("ignores trailing separators and separator style", () => {
+    expect(sameDirectory("/repo/", "/repo")).toBe(true);
+    expect(sameDirectory("C:\\work\\repo\\", "C:/work/repo")).toBe(true);
+    expect(sameDirectory("/repo", "/repo-old-worktree")).toBe(false);
   });
 });
 

@@ -34,6 +34,7 @@ import {
   parseServerUrlFromOutput,
   permissionTitle,
   previewFromToolPart,
+  sameDirectory,
   sessionErrorMessage,
   stringField,
   textDeltaEvent,
@@ -584,10 +585,24 @@ async function resolveSession(
         .catch(() => undefined);
       return forked;
     } catch (error) {
-      if (!isOpenCodeNotFound(error) && !isHttpNotFound(error)) throw error;
+      if (
+        !isOpenCodeNotFound(error) &&
+        !isHttpNotFound(error) &&
+        !isEmptySessionFork(error)
+      )
+        throw error;
     }
   }
   return client.createSession({ permission });
+}
+
+/** v2 refuses to fork a session without history; nothing is lost by starting fresh. */
+function isEmptySessionFork(error: unknown): boolean {
+  return (
+    error instanceof OpenCodeHttpError &&
+    error.status === 400 &&
+    stringField(asRecord(error.body), "kind") === "empty_session"
+  );
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
@@ -1420,12 +1435,6 @@ function roleForPart(
     part.type === "reasoning"
     ? "assistant"
     : undefined;
-}
-
-function sameDirectory(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value.replace(/\/+$/, "").replace(/\\/g, "/");
-  return normalize(left) === normalize(right);
 }
 
 function isHttpNotFound(error: unknown): boolean {

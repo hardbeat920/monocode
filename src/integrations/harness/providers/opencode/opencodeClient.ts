@@ -7,6 +7,7 @@ import {
 import {
   asRecord,
   normalizeOpenCodeV2Event,
+  sameDirectory,
   stringField,
   toOpenCodeV2PermissionRules,
   type OpenCodeApiGeneration,
@@ -69,9 +70,11 @@ export class OpenCodeClient {
   ) {}
 
   async getSession(sessionID: string): Promise<OpenCodeSession> {
-    return this.request<OpenCodeSession>(
-      "GET",
-      this.path(`/session/${enc(sessionID)}`),
+    return normalizeSession(
+      await this.request<OpenCodeSession>(
+        "GET",
+        this.path(`/session/${enc(sessionID)}`),
+      ),
     );
   }
 
@@ -89,21 +92,23 @@ export class OpenCodeClient {
     permission?: unknown;
   }): Promise<OpenCodeSession> {
     const permission = input.permission as OpenCodePermissionRule[] | undefined;
-    return this.request<OpenCodeSession>("POST", this.path("/session"), {
-      body: {
-        ...(input.title ? { title: input.title } : {}),
-        ...(this.generation === "v2"
-          ? {
-              location: { directory: this.directory },
-              ...(permission
-                ? { permissions: toOpenCodeV2PermissionRules(permission) }
-                : {}),
-            }
-          : input.permission
-            ? { permission: input.permission }
-            : {}),
-      },
-    });
+    return normalizeSession(
+      await this.request<OpenCodeSession>("POST", this.path("/session"), {
+        body: {
+          ...(input.title ? { title: input.title } : {}),
+          ...(this.generation === "v2"
+            ? {
+                location: { directory: this.directory },
+                ...(permission
+                  ? { permissions: toOpenCodeV2PermissionRules(permission) }
+                  : {}),
+              }
+            : input.permission
+              ? { permission: input.permission }
+              : {}),
+        },
+      }),
+    );
   }
 
   async updateSession(
@@ -120,34 +125,53 @@ export class OpenCodeClient {
             ),
           }
         : body;
-    return this.request<OpenCodeSession>(
-      "PATCH",
-      this.path(`/session/${enc(sessionID)}`),
-      {
-        body: normalizedBody,
-      },
+    return normalizeSession(
+      await this.request<OpenCodeSession>(
+        "PATCH",
+        this.path(`/session/${enc(sessionID)}`),
+        {
+          body: normalizedBody,
+        },
+      ),
     );
   }
 
+  /**
+   * Copy a session into `directory`. v2 forks stay in the source folder until
+   * moved, so the move is confirmed before the fork is handed out; a fork that
+   * cannot be moved is deleted rather than left behind in the wrong folder.
+   */
   async forkSession(
     sessionID: string,
     directory: string,
   ): Promise<OpenCodeSession> {
-    const forked = await this.request<OpenCodeSession>(
-      "POST",
-      this.path(`/session/${enc(sessionID)}/fork`),
-      this.generation === "v2"
-        ? { body: {} }
-        : { query: { directory }, body: {} },
+    const forked = normalizeSession(
+      await this.request<OpenCodeSession>(
+        "POST",
+        this.path(`/session/${enc(sessionID)}/fork`),
+        this.generation === "v2"
+          ? { body: {} }
+          : { query: { directory }, body: {} },
+      ),
     );
-    if (this.generation === "v2") {
+    if (this.generation === "v1") return forked;
+    try {
       await this.request<unknown>(
         "POST",
         this.path(`/session/${enc(forked.id)}/move`),
         { body: { directory, delivery: "queue" } },
       );
+      const moved = await this.getSession(forked.id);
+      if (!moved.directory || !sameDirectory(moved.directory, directory)) {
+        throw new Error(
+          `OpenCode did not move the forked session to ${directory}`,
+        );
+      }
+      return moved;
+    } catch (error) {
+      await this.deleteSession(forked.id);
+      throw error;
     }
-    return forked;
   }
 
   async abortSession(sessionID: string): Promise<void> {
@@ -691,6 +715,16 @@ function v2PromptBody(
       .map((part) => ({ uri: part.url, name: part.filename })),
     delivery,
   };
+}
+
+/** v2 reports a session's folder as `location.directory`. */
+function normalizeSession(session: OpenCodeSession): OpenCodeSession {
+  const rec = asRecord(session);
+  if (!rec) return session;
+  const directory =
+    stringField(rec, "directory") ??
+    stringField(asRecord(rec.location), "directory");
+  return directory ? { ...session, directory } : session;
 }
 
 function normalizeV2Message(value: unknown): OpenCodeMessage {
