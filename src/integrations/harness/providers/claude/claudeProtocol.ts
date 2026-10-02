@@ -826,6 +826,18 @@ export function assistantMessageId(
   return stringField(asRecord(rec.message), "id");
 }
 
+/**
+ * Model that served an assistant message, as `modelUsage` keys it.
+ *
+ * The CLI stamps each ledger entry with the model that served the request, so
+ * this is the same string family the window lookup matches against.
+ */
+export function assistantModel(
+  rec: Record<string, unknown>,
+): string | undefined {
+  return stringField(asRecord(rec.message), "model");
+}
+
 export function assistantToolUses(rec: Record<string, unknown>): Array<{
   id: string;
   name: string;
@@ -1164,29 +1176,67 @@ export function contextUsedFromAssistant(
 }
 
 /**
+ * Window of the model the main loop is on.
+ *
+ * `modelUsage` is the CLI's per-model ledger for every call in the query
+ * pipeline, and the CLI documents it as covering "main loop, Task subagents,
+ * sidechains, and internal calls such as compaction". Taking the widest window
+ * in there can therefore hand the denominator to a model whose messages the
+ * numerator deliberately skipped — a 1M subagent beside a 200K parent reports
+ * the session at a fifth of its occupancy. Naming the model keeps both halves
+ * of the ratio describing the same window.
+ *
+ * With no model to match, only a lone entry is safe: two entries are a guess,
+ * and guessing wrong is what this exists to stop.
+ */
+function windowFromModelUsage(
+  modelUsage: Record<string, unknown> | null,
+  model: string | undefined,
+): number | undefined {
+  const windows: Array<[string, number]> = [];
+  for (const [key, value] of Object.entries(modelUsage ?? {})) {
+    const contextWindow = numberField(asRecord(value), "contextWindow");
+    if (contextWindow > 0) windows.push([key, contextWindow]);
+  }
+  if (model) {
+    const named = windows.find(([key]) => sameClaudeModel(key, model));
+    if (named) return named[1];
+  }
+  return windows.length === 1 ? windows[0][1] : undefined;
+}
+
+/**
+ * `resolveClaudeApiModelId` asks for a 1M window by suffixing `[1m]`, which the
+ * ledger's keys do not carry. Strip it so the two spellings still meet.
+ */
+function sameClaudeModel(left: string, right: string): boolean {
+  const bare = (model: string) =>
+    model.trim().toLowerCase().replace(/\[1m\]$/, "");
+  return bare(left) === bare(right);
+}
+
+/**
  * Context level and window from a turn `result`.
  *
  * `usage` at the top level sums every iteration of the turn, so the last entry
- * of `usage.iterations` is what actually sits in the window. `modelUsage`
- * carries the window itself, which is why we let the CLI tell us rather than
- * keeping a model table in sync.
+ * of `usage.iterations` is what actually sits in the window — and the CLI
+ * scopes it to the main agent loop, excluding subagents, sidechains, and
+ * auxiliary calls. `modelUsage` carries the window itself, which is why we let
+ * the CLI tell us rather than keeping a model table in sync, but it spans every
+ * model in the pipeline, so pass the one the main loop last used.
  */
 export function contextFromResult(
   rec: Record<string, unknown>,
+  input?: { model?: string },
 ): { used?: number; window?: number } | undefined {
   const usage = asRecord(rec.usage);
   const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
   const last = asRecord(iterations[iterations.length - 1]);
   const used = contextUsedFromUsage(last ?? usage);
-
-  let window: number | undefined;
-  const modelUsage = asRecord(rec.modelUsage);
-  for (const entry of Object.values(modelUsage ?? {})) {
-    const contextWindow = numberField(asRecord(entry), "contextWindow");
-    if (contextWindow > 0) {
-      window = Math.max(window ?? 0, contextWindow);
-    }
-  }
+  const window = windowFromModelUsage(
+    asRecord(rec.modelUsage),
+    input?.model,
+  );
 
   if (!used && !window) return undefined;
   return { used: used > 0 ? used : undefined, window };

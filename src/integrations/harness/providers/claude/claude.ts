@@ -18,6 +18,7 @@ import {
   askUserQuestionAllowInput,
   asRecord,
   assistantMessageId,
+  assistantModel,
   assistantTextBlocks,
   assistantThinkingBlocks,
   assistantToolUses,
@@ -184,6 +185,16 @@ type Live = {
    * not change the model — so only the level is withheld.
    */
   compactedThisTurn: boolean;
+  /**
+   * Model the main loop last used, which is how `modelUsage` keys its ledger.
+   *
+   * Subagent traffic is skipped everywhere the context level is read, so this
+   * names the window that level was measured against. It is deliberately not
+   * seeded from what we asked for: Claude can fall back to another model when a
+   * window is refused, and whatever actually served the turn is the window that
+   * filled up.
+   */
+  model?: string;
 };
 
 type Resume = {
@@ -701,6 +712,11 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   ) {
     markInitialized(live);
     if (stringField(rec, "subtype") === "init") noteClaudeTurnStarted(live);
+    // The init names the model the main loop is on, before any assistant
+    // message has arrived to say so.
+    if (!isSubagentMessage(rec)) {
+      live.model = stringField(rec, "model") ?? live.model;
+    }
   }
 
   if (type === "control_response") {
@@ -848,6 +864,9 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
     live.compactedThisTurn = false;
     live.onEvent({ type: "context", used });
   }
+  // Whatever the CLI served, refusal fallbacks included, is the window the
+  // level above was measured against.
+  live.model = assistantModel(rec) ?? live.model;
 
   const snapshot = assistantTextBlocks(rec).join("");
   if (snapshot) closePendingAssistantMessage(live);
@@ -996,7 +1015,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A /compact result reports the summarizer call's usage, not the rebuilt
   // conversation level. The next real turn will provide the fresh reading.
   if (!live.manualCompaction) {
-    const context = contextFromResult(rec);
+    const context = contextFromResult(rec, { model: live.model });
     if (context) {
       // A turn that compacted is the same case arriving without a request from
       // us: the summary was the last thing it did, so its result sizes the

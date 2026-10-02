@@ -137,6 +137,25 @@ function resultReading(cacheRead: number, contextWindow: number) {
   };
 }
 
+/**
+ * A turn result whose ledger holds more than one model, as it does whenever a
+ * Task subagent ran on a different one.
+ */
+function multiModelResult(
+  cacheRead: number,
+  modelUsage: Record<string, number>,
+) {
+  return {
+    ...resultReading(cacheRead, 0),
+    modelUsage: Object.fromEntries(
+      Object.entries(modelUsage).map(([model, contextWindow]) => [
+        model,
+        { contextWindow },
+      ]),
+    ),
+  };
+}
+
 const readingEvents = (events: HarnessEvent[]) =>
   events.filter((event) => event.type === "context");
 
@@ -893,6 +912,85 @@ describe("claude assistant message boundaries", () => {
     expect(events.filter((event) => event.type === "message.delta")).toEqual([
       { type: "message.delta", text: progress },
       { type: "message.delta", text: update },
+    ]);
+  });
+});
+
+describe("claude context window", () => {
+  it("reports the parent's window when a subagent ran a wider model", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "on it" }],
+        usage: {
+          input_tokens: 5,
+          cache_read_input_tokens: 16_652,
+          output_tokens: 2,
+        },
+      },
+    });
+    // The child's own window is wider, and its usage is deliberately skipped,
+    // so taking the widest entry would report the session at a fifth of the
+    // occupancy it actually has.
+    emit({
+      type: "assistant",
+      session_id: "sess_child",
+      parent_tool_use_id: "toolu_agent",
+      message: {
+        model: "claude-sonnet-5",
+        content: [{ type: "text", text: "child thinking" }],
+        usage: {
+          input_tokens: 900_000,
+          cache_read_input_tokens: 0,
+          output_tokens: 4,
+        },
+      },
+    });
+    emit(
+      multiModelResult(16_652, {
+        "claude-opus-5": 200_000,
+        "claude-sonnet-5": 1_000_000,
+      }),
+    );
+    await turn;
+
+    expect(readingEvents(events)).toEqual([
+      { type: "context", used: 16_659 },
+      { type: "context", used: 16_659, window: 200_000 },
+    ]);
+  });
+
+  it("trusts the window of a model Claude fell back to", async () => {
+    // A refused window can still fall back to another model, and whatever
+    // served the turn is the window that filled up — not what we asked for.
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        model: "claude-haiku-4-5",
+        content: [{ type: "text", text: "falling back" }],
+        usage: {
+          input_tokens: 5,
+          cache_read_input_tokens: 90_000,
+          output_tokens: 2,
+        },
+      },
+    });
+    emit(
+      multiModelResult(90_000, {
+        "claude-opus-5": 1_000_000,
+        "claude-haiku-4-5": 200_000,
+      }),
+    );
+    await turn;
+
+    expect(readingEvents(events)).toEqual([
+      { type: "context", used: 90_007 },
+      { type: "context", used: 90_007, window: 200_000 },
     ]);
   });
 });
