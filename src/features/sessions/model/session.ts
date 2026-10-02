@@ -619,6 +619,36 @@ export function retargetSessionToProject(
   };
 }
 
+/** Apply a model/provider choice while keeping the conversation metadata. */
+export function withHarnessChoice(
+  session: Session,
+  harness: HarnessId,
+  model: string,
+  modelSettings: Record<string, string>,
+): Session {
+  return {
+    ...session,
+    harness,
+    model,
+    modelSettings,
+    title:
+      session.titleIsExplicit && session.harness === harness
+        ? session.title
+        : session.blocks.length === 0 && !session.titleIsExplicit
+          ? HARNESS_LABEL[harness]
+          : formatSessionTitle(
+              harness,
+              sessionDisplayTitle(session.title, session.harness),
+            ),
+    ...(session.model === model
+      ? {}
+      : { context: dropContextWindow(session.context) }),
+    ...(session.harness === harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
+  };
+}
+
 /** New conversation carrying another session's harness, model and settings. */
 export function newSessionLike(
   seed: Session | undefined,
