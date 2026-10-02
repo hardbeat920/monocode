@@ -1,0 +1,21 @@
+[package]
+name = "monocode-markdown"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Streaming markdown renderer with code highlighting for MonoCode"
+
+[dependencies]
+gpui.workspace = true
+pulldown-cmark = { version = "0.13.4", default-features = false }
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-onig", "yaml-load"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+
+[[example]]
+name = "stream"
+path = "examples/stream.rs"
