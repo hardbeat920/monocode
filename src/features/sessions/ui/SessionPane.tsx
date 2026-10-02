@@ -245,6 +245,11 @@ export const SessionPane = memo(function SessionPane(props: SessionPaneProps) {
   return <LocalSessionPane {...props} />;
 });
 
+/**
+ * Render a session's transcript, composer, and side conversations using supplied actions.
+ * Associate side-question close guards with the owning session so automated
+ * closing can detect drafts held by a side composer.
+ */
 const LocalSessionPane = memo(function LocalSessionPane({
   remoteSession = false,
   remoteFeatures,
@@ -414,6 +419,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   }, [remote, session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const btw = useBtwConversation({
+    sessionId: session.id,
     available:
       !remote &&
       !isEmpty &&

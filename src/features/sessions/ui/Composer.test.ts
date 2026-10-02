@@ -42,6 +42,7 @@ import {
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import {
   clearComposerDraft,
+  hasUnsavedComposerDraft,
   getComposerDraft,
   setComposerDraft,
 } from "../model/draftCache";
@@ -181,6 +182,38 @@ describe("Composer question focus", () => {
       ),
     );
   }
+
+  it("blocks session close for live text, pending paste, and attachment-only drafts", async () => {
+    const id = "close-guard";
+    await renderComposer(undefined, vi.fn(), false, 0, undefined, undefined, vi.fn(), id);
+    const textarea = container.querySelector("textarea")!;
+    expect(hasUnsavedComposerDraft(id)).toBe(false);
+    // The guard reads the live element, before React/cache updates.
+    textarea.value = "Do not discard";
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+    textarea.value = "";
+    const file = new File(["data"], "unsent.png", { type: "image/png" });
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        getData: () => "",
+        files: [file],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(paste);
+      expect(hasUnsavedComposerDraft(id)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(textarea.value).toBe("");
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="Remove unsent.png"]',
+    )!.click());
+    expect(hasUnsavedComposerDraft(id)).toBe(false);
+    clearComposerDraft(id);
+  });
 
   it.each([
     ["/btw", ""],

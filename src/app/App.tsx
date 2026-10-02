@@ -1,3 +1,4 @@
+import { closeAgentSession } from "../features/agent-app/model/closeSession";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
@@ -921,6 +922,11 @@ export default function App(props: AppProps) {
   );
 }
 
+/**
+ * Own this window's sessions, layouts, persistence, and provider lifecycles.
+ * App CLI handlers read live refs and commit layout changes synchronously;
+ * sessions removed from view remain eligible for ordinary idle detachment.
+ */
 function Workspace({
   windowTransfer = null,
   resumed = null,
@@ -9379,6 +9385,30 @@ function Workspace({
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
+            close: (id) =>
+              closeAgentSession(source, id, {
+                snapshot: () => ({
+                  sessions: sessionsRef.current,
+                  tabs: tabsRef.current,
+                  activeTabId: activeTabIdRef.current,
+                }),
+                unavailable: (targetId) =>
+                  removingSessionIds.current.has(targetId) ||
+                  switchingWorktrees.current.has(targetId) ||
+                  !!orchestrator.run(targetId),
+                worktreeOf: tabWorktreeOf,
+                apply: (next) => {
+                  flushSync(() => {
+                    sessionsRef.current = next.sessions;
+                    tabsRef.current = next.tabs;
+                    activeTabIdRef.current = next.activeTabId;
+                    setSessions(next.sessions);
+                    setTabs(next.tabs);
+                    activateTab(next.activeTabId);
+                  });
+                  void refreshHistory(sidebarCwdRef.current);
+                },
+              }),
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>
               createWorktree(cwd, branch, base, existing),

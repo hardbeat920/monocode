@@ -65,6 +65,8 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  /** Save and close an authorized target's views, rejecting unsafe live state. */
+  close(id: string): Promise<{ closed: boolean }>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -83,6 +85,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.close", ["sessionId"]],
   [
     "sessions.start",
     [
@@ -281,6 +284,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Dispatch an app action for the caller already authenticated by the control bridge.
+ * Validate action fields and project-scoped session access before host mutations;
+ * propagate validation and host failures to the caller as rejected requests.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
@@ -352,6 +360,13 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.close": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Cannot close the calling session");
+      await projectSession(source, id, host);
+      return { sessionId: id, ...(await host.close(id)) };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
