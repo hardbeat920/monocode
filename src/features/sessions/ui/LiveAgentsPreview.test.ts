@@ -122,4 +122,60 @@ describe("LiveAgentsPreview", () => {
     expect(liveRegion.textContent).not.toMatch(/\d+s/);
     expect(container.querySelector("[role=status]")).toBeNull();
   });
+
+  it("shows reported turn counts and exposes cache details on hover or focus", () => {
+    const agents = [
+      agent("a", "/repo/a", {
+        turnMetrics: { inputTokens: 0, cacheReadTokens: 1_200 },
+      }),
+      agent("b", "/repo/b"),
+    ];
+    render({
+      agents,
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    const card = container.querySelector<HTMLElement>(
+      '[data-live-agent-card="a"]',
+    )!;
+    expect(card.textContent).toContain("0 input");
+    expect(card.textContent).toContain("1.2K cached");
+    expect(card.getAttribute("aria-label")).toContain("0 input");
+    expect(card.getAttribute("aria-label")).not.toContain("output");
+    expect(card.getAttribute("aria-label")).toContain("1.2K cached");
+    expect(card.title).toContain("1.2K cached");
+    const cacheDetails = Array.from(card.children).find((child) =>
+      child.textContent?.includes("cached"),
+    )!;
+    expect(cacheDetails.className).toContain("group-hover:visible");
+    expect(cacheDetails.className).toContain("group-focus-visible:visible");
+
+    render({
+      agents: [
+        agent("a", "/repo/a", {
+          turnMetrics: { inputTokens: 2_000, outputTokens: 84 },
+        }),
+        agents[1],
+      ],
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+    expect(card.textContent).toContain("2K input · 84 output");
+    expect(card.textContent).not.toContain("cached");
+
+    render({
+      agents: [agent("a", "/repo/a"), agents[1]],
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+    expect(card.textContent).not.toContain("input");
+    expect(card.textContent).not.toContain("output");
+  });
 });

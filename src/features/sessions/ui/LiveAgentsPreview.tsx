@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
+import { formatTokens } from "../model/contextUsage";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import {
   loadTabGroupColors,
@@ -165,7 +166,24 @@ function LiveAgentCard({
       ? "Done"
       : agent.activity;
   const live = !agent.needsApproval && !agent.done;
-  const title = [agent.title, project, activity, elapsed]
+  const tokenCounts = [
+    agent.turnMetrics?.inputTokens != null
+      ? `${formatTokens(agent.turnMetrics.inputTokens)} input`
+      : null,
+    agent.turnMetrics?.outputTokens != null
+      ? `${formatTokens(agent.turnMetrics.outputTokens)} output`
+      : null,
+  ].filter(Boolean);
+  const cacheCounts = [
+    agent.turnMetrics?.cacheReadTokens != null
+      ? `${formatTokens(agent.turnMetrics.cacheReadTokens)} cached`
+      : null,
+    agent.turnMetrics?.cacheWriteTokens != null
+      ? `${formatTokens(agent.turnMetrics.cacheWriteTokens)} cache written`
+      : null,
+  ].filter(Boolean);
+  const metricsLabel = [...tokenCounts, ...cacheCounts].join(" · ");
+  const title = [agent.title, project, activity, elapsed, metricsLabel]
     .filter(Boolean)
     .join("\n");
 
@@ -173,13 +191,13 @@ function LiveAgentCard({
     <button
       type="button"
       title={title}
-      aria-label={[agent.title, project, activity, elapsed]
+      aria-label={[agent.title, project, activity, elapsed, metricsLabel]
         .filter(Boolean)
         .join(", ")}
       aria-current={selected ? "true" : undefined}
       data-live-agent-card={agent.id}
       onClick={() => onSelect?.(agent.id)}
-      className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
+      className={`group relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
         selected ? "bg-selection" : "hover:bg-content/8"
       }`}
     >
@@ -226,6 +244,16 @@ function LiveAgentCard({
           <span className="shrink-0 tabular-nums">{elapsed}</span>
         ) : null}
       </span>
+      {tokenCounts.length ? (
+        <span className="mt-1 min-w-0 truncate pl-4 text-[10px] leading-tight text-content/40">
+          {tokenCounts.join(" · ")}
+        </span>
+      ) : null}
+      {cacheCounts.length ? (
+        <span className="invisible min-w-0 truncate pl-4 text-[10px] leading-tight text-content/50 group-hover:visible group-focus-visible:visible">
+          {cacheCounts.join(" · ")}
+        </span>
+      ) : null}
     </button>
   );
 }

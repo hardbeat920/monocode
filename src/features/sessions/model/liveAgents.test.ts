@@ -60,6 +60,45 @@ describe("liveAgentsFromSessions", () => {
     ]);
   });
 
+  it("keeps only provider metrics for the current turn", () => {
+    const session = chat("/tmp/tokens", {
+      busy: true,
+      blocks: [
+        {
+          id: "u1",
+          role: "user",
+          text: "first",
+          turnMetrics: { inputTokens: 1_250, outputTokens: 0 },
+        },
+      ],
+    });
+
+    expect(liveAgentsFromSessions([session])[0]?.turnMetrics).toEqual({
+      inputTokens: 1_250,
+      outputTokens: 0,
+    });
+
+    const updated = {
+      ...session,
+      blocks: [
+        { ...session.blocks[0], turnMetrics: { inputTokens: 0, outputTokens: 84 } },
+      ],
+    };
+    expect(liveAgentsFromSessions([updated])[0]?.turnMetrics).toEqual({
+      inputTokens: 0,
+      outputTokens: 84,
+    });
+
+    const nextTurn = {
+      ...updated,
+      blocks: [
+        updated.blocks[0],
+        { id: "u2", role: "user" as const, text: "second", startedAt: 2_000 },
+      ],
+    };
+    expect(liveAgentsFromSessions([nextTurn])[0]?.turnMetrics).toBeUndefined();
+  });
+
   it("puts sessions waiting on approval first", () => {
     const working = chat("/tmp/a", {
       busy: true,
@@ -136,6 +175,7 @@ describe("liveAgentsFromSessions", () => {
           text: "go",
           startedAt: 1_000,
           durationMs: 12_000,
+          turnMetrics: { inputTokens: 1_024, outputTokens: 32 },
         },
         edit("t1", "src/App.tsx", "completed"),
       ],
@@ -152,6 +192,7 @@ describe("liveAgentsFromSessions", () => {
         activity: "Done",
         startedAt: 1_000,
         durationMs: 12_000,
+        turnMetrics: { inputTokens: 1_024, outputTokens: 32 },
         needsApproval: false,
         done: true,
       },

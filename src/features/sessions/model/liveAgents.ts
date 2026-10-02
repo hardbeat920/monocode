@@ -6,6 +6,7 @@ import {
   type Block,
   type HarnessId,
   type Session,
+  type TurnMetrics,
 } from "./session";
 
 export type LiveAgent = {
@@ -16,6 +17,7 @@ export type LiveAgent = {
   activity: string;
   startedAt?: number;
   durationMs?: number;
+  turnMetrics?: TurnMetrics;
   needsApproval: boolean;
   done: boolean;
 };
@@ -61,6 +63,7 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
   const pendingQuestion = session.pendingQuestion;
   const done = unseenFinished && !isInFlightSession(session);
   const activityBlock = pending ?? lastActivityBlock(session.blocks);
+  const turnMetrics = lastTurnMetrics(session.blocks);
   return {
     id: session.id,
     cwd: session.cwd,
@@ -75,6 +78,7 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
         : activityLabel(activityBlock, session.cwd),
     startedAt: turnStartedAt(session.blocks),
     durationMs: done ? turnDurationMs(session.blocks) : undefined,
+    ...(turnMetrics ? { turnMetrics } : {}),
     needsApproval: Boolean(pending) || Boolean(pendingQuestion),
     done,
   };
@@ -110,6 +114,13 @@ function turnStartedAt(blocks: Block[]): number | undefined {
 function turnDurationMs(blocks: Block[]): number | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") return blocks[i].durationMs;
+  }
+  return undefined;
+}
+
+function lastTurnMetrics(blocks: Block[]): TurnMetrics | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].role === "user") return blocks[i].turnMetrics;
   }
   return undefined;
 }
