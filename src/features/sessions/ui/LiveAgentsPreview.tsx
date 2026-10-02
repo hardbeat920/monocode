@@ -32,6 +32,7 @@ type Props = {
   groupMascots?: Record<string, string>;
 };
 
+/** Renders the sidebar panel once at least two live or unseen-finished agents are available. */
 export function LiveAgentsPreview({
   agents,
   activeSessionId,
@@ -131,6 +132,7 @@ export function LiveAgentsPreview({
   );
 }
 
+/** Renders a selectable agent card with cache metrics in a hover/focus tooltip. */
 function LiveAgentCard({
   agent,
   now,

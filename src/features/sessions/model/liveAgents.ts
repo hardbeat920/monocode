@@ -30,6 +30,10 @@ export function isLiveAgentSession(
   return !session.inboxAsk && !session.orchestrationLeadId;
 }
 
+/**
+ * Builds cards for active sessions and finished sessions the user has not seen.
+ * Approval waits sort first, followed by active turns from longest-running.
+ */
 export function liveAgentsFromSessions(
   sessions: Session[],
   unseenFinishedIds: ReadonlySet<string> = new Set(),
@@ -56,6 +60,7 @@ export function formatLiveElapsed(startedAt: number, now: number): string {
   return minRest ? `${hours}h ${minRest}m` : `${hours}h`;
 }
 
+/** Maps a session to its card, including metrics from its latest user turn. */
 function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
   const pending = session.blocks.find(
     (block) => block.approval && !block.approval.decided,
@@ -118,6 +123,9 @@ function turnDurationMs(blocks: Block[]): number | undefined {
   return undefined;
 }
 
+/**
+ * Returns metrics from the latest user turn only; earlier turns never carry forward.
+ */
 function lastTurnMetrics(blocks: Block[]): TurnMetrics | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") return blocks[i].turnMetrics;
