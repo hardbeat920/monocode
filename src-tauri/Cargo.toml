@@ -35,6 +35,7 @@ tauri-plugin-process = "2"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
 ruzstd = "0.9"
+memchr = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

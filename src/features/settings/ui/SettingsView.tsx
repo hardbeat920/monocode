@@ -37,9 +37,10 @@ import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
   createUsagePricing,
   fetchModelPrices,
-  fetchProviderUsage,
   formatUsageCost,
   formatUsageTokens,
+  lastProviderUsage,
+  loadProviderUsage,
   summarizeUsage,
   usageBreakdown,
   usageDays,
@@ -48,6 +49,7 @@ import {
   type ModelPrices,
   type UsageBreakdown,
   type UsageDay,
+  type UsageReport,
 } from "../../providers/model/providerUsage";
 import {
   ColorPickerPopover,
@@ -3281,10 +3283,42 @@ function usageAccountLabel(account: ProviderAccount): string {
   return `${HARNESS_TITLE[account.provider]} · ${account.label}`;
 }
 
+function usageSince(): number {
+  return usageDays(USAGE_MAX_DAYS, new Date())[0].getTime();
+}
+
+function usageLoad(
+  results: { account: ProviderAccount; report: UsageReport | null }[],
+): UsageLoad {
+  return {
+    status: "ready",
+    usage: results.flatMap(({ account, report }) =>
+      report ? [{ account, rows: report.rows }] : [],
+    ),
+    failed: results
+      .filter(({ report }) => !report)
+      .map(({ account }) => usageAccountLabel(account)),
+  };
+}
+
+/** What the last visit read, while every account still has a copy. */
+function lastUsageLoad(accounts: ProviderAccount[]): UsageLoad {
+  const since = usageSince();
+  const results = accounts.map((account) => ({
+    account,
+    report: lastProviderUsage(account, since),
+  }));
+  return results.every(({ report }) => report)
+    ? usageLoad(results)
+    : { status: "loading" };
+}
+
 function ProviderUsageSettings() {
   const [version, setVersion] = useState(0);
   const [reload, setReload] = useState(0);
-  const [load, setLoad] = useState<UsageLoad>({ status: "loading" });
+  const [load, setLoad] = useState<UsageLoad>(() =>
+    lastUsageLoad(PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts)),
+  );
   // True while a scan runs, including reloads that keep the last results shown.
   const [refreshing, setRefreshing] = useState(true);
   const [accountKey, setAccountKey] = useState(ALL_USAGE_ACCOUNTS);
@@ -3322,17 +3356,13 @@ function ProviderUsageSettings() {
     setLoad((current) =>
       current.status === "ready" ? current : { status: "loading" },
     );
-    const since = usageDays(USAGE_MAX_DAYS, new Date())[0].getTime();
+    const since = usageSince();
     void Promise.all(
       accounts.map(async (account) => {
         try {
           return {
             account,
-            report: await fetchProviderUsage(
-              account.provider,
-              account.id,
-              since,
-            ),
+            report: await loadProviderUsage(account, since),
           };
         } catch {
           return { account, report: null };
@@ -3341,15 +3371,7 @@ function ProviderUsageSettings() {
     ).then((results) => {
       if (cancelled) return;
       setRefreshing(false);
-      setLoad({
-        status: "ready",
-        usage: results.flatMap(({ account, report }) =>
-          report ? [{ account, rows: report.rows }] : [],
-        ),
-        failed: results
-          .filter(({ report }) => !report)
-          .map(({ account }) => usageAccountLabel(account)),
-      });
+      setLoad(usageLoad(results));
     });
     return () => {
       cancelled = true;
@@ -3373,16 +3395,24 @@ function ProviderUsageSettings() {
       : load.usage;
   }, [load, selected]);
 
-  // Recomputed per render so "today" moves on when Settings stays open overnight.
-  const now = new Date();
-  const summary = summarizeUsage(usage, dayCount, now, pricing);
-  const rows = usageBreakdown(
-    usage,
-    dayCount,
-    now,
-    shownBreakdown,
-    usageAccountLabel,
-    pricing,
+  // Local midnight, read per render so "today" moves on when Settings stays
+  // open overnight, while the totals below are only redone when it does.
+  const today = usageDays(1, new Date())[0].getTime();
+  const summary = useMemo(
+    () => summarizeUsage(usage, dayCount, new Date(today), pricing),
+    [usage, dayCount, today, pricing],
+  );
+  const rows = useMemo(
+    () =>
+      usageBreakdown(
+        usage,
+        dayCount,
+        new Date(today),
+        shownBreakdown,
+        usageAccountLabel,
+        pricing,
+      ),
+    [usage, dayCount, today, shownBreakdown, pricing],
   );
 
   const accountOptions = [

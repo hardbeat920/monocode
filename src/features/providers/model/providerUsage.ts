@@ -24,6 +24,9 @@ export type UsageReport = {
   /** False when the account has never written a session log. */
   found: boolean;
   filesScanned: number;
+  /** Logs read this time; unchanged ones are reused from the last scan. */
+  filesParsed: number;
+  bytesRead: number;
 };
 
 /** Longest range the Usage section offers; one scan covers every range. */
@@ -39,6 +42,57 @@ export async function fetchProviderUsage(
     accountId,
     sinceMs,
   });
+}
+
+type UsageRequest = {
+  sinceMs: number;
+  promise: Promise<UsageReport>;
+};
+
+const pendingUsage = new Map<string, UsageRequest>();
+const lastUsage = new Map<string, { sinceMs: number; report: UsageReport }>();
+
+function usageKey(account: ProviderAccount): string {
+  return `${account.provider}:${account.id}`;
+}
+
+/**
+ * Reads an account's usage, sharing a read already in flight for the same
+ * range, so reopening Settings mid-scan does not start a second one.
+ */
+export function loadProviderUsage(
+  account: ProviderAccount,
+  sinceMs: number,
+  fetch: typeof fetchProviderUsage = fetchProviderUsage,
+): Promise<UsageReport> {
+  const key = usageKey(account);
+  const pending = pendingUsage.get(key);
+  if (pending?.sinceMs === sinceMs) return pending.promise;
+  const promise = fetch(account.provider, account.id, sinceMs)
+    .then((report) => {
+      lastUsage.set(key, { sinceMs, report });
+      return report;
+    })
+    .finally(() => {
+      if (pendingUsage.get(key)?.promise === promise) pendingUsage.delete(key);
+    });
+  pendingUsage.set(key, { sinceMs, promise });
+  return promise;
+}
+
+/** The last usage read for an account, to show while it is read again. */
+export function lastProviderUsage(
+  account: ProviderAccount,
+  sinceMs: number,
+): UsageReport | null {
+  const last = lastUsage.get(usageKey(account));
+  return last && last.sinceMs === sinceMs ? last.report : null;
+}
+
+/** Test hook: forgets every read. */
+export function resetProviderUsageCache(): void {
+  pendingUsage.clear();
+  lastUsage.clear();
 }
 
 /** US dollars per million tokens. */
@@ -136,10 +190,23 @@ function bestRate(
   return best;
 }
 
-/** Built-in rate for a model id such as `claude-sonnet-4-5-20250929` or `gpt-5.5-codex`. */
-export function usageRate(model: string): Rate | null {
-  return bestRate(normalizeModelId(model), RATES)?.rate ?? null;
+/** Remembers each model's rate, since a report repeats a few models many times. */
+function memoizeByModel(lookup: UsagePricing): UsagePricing {
+  const rates = new Map<string, Rate | null>();
+  return (model) => {
+    let rate = rates.get(model);
+    if (rate === undefined) {
+      rate = lookup(model);
+      rates.set(model, rate);
+    }
+    return rate;
+  };
 }
+
+/** Built-in rate for a model id such as `claude-sonnet-4-5-20250929` or `gpt-5.5-codex`. */
+export const usageRate: UsagePricing = memoizeByModel(
+  (model) => bestRate(normalizeModelId(model), RATES)?.rate ?? null,
+);
 
 /** Looks up the rate for a model id as it appears in the session logs. */
 export type UsagePricing = (model: string) => Rate | null;
@@ -209,14 +276,14 @@ export function createUsagePricing(models: ModelPrice[] = []): UsagePricing {
       };
     }
   }
-  return (model) => {
+  return memoizeByModel((model) => {
     const id = normalizeModelId(model);
     const fromRemote = bestRate(id, remote);
     const builtIn = bestRate(id, RATES);
     if (!fromRemote) return builtIn?.rate ?? null;
     if (!builtIn) return fromRemote.rate;
     return fromRemote.length >= builtIn.length ? fromRemote.rate : builtIn.rate;
-  };
+  });
 }
 
 export function rowTokens(row: UsageRow): number {
@@ -290,10 +357,6 @@ export type UsageSummary = {
   unpricedModels: string[];
 };
 
-function localDayKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
-}
-
 /** The last `dayCount` local calendar days, oldest first, ending today. */
 export function usageDays(dayCount: number, now: Date): Date[] {
   return Array.from({ length: dayCount }, (_, index) => {
@@ -303,22 +366,33 @@ export function usageDays(dayCount: number, now: Date): Date[] {
   });
 }
 
-/** Rows that fall inside the last `dayCount` local days. */
+/**
+ * Rows that fall inside the last `dayCount` local days, with the index of
+ * the day each falls on.
+ */
 function rowsInRange(
   usage: AccountUsage[],
   dayCount: number,
   now: Date,
-): { entry: AccountUsage; row: UsageRow; day: string }[] {
-  const start = usageDays(dayCount, now)[0].getTime() / 1000;
-  return usage.flatMap((entry) =>
-    entry.rows
-      .filter((row) => row.slot >= start)
-      .map((row) => ({
-        entry,
-        row,
-        day: localDayKey(new Date(row.slot * 1000)),
-      })),
-  );
+): { entry: AccountUsage; row: UsageRow; day: number }[] {
+  const dates = usageDays(dayCount, now);
+  const last = dates[dates.length - 1];
+  // Local midnights in Unix seconds; a day can be 23 or 25 hours long.
+  const bounds = [
+    ...dates,
+    new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1),
+  ].map((date) => date.getTime() / 1000);
+  const end = bounds[bounds.length - 1];
+  const result: { entry: AccountUsage; row: UsageRow; day: number }[] = [];
+  for (const entry of usage) {
+    for (const row of entry.rows) {
+      if (row.slot < bounds[0] || row.slot >= end) continue;
+      let day = 0;
+      while (row.slot >= bounds[day + 1]) day += 1;
+      result.push({ entry, row, day });
+    }
+  }
+  return result;
 }
 
 export function summarizeUsage(
@@ -332,15 +406,13 @@ export function summarizeUsage(
     tokens: 0,
     cost: 0,
   }));
-  const byDay = new Map(days.map((day) => [localDayKey(day.date), day]));
   let input = 0;
   let cacheRead = 0;
   let cacheSavings = 0;
   const unpriced = new Set<string>();
 
   for (const { row, day } of rowsInRange(usage, dayCount, now)) {
-    const target = byDay.get(day);
-    if (!target) continue;
+    const target = days[day];
     const cost = rowCost(row, pricing);
     if (cost == null) unpriced.add(row.model);
     target.tokens += rowTokens(row);

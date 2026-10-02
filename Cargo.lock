@@ -2348,6 +2348,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "libc",
+ "memchr",
  "notify-rust",
  "objc2",
  "objc2-app-kit",

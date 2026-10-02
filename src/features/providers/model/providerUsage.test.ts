@@ -1,12 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderAccount } from "./providerAccounts";
 import {
   createUsagePricing,
+  lastProviderUsage,
+  loadProviderUsage,
+  resetProviderUsageCache,
   rowCost,
   summarizeUsage,
   usageBreakdown,
   usageRate,
   type AccountUsage,
+  type ModelPrice,
+  type UsageReport,
   type UsageRow,
 } from "./providerUsage";
 
@@ -211,5 +216,116 @@ describe("OpenRouter pricing", () => {
       pricing,
     );
     expect(summary.cost).toBeCloseTo(22);
+  });
+});
+
+describe("loading usage", () => {
+  afterEach(() => resetProviderUsageCache());
+
+  const report = (rows: UsageRow[]): UsageReport => ({
+    rows,
+    found: true,
+    filesScanned: 1,
+    filesParsed: 1,
+    bytesRead: 1,
+  });
+
+  it("shares a read already in flight and remembers its result", async () => {
+    let finish: (value: UsageReport) => void = () => {};
+    const fetch = vi.fn(
+      () => new Promise<UsageReport>((resolve) => (finish = resolve)),
+    );
+    const first = loadProviderUsage(personal, 1_000, fetch);
+    const second = loadProviderUsage(personal, 1_000, fetch);
+    expect(second).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(lastProviderUsage(personal, 1_000)).toBeNull();
+
+    const result = report([row(now)]);
+    finish(result);
+    await first;
+    expect(lastProviderUsage(personal, 1_000)).toBe(result);
+    // A new day's range is its own read.
+    expect(lastProviderUsage(personal, 2_000)).toBeNull();
+  });
+
+  it("starts a new read once the last one finished, or for another account", async () => {
+    const fetch = vi.fn(async () => report([]));
+    await loadProviderUsage(personal, 1_000, fetch);
+    await loadProviderUsage(personal, 1_000, fetch);
+    await loadProviderUsage(work, 1_000, fetch);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not remember a failed read", async () => {
+    const fetch = vi.fn(async () => {
+      throw new Error("unreadable");
+    });
+    await expect(loadProviderUsage(personal, 1_000, fetch)).rejects.toThrow();
+    expect(lastProviderUsage(personal, 1_000)).toBeNull();
+    await expect(loadProviderUsage(personal, 1_000, fetch)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("usage performance", () => {
+  // A month of heavy use: thousands of 15-minute buckets across many models,
+  // priced from a long OpenRouter list.
+  const prices: ModelPrice[] = Array.from({ length: 100 }, (_, index) => ({
+    id:
+      index % 2
+        ? `anthropic/claude-model-${index}.${index % 7}`
+        : `openai/gpt-${index}.${index % 5}`,
+    input: 0.000003,
+    output: 0.000015,
+    cacheRead: 0.0000003,
+  }));
+  const models = [
+    // Logged as Claude Code and Codex name them.
+    ...prices
+      .slice(0, 20)
+      .map((price) =>
+        price.id.startsWith("anthropic/")
+          ? price.id.slice("anthropic/".length).replace(/\./g, "-")
+          : price.id.slice("openai/".length),
+      ),
+    "claude-opus-5-5-20260901",
+    "gpt-5.5-codex",
+    "unknown-model",
+  ];
+  const usage: AccountUsage[] = [personal, work, codex].map(
+    (account, accountIndex) => ({
+      account,
+      rows: Array.from({ length: 1_000 }, (_, index) =>
+        row(new Date(now.getTime() - (index * 3 + accountIndex) * 15 * 60_000), {
+          model: models[(index + accountIndex) % models.length],
+          project: `/work/project-${index % 12}`,
+          input: 1_000 + index,
+          cacheRead: 10_000,
+          cacheWrite5m: 500,
+          output: 2_000,
+        }),
+      ),
+    }),
+  );
+
+  it("summarizes and breaks down 3,000 rows quickly", () => {
+    const label = (account: ProviderAccount) => account.label;
+    const measure = () => {
+      const pricing = createUsagePricing(prices);
+      const started = performance.now();
+      const summary = summarizeUsage(usage, 30, now, pricing);
+      for (const by of ["model", "project", "account"] as const) {
+        usageBreakdown(usage, 30, now, by, label, pricing);
+      }
+      return { summary, elapsed: performance.now() - started };
+    };
+    const runs = Array.from({ length: 5 }, measure);
+    expect(runs[0].summary.tokens).toBeGreaterThan(0);
+    expect(runs[0].summary.unpricedModels).toEqual(["unknown-model"]);
+    // The best run, so a garbage collection pause does not fail the test.
+    // Looking up each row's price in the whole list took ~300 ms here.
+    const best = Math.min(...runs.map((run) => run.elapsed));
+    expect(best).toBeLessThan(40);
   });
 });
