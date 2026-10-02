@@ -75,6 +75,7 @@ export const RATE_LIMIT_MIN_REFETCH_MS = 5 * 60_000;
 
 const WINDOW_DURATION_TOLERANCE_MINUTES = 1;
 
+/** Represent usage that has not been fetched, with no quota data or fetch timestamp. */
 export function idleRateLimits(
   provider: RateLimitProvider,
 ): ProviderRateLimits {
@@ -119,6 +120,10 @@ export function fetchingRateLimits(
   };
 }
 
+/**
+ * Record an unavailable result with no quota data and the current attempt time.
+ * Retaining an older snapshot, when appropriate, is the shared cache's responsibility.
+ */
 export function unavailableRateLimits(
   provider: RateLimitProvider,
   error: string,
