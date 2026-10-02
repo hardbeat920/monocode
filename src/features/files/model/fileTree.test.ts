@@ -186,6 +186,14 @@ describe("withoutSubtree", () => {
     expect([...withoutSubtree(expanded, src)]).toEqual([root, `${root}/docs`]);
   });
 
+  it("collapsing a folder yields the set its descendants would occupy", () => {
+    // What toggle() now stores: a collapse drops the subtree, so re-expanding
+    // starts from the folder alone instead of resurrecting stale children.
+    const expanded = new Set([root, src, `${src}/deep`]);
+
+    expect([...withoutSubtree(expanded, src)]).toEqual([root]);
+  });
+
   it("keeps a sibling whose name merely starts the same", () => {
     const sibling = `${root}/src-legacy`;
     const expanded = new Set([root, src, sibling]);
