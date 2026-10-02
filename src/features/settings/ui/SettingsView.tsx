@@ -3259,6 +3259,8 @@ type AccountEditor = {
 
 function ProviderAccountsSettings() {
   const [version, setVersion] = useState(0);
+  // Sign-in can switch the email or organization behind an existing profile.
+  const [signIns, setSignIns] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3330,6 +3332,7 @@ function ProviderAccountsSettings() {
         caught instanceof Error ? caught.message : "Could not complete sign-in",
       );
     } finally {
+      setSignIns((count) => count + 1);
       setWorking(null);
     }
   };
@@ -3372,7 +3375,7 @@ function ProviderAccountsSettings() {
 
   const identities = useProviderAccountIdentities(
     PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
-    version,
+    `${version}:${signIns}`,
   );
   const usage = useProviderAccountUsage(version);
 

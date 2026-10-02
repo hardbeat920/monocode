@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { loginHarness } from "../../../integrations/harness/core/auth";
 import { SettingsView } from "./SettingsView";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import {
@@ -19,6 +20,7 @@ import {
   clearCachedRateLimits,
   setCachedRateLimits,
 } from "../../providers/model/rateLimitsCache";
+import { unavailableRateLimits } from "../../providers/model/rateLimits";
 import {
   HARNESSES,
   HARNESS_TITLE,
@@ -36,6 +38,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+vi.mock("../../../integrations/harness/core/auth", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../integrations/harness/core/auth")
+  >()),
+  loginHarness: vi.fn(async () => undefined),
+}));
 vi.mock("../../../integrations/harness/core/availability", () => ({
   isHarnessAvailable: (id: string) => id === "claude" || id === "cursor",
   hasProbedHarnessAvailability: () => true,
@@ -100,6 +108,7 @@ beforeEach(() => {
   root = createRoot(container);
   onSelectSection = vi.fn();
   vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  vi.mocked(loginHarness).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -1050,5 +1059,163 @@ describe("providers scope inheritance", () => {
     expect(cursorToggle.closest(".settings-row")?.textContent).toContain(
       "Hidden globally",
     );
+  });
+});
+
+describe("provider account sign-in", () => {
+  type Identity = { email: string; organization: string };
+  type ClaudeUsage = { status: string; body?: string; error?: string };
+
+  const okUsage: ClaudeUsage = {
+    status: "ok",
+    body: JSON.stringify({
+      five_hour: { used_percentage: 10, resets_at: 1_738_425_600 },
+    }),
+  };
+  let identities: Record<string, Identity>;
+  let usage: ClaudeUsage;
+
+  beforeEach(() => {
+    identities = {
+      default: { email: "old@example.com", organization: "Old Org" },
+    };
+    usage = okUsage;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const { provider, accountId } = (args ?? {}) as {
+        provider?: string;
+        accountId?: string;
+      };
+      if (command === "provider_account_identity") {
+        return provider === "claude" ? (identities[accountId!] ?? null) : null;
+      }
+      if (command === "fetch_claude_usage") return usage;
+      return undefined;
+    });
+  });
+
+  function expire(accountId: string, error = "Claude sign-in expired") {
+    setCachedRateLimits(
+      "claude",
+      accountId,
+      unavailableRateLimits("claude", error),
+    );
+  }
+
+  function signInButton(label: string) {
+    return container.querySelector<HTMLButtonElement>(
+      `[aria-label="Sign in to ${label}"]`,
+    );
+  }
+
+  function alertText() {
+    return container.querySelector('[role="alert"]')?.textContent ?? null;
+  }
+
+  it("re-reads the account identity after signing in", async () => {
+    expire("default");
+    await render("providers");
+    expect(container.textContent).toContain("old@example.com");
+    expect(container.textContent).toContain("Old Org");
+
+    identities.default = {
+      email: "new@example.com",
+      organization: "New Org",
+    };
+    await act(async () => signInButton("Default account")!.click());
+
+    expect(container.textContent).toContain("new@example.com");
+    expect(container.textContent).toContain("New Org");
+    expect(container.textContent).not.toContain("old@example.com");
+    expect(container.textContent).not.toContain("Old Org");
+    expect(signInButton("Default account")).toBeNull();
+    expect(alertText()).toBeNull();
+  });
+
+  it("signs in to the selected profile", async () => {
+    saveProviderAccount({
+      id: "account-work",
+      provider: "claude",
+      label: "Work",
+    });
+    expire("account-work");
+    setCachedRateLimits("claude", "default", {
+      ...unavailableRateLimits("claude", ""),
+      status: "ok",
+      error: null,
+    });
+    await render("providers");
+
+    expect(signInButton("Default account")).toBeNull();
+    await act(async () => signInButton("Work")!.click());
+    expect(loginHarness).toHaveBeenCalledTimes(1);
+    expect(loginHarness).toHaveBeenCalledWith("claude", "account-work");
+    expect(invoke).toHaveBeenCalledWith("fetch_claude_usage", {
+      accountId: "account-work",
+    });
+
+    await act(async () => expire("default"));
+    await render("general");
+    await render("providers");
+    await act(async () => signInButton("Default account")!.click());
+    expect(vi.mocked(loginHarness).mock.calls[1]).toEqual(["claude"]);
+  });
+
+  it("disables account actions while a sign-in is pending", async () => {
+    let finish!: () => void;
+    vi.mocked(loginHarness).mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    expire("default");
+    await render("providers");
+
+    await act(async () => signInButton("Default account")!.click());
+    const pending = signInButton("Default account")!;
+    expect(pending.textContent).toBe("Signing in…");
+    expect(pending.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Rename Default account"]',
+      )!.disabled,
+    ).toBe(true);
+    await act(async () => pending.click());
+    expect(loginHarness).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    expect(signInButton("Default account")).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Rename Default account"]',
+      )!.disabled,
+    ).toBe(false);
+  });
+
+  it("reports a sign-in that usage cannot verify", async () => {
+    expire("default");
+    usage = { status: "unavailable", error: "Claude not signed in" };
+    await render("providers");
+
+    await act(async () => signInButton("Default account")!.click());
+    expect(alertText()).toBe("Claude not signed in");
+    expect(signInButton("Default account")?.textContent).toBe("Sign in");
+
+    vi.mocked(loginHarness).mockRejectedValueOnce(
+      new Error("Browser sign-in was cancelled"),
+    );
+    await act(async () => signInButton("Default account")!.click());
+    expect(alertText()).toBe("Browser sign-in was cancelled");
+
+    usage = { status: "error" };
+    await act(async () => signInButton("Default account")!.click());
+    expect(alertText()).toBe("Claude usage unavailable");
+  });
+
+  it("does not offer sign-in when the provider CLI is missing", async () => {
+    expire("default", "Claude CLI not found");
+    await render("providers");
+
+    expect(signInButton("Default account")).toBeNull();
+    expect(loginHarness).not.toHaveBeenCalled();
   });
 });
