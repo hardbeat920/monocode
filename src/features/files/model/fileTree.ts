@@ -6,6 +6,7 @@ const expandedByProject = new Map<string, Set<string>>();
 const selectedByProject = new Map<string, string | null>();
 const dirs = new Map<string, FsEntry[]>();
 const listeners = new Set<() => void>();
+const mountedRoots = new Set<string>();
 
 const REFRESH_MS = 150;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,9 +55,39 @@ export function forgetDir(path: string) {
   }
 }
 
-/** Re-list every cached folder. Agent writes and window focus use this. */
+/** Roots with an explorer on screen — only their listings stay worth keeping. */
+export function registerExplorer(cwd: string) {
+  mountedRoots.add(cwd);
+}
+
+export function unregisterExplorer(cwd: string) {
+  mountedRoots.delete(cwd);
+}
+
+/** Folders the mounted explorers can actually show right now. */
+function visibleDirs(): Set<string> {
+  const visible = new Set<string>();
+  for (const root of mountedRoots) {
+    visible.add(root);
+    for (const path of expandedByProject.get(root) ?? []) {
+      if (path === root || path.startsWith(`${root}/`)) visible.add(path);
+    }
+  }
+  return visible;
+}
+
+/**
+ * Re-list what the mounted explorers show, drop the rest.
+ *
+ * Agent writes and window focus use this. Collapsed subtrees and other projects
+ * are evicted; expanding them again re-lists on demand.
+ */
 export async function refreshCachedDirs(): Promise<void> {
-  const paths = [...dirs.keys()];
+  const visible = visibleDirs();
+  for (const path of [...dirs.keys()]) {
+    if (!visible.has(path)) dirs.delete(path);
+  }
+  const paths = [...visible].filter((path) => dirs.has(path));
   if (paths.length === 0) return;
   await Promise.all(
     paths.map((path) =>
@@ -107,7 +138,10 @@ async function runRefresh() {
 }
 
 /** Folder to create into, given the explorer selection. */
-export function createParentOf(cwd: string, selectedPath: string | null): string {
+export function createParentOf(
+  cwd: string,
+  selectedPath: string | null,
+): string {
   if (!selectedPath || selectedPath === cwd) return cwd;
   const parent = parentPath(selectedPath);
   const entry = peekDir(parent)?.find((e) => e.path === selectedPath);

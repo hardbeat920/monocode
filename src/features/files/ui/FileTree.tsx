@@ -41,9 +41,11 @@ import {
   notifyDirsChanged,
   peekDir,
   refreshDir,
+  registerExplorer,
   saveExpanded,
   saveSelected,
   subscribeDirsChanged,
+  unregisterExplorer,
 } from "../model/fileTree";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
@@ -806,6 +808,11 @@ export const FileTree = memo(function FileTree({
       cancelled = true;
       unlisten?.();
     };
+  }, [cwd]);
+
+  useEffect(() => {
+    registerExplorer(cwd);
+    return () => unregisterExplorer(cwd);
   }, [cwd]);
 
   useEffect(() => {
