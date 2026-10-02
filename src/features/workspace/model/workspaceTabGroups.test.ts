@@ -17,6 +17,8 @@ import {
   findOpenSessionTab,
   findTabForProject,
   openAddToChatSessionPane,
+  planBlankPaneReplacement,
+  planFocusOpenSession,
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
   switchSessionInTab,
@@ -121,6 +123,112 @@ describe("focusedWorkspaceTabCwd", () => {
       "/alpha",
     );
     expect(focusedWorkspaceTabCwd(mixed, [])).toBeNull();
+  });
+});
+
+function userTurn(entry: Session): Session {
+  return {
+    ...entry,
+    blocks: [{ id: "turn", role: "user", text: "hi" }],
+  };
+}
+
+describe("planFocusOpenSession", () => {
+  it("keeps a cross-project split in the title strip it is filed under", () => {
+    const split: WorkspaceTab = {
+      ...tab("split", "a"),
+      layout: splitPane(newTab("a").layout, "a", "right", "b"),
+    };
+    const sessions = [session("a", "/alpha"), session("b", "/beta")];
+
+    const plan = planFocusOpenSession([split], sessions, "b");
+
+    expect(plan).toEqual({ tabId: "split", projectCwd: "/alpha" });
+    expect(
+      filterTabsForProject([split], sessions, plan!.projectCwd!).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["split"]);
+  });
+
+  it("follows the project of a single-session tab", () => {
+    const sessions = [session("b", "/beta")];
+    expect(planFocusOpenSession([tab("t", "b")], sessions, "b")).toEqual({
+      tabId: "t",
+      projectCwd: "/beta",
+    });
+  });
+
+  it("does not plan a focus for a session that is not mounted", () => {
+    expect(planFocusOpenSession([tab("t", "b")], [], "b")).toBeUndefined();
+  });
+});
+
+describe("planBlankPaneReplacement", () => {
+  it("follows the session's project after filling a projectless blank pane", () => {
+    const sessions = [session("blank", "~")];
+    const opened = userTurn(session("b", "/beta"));
+
+    const plan = planBlankPaneReplacement({
+      tabs: [tab("home", "blank")],
+      sessions,
+      activeTabId: "home",
+      session: opened,
+    });
+
+    expect(plan).toEqual({
+      tabId: "home",
+      paneId: "blank",
+      projectCwd: "/beta",
+    });
+  });
+
+  it("fills a same-project blank pane and reports that project", () => {
+    const plan = planBlankPaneReplacement({
+      tabs: [tab("t", "blank")],
+      sessions: [session("blank", "/beta")],
+      activeTabId: "t",
+      session: userTurn(session("b", "/beta")),
+    });
+    expect(plan?.projectCwd).toBe("/beta");
+  });
+
+  it("refuses a blank pane that belongs to another project", () => {
+    expect(
+      planBlankPaneReplacement({
+        tabs: [tab("t", "blank")],
+        sessions: [session("blank", "/alpha")],
+        activeTabId: "t",
+        session: userTurn(session("b", "/beta")),
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a projectless blank pane in a split anchored to another project", () => {
+    const split: WorkspaceTab = {
+      ...tab("split", "a"),
+      layout: splitPane(newTab("a").layout, "a", "right", "blank"),
+      focusedId: "blank",
+    };
+    expect(
+      planBlankPaneReplacement({
+        tabs: [split],
+        sessions: [userTurn(session("a", "/alpha")), session("blank", "~")],
+        activeTabId: "split",
+        session: userTurn(session("b", "/beta")),
+      }),
+    ).toBeNull();
+  });
+
+  it("has nothing to replace when the active tab has no blank pane", () => {
+    expect(
+      planBlankPaneReplacement({
+        tabs: [tab("t", "a")],
+        sessions: [userTurn(session("a", "/alpha"))],
+        activeTabId: "t",
+        session: userTurn(session("b", "/alpha")),
+      }),
+    ).toBeNull();
   });
 });
 

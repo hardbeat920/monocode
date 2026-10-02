@@ -13,7 +13,11 @@ import {
   type WorkspaceTab,
 } from "./layout";
 import { projectName } from "../../../shared/lib/paths";
-import { sameProjectPath } from "../../projects/model/recents";
+import { isBlankSession } from "../../projects/model/projectReturn";
+import {
+  looksLikeProject,
+  sameProjectPath,
+} from "../../projects/model/recents";
 import type { Session } from "../../sessions/model/session";
 
 export function workspaceTabCwd(
@@ -72,6 +76,86 @@ export function findOpenSessionTab(
 ): WorkspaceTab | undefined {
   if (!sessions.some((session) => session.id === sessionId)) return undefined;
   return tabs.find((tab) => leafIds(tab.layout).includes(sessionId));
+}
+
+/**
+ * Reveal an open session. The project to follow is the one the title strip
+ * files the tab under (`filterTabsForProject`), not the focused pane's: in a
+ * split across projects, following the focused pane would hide the tab it
+ * just activated.
+ */
+export function planFocusOpenSession(
+  tabs: readonly WorkspaceTab[],
+  sessions: readonly Pick<Session, "id" | "cwd">[],
+  sessionId: string,
+): { tabId: string; projectCwd: string | null } | undefined {
+  const tab = findOpenSessionTab(tabs, sessions, sessionId);
+  if (!tab) return undefined;
+  return {
+    tabId: tab.id,
+    projectCwd: workspaceTabCwd({ ...tab, focusedId: sessionId }, sessions),
+  };
+}
+
+/**
+ * Put `session` into a blank pane of the active tab (or the first tab) when
+ * that keeps the tab in the session's project. `projectCwd` is the project the
+ * tab files under afterwards, so the caller can follow it.
+ */
+export function planBlankPaneReplacement({
+  tabs,
+  sessions,
+  activeTabId,
+  session,
+}: {
+  tabs: readonly WorkspaceTab[];
+  sessions: readonly Session[];
+  activeTabId: string;
+  session: Session;
+}):
+  | { tabId: string; paneId: string; projectCwd: string | null }
+  | null {
+  const tab = tabs.find((entry) => entry.id === activeTabId) ?? tabs[0];
+  if (!tab) return null;
+
+  const find = (id: string) => sessions.find((entry) => entry.id === id);
+  const paneId = isBlankSession(find(tab.focusedId))
+    ? tab.focusedId
+    : leafIds(tab.layout).find((id) => isBlankSession(find(id)));
+  if (!paneId || paneId === session.id) return null;
+
+  // A blank pane belongs to its own project; a session from another one
+  // gets its own tab in that project instead.
+  const blankCwd = find(paneId)?.cwd;
+  if (
+    blankCwd &&
+    looksLikeProject(blankCwd) &&
+    !sameProjectPath(blankCwd, session.cwd)
+  )
+    return null;
+
+  const next: WorkspaceTab = {
+    ...tab,
+    layout: replaceLeafId(tab.layout, paneId, session.id),
+    focusedId: session.id,
+  };
+  const nextSessions = [
+    ...sessions.filter(
+      (entry) => entry.id !== paneId && entry.id !== session.id,
+    ),
+    session,
+  ];
+  const projectCwd = workspaceTabCwd(next, nextSessions);
+  // A projectless blank pane can sit in a split anchored to another project;
+  // filling it there would file the session under the wrong project.
+  if (
+    looksLikeProject(session.cwd) &&
+    projectCwd &&
+    !sameProjectPath(projectCwd, session.cwd)
+  )
+    return null;
+
+  return { tabId: tab.id, paneId, projectCwd };
 }
 
 /** Show another session in the focused pane without changing the active tab. */
