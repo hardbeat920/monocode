@@ -134,7 +134,14 @@ export async function fetchCodexRateLimits(
       accountId,
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
+    if (
+      parsed.session ||
+      parsed.weekly ||
+      parsed.monthly ||
+      parsed.resetCredits ||
+      parsed.windows?.length ||
+      parsed.credits?.length
+    ) {
       return parsed;
     }
     const rec = asRecord(result);

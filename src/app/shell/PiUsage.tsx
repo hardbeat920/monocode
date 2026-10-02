@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { RefreshCw } from "../../shared/ui/icons";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import {
-  fetchPiUsage,
-  piBillingProvider,
   piUsageProvider,
   type PiUsageProvider,
 } from "../../features/providers/model/piUsage";
@@ -12,6 +10,10 @@ import {
   RATE_LIMIT_MIN_REFETCH_MS,
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
+import {
+  loadRateLimits,
+  useCachedRateLimits,
+} from "../../features/providers/model/rateLimitsCache";
 import { UsageProviderChip } from "./UsageProviderChip";
 
 export function PiUsage({ model, now }: { model?: string; now: number }) {
@@ -41,9 +43,8 @@ function PiProviderUsage({
   provider: PiUsageProvider;
   now: number;
 }) {
-  const [limits, setLimits] = useState(() =>
-    idleRateLimits(piBillingProvider(provider)),
-  );
+  const source = `pi:${provider}` as const;
+  const limits = useCachedRateLimits(source);
   const refreshRef = useRef<(force?: boolean) => void>(() => undefined);
   useEffect(() => {
     let disposed = false;
@@ -58,18 +59,14 @@ function PiProviderUsage({
       )
         return;
       inflight = true;
-      setLimits({
-        ...idleRateLimits(piBillingProvider(provider)),
-        status: "fetching",
+      void loadRateLimits(
+        source,
+        "default",
+        force ? true : "throttled",
+      ).finally(() => {
+        inflight = false;
+        lastFetchAt = Date.now();
       });
-      void fetchPiUsage(provider)
-        .then((result) => {
-          if (!disposed) setLimits(result);
-        })
-        .finally(() => {
-          inflight = false;
-          lastFetchAt = Date.now();
-        });
     };
     refreshRef.current = refresh;
     refresh();
@@ -83,12 +80,20 @@ function PiProviderUsage({
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [provider]);
+  }, [source]);
   const fetching = limits.status === "fetching";
   return (
     <>
       <UsageProviderChip
-        limits={limits}
+        limits={
+          limits.status === "error" || limits.status === "unavailable"
+            ? {
+                ...idleRateLimits(limits.provider),
+                status: limits.status,
+                error: limits.error,
+              }
+            : limits
+        }
         now={now}
         presentation={{
           sourceLabel: "Pi's saved OAuth account",

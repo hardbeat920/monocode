@@ -328,3 +328,126 @@ describe("rateLimitWindowTooltip", () => {
     ).toBe("42% used · Resets in 2h 33m");
   });
 });
+
+it("preserves Claude's additional weekly/model windows and native extra usage without raw data", () => {
+  const limits = parseClaudeOAuthUsage(
+    JSON.stringify({
+      seven_day_sonnet: {
+        utilization: 0,
+        resets_at: "2026-10-09T12:00:00Z",
+        token: "secret",
+      },
+      seven_day_opus: { utilization: 92, resets_at: null },
+      seven_day_oauth_apps: { utilization: 13 },
+      extra_usage: {
+        is_enabled: true,
+        monthly_limit: null,
+        used_credits: 123.5,
+        utilization: null,
+        currency: "USD",
+        token: "secret",
+      },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          scope: { model: { display_name: "Fable" }, token: "secret" },
+          percent: 47,
+          resets_at: "2026-10-08T12:00:00Z",
+        },
+      ],
+      unknown: { token: "secret" },
+    }),
+  );
+  expect(limits.windows).toEqual([
+    {
+      id: "seven_day_opus",
+      scope: "opus",
+      usedPercent: 92,
+      windowMinutes: 10080,
+      resetsAt: null,
+    },
+    {
+      id: "seven_day_sonnet",
+      scope: "sonnet",
+      usedPercent: 0,
+      windowMinutes: 10080,
+      resetsAt: Date.parse("2026-10-09T12:00:00Z"),
+    },
+    {
+      id: "seven_day_oauth_apps",
+      scope: "oauth_apps",
+      usedPercent: 13,
+      windowMinutes: 10080,
+      resetsAt: null,
+    },
+    {
+      id: "weekly_scoped",
+      scope: "Fable",
+      usedPercent: 47,
+      windowMinutes: 10080,
+      resetsAt: Date.parse("2026-10-08T12:00:00Z"),
+    },
+  ]);
+  expect(limits.extraUsage).toEqual({
+    enabled: true,
+    monthlyLimit: null,
+    usedCredits: 123.5,
+    usedPercent: null,
+    currency: "USD",
+  });
+  expect(JSON.stringify(limits)).not.toContain("secret");
+});
+
+it("preserves Codex named buckets, actual durations, unknown duration and credits", () => {
+  const primary = {
+    usedPercent: 30,
+    windowDurationMins: 120,
+    resetsAt: 1790942400,
+  };
+  const limits = parseCodexRateLimits({
+    rateLimits: { limitId: "codex", primary },
+    rateLimitsByLimitId: {
+      codex: {
+        primary,
+        secondary: { usedPercent: 5, windowDurationMins: 43200 },
+      },
+      "gpt-model": {
+        primary: { usedPercent: 100 },
+        credits: {
+          balance: "2.50",
+          unlimited: false,
+          hasCredits: true,
+          token: "secret",
+        },
+      },
+    },
+  });
+  expect(limits.windows).toEqual([
+    {
+      id: "primary",
+      scope: "codex",
+      usedPercent: 30,
+      windowMinutes: 120,
+      resetsAt: 1790942400000,
+    },
+    {
+      id: "secondary",
+      scope: "codex",
+      usedPercent: 5,
+      windowMinutes: 43200,
+      resetsAt: null,
+    },
+    {
+      id: "primary",
+      scope: "gpt-model",
+      usedPercent: 100,
+      windowMinutes: null,
+      resetsAt: null,
+    },
+  ]);
+  expect(limits.session?.windowMinutes).toBe(120);
+  expect(limits.credits).toEqual([
+    { scope: "gpt-model", balance: 2.5, unlimited: false, hasCredits: true },
+  ]);
+  expect(JSON.stringify(limits)).not.toContain("secret");
+});

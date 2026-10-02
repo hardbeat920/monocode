@@ -30,7 +30,32 @@ export type RateLimitResetCredits = {
   credits: RateLimitResetCredit[] | null;
 };
 
+/** Complete provider windows; the three legacy slots remain the footer view. */
+export type QuotaWindow = {
+  id: string;
+  scope: string;
+  usedPercent: number;
+  windowMinutes: number | null;
+  resetsAt: number | null;
+};
+
 export type ProviderRateLimits = {
+  windows?: QuotaWindow[];
+  extraUsage?: {
+    enabled: boolean | null;
+    monthlyLimit: number | null;
+    usedCredits: number | null;
+    usedPercent: number | null;
+    currency: string | null;
+  } | null;
+  credits?: {
+    scope: string;
+    hasCredits: boolean | null;
+    unlimited: boolean | null;
+    balance: number | null;
+  }[];
+  /** Last successful snapshot time, distinct from a failed attempt's updatedAt. */
+  fetchedAt?: number | null;
   provider: RateLimitProvider;
   session: RateLimitWindow | null;
   weekly: RateLimitWindow | null;
@@ -74,7 +99,10 @@ export function fetchingRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.windows?.length ||
+      previous.extraUsage ||
+      previous.credits?.length)
   ) {
     return { ...previous, status: "fetching" };
   }
@@ -116,7 +144,10 @@ export function errorRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.windows?.length ||
+      previous.extraUsage ||
+      previous.credits?.length)
   ) {
     return {
       ...previous,
@@ -284,7 +315,51 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   if (!rec) {
     return errorRateLimits("claude", "Claude usage response was empty");
   }
+  const windows: QuotaWindow[] = [];
+  for (const [id, scope, minutes] of [
+    ["five_hour", "account", SESSION_WINDOW_MINUTES],
+    ["seven_day", "account", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_opus", "opus", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_sonnet", "sonnet", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_oauth_apps", "oauth_apps", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_cowork", "cowork", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_overage_included", "overage_included", WEEKLY_WINDOW_MINUTES],
+  ] as const) {
+    const window = mapUsageWindow(rec[id], minutes);
+    if (window) windows.push({ id, scope, ...window });
+  }
+  // Newer Claude responses put per-model weekly buckets in limits[]. Keep
+  // only the known usage fields and the model label, never the raw scope.
+  if (Array.isArray(rec.limits)) {
+    for (const raw of rec.limits) {
+      const limit = asRecord(raw);
+      const model = asRecord(asRecord(limit?.scope)?.model);
+      const scope = model && stringField(model, "display_name");
+      if (limit?.kind !== "weekly_scoped" || !scope) continue;
+      const window = mapUsageWindow(
+        { utilization: limit.percent, resets_at: limit.resets_at },
+        WEEKLY_WINDOW_MINUTES,
+      );
+      if (window) windows.push({ id: "weekly_scoped", scope, ...window });
+    }
+  }
+  const extra = asRecord(rec.extra_usage);
   return {
+    windows,
+    extraUsage: extra
+      ? {
+          enabled:
+            typeof extra.is_enabled === "boolean" ? extra.is_enabled : null,
+          monthlyLimit: numberField(extra, "monthly_limit"),
+          usedCredits: numberField(extra, "used_credits"),
+          usedPercent: numberField(extra, "utilization"),
+          currency:
+            typeof extra.currency === "string" &&
+            /^[A-Z]{3}$/.test(extra.currency)
+              ? extra.currency
+              : null,
+        }
+      : null,
     provider: "claude",
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
@@ -309,7 +384,46 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     primary: snapshotFrom(asRecord(wrapper?.primary)),
     secondary: snapshotFrom(asRecord(wrapper?.secondary)),
   });
+  // app-server's single bucket is a compatibility view. Keep every named
+  // bucket, including model-specific quotas and nonstandard window durations.
+  const buckets = asRecord(rec?.rateLimitsByLimitId);
+  const entries = buckets
+    ? Object.entries(buckets).filter(([, value]) => asRecord(value))
+    : [];
+  const defaultScope = stringField(wrapper ?? {}, "limitId") ?? "account";
+  if (wrapper && !entries.some(([id]) => id === defaultScope)) {
+    entries.unshift([defaultScope, wrapper]);
+  }
+  const windows: QuotaWindow[] = [];
+  const credits: NonNullable<ProviderRateLimits["credits"]> = [];
+  for (const [scope, value] of entries) {
+    const bucket = asRecord(value);
+    if (!bucket) continue;
+    for (const id of ["primary", "secondary"] as const) {
+      const window = snapshotFrom(asRecord(bucket[id]));
+      if (window)
+        windows.push({
+          id,
+          scope,
+          usedPercent: clampUsedPercent(window.usedPercent),
+          windowMinutes: window.windowDurationMins,
+          resetsAt: parseResetTimestamp(window.resetsAt),
+        });
+    }
+    const credit = asRecord(bucket.credits);
+    if (credit)
+      credits.push({
+        scope,
+        hasCredits:
+          typeof credit.hasCredits === "boolean" ? credit.hasCredits : null,
+        unlimited:
+          typeof credit.unlimited === "boolean" ? credit.unlimited : null,
+        balance: numberField(credit, "balance"),
+      });
+  }
   return {
+    windows,
+    credits,
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
@@ -494,7 +608,7 @@ function mapCodexSnapshot(
   if (!raw) return null;
   return {
     usedPercent: clampUsedPercent(raw.usedPercent),
-    windowMinutes,
+    windowMinutes: raw.windowDurationMins ?? windowMinutes,
     resetsAt: parseResetTimestamp(raw.resetsAt),
   };
 }

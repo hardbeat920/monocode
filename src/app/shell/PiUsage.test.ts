@@ -4,6 +4,10 @@ import { RATE_LIMIT_POLL_MS } from "../../features/providers/model/rateLimits";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  clearCachedRateLimits,
+  getCachedRateLimits,
+} from "../../features/providers/model/rateLimitsCache";
 import { UsageFooter } from "./UsageFooter";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -18,6 +22,7 @@ const quota = (percent: number) => ({
 });
 
 beforeEach(() => {
+  clearCachedRateLimits();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -115,12 +120,17 @@ it("clears quotas on failed refresh and can recover after a Pi login", async () 
   expect(refresh()).not.toBeNull();
   await act(async () => refresh()?.click());
   expect(container.textContent).not.toContain("24%");
+  // The UI still hides failed quotas; the operator can inspect the stale copy.
+  expect(getCachedRateLimits("pi:anthropic")).toMatchObject({
+    status: "unavailable",
+    session: { usedPercent: 24 },
+  });
   vi.mocked(invoke).mockResolvedValueOnce(quota(12));
   await act(async () => refresh()?.click());
   expect(container.textContent).toContain("12%");
 });
 
-it("isolates A to B to A and same-provider session changes", async () => {
+it("shares account snapshots across A to B to A and same-provider session changes", async () => {
   let finishOld: ((value: unknown) => void) | undefined;
   vi.mocked(invoke).mockImplementationOnce(
     () =>
@@ -130,18 +140,16 @@ it("isolates A to B to A and same-provider session changes", async () => {
   );
   await show("pi:anthropic/claude", "a");
   await show("pi:openai-codex/gpt", "b");
-  vi.mocked(invoke).mockResolvedValueOnce(quota(17));
   await show("pi:anthropic/claude", "a");
   await act(async () => finishOld?.(quota(99)));
-  expect(container.textContent).toContain("17%");
-  expect(container.textContent).not.toContain("99%");
-  vi.mocked(invoke).mockResolvedValueOnce(quota(8));
+  expect(container.textContent).toContain("99%");
   await show("pi:anthropic/claude", "c");
-  expect(container.textContent).toContain("8%");
-  expect(invoke).toHaveBeenCalledTimes(4);
+  expect(container.textContent).toContain("99%");
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(getCachedRateLimits("pi:anthropic").session?.usedPercent).toBe(99);
 });
 
-it("ignores a disposed Strict Mode request without blocking its replacement", async () => {
+it("joins the same account request when Strict Mode remounts", async () => {
   let finishOld: ((value: unknown) => void) | undefined;
   vi.mocked(invoke).mockImplementationOnce(
     () =>
@@ -165,10 +173,10 @@ it("ignores a disposed Strict Mode request without blocking its replacement", as
       ),
     ),
   );
-  expect(container.textContent).toContain("24%");
+  expect(invoke).toHaveBeenCalledTimes(1);
   await act(async () => finishOld?.(quota(99)));
-  expect(container.textContent).not.toContain("99%");
-  expect(container.textContent).toContain("24%");
+  expect(container.textContent).toContain("99%");
+  expect(invoke).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes on native window focus after the minimum interval", async () => {
