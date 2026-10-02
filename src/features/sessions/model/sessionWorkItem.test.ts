@@ -453,6 +453,49 @@ describe("session work items", () => {
     ).toBe(true);
   });
 
+  it("rejects a Linear link whose URL is not an issue page", () => {
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "SW-29",
+        url: "https://linear.app/settings",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeLinkedWorkItem({
+        kind: "linear",
+        identifier: "SW-29",
+        url: "https://linear.app/acme/project/roadmap",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a GitHub hint whose number also stands alone when Linear lookups fail", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "linear_status") return { connected: true };
+      if (command === "linear_list_teams") throw new Error("offline");
+      if (command === "linear_issue_lookup") throw new Error("not found");
+      if (command === "git_github_repo") return "acme/app";
+      throw new Error(`Unexpected command: ${String(command)}`);
+    });
+
+    await expect(
+      resolveLinkedWorkItem(
+        "Fix GitHub #8: handle UTF-8 decoding",
+        "/tmp/app",
+        {
+          kind: "issue",
+          number: 8,
+        },
+      ),
+    ).resolves.toEqual({
+      kind: "issue",
+      repo: "acme/app",
+      number: 8,
+      url: "https://github.com/acme/app/issues/8",
+    });
+  });
+
   it("rejects a persisted Linear link whose identifier disagrees with its URL", () => {
     expect(
       normalizeLinkedWorkItem({

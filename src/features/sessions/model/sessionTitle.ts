@@ -65,7 +65,7 @@ export function sanitizeThreadTitle(raw: string): string {
 }
 
 /** True when the number stands alone somewhere, not only as the tail of a ticket key such as `SW-29`. */
-function referencedNumber(message: string, number: number): boolean {
+export function numberStandsAlone(message: string, number: number): boolean {
   const occurrences = new RegExp(`(^|\\D)${number}(?=\\D|$)`, "g");
   for (const match of message.matchAll(occurrences)) {
     const before = message.slice(0, match.index + match[1].length);
@@ -99,7 +99,7 @@ export function parseGeneratedSessionTitle(
             typeof number === "number" &&
             Number.isSafeInteger(number) &&
             number > 0 &&
-            referencedNumber(message, number)
+            numberStandsAlone(message, number)
               ? { kind, number }
               : null;
           return { title, workItem: validWorkItem };

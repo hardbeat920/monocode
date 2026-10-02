@@ -15,7 +15,7 @@ import type {
   LinearLinkedWorkItem,
   LinkedWorkItem,
 } from "./session";
-import type { GeneratedWorkItemHint } from "./sessionTitle";
+import { numberStandsAlone, type GeneratedWorkItemHint } from "./sessionTitle";
 
 const GITHUB_URL_RE =
   /https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)\b/i;
@@ -110,10 +110,11 @@ export function normalizeLinkedWorkItem(
       typeof item.identifier === "string" ? item.identifier : "",
     );
     const url = typeof item.url === "string" ? item.url.trim() : "";
-    if (!parsed || !/^https:\/\/linear\.app\//.test(url)) return undefined;
     // The badge shows the identifier and the URL opens the issue; they must agree.
     const fromUrl = parseLinearWorkItemUrl(url);
-    if (fromUrl && fromUrl.identifier !== parsed.identifier) return undefined;
+    if (!parsed || !fromUrl || fromUrl.identifier !== parsed.identifier) {
+      return undefined;
+    }
     const id = typeof item.id === "string" ? item.id.trim() : "";
     return {
       kind,
@@ -300,10 +301,13 @@ export async function resolveLinkedWorkItem(
   }
 
   // A ticket key such as `SW-29` is the usual source of an invented GitHub
-  // issue number, so a model guess that repeats a ticket number is dropped.
+  // issue number. A model guess that only repeats a ticket number is dropped;
+  // a number that also stands alone in the message, such as "#8", is kept.
   const hint =
     explicit ??
-    (generatedHint && !ticketNumbersSeen.has(generatedHint.number)
+    (generatedHint &&
+    (!ticketNumbersSeen.has(generatedHint.number) ||
+      numberStandsAlone(message, generatedHint.number))
       ? generatedHint
       : null);
   if (!hint || !validNumber(hint.number)) return null;
