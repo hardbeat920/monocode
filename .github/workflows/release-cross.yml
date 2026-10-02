@@ -1,0 +1,84 @@
+name: Cross release (fork)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-opencrabs.*"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: bash scripts/install-linux-deps-debian.sh
+
+      - run: npm ci
+
+      - name: Build Linux packages
+        run: |
+          set -euo pipefail
+          printf '%s\n' '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.fork.conf.json"
+          npm run build:linux -- --config "$RUNNER_TEMP/tauri.fork.conf.json"
+
+      - name: Stage Linux packages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-artifacts
+          cp target/release/bundle/deb/*.deb release-artifacts/
+          cp target/release/bundle/appimage/*.AppImage release-artifacts/
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
+
+  windows:
+    name: Windows packages
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\tauri.fork.conf.json"
+          npx tauri build --bundles nsis --config "$env:RUNNER_TEMP\tauri.fork.conf.json"
+
+      - name: Stage Windows packages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "release-artifacts" | Out-Null
+          Copy-Item "target/release/bundle/nsis/*.exe" "release-artifacts/"
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: release-artifacts/
+          if-no-files-found: error
