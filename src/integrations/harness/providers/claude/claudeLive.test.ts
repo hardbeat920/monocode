@@ -105,9 +105,43 @@ async function startTurn(
   return { events, turn };
 }
 
+/**
+ * One assistant message reporting the window occupancy of the request behind it.
+ *
+ * Shape captured from `claude --output-format stream-json --verbose`.
+ */
+function reading(cacheRead: number) {
+  return {
+    type: "assistant",
+    session_id: "sess_1",
+    message: {
+      content: [{ type: "text", text: "still working" }],
+      usage: { input_tokens: 5, cache_read_input_tokens: cacheRead, output_tokens: 2 },
+    },
+  };
+}
+
+/** A turn result whose last iteration is the request the meter should read. */
+function resultReading(cacheRead: number, contextWindow: number) {
+  const usage = {
+    input_tokens: 5,
+    cache_read_input_tokens: cacheRead,
+    output_tokens: 2,
+  };
+  return {
+    type: "result",
+    subtype: "success",
+    session_id: "sess_1",
+    usage: { ...usage, iterations: [{ type: "message", ...usage }] },
+    modelUsage: { "claude-sonnet-5": { contextWindow } },
+  };
+}
+
+const readingEvents = (events: HarnessEvent[]) =>
+  events.filter((event) => event.type === "context");
+
 /** What Claude streams when a finished task wakes it for another turn. */
-function emitFollowUpTurn(text: string) {
-  emit({ type: "system", subtype: "init", session_id: "sess_1" });
+function emitFollowUpTurn(text: string) {  emit({ type: "system", subtype: "init", session_id: "sess_1" });
   emit({
     type: "stream_event",
     session_id: "sess_1",
@@ -1973,5 +2007,127 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+
+  it("retires the level the summary replaced", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({ type: "system", subtype: "compact_boundary", session_id: "sess_1" });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await compact;
+
+    // Nothing sizes the rebuilt conversation, so the ring is told to stop
+    // showing the height it was at before the summary.
+    expect(events).toContainEqual({ type: "context", compacted: true });
+    expect(
+      events.filter((event) => event.type === "context" && event.used != null),
+    ).toEqual([]);
+  });
+
+  it("still fails a compaction the CLI never confirmed", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await expect(compact).rejects.toThrow(
+      "did not confirm context compaction",
+    );
+  });
+});
+
+describe("claude auto compaction", () => {
+  it("retires the level when the summary ends the turn", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit(reading(190_000));
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto", pre_tokens: 190_007 },
+    });
+    // The turn's last main-loop request was made against the conversation the
+    // summary then replaced, so its result is not a reading of the window.
+    emit(resultReading(190_007, 200_000));
+    await turn;
+
+    expect(readingEvents(events)).toEqual([
+      { type: "context", used: 190_007 },
+      { type: "context", compacted: true },
+      // The window still holds: a summary does not change the model.
+      { type: "context", window: 200_000 },
+    ]);
+  });
+
+  it("trusts a request the summary was followed by", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit(reading(190_000));
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto", pre_tokens: 190_007 },
+    });
+    emit(reading(24_000));
+    emit(resultReading(24_000, 200_000));
+    await turn;
+
+    expect(readingEvents(events)).toEqual([
+      { type: "context", used: 190_007 },
+      { type: "context", compacted: true },
+      { type: "context", used: 24_007 },
+      { type: "context", used: 24_007, window: 200_000 },
+    ]);
+  });
+
+  it("does not carry the distrust into the next turn", async () => {
+    const { turn } = await startTurn("s1");
+    emit(reading(190_000));
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto", pre_tokens: 190_007 },
+    });
+    emit(resultReading(190_007, 200_000));
+    await turn;
+
+    const next = await startTurn("s1");
+    emit(reading(31_000));
+    emit(resultReading(31_000, 200_000));
+    await next.turn;
+
+    expect(readingEvents(next.events)).toEqual([
+      { type: "context", used: 31_007 },
+      { type: "context", used: 31_007, window: 200_000 },
+    ]);
   });
 });

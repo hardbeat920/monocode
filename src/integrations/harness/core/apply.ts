@@ -7,7 +7,10 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../../../features/sessions/model/session";
-import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import {
+  markCompacted,
+  mergeContextUsage,
+} from "../../../features/sessions/model/contextUsage";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -133,10 +136,18 @@ export function applyHarnessEvent(
     case "context":
       return {
         ...session,
-        context: mergeContextUsage(session.context, {
-          used: event.used,
-          window: event.window,
-        }),
+        // A boundary carries no level of its own, so take the window it may
+        // report and mark the held level stale rather than publish a number
+        // nobody sent. The window is still the active model's, so it is worth
+        // learning across the boundary.
+        context: event.compacted
+          ? markCompacted(
+              mergeContextUsage(session.context, { window: event.window }),
+            )
+          : mergeContextUsage(session.context, {
+              used: event.used,
+              window: event.window,
+            }),
       };
     case "turn.metrics":
       return mergeTurnMetrics(session, event);

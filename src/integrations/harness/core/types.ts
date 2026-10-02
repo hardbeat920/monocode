@@ -147,8 +147,16 @@ export type HarnessEvent =
       /** False marks the plan ready for review. */
       streaming?: boolean;
     }
-  /** Context-window level after the harness's latest request. */
-  | { type: "context"; used?: number; window?: number }
+  /**
+   * Context-window level after the harness's latest request.
+   *
+   * `compacted` marks a compaction boundary rather than a measurement: the
+   * harness has rebuilt the conversation and has not sized the result yet, so
+   * whatever level is held describes the one that was replaced. Send it with
+   * `window` to keep learning the denominator across the boundary. The next
+   * event carrying `used` clears it.
+   */
+  | { type: "context"; used?: number; window?: number; compacted?: boolean }
   /** Provider token accounting for the active user turn. */
   | ({ type: "turn.metrics" } & TurnMetrics);
 

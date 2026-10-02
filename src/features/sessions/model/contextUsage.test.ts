@@ -5,6 +5,7 @@ import {
   contextTooltip,
   dropContextWindow,
   formatTokens,
+  markCompacted,
   mergeContextUsage,
 } from "./contextUsage";
 
@@ -25,6 +26,12 @@ describe("contextRatio", () => {
   it("rejects nonsense readings", () => {
     expect(contextRatio({ used: -5, window: 100 })).toBeNull();
     expect(contextRatio({ used: 10, window: 0 })).toBeNull();
+  });
+
+  it("has no ratio while a compaction leaves the level unverified", () => {
+    expect(
+      contextRatio({ used: 190_000, window: 200_000, compacted: true }),
+    ).toBeNull();
   });
 });
 
@@ -61,6 +68,21 @@ describe("contextTooltip", () => {
     expect(contextTooltip({ used: 176_000 })).toEqual({
       headline: "Context used",
       detail: "176K tokens",
+    });
+  });
+
+  it("reports the compaction instead of a level it cannot vouch for", () => {
+    expect(
+      contextTooltip({ used: 190_000, window: 200_000, compacted: true }),
+    ).toEqual({
+      headline: "Context compacted",
+      detail: "Rebuilt inside a 200K token window",
+    });
+    expect(
+      contextTooltip({ used: 190_000, compacted: true }),
+    ).toEqual({
+      headline: "Context compacted",
+      detail: "Rebuilt, measuring again on the next turn",
     });
   });
 });
@@ -102,6 +124,53 @@ describe("mergeContextUsage", () => {
       window: 200_000,
     });
   });
+
+  it("keeps the stale marker through a window-only reading", () => {
+    // Claude sends the window at a compaction boundary, where the level that
+    // accompanies it is the one the compaction replaced. Rebuilding the object
+    // here would quietly un-mark it and put the old height back on the ring.
+    const marked = markCompacted({ used: 190_000, window: 200_000 });
+    expect(marked).toEqual({
+      used: 190_000,
+      window: 200_000,
+      compacted: true,
+    });
+    expect(mergeContextUsage(marked, { window: 200_000 })).toEqual({
+      used: 190_000,
+      window: 200_000,
+      compacted: true,
+    });
+  });
+
+  it("clears the stale marker on a reading that carries a level", () => {
+    const marked = markCompacted({ used: 190_000, window: 200_000 });
+    expect(mergeContextUsage(marked, { used: 40_000 })).toEqual({
+      used: 40_000,
+      window: 200_000,
+    });
+  });
+
+  it("clears the stale marker even when the new level is zero", () => {
+    const marked = markCompacted({ used: 190_000, window: 200_000 });
+    expect(mergeContextUsage(marked, { used: 0, window: 200_000 })).toEqual({
+      used: 0,
+      window: 200_000,
+    });
+  });
+});
+
+describe("markCompacted", () => {
+  it("keeps the level the compaction replaced", () => {
+    expect(markCompacted({ used: 190_000, window: 200_000 })).toEqual({
+      used: 190_000,
+      window: 200_000,
+      compacted: true,
+    });
+  });
+
+  it("has nothing to mark without a reading", () => {
+    expect(markCompacted(undefined)).toBeUndefined();
+  });
 });
 
 describe("dropContextWindow", () => {
@@ -117,5 +186,13 @@ describe("dropContextWindow", () => {
 
   it("leaves the ring hidden until the next turn re-reports", () => {
     expect(contextRatio(dropContextWindow({ used: 30_000, window: 200_000 }))).toBeNull();
+  });
+
+  it("carries the stale marker across a model switch", () => {
+    // The marker describes the level rather than the model, so a new model does
+    // not vouch for the reading the last one left behind.
+    expect(
+      dropContextWindow({ used: 190_000, window: 200_000, compacted: true }),
+    ).toEqual({ used: 190_000, compacted: true });
   });
 });

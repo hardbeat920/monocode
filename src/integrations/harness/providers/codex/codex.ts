@@ -717,6 +717,10 @@ async function runCompaction(live: Live): Promise<void> {
     });
     settlePendingTurn(live);
     await turnPromise;
+    // Nothing reports the rebuilt level until the next turn's token count, and
+    // the one we hold describes the thread as it was before the summary. Say so
+    // rather than leaving the ring pinned at its pre-compaction height.
+    live.onEvent({ type: "context", compacted: true });
   } finally {
     live.turnDone = null;
     live.turnFailed = null;

@@ -3,19 +3,32 @@
  *
  * This is a level, not a running total: every harness reports the size of the
  * prompt it just sent, so the newest reading replaces the previous one. That
- * keeps compaction free — once the harness compacts, its next report is simply
- * smaller.
+ * keeps compaction cheap — once the harness compacts, its next report is simply
+ * smaller. It does mean nothing reports the level *at* the boundary, though,
+ * so the last reading before a compaction describes a conversation that no
+ * longer exists. `compacted` marks that window in which we hold a number we
+ * cannot vouch for, until a real measurement replaces it.
  */
 export type ContextUsage = {
   /** Tokens in the context window as of the last request. */
   used: number;
   /** Context window for the active model, when the harness reports one. */
   window?: number;
+  /**
+   * The harness compacted and has not measured the window since.
+   *
+   * `used` is then the level the compaction replaced, so it must not be shown
+   * as the current one. Treated exactly like a model switch: the level is kept
+   * because the next reading replaces it, but the ring declines to render a
+   * number it cannot vouch for.
+   */
+  compacted?: boolean;
 };
 
-/** Fraction of the window in use, or null when the window is unknown. */
+/** Fraction of the window in use, or null when no trustworthy level exists. */
 export function contextRatio(usage: ContextUsage | undefined): number | null {
-  if (!usage || !usage.window || usage.window <= 0) return null;
+  if (!usage || usage.compacted) return null;
+  if (!usage.window || usage.window <= 0) return null;
   if (!Number.isFinite(usage.used) || usage.used < 0) return null;
   return Math.min(1, usage.used / usage.window);
 }
@@ -44,6 +57,14 @@ export function contextTooltip(usage: ContextUsage): {
   headline: string;
   detail: string;
 } {
+  if (usage.compacted) {
+    return {
+      headline: "Context compacted",
+      detail: usage.window
+        ? `Rebuilt inside a ${formatTokens(usage.window)} token window`
+        : "Rebuilt, measuring again on the next turn",
+    };
+  }
   const percent = contextPercent(usage);
   return {
     headline:
@@ -60,6 +81,11 @@ export function contextTooltip(usage: ContextUsage): {
  * Harnesses split the two halves across different messages — Claude reports the
  * window only on the turn `result`, well after the first usage arrives — so a
  * reading without a window keeps the last known one.
+ *
+ * A window on its own is not a measurement. Claude sends one at a compaction
+ * boundary, where the level it accompanies is the one the compaction replaced,
+ * so the stale marker has to survive a window-only merge and clear only on a
+ * reading that actually carries a level.
  */
 export function mergeContextUsage(
   previous: ContextUsage | undefined,
@@ -67,7 +93,25 @@ export function mergeContextUsage(
 ): ContextUsage {
   const used = next.used ?? previous?.used ?? 0;
   const window = next.window ?? previous?.window;
-  return window ? { used, window } : { used };
+  const compacted = next.used === undefined ? previous?.compacted : undefined;
+  return {
+    used,
+    ...(window ? { window } : {}),
+    ...(compacted ? { compacted } : {}),
+  };
+}
+
+/**
+ * Mark the held level stale at a compaction boundary.
+ *
+ * The level is kept rather than zeroed: it is the honest "before" figure, and
+ * the next reading replaces it. `contextRatio` refuses to render it meanwhile.
+ */
+export function markCompacted(
+  usage: ContextUsage | undefined,
+): ContextUsage | undefined {
+  if (!usage) return undefined;
+  return { ...usage, compacted: true };
 }
 
 /**
@@ -75,11 +119,14 @@ export function mergeContextUsage(
  *
  * The window is a property of the model, so switching models invalidates it.
  * The level still roughly holds — it describes the transcript, not the model —
- * and the next turn re-reports both.
+ * and the next turn re-reports both. A stale marker rides along: it describes
+ * the level rather than the model, so a model switch does not vouch for it.
  */
 export function dropContextWindow(
   usage: ContextUsage | undefined,
 ): ContextUsage | undefined {
   if (!usage) return undefined;
-  return { used: usage.used };
+  return usage.compacted
+    ? { used: usage.used, compacted: true }
+    : { used: usage.used };
 }

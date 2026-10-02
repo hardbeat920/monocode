@@ -145,7 +145,12 @@ function persistableMeta(
     ...(session.providerAccountId && isPersistableId(session.providerAccountId)
       ? { providerAccountId: session.providerAccountId }
       : {}),
-    ...(session.context ? { contextUsed: session.context.used } : {}),
+    // A stale level is the one the compaction replaced, so storing it would
+    // resurrect a full-looking ring after a restart. The window still describes
+    // the active model, so keep it and let the next reading re-pair with it.
+    ...(session.context && !session.context.compacted
+      ? { contextUsed: session.context.used }
+      : {}),
     ...(session.context?.window
       ? { contextWindow: session.context.window }
       : {}),

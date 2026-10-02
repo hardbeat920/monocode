@@ -138,6 +138,11 @@ export async function compactGrokContext(
           { sessionId: live.acpSessionId },
           PROMPT_TIMEOUT_MS,
         );
+        // The summary's own usage_update, if Grok sends one, describes the
+        // summarization call. Nothing reports the rebuilt level until the next
+        // turn, so retire the reading we are holding instead of leaving the
+        // ring at its pre-compaction height.
+        live.onEvent({ type: "context", compacted: true });
       } catch (error) {
         if (live.cancelled) return;
         throw error;

@@ -174,6 +174,16 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /**
+   * A compaction boundary landed during the turn in flight.
+   *
+   * Claude's turn `result` describes the last main-loop request it sent. When
+   * the summary is the last thing the turn did, that request was made against
+   * the conversation the compaction then replaced, so the result's level is
+   * not a reading of the window. Its window is still valid — compaction does
+   * not change the model — so only the level is withheld.
+   */
+  compactedThisTurn: boolean;
 };
 
 type Resume = {
@@ -511,6 +521,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    compactedThisTurn: false,
   };
   liveRef.current = live;
 
@@ -593,6 +604,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  live.compactedThisTurn = false;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -728,13 +740,21 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
-    const text = statusTextFromSystem(rec);
-    if (text) {
-      if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {
-        live.compactionConfirmed = true;
-      }
-      live.onEvent({ type: "status", text });
+    // A boundary is a boundary whether or not the CLI sent prose with it, so
+    // this is read outside the text check: compactClaudeContext throws when
+    // compactionConfirmed stays false.
+    const compacting = (stringField(rec, "subtype") ?? "").startsWith("compact");
+    if (compacting) {
+      live.compactionConfirmed = true;
+      live.compactedThisTurn = true;
+      // Every reading this session holds describes the conversation Claude just
+      // replaced, and the summarizer's own call says nothing about what is
+      // left. The boundary reports no surviving size, so retire the reading
+      // rather than let the ring sit at its pre-compaction height.
+      live.onEvent({ type: "context", compacted: true });
     }
+    const text = statusTextFromSystem(rec);
+    if (text) live.onEvent({ type: "status", text });
   }
 }
 
@@ -821,7 +841,13 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   }
 
   const used = contextUsedFromAssistant(rec);
-  if (used !== undefined) live.onEvent({ type: "context", used });
+  if (used !== undefined) {
+    // The boundary is written once the summary is materialised, so a reading
+    // taken after it came from a request sent with the rebuilt conversation.
+    // That re-arms the turn: its closing result can be trusted again.
+    live.compactedThisTurn = false;
+    live.onEvent({ type: "context", used });
+  }
 
   const snapshot = assistantTextBlocks(rec).join("");
   if (snapshot) closePendingAssistantMessage(live);
@@ -971,7 +997,19 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // conversation level. The next real turn will provide the fresh reading.
   if (!live.manualCompaction) {
     const context = contextFromResult(rec);
-    if (context) live.onEvent({ type: "context", ...context });
+    if (context) {
+      // A turn that compacted is the same case arriving without a request from
+      // us: the summary was the last thing it did, so its result sizes the
+      // conversation the summary replaced. Compaction does not change the
+      // model, so the window is still worth taking.
+      if (live.compactedThisTurn) {
+        if (context.window) {
+          live.onEvent({ type: "context", window: context.window });
+        }
+      } else {
+        live.onEvent({ type: "context", ...context });
+      }
+    }
   }
   const metrics = turnMetricsFromResult(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
