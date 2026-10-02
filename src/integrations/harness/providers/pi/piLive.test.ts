@@ -238,5 +238,27 @@ describe("Pi live session", () => {
       });
       await stopPiSession("pi-text");
     });
+
+    const typed = (text: string) =>
+      ({ kind: "answered", answers: {}, custom: { d: text } }) as const;
+
+    it.each([
+      ["input", typed("main"), { value: "main" }],
+      ["editor", typed("a\n  b"), { value: "a\n  b" }],
+      ["input", typed(""), { value: "" }],
+      ["input", { kind: "skipped" } as const, { cancelled: true }],
+    ] as const)("replies to %s with %j", async (method, reply, response) => {
+      const frame = await open("pi-reply");
+      frame({ type: "extension_ui_request", id: "d", method, title: "Value" });
+      piAdapter.respondQuestion!("pi-reply", asked().requestId, reply);
+      await vi.waitFor(() =>
+        expect(replies()).toContainEqual({
+          type: "extension_ui_response",
+          id: "d",
+          ...response,
+        }),
+      );
+      await stopPiSession("pi-reply");
+    });
   });
 });
