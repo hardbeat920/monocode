@@ -18,15 +18,23 @@ import {
   searchProject,
   type OpenFileFn,
   type ProjectSearchMatch,
+  type ProjectSearchOptions,
+  type ProjectSearchResult,
 } from "../../search/model/search";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 
 type Props = {
   cwd: string;
   focusToken?: number;
-  onOpenFile: OpenFileFn;
   onClose: () => void;
-};
+  search?: (options: ProjectSearchOptions) => Promise<ProjectSearchResult>;
+} & (
+  | { onOpenFile: OpenFileFn; onOpenMatch?: never }
+  | {
+      onOpenFile?: never;
+      onOpenMatch: (match: ProjectSearchMatch, pin: boolean) => void;
+    }
+);
 
 type MatchGroup = {
   path: string;
@@ -39,7 +47,9 @@ export function ProjectSearch({
   cwd,
   focusToken = 0,
   onOpenFile,
+  onOpenMatch,
   onClose,
+  search = searchProject,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
@@ -89,7 +99,7 @@ export function ProjectSearch({
       activeSearchId.current = searchId;
       setLoading(true);
       setError(null);
-      void searchProject({
+      void search({
         cwd,
         query: trimmed,
         searchId,
@@ -126,18 +136,20 @@ export function ProjectSearch({
         void cancelProjectSearch(cwd, searchId).catch(() => undefined);
       }
     };
-  }, [caseSensitive, cwd, exclude, include, query, regex, wholeWord]);
+  }, [caseSensitive, cwd, exclude, include, query, regex, wholeWord, search]);
 
   const groups = useMemo(() => groupMatches(matches), [matches]);
   const matchCount = matches.length;
   const fileCount = groups.length;
 
   const openMatch = (match: ProjectSearchMatch, pin = false) => {
-    onOpenFile(
-      match.path,
-      { line: match.line, column: match.column },
-      { exact: true, pin },
-    );
+    if (onOpenMatch) onOpenMatch(match, pin);
+    else
+      onOpenFile?.(
+        match.path,
+        { line: match.line, column: match.column },
+        { exact: true, pin },
+      );
   };
 
   const onQueryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {

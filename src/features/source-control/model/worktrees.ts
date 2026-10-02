@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { appendReadyHandoff, buildDeterministicHandoff } from "../../sessions/model/handoff";
-import { notifyGitChanged } from "../../../platform/tauri/fs";
+import { invokeWorkspace, notifyGitChanged } from "../../../platform/tauri/fs";
 import { isFilesystemTab, type FilePaneTab } from "../../workspace/model/layout";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 import { isBlankSession } from "../../projects/model/projectReturn";
@@ -21,7 +21,7 @@ export type Worktree = {
 export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 
 export const listWorktrees = (cwd: string) =>
-  invoke<Worktrees>("git_worktrees", { cwd });
+  invokeWorkspace<Worktrees>("git_worktrees", { cwd });
 
 export async function createWorktree(
   cwd: string,

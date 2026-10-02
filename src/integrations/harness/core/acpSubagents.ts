@@ -1,4 +1,5 @@
 import type { HarnessEvent } from "./types";
+import { isFailedStatus } from "../../../features/sessions/model/transcriptActivity";
 import {
   agentToolTitle,
   isAgentTool,
@@ -48,6 +49,13 @@ export class AcpSubagents {
           text: event.title ?? "",
           toolKind: event.kind,
           status: event.status,
+          // Detail is what a red row opens, so only a call that failed carries
+          // one. A settled result is already in the preview, and storing every
+          // child's output would weigh the saved session down for nothing.
+          ...(event.type === "tool.updated" && isFailedStatus(event.status) &&
+          event.detail
+            ? { detail: event.detail }
+            : {}),
           preview: event.preview,
         });
       } else if (

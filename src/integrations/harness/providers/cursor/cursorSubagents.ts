@@ -81,6 +81,11 @@ export function cursorSubagentEvents(
         ? {
             toolKind: kind,
             status: step.status,
+            // A preview's output is not shown on the row, so a failure has to
+            // carry its own text to be readable at all.
+            ...(step.status === "failed" && step.output
+              ? { detail: step.output }
+              : {}),
             preview: step.output
               ? {
                   ...(preview ?? { kind: "read" as const, contentOnly: true }),

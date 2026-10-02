@@ -1,9 +1,54 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   runtimeProviderBinaryPath,
   type ConfigurableBinaryProvider,
 } from "../../../features/providers/model/providerBinaryPaths";
+
+/** Process I/O is supplied by the desktop or a headless host. Provider
+ * protocols never need to know which process owns their children. */
+export interface ChildBackend {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  listen<T>(
+    event: string,
+    handler: (event: { payload: T }) => void,
+  ): Promise<UnlistenFn>;
+}
+
+let backend: ChildBackend | undefined;
+
+export function configureChildBackend(next: ChildBackend): void {
+  if (bridge || users)
+    throw new Error("Configure the child backend before starting the bridge");
+  backend = next;
+}
+
+export function hasHeadlessChildBackend(): boolean {
+  return backend !== undefined;
+}
+
+/** Provider-owned transcript files are read on the machine running the child. */
+export function readHarnessTextFile(path: string): Promise<string> {
+  return invoke<string>(backend ? "harness_read_text_file" : "read_text_file", {
+    path,
+  });
+}
+
+function invoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  return backend
+    ? backend.invoke<T>(command, args)
+    : tauriInvoke<T>(command, args);
+}
+
+function listen<T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+): Promise<UnlistenFn> {
+  return backend ? backend.listen(event, handler) : tauriListen(event, handler);
+}
 
 type LinePayload = { sessionId: string; line: string };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
@@ -22,6 +67,11 @@ const stderrHandlers = new Map<string, LineHandler>();
 const sseHandlers = new Map<string, SseHandler>();
 const sseEndHandlers = new Map<string, SseEndHandler>();
 const sseBuffer = new Map<string, string[]>();
+// Output is broadcast to every window. Only ids this window spawned or opened
+// may buffer while unwatched; anything else would be held until the bridge
+// is torn down, since nothing here ever watches or unwatches it.
+const ownedChildren = new Set<string>();
+const ownedSse = new Set<string>();
 const livePid = new Map<string, number>();
 const pendingExit = new Map<
   string,
@@ -81,7 +131,9 @@ function ensureBridge() {
           handler(line);
           return;
         }
-        pushBounded(lineBuffer, sessionId, line);
+        if (ownedChildren.has(sessionId)) {
+          pushBounded(lineBuffer, sessionId, line);
+        }
       }),
     ),
     register(
@@ -116,7 +168,7 @@ function ensureBridge() {
           handler(data);
           return;
         }
-        pushBounded(sseBuffer, sessionId, data);
+        if (ownedSse.has(sessionId)) pushBounded(sseBuffer, sessionId, data);
       }),
     ),
     register(
@@ -149,11 +201,11 @@ function teardownBridge() {
   sseHandlers.clear();
   sseEndHandlers.clear();
   sseBuffer.clear();
+  ownedChildren.clear();
+  ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
-  void pending
-    ?.then((fns) => fns.forEach((fn) => fn()))
-    .catch(() => undefined);
+  void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
 
 export function startHarnessBridge(): () => void {
@@ -215,6 +267,7 @@ export function unwatchChild(sessionId: string) {
   lineHandlers.delete(sessionId);
   exitHandlers.delete(sessionId);
   lineBuffer.delete(sessionId);
+  ownedChildren.delete(sessionId);
   stderrHandlers.delete(sessionId);
   pendingExit.delete(sessionId);
 }
@@ -235,6 +288,7 @@ export function unwatchSse(sessionId: string) {
   sseHandlers.delete(sessionId);
   sseEndHandlers.delete(sessionId);
   sseBuffer.delete(sessionId);
+  ownedSse.delete(sessionId);
 }
 
 export async function spawnChild(
@@ -247,6 +301,7 @@ export async function spawnChild(
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
+  ownedChildren.add(sessionId);
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
@@ -288,6 +343,8 @@ export function killAllChildren(): Promise<void> {
   sseHandlers.clear();
   sseEndHandlers.clear();
   sseBuffer.clear();
+  ownedChildren.clear();
+  ownedSse.clear();
   livePid.clear();
   pendingExit.clear();
   return invoke("harness_kill_all");
@@ -406,6 +463,7 @@ export function openHarnessSse(
   url: string,
   headers?: Record<string, string>,
 ): Promise<void> {
+  ownedSse.add(sessionId);
   return invoke("harness_sse_open", { sessionId, url, headers });
 }
 
@@ -447,6 +505,18 @@ export function inspectHarnessBinary(
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  });
+}
+
+/** Runs the CLI's own self-update against the binary MonoCode uses. */
+export async function updateHarnessCli(
+  provider: ConfigurableBinaryProvider,
+): Promise<void> {
+  const resolved = await resolveHarnessBinary(provider);
+  await invoke("harness_update", {
+    command: resolved.path,
+    binaryProvider: provider,
+    binaryPath: runtimeProviderBinaryPath(provider),
   });
 }
 

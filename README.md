@@ -39,6 +39,8 @@ Windows (x86_64): download the NSIS installer from [GitHub Releases](https://git
 
 ## Some notes
 
+Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. See [remote access setup and current limitations](docs/remote-access.md).
+
 This is very early and you should expect bugs.
 
 ### Agent access to MonoCode
@@ -117,6 +119,18 @@ npm run build:windows
 The Windows build emits an NSIS installer under `target/release/bundle/nsis/`.
 Tauri loads `src-tauri/tauri.windows.conf.json` automatically for Windows development and builds.
 
+## Contributors
+
+Thanks to everyone who contributes to MonoCode!
+
+[![MonoCode contributors](https://contrib.rocks/image?repo=hardbeat920/monocode)](https://github.com/hardbeat920/monocode/graphs/contributors)
+
 ## License
 
 [MIT](LICENSE). Provider names and logos are trademarks of their owners - see [NOTICE](NOTICE).
+
+## Acknowledgments
+
+Special thanks to the project that helps us recognize MonoCode's contributors:
+
+- [contrib.rocks](https://contrib.rocks)

@@ -1,6 +1,7 @@
 export const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 export type Hsv = { h: number; s: number; v: number };
+export type Rgb = { r: number; g: number; b: number };
 
 export function isHexColor(value: string): boolean {
   return HEX_COLOR_RE.test(value);
@@ -62,6 +63,30 @@ export function hsvToHex(h: number, s: number, v: number): string {
       .padStart(2, "0");
 
   return `#${toByte(r)}${toByte(g)}${toByte(b)}`;
+}
+
+/** Hue in degrees, saturation and lightness in percent, as the theme uses them. */
+export function hslToRgb(
+  hue: number,
+  saturation: number,
+  lightness: number,
+): Rgb {
+  const sat = clamp(saturation, 0, 100) / 100;
+  const light = clamp(lightness, 0, 100) / 100;
+  const h = ((hue % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = light - c / 2;
+  const [r, g, b] = [
+    [c, x, 0],
+    [x, c, 0],
+    [0, c, x],
+    [0, x, c],
+    [x, 0, c],
+    [c, 0, x],
+  ][Math.floor(h / 60) % 6];
+  const channel = (value: number) => Math.round(clamp(value + m, 0, 1) * 255);
+  return { r: channel(r), g: channel(g), b: channel(b) };
 }
 
 function clamp(value: number, min: number, max: number): number {

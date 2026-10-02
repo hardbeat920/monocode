@@ -17,6 +17,28 @@
   visibility: hidden;
   pointer-events: none;
   transition: opacity 160ms var(--motion-ease-out);
+  /* Feather all four sides so the tiles dissolve into the row instead of
+     stopping hard at its edge; intersecting the two fades rounds the corners. */
+  -webkit-mask-image:
+    linear-gradient(
+      to right,
+      transparent,
+      #000 28px,
+      #000 calc(100% - 28px),
+      transparent
+    ),
+    linear-gradient(to bottom, transparent, #000 35%, #000 65%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent,
+      #000 28px,
+      #000 calc(100% - 28px),
+      transparent
+    ),
+    linear-gradient(to bottom, transparent, #000 35%, #000 65%, transparent);
+  mask-composite: intersect;
 }
 
 .codex-effort-option::after {
@@ -24,7 +46,6 @@
   position: absolute;
   inset: 0;
   z-index: 2;
-  border: 1px solid var(--codex-effort-color);
   border-radius: inherit;
   content: "";
   pointer-events: none;
@@ -65,7 +86,7 @@
 
 .codex-effort-option:is(:hover, :focus-visible, .bg-selection)::after {
   animation: codex-effort-edge-ripple 5000ms ease-in-out 1 both;
-  will-change: border-width, box-shadow, opacity;
+  will-change: box-shadow, opacity;
 }
 
 @keyframes codex-effort-tiles-clear {
@@ -108,26 +129,21 @@
   54%,
   68%,
   82% {
-    border-width: 1px;
-    opacity: 0.22;
-    box-shadow: inset 0 0 0 0 transparent;
+    opacity: 0.3;
+    box-shadow: inset 0 0 4px 0 transparent;
   }
 
   19%,
   47%,
   75% {
-    border-width: 3px;
-    opacity: 0.9;
-    box-shadow:
-      inset 0 0 0 1px
-        color-mix(in srgb, var(--codex-effort-color) 65%, transparent),
-      0 0 8px color-mix(in srgb, var(--codex-effort-color) 60%, transparent);
+    opacity: 0.85;
+    box-shadow: inset 0 0 12px 1px
+      color-mix(in srgb, var(--codex-effort-color) 55%, transparent);
   }
 
   100% {
-    border-width: 1px;
     opacity: 0;
-    box-shadow: inset 0 0 0 0 transparent;
+    box-shadow: inset 0 0 4px 0 transparent;
   }
 }
 
@@ -145,7 +161,6 @@
 
   .codex-effort-option:is(:hover, :focus-visible, .bg-selection)::after {
     animation: none;
-    border-width: 1px;
     opacity: 0.42;
     box-shadow: none;
     will-change: auto;

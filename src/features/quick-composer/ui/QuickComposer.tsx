@@ -52,6 +52,21 @@ import { useQuickAttachments } from "./useQuickAttachments";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { QuickModelSelector } from "./QuickModelSelector";
 import { useQuickPickerMotion } from "./useQuickPickerMotion";
+import { OPERATOR_COMMAND } from "../../sessions/model/operatorCommand";
+import { ORCHESTRATOR_COMMAND } from "../../sessions/model/orchestratorCommand";
+import { PLAN_COMMAND } from "../../sessions/model/plan";
+import { DRAFT_COMMAND } from "../../sessions/model/draftCommand";
+import {
+  leadingModeCommand,
+  MODE_COMMAND_STYLES,
+  ModeCommandText,
+} from "../../sessions/ui/modeCommands";
+import {
+  rankSkills,
+  replaceSlashToken,
+  slashTokenAt,
+  type SlashToken,
+} from "../../skills/model/slashCommands";
 import {
   applyQuickCatalog,
   filterQuickProjects,
@@ -68,6 +83,31 @@ import {
 
 /** Tallest the prompt grows before it scrolls, in px. */
 const PROMPT_MAX_HEIGHT = 220;
+
+/** Commands the floating composer offers after a leading `/`. */
+const MODE_COMMANDS = [
+  PLAN_COMMAND,
+  OPERATOR_COMMAND,
+  ORCHESTRATOR_COMMAND,
+  DRAFT_COMMAND,
+];
+const MODE_NAMES: ReadonlySet<string> = new Set(
+  MODE_COMMANDS.map((command) => command.name),
+);
+/** Sized for the 16px prompt, as the main composer's indent is for 14px. */
+const MODE_INDENT = "15px";
+
+/** The mode a prompt starts with, and the prompt the session should get. */
+export function quickPromptMode(text: string): {
+  prompt: string;
+  mode: string | null;
+} {
+  const match = text.match(/^\/([a-z]+)(?=\s|$)\s*/);
+  const mode = match?.[1] && MODE_NAMES.has(match[1]) ? match[1] : null;
+  // The workspace reads Operator from the prompt itself.
+  if (!mode || mode === OPERATOR_COMMAND.name) return { prompt: text, mode };
+  return { prompt: text.slice(match![0].length), mode };
+}
 
 export function QuickComposer({ onShown }: { onShown: () => void }) {
   const [projects, setProjects] = useState(loadQuickProjects);
@@ -94,8 +134,10 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   const [runtimeMode, setRuntimeMode] =
     useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [prompt, setPrompt] = useState("");
+  const leadingMode = leadingModeCommand(prompt, MODE_NAMES);
+  const [slash, setSlash] = useState<SlashToken | null>(null);
   const [picker, setPicker] = useState<
-    "project" | "model" | "attachments" | null
+    "project" | "model" | "attachments" | "commands" | null
   >(null);
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
@@ -110,6 +152,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   const pickerRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -142,6 +185,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       setChoice(nextChoice);
       setModelSettings(loadLastModelSettings());
       setPicker(null);
+      setSlash(null);
       setError(null);
       void emit(QUICK_COMPOSER_CATALOG_REQUEST_EVENT, nextChoice.harness);
       focusPrompt();
@@ -200,17 +244,24 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     if (!field) return;
     field.style.height = "auto";
     field.style.height = `${Math.min(field.scrollHeight, PROMPT_MAX_HEIGHT)}px`;
-  }, [prompt]);
+  }, [prompt, leadingMode?.name]);
 
   const onGitOpenChange = useCallback((open: boolean) => {
     setGitOpen(open);
-    if (open) setPicker(null);
+    if (open) {
+      setPicker(null);
+      setSlash(null);
+    }
   }, []);
   useQuickPickerMotion(frameRef, pickerRef, picker);
 
   const projectOptions = useMemo(
     () => filterQuickProjects(projects, picker === "project" ? query : ""),
     [picker, projects, query],
+  );
+  const commandOptions = useMemo(
+    () => rankSkills(MODE_COMMANDS, slash?.query ?? ""),
+    [slash?.query],
   );
   const resolvedModel = resolveQuickModel(choice);
   const model = resolvedModel ?? {
@@ -219,12 +270,14 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     name: "Loading model…",
   };
   const settings = mergeModelSettings(model, modelSettings);
-  const optionCount = projectOptions.length;
+  const optionCount =
+    picker === "commands" ? commandOptions.length : projectOptions.length;
   const openPicker = (kind: "project" | "model" | "attachments") => {
     if (picker === kind) {
       closePicker();
       return;
     }
+    setSlash(null);
     setPicker(kind);
     setQuery("");
     setHighlight(Math.max(0, projects.indexOf(cwd ?? "")));
@@ -236,11 +289,32 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
 
   const closePicker = () => {
     setPicker(null);
+    setSlash(null);
     setQuery("");
-    focusPrompt();
+    if (picker === "commands")
+      promptRef.current?.focus({ preventScroll: true });
+    else focusPrompt();
   };
 
   const chooseAt = (index: number) => {
+    if (picker === "commands") {
+      const command = commandOptions[index];
+      const field = promptRef.current;
+      if (!command || !slash || !field) return;
+      // The command stays in the prompt, where it renders with its icon.
+      const next = replaceSlashToken(field.value, slash, command.invocation);
+      let cursor = slash.start + command.invocation.length + 1;
+      if (next[cursor] === " ") cursor += 1;
+      field.value = next;
+      setPrompt(next);
+      setPicker(null);
+      setSlash(null);
+      requestAnimationFrame(() => {
+        field.focus({ preventScroll: true });
+        field.setSelectionRange(cursor, cursor);
+      });
+      return;
+    }
     if (picker === "project") {
       const path = projectOptions[index];
       if (!path) return;
@@ -250,12 +324,30 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     closePicker();
   };
 
+  const syncPromptCommand = (field: HTMLTextAreaElement) => {
+    const token =
+      field.selectionStart === field.selectionEnd
+        ? slashTokenAt(field.value, field.selectionStart)
+        : null;
+    // Operator activates only at the start of a prompt.
+    const leading =
+      token && !field.value.slice(0, token.start).trim() ? token : null;
+    setSlash(leading);
+    if (leading && !busy && !gitOpen) {
+      setPicker("commands");
+      setHighlight(0);
+    } else {
+      setPicker((current) => (current === "commands" ? null : current));
+    }
+  };
+
   const dismiss = () => {
     void invoke("quick_composer_dismiss");
   };
 
   const submit = async (reveal: boolean) => {
-    const text = prompt.trim();
+    const launchMode = quickPromptMode(prompt.trim());
+    const text = launchMode.prompt.trim();
     if (
       (!text && !attachments.files.length) ||
       !cwd ||
@@ -272,6 +364,12 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     try {
       const request: QuickLaunch = {
         prompt: text,
+        ...(launchMode.mode === DRAFT_COMMAND.name ? { draft: true } : {}),
+        ...(launchMode.mode === PLAN_COMMAND.name
+          ? { intent: "plan" as const }
+          : launchMode.mode === ORCHESTRATOR_COMMAND.name
+            ? { intent: "orchestrate" as const }
+            : {}),
         cwd,
         ...picked,
         modelSettings: settings,
@@ -285,6 +383,8 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       saveLastModelSettings(settings);
       saveRecentModelChoice(picked.harness, picked.model);
       setPrompt("");
+      setPicker(null);
+      setSlash(null);
       attachments.clear();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -300,6 +400,27 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       if (picker) closePicker();
       else dismiss();
       return;
+    }
+    if (picker === "commands") {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (optionCount === 0) return;
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setHighlight((index) => (index + step + optionCount) % optionCount);
+        return;
+      }
+      if (
+        optionCount > 0 &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        (event.key === "Enter" || event.key === "Tab")
+      ) {
+        event.preventDefault();
+        chooseAt(Math.min(highlight, optionCount - 1));
+        return;
+      }
     }
     if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
       event.preventDefault();
@@ -338,7 +459,8 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   };
 
   const canSubmit = Boolean(
-    (prompt.trim() || attachments.files.length) &&
+    (quickPromptMode(prompt.trim()).prompt.trim() ||
+      attachments.files.length) &&
     cwd &&
     !busy &&
     !attachments.loading &&
@@ -347,8 +469,8 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     (attachmentsSupported || !attachments.files.length),
   );
 
-  const optionClass = (index: number) =>
-    `flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] ${
+  const optionClass = (index: number, stacked = false) =>
+    `flex w-full ${stacked ? "flex-col items-start gap-0.5" : "items-center gap-2.5"} rounded-lg px-2 py-1.5 text-left text-[13px] ${
       index === highlight
         ? "bg-selection-emphasis text-content"
         : "text-content/75"
@@ -422,22 +544,68 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
           ))}
         </div>
       ) : null}
-      <textarea
-        ref={promptRef}
-        value={prompt}
-        rows={2}
-        onChange={(event) => setPrompt(event.target.value)}
-        onKeyDown={onPromptKeyDown}
-        placeholder={
-          cwd
-            ? `Start a ${HARNESS_TITLE[model.harness]} session in ${projectName(cwd)}…`
-            : "Open a project in MonoCode first"
-        }
-        disabled={!cwd}
-        aria-label="Prompt"
-        spellCheck
-        className="block w-full shrink-0 resize-none bg-transparent pl-5 pr-9 pt-4 pb-2 text-[16px] leading-6 text-content outline-none select-text placeholder:text-content/40"
-      />
+      <div className="relative shrink-0">
+        <div
+          ref={highlightRef}
+          aria-hidden
+          style={{ textIndent: leadingMode ? MODE_INDENT : undefined }}
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap wrap-break-word pl-5 pr-9 pt-4 pb-2 text-[16px] leading-6 text-content"
+        >
+          {leadingMode ? (
+            <>
+              <ModeCommandText
+                text={prompt}
+                mode={leadingMode}
+                indent={MODE_INDENT}
+                iconClassName="size-4"
+              />
+              {prompt.slice(leadingMode.end)}
+            </>
+          ) : (
+            prompt
+          )}
+          {prompt.endsWith("\n") ? "\n" : null}
+        </div>
+        <textarea
+          ref={promptRef}
+          value={prompt}
+          rows={2}
+          style={{ textIndent: leadingMode ? MODE_INDENT : undefined }}
+          onScroll={(event) => {
+            if (highlightRef.current)
+              highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+          }}
+          onChange={(event) => {
+            setPrompt(event.target.value);
+            syncPromptCommand(event.currentTarget);
+          }}
+          onClick={(event) => syncPromptCommand(event.currentTarget)}
+          onKeyDown={onPromptKeyDown}
+          onKeyUp={(event) => {
+            if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+              syncPromptCommand(event.currentTarget);
+          }}
+          placeholder={
+            cwd
+              ? `Start a ${HARNESS_TITLE[model.harness]} session in ${projectName(cwd)}…`
+              : "Open a project in MonoCode first"
+          }
+          disabled={!cwd}
+          aria-label="Prompt"
+          aria-autocomplete="list"
+          aria-controls={
+            picker === "commands" ? "quick-composer-commands" : undefined
+          }
+          aria-expanded={picker === "commands"}
+          aria-activedescendant={
+            picker === "commands" && commandOptions[highlight]
+              ? `quick-command-${commandOptions[highlight].invocation}`
+              : undefined
+          }
+          spellCheck
+          className="composer-field scrollbar-none relative block w-full resize-none bg-transparent pl-5 pr-9 pt-4 pb-2 text-[16px] leading-6 outline-none select-text"
+        />
+      </div>
 
       {attachments.files.length && !attachmentsSupported ? (
         <p role="alert" className="px-5 pb-2 text-xs text-amber-400">
@@ -519,7 +687,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
             disabled={!canSubmit}
             className="rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-40"
           >
-            Start
+            {leadingMode?.name === DRAFT_COMMAND.name ? "Save draft" : "Start"}
           </button>
         </span>
       </div>
@@ -566,6 +734,41 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       ) : null}
       {picker && picker !== "attachments" ? (
         <div ref={pickerRef} key={picker} className="flex min-h-0 flex-col">
+          {picker === "commands" ? (
+            <div
+              ref={listRef}
+              id="quick-composer-commands"
+              role="listbox"
+              aria-label="Commands"
+              className="shrink-0 border-t border-stroke p-2"
+            >
+              {commandOptions.length === 0 ? (
+                <p className="px-2 py-2 text-[12px] text-content/45">
+                  No matching commands
+                </p>
+              ) : (
+                commandOptions.map((command, index) => (
+                  <button
+                    key={command.invocation}
+                    id={`quick-command-${command.invocation}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === highlight}
+                    tabIndex={-1}
+                    onMouseEnter={() => setHighlight(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseAt(index)}
+                    className={optionClass(index, true)}
+                  >
+                    <CommandLabel name={command.name} />
+                    <span className="text-[11px] leading-4 text-content/50">
+                      {command.description}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : null}
           {picker === "model" ? (
             <QuickModelSelector
               model={model}
@@ -653,6 +856,20 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function CommandLabel({ name }: { name: string }) {
+  const style = MODE_COMMAND_STYLES[name];
+  return (
+    <span className="flex items-center gap-1.5">
+      {style ? (
+        <style.Icon
+          className={`size-3.5 shrink-0 ${style.menu?.iconClassName ?? ""}`}
+        />
+      ) : null}
+      {name.charAt(0).toUpperCase() + name.slice(1)}
+    </span>
   );
 }
 

@@ -7,6 +7,7 @@ import { formatReminderTime } from "../../features/sessions/model/sessionReminde
 import { Sidebar } from "./Sidebar";
 import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
+import { copyText } from "../../platform/tauri/clipboard";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -17,6 +18,9 @@ vi.mock("../../features/source-control/hooks/useGitFileStatuses", () => ({
 }));
 vi.mock("./SidebarUpdate", () => ({ SidebarUpdateFooter: () => null }));
 vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
+vi.mock("../../platform/tauri/clipboard", () => ({
+  copyText: vi.fn().mockResolvedValue(undefined),
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -76,6 +80,7 @@ function startRename() {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(copyText).mockReset().mockResolvedValue(undefined);
   vi.mocked(useProjectDiffStats).mockReturnValue(null);
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -445,6 +450,69 @@ describe("sidebar session multiselection", () => {
       "session-1",
       "session-3",
     ]);
+  });
+});
+
+describe("sidebar session IDs", () => {
+  function openCopyIdMenu(sessionId: string) {
+    act(() => {
+      container
+        .querySelector(`[data-session-card="${sessionId}"]`)!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+    });
+    const trigger = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Copy session ID")!;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    act(() => trigger.click());
+    return document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Copy session ID"]',
+    )!;
+  }
+
+  it("copies either ID from the right-clicked session", async () => {
+    props.sessions = [
+      { ...props.sessions[0], providerSessionId: "harness-session-1" },
+      {
+        ...props.sessions[0],
+        id: "session-2",
+        providerSessionId: "harness-session-2",
+        updatedAt: props.sessions[0].updatedAt - 1,
+      },
+    ];
+    act(() => render());
+    const harnessMenu = openCopyIdMenu("session-2");
+    const copyHarnessId = Array.from(
+      harnessMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Harness session ID")!;
+    expect(copyHarnessId.disabled).toBe(false);
+    await act(async () => copyHarnessId.click());
+    expect(copyText).toHaveBeenNthCalledWith(1, "harness-session-2");
+
+    const monocodeMenu = openCopyIdMenu("session-2");
+    const copyMonoCodeId = Array.from(
+      monocodeMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "MonoCode session ID")!;
+    expect(copyMonoCodeId.disabled).toBe(false);
+    await act(async () => copyMonoCodeId.click());
+    expect(copyText).toHaveBeenNthCalledWith(2, "session-2");
+  });
+
+  it("keeps the MonoCode ID available before the harness supplies an ID", async () => {
+    act(() => render());
+    const copyMenu = openCopyIdMenu("session-1");
+    const copyHarnessId = Array.from(
+      copyMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Harness session ID")!;
+    const copyMonoCodeId = Array.from(
+      copyMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "MonoCode session ID")!;
+    expect(copyHarnessId.disabled).toBe(true);
+    expect(copyMonoCodeId.disabled).toBe(false);
+    await act(async () => copyMonoCodeId.click());
+    expect(copyText).toHaveBeenCalledExactlyOnceWith("session-1");
   });
 });
 

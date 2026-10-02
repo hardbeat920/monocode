@@ -34,6 +34,7 @@ import CommentAdd01Icon from "@hugeicons/core-free-icons/CommentAdd01Icon";
 import ComputerTerminal01Icon from "@hugeicons/core-free-icons/ComputerTerminal01Icon";
 import Copy01Icon from "@hugeicons/core-free-icons/Copy01Icon";
 import CursorMagicSelection04Icon from "@hugeicons/core-free-icons/CursorMagicSelection04Icon";
+import DashboardSquare01Icon from "@hugeicons/core-free-icons/DashboardSquare01Icon";
 import Delete02Icon from "@hugeicons/core-free-icons/Delete02Icon";
 import DragDropVerticalIcon from "@hugeicons/core-free-icons/DragDropVerticalIcon";
 import File01Icon from "@hugeicons/core-free-icons/File01Icon";
@@ -55,6 +56,7 @@ import GitPullRequestClosedIcon from "@hugeicons/core-free-icons/GitPullRequestC
 import GitPullRequestDraftIcon from "@hugeicons/core-free-icons/GitPullRequestDraftIcon";
 import GitPullRequestIcon from "@hugeicons/core-free-icons/GitPullRequestIcon";
 import GlobeIcon from "@hugeicons/core-free-icons/GlobeIcon";
+import InternetIcon from "@hugeicons/core-free-icons/InternetIcon";
 import HelpCircleIcon from "@hugeicons/core-free-icons/HelpCircleIcon";
 import ImageAdd01Icon from "@hugeicons/core-free-icons/ImageAdd01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
@@ -93,6 +95,7 @@ import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
 import SquareIcon from "@hugeicons/core-free-icons/SquareIcon";
 import SquareLock02Icon from "@hugeicons/core-free-icons/SquareLock02Icon";
 import StarIcon from "@hugeicons/core-free-icons/StarIcon";
+import UnfoldMoreIcon from "@hugeicons/core-free-icons/UnfoldMoreIcon";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import TickDouble02Icon from "@hugeicons/core-free-icons/TickDouble02Icon";
 import UndoIcon from "@hugeicons/core-free-icons/UndoIcon";
@@ -170,6 +173,7 @@ export const ChevronLeft = wrap(ArrowLeft01Icon, "ChevronLeft");
 export const ChevronRight = wrap(ArrowRight01Icon, "ChevronRight");
 export const CornerDownRight = wrap(ArrowTurnForwardIcon, "CornerDownRight");
 export const ChevronUp = wrap(ArrowUp01Icon, "ChevronUp");
+export const ChevronsUpDown = wrap(UnfoldMoreIcon, "ChevronsUpDown");
 export const CircleAlert = wrap(AlertCircleIcon, "CircleAlert");
 export const CircleDashed = wrap(CircleDashedIcon, "CircleDashed");
 export const CircleDot = wrap(CircleDotIcon, "CircleDot");
@@ -182,6 +186,7 @@ export const CursorMagicSelection = wrap(
   CursorMagicSelection04Icon,
   "CursorMagicSelection",
 );
+export const DashboardSquare = wrap(DashboardSquare01Icon, "DashboardSquare");
 export const ExternalLink = wrap(LinkSquare02Icon, "ExternalLink");
 export const File = wrap(File01Icon, "File");
 export const FileDiff = wrap(FileDiffIcon, "FileDiff");
@@ -213,6 +218,7 @@ export const GitPullRequestDraft = wrap(
 );
 export const GripVertical = wrap(DragDropVerticalIcon, "GripVertical");
 export const Globe = wrap(GlobeIcon, "Globe");
+export const Internet = wrap(InternetIcon, "Internet");
 export const ImagePlus = wrap(ImageAdd01Icon, "ImagePlus");
 export const Inbox = wrap(InboxIcon, "Inbox");
 export const BellOff = wrap(NotificationOff01Icon, "BellOff");

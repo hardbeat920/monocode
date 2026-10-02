@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   clearComposerDraft,
   getComposerDraft,
+  getComposerMcpTags,
   setComposerDraft,
+  setComposerMcpTags,
 } from "./draftCache";
+import { newMcpTag } from "./mcpPicker";
 
 describe("draftCache", () => {
   it("returns undefined for a session that never had a draft", () => {
@@ -41,5 +44,25 @@ describe("draftCache", () => {
     clearComposerDraft("s5");
 
     expect(getComposerDraft("s5")).toBeUndefined();
+  });
+
+  it("keeps MCP tag metadata with its session draft", () => {
+    const tag = newMcpTag(
+      {
+        provider: "codex",
+        name: "docs",
+        scope: "user",
+        configPath: "/config.toml",
+        transport: "stdio",
+      },
+      [],
+    );
+    setComposerDraft("mcp-one", `Ask ${tag.token}`);
+    setComposerMcpTags("mcp-one", [tag]);
+    setComposerDraft("mcp-two", "Another draft");
+    expect(getComposerMcpTags("mcp-one")).toEqual([tag]);
+    expect(getComposerMcpTags("mcp-two")).toEqual([]);
+    setComposerDraft("mcp-one", "");
+    expect(getComposerMcpTags("mcp-one")).toEqual([]);
   });
 });

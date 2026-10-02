@@ -4153,14 +4153,29 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
-    // Finder launches get launchd's bare PATH; signers, hooks, and git-lfs need the real one.
-    cmd.env("PATH", crate::harness::gui_search_path());
     crate::hide_window_console(&mut cmd);
     cmd
 }
 
+fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
+    let mut cmd = git_cmd();
+    if matches!(
+        args.first().copied(),
+        Some("commit" | "push" | "pull" | "fetch" | "clone")
+    ) {
+        // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
+        cmd.env("PATH", gui_path());
+    }
+    cmd
+}
+
+fn git_cmd_for_args(args: &[&str]) -> Command {
+    git_cmd_for_args_with_path(args, crate::harness::gui_search_path)
+}
+
 pub(crate) fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
-    let output = git_cmd()
+    let mut cmd = git_cmd_for_args(args);
+    let output = cmd
         .arg("--no-pager")
         .arg("-C")
         .arg(root)
@@ -4194,7 +4209,7 @@ fn git_run(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = git_cmd()
+    let output = git_cmd_for_args(args)
         .arg("--no-pager")
         .arg("-C")
         .arg(root)
@@ -5041,7 +5056,7 @@ fn clone_repo_sync(url: &str, parent: &str) -> Result<String, String> {
         return Err(format!("{} already exists", dest.display()));
     }
     let dest_str = dest.to_str().ok_or("Invalid destination path")?;
-    let output = git_cmd()
+    let output = git_cmd_for_args(&["clone"])
         .args(["clone", "--", url, dest_str])
         .output()
         .map_err(|e| {
@@ -5383,38 +5398,6 @@ pub(crate) fn delete_generated_images_sync(
             return Err("Invalid generated image path".into());
         }
         std::fs::remove_file(candidate).map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-pub(crate) fn cleanup_orphaned_generated_images(
-    app: &AppHandle,
-    referenced: &[String],
-) -> Result<(), String> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join(GENERATED_IMAGE_DIR);
-    let root = match root.canonicalize() {
-        Ok(root) => root,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.to_string()),
-    };
-    let referenced = referenced
-        .iter()
-        .filter_map(|path| PathBuf::from(path).canonicalize().ok())
-        .collect::<HashSet<_>>();
-    for entry in std::fs::read_dir(&root).map_err(|error| error.to_string())? {
-        let path = entry
-            .map_err(|error| error.to_string())?
-            .path()
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
-        if !path.starts_with(&root) || !path.is_file() || referenced.contains(&path) {
-            continue;
-        }
-        std::fs::remove_file(path).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -5782,10 +5765,14 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // explorer.exe returns 1 even when it opened the folder.
         let path_str = path.to_string_lossy().replace('/', "\\");
+        // `.arg` would wrap the whole `/select,...` switch in quotes when the
+        // path has spaces; explorer ignores a quoted switch and opens its
+        // default folder instead. Only the path itself may be quoted.
         Command::new("explorer")
-            .arg(format!("/select,{path_str}"))
+            .raw_arg(format!("/select,\"{path_str}\""))
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -8359,11 +8346,33 @@ mod tests {
     }
 
     #[test]
-    fn git_cmd_uses_gui_search_path() {
-        let path = crate::harness::gui_search_path();
-        assert!(git_cmd().get_envs().any(|(key, value)| {
-            key == std::ffi::OsStr::new("PATH") && value == Some(std::ffi::OsStr::new(&path))
-        }));
+    fn read_only_git_cmd_uses_inherited_path() {
+        assert!(!git_cmd()
+            .get_envs()
+            .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn read_only_git_never_resolves_login_shell_path() {
+        for action in ["status", "diff", "rev-parse", "ls-files", "cat-file"] {
+            let cmd = git_cmd_for_args_with_path(&[action], || {
+                panic!("read-only git must not resolve the login-shell PATH")
+            });
+            assert!(!cmd
+                .get_envs()
+                .any(|(key, _)| key == std::ffi::OsStr::new("PATH")));
+        }
+    }
+
+    #[test]
+    fn git_actions_that_need_helpers_use_login_shell_path() {
+        for action in ["commit", "push", "pull", "fetch", "clone"] {
+            let cmd = git_cmd_for_args_with_path(&[action], || "gui-git-path".into());
+            assert!(cmd.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new("PATH")
+                    && value == Some(std::ffi::OsStr::new("gui-git-path"))
+            }));
+        }
     }
 
     #[test]

@@ -737,6 +737,18 @@ describe("model picker", () => {
       expect(
         container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
       ).not.toBeNull();
+      if (harness === "codex") {
+        expect(
+          container.querySelectorAll(
+            '[data-effort-tone="max"] .codex-effort-tile',
+          ),
+        ).toHaveLength(160);
+        const filledTiles = container.querySelectorAll(
+          '[data-effort-tone="max"] .codex-effort-tile--filled',
+        );
+        expect(filledTiles.length).toBeGreaterThanOrEqual(96);
+        expect(filledTiles.length).toBeLessThanOrEqual(112);
+      }
       const high = [
         ...container.querySelectorAll<HTMLButtonElement>(
           '[role="menuitemradio"]',

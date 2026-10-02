@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-02
+
+### Added
+
+- The sidebar working-copy switcher gives local worktrees their own workspaces, with open-tab counts and activity indicators. Selecting a worktree filters its sessions and tabs; the project-folder session list still shows all project conversations. New sessions start in the selected checkout, and switching workspaces restores a remembered tab, carries over a blank session, or opens a new one.
+- Settings → Providers → Usage and privacy adds **Show remaining usage** and **Mask account emails**. Both preferences stay in sync across windows; enabling masking again hides previously revealed emails. In #592 by @itizarsa.
+
+### Changed
+
+- Usage meters show used capacity and account emails are visible by default, including after upgrading from 0.6.0. Enable **Show remaining usage** and **Mask account emails** to restore the previous display behavior. In #592 by @itizarsa.
+- Tabs belong to the workspace where they were opened. Opening an existing conversation from the session list, search, or inbox brings its tab into the selected workspace while preserving its checkout; changing a session's working copy from the composer keeps the tab in its current workspace.
+- Local projects reopen in their default workspace after an app restart. Only tabs assigned to that workspace are restored; tabs in other worktree workspaces close, while saved conversations remain available in history.
+- Inbox, Notes, and Automations preload after the workspace appears. Navigation keeps the current view visible until the destination is ready, and cached notes and automation lists appear immediately while refreshing.
+- Markdown code highlighting uses a bounded cache and shares concurrent highlighting requests, avoiding the accumulation of every partial code block during streaming. Exact cache keys also prevent different blocks from receiving each other's highlighting. In #636 by @pdparchitect.
+- The Inbox image and video cache has a 32 MiB budget, evicts the least recently used media, and shares downloads already in progress instead of retaining every file for the life of the window. In #638 by @pdparchitect.
+- Codex Max and Ultra effort options have animated tile and glow effects in the model picker and effort menu, with keyboard highlighting and reduced-motion support. Glow edges have been softened. In #516 by @shxntanu.
+- Transcript turn metrics have more spacing beside the other response controls.
+- Session detachment and finished-session tracking now use dedicated hooks, with expanded regression coverage for lifecycle cleanup, cache eviction, concurrent highlighting, terminal remounts, navigation, and UI restoration.
+
+### Fixed
+
+- Rapid worktree selections apply the latest choice and ignore stale completions, keeping the selected workspace aligned with the blank session's execution directory. The switcher shows progress and failures, and the composer is temporarily disabled while a switch is pending.
+- Opening a specific session from search or the inbox after a project switch no longer redirects to an unrelated remembered worktree tab. Project returns keep their existing conversation fallback, including tabs with panes from different projects.
+- Finished orchestration workers and internal inbox discussions no longer remain marked as unseen live agents, allowing eligible finished workers to detach and release their transcripts. In #639 by @pdparchitect.
+- App windows no longer buffer harness output for processes owned by other windows or for stopped process generations, preventing unused output from accumulating or being replayed into a replacement process. In #637 by @pdparchitect.
+- OpenCode closes event-stream handlers when stopping a session even if the stream or server already ended, releasing the retained session state. In #640 by @pdparchitect.
+- A terminal no longer opens blank when its view remounts with the same ID, such as under React StrictMode in development or after moving a terminal between the dock and a file pane. The previous view's late cleanup used to kill the new shell and drop its output listener. In #641 by @king20300.
+- **Open All Changes** respects the section it was opened from: Changes shows unstaged diffs, Staged Changes shows staged diffs, and the staged review is labeled accordingly. In #582 by @itizarsa.
+- Large files with scattered edits use a line-by-line diff instead of appearing entirely changed when the character diff gives up. Hunk staging uses the same diff calculation as the review. In #590 by @itizarsa.
+- Markdown previews, notes, and skill documents preserve line breaks, including around inline formatting, blockquotes, and explicit breaks. Agent replies and inbox comments continue to reflow as prose. In #595 by @sambhavthakkar.
+- Codex command rows show their commands instead of a bare Shell label when a file-listing action has no path. Older rows are repaired from their saved command previews, and a failed repair save no longer prevents opening the conversation. In #581 by @sambhavthakkar.
+- User-message bubbles fit within narrow session panes and recalculate their shape when a pooled transcript is shown again. In #575 by @sambhavthakkar.
+- Closing Settings or navigating back restores the previously open workspace view.
+- **Reveal in File Explorer** selects the correct file on Windows when its path contains spaces. In #619 by @SamuelPoiani.
+- ARM64 Linux builds use the platform's correct character type for the terminal name buffer, fixing a compilation failure. In #584 by @pdparchitect.
+
+## [0.6.0] - 2026-09-30
+
+### Added
+
+- Settings → MCP discovers connections for Claude Code, Claude Desktop, Codex, Cursor, and OpenCode. Filter by provider, select a project, inspect server configuration and status, and add or remove servers in the scopes each provider supports. In #458.
+- `/mcp` opens a server picker in the composer. Selected servers appear as inline tags, tell the agent which configured servers to use, and stay with saved drafts when switching sessions. In #458.
+- MonoCode checks for Claude Code, Codex, OpenCode, and Pi CLI updates once per app launch and offers in-app updates. An update is confirmed against the installed version, and model catalogs refresh across open windows after it succeeds.
+- File → Autosave saves editor changes after one second without typing. It is off by default, respects Format on save, and pauses when an external file change needs a decision. In #475.
+- `/plan` and `/orchestrator` select the turn's mode, while `/draft` saves the message without starting an agent. Mode commands have autocomplete and completion in the main and Quick composers, with inline command styling and removable mode pills in the main composer.
+- Linux supports transparent glass in dark mode through the Body glass preference. It is off by default; turning it off restores an opaque window that follows the selected theme. In #561.
+- A session's sidebar context menu can copy its harness session ID or MonoCode session ID. Harness IDs are retained in session summaries, including repaired summaries from older caches.
+
+### Changed
+
+- Provider usage bars and labels show the percentage remaining rather than the percentage used.
+- Provider account emails are blurred until revealed, including in Settings and the usage and account pickers. Revealing an email is separate from switching accounts.
+- The session sidebar toggle uses a dashboard icon in the title bar.
+- MCP discovery is shared between Settings and the composer and cached per project, avoiding repeated probes when navigating or remounting views. Claude connection health loads asynchronously, and an explicit refresh reloads discovery results.
+- File editor tests enable fake timers before mounting the editor, avoiding autosave timer races during parallel test runs.
+
+### Fixed
+
+- Settings → Appearance → Interface scale uses a menu instead of a slider, so adjusting it no longer rescales the UI mid-gesture. In #559.
+- MonoCode no longer crashes at launch on macOS 12 when registering an empty Window menu; the menu now includes Minimize and Zoom. In #509.
+- Triple-clicking a paragraph or code line in an agent reply selects that block instead of extending the selection to the end of the reply. In #535.
+- Plaintext and untagged code fences receive JavaScript syntax highlighting while keeping their original language labels. In #471.
+- Claude background subagents appear once instead of showing both a placeholder and an Agent tool row for the same task. In #536.
+- Failed subagent tool calls retain their error output across Claude, Codex, ACP, Cursor, OpenCode, and Pi. Folded subagent rows show the failed-step count, and error details are capped at the same limit as top-level tools. In #569.
+- Claude's `TaskCreate` and `TaskUpdate` tools populate the todo panel instead of appearing as subagents. Task status changes, renames, and deletions are applied, and task state survives resumed process and app restarts without mixing different Claude conversations. In #513.
+- MCP discovery and management use the configured provider CLI binary paths and preserve disabled server state.
+- OpenCode 2 global MCP timeout settings are recognized as settings rather than mistaken for legacy server entries. In #580.
+- Glass transitions respect reduced-motion preferences even after glass-specific styles are applied.
+- Creating a remote session keeps its initial creation and update timestamps aligned instead of immediately marking it as updated.
+- Unix remote-host bootstrap scripts use LF line endings even when generated from a Windows checkout.
+- A Windows host started by its scheduled task no longer fails to protect its data directory. `Set-Acl` rewrites the audit list, which needs a privilege the task's limited token does not have; the host now sets only the access rules. In #567.
+- Windows host errors show PowerShell's message instead of the CLIXML progress records that Windows PowerShell writes to a redirected stderr. In #567.
+- A remote host re-probes its model catalog when a provider CLI is updated or the catalog is five minutes old, so new models and settings appear without restarting the host. A new remote session drops settings the host's model does not offer, such as a 1M context on an account without it. In #567.
+
+## [0.5.0] - 2026-09-29
+
+### Added
+
+- Experimental remote access runs persistent agent sessions on Windows, macOS, and Linux machines through SSH. Settings → Connections installs a version-matched host, pairs the desktop, manages the private tunnel, and can reconnect or update the host. Remote projects and their sessions appear in the normal project rail and session views. In #432.
+- Remote sessions support Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, OMP, fx, Hermes Agent, and Antigravity when installed on the host. The host provides its own model catalog and runs each provider under the remote user's account. In #432 and #539.
+- Remote projects use the normal Explorer, file editor, Go to File, project search, Changes, Git history, branch, and worktree views. File creation and editing, diffs, staging, commits, pushes, and pull request creation operate on the host checkout. In #432.
+- Remote conversations support file and image attachments, saved drafts, Plan mode, and Build from a plan. The release now includes verified host packages for Windows, macOS, and Linux on x64 and arm64. In #432.
+- The Help menu links to the MonoCode website, repository, bug report, and feature request pages.
+
+### Changed
+
+- App startup overlaps workspace loading with optional UI loading. Streaming harness updates are batched, and transcript pools avoid unnecessary rebuilding and session saves.
+- Automation cards have a larger interactive target, a separate enable toggle, and an accessible label.
+- Release publishing waits for host packages before updating the in-app updater feed and can safely resume an interrupted draft release. In #528.
+- Windows integration tests allow more time for PowerShell and cleanup operations and run test files without parallelism.
+
+### Fixed
+
+- Transcript scrolling holds the reader's place when earlier turns resize, does not jump back to the bottom while the reader scrolls up, and clears scroll observer state when turns are removed.
+- Generated Git commit messages can be canceled; canceled or superseded results no longer populate Git dialogs.
+
+## [0.4.3] - 2026-09-28
+
+### Fixed
+
+- Read-only Git checks no longer resolve the login-shell path, which could delay project stats and session saves after a Finder launch. Commits, sync, fetch, and clone still use that path when needed.
+- The hidden project rail suspends its Git-stat listeners and reuses recent stats when reopened.
+- Transcript updates no longer make the composer mascot measure layout on every animation frame.
+- Startup and transcript saves no longer scan or reparse saved sessions for orphaned generated images; deleting a session still removes its referenced image files.
+
 ## [0.4.1] - 2026-09-28
 
 ### Fixed
@@ -1106,7 +1211,12 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/hardbeat920/monocode/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/hardbeat920/monocode/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/hardbeat920/monocode/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/hardbeat920/monocode/compare/v0.4.2...v0.4.3
+[0.4.1]: https://github.com/hardbeat920/monocode/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/hardbeat920/monocode/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hardbeat920/monocode/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hardbeat920/monocode/compare/v0.1.56...v0.2.0
