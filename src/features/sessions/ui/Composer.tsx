@@ -198,7 +198,11 @@ import {
   taggedMcpServers,
   type McpTag,
 } from "../model/mcpPicker";
-import { getComposerMcpTags, setComposerMcpTags } from "../model/draftCache";
+import {
+  getComposerMcpTags,
+  setComposerMcpTags,
+  registerComposerCloseGuard,
+} from "../model/draftCache";
 import { type McpConnection } from "../../settings/model/mcp";
 import {
   getCachedMcpSettings,
@@ -602,6 +606,17 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  useEffect(() => {
+    if (!sessionId) return;
+    return registerComposerCloseGuard(
+      sessionId,
+      () =>
+        !!ref.current?.value ||
+        attachmentsRef.current.length > 0 ||
+        !!pasteFlightRef.current ||
+        submitLockRef.current,
+    );
+  }, [sessionId]);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,

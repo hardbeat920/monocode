@@ -94,6 +94,7 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
+    close: vi.fn(async () => ({ closed: true })),
     worktrees: vi.fn(async () => ({
       worktrees: [
         { ...featureWorktree },
@@ -738,5 +739,45 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("body is required");
+  });
+});
+
+
+describe("sessions.close", () => {
+  it.each([true, false])("returns an explicit closed result: %s", async (closed) => {
+    const { source, host } = fixture();
+    vi.mocked(host.close).mockResolvedValue({ closed });
+    await expect(handleAgentApp(source, "close-1", "sessions.close", {
+      sessionId: "other",
+    }, host)).resolves.toEqual({ sessionId: "other", closed });
+    expect(host.close).toHaveBeenCalledWith("other");
+    expect(host.send).not.toHaveBeenCalled();
+    expect(host.draft).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ sessionId: "lead" }, "calling session"],
+    [{ sessionId: "missing" }, "not found in this project"],
+    [{ sessionId: "" }, "non-empty string"],
+    [{ sessionId: "other", force: true }, "Unknown sessions.close fields"],
+  ])("rejects invalid or inaccessible targets: %j", async (input, error) => {
+    const { source, host } = fixture();
+    await expect(handleAgentApp(source, "close-1", "sessions.close", input, host))
+      .rejects.toThrow(error);
+    expect(host.close).not.toHaveBeenCalled();
+  });
+
+  it("requires a project and a readable accessible record", async () => {
+    const { source, host } = fixture();
+    source.cwd = "~";
+    await expect(handleAgentApp(source, "close-1", "sessions.close", {
+      sessionId: "other",
+    }, host)).rejects.toThrow("Choose a project");
+    source.cwd = "/tmp/project";
+    vi.mocked(host.session).mockResolvedValue(null);
+    await expect(handleAgentApp(source, "close-1", "sessions.close", {
+      sessionId: "other",
+    }, host)).rejects.toThrow("not found in this project");
+    expect(host.close).not.toHaveBeenCalled();
   });
 });

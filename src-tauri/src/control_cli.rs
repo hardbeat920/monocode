@@ -82,12 +82,13 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 14] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
+    "sessions.close",
     "sessions.start",
     "worktrees.list",
     "worktrees.create",
@@ -116,6 +117,14 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
+  sessions.close {"sessionId":"..."}
+                  Close all of an idle project session's open panes/tabs.
+                  Preserve its conversation, saved drafts, files and worktree.
+                  Busy sessions and the calling session are rejected. Save any
+                  unsaved composer text/attachments with /draft first.
+                  A save failure leaves the view open. Returns {sessionId,
+                  closed:true}; already closed returns closed:false. No stop,
+                  cancel, archive or delete. Other panes stay open.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
@@ -525,7 +534,12 @@ mod tests {
             parse_args_for(&args(&["notes.list"]), true),
             Ok(Parsed::Call(_, _, _))
         ));
-        for action in ["sessions.read", "sessions.send", "sessions.draft"] {
+        for action in [
+            "sessions.read",
+            "sessions.send",
+            "sessions.draft",
+            "sessions.close",
+        ] {
             assert!(matches!(
                 parse_args_for(&args(&[action, "--json", r#"{"sessionId":"other"}"#]), true),
                 Ok(Parsed::Call(_, _, _))

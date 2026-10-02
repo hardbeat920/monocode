@@ -51,3 +51,26 @@ export function clearComposerDraft(sessionId: string): void {
   drafts.delete(sessionId);
   mcpTags.delete(sessionId);
 }
+
+// A session can have more than one mounted composer (shared panes or draft edits).
+const closeGuards = new Map<string, Set<() => boolean>>();
+
+export function registerComposerCloseGuard(
+  sessionId: string,
+  hasUnsavedWork: () => boolean,
+): () => void {
+  const guards = closeGuards.get(sessionId) ?? new Set();
+  guards.add(hasUnsavedWork);
+  closeGuards.set(sessionId, guards);
+  return () => {
+    guards.delete(hasUnsavedWork);
+    if (guards.size === 0) closeGuards.delete(sessionId);
+  };
+}
+
+export function hasUnsavedComposerDraft(sessionId: string): boolean {
+  return (
+    !!getComposerDraft(sessionId) ||
+    [...(closeGuards.get(sessionId) ?? [])].some((guard) => guard())
+  );
+}

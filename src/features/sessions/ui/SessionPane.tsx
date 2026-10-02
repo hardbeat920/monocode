@@ -412,6 +412,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   }, [remote, session.id, session.inboxAsk, session.worktreeRemoved]);
   const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
   const btw = useBtwConversation({
+    sessionId: session.id,
     available:
       !remote &&
       !isEmpty &&

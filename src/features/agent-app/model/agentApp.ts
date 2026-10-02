@@ -65,6 +65,7 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  close(id: string): Promise<{ closed: boolean }>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -83,6 +84,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.close", ["sessionId"]],
   [
     "sessions.start",
     [
@@ -352,6 +354,13 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.close": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Cannot close the calling session");
+      await projectSession(source, id, host);
+      return { sessionId: id, ...(await host.close(id)) };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
