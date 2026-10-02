@@ -477,6 +477,36 @@ export function statusTextFromSystem(
   return compact ? "Compacted context" : undefined;
 }
 
+/**
+ * What a compaction boundary reports about itself, or null when it is not one.
+ *
+ * `compact_metadata` is the only place the stream states how full the window
+ * was when Claude decided to compact, and how much the summary left behind.
+ * `pre_tokens` is required and `post_tokens` optional on the wire, so the
+ * object is truthy even when empty — callers must test the result, not
+ * `trigger`, to decide a compaction happened.
+ */
+export function compactionFromSystem(
+  rec: Record<string, unknown>,
+): {
+  trigger?: "auto" | "manual";
+  preTokens?: number;
+  postTokens?: number;
+} | null {
+  const subtype = stringField(rec, "subtype");
+  if (stringField(rec, "type") !== "system") return null;
+  if (!(subtype ?? "").startsWith("compact")) return null;
+  const metadata = asRecord(rec.compact_metadata);
+  const trigger = stringField(metadata, "trigger");
+  const preTokens = numberField(metadata, "pre_tokens");
+  const postTokens = numberField(metadata, "post_tokens");
+  return {
+    ...(trigger === "auto" || trigger === "manual" ? { trigger } : {}),
+    ...(preTokens > 0 ? { preTokens } : {}),
+    ...(postTokens > 0 ? { postTokens } : {}),
+  };
+}
+
 export function turnStatusFromResult(rec: Record<string, unknown>): {
   status: "completed" | "failed" | "interrupted" | "cancelled";
   error?: string;

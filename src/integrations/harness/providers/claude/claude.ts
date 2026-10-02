@@ -22,6 +22,7 @@ import {
   assistantTextBlocks,
   assistantThinkingBlocks,
   assistantToolUses,
+  compactionFromSystem,
   contextFromResult,
   contextUsedFromAssistant,
   turnMetricsFromResult,
@@ -759,15 +760,21 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     // A boundary is a boundary whether or not the CLI sent prose with it, so
     // this is read outside the text check: compactClaudeContext throws when
     // compactionConfirmed stays false.
-    const compacting = (stringField(rec, "subtype") ?? "").startsWith("compact");
-    if (compacting) {
+    const compaction = compactionFromSystem(rec);
+    if (compaction) {
       live.compactionConfirmed = true;
       live.compactedThisTurn = true;
-      // Every reading this session holds describes the conversation Claude just
-      // replaced, and the summarizer's own call says nothing about what is
-      // left. The boundary reports no surviving size, so retire the reading
-      // rather than let the ring sit at its pre-compaction height.
-      live.onEvent({ type: "context", compacted: true });
+      // The boundary is the one place the CLI says how much the summary left
+      // behind. Publishing it drops the ring to the real figure instead of
+      // blanking it, and every reading this session holds describes the
+      // conversation the summary replaced.
+      if (compaction.postTokens) {
+        live.onEvent({ type: "context", used: compaction.postTokens });
+      } else {
+        // Older builds send `pre_tokens` only. Nothing sizes what survived, so
+        // retire the reading rather than leave the ring at its old height.
+        live.onEvent({ type: "context", compacted: true });
+      }
     }
     const text = statusTextFromSystem(rec);
     if (text) live.onEvent({ type: "status", text });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import { contextRatio } from "../../../../features/sessions/model/contextUsage";
 import {
   foldableWork,
   foldedBlocks,
@@ -2137,6 +2138,42 @@ describe("claude manual compaction", () => {
     ).toEqual([]);
   });
 
+  it("reports the surviving size when the CLI sends one", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: {
+        trigger: "manual",
+        pre_tokens: 180_007,
+        post_tokens: 31_000,
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await compact;
+
+    // Clicking "Compact now" moves the ring immediately, rather than leaving
+    // it blank until the next message.
+    expect(readingEvents(events)).toEqual([{ type: "context", used: 31_000 }]);
+  });
+
   it("still fails a compaction the CLI never confirmed", async () => {
     const { turn } = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
@@ -2163,6 +2200,38 @@ describe("claude manual compaction", () => {
 });
 
 describe("claude auto compaction", () => {
+  it("lands the ring on the size the summary left behind", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit(reading(190_000));
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: {
+        trigger: "auto",
+        pre_tokens: 190_007,
+        post_tokens: 24_000,
+      },
+    });
+    emit(resultReading(190_007, 200_000));
+    await turn;
+
+    // The boundary is the only place that says what survived, so the ring drops
+    // to the real figure rather than going blank.
+    expect(readingEvents(events)).toEqual([
+      { type: "context", used: 190_007 },
+      { type: "context", used: 24_000 },
+      { type: "context", window: 200_000 },
+    ]);
+    // Replaying these through the reducer is what proves the ring ends up
+    // showing 12% of a 200K window rather than 95% or nothing at all.
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    expect(contextRatio(session.context)).toBeCloseTo(0.12, 5);
+  });
+
   it("retires the level when the summary ends the turn", async () => {
     const { events, turn } = await startTurn("s1");
     emit(reading(190_000));

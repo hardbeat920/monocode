@@ -10,6 +10,7 @@ import {
   assistantModel,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  compactionFromSystem,
   contextFromResult,
   contextUsedFromAssistant,
   extractExitPlanModePlan,
@@ -745,6 +746,68 @@ describe("helpers", () => {
     expect(
       statusTextFromSystem({ type: "assistant", message: "hello" }),
     ).toBeUndefined();
+  });
+});
+
+describe("compactionFromSystem", () => {
+  it("reads the trigger and the sizes either side of the summary", () => {
+    // Shape captured from `claude --output-format stream-json --verbose`.
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 48_230,
+          post_tokens: 7_161,
+        },
+      }),
+    ).toEqual({ trigger: "auto", preTokens: 48_230, postTokens: 7_161 });
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual" },
+      }),
+    ).toEqual({ trigger: "manual" });
+  });
+
+  it("reports a boundary that says nothing about itself", () => {
+    // Truthy even when empty: a /compact on a build that sends no metadata is
+    // still a confirmed compaction, and treating it as unconfirmed makes
+    // compactClaudeContext throw on a compaction that worked. So callers must
+    // test this result, never `.trigger`.
+    expect(
+      compactionFromSystem({ type: "system", subtype: "compact_boundary" }),
+    ).toEqual({});
+    expect(compactionFromSystem({ type: "system", subtype: "compact" })).toEqual(
+      {},
+    );
+    // An unrecognised trigger is dropped rather than passed through.
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "later" },
+      }),
+    ).toEqual({});
+  });
+
+  it("drops sizes that are not positive numbers", () => {
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 0, post_tokens: -5 },
+      }),
+    ).toEqual({ trigger: "auto" });
+  });
+
+  it("ignores anything that is not a compaction boundary", () => {
+    expect(compactionFromSystem({ type: "system", subtype: "init" })).toBeNull();
+    expect(compactionFromSystem({ type: "system", subtype: "status" })).toBeNull();
+    expect(compactionFromSystem({ type: "assistant" })).toBeNull();
+    expect(compactionFromSystem({ type: "result" })).toBeNull();
   });
 });
 
