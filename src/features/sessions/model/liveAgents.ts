@@ -89,6 +89,7 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
   };
 }
 
+/** Sorts approval waits first, then active cards before done cards by start time. */
 function compareLiveAgents(a: LiveAgent, b: LiveAgent): number {
   if (a.needsApproval !== b.needsApproval) return a.needsApproval ? -1 : 1;
   if (a.done !== b.done) return a.done ? 1 : -1;
@@ -116,6 +117,7 @@ function turnStartedAt(blocks: Block[]): number | undefined {
   return undefined;
 }
 
+/** Returns the duration saved on the latest user turn for a completed card. */
 function turnDurationMs(blocks: Block[]): number | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") return blocks[i].durationMs;
