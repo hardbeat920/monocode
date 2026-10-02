@@ -28,7 +28,12 @@ type Target = {
   removed?: boolean;
 };
 
-/** Read only: account metadata and the very same snapshots consumed by the UI. */
+/**
+ * Return an allowlisted account/usage snapshot independently of the caller's harness.
+ * Validate filters, preserve unknown/stale states, and never change account selection.
+ * Cached reads do not probe; explicit refresh starts shared throttled loads and
+ * returns immediately, so loading rows may need a subsequent cached read.
+ */
 export function usageSnapshot(source: Session, input: Record<string, unknown>) {
   const { provider, accountId, refresh = false } = input;
   if (provider !== undefined && !HARNESSES.includes(provider as HarnessId))

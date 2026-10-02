@@ -15,6 +15,7 @@ import {
 } from "../../features/providers/model/rateLimitsCache";
 import { UsageProviderChip } from "./UsageProviderChip";
 
+/** Show Pi subscription usage only for a concrete model with a supported billing source. */
 export function PiUsage({ model, now }: { model?: string; now: number }) {
   const provider = piUsageProvider(model);
   if (!provider) {
@@ -35,6 +36,11 @@ export function PiUsage({ model, now }: { model?: string; now: number }) {
   return <PiProviderUsage key={provider} provider={provider} now={now} />;
 }
 
+/**
+ * Display shared Pi usage, refreshing on visible polls/focus or explicit requests.
+ * Unmounting removes triggers but leaves shared requests and snapshots alive.
+ * Failed quotas are hidden in the footer while the cache retains their stale data.
+ */
 function PiProviderUsage({
   provider,
   now,
@@ -48,6 +54,7 @@ function PiProviderUsage({
   useEffect(() => {
     let disposed = false;
     let inflight = false;
+    /** Join cache work while visible; an explicit refresh bypasses visibility/cooldowns. */
     const refresh = (force = false) => {
       if (disposed || inflight) return;
       if (!force && document.visibilityState !== "visible") return;

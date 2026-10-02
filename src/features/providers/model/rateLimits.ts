@@ -90,6 +90,7 @@ export function idleRateLimits(
   };
 }
 
+/** Mark a snapshot as fetching while retaining prior quota data and its timestamp. */
 export function fetchingRateLimits(
   provider: RateLimitProvider,
   previous?: ProviderRateLimits | null,
@@ -134,6 +135,10 @@ export function unavailableRateLimits(
   };
 }
 
+/**
+ * Record a failed attempt at the current time, retaining any previous quotas.
+ * The error text is internal provider detail; callers must sanitize external output.
+ */
 export function errorRateLimits(
   provider: RateLimitProvider,
   error: string,
@@ -304,6 +309,10 @@ function usedPercentFrom(rec: Record<string, unknown>): number | null {
   return value;
 }
 
+/**
+ * Project Claude OAuth JSON into known account/model windows and native extra usage.
+ * Invalid JSON or a non-object returns an error snapshot; absent fields stay unknown.
+ */
 export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   let parsed: unknown;
   try {
@@ -377,6 +386,11 @@ type CodexWindowSnapshot = {
   resetsAt: unknown;
 };
 
+/**
+ * Normalize app-server's legacy and named quota buckets without dropping model scope.
+ * Missing default-bucket windows fall back to the legacy view; unknown data stays
+ * absent, and reset timestamps do not imply that an allowance has renewed.
+ */
 export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
   const rec = asRecord(result);
   const wrapper = asRecord(rec?.rateLimits) ?? rec;
@@ -605,6 +619,7 @@ function classifyWindowDuration(
   return null;
 }
 
+/** Map a legacy slot, using its fallback duration only when Codex omits one. */
 function mapCodexSnapshot(
   raw: CodexWindowSnapshot | null,
   windowMinutes: number,

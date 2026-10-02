@@ -26,6 +26,7 @@ const queuedRefreshes = new Map<string, Promise<ProviderRateLimits>>();
 const listeners = new Set<() => void>();
 let allSnapshots: Record<string, ProviderRateLimits> = {};
 
+/** Namespace snapshots by source and account, keeping Pi separate from CLI profiles. */
 function keyFor(provider: RateLimitSource, accountId: string): string {
   return `${provider}:${accountId}`;
 }
@@ -45,6 +46,7 @@ export function getAllRateLimits(): Record<string, ProviderRateLimits> {
   return allSnapshots;
 }
 
+/** Read the shared snapshot or a stable idle value without starting a provider probe. */
 export function getCachedRateLimits(
   provider: RateLimitSource,
   accountId = "default",
@@ -60,6 +62,7 @@ const idle: Record<RateLimitSource, ProviderRateLimits> = {
   "pi:openai-codex": idleRateLimits("codex"),
 };
 
+/** Subscribe React to shared snapshots; mounting this hook does not fetch usage. */
 export function useCachedRateLimits(
   provider: RateLimitSource,
   accountId = "default",
@@ -71,6 +74,7 @@ export function useCachedRateLimits(
   );
 }
 
+/** Replace one cached snapshot and notify subscribers without probing the provider. */
 export function setCachedRateLimits(
   provider: RateLimitSource,
   accountId: string,
@@ -79,7 +83,12 @@ export function setCachedRateLimits(
   publish(keyFor(provider, accountId), value);
 }
 
-/** Fetch an account once per window lifetime, or again on explicit refresh. */
+/**
+ * Load missing usage or refresh through the shared per-account request queue.
+ * `false` reuses cached data; `throttled` also enforces success/error cooldowns.
+ * `true` bypasses cooldowns and queues one follow-up when a request is in flight.
+ * Fetch exceptions become error snapshots; failed refreshes preserve prior quotas.
+ */
 export function loadRateLimits(
   provider: RateLimitSource,
   accountId = "default",
@@ -168,7 +177,10 @@ export function loadRateLimits(
   return run;
 }
 
-/** Also used when an account is removed and by tests that need a clean cache. */
+/**
+ * Evict snapshots and attempt timestamps for one source/account pair, or all
+ * entries when either argument is omitted. Notify subscribers; do not cancel probes.
+ */
 export function clearCachedRateLimits(
   provider?: RateLimitSource,
   accountId?: string,

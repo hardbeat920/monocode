@@ -529,6 +529,7 @@ mod tests {
         assert_eq!(quoted("/Users/a\\b/MonoCode"), "'/Users/a\\b/MonoCode'");
         assert_eq!(quoted("/Users/it's/MonoCode"), r"'/Users/it'\''s/MonoCode'");
     }
+    /// Check app-action parsing/help and request-ID rejection without running a command.
     #[test]
     fn app_mode_exposes_only_app_actions_and_safe_request_ids() {
         assert!(matches!(

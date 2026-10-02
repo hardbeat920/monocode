@@ -283,6 +283,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Dispatch an app action for the caller supplied by the authorized control bridge.
+ * Validate allowed fields before reading state or invoking host operations; reject
+ * invalid inputs and propagate host failures to the bridge's response handler.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
