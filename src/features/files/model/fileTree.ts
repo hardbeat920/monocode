@@ -87,7 +87,12 @@ function visibleDirs(): Set<string> {
     if (!expanded) continue;
     for (const path of expanded) {
       if (path === root || path.startsWith(`${root}/`)) {
-        if (everyFolderAbove(path, root, expanded)) visible.add(path);
+        if (
+          path === root ||
+          (expanded.has(root) && everyFolderAbove(path, root, expanded))
+        ) {
+          visible.add(path);
+        }
       }
     }
   }
@@ -96,8 +101,8 @@ function visibleDirs(): Set<string> {
 
 /**
  * Collapsing a folder only drops that one path from the expanded set, so its
- * descendants linger there. A descendant is on screen only while every folder
- * between it and the root is expanded.
+ * descendants linger there. A descendant is on screen only while the root and
+ * every folder between it and the root are expanded.
  */
 function everyFolderAbove(
   path: string,

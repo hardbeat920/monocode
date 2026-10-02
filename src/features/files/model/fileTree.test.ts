@@ -128,6 +128,23 @@ describe("fileTree cache", () => {
     expect(listDir.mock.calls.map(([path]) => path)).toEqual([root, root]);
   });
 
+  it("drops descendants left behind by a collapsed root", async () => {
+    const child = `${root}/src`;
+    registerExplorer(root);
+    // Root collapsed: it drops out of the set, its children stay.
+    saveExpanded(root, new Set([child]));
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+    await listCachedDir(child);
+    listDir.mockClear();
+
+    await refreshCachedDirs();
+
+    expect(peekDir(root)).not.toBeNull();
+    expect(peekDir(child)).toBeNull();
+    expect(listDir.mock.calls.map(([path]) => path)).toEqual([root]);
+  });
+
   it("drops a project's folders once its explorer unmounts", async () => {
     registerExplorer(root);
     listDir.mockResolvedValue([]);
