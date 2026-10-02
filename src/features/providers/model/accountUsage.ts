@@ -92,6 +92,20 @@ export function accountStatus(
   return { tone: "ready", label: "Ready", detail: null };
 }
 
+/** True when usage failed because the account has to sign in again. */
+export function needsProviderLogin(limits: ProviderRateLimits): boolean {
+  if (limits.status === "unavailable") return true;
+  if (limits.status !== "error") return false;
+  const text = limits.error?.toLowerCase() ?? "";
+  return (
+    text.includes("expired") ||
+    text.includes("sign-in") ||
+    text.includes("not signed in") ||
+    text.includes("not connected") ||
+    text.includes("authentication")
+  );
+}
+
 /** "back in 31m" for the used-up window that stays blocked longest. */
 function backIn(limits: ProviderRateLimits, now: number): string | null {
   const resetAt = exhaustedWindowResetAt(limits);

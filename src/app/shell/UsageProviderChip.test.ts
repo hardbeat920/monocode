@@ -7,7 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ProviderRateLimits } from "../../features/providers/model/rateLimits";
 import { projectKey } from "../../shared/lib/paths";
 import { saveTabGroupMascot } from "../../features/workspace/model/tabGroups";
-import { needsProviderLogin, UsageProviderChip } from "./UsageProviderChip";
+import { needsProviderLogin } from "../../features/providers/model/accountUsage";
+import { UsageProviderChip } from "./UsageProviderChip";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),

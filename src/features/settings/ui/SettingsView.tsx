@@ -229,9 +229,14 @@ import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubti
 import {
   accountStatus,
   accountUsageKey,
+  needsProviderLogin,
   useProviderAccountUsage,
 } from "../../providers/model/accountUsage";
-import { clearCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import type { ProviderRateLimits } from "../../providers/model/rateLimits";
+import {
+  clearCachedRateLimits,
+  loadRateLimits,
+} from "../../providers/model/rateLimitsCache";
 import {
   AccountStatusLabel,
   AccountUsageMeters,
@@ -3305,6 +3310,30 @@ function ProviderAccountsSettings() {
     }
   };
 
+  const signInAccount = async (account: ProviderAccount) => {
+    if (working) return;
+    setWorking(`signin:${account.provider}:${account.id}`);
+    setError(null);
+    try {
+      await (account.isDefault
+        ? loginHarness(account.provider)
+        : loginHarness(account.provider, account.id));
+      const limits = await loadRateLimits(account.provider, account.id, true);
+      if (limits.status === "error" || needsProviderLogin(limits)) {
+        throw new Error(
+          limits.error ||
+            `${HARNESS_TITLE[account.provider]} sign-in could not be verified`,
+        );
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Could not complete sign-in",
+      );
+    } finally {
+      setWorking(null);
+    }
+  };
+
   const removeAccount = async (account: ProviderAccount) => {
     if (account.isDefault || working) return;
     const confirmed = await ask(
@@ -3393,6 +3422,7 @@ function ProviderAccountsSettings() {
                   editor?.provider === provider &&
                   editor.accountId === account.id;
                 const removing = working === `remove:${provider}:${account.id}`;
+                const signingIn = working === `signin:${provider}:${account.id}`;
                 const identity = identities[identityKey(account)];
                 const orgTag = identityOrganizationTag(identity);
                 const limits = usage.usage[accountUsageKey(account)];
@@ -3442,7 +3472,24 @@ function ProviderAccountsSettings() {
                       </div>
                     </div>
                     <AccountUsageMeters limits={limits} now={usage.now} />
-                    <div className="flex w-24 shrink-0 items-center justify-end gap-1">
+                    <div className="flex min-w-24 shrink-0 items-center justify-end gap-1">
+                      {signingIn || (limits && canSignIn(limits)) ? (
+                        <button
+                          type="button"
+                          disabled={Boolean(working)}
+                          aria-label={`Sign in to ${account.label}`}
+                          onClick={() => void signInAccount(account)}
+                          className="mr-1 flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2 text-[11px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+                        >
+                          {signingIn ? (
+                            <Loader
+                              className="size-3 animate-spin"
+                              aria-hidden
+                            />
+                          ) : null}
+                          {signingIn ? "Signing in…" : "Sign in"}
+                        </button>
+                      ) : null}
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
                           Default
@@ -3504,6 +3551,14 @@ function ProviderAccountsSettings() {
         </p>
       ) : null}
     </Group>
+  );
+}
+
+/** Sign-in can fix this account; a missing CLI needs an install first. */
+function canSignIn(limits: ProviderRateLimits): boolean {
+  return (
+    needsProviderLogin(limits) &&
+    !limits.error?.toLowerCase().includes("cli not found")
   );
 }
 

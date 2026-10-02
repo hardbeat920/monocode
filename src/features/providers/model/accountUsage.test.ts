@@ -18,6 +18,7 @@ vi.mock("./rateLimitsFetch", () => ({
 import {
   accountHeadroom,
   accountStatus,
+  needsProviderLogin,
   bestAlternativeAccount,
   useProviderAccountUsage,
   type AccountUsage,
@@ -126,6 +127,25 @@ describe("accountStatus", () => {
         now,
       ).label,
     ).toBe("Claude sign-in expired");
+  });
+});
+
+describe("needsProviderLogin", () => {
+  it("asks for sign-in when the account is expired or signed out", () => {
+    expect(
+      needsProviderLogin(
+        limits(null, null, {
+          status: "error",
+          error: "Claude sign-in expired",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      needsProviderLogin(
+        limits(null, null, { status: "unavailable", error: null }),
+      ),
+    ).toBe(true);
+    expect(needsProviderLogin(limits(window(40)))).toBe(false);
   });
 });
 
