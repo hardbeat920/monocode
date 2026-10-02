@@ -20,7 +20,11 @@ Read this before working on any crate under `crates/` or `apps/`. The plan and m
 | `monocode-markdown` | Streaming markdown renderer with code highlighting. | gpui |
 | `monocode-terminal-view` | Terminal emulator element: alacritty_terminal grid drawn with GPUI, input, selection, scrollback. | gpui, alacritty_terminal |
 | `monocode-editor` | Code editor and diff views built on gpui-component's editor: git gutter, find and replace, language detection. | gpui, gpui-component |
-| `monocode-app` | The GPUI binary: windows, views per feature, menus, keybindings. `monocode-app host` runs the engine headless. | everything |
+| `monocode-layout` | Pure workspace layout model: tabs, split panes, tab groups, pane drops, the workspace snapshot JSON. | core |
+| `monocode-settings` | `Kv`, the key-value store that replaces localStorage with the same keys and JSON values, plus the one-time WebKit localStorage import. | core, rusqlite |
+| `monocode-host` | The remote host's engine and the app's headless mode, ported from `host/`. | engine, remote |
+| `monocode-view-*` | Feature views, one crate per group: `view-transcript`, `view-composer`, `view-workbench`, `view-files`, `view-scm`, `view-inbox`, `view-settings`, `view-pages`, `view-remote`. | engine, ui, markdown, editor, terminal-view |
+| `monocode-app` | The GPUI binary: window, shell chrome, sidebar, quick composer, menus, keybindings, and the `--view` registry that composes the view crates. `monocode-app host` runs the engine headless. | everything |
 
 `src-tauri` keeps building until cutover. It has its own workspace and lockfile (`src-tauri/Cargo.lock`), because upstream GTK crates pin a `toml_datetime` that GPUI's build cannot share. It may depend on the non-GPUI crates by path. Check it with `cd src-tauri && cargo check`. Both workspaces build into the root `target/` directory (see `.cargo/config.toml`).
 
@@ -30,6 +34,15 @@ Read this before working on any crate under `crates/` or `apps/`. The plan and m
 - `monocode-process`, `monocode-store`, `monocode-git`, and `monocode-integrations` are blocking APIs. Callers run them off the UI thread. Long-lived readers use std threads and send over `async-channel` or a callback.
 - `monocode-harness` uses `futures`, `async-channel`, and `smol` timers (`smol::Timer`). It never names tokio or GPUI, so the same adapter runs under the GPUI executor, under the headless host, and in tests with `smol::block_on`. An adapter that needs to spawn takes a spawner from its caller.
 - `monocode-engine` holds state in GPUI entities (`Entity<T>`, `cx.notify()`, `cx.spawn`, `cx.background_spawn`). Views observe these entities directly. The headless host runs the same entities under `gpui_platform::headless()`.
+
+## Shared files and feature gates
+
+- `monocode-harness`: each provider lives in `src/providers/<name>/` behind a cargo feature of the same name. Build one provider alone with `--no-default-features --features <name>`. The framework in `src/core/` is always on and owns `lib.rs`.
+- `monocode-engine`: `runtime` is always on and owns `lib.rs`. Every other package (`submit`, `attention`, `side_threads`, `orchestration`, `workspace`, `projects`, `history`, `automations`, `inbox`, `remote`) is a module behind a feature of the same name.
+- Engine packages call each other through hook traits that `runtime` defines (`EngineHooks`) with no-op defaults. The owning package fills its hooks in. This keeps the call cycles the TypeScript had (submit, orchestrator, queues, remote) from becoming crate cycles.
+- localStorage reads and writes become `monocode_settings::Kv` calls with the same `monocode.*` keys and the same JSON values, so each ported module keeps its own load and save code.
+- The transcript reducer lives in `monocode_core::reducer`. `regex` is allowed in core.
+- When two packages must edit one shared file (a `Cargo.toml`, a `mod.rs`), re-read it right before editing and change only your own lines.
 
 ## Porting rules
 
@@ -58,6 +71,7 @@ Several agents work in this checkout at once.
 - Crates that do not depend on GPUI build fast in their own target directory: set `CARGO_TARGET_DIR=target/agent-<crate>` so you are not blocked by another agent's GPUI build lock.
 - Run long commands in the background or with a long timeout. A cold GPUI build takes about 4 minutes.
 - Do not commit. The lead reviews and commits.
+- Sessions can be interrupted and resumed. Write code to disk early, and keep a short `PROGRESS.md` in your crate (done, in progress, next) updated after each step, so a restart loses little. The lead deletes these files at cutover.
 - If another agent's half-finished code breaks your build through a shared dependency, do not fix their files. Note it in your report and work around it, for example by checking only your crate.
 
 ## Writing
