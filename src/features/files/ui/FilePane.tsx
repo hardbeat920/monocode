@@ -159,6 +159,7 @@ function FilePaneComponent({
               cwd={activeFile.cwd}
               focusPath={activeFile.path}
               focusKind={activeFile.changeKind}
+              focusRequest={activeFile.focusRequest}
             />
           </div>
         ) : null}
