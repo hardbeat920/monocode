@@ -8,6 +8,8 @@ import {
   extractSkillName,
   extractToolPreview,
 } from "../../core/preview";
+import { acpAgentInfo } from "../../core/acpSubagents";
+import { statSync } from "node:fs";
 
 export type OpenCrabsPermissionRequest = {
   title: string;
@@ -99,14 +101,18 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
       previewKind: preview?.kind,
     });
     return [
+      ...imagesFromContent(update, tool, callId),
       {
         type: "tool.updated",
         callId,
-        title: title || toolLabel(update) || toolLabel(tool),
         kind: toolKind,
         status,
         detail: toolDetail(update, tool),
         preview,
+        // Classify on the RAW label — composeToolTitle strips the
+        // "subagent:" prefix acpAgentInfo's detection needs.
+        ...acpAgentInfo(update, tool, toolKind, toolLabel(update) ?? toolLabel(tool)),
+        title: title || toolLabel(update) || toolLabel(tool),
       },
     ];
   }
@@ -280,6 +286,50 @@ export function nativeCommandsFromUpdate(
       },
     ];
   });
+}
+
+/** Image resource_links the tool's content references on disk. */
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
+function imagesFromContent(
+  update: Record<string, unknown>,
+  tool: Record<string, unknown>,
+  callId: string,
+): HarnessEvent[] {
+  const content = update.content ?? tool.content;
+  if (!Array.isArray(content)) return [];
+  const events: HarnessEvent[] = [];
+  for (const [i, block] of content.entries()) {
+    const rec = asRecord(block);
+    if (!rec || rec.type !== "resource_link") continue;
+    const uri = typeof rec.uri === "string" ? rec.uri : "";
+    if (!uri.startsWith("file://")) continue;
+    const path = decodeURIComponent(uri.slice("file://".length));
+    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = IMAGE_MIME[ext];
+    if (!mimeType) continue;
+    try {
+      const st = statSync(path);
+      if (!st.isFile()) continue;
+      events.push({
+        type: "image.generated",
+        itemId: `${callId}:${i}`,
+        path,
+        name: String(rec.name ?? path.split("/").pop() ?? "image"),
+        mimeType,
+        size: st.size,
+      });
+    } catch {
+      // Gone before render — the text summary still carries the path.
+    }
+  }
+  return events;
 }
 
 function planEvent(update: Record<string, unknown>): HarnessEvent | null {
