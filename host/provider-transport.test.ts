@@ -24,6 +24,7 @@ import {
 // through the existing production adapters without contacting a paid model.
 const fixture = `#!/usr/bin/env node
 const readline = require('node:readline');
+const dialogAnswers = [];
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // Records what each turn actually received, so tests can prove that settings
 // applied between turns reach the provider.
@@ -67,10 +68,20 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.type === 'get_available_models') send({type: 'response', id: request.id, command: 'get_available_models', success: true, data: {models: [{provider: 'openai', id: 'fixture-model', name: 'Fixture model'}]}});
   if (request.type === 'prompt') {
     send({type: 'response', id: request.id, command: 'prompt', success: true, data: {}});
+    if (request.message === 'two dialogs') {
+      send({type: 'extension_ui_request', id: 'first', method: 'select', title: 'First?', options: ['A', 'B']});
+      send({type: 'extension_ui_request', id: 'second', method: 'select', title: 'Second?', options: ['C', 'D']});
+      return;
+    }
     setTimeout(() => {
       send({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'Headless Pi completed'}});
       send({type: 'agent_settled'});
     }, 30);
+  }
+  if (request.type === 'extension_ui_response') {
+    record({extensionResponse: request});
+    dialogAnswers.push(request);
+    if (dialogAnswers.length === 2) send({type: 'agent_settled'});
   }
 });
 `;
@@ -197,6 +208,51 @@ describe("existing providers over headless process I/O", () => {
       }
     },
   );
+
+  it("answers overlapping Pi dialogs through the remote host", async () => {
+    const project = await engine.openProject(directory);
+    const { sessionId } = engine.command({
+      type: "create",
+      commandId: "create-pi-dialogs",
+      projectId: project.id,
+      harness: "pi",
+      model: "pi:default",
+      runtimeMode: "supervised",
+    });
+    engine.command({
+      type: "send",
+      commandId: "send-pi-dialogs",
+      sessionId,
+      text: "two dialogs",
+    });
+    await vi.waitFor(() =>
+      expect(store.session(sessionId).session.pendingQuestion?.questions[0].id).toBe("first"),
+    );
+    const answer = (requestId: number, option: string, questionId: string) =>
+      engine.command({
+        type: "answer",
+        commandId: `answer-pi-${requestId}`,
+        sessionId,
+        runId: store.session(sessionId).runId,
+        requestId,
+        reply: { kind: "answered", answers: { [questionId]: [option] } },
+      });
+    answer(store.session(sessionId).session.pendingQuestion!.requestId, "0", "first");
+    await vi.waitFor(() =>
+      expect(store.session(sessionId).session.pendingQuestion?.questions[0].id).toBe("second"),
+    );
+    answer(store.session(sessionId).session.pendingQuestion!.requestId, "1", "second");
+    await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"));
+    const responses = readFileSync(join(directory, "calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).extensionResponse)
+      .filter((response) => response?.id === "first" || response?.id === "second");
+    expect(responses).toEqual([
+      { type: "extension_ui_response", id: "first", value: "A" },
+      { type: "extension_ui_response", id: "second", value: "D" },
+    ]);
+  });
 
   it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
     "completes a %s turn over the headless ACP transport",
