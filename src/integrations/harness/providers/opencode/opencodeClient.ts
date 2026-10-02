@@ -254,7 +254,7 @@ export class OpenCodeClient {
   }): Promise<{ info?: Record<string, unknown>; parts?: unknown[] }> {
     if (this.generation === "v2") {
       await this.configureTurn(input);
-      const result = await this.request<{ text?: string }>(
+      const result = await this.request<{ text?: string } | undefined>(
         "POST",
         this.path(`/session/${enc(input.sessionID)}/generate`),
         {
@@ -264,7 +264,7 @@ export class OpenCodeClient {
       );
       return {
         info: {},
-        parts: result.text ? [{ type: "text", text: result.text }] : [],
+        parts: result?.text ? [{ type: "text", text: result.text }] : [],
       };
     }
     return this.request("POST", `/session/${enc(input.sessionID)}/message`, {
