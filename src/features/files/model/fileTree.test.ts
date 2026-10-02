@@ -11,6 +11,7 @@ import {
   saveExpanded,
   subscribeDirsChanged,
   unregisterExplorer,
+  withoutSubtree,
 } from "./fileTree";
 
 const root = "/tmp/empty-project";
@@ -108,6 +109,25 @@ describe("fileTree cache", () => {
     );
   });
 
+  it("drops a descendant left behind by a collapsed folder", async () => {
+    const collapsed = `${root}/src`;
+    const hidden = `${collapsed}/deep`;
+    registerExplorer(root);
+    saveExpanded(root, new Set([root, hidden]));
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+    await listCachedDir(collapsed);
+    await listCachedDir(hidden);
+    listDir.mockClear();
+
+    await refreshCachedDirs();
+    await refreshCachedDirs();
+
+    expect(peekDir(hidden)).toBeNull();
+    expect(peekDir(collapsed)).toBeNull();
+    expect(listDir.mock.calls.map(([path]) => path)).toEqual([root, root]);
+  });
+
   it("drops a project's folders once its explorer unmounts", async () => {
     registerExplorer(root);
     listDir.mockResolvedValue([]);
@@ -137,5 +157,28 @@ describe("fileTree cache", () => {
     expect(peekDir(root)).toEqual([entry("from-agent.ts")]);
     expect(onChange).toHaveBeenCalledTimes(1);
     stop();
+  });
+});
+
+describe("withoutSubtree", () => {
+  const src = `${root}/src`;
+
+  it("drops a deleted folder and its expanded descendants", () => {
+    const expanded = new Set([root, src, `${src}/deep`, `${root}/docs`]);
+
+    expect([...withoutSubtree(expanded, src)]).toEqual([root, `${root}/docs`]);
+  });
+
+  it("keeps a sibling whose name merely starts the same", () => {
+    const sibling = `${root}/src-legacy`;
+    const expanded = new Set([root, src, sibling]);
+
+    expect([...withoutSubtree(expanded, src)]).toEqual([root, sibling]);
+  });
+
+  it("returns the same set when nothing matched", () => {
+    const expanded = new Set([root, src]);
+
+    expect(withoutSubtree(expanded, `${root}/docs`)).toBe(expanded);
   });
 });

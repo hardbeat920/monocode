@@ -22,6 +22,20 @@ export function saveExpanded(cwd: string, expanded: Set<string>) {
   expandedByProject.set(cwd, new Set(expanded));
 }
 
+/**
+ * An expanded set without `path` or anything under it, for when a folder is
+ * deleted. Returns the same set when there was nothing to drop.
+ */
+export function withoutSubtree(
+  expanded: Set<string>,
+  path: string,
+): Set<string> {
+  const next = new Set(
+    [...expanded].filter((p) => p !== path && !p.startsWith(`${path}/`)),
+  );
+  return next.size === expanded.size ? expanded : next;
+}
+
 export function loadSelected(cwd: string): string | null {
   return selectedByProject.get(cwd) ?? null;
 }
@@ -69,11 +83,35 @@ function visibleDirs(): Set<string> {
   const visible = new Set<string>();
   for (const root of mountedRoots) {
     visible.add(root);
-    for (const path of expandedByProject.get(root) ?? []) {
-      if (path === root || path.startsWith(`${root}/`)) visible.add(path);
+    const expanded = expandedByProject.get(root);
+    if (!expanded) continue;
+    for (const path of expanded) {
+      if (path === root || path.startsWith(`${root}/`)) {
+        if (everyFolderAbove(path, root, expanded)) visible.add(path);
+      }
     }
   }
   return visible;
+}
+
+/**
+ * Collapsing a folder only drops that one path from the expanded set, so its
+ * descendants linger there. A descendant is on screen only while every folder
+ * between it and the root is expanded.
+ */
+function everyFolderAbove(
+  path: string,
+  root: string,
+  expanded: Set<string>,
+): boolean {
+  let end = root.length;
+  while (end < path.length) {
+    const slash = path.indexOf("/", end + 1);
+    if (slash === -1) return true;
+    if (!expanded.has(path.slice(0, slash))) return false;
+    end = slash;
+  }
+  return true;
 }
 
 /**
