@@ -104,62 +104,31 @@ export function applyHarnessEvent(
       );
       return { ...session, blocks };
     }
-    case "question.asked": {
-      const prompt = {
-        requestId: event.requestId,
-        questions: event.questions,
-        ...(event.title ? { title: event.title } : {}),
-        ...(event.autoResolveAt != null
-          ? { autoResolveAt: event.autoResolveAt }
-          : {}),
+    case "question.asked":
+      return {
+        ...session,
+        pendingQuestion: {
+          requestId: event.requestId,
+          questions: event.questions,
+          ...(event.title ? { title: event.title } : {}),
+          ...(event.autoResolveAt != null
+            ? { autoResolveAt: event.autoResolveAt }
+            : {}),
+        },
       };
-      return session.pendingQuestion
-        ? {
-            ...session,
-            queuedQuestions: [...(session.queuedQuestions ?? []), prompt],
-          }
-        : { ...session, pendingQuestion: prompt };
-    }
     case "question.updated":
-      if (session.pendingQuestion?.requestId === event.requestId)
-        return {
-          ...session,
-          pendingQuestion: {
-            ...session.pendingQuestion,
-            autoResolveAt: event.autoResolveAt,
-          },
-        };
-      return session.queuedQuestions?.some(
-        (prompt) => prompt.requestId === event.requestId,
-      )
+      return session.pendingQuestion?.requestId === event.requestId
         ? {
             ...session,
-            queuedQuestions: session.queuedQuestions.map((prompt) =>
-              prompt.requestId === event.requestId
-                ? { ...prompt, autoResolveAt: event.autoResolveAt }
-                : prompt,
-            ),
+            pendingQuestion: {
+              ...session.pendingQuestion,
+              autoResolveAt: event.autoResolveAt,
+            },
           }
         : session;
     case "question.resolved":
-      if (session.pendingQuestion?.requestId === event.requestId) {
-        const [pendingQuestion, ...queuedQuestions] =
-          session.queuedQuestions ?? [];
-        return {
-          ...session,
-          pendingQuestion,
-          queuedQuestions: queuedQuestions.length ? queuedQuestions : undefined,
-        };
-      }
-      return session.queuedQuestions?.some(
-        (prompt) => prompt.requestId === event.requestId,
-      )
-        ? {
-            ...session,
-            queuedQuestions: session.queuedQuestions.filter(
-              (prompt) => prompt.requestId !== event.requestId,
-            ),
-          }
+      return session.pendingQuestion?.requestId === event.requestId
+        ? { ...session, pendingQuestion: undefined }
         : session;
     case "context":
       return {
@@ -535,7 +504,6 @@ export function stopStreaming(session: Session, endedAt = Date.now()): Session {
     ...settled,
     busy: false,
     pendingQuestion: undefined,
-    queuedQuestions: undefined,
     blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
   };
 }

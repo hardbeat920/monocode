@@ -1056,39 +1056,6 @@ describe("clarifying questions", () => {
     expect(session.pendingQuestion).toBeUndefined();
   });
 
-  it("shows overlapping questions in arrival order and removes a resolved queued question", () => {
-    let session = newSession("pi", "/repo");
-    for (const requestId of [3, 4, 5]) {
-      session = applyHarnessEvent(session, {
-        type: "question.asked",
-        requestId,
-        questions,
-      });
-    }
-    expect(session.pendingQuestion?.requestId).toBe(3);
-    expect(session.queuedQuestions?.map((prompt) => prompt.requestId)).toEqual([
-      4, 5,
-    ]);
-    session = applyHarnessEvent(session, {
-      type: "question.resolved",
-      requestId: 5,
-      decision: "skipped",
-    });
-    session = applyHarnessEvent(session, {
-      type: "question.resolved",
-      requestId: 3,
-      decision: "answered",
-    });
-    expect(session.pendingQuestion?.requestId).toBe(4);
-    expect(session.queuedQuestions).toBeUndefined();
-    session = applyHarnessEvent(session, {
-      type: "question.resolved",
-      requestId: 4,
-      decision: "answered",
-    });
-    expect(session.pendingQuestion).toBeUndefined();
-  });
-
   it("drops a parked prompt when the turn stops", () => {
     let session = newSession("claude", "/repo");
     session = applyHarnessEvent(session, {
