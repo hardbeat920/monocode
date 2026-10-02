@@ -8,6 +8,7 @@ import { LiveAgentsPreview } from "./LiveAgentsPreview";
 let container: HTMLDivElement;
 let root: Root;
 
+/** Creates a live-card fixture; `patch` overrides its default fields. */
 function agent(
   id: string,
   cwd: string,
@@ -26,6 +27,7 @@ function agent(
   };
 }
 
+/** Renders preview props inside `act` so updates finish before assertions. */
 function render(props: ComponentProps<typeof LiveAgentsPreview>) {
   act(() => root.render(createElement(LiveAgentsPreview, props)));
 }

@@ -5,6 +5,9 @@ import {
 } from "./liveAgents";
 import { newSession, type Block, type Session } from "./session";
 
+/**
+ * Creates a base Claude session with one user block; `patch.blocks` replaces it.
+ */
 function chat(cwd: string, patch: Partial<Session> = {}): Session {
   const session = newSession("claude", cwd);
   session.title = "claude · Fix the sidebar";
@@ -12,6 +15,9 @@ function chat(cwd: string, patch: Partial<Session> = {}): Session {
   return { ...session, ...patch, blocks: patch.blocks ?? session.blocks };
 }
 
+/**
+ * Builds a tool block fixture with a write preview and configurable status.
+ */
 function edit(id: string, path = "src/App.tsx", status = "in_progress"): Block {
   const fileName = path.split("/").pop() ?? path;
   return {
