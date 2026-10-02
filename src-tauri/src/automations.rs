@@ -795,6 +795,11 @@ pub fn automation_runs_recover(
             changed = true;
             continue;
         }
+        // Saved head work must first be confirmed open/current by the shared
+        // Inbox refresh. Its durable retry entry will reclaim this pending run.
+        if run.event.as_deref() == Some("pull_request_head_changed") {
+            continue;
+        }
         due.push(DueAutomationRun { automation, run });
     }
     changed_automation_ids.sort();
@@ -896,6 +901,73 @@ pub fn automations_claim_due(
     Ok(Some(DueAutomationRun { automation, run }))
 }
 
+// Reserve dispatch in the same transaction as the claim. Concurrent refreshes
+// must not both return an unaccepted pending run to the frontend.
+fn reserve_head_run(
+    conn: &Connection,
+    mut run: AutomationRun,
+    now: i64,
+) -> Result<AutomationRun, String> {
+    run.status = "running".into();
+    run.started_at = Some(now);
+    run.completed_at = None;
+    run.error = None;
+    write_run(conn, &run)?;
+    Ok(run)
+}
+
+/// Serialize reviews of one PR without consuming a newer head's claim while busy.
+fn prepare_head_claim(
+    conn: &Connection,
+    automation_id: &str,
+    event_key: &str,
+    now: i64,
+) -> Result<Option<AutomationRun>, String> {
+    let Some((pr_key, _)) = event_key.split_once(":head_changed:") else {
+        return Err("Invalid pull request head event key.".into());
+    };
+    let mut statement = conn
+        .prepare("SELECT run_json FROM automation_runs WHERE automation_id = ?1")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([automation_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut pending = None;
+    let mut superseded = Vec::new();
+    for raw in rows {
+        let mut run: AutomationRun = serde_json::from_str(&raw.map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let Some(key) = run.event_key.as_deref() else {
+            continue;
+        };
+        if !key
+            .strip_prefix(pr_key)
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(':'))
+        {
+            continue;
+        }
+        if key == event_key {
+            if run.status == "pending" {
+                pending = Some(run);
+            }
+            continue;
+        }
+        if run.status == "pending" && run.event.as_deref() == Some("pull_request_head_changed") {
+            run.status = "skipped".into();
+            run.completed_at = Some(now);
+            run.error = Some("Superseded by a newer observed PR head before launch.".into());
+            superseded.push(run);
+        } else if run.status == "pending" || run.status == "running" {
+            return Err("A review of this PR is still active; the latest head remains pending.".into());
+        }
+    }
+    drop(statement);
+    for run in superseded {
+        write_run(conn, &run)?;
+    }
+    Ok(pending)
+}
+
 #[tauri::command(async)]
 pub fn automations_claim_event(
     app: AppHandle,
@@ -931,6 +1003,17 @@ pub fn automations_claim_event(
         tx.rollback().map_err(|error| error.to_string())?;
         return Ok(None);
     }
+    if claim.event_kind == "github" && claim.event == "pull_request_head_changed" {
+        if let Some(run) = prepare_head_claim(&tx, &automation_id, &claim.event_key, now)? {
+            let run = reserve_head_run(&tx, run, now)?;
+            apply_run_summary(&mut automation, &run);
+            write_automation(&tx, &automation)?;
+            tx.commit().map_err(|error| error.to_string())?;
+            drop(conn);
+            let _ = app.emit(CHANGED, ());
+            return Ok(Some(DueAutomationRun { automation, run }));
+        }
+    }
     let claimed = tx
         .execute(
             "INSERT OR IGNORE INTO automation_event_claims
@@ -939,10 +1022,11 @@ pub fn automations_claim_event(
         )
         .map_err(|error| error.to_string())?;
     if claimed == 0 {
-        tx.rollback().map_err(|error| error.to_string())?;
+        // Keep any superseded unaccepted head runs marked skipped.
+        tx.commit().map_err(|error| error.to_string())?;
         return Ok(None);
     }
-    let run = new_event_run(
+    let mut run = new_event_run(
         &automation_id,
         &claim.event_key,
         &claim.event_kind,
@@ -951,6 +1035,9 @@ pub fn automations_claim_event(
         now,
         &claim.prompt,
     );
+    if claim.event_kind == "github" && claim.event == "pull_request_head_changed" {
+        run = reserve_head_run(&tx, run, now)?;
+    }
     automation.last_run_at = Some(now);
     automation.last_run_status = Some(run.status.clone());
     automation.last_run_error = None;
@@ -996,6 +1083,10 @@ pub fn automation_run_update(
         .ok_or_else(|| "Automation run not found.".to_string())?;
     let mut run: AutomationRun = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
     run.status = status;
+    if run.status == "pending" {
+        run.started_at = None;
+        run.completed_at = None;
+    }
     if run.status == "running" && run.started_at.is_none() {
         run.started_at = Some(now);
     }
@@ -1298,5 +1389,76 @@ mod tests {
 
         assert_eq!(claim(), 1);
         assert_eq!(claim(), 0);
+    }
+
+    #[test]
+    fn head_claims_wait_for_active_reviews_and_reuse_unaccepted_runs() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_tables(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO automations (id, definition_json, enabled, next_run_at, updated_at)
+             VALUES ('automation-id', '{}', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+        let key = "github:pr:acme/web:12:head_changed:bbbb";
+        assert!(validate_event_key(key).is_ok());
+        let mut opened = new_event_run(
+            "automation-id",
+            "github:pr:acme/web:12",
+            "github",
+            "pull_request_opened",
+            1,
+            1,
+            "Review",
+        );
+        opened.status = "running".into();
+        write_run(&conn, &opened).unwrap();
+        assert!(prepare_head_claim(&conn, "automation-id", key, 2).is_err());
+        assert!(prepare_head_claim(
+            &conn,
+            "automation-id",
+            "github:pr:acme/web:123:head_changed:cccc",
+            2,
+        )
+        .is_ok());
+        opened.status = "succeeded".into();
+        write_run(&conn, &opened).unwrap();
+        assert!(prepare_head_claim(&conn, "automation-id", key, 3)
+            .unwrap()
+            .is_none());
+        let mut head = new_event_run(
+            "automation-id",
+            key,
+            "github",
+            "pull_request_head_changed",
+            3,
+            3,
+            "Review B",
+        );
+        write_run(&conn, &head).unwrap();
+        assert_eq!(
+            prepare_head_claim(&conn, "automation-id", key, 4)
+                .unwrap()
+                .unwrap()
+                .id,
+            head.id,
+        );
+        head = reserve_head_run(&conn, head, 4).unwrap();
+        assert!(prepare_head_claim(&conn, "automation-id", key, 4)
+            .unwrap()
+            .is_none());
+        let next = "github:pr:acme/web:12:head_changed:cccc";
+        assert!(prepare_head_claim(&conn, "automation-id", next, 5).is_err());
+        head.status = "pending".into(); // rejected launch
+        write_run(&conn, &head).unwrap();
+        assert!(prepare_head_claim(&conn, "automation-id", next, 6)
+            .unwrap()
+            .is_none());
+        let saved = list_runs(&conn, "automation-id").unwrap();
+        assert_eq!(
+            saved.iter().find(|run| run.id == head.id).unwrap().status,
+            "skipped",
+        );
     }
 }

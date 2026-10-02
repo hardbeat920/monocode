@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   InboxTransitionTracker,
   resolveMissingTransitions,
@@ -31,6 +32,8 @@ function pr(overrides: Partial<InboxItem> = {}): InboxItem {
     ...overrides,
   });
 }
+
+beforeEach(() => localStorage.clear());
 
 const QUIET = { transitions: [], missing: [] };
 
@@ -99,10 +102,10 @@ describe("inbox transition tracker", () => {
       missing: [open],
     });
     const closed = issue({ state: "closed", updatedAt: "2026-10-01T09:00:00Z" });
-    expect(tracker.resolve(closed)).toEqual({
+    expect(tracker.resolve(closed)).toEqual([{
       item: closed,
       transition: "closed",
-    });
+    }]);
     expect(tracker.observe([], "open")).toEqual(QUIET);
   });
 
@@ -111,7 +114,7 @@ describe("inbox transition tracker", () => {
     const open = issue();
     tracker.observe([open], "open");
     tracker.observe([], "open");
-    expect(tracker.resolve(open)).toBeNull();
+    expect(tracker.resolve(open)).toEqual([]);
     expect(tracker.observe([], "open")).toEqual(QUIET);
     expect(tracker.observe([open], "open")).toEqual(QUIET);
   });
@@ -235,5 +238,93 @@ describe("resolving missing inbox items", () => {
     );
     expect(looked).toEqual([1, 2, 3]);
     expect(tracker.observe([], "open").missing).toEqual([items[3]]);
+  });
+});
+
+
+describe("PR head observations", () => {
+  const a = pr({ headRefOid: "a".repeat(40) });
+  const b = pr({ headRefOid: "b".repeat(40) });
+
+  it("baselines first sightings and reports changed/force-pushed heads independently of timestamps", () => {
+    const tracker = new InboxTransitionTracker();
+    expect(tracker.observe([a], "open")).toEqual(QUIET);
+    expect(
+      tracker.observe(
+        [
+          {
+            ...a,
+            title: "Edited",
+            labels: [{ name: "bug", color: "fff" }],
+            updatedAt: "2026-10-02T00:00:00Z",
+          },
+        ],
+        "open",
+      ),
+    ).toEqual(QUIET);
+    expect(tracker.observe([b], "open").transitions).toEqual([
+      { item: b, transition: "head_changed", previousHead: a.headRefOid },
+    ]);
+    expect(tracker.observe([b], "open")).toEqual(QUIET);
+    expect(tracker.observe([a], "open").transitions[0]?.previousHead).toBe(
+      b.headRefOid,
+    );
+  });
+
+  it("persists only head baselines and catches up to the latest head after restart", () => {
+    const tracker = new InboxTransitionTracker();
+    tracker.observe([a], "open");
+    tracker.checkpoint();
+    const restarted = new InboxTransitionTracker();
+    expect(restarted.observe([a], "open")).toEqual(QUIET);
+    expect(restarted.observe([b], "open", ["github"])).toEqual(QUIET);
+    expect(restarted.observe([b], "open").transitions[0]).toEqual({
+      item: b,
+      transition: "head_changed",
+      previousHead: a.headRefOid,
+    });
+    restarted.checkpoint();
+    expect(new InboxTransitionTracker().observe([b], "open")).toEqual(QUIET);
+  });
+
+  it("does not advance the durable baseline before the queue handoff", () => {
+    const tracker = new InboxTransitionTracker();
+    tracker.observe([a], "open");
+    tracker.checkpoint();
+    tracker.observe([b], "open");
+    expect(
+      new InboxTransitionTracker().observe([b], "open").transitions,
+    ).toHaveLength(1);
+  });
+
+  it("keeps repository identity and ignores missing heads, issues, and closed PR heads", () => {
+    const tracker = new InboxTransitionTracker();
+    tracker.observe([a, { ...a, repo: "acme/other" }], "all");
+    expect(
+      tracker.observe([{ ...b, repo: "acme/other" }, a], "all").transitions,
+    ).toHaveLength(1);
+    expect(
+      tracker
+        .observe([{ ...b, state: "merged" }], "all")
+        .transitions.map((t) => t.transition),
+    ).toEqual(["merged"]);
+    expect(
+      new InboxTransitionTracker().observe(
+        [issue({ headRefOid: b.headRefOid })],
+        "all",
+      ).transitions,
+    ).toEqual([]);
+    const missing = new InboxTransitionTracker();
+    missing.observe([pr()], "open");
+    expect(missing.observe([a], "open")).toEqual(QUIET);
+  });
+
+  it("reports a ready transition alongside the changed head, including bounded lookups", () => {
+    const tracker = new InboxTransitionTracker();
+    tracker.observe([{ ...a, draft: true }], "open");
+    expect(tracker.resolve(b).map((t) => t.transition)).toEqual([
+      "ready_for_review",
+      "head_changed",
+    ]);
   });
 });

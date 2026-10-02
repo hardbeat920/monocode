@@ -150,6 +150,7 @@ export function useInboxActivity(
     onActivity?: (
       appeared: InboxItem[],
       transitions: InboxTransition[],
+      observed: InboxItem[],
     ) => void;
   },
 ): InboxActivity {
@@ -258,7 +259,12 @@ export function useInboxActivity(
         const changed = observed.changed;
         // Invoke on every successful poll so retained automation claims can be
         // retried even when the item is no longer newly appeared.
-        onActivityRef.current?.(observed.appeared, moved.transitions);
+        onActivityRef.current?.(
+          observed.appeared,
+          moved.transitions,
+          failedProviders.includes("github") ? [] : listed.items,
+        );
+        transitions.current.checkpoint();
         const selfAuthored = changed.filter((item) =>
           consumeInboxSelfActivity(item),
         );
@@ -365,7 +371,10 @@ export function useInboxActivity(
               { force: true },
             ),
         );
-        if (confirmed.length > 0) onActivityRef.current?.([], confirmed);
+        if (confirmed.length > 0) {
+          onActivityRef.current?.([], confirmed, confirmed.map(({ item }) => item));
+        }
+        transitions.current.checkpoint();
       } catch {
         // Leave the last known badges; a later poll can try again.
       } finally {

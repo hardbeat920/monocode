@@ -366,6 +366,26 @@ describe("Inbox activity for automations", () => {
     expect(reportedTransitions()).toEqual([]);
   });
 
+  it("reports head changes through the shared poll and catches up after remount without extra fetches", async () => {
+    const a = { ...remote, headRefOid: "a".repeat(40) };
+    const b = { ...remote, headRefOid: "b".repeat(40) };
+    listInboxItems.mockResolvedValue({ items: [a], errors: {} });
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([]);
+    expect(localStorage.getItem("monocode.inbox-pr-heads.v1")).toContain(a.headRefOid);
+    await act(async () => { root.render(null); });
+    listInboxItems.mockResolvedValue({ items: [b], errors: {} });
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([{ item: b, transition: "head_changed", previousHead: a.headRefOid }]);
+    expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([b]);
+    await nextPoll();
+    expect(reportedTransitions()).toHaveLength(1);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+    listInboxItems.mockResolvedValue({ items: [b], errors: { github: "offline" } });
+    await nextPoll();
+    expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([]);
+  });
+
   it("still reports newly appeared items on every poll", async () => {
     const other = { ...remote, number: 43 };
     listInboxItems

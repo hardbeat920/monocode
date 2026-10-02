@@ -123,7 +123,7 @@ export function linkedWorkItemFromAutomationEvent(run: {
 }): LinkedWorkItem | null {
   if (run.trigger !== "event" || run.eventKind !== "github") return null;
   // Changes after opening append `:<change>:<timestamp>` to the item's key.
-  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)(?::[a-z_]+:\d+)?$/i.exec(
+  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)(?::(?:head_changed:[a-f0-9]+|[a-z_]+:\d+))?$/i.exec(
     run.eventKey?.trim() ?? "",
   );
   if (!match) return null;

@@ -118,6 +118,7 @@ it("names the GitHub state-change triggers for what happened", () => {
     issue_reopened: "Issue reopened",
     issue_closed: "Issue closed",
     pull_request_reopened: "Pull request reopened",
+    pull_request_head_changed: "Pull request head changed",
     pull_request_closed: "Pull request closed",
     pull_request_merged: "Pull request merged",
     pull_request_ready_for_review: "Pull request ready for review",

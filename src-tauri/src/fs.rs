@@ -1207,6 +1207,7 @@ pub struct GitHubWorkItem {
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
     pub draft: bool,
+    pub head_ref_oid: String,
     pub repo: String,
 }
 
@@ -2740,7 +2741,7 @@ fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft,headRefOid"
     } else {
         "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
     };
@@ -2787,7 +2788,7 @@ fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft,headRefOid"
     } else {
         "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
     };
@@ -3972,6 +3973,8 @@ fn parse_github_work_items(
         assignees: Vec<RowAssignee>,
         #[serde(default)]
         is_draft: bool,
+        #[serde(default)]
+        head_ref_oid: String,
     }
     let rows: Vec<Row> = serde_json::from_str(json).map_err(|error| error.to_string())?;
     Ok(rows
@@ -4002,6 +4005,7 @@ fn parse_github_work_items(
                 })
                 .collect(),
             draft: row.is_draft,
+            head_ref_oid: row.head_ref_oid,
             repo: repo.to_string(),
         })
         .collect())
@@ -7518,10 +7522,13 @@ mod tests {
             "title": "WIP checkout",
             "url": "https://github.com/acme/web/pull/12",
             "state": "OPEN",
-            "isDraft": true
+            "isDraft": true,
+            "headRefOid": "abc123"
         }]"#;
         let items = parse_github_work_items(json, "pr", "acme/web").unwrap();
         assert_eq!(items[0].kind, "pr");
+        assert_eq!(items[0].head_ref_oid, "abc123");
+        assert_eq!(serde_json::to_value(&items[0]).unwrap()["headRefOid"], "abc123");
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");
@@ -7554,10 +7561,12 @@ mod tests {
             "title": "WIP checkout",
             "url": "https://github.com/acme/web/pull/12",
             "state": "OPEN",
-            "isDraft": true
+            "isDraft": true,
+            "headRefOid": "def456"
         }"#;
         let item = parse_github_work_item(json, "pr", "acme/web").unwrap();
         assert_eq!(item.number, 12);
+        assert_eq!(item.head_ref_oid, "def456");
         assert_eq!(item.kind, "pr");
         assert_eq!(item.repo, "acme/web");
         assert!(item.draft);

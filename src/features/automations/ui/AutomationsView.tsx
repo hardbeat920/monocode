@@ -1686,6 +1686,7 @@ export const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent
   github: [
     { value: "draft_opened", label: "Draft opened" },
     { value: "pull_request_opened", label: "Pull request opened" },
+    { value: "pull_request_head_changed", label: "Pull request head changed" },
     {
       value: "pull_request_ready_for_review",
       label: "Pull request ready for review",
