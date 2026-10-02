@@ -85,8 +85,22 @@ export class OpenCodeV2EventTranslator {
         return this.toolEvent(type, data);
       case "session.execution.succeeded":
       case "session.execution.interrupted":
-        return sessionID ? { type: "session.idle", properties: { sessionID } } : null;
+        return sessionID
+          ? {
+              type: "session.idle",
+              properties: {
+                sessionID,
+                execution: type.slice("session.execution.".length),
+              },
+            }
+          : null;
       case "session.execution.failed":
+        return sessionID
+          ? {
+              type: "session.error",
+              properties: { sessionID, error: data.error, execution: "failed" },
+            }
+          : null;
       case "session.error":
         return sessionID
           ? { type: "session.error", properties: { sessionID, error: data.error } }
@@ -189,6 +203,75 @@ export class OpenCodeV2EventTranslator {
       tool: call.tool,
       state,
     });
+  }
+}
+
+export type OpenCodeV2InboxOutcome =
+  | { kind: "succeeded" | "interrupted" }
+  | { kind: "failed"; error: unknown };
+
+/**
+ * OpenCode 2.x execution events carry only a session id, so a late
+ * `execution.interrupted` from a stopped run looks exactly like the next
+ * prompt finishing. Every prompt and compaction is admitted as an inbox item
+ * whose id the server reports when the running execution picks it up
+ * (`session.inbox.delivered`); an execution's terminal event settles only the
+ * items delivered to it. Waiters key on their own inbox id to ignore the rest.
+ */
+export class OpenCodeV2InboxTracker {
+  private delivered: string[] = [];
+  private runningCompaction: string | undefined;
+  private readonly outcomes = new Map<string, OpenCodeV2InboxOutcome>();
+  /** False until the server is seen reporting inbox delivery at all. */
+  reportsDelivery = false;
+
+  /** Feed a translated main-session event. */
+  observe(type: string, properties: Event): void {
+    switch (type) {
+      case "session.inbox.delivered": {
+        const id = stringField(properties, "inboxID");
+        if (!id) return;
+        this.reportsDelivery = true;
+        if (!this.delivered.includes(id)) this.delivered.push(id);
+        return;
+      }
+      case "session.compaction.started":
+        this.runningCompaction =
+          stringField(properties, "inputID") ??
+          this.delivered[this.delivered.length - 1];
+        return;
+      case "session.compaction.ended":
+        if (this.runningCompaction) {
+          this.settle(this.runningCompaction, { kind: "succeeded" });
+        }
+        this.runningCompaction = undefined;
+        return;
+      case "session.compaction.failed": {
+        const id = stringField(properties, "inputID") ?? this.runningCompaction;
+        if (id) this.settle(id, { kind: "failed", error: properties.error });
+        this.runningCompaction = undefined;
+        return;
+      }
+    }
+    const execution = stringField(properties, "execution");
+    if (!execution) return;
+    const outcome: OpenCodeV2InboxOutcome =
+      execution === "failed"
+        ? { kind: "failed", error: properties.error }
+        : { kind: execution === "interrupted" ? "interrupted" : "succeeded" };
+    for (const id of this.delivered) {
+      if (!this.outcomes.has(id)) this.settle(id, outcome);
+    }
+    this.delivered = [];
+    this.runningCompaction = undefined;
+  }
+
+  outcome(id: string): OpenCodeV2InboxOutcome | undefined {
+    return this.outcomes.get(id);
+  }
+
+  private settle(id: string, outcome: OpenCodeV2InboxOutcome): void {
+    remember(this.outcomes, id, outcome);
   }
 }
 

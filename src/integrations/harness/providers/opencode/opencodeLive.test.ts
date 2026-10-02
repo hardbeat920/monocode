@@ -8,6 +8,10 @@ let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
 let sessionMessages: unknown[] = [];
 let openCodeVersion = "opencode 1.14.19";
+/** v2 inbox ids handed out, in order, by the prompt and compact routes. */
+let admittedIds: Record<string, string[]> = {};
+/** Runs before an admission response returns, as a fast server would. */
+let onAdmit: ((path: string, id: string) => void) | undefined;
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -51,6 +55,12 @@ const harnessHttp = vi.fn(
     ) {
       return { status: 200, body: JSON.stringify(sessionMessages) };
     }
+    const admitted =
+      input.method === "POST" ? admittedIds[url.pathname]?.shift() : undefined;
+    if (admitted) {
+      onAdmit?.(url.pathname, admitted);
+      return { status: 200, body: JSON.stringify({ data: { id: admitted } }) };
+    }
     return { status: 204, body: "" };
   },
 );
@@ -92,6 +102,7 @@ const {
   __openCodeTestReset,
   bindOpenCodeSession,
   cancelOpenCodeTurn,
+  compactOpenCodeContext,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
   rewindOpenCodeLastTurn,
@@ -171,6 +182,8 @@ beforeEach(() => {
   onSseEnd = undefined;
   sessionMessages = [];
   openCodeVersion = "opencode 1.14.19";
+  admittedIds = {};
+  onAdmit = undefined;
   spawnChild.mockClear();
   killChild.mockClear();
   closeHarnessSse.mockClear();
@@ -313,6 +326,183 @@ it("surfaces a failed v2 execution as a session error", async () => {
   });
   await done.catch(() => undefined);
   expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
+});
+
+describe("OpenCode 2.x completion correlation", () => {
+  const PROMPT = "/api/session/session_1/prompt";
+  const COMPACT = "/api/session/session_1/compact";
+  const v2 = (type: string, data: Record<string, unknown> = {}) =>
+    onSseEvent?.({ id: `evt_${type}`, type, data: { sessionID: "session_1", ...data } });
+  const calls = (path: string) =>
+    harnessHttp.mock.calls.filter(([input]) => new URL(input.url).pathname === path)
+      .length;
+  const settled = (promise: Promise<unknown>) => {
+    let done = false;
+    promise.then(
+      () => (done = true),
+      () => (done = true),
+    );
+    return () => done;
+  };
+  const drain = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const replyText = (events: HarnessEvent[]) =>
+    events
+      .filter((event) => event.type === "message.delta")
+      .map((event) => (event as { text: string }).text)
+      .join("");
+  const compact = (events: HarnessEvent[]) =>
+    compactOpenCodeContext({
+      sessionId: "opencode-live",
+      cwd: "/repo",
+      model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+
+  beforeEach(() => {
+    openCodeVersion = "opencode v2.0.19";
+  });
+
+  it("does not let a stopped run's late interrupt finish the next turn", async () => {
+    admittedIds[PROMPT] = ["msg_first", "msg_second"];
+    const first = turn([]);
+    await waitFor(() => calls(PROMPT) === 1, "first prompt");
+    await drain();
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_first" });
+    await cancelOpenCodeTurn("opencode-live");
+    await first;
+
+    // The interrupt response returns before its event; the event lands while
+    // the next prompt is being admitted.
+    onAdmit = (_path, id) => {
+      if (id === "msg_second") v2("session.execution.interrupted", { reason: "user" });
+    };
+    const events: HarnessEvent[] = [];
+    const second = turn(events);
+    const secondDone = settled(second);
+    await waitFor(() => calls(PROMPT) === 2, "second prompt");
+    await drain();
+    v2("session.execution.interrupted", { reason: "user" });
+    await drain();
+    expect(secondDone()).toBe(false);
+    expect(events).not.toContainEqual({ type: "message.completed" });
+
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_second" });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "SECOND_DONE" });
+    v2("session.execution.succeeded");
+    await second;
+    expect(replyText(events)).toBe("SECOND_DONE");
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("finishes a run that completed before its admission response", async () => {
+    admittedIds[PROMPT] = ["msg_fast"];
+    onAdmit = (_path, id) => {
+      v2("session.execution.started");
+      v2("session.inbox.delivered", { inboxID: id });
+      v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "FAST" });
+      v2("session.execution.succeeded");
+    };
+    const events: HarnessEvent[] = [];
+    await turn(events);
+    expect(replyText(events)).toBe("FAST");
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("reports a failed run as a session error", async () => {
+    admittedIds[PROMPT] = ["msg_fail"];
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(() => calls(PROMPT) === 1, "prompt");
+    await drain();
+    v2("session.inbox.delivered", { inboxID: "msg_fail" });
+    v2("session.execution.failed", { error: { message: "Rate limited" } });
+    await done;
+    expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
+  });
+
+  it("keeps uncorrelated completion when the server never reports delivery", async () => {
+    admittedIds[PROMPT] = ["msg_untracked"];
+    const done = turn([]);
+    await waitFor(() => calls(PROMPT) === 1, "prompt");
+    await drain();
+    v2("session.execution.succeeded");
+    await done;
+  });
+
+  it("waits for compaction to end before sending the next prompt", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    admittedIds[PROMPT] = ["msg_after"];
+    const compaction = compact([]);
+    const compacted = settled(compaction);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_compact" });
+    v2("session.compaction.started", { reason: "manual", inputID: "msg_compact" });
+
+    const events: HarnessEvent[] = [];
+    const next = turn(events);
+    await drain();
+    expect(compacted()).toBe(false);
+    expect(calls(PROMPT)).toBe(0);
+
+    v2("session.compaction.ended", { reason: "manual", text: "summary" });
+    await compaction;
+    await waitFor(() => calls(PROMPT) === 1, "prompt after compaction");
+    await drain();
+    // The compaction's execution goes on to run the queued prompt.
+    v2("session.inbox.delivered", { inboxID: "msg_after" });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "AFTER" });
+    v2("session.execution.succeeded");
+    await next;
+    expect(replyText(events)).toBe("AFTER");
+  });
+
+  it("fails compaction when OpenCode reports a compaction failure", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    const compaction = compact([]);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    v2("session.inbox.delivered", { inboxID: "msg_compact" });
+    v2("session.compaction.failed", {
+      reason: "manual",
+      inputID: "msg_compact",
+      error: { message: "Context too large" },
+    });
+    await expect(compaction).rejects.toThrow("Context too large");
+  });
+
+  it("fails compaction when its run is interrupted before it ends", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    const compaction = compact([]);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    v2("session.inbox.delivered", { inboxID: "msg_compact" });
+    v2("session.compaction.started", { reason: "manual", inputID: "msg_compact" });
+    v2("session.execution.interrupted", { reason: "shutdown" });
+    await expect(compaction).rejects.toThrow("interrupted");
+  });
+
+  it("settles compaction when the user stops it", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    const compaction = compact([]);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    await cancelOpenCodeTurn("opencode-live");
+    await compaction;
+  });
+
+  it("fails compaction when the event stream ends", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    const compaction = compact([]);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    onSseEnd?.("stream closed");
+    await expect(compaction).rejects.toThrow("stream closed");
+  });
 });
 
 describe("OpenCode subagent trails", () => {

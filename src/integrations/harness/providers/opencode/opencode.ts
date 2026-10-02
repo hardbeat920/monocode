@@ -45,6 +45,10 @@ import {
 } from "./opencodeProtocol";
 import { resolveOpenCodeV2Service } from "./opencodeService";
 import {
+  OpenCodeV2InboxTracker,
+  type OpenCodeV2InboxOutcome,
+} from "./opencodeV2Events";
+import {
   composeToolTitle,
   extractShellCommand,
   extractSkillName,
@@ -107,6 +111,12 @@ type Live = {
   turnFailed: ((error: Error) => void) | null;
   turnEndPending: boolean;
   activeTurn: boolean;
+  inbox: OpenCodeV2InboxTracker;
+  /**
+   * The v2 prompt or compaction whose completion the current latch waits
+   * for. `id` is unset until the server admits it.
+   */
+  awaitedInbox: { kind: "turn" | "compaction"; id?: string } | null;
 };
 
 type Resume = {
@@ -115,6 +125,8 @@ type Resume = {
 };
 
 const SERVER_TIMEOUT_MS = 30_000;
+// Matches the v1 summarize request timeout.
+const COMPACTION_TIMEOUT_MS = 30 * 60_000;
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
@@ -480,6 +492,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnFailed: null,
       turnEndPending: false,
       activeTurn: false,
+      inbox: new OpenCodeV2InboxTracker(),
+      awaitedInbox: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -592,10 +606,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   });
   live.activeTurn = true;
   live.turnMetricsByMessageId.clear();
+  const v2 = live.client.generation === "v2";
+  live.awaitedInbox = v2 ? { kind: "turn" } : null;
   settlePendingTurn(live);
 
   try {
-    await live.client.promptAsync({
+    const inboxID = await live.client.promptAsync({
       sessionID: live.openCodeSessionId,
       model: parsed,
       agent: openCodeAgentForTurn(input),
@@ -603,6 +619,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       parts,
     });
     input.onAccepted?.();
+    if (v2) {
+      live.awaitedInbox = inboxID ? { kind: "turn", id: inboxID } : null;
+      // Fast runs can be delivered and finish before the admission response.
+      finishAwaitedInbox(live);
+    }
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -613,6 +634,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
   }
@@ -622,10 +644,130 @@ async function runCompaction(
   live: Live,
   model: { providerID: string; modelID: string },
 ): Promise<void> {
-  // Unlike prompt_async, summarize responds only after the compaction pass.
-  // Keep this outside the normal turn latch: its eventual session.status=idle
-  // must not become a pending completion for the next user turn.
-  await live.client.summarizeSession(live.openCodeSessionId, model);
+  if (live.client.generation !== "v2") {
+    // Unlike prompt_async, summarize responds only after the compaction pass.
+    // Keep this outside the normal turn latch: its eventual session.status=idle
+    // must not become a pending completion for the next user turn.
+    await live.client.summarizeSession(live.openCodeSessionId, model);
+    return;
+  }
+  // v2 only queues the compaction. Hold the turn chain until it actually
+  // ends so the next prompt is not sent into a context being rewritten.
+  const finished = new Promise<void>((resolve, reject) => {
+    live.turnDone = resolve;
+    live.turnFailed = reject;
+  });
+  // Rejections can land before the admission request returns.
+  finished.catch(() => undefined);
+  live.awaitedInbox = { kind: "compaction" };
+  const timer = setTimeout(
+    () => live.turnFailed?.(new Error("OpenCode compaction timed out")),
+    COMPACTION_TIMEOUT_MS,
+  );
+  try {
+    const inboxID = await live.client.summarizeSession(
+      live.openCodeSessionId,
+      model,
+    );
+    if (!inboxID) return;
+    live.awaitedInbox = { kind: "compaction", id: inboxID };
+    finishAwaitedInbox(live);
+    await finished;
+  } finally {
+    clearTimeout(timer);
+    live.awaitedInbox = null;
+    live.turnDone = null;
+    live.turnFailed = null;
+  }
+}
+
+/**
+ * Routes v2 completion events through the awaited inbox item. Returns true
+ * when the event belongs to that gate, settling the waiter only when the
+ * event finished the item it waits for; earlier runs' late events are dropped.
+ */
+function gateAwaitedInbox(
+  live: Live,
+  type: string,
+  properties: Record<string, unknown>,
+): boolean {
+  const awaited = live.awaitedInbox;
+  if (!awaited) return false;
+  const terminal =
+    type === "session.idle" ||
+    stringField(properties, "execution") !== undefined ||
+    (type === "session.status" &&
+      stringField(asRecord(properties.status), "type") === "idle");
+  const compactionEnd =
+    type === "session.compaction.ended" ||
+    type === "session.compaction.failed";
+  if (!terminal && !compactionEnd) return false;
+  if (!awaited.id) return true;
+  if (live.inbox.outcome(awaited.id)) {
+    finishAwaitedInbox(live);
+  } else if (!live.inbox.reportsDelivery) {
+    // Servers that never report inbox delivery cannot be correlated; keep the
+    // uncorrelated completion so a turn cannot wait forever.
+    finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+  }
+  return true;
+}
+
+function inboxFallbackOutcome(
+  type: string,
+  properties: Record<string, unknown>,
+  awaited: NonNullable<Live["awaitedInbox"]>,
+): OpenCodeV2InboxOutcome | undefined {
+  if (type === "session.compaction.ended") {
+    return awaited.kind === "compaction" ? { kind: "succeeded" } : undefined;
+  }
+  if (type === "session.compaction.failed") {
+    return awaited.kind === "compaction"
+      ? { kind: "failed", error: properties.error }
+      : undefined;
+  }
+  const execution = stringField(properties, "execution");
+  if (execution === "failed") return { kind: "failed", error: properties.error };
+  return { kind: execution === "interrupted" ? "interrupted" : "succeeded" };
+}
+
+function finishAwaitedInbox(
+  live: Live,
+  fallback?: OpenCodeV2InboxOutcome,
+): void {
+  const awaited = live.awaitedInbox;
+  const outcome =
+    (awaited?.id && live.inbox.outcome(awaited.id)) || fallback;
+  if (!awaited || !outcome) return;
+  live.awaitedInbox = null;
+  if (awaited.kind === "compaction") {
+    const done = live.turnDone;
+    const failed = live.turnFailed;
+    live.turnDone = null;
+    live.turnFailed = null;
+    if (outcome.kind === "succeeded") done?.();
+    else
+      failed?.(
+        new Error(
+          outcome.kind === "failed"
+            ? sessionErrorMessage(outcome.error)
+            : "OpenCode compaction was interrupted",
+        ),
+      );
+    return;
+  }
+  if (outcome.kind === "failed") {
+    live.onEvent({
+      type: "session.error",
+      message: sessionErrorMessage(outcome.error),
+    });
+    finishActiveTurn(live);
+    return;
+  }
+  finishActiveTurn(live, [
+    { type: "message.completed" },
+    { type: "reasoning.completed" },
+  ]);
 }
 
 async function handleEvent(
@@ -662,6 +804,9 @@ async function handleEvent(
     const turn = live.turnDone;
     if (!(await isDescendantSession(live, payloadSessionId))) return;
     if (live.muteUpdates || live.turnDone !== turn) return;
+  } else if (live.client.generation === "v2") {
+    live.inbox.observe(type, properties);
+    if (gateAwaitedInbox(live, type, properties)) return;
   }
 
   switch (type) {

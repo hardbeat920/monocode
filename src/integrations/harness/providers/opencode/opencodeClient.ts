@@ -187,21 +187,22 @@ export class OpenCodeClient {
     });
   }
 
+  /**
+   * v1 responds once the summary is written. v2 only admits the compaction
+   * and resolves to its inbox id; completion arrives on the event stream.
+   */
   async summarizeSession(
     sessionID: string,
     model: { providerID: string; modelID: string },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (this.generation === "v2") {
       await this.setModel(sessionID, model);
-      await this.request<unknown>(
+      const admitted = await this.request<unknown>(
         "POST",
         this.path(`/session/${enc(sessionID)}/compact`),
-        {
-          body: { delivery: "queue" },
-          timeoutMs: 30 * 60_000,
-        },
+        { body: { delivery: "queue" } },
       );
-      return;
+      return stringField(asRecord(admitted), "id");
     }
     await this.request<unknown>(
       "POST",
@@ -211,8 +212,10 @@ export class OpenCodeClient {
         timeoutMs: 30 * 60_000,
       },
     );
+    return undefined;
   }
 
+  /** Resolves to the v2 inbox id of the admitted prompt, when reported. */
   async promptAsync(input: {
     sessionID: string;
     model: { providerID: string; modelID: string };
@@ -220,15 +223,15 @@ export class OpenCodeClient {
     variant?: string;
     parts: OpenCodePromptPart[];
     delivery?: "queue" | "steer";
-  }): Promise<void> {
+  }): Promise<string | undefined> {
     if (this.generation === "v2") {
       await this.configureTurn(input);
-      await this.request<unknown>(
+      const admitted = await this.request<unknown>(
         "POST",
         this.path(`/session/${enc(input.sessionID)}/prompt`),
         { body: v2PromptBody(input.parts, input.delivery ?? "queue") },
       );
-      return;
+      return stringField(asRecord(admitted), "id");
     }
     await this.request<unknown>(
       "POST",
@@ -242,6 +245,7 @@ export class OpenCodeClient {
         },
       },
     );
+    return undefined;
   }
 
   async prompt(input: {
