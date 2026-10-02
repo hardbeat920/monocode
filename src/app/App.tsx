@@ -8225,6 +8225,7 @@ function Workspace({
     [updateBtwThread],
   );
 
+  /** Start one isolated BTW question against the selected transcript turn. */
   const onBtwSubmit = useCallback(
     (
       sessionId: string,
@@ -9381,6 +9382,7 @@ function Workspace({
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
+            /** Restore the target, then use the existing BTW submission callback. */
             btwAsk: async (target, turn, threadId, messageId, question) => {
               const open = await ensureOpenSessionRef.current(target.id);
               if (!open || !sameProjectPath(open.cwd, source.cwd))

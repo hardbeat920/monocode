@@ -68,6 +68,7 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  /** Start the existing BTW lifecycle for a selected turn; false means rejection. */
   btwAsk(
     target: Session,
     turn: Block[],
@@ -293,6 +294,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Validate and dispatch one Operator app CLI request.
+ * Session actions resolve targets through the calling session's project;
+ * request IDs are forwarded for actions that support retry deduplication.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
