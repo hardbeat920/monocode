@@ -51,7 +51,9 @@ vi.stubGlobal("localStorage", {
   setItem: (key: string, value: string) => values.set(key, value),
 });
 const now = Date.parse("2026-10-02T12:00:00Z");
+/** Create a fresh Codex caller in a synthetic project for harness/selection checks. */
 const source = () => newSession("codex", "/tmp/project", "codex:test");
+/** Supply an exhausted session with a past reset alongside an unexpired weekly quota. */
 const claude = () =>
   parseClaudeOAuthUsage(
     JSON.stringify({
@@ -60,6 +62,7 @@ const claude = () =>
     }),
   );
 const host = {} as AgentAppHost; // usage.list must never call a mutating host method.
+/** Exercise app dispatch with an empty host so accidental host operations fail. */
 const list = (input: Record<string, unknown> = {}, session = source()) =>
   handleAgentApp(session, "usage-1", "usage.list", input, host) as Promise<
     ReturnType<typeof usageSnapshot>
