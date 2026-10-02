@@ -284,3 +284,57 @@ describe("Pi auto compaction", () => {
     await stopPiSession("pi-auto-3");
   });
 });
+
+describe("Pi auto compaction boundary without a level", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.request.mockReset();
+    mocks.resolveBinary.mockReset();
+    mocks.spawnChild.mockReset();
+    mocks.resolveBinary.mockResolvedValue({ path: "/fake/pi" });
+    mocks.killChild.mockResolvedValue(undefined);
+    mocks.request.mockImplementation(
+      async (command: Record<string, unknown>) => {
+        if (command.type === "get_state") {
+          return {
+            data: { sessionId: "pi_session", model: { contextWindow: 200_000 } },
+          };
+        }
+        return { data: {} };
+      },
+    );
+  });
+
+  it("retires the level when the boundary frame sizes nothing", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-auto-4",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    const frame = mocks.frames.at(-1)!;
+    events.length = 0;
+
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+        usage: { totalTokens: 190_000 },
+      },
+    });
+    frame({ type: "compaction_start" });
+    // A usage object with no tokens answers a bare window rather than a level,
+    // which sizes nothing. Treating that as a reading left the replaced level
+    // on the ring instead of retiring it.
+    frame({ type: "compaction_end", usage: {} });
+
+    expect(events.filter((event) => event.type === "context")).toEqual([
+      { type: "context", used: 190_000, window: 200_000 },
+      { type: "context", window: 200_000, compacted: true },
+    ]);
+    await stopPiSession("pi-auto-4");
+  });
+});

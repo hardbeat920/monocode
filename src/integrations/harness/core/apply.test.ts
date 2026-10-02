@@ -924,8 +924,7 @@ describe("applyHarnessEvent context", () => {
     expect(session.context).toEqual({ used: 18_000, window: 272_000 });
   });
 
-  it("carries the marker through the window-only event Claude sends after it", () => {
-    let session = newSession("claude", "/repo");
+  it("carries the marker through the window-only event Claude sends after it", () => {    let session = newSession("claude", "/repo");
     session = applyHarnessEvent(session, {
       type: "context",
       used: 190_000,
@@ -938,6 +937,34 @@ describe("applyHarnessEvent context", () => {
       window: 200_000,
       compacted: true,
     });
+  });
+
+  it("drops the window on a reset, keeping the level", () => {
+    let session = newSession("grok", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 30_000,
+      window: 500_000,
+    });
+    // The model changed, so the held window belongs to the one just left.
+    session = applyHarnessEvent(session, { type: "context", reset: true });
+    expect(session.context).toEqual({ used: 30_000 });
+    // A later reading without a window cannot inherit the old denominator.
+    session = applyHarnessEvent(session, { type: "context", used: 64_000 });
+    expect(session.context).toEqual({ used: 64_000 });
+    expect(contextRatio(session.context)).toBeNull();
+  });
+
+  it("keeps a stale marker across a reset", () => {
+    let session = newSession("grok", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 190_000,
+      window: 500_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", compacted: true });
+    session = applyHarnessEvent(session, { type: "context", reset: true });
+    expect(session.context).toEqual({ used: 190_000, compacted: true });
   });
 });
 

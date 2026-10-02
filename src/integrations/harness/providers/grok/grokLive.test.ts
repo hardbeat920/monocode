@@ -1,4 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { applyHarnessEvent } from "../../core/apply";
+import { newSession } from "../../../../features/sessions/model/session";
+import { contextRatio } from "../../../../features/sessions/model/contextUsage";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
@@ -385,10 +388,22 @@ describe("grok context window", () => {
     );
     await next;
 
-    // No window is claimed. Grok reports one in its usage payload when it has
-    // one, and until then the ring stays hidden rather than divide by a window
-    // belonging to the model we just left.
-    expect(readings(second)).toEqual([{ type: "context", used: 64_000 }]);
+    // The switch resets the window, and the usage report carries none of its
+    // own, so nothing divides by a window belonging to the model just left.
+    expect(readings(second)).toEqual([
+      { type: "context", reset: true },
+      { type: "context", used: 64_000 },
+    ]);
+    // And the session itself must not be left holding it: clearing the live
+    // copy alone leaves the previous window in place for the next reading to
+    // merge into, which is how the new model's level ended up divided by the
+    // old denominator.
+    const session = second.reduce(
+      applyHarnessEvent,
+      newSession("grok", "/repo"),
+    );
+    expect(session.context).toEqual({ used: 64_000 });
+    expect(contextRatio(session.context)).toBeNull();
     await stopGrokSession("w2");
   });
 });

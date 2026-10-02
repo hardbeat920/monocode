@@ -8,6 +8,7 @@ import type {
   ToolPreview,
 } from "../../../features/sessions/model/session";
 import {
+  dropContextWindow,
   markCompacted,
   mergeContextUsage,
 } from "../../../features/sessions/model/contextUsage";
@@ -136,18 +137,19 @@ export function applyHarnessEvent(
     case "context":
       return {
         ...session,
-        // A boundary carries no level of its own, so take the window it may
-        // report and mark the held level stale rather than publish a number
-        // nobody sent. The window is still the active model's, so it is worth
-        // learning across the boundary.
-        context: event.compacted
-          ? markCompacted(
-              mergeContextUsage(session.context, { window: event.window }),
-            )
-          : mergeContextUsage(session.context, {
-              used: event.used,
-              window: event.window,
-            }),
+        // A boundary carries no level, so take any window it reports and mark
+        // the held level stale rather than publish a number nobody sent. A reset
+        // drops the window instead: the model changed.
+        context: event.reset
+          ? dropContextWindow(session.context)
+          : event.compacted
+            ? markCompacted(
+                mergeContextUsage(session.context, { window: event.window }),
+              )
+            : mergeContextUsage(session.context, {
+                used: event.used,
+                window: event.window,
+              }),
       };
     case "turn.metrics":
       return mergeTurnMetrics(session, event);

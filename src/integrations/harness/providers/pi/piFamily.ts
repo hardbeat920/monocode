@@ -863,20 +863,20 @@ function handleFrame(
   const turnError = turnErrorFromEvent(rec);
   if (turnError !== null) live.turnError = turnError;
 
-  // Pi's summarizer is its own model call, so any usage reported while it runs
-  // describes that call rather than the conversation being rebuilt. Skip those
-  // readings instead of showing them as the window's level.
+  // Pi's summarizer is its own model call, so usage reported while it runs
+  // describes that call, not the conversation being rebuilt.
   const context = live.compacting
     ? null
     : contextFromUsage(rec, live.contextWindow);
-  if (context) live.onEvent({ type: "context", ...context });
-  // Nothing sizes the rebuilt conversation at the boundary, so retire the level
-  // we are holding — it describes the one the summary replaced. A frame that
-  // reports its own usage has already spoken for the window, and Pi sends the
-  // boundary only once the summary is materialised, so that reading is the last
-  // word and must not be overwritten.
-  if (compactionEnded && !context) {
-    live.onEvent({ type: "context", compacted: true });
+  // A bare window sizes nothing, so at a boundary it rides the marker instead.
+  const retiring = compactionEnded && context?.used == null;
+  if (context && !retiring) live.onEvent({ type: "context", ...context });
+  if (retiring) {
+    live.onEvent({
+      type: "context",
+      ...(context?.window ? { window: context.window } : {}),
+      compacted: true,
+    });
   }
   const metrics = turnMetricsFromUsage(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });

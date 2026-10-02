@@ -151,12 +151,20 @@ export type HarnessEvent =
    * Context-window level after the harness's latest request.
    *
    * `compacted` marks a compaction boundary rather than a measurement: the
-   * harness has rebuilt the conversation and has not sized the result yet, so
-   * whatever level is held describes the one that was replaced. Send it with
-   * `window` to keep learning the denominator across the boundary. The next
-   * event carrying `used` clears it.
+   * harness has rebuilt the conversation and not sized the result, so the held
+   * level describes the one that was replaced. Pair it with `window` to keep
+   * learning the denominator. The next event carrying `used` clears it.
+   *
+   * `reset` drops the window without offering a level, for when the model
+   * changed and the held window describes the one just left.
    */
-  | { type: "context"; used?: number; window?: number; compacted?: boolean }
+  | {
+      type: "context";
+      used?: number;
+      window?: number;
+      compacted?: boolean;
+      reset?: boolean;
+    }
   /** Provider token accounting for the active user turn. */
   | ({ type: "turn.metrics" } & TurnMetrics);
 

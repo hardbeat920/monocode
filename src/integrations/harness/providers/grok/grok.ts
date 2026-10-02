@@ -439,12 +439,11 @@ async function applyModelSelection(
       )
       .then(() => {
         live.modelId = base;
-        // The window we captured at startup belongs to the model we just left,
-        // and every usage event without its own would be filled in with it —
-        // so the new model's level would be divided by the old model's window.
-        // Grok reports a window in its usage payload when it has one; until then
-        // the ring stays hidden rather than show a number we cannot vouch for.
+        // The startup window belongs to the model we just left. Clearing only
+        // the live copy is not enough: the session keeps the window it was last
+        // given, and a later reading merges into that.
         live.contextWindow = undefined;
+        live.onEvent({ type: "context", reset: true });
       })
       .catch((error: unknown) => {
         ignoreUnsupportedControl("set_model", error);
