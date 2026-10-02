@@ -1,0 +1,31 @@
+[package]
+name = "monocode-terminal-view"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[features]
+# Lets examples/shell.rs write the window to a PNG through
+# Window::render_to_image (`--screenshot <path.png>`).
+screenshot = ["gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+gpui.workspace = true
+# Only the screenshot feature turns this on. The library itself never opens a
+# platform.
+gpui_platform = { workspace = true, optional = true }
+alacritty_terminal = "0.26"
+async-channel.workspace = true
+log.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform.workspace = true
+portable-pty = { version = "0.9", path = "../../vendor/portable-pty" }
+
+[[example]]
+name = "shell"
+path = "examples/shell.rs"
