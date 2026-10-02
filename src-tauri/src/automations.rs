@@ -958,7 +958,9 @@ fn prepare_head_claim(
             run.error = Some("Superseded by a newer observed PR head before launch.".into());
             superseded.push(run);
         } else if run.status == "pending" || run.status == "running" {
-            return Err("A review of this PR is still active; the latest head remains pending.".into());
+            return Err(
+                "A review of this PR is still active; the latest head remains pending.".into(),
+            );
         }
     }
     drop(statement);
