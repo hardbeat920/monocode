@@ -4337,7 +4337,11 @@ function Workspace({
   );
 
   const onRenameHistorySession = useCallback(
-    async (sessionId: string, displayTitle: string) => {
+    async (
+      sessionId: string,
+      displayTitle: string,
+      expectedCwd = sidebarCwd,
+    ) => {
       invalidateLoadedSession(sessionId);
       const updated = await renameSession(
         sessionId,
@@ -4349,6 +4353,7 @@ function Workspace({
           sessionsRef.current = update(sessionsRef.current);
           setSessions(update);
         },
+        expectedCwd,
       );
       if (!sessionsRef.current.some((session) => session.id === sessionId))
         rememberLoadedSession(loadedSessionCache.current, updated);
@@ -9332,7 +9337,7 @@ function Workspace({
                 : null;
             },
             rename: async (id, title) => {
-              await renameHistorySessionRef.current(id, title);
+              await renameHistorySessionRef.current(id, title, source.cwd);
             },
             send: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);
@@ -10803,7 +10808,12 @@ function Workspace({
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
               onRenameSession={(id, title) => {
-                void onRenameHistorySession(id, title).catch(() => undefined);
+                void onRenameHistorySession(id, title).catch((error) => {
+                  void message(
+                    `Could not rename this conversation. Please retry.\n\n${String(error)}`,
+                    { title: "MonoCode", kind: "error" },
+                  );
+                });
               }}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}

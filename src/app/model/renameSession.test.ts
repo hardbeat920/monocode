@@ -10,6 +10,8 @@ import {
 import {
   canReplaceSessionTitle,
   newSession,
+  removeSessionDraft,
+  retargetSessionToProject,
   titleFromPrompt,
   type Session,
 } from "../../features/sessions/model/session";
@@ -73,6 +75,7 @@ it("patches a busy session without losing queued harness events and awaits stora
       sessions = update(sessions);
       queued = update;
     },
+    "/repo",
   ).then(() => {
     saved = true;
   });
@@ -110,7 +113,7 @@ it("renames a closed draft through storage and preserves an explicit prompt seed
   session.blocks[0].draft = true;
   await upsertSession(session);
   const update = vi.fn();
-  await renameSession(session.id, "Fix tracking", () => [], update);
+  await renameSession(session.id, "Fix tracking", () => [], update, "/repo");
   const restored = (await getSession(session.id))!;
   expect(restored.title).toBe(session.title);
   expect(restored.titleIsExplicit).toBe(true);
@@ -128,6 +131,7 @@ it("surfaces a failed save and lets the same rename retry", async () => {
       (update) => {
         sessions = update(sessions);
       },
+      "/repo",
     );
   vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
   await expect(rename()).rejects.toThrow("disk full");
@@ -139,10 +143,47 @@ it("surfaces a failed save and lets the same rename retry", async () => {
 
 it("rejects missing records and null write results", async () => {
   await expect(
-    renameSession("missing", "Title", () => [], vi.fn()),
+    renameSession("missing", "Title", () => [], vi.fn(), "/repo"),
   ).rejects.toThrow("not found");
   vi.mocked(invoke).mockResolvedValueOnce(null);
   await expect(
-    renameSession("chat", "Title", () => [chat()], vi.fn()),
+    renameSession("chat", "Title", () => [chat()], vi.fn(), "/repo"),
   ).rejects.toThrow("could not be saved");
+});
+
+it("rejects a target moved to another project while its stored draft loads", async () => {
+  const session = chat();
+  session.busy = false;
+  session.blocks[0].draft = true;
+  await upsertSession(session);
+  const record = stored.get(session.id)!;
+  let release!: (value: SessionRecord) => void;
+  vi.mocked(invoke)
+    .mockClear()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+  let sessions: Session[] = [];
+  const update = vi.fn();
+  const renaming = renameSession(
+    session.id,
+    "Operator title",
+    () => sessions,
+    update,
+    "/repo",
+  );
+  // The draft opens, is removed, and the now-blank tab changes projects.
+  sessions = [
+    retargetSessionToProject(removeSessionDraft(session, "user")!, "/other"),
+  ];
+  release(record);
+  await expect(renaming).rejects.toThrow("not found in this project");
+  expect(update).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("session_get", {
+    sessionId: session.id,
+  });
+  expect(stored.get(session.id)).toEqual(record);
 });
