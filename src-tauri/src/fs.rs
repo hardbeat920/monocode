@@ -1155,9 +1155,11 @@ struct GitPrCreateInput {
     head: String,
 }
 
-/// Create a GitHub pull request with `gh` and return its URL.
+/// Create a pull request and return its URL. Azure Repos checkouts use the
+/// Azure DevOps API; everything else falls back to the GitHub CLI.
 #[tauri::command]
 pub async fn git_pr_create(
+    app: AppHandle,
     cwd: String,
     title: String,
     body: String,
@@ -1166,6 +1168,7 @@ pub async fn git_pr_create(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_pr_create_for(
+            &app,
             &expand_home(&cwd),
             &GitPrCreateInput {
                 title,
@@ -2599,6 +2602,22 @@ fn git_push_for(root: &Path) -> Result<(), String> {
     }
     let remote = git_remote_name(root).ok_or_else(|| "No git remote to push to".to_string())?;
     git_checked(root, &["push", "-u", &remote, "HEAD"])
+}
+
+/// Remote `git push` would use: the upstream's remote when the branch tracks
+/// one, otherwise the default remote. Mirrors `git_push_for` so pull-request
+/// creation targets the same repository the branch pushes to.
+pub(crate) fn git_push_remote_name(root: &Path) -> Option<String> {
+    if let Some(upstream) = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]) {
+        let upstream = upstream.trim();
+        if let Some((remote, _)) = upstream.split_once('/') {
+            if !remote.is_empty() {
+                return Some(remote.to_string());
+            }
+        }
+        return None;
+    }
+    git_remote_name(root)
 }
 
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
@@ -4042,7 +4061,21 @@ fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
     best
 }
 
-fn git_pr_create_for(root: &Path, input: &GitPrCreateInput) -> Result<String, String> {
+fn git_pr_create_for(
+    app: &AppHandle,
+    root: &Path,
+    input: &GitPrCreateInput,
+) -> Result<String, String> {
+    if let Some(url) = crate::azure_devops::try_create_pull_request(
+        app,
+        root,
+        &input.title,
+        &input.body,
+        &input.base,
+        &input.head,
+    )? {
+        return Ok(url);
+    }
     let title = input.title.trim();
     if title.is_empty() {
         return Err("Pull request title cannot be empty".into());
@@ -6566,6 +6599,46 @@ mod tests {
             info.repo.as_deref(),
             dir.0.file_name().and_then(|name| name.to_str())
         );
+    }
+
+    #[test]
+    fn git_push_remote_name_follows_the_push_destination() {
+        let dir = tmp("git-push-remote");
+        if !init_git(&dir.0, "feature", Some("https://github.com/acme/web.git")) {
+            return;
+        }
+        // No upstream: the default remote.
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        // An extra Azure remote must not change the push destination.
+        if !git(
+            &dir.0,
+            &[
+                "remote",
+                "add",
+                "azure",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        ) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        // Once the branch tracks the Azure remote, pushes go there.
+        if std::fs::write(dir.0.join("file.txt"), "initial\n").is_err()
+            || !git(&dir.0, &["add", "."])
+            || !git(&dir.0, &["commit", "-m", "initial"])
+        {
+            return;
+        }
+        let Some(sha) = git_run(&dir.0, &["rev-parse", "HEAD"]).map(|sha| sha.trim().to_string())
+        else {
+            return;
+        };
+        if !git(&dir.0, &["update-ref", "refs/remotes/azure/feature", &sha])
+            || !git(&dir.0, &["branch", "--set-upstream-to", "azure/feature"])
+        {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
     }
 
     fn git(dir: &Path, args: &[&str]) -> bool {

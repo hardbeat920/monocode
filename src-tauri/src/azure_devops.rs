@@ -30,7 +30,7 @@ pub struct AzureDevOpsStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct AzureDevOpsConfig {
+pub(crate) struct AzureDevOpsConfig {
     url: String,
     token: String,
 }
@@ -283,6 +283,111 @@ pub async fn azure_devops_mr_diff(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Create a pull request on Azure Repos and return its web URL.
+/// Returns `Ok(None)` when the push remote is not an Azure DevOps remote or
+/// no Azure DevOps configuration matches, so callers fall back to the
+/// GitHub flow.
+pub(crate) fn try_create_pull_request(
+    app: &AppHandle,
+    root: &Path,
+    title: &str,
+    body: &str,
+    base: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
+    let Some((org_key, project, repo_name)) = azure_remote_for(root)? else {
+        return Ok(None);
+    };
+    let title = title.trim();
+    let base = base.trim();
+    let head = head.trim();
+    if title.is_empty() {
+        return Err("Pull request title cannot be empty".into());
+    }
+    if base.is_empty() || head.is_empty() {
+        return Err("Pull request base and head branches are required".into());
+    }
+    if base == head {
+        return Err("Pull request base and head branches must differ".into());
+    }
+    // No stored PAT: keep the GitHub CLI fallback instead of failing.
+    let Some(config) = read_config(app)? else {
+        return Ok(None);
+    };
+    if !config.url.trim().eq_ignore_ascii_case(&org_key) {
+        return Err(format!(
+            "Azure DevOps is connected to {} but this repository belongs to {org_key}. Update the organization in Settings.",
+            config.url.trim()
+        ));
+    }
+    let path = format!(
+        "/{}/_apis/git/repositories/{}/pullrequests?api-version={}",
+        encode_segment(&project),
+        encode_segment(&repo_name),
+        API_VERSION
+    );
+    let payload = json!({
+        "sourceRefName": format!("refs/heads/{head}"),
+        "targetRefName": format!("refs/heads/{base}"),
+        "title": title,
+        "description": body.trim(),
+    });
+    let response = azure_post_json(&config, &path, payload)?;
+    let url = response
+        .value
+        .get("_links")
+        .and_then(|links| links.get("web"))
+        .and_then(|web| web.get("href"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string);
+    if let Some(url) = url {
+        return Ok(Some(url));
+    }
+    // Fall back to the canonical web URL when the API omits _links.web.
+    let number = response.value.get("pullRequestId").and_then(Value::as_i64);
+    match number {
+        Some(id) if id > 0 => Ok(Some(pr_web_url(&config, &project, &repo_name, id))),
+        _ => Err("Azure DevOps did not return a pull request URL".into()),
+    }
+}
+
+/// Azure DevOps coordinates of the branch's push destination, resolved with
+/// the same remote `git push` uses (upstream remote, else default remote).
+/// Returns `Ok(None)` when that push remote is not an Azure DevOps remote,
+/// so callers fall back to the GitHub CLI path.
+fn azure_remote_for(root: &Path) -> Result<Option<(String, String, String)>, String> {
+    let Some(remote) = crate::fs::git_push_remote_name(root) else {
+        return Ok(None);
+    };
+    let url = git_remote_url(root, &remote)?;
+    let Some(parsed) = parse_azure_remote(&url) else {
+        return Ok(None);
+    };
+    if !valid_repo_parts(&parsed.1, &parsed.2) {
+        return Ok(None);
+    }
+    Ok(Some(parsed))
+}
+
+/// Push URL of a git remote. Unknown remotes yield an empty string so the
+/// caller treats them as non-Azure instead of failing.
+fn git_remote_url(root: &Path, remote: &str) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    crate::hide_window_console(&mut cmd);
+    let output = cmd
+        .args(["remote", "get-url", "--push", remote])
+        .current_dir(root)
+        .output()
+        .map_err(|_| "Could not run git".to_string())?;
+    if !output.status.success() {
+        // No such remote (e.g. no `origin` yet): not Azure, fall back.
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn azure_devops_list_work_items_for(
@@ -1468,8 +1573,8 @@ fn pr_web_url(config: &AzureDevOpsConfig, project: &str, repo: &str, number: i64
     format!(
         "{}/{}/_git/{}/pullrequest/{}",
         config.url.trim_end_matches('/'),
-        project.trim(),
-        repo.trim(),
+        encode_segment(project.trim()),
+        encode_segment(repo.trim()),
         number
     )
 }
@@ -1875,7 +1980,7 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
     }
     // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo} (no scheme).
     if !remote.contains("://") && remote.contains('@') {
-        if let Some((_, path)) = remote.split_once(':') {
+        if let Some((left, path)) = remote.split_once(':') {
             let path = path.strip_prefix("v3/").unwrap_or(path);
             let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
             if parts.len() >= 3 && remote.contains("dev.azure.com") {
@@ -1890,6 +1995,49 @@ fn parse_azure_remote(remote: &str) -> Option<(String, String, String)> {
                     project,
                     repo,
                 ));
+            }
+            // On-premises scp-style SSH: user@host[:port]:{collection/...}/{project}/_git/{repo}
+            let mut host = left
+                .rsplit('@')
+                .next()
+                .unwrap_or(left)
+                .trim()
+                .to_ascii_lowercase();
+            let mut scp_path = path;
+            // A leading numeric segment is the SSH port (host:port/path).
+            if let Some((maybe_port, rest)) = scp_path.split_once('/') {
+                if !maybe_port.is_empty() && maybe_port.bytes().all(|b| b.is_ascii_digit()) {
+                    host = format!("{host}:{maybe_port}");
+                    scp_path = rest;
+                }
+            }
+            if !host.is_empty() {
+                let segments: Vec<String> = scp_path
+                    .split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(percent_decode)
+                    .collect();
+                if let Some(git_index) = segments
+                    .iter()
+                    .position(|segment| segment.eq_ignore_ascii_case("_git"))
+                {
+                    if git_index >= 2 && git_index + 1 < segments.len() {
+                        let project = segments[git_index - 1].clone();
+                        let repo = segments[git_index + 1..]
+                            .join("/")
+                            .trim_end_matches(".git")
+                            .trim()
+                            .to_string();
+                        let org_path = segments[..git_index - 1].join("/");
+                        if !org_path.is_empty() && !project.is_empty() && !repo.is_empty() {
+                            return Some((
+                                format!("https://{host}/{org_path}").to_ascii_lowercase(),
+                                project,
+                                repo,
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -2006,7 +2154,7 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("azure-devops-config.json"))
 }
 
-fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
+pub(crate) fn read_config(app: &AppHandle) -> Result<Option<AzureDevOpsConfig>, String> {
     let path = config_path(app)?;
     match fs::read_to_string(path) {
         Ok(raw) => {
@@ -2151,6 +2299,112 @@ mod tests {
             project_repo_from_remote("https://dev.azure.com/other/platform/_git/web", org)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn parses_on_premises_scp_style_ssh_remotes() {
+        // user@host:{collection}/{project}/_git/{repo}, no scheme.
+        assert_eq!(
+            parse_azure_remote("git@tfs.contoso.com:DefaultCollection/platform/_git/web"),
+            Some((
+                "https://tfs.contoso.com/defaultcollection".to_string(),
+                "platform".to_string(),
+                "web".to_string(),
+            ))
+        );
+        assert_eq!(
+            parse_azure_remote(
+                "deploy@tfs.contoso.com:8080/tfs/DefaultCollection/platform/_git/web.git"
+            ),
+            Some((
+                "https://tfs.contoso.com:8080/tfs/defaultcollection".to_string(),
+                "platform".to_string(),
+                "web".to_string(),
+            ))
+        );
+        // Without a collection/project/_git path there is nothing to resolve.
+        assert!(parse_azure_remote("git@tfs.contoso.com:platform/web.git").is_none());
+        assert!(parse_azure_remote("git@github.com:acme/web.git").is_none());
+    }
+
+    #[test]
+    fn encodes_special_characters_in_pr_urls() {
+        let config = AzureDevOpsConfig {
+            url: "https://dev.azure.com/acme/".to_string(),
+            token: "token".to_string(),
+        };
+        assert_eq!(
+            pr_web_url(&config, "My Project", "weird%2Fname", 3),
+            "https://dev.azure.com/acme/My%20Project/_git/weird%252Fname/pullrequest/3"
+        );
+    }
+
+    #[test]
+    fn resolves_the_push_url_when_fetch_and_push_differ() {
+        let dir = temp_git_dir("azure-push-url");
+        // Fetch from GitHub but push to Azure: the push destination wins.
+        git(
+            &dir,
+            &["remote", "add", "origin", "https://github.com/acme/web.git"],
+        );
+        git(
+            &dir,
+            &[
+                "config",
+                "remote.origin.pushurl",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        );
+        assert_eq!(
+            azure_remote_for(&dir)
+                .unwrap()
+                .as_ref()
+                .map(|remote| remote.1.clone() + "/" + &remote.2),
+            Some("shop/web".to_string())
+        );
+        // Fetch from Azure but push to GitHub: not an Azure push destination.
+        git(&dir, &["remote", "remove", "origin"]);
+        git(
+            &dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        );
+        git(
+            &dir,
+            &[
+                "config",
+                "remote.origin.pushurl",
+                "https://github.com/acme/web.git",
+            ],
+        );
+        assert!(azure_remote_for(&dir).unwrap().is_none());
+    }
+
+    static GIT_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn temp_git_dir(name: &str) -> PathBuf {
+        let id = GIT_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("monocode-{name}-{}-{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init"]);
+        git(&dir, &["config", "user.name", "MonoCode"]);
+        git(&dir, &["config", "user.email", "monocode@test"]);
+        dir
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("git must run in tests");
+        assert!(status.success(), "git {args:?} failed in tests");
     }
 
     #[test]
