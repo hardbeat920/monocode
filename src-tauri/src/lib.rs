@@ -312,6 +312,7 @@ pub fn run() {
             fs::git_file_diff,
             fs::git_history,
             fs::git_commit_files,
+            fs::git_commit_message,
             fs::git_commit_file_diff,
             fs::git_stage_file,
             fs::git_stage_contents,
