@@ -241,9 +241,9 @@ export class OpenCodeV2InboxTracker {
         return;
       }
       case "session.compaction.started":
-        this.runningCompaction =
-          stringField(properties, "inputID") ??
-          this.delivered[this.delivered.length - 1];
+        // Without an id, guessing among delivered items could settle a prompt
+        // queued behind the compaction; the execution's end settles both.
+        this.runningCompaction = stringField(properties, "inputID");
         return;
       case "session.compaction.ended":
         if (this.runningCompaction) {
