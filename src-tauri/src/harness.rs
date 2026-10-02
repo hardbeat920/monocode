@@ -1045,6 +1045,9 @@ fn apply_provider_account(
     };
     match account.provider.as_str() {
         "claude" => {
+            if let Some(shared) = default_claude_config_dir() {
+                link_claude_user_resources(&shared, &dir);
+            }
             // Claude scopes both its ordinary config and its macOS Keychain
             // credential to these exact strings. Setting both keeps profiles
             // isolated on every supported platform.
@@ -1063,6 +1066,53 @@ fn apply_provider_account(
         _ => unreachable!("provider_account_dir validates the provider"),
     }
     Ok(())
+}
+
+/// User-level definitions Claude reads from its config dir. They hold no
+/// credentials, so every account profile shares the default profile's copy.
+const CLAUDE_SHARED_USER_DIRS: [&str; 3] = ["skills", "commands", "agents"];
+
+/// The config dir the default account uses: `CLAUDE_CONFIG_DIR` when the app
+/// inherited one, otherwise `~/.claude`.
+fn default_claude_config_dir() -> Option<PathBuf> {
+    claude_config_dir_from(std::env::var_os("CLAUDE_CONFIG_DIR"))
+}
+
+/// A relative `CLAUDE_CONFIG_DIR` is made absolute against the app's working
+/// directory; a symlink to a relative target would resolve inside the profile.
+fn claude_config_dir_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    match value {
+        Some(path) if !path.is_empty() => std::path::absolute(PathBuf::from(path)).ok(),
+        _ => dirs_home().map(|home| PathBuf::from(home).join(".claude")),
+    }
+}
+
+/// `CLAUDE_CONFIG_DIR` also moves where Claude looks for user skills,
+/// commands and agents, so an account profile would otherwise start with
+/// none. Link each missing one back to the default profile. Anything already
+/// present in the profile is the user's own and stays untouched.
+fn link_claude_user_resources(shared: &Path, profile: &Path) {
+    if shared == profile {
+        return;
+    }
+    for name in CLAUDE_SHARED_USER_DIRS {
+        let target = shared.join(name);
+        let link = profile.join(name);
+        if !target.is_dir() || std::fs::symlink_metadata(&link).is_ok() {
+            continue;
+        }
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&target, &link);
+        if let Err(error) = linked {
+            eprintln!(
+                "[harness] could not link {} into {}: {error}",
+                target.display(),
+                profile.display()
+            );
+        }
+    }
 }
 
 /// A child that stops draining stdin can block `write_all` for minutes, so the
@@ -3749,6 +3799,90 @@ mod tests {
         let id = passwd_identity().expect("passwd");
         assert!(!id.user.is_empty());
         assert!(PathBuf::from(&id.home).is_dir());
+    }
+}
+
+#[cfg(all(unix, test))]
+mod claude_profile_link_tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-claude-profile-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn links_default_skills_commands_and_agents_into_profile() {
+        let shared = temp_dir("shared");
+        let profile = temp_dir("profile");
+        for name in CLAUDE_SHARED_USER_DIRS {
+            std::fs::create_dir_all(shared.join(name)).unwrap();
+        }
+        std::fs::create_dir_all(shared.join("skills/ship")).unwrap();
+        std::fs::write(
+            shared.join("skills/ship/SKILL.md"),
+            "---\nname: ship\n---\n",
+        )
+        .unwrap();
+
+        link_claude_user_resources(&shared, &profile);
+
+        for name in CLAUDE_SHARED_USER_DIRS {
+            assert_eq!(
+                std::fs::read_link(profile.join(name)).unwrap(),
+                shared.join(name)
+            );
+        }
+        assert!(profile.join("skills/ship/SKILL.md").is_file());
+
+        // A second launch finds the links already in place.
+        link_claude_user_resources(&shared, &profile);
+        assert!(profile.join("skills/ship/SKILL.md").is_file());
+
+        std::fs::remove_dir_all(shared).unwrap();
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn relative_config_dir_resolves_against_working_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            claude_config_dir_from(Some("rel/claude".into())),
+            Some(cwd.join("rel/claude"))
+        );
+        assert_eq!(
+            claude_config_dir_from(Some("/abs/claude".into())),
+            Some(PathBuf::from("/abs/claude"))
+        );
+        let home_default = dirs_home().map(|home| PathBuf::from(home).join(".claude"));
+        assert_eq!(claude_config_dir_from(Some("".into())), home_default);
+        assert_eq!(claude_config_dir_from(None), home_default);
+    }
+
+    #[test]
+    fn keeps_profile_owned_dirs_and_skips_missing_defaults() {
+        let shared = temp_dir("shared-owned");
+        let profile = temp_dir("profile-owned");
+        std::fs::create_dir_all(shared.join("skills")).unwrap();
+        std::fs::create_dir_all(profile.join("skills/own")).unwrap();
+
+        link_claude_user_resources(&shared, &profile);
+
+        assert!(!std::fs::symlink_metadata(profile.join("skills"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(profile.join("skills/own").is_dir());
+        assert!(std::fs::symlink_metadata(profile.join("commands")).is_err());
+        assert!(std::fs::symlink_metadata(profile.join("agents")).is_err());
+
+        std::fs::remove_dir_all(shared).unwrap();
+        std::fs::remove_dir_all(profile).unwrap();
     }
 }
 
