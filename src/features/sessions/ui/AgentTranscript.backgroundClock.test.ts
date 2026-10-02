@@ -38,11 +38,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(visible: boolean) {
+function render(visible: boolean, transcript: Block[] = blocks) {
   act(() =>
     root.render(
       createElement(AgentTranscript, {
-        blocks,
+        blocks: transcript,
         busy: true,
         visible,
         backgroundTasks: ["npm run dev"],
@@ -63,5 +63,23 @@ describe("AgentTranscript background clock", () => {
     render(false);
     render(true);
     expect(container.textContent).toContain("Working for 1m 35s");
+  });
+
+  it("does not reach back past a turn that already ended", () => {
+    // A send the host has not confirmed yet carries no clock, but the turn
+    // before it finished long ago.
+    render(true, [
+      {
+        id: "old",
+        role: "user",
+        text: "earlier",
+        startedAt: startedAt - 3_600_000,
+        durationMs: 5_000,
+      },
+      { id: "old-answer", role: "assistant", text: "Done." },
+      { id: "pending", role: "user", text: "next prompt" },
+    ]);
+    expect(container.textContent).not.toContain("61m");
+    expect(container.textContent).toContain("next promptWorking for 1s");
   });
 });
