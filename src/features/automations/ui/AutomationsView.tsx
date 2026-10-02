@@ -1676,7 +1676,7 @@ type TriggerEvent = {
   label: string;
 };
 
-const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
+export const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   time: [
     { value: "hourly", label: "Hourly" },
     { value: "daily", label: "Daily" },
@@ -1686,7 +1686,16 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
   github: [
     { value: "draft_opened", label: "Draft opened" },
     { value: "pull_request_opened", label: "Pull request opened" },
+    {
+      value: "pull_request_ready_for_review",
+      label: "Pull request ready for review",
+    },
+    { value: "pull_request_reopened", label: "Pull request reopened" },
+    { value: "pull_request_merged", label: "Pull request merged" },
+    { value: "pull_request_closed", label: "Pull request closed" },
     { value: "issue_opened", label: "Issue opened" },
+    { value: "issue_reopened", label: "Issue reopened" },
+    { value: "issue_closed", label: "Issue closed" },
   ],
   linear: [{ value: "issue_created", label: "Issue created" }],
   jira: [{ value: "issue_created", label: "Issue appeared" }],

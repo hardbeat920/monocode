@@ -73,6 +73,35 @@ describe("session work items", () => {
     });
   });
 
+  it("restores the linked item from a reopened or closed automation event", () => {
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "github",
+        eventKey: "github:issue:openai/codex:321:reopened:1790000000000",
+      }),
+    ).toEqual({
+      kind: "issue",
+      repo: "openai/codex",
+      number: 321,
+      url: "https://github.com/openai/codex/issues/321",
+    });
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "github",
+        eventKey: "github:pr:openai/codex:321:ready_for_review:1790000000000",
+      })?.kind,
+    ).toBe("pr");
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "github",
+        eventKey: "github:pr:openai/codex:321:reopened",
+      }),
+    ).toBeNull();
+  });
+
   it("does not link non-GitHub or malformed automation events", () => {
     expect(
       linkedWorkItemFromAutomationEvent({

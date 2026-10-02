@@ -9,6 +9,10 @@ import {
   type DueAutomationRun,
 } from "./automations";
 import { inboxStartDraft, type InboxItem } from "../../inbox/model/githubTasks";
+import type {
+  InboxTransition,
+  InboxTransitionKind,
+} from "../../inbox/model/inboxTransitions";
 import { sameProjectPath } from "../../projects/model/recents";
 import type { LinkedWorkItem } from "../../sessions/model/session";
 import { linkedWorkItemFromInboxItem } from "../../sessions/model/sessionWorkItem";
@@ -27,12 +31,41 @@ export type ClaimedInboxAutomationRun = DueAutomationRun & {
   linkedWorkItem?: LinkedWorkItem;
 };
 
+/** An Inbox item that appeared, or one that went through `transition`. */
+type InboxEvent = { item: InboxItem; transition?: InboxTransitionKind };
+
 const RETRY_STORAGE_KEY = "monocode.automation-inbox-retries.v1";
 const MAX_RETRY_ITEMS = 500;
-let retryItems: Map<string, InboxItem> | undefined;
+let retryItems: Map<string, InboxEvent> | undefined;
+
+const TRANSITION_EVENTS: Record<
+  "issue" | "pr",
+  Partial<Record<InboxTransitionKind, string>>
+> = {
+  issue: { reopened: "issue_reopened", closed: "issue_closed" },
+  pr: {
+    reopened: "pull_request_reopened",
+    closed: "pull_request_closed",
+    merged: "pull_request_merged",
+    ready_for_review: "pull_request_ready_for_review",
+  },
+};
+
+const TRANSITION_PHRASES: Record<InboxTransitionKind, string> = {
+  reopened: "was reopened",
+  closed: "was closed",
+  merged: "was merged",
+  ready_for_review: "was marked ready for review",
+};
 
 export const SUPPORTED_INBOX_TRIGGER_EVENTS = {
-  github: ["draft_opened", "pull_request_opened", "issue_opened"],
+  github: [
+    "draft_opened",
+    "pull_request_opened",
+    ...Object.values(TRANSITION_EVENTS.pr),
+    "issue_opened",
+    ...Object.values(TRANSITION_EVENTS.issue),
+  ],
   gitlab: ["merge_request_opened", "issue_opened"],
   linear: ["issue_created"],
   jira: ["issue_created"],
@@ -69,11 +102,31 @@ export function inboxAppearedEvent(
   return null;
 }
 
-export function automationEventKey(item: InboxItem): string {
-  const identity =
+export function inboxTransitionEvent(
+  item: InboxItem,
+  transition: InboxTransitionKind,
+): { kind: AutomationTriggerKind; event: string } | null {
+  if (item.provider !== "github") return null;
+  if (item.kind !== "issue" && item.kind !== "pr") return null;
+  const event = TRANSITION_EVENTS[item.kind][transition];
+  return event ? { kind: "github", event } : null;
+}
+
+/**
+ * An item opens once, so its key is the item alone. Later changes can repeat,
+ * so each carries the change and when it happened.
+ */
+export function automationEventKey(
+  item: InboxItem,
+  transition?: InboxTransitionKind,
+): string {
+  const base =
     item.provider === "linear" || item.provider === "jira"
       ? `${item.provider}:issue:${item.id || item.identifier || item.number}`
       : `${item.provider}:${item.kind}:${item.repo}:${item.number}`;
+  const identity = transition
+    ? `${base}:${transition}:${Date.parse(item.updatedAt) || 0}`
+    : base;
   return identity
     .trim()
     .toLowerCase()
@@ -81,15 +134,26 @@ export function automationEventKey(item: InboxItem): string {
     .slice(0, 400);
 }
 
-function pendingRetryItems(): Map<string, InboxItem> {
+function savedInboxEvent(saved: unknown): InboxEvent | null {
+  if (!saved || typeof saved !== "object") return null;
+  const entry = saved as Partial<InboxTransition>;
+  // Appeared items are stored bare, as they were before transitions existed.
+  if (!entry.transition) return { item: saved as InboxItem };
+  if (!entry.item || !(entry.transition in TRANSITION_PHRASES)) return null;
+  return { item: entry.item, transition: entry.transition };
+}
+
+function pendingRetryItems(): Map<string, InboxEvent> {
   if (retryItems) return retryItems;
   retryItems = new Map();
   try {
     const saved = JSON.parse(window.localStorage.getItem(RETRY_STORAGE_KEY) ?? "[]");
     if (Array.isArray(saved)) {
-      for (const item of saved as InboxItem[]) {
-        const key = automationEventKey(item);
-        if (key) retryItems.set(key, item);
+      for (const entry of saved) {
+        const event = savedInboxEvent(entry);
+        if (!event) continue;
+        const key = automationEventKey(event.item, event.transition);
+        if (key) retryItems.set(key, event);
       }
     }
   } catch {
@@ -98,29 +162,52 @@ function pendingRetryItems(): Map<string, InboxItem> {
   return retryItems;
 }
 
-function saveRetryItems(items: ReadonlyMap<string, InboxItem>) {
+function saveRetryItems(items: ReadonlyMap<string, InboxEvent>) {
   try {
     if (items.size === 0) window.localStorage.removeItem(RETRY_STORAGE_KEY);
     else
       window.localStorage.setItem(
         RETRY_STORAGE_KEY,
-        JSON.stringify([...items.values()]),
+        JSON.stringify(
+          [...items.values()].map((event) =>
+            event.transition ? event : event.item,
+          ),
+        ),
       );
   } catch {
     // The in-memory queue still retries while storage is unavailable.
   }
 }
 
+function inboxTransitionDraft(
+  item: InboxItem,
+  transition: InboxTransitionKind,
+): string {
+  const [, ...details] = inboxStartDraft(item).trim().split("\n");
+  const kind = item.kind === "pr" ? "pull request" : "issue";
+  return [
+    `This GitHub ${kind} ${TRANSITION_PHRASES[transition]}:`,
+    ...details,
+  ].join("\n");
+}
+
 export function matchInboxAutomations(
   automations: readonly Automation[],
   appeared: readonly InboxItem[],
+  transitions: readonly InboxTransition[] = [],
 ): InboxAutomationMatch[] {
   const matches: InboxAutomationMatch[] = [];
   const seen = new Set<string>();
-  for (const item of appeared) {
-    const event = inboxAppearedEvent(item);
+  const events: InboxEvent[] = [
+    ...appeared.map((item) => ({ item })),
+    ...transitions,
+  ];
+  for (const { item, transition } of events) {
+    const event = transition
+      ? inboxTransitionEvent(item, transition)
+      : inboxAppearedEvent(item);
     if (!event) continue;
-    const eventKey = automationEventKey(item);
+    const eventKey = automationEventKey(item, transition);
     if (!eventKey) continue;
     for (const automation of automations) {
       if (!automation.enabled) continue;
@@ -136,8 +223,14 @@ export function matchInboxAutomations(
         trigger,
         item,
         eventKey,
-        occurredAt: itemOccurredAt(item),
-        prompt: `${automation.prompt.trim()}\n\n${inboxStartDraft(item).trim()}`,
+        occurredAt: transition
+          ? Date.parse(item.updatedAt) || 0
+          : itemOccurredAt(item),
+        prompt: `${automation.prompt.trim()}\n\n${
+          transition
+            ? inboxTransitionDraft(item, transition)
+            : inboxStartDraft(item).trim()
+        }`,
       });
     }
   }
@@ -147,11 +240,15 @@ export function matchInboxAutomations(
 export async function claimInboxAutomationRuns(
   appeared: readonly InboxItem[],
   now = Date.now(),
+  transitions: readonly InboxTransition[] = [],
 ): Promise<ClaimedInboxAutomationRun[]> {
   const pending = pendingRetryItems();
-  for (const item of appeared) {
-    const key = automationEventKey(item);
-    if (key) pending.set(key, item);
+  for (const event of [
+    ...appeared.map((item): InboxEvent => ({ item })),
+    ...transitions,
+  ]) {
+    const key = automationEventKey(event.item, event.transition);
+    if (key) pending.set(key, event);
   }
   while (pending.size > MAX_RETRY_ITEMS) {
     const oldest = pending.keys().next().value;
@@ -163,7 +260,13 @@ export async function claimInboxAutomationRuns(
 
   const automations = await listAutomations();
   const candidates = [...pending.values()];
-  const matches = matchInboxAutomations(automations, candidates);
+  const matches = matchInboxAutomations(
+    automations,
+    candidates.filter((event) => !event.transition).map((event) => event.item),
+    candidates.filter(
+      (event): event is InboxTransition => event.transition !== undefined,
+    ),
+  );
   const claimed: ClaimedInboxAutomationRun[] = [];
   const failed = new Set<string>();
   for (const match of matches) {
@@ -194,8 +297,8 @@ export async function claimInboxAutomationRuns(
       failed.add(match.eventKey);
     }
   }
-  for (const item of candidates) {
-    const key = automationEventKey(item);
+  for (const event of candidates) {
+    const key = automationEventKey(event.item, event.transition);
     if (!failed.has(key)) pending.delete(key);
   }
   saveRetryItems(pending);

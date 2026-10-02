@@ -266,3 +266,116 @@ describe("Inbox activity polling", () => {
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
   });
 });
+
+describe("Inbox activity for automations", () => {
+  const POLL_MS = 30_000;
+  const onActivity = vi.fn();
+
+  function AutomationHarness() {
+    useInboxActivity(recents, "/tmp/app", [], { onActivity });
+    return null;
+  }
+
+  async function mountForAutomations() {
+    await act(async () => {
+      root.render(createElement(AutomationHarness));
+    });
+  }
+
+  async function nextPoll() {
+    await act(async () => vi.advanceTimersByTimeAsync(POLL_MS));
+  }
+
+  const reportedTransitions = () =>
+    onActivity.mock.calls.flatMap(([, transitions]) => transitions);
+  const reportedAppeared = () =>
+    onActivity.mock.calls.flatMap(([appeared]) => appeared);
+
+  beforeEach(() => {
+    onActivity.mockReset();
+    vi.useFakeTimers();
+  });
+
+  it("reports a pull request that left the open list because it was merged", async () => {
+    const merged = {
+      ...remote,
+      state: "merged",
+      updatedAt: "2026-09-13T13:00:00Z",
+    };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: {} });
+    githubWorkItem.mockResolvedValue(merged);
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([]);
+
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/app",
+      "acme/app",
+      "pr",
+      42,
+      { force: true },
+    );
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+
+    await nextPoll();
+    expect(reportedTransitions()).toHaveLength(1);
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports nothing when the missing pull request is still open", async () => {
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: {} });
+    githubWorkItem.mockResolvedValue(remote);
+    await mountForAutomations();
+    await nextPoll();
+    await nextPoll();
+
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+    expect(reportedTransitions()).toEqual([]);
+  });
+
+  it("reports a reopened item without treating it as newly appeared", async () => {
+    const closed = { ...remote, state: "closed" };
+    const reopened = { ...remote, updatedAt: "2026-09-13T14:00:00Z" };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [closed], errors: {} })
+      .mockResolvedValue({ items: [reopened], errors: {} });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(reportedTransitions()).toEqual([
+      { item: reopened, transition: "reopened" },
+    ]);
+    expect(reportedAppeared()).toEqual([]);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("does not look items up while the GitHub refresh is failing", async () => {
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: { github: "gh is offline" } });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(githubWorkItem).not.toHaveBeenCalled();
+    expect(reportedTransitions()).toEqual([]);
+  });
+
+  it("still reports newly appeared items on every poll", async () => {
+    const other = { ...remote, number: 43 };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [remote, other], errors: {} });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(reportedAppeared()).toEqual([other]);
+    expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+

@@ -53,6 +53,11 @@ import {
   inboxNotificationSubject,
 } from "../model/inboxNotifications";
 import {
+  InboxTransitionTracker,
+  resolveMissingTransitions,
+  type InboxTransition,
+} from "../model/inboxTransitions";
+import {
   inboxNotificationProject,
   rememberNotificationProjects,
 } from "../../notifications/model/notificationProjects";
@@ -140,7 +145,13 @@ export function useInboxActivity(
   recents: RecentProject[],
   cwd: string,
   sessions: readonly SessionSummary[],
-  options?: { onAppeared?: (items: InboxItem[]) => void },
+  options?: {
+    /** Newly appeared items, and GitHub items that changed state. */
+    onActivity?: (
+      appeared: InboxItem[],
+      transitions: InboxTransition[],
+    ) => void;
+  },
 ): InboxActivity {
   const [unseen, setUnseen] = useState(false);
   const [workItems, setWorkItems] = useState<
@@ -150,8 +161,9 @@ export function useInboxActivity(
   const [notificationRevision, setNotificationRevision] = useState(0);
   const entriesRef = useRef<ProjectSeenEntry[]>([]);
   const notifications = useRef(new InboxNotificationTracker());
+  const transitions = useRef(new InboxTransitionTracker());
   const sessionsRef = useRef(sessions);
-  const onAppearedRef = useRef(options?.onAppeared);
+  const onActivityRef = useRef(options?.onActivity);
   const fallbackFetchedAt = useRef(new Map<string, number>());
   const targetKey = linkedWorkItemTargets(sessions)
     .map((target) => target.key)
@@ -174,8 +186,8 @@ export function useInboxActivity(
   }, [sessions]);
 
   useLayoutEffect(() => {
-    onAppearedRef.current = options?.onAppeared;
-  }, [options?.onAppeared]);
+    onActivityRef.current = options?.onActivity;
+  }, [options?.onActivity]);
 
   useEffect(() => {
     const stopSeen = subscribeInboxSeen(applyUnseen);
@@ -231,15 +243,22 @@ export function useInboxActivity(
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
         );
+        const scope = inboxListCacheKey(projects, query);
+        const failedProviders = Object.keys(listed.errors) as InboxProvider[];
         const observed = notifications.current.observe(
           listed.items,
-          inboxListCacheKey(projects, query),
-          Object.keys(listed.errors) as InboxProvider[],
+          scope,
+          failedProviders,
+        );
+        const moved = transitions.current.observe(
+          listed.items,
+          scope,
+          failedProviders,
         );
         const changed = observed.changed;
         // Invoke on every successful poll so retained automation claims can be
         // retried even when the item is no longer newly appeared.
-        onAppearedRef.current?.(observed.appeared);
+        onActivityRef.current?.(observed.appeared, moved.transitions);
         const selfAuthored = changed.filter((item) =>
           consumeInboxSelfActivity(item),
         );
@@ -330,6 +349,23 @@ export function useInboxActivity(
             setWorkItems((current) => mergeSnapshots(current, fallback));
           }
         }
+
+        // A closed item just leaves an open-only list, so ask GitHub what
+        // happened to it. Report even if this effect was replaced meanwhile:
+        // the tracker has already recorded the change and will not repeat it.
+        const confirmed = await resolveMissingTransitions(
+          transitions.current,
+          moved.missing,
+          (item) =>
+            githubWorkItem(
+              item.projectPath,
+              item.repo,
+              item.kind === "pr" ? "pr" : "issue",
+              item.number,
+              { force: true },
+            ),
+        );
+        if (confirmed.length > 0) onActivityRef.current?.([], confirmed);
       } catch {
         // Leave the last known badges; a later poll can try again.
       } finally {

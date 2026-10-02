@@ -9,7 +9,8 @@ import {
   peekAutomations,
   type Automation,
 } from "../model/automations";
-import { AutomationsView } from "./AutomationsView";
+import { SUPPORTED_INBOX_TRIGGER_EVENTS } from "../model/automationEvents";
+import { AutomationsView, TRIGGER_EVENTS } from "./AutomationsView";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", async (original) => ({
@@ -96,3 +97,30 @@ it("invalidates the cached list when an automation changes", async () => {
   notifyAutomationsChanged();
   expect(peekAutomations()).toBeNull();
 });
+
+it("offers exactly the inbox events that can fire, each under its own label", () => {
+  for (const [kind, supported] of Object.entries(SUPPORTED_INBOX_TRIGGER_EVENTS)) {
+    const offered = TRIGGER_EVENTS[kind as keyof typeof TRIGGER_EVENTS];
+    expect(offered.map((event) => event.value).sort()).toEqual(
+      [...supported].sort(),
+    );
+    const labels = offered.map((event) => event.label);
+    expect(labels.every((label) => label.trim())).toBe(true);
+    expect(new Set(labels).size).toBe(labels.length);
+  }
+});
+
+it("names the GitHub state-change triggers for what happened", () => {
+  const labels = Object.fromEntries(
+    TRIGGER_EVENTS.github.map((event) => [event.value, event.label]),
+  );
+  expect(labels).toMatchObject({
+    issue_reopened: "Issue reopened",
+    issue_closed: "Issue closed",
+    pull_request_reopened: "Pull request reopened",
+    pull_request_closed: "Pull request closed",
+    pull_request_merged: "Pull request merged",
+    pull_request_ready_for_review: "Pull request ready for review",
+  });
+});
+
