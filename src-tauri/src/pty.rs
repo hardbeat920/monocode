@@ -45,10 +45,16 @@ struct LivePty {
     #[cfg(windows)]
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     pid: u32,
+    /// Label of the window showing this terminal. A reload keeps the window,
+    /// so the PTY outlives the page; destroying the window reaps it.
+    owner: Mutex<String>,
 }
 
 pub struct PtyHost {
     sessions: Mutex<HashMap<String, Arc<LivePty>>>,
+    /// Background reaps of closed windows. Shutdown joins them so their
+    /// SIGKILLs land before the process exits.
+    reapers: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
 impl PtyHost {
@@ -63,6 +69,7 @@ impl PtyHost {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            reapers: Mutex::new(Vec::new()),
         }
     }
 
@@ -71,6 +78,17 @@ impl PtyHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id, live)
+    }
+
+    /// Hand a live PTY to the window asking for it. The lookup, the owner
+    /// change and the redraw happen under the sessions lock, so a closing
+    /// window's `kill_window` cannot reap the terminal mid-transfer. `None`
+    /// when no PTY runs under `id`, and the caller spawns a fresh one.
+    fn reattach(&self, id: &str, owner: &str, cols: u16, rows: u16) -> Option<Result<(), String>> {
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let live = sessions.get(id)?;
+        live.set_owner(owner);
+        Some(reattach(live, cols, rows))
     }
 
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
@@ -101,21 +119,62 @@ impl PtyHost {
             let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             map.drain().map(|(_, live)| live).collect()
         };
-        let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
-        for live in kids {
-            #[cfg(unix)]
-            {
-                hangup(live.pid);
-                close_fd(live.master_fd);
-            }
-            #[cfg(not(unix))]
-            drop(live);
-        }
-        // Quit and `Drop` both exit the process, so the SIGKILL has to land
-        // before this returns. `terminate`'s detached escalate thread never gets
-        // to run, and every shell is its own `setsid` session that outlives us.
-        crate::harness::terminate_all(&pids);
+        reap(kids);
     }
+
+    /// The terminals of one closed window. Other windows keep theirs.
+    pub(crate) fn kill_window(&self, label: &str) {
+        let kids: Vec<Arc<LivePty>> = {
+            let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            let ids: Vec<String> = map
+                .iter()
+                .filter(|(_, live)| live.owned_by(label))
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.iter().filter_map(|id| map.remove(id)).collect()
+        };
+        reap(kids);
+    }
+
+    pub(crate) fn track_reaper(&self, handle: thread::JoinHandle<()>) {
+        let mut reapers = self.reapers.lock().unwrap_or_else(|e| e.into_inner());
+        reapers.retain(|reaper| !reaper.is_finished());
+        reapers.push(handle);
+    }
+
+    pub(crate) fn join_reapers(&self) {
+        let reapers = std::mem::take(&mut *self.reapers.lock().unwrap_or_else(|e| e.into_inner()));
+        for reaper in reapers {
+            let _ = reaper.join();
+        }
+    }
+}
+
+impl LivePty {
+    fn owned_by(&self, label: &str) -> bool {
+        *self.owner.lock().unwrap_or_else(|e| e.into_inner()) == label
+    }
+
+    fn set_owner(&self, label: &str) {
+        *self.owner.lock().unwrap_or_else(|e| e.into_inner()) = label.to_string();
+    }
+}
+
+fn reap(kids: Vec<Arc<LivePty>>) {
+    let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
+    for live in kids {
+        #[cfg(unix)]
+        {
+            hangup(live.pid);
+            close_fd(live.master_fd);
+        }
+        #[cfg(not(unix))]
+        drop(live);
+    }
+    // Quit and `Drop` both exit the process, so the SIGKILL has to land
+    // before this returns. `terminate`'s detached escalate thread never gets
+    // to run, and every shell is its own `setsid` session that outlives us.
+    crate::harness::terminate_all(&pids);
 }
 
 impl Drop for PtyHost {
@@ -127,34 +186,71 @@ impl Drop for PtyHost {
 #[tauri::command]
 pub fn pty_spawn(
     app: AppHandle,
+    window: tauri::Window,
     host: State<PtyHost>,
     id: String,
     cwd: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    let (cols, rows) = (cols.max(2), rows.max(2));
+    // A reloaded page restores its terminals under the same ids while the old
+    // shells are still running. Hand the live PTY to the new view instead of
+    // hanging up the shell and every job in it.
+    if let Some(attached) = host.reattach(&id, window.label(), cols, rows) {
+        return attached;
+    }
+
     let workdir = working_dir(&cwd);
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    if let Some(prev) = host.remove(&id) {
-        terminate(prev.pid);
-        #[cfg(unix)]
-        close_fd(prev.master_fd);
-    }
 
     #[cfg(unix)]
     {
-        spawn_unix(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_unix(app, host, window.label(), id, workdir, cols, rows)
     }
 
     #[cfg(windows)]
     {
-        spawn_windows(app, host, id, workdir, cols.max(2), rows.max(2))
+        spawn_windows(app, host, window.label(), id, workdir, cols, rows)
     }
 
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (app, cwd, cols, rows);
         Err("Terminals are not supported on this platform.".into())
+    }
+}
+
+/// The new view starts blank. Resizing and a SIGWINCH make the shell reprint
+/// its prompt and a full-screen program redraw, even when the size is the same.
+fn reattach(live: &LivePty, cols: u16, rows: u16) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        resize_fd(live.master_fd, cols, rows)?;
+        let mut pgrp: libc::pid_t = 0;
+        if unsafe { libc::ioctl(live.master_fd, libc::TIOCGPGRP, &mut pgrp) } == 0 && pgrp > 1 {
+            unsafe {
+                libc::kill(-pgrp, libc::SIGWINCH);
+            }
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let master = live.master.lock().unwrap_or_else(|e| e.into_inner());
+        master
+            .resize(portable_pty::PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| format!("Failed to resize terminal: {err}"))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (live, cols, rows);
+        Ok(())
     }
 }
 
@@ -245,6 +341,7 @@ pub fn pty_kill_all(host: State<'_, PtyHost>) -> Result<(), String> {
 fn spawn_unix(
     app: AppHandle,
     host: State<PtyHost>,
+    owner: &str,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
@@ -307,6 +404,7 @@ fn spawn_unix(
         writer: Mutex::new(Box::new(writer)),
         master_fd: master,
         pid,
+        owner: Mutex::new(owner.to_string()),
     });
     host.insert(id.clone(), live);
 
@@ -374,6 +472,7 @@ fn spawn_unix(
 fn spawn_windows(
     app: AppHandle,
     host: State<PtyHost>,
+    owner: &str,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
@@ -423,6 +522,7 @@ fn spawn_windows(
         writer: Mutex::new(Box::new(writer)),
         master: Mutex::new(pair.master),
         pid,
+        owner: Mutex::new(owner.to_string()),
     });
     host.insert(id.clone(), live);
 
@@ -814,18 +914,56 @@ mod tests {
         assert!(pty_should_flush(1, PTY_COALESCE));
     }
 
+    fn fake_pty(pid: u32, owner: &str) -> Arc<LivePty> {
+        Arc::new(LivePty {
+            cwd: std::path::PathBuf::from("/test"),
+            writer: Mutex::new(Box::new(std::io::sink())),
+            master_fd: -1,
+            pid,
+            owner: Mutex::new(owner.to_string()),
+        })
+    }
+
+    #[test]
+    fn kill_window_reaps_only_that_windows_terminals() {
+        let host = PtyHost::new();
+        // pid 0 keeps the reap from signalling anything real.
+        host.insert("a".into(), fake_pty(0, "main"));
+        host.insert("b".into(), fake_pty(0, "window-2"));
+        host.kill_window("main");
+        assert!(host.get("a").is_none());
+        assert!(host.get("b").is_some());
+    }
+
+    #[test]
+    fn a_reattached_terminal_follows_its_new_window() {
+        let host = PtyHost::new();
+        host.insert("a".into(), fake_pty(0, "main"));
+        assert!(host.reattach("missing", "window-2", 80, 24).is_none());
+        // The fake has no real fd, so the resize fails, but the handoff holds.
+        assert!(host.reattach("a", "window-2", 80, 24).is_some());
+        host.kill_window("main");
+        assert!(host.get("a").is_some());
+        host.kill_window("window-2");
+        assert!(host.get("a").is_none());
+    }
+
+    #[test]
+    fn join_reapers_waits_for_pending_window_reaps() {
+        let host = PtyHost::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        host.track_reaper(thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            tx.send(()).unwrap();
+        }));
+        host.join_reapers();
+        assert!(rx.try_recv().is_ok());
+    }
+
     #[test]
     fn remove_if_pid_ignores_a_replaced_session() {
         let host = PtyHost::new();
-        host.insert(
-            "term".into(),
-            Arc::new(LivePty {
-                cwd: std::path::PathBuf::from("/test"),
-                writer: Mutex::new(Box::new(std::io::sink())),
-                master_fd: -1,
-                pid: 42,
-            }),
-        );
+        host.insert("term".into(), fake_pty(42, "main"));
         assert!(host.remove_if_pid("term", 7).is_none());
         assert!(host.get("term").is_some());
         assert!(host.remove_if_pid("term", 42).is_some());

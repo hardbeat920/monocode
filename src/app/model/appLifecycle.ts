@@ -494,6 +494,29 @@ export async function reapWindowRuntime(
   projectTerminals: ProjectTerminalDock[] = [],
   includeAllChildren = true,
 ): Promise<void> {
+  await forgetSessionChildren(sessions);
+  await Promise.all(
+    [...terminalFileIds(tabs), ...projectTerminalFileIds(projectTerminals)].map(
+      (id) => killPty(id),
+    ),
+  );
+  // Catalog probes, title generators, and usage scrapers are not session
+  // children. Drop them so an unused Pi/Codex probe cannot outlive the window.
+  if (includeAllChildren) await killAllChildren().catch(() => undefined);
+}
+
+/**
+ * Page unload. Unlike `reapWindowRuntime` this leaves terminals running: a
+ * reload (or macOS restarting a crashed web process) restores them under the
+ * same ids and reattaches, and the backend reaps them when the window itself
+ * is destroyed.
+ */
+export async function reapUnloadRuntime(sessions: Session[]): Promise<void> {
+  await forgetSessionChildren(sessions);
+  await killAllChildren().catch(() => undefined);
+}
+
+async function forgetSessionChildren(sessions: Session[]): Promise<void> {
   await Promise.all(
     sessions.map((session) =>
       Promise.all(
@@ -503,14 +526,6 @@ export async function reapWindowRuntime(
       ),
     ),
   );
-  await Promise.all(
-    [...terminalFileIds(tabs), ...projectTerminalFileIds(projectTerminals)].map(
-      (id) => killPty(id),
-    ),
-  );
-  // Catalog probes, title generators, and usage scrapers are not session
-  // children. Drop them so an unused Pi/Codex probe cannot outlive the window.
-  if (includeAllChildren) await killAllChildren().catch(() => undefined);
 }
 
 function terminalFileIds(tabs: WorkspaceTab[]): string[] {
