@@ -1,5 +1,7 @@
-import { appendUser } from "../../../integrations/harness/core/apply";
+import { appendUser, applyHarnessEvents } from "../../../integrations/harness/core/apply";
 import { describe, expect, it } from "vitest";
+import { mapCodexNotification } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { toolCallLabel } from "../model/transcriptActivity";
 import {
   newSession,
   type Block,
@@ -8,10 +10,18 @@ import {
 } from "../model/session";
 import {
   backfillClaudeShellCommands,
+  backfillCodexShellCommands,
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
+  shouldPersistSession,
 } from "./sessionStore";
+
+it("keeps host-owned transcripts out of local session storage", () => {
+  const session = newSession("codex", "remote://env/home/me/repo");
+  session.blocks = [{ id: "turn", role: "user", text: "Continue" }];
+  expect(shouldPersistSession(session)).toBe(false);
+});
 
 describe("Claude Shell row recovery", () => {
   it("restores only matching placeholder rows and preserves tool output", () => {
@@ -46,6 +56,144 @@ describe("Claude Shell row recovery", () => {
     });
     expect(repaired[1]).toBe(blocks[1]);
     expect(backfillClaudeShellCommands(repaired, {})).toBe(repaired);
+  });
+});
+
+describe("Codex Shell row recovery", () => {
+  it("relabels from the command saved on the row, keeping redactions", () => {
+    // The command Codex sent with the item is already on the row as its preview
+    // title. Reading it back means whatever Codex redacted stays redacted.
+    const redacted = "/usr/bin/zsh -lc 'curl -H \"token=[redacted]\" example'";
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: redacted },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0].text).not.toBe("Shell");
+    expect(repaired[0].tool?.preview?.title).toContain("[redacted]");
+  });
+
+  it("leaves a row with no usable saved command as it is", () => {
+    // A weak preview title names no command, so there is nothing to relabel
+    // from and the row keeps its placeholder.
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "Shell" },
+        },
+      },
+    ];
+    expect(backfillCodexShellCommands(blocks)).toBe(blocks);
+  });
+
+  it("labels placeholder rows with the saved command and rebuilds the preview", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          status: "failed",
+          detail: "exit 1",
+          preview: {
+            kind: "shell",
+            title: "rg --files -g AGENTS.md -g '!node_modules'",
+          },
+        },
+      },
+      {
+        id: "read",
+        role: "tool",
+        text: "Read file.ts",
+        tool: { callId: "exec-2", kind: "read" },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0]).toMatchObject({
+      text: "Find files",
+      tool: {
+        title: "Find files",
+        status: "failed",
+        detail: "exit 1",
+        preview: { kind: "shell", title: "rg --files -g AGENTS.md -g '!node_modules'" },
+      },
+    });
+    expect(repaired[1]).toBe(blocks[1]);
+    expect(backfillCodexShellCommands(repaired)).toBe(repaired);
+  });
+
+  it("keeps the raw command when no readable intent is inferred", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-3",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "git commit -m 'Fix shell labels'" },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0].text).toBe("git commit -m 'Fix shell labels'");
+  });
+
+  // A row repaired from the saved preview has to read the same as one rendered
+  // live, or reopening a session would relabel work the user already saw.
+  it("labels a recovered row exactly as the live item does", () => {
+    // Captured from `codex app-server`: the reported session's middle row was
+    // `rg --files -g AGENTS.md`, which Codex labels a path-less `listFiles`.
+    const item = {
+      type: "commandExecution",
+      id: "exec-88885872",
+      status: "inProgress",
+      command: `/usr/bin/zsh -lc "rg --files -g AGENTS.md -g '"'"'!node_modules'"'"'"`,
+      commandActions: [
+        { type: "listFiles", command: "rg --files -g AGENTS.md -g '!node_modules'", path: null },
+      ],
+    };
+    let live = newSession("codex", "/home/me/proj");
+    live = applyHarnessEvents(live, mapCodexNotification("item/started", { item }).events);
+    const liveRow = live.blocks[0];
+
+    // The same row as the buggy build saved it. No recovered map: the command
+    // is already on the row, which is how it reads in production.
+    const saved: Block[] = [
+      {
+        id: "e84ab067",
+        role: "tool",
+        text: "Shell",
+        tool: { ...liveRow.tool, title: "Shell" },
+      },
+    ];
+    const [recovered] = backfillCodexShellCommands(saved);
+
+    expect(recovered.text).not.toBe("Shell");
+    expect(recovered.text).toBe(liveRow.text);
+    expect(recovered.tool?.title).toBe(liveRow.tool?.title);
+    expect(toolCallLabel(recovered, "/home/me/proj")).toBe(
+      toolCallLabel(liveRow, "/home/me/proj"),
+    );
   });
 });
 
@@ -88,7 +236,8 @@ describe("persisting a subagent's trail", () => {
             kind: "tool",
             text: "Read src/App.tsx",
             toolKind: "read",
-            status: "completed",
+            status: "failed",
+            detail: "File not found",
           },
           { id: "s2", kind: "message", text: "Nothing to flag." },
         ],
@@ -102,7 +251,8 @@ describe("persisting a subagent's trail", () => {
           kind: "tool",
           text: "Read src/App.tsx",
           toolKind: "read",
-          status: "completed",
+          status: "failed",
+          detail: "File not found",
         },
         { id: "s2", kind: "message", text: "Nothing to flag." },
       ],
@@ -184,6 +334,60 @@ describe("sanitizeSessionForPersist", () => {
       { id: "sent", role: "user", text: "Start here" },
       { id: "reply", role: "assistant", text: "Done" },
       { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+  });
+
+  it("persists generated image metadata without binary payloads", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[1]).toEqual({
+      id: "image",
+      role: "image",
+      text: "",
+      image: {
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    });
+  });
+
+  it("drops malformed generated image metadata", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 0,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "u", role: "user", text: "Draw this" },
     ]);
   });
 

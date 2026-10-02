@@ -10,6 +10,7 @@ import {
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
+import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, type AgentAppHost } from "./agentApp";
 
 vi.mock("../../../integrations/harness/core/availability", () => ({
@@ -24,6 +25,18 @@ const note: Note = {
   tags: ["work"],
   createdAt: 1,
   updatedAt: 2,
+};
+const featureWorktree: Worktree = {
+  path: "/tmp/project-worktrees/feature",
+  branch: "feature",
+  head: "abc123",
+  isMain: false,
+  locked: false,
+  prunable: false,
+  missing: false,
+  dirty: false,
+  unpushed: 0,
+  sessionIds: [],
 };
 
 const storedValues = new Map<string, string>();
@@ -81,6 +94,14 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
+    worktrees: vi.fn(async () => ({
+      worktrees: [
+        { ...featureWorktree },
+        { ...featureWorktree, path: source.cwd, isMain: true, branch: "main" },
+      ],
+      defaultRoot: "/tmp/project-worktrees",
+    })),
+    createWorktree: vi.fn(async () => ({ ...featureWorktree })),
     notes: vi.fn(async () => [note]),
     note: vi.fn(async (id) => (id === note.id ? note : null)),
     saveNote: vi.fn(async (input) => ({ ...note, ...input })),
@@ -252,6 +273,180 @@ describe("agent app commands", () => {
       "app-lead-request-1",
     );
     expect(result).toMatchObject({ id: "app-lead-request-1", submitted: true });
+  });
+
+  it("lists project worktrees and starts on a selected existing checkout", async () => {
+    const { source, host } = fixture();
+    source.worktreeCwd = "/tmp/project-worktrees/other";
+    const listed = await handleAgentApp(
+      source,
+      "list",
+      "worktrees.list",
+      {},
+      host,
+    );
+    expect((listed as { worktrees: Worktree[] }).worktrees[0]).toMatchObject({
+      branch: "feature",
+    });
+    expect(host.worktrees).toHaveBeenCalledWith(source.cwd);
+
+    await handleAgentApp(
+      source,
+      "feature",
+      "sessions.start",
+      {
+        prompt: "Review feature",
+        worktreeCwd: featureWorktree.path,
+      },
+      host,
+    );
+    expect(host.start).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeCwd: featureWorktree.path }),
+      "app-lead-feature",
+    );
+    await handleAgentApp(
+      source,
+      "main",
+      "sessions.start",
+      {
+        prompt: "Review main",
+        worktreeCwd: source.cwd,
+      },
+      host,
+    );
+    expect(host.start).toHaveBeenLastCalledWith(
+      expect.objectContaining({ worktreeCwd: undefined }),
+      "app-lead-main",
+    );
+  });
+
+  it("rejects unavailable or conflicting worktree choices before launching", async () => {
+    const { source, host } = fixture();
+    for (const input of [
+      { prompt: "A", worktreeCwd: "/tmp/other-repo" },
+      {
+        prompt: "A",
+        workspaceMode: "worktree",
+        worktreeCwd: featureWorktree.path,
+      },
+      { prompt: "A", worktreeBase: "main", worktreeCwd: featureWorktree.path },
+    ]) {
+      await expect(
+        handleAgentApp(source, "invalid", "sessions.start", input, host),
+      ).rejects.toThrow();
+    }
+    vi.mocked(host.worktrees).mockResolvedValueOnce({
+      worktrees: [{ ...featureWorktree, missing: true }],
+      defaultRoot: "/tmp/project-worktrees",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.start",
+        { prompt: "A", worktreeCwd: featureWorktree.path },
+        host,
+      ),
+    ).rejects.toThrow("unavailable in this project");
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("creates a worktree on a named new or existing branch", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(
+        source,
+        "new",
+        "worktrees.create",
+        {
+          branch: "feature",
+          base: "origin/main",
+        },
+        host,
+      ),
+    ).toMatchObject({ path: featureWorktree.path });
+    expect(host.createWorktree).toHaveBeenCalledWith(
+      source.cwd,
+      "feature",
+      "origin/main",
+      false,
+    );
+    await handleAgentApp(
+      source,
+      "existing",
+      "worktrees.create",
+      {
+        branch: "feature",
+        existing: true,
+      },
+      host,
+    );
+    expect(host.createWorktree).toHaveBeenLastCalledWith(
+      source.cwd,
+      "feature",
+      "HEAD",
+      true,
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "bad",
+        "worktrees.create",
+        {
+          branch: "feature",
+          base: "main",
+          existing: true,
+        },
+        host,
+      ),
+    ).rejects.toThrow("base cannot be set");
+    expect(host.createWorktree).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts a pane beside the caller or another session in either direction", async () => {
+    const { source, host } = fixture();
+    await handleAgentApp(
+      source,
+      "right",
+      "sessions.start",
+      { prompt: "Inspect the API", placement: "right", draft: true },
+      host,
+    );
+    expect(host.start).toHaveBeenLastCalledWith(
+      expect.objectContaining({ draft: true }),
+      "app-lead-right",
+      { direction: "right", besideSessionId: "lead" },
+    );
+    await handleAgentApp(
+      source,
+      "down",
+      "sessions.start",
+      {
+        prompt: "Review the UI",
+        placement: "down",
+        besideSessionId: "app-lead-right",
+      },
+      host,
+    );
+    expect(host.start).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "app-lead-down",
+      { direction: "down", besideSessionId: "app-lead-right" },
+    );
+  });
+
+  it("rejects invalid pane placement before starting", async () => {
+    const { source, host } = fixture();
+    for (const input of [
+      { prompt: "A", placement: "left" },
+      { prompt: "A", besideSessionId: "other" },
+      { prompt: "A", placement: "down", besideSessionId: 42 },
+    ]) {
+      await expect(
+        handleAgentApp(source, "invalid", "sessions.start", input, host),
+      ).rejects.toThrow();
+    }
+    expect(host.start).not.toHaveBeenCalled();
   });
 
   it("inherits the caller's permission mode unless start overrides it", async () => {

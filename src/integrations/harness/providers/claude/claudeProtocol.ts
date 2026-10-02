@@ -5,9 +5,16 @@ import type {
   ToolPreview,
   TurnMetrics,
 } from "../../../../features/sessions/model/session";
-import { attachmentPathText } from "../../../../features/sessions/model/attachments";
+import {
+  attachmentPathText,
+  promptText,
+} from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
-import { isTaskListToolName, taskListFromToolInput } from "../../../../features/sessions/model/taskList";
+import {
+  isTaskListToolName,
+  normalizeTaskListStatus,
+  taskListFromToolInput,
+} from "../../../../features/sessions/model/taskList";
 import {
   questionPromptTitle,
   questionsFromUnknown,
@@ -187,7 +194,10 @@ export function buildClaudeUserMessage(input: {
   attachments?: Attachment[];
   effort?: string | null;
 }): Record<string, unknown> {
-  const text = applyClaudePromptEffortPrefix(input.text.trim(), input.effort);
+  const text = applyClaudePromptEffortPrefix(
+    promptText(input.text, input.attachments ?? []),
+    input.effort,
+  );
   const content: Array<Record<string, unknown>> = [];
   if (text) content.push({ type: "text", text });
   for (const attachment of input.attachments ?? []) {
@@ -943,9 +953,69 @@ export function isTodoTool(toolName: string): boolean {
   return isTaskListToolName(toolName);
 }
 
+/**
+ * Newer Claude Code builds replace TodoWrite with incremental task tools:
+ * TaskCreate adds one item and TaskUpdate changes one item by id.
+ */
+export function isClaudeTaskTool(toolName: string): boolean {
+  return ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet"].includes(
+    toolName.trim(),
+  );
+}
+
+/**
+ * Fold one successful TaskCreate/TaskUpdate call into the session's task map.
+ * Returns true when the visible list changed. TaskCreate only learns its id
+ * from the result text ("Task #3 created successfully: ...").
+ */
+export function applyClaudeTaskTool(
+  tasks: Map<string, TaskListItem>,
+  toolName: string,
+  input: Record<string, unknown>,
+  resultText: string,
+): boolean {
+  const name = toolName.trim();
+  if (name === "TaskCreate") {
+    const text = [input.subject, input.activeForm, input.description]
+      .find(
+        (value): value is string =>
+          typeof value === "string" && !!value.trim(),
+      )
+      ?.trim();
+    const id = resultText.match(/Task #([^\s:]+)/)?.[1];
+    if (!text || !id) return false;
+    tasks.set(id, { id, text, status: "pending" });
+    return true;
+  }
+  if (name === "TaskUpdate") {
+    const rawId = input.taskId;
+    const id =
+      typeof rawId === "number" && Number.isFinite(rawId)
+        ? String(rawId)
+        : typeof rawId === "string"
+          ? rawId.trim().replace(/^#/, "")
+          : "";
+    const current = id ? tasks.get(id) : undefined;
+    if (!current) return false;
+    const status = stringField(input, "status")?.trim().toLowerCase();
+    if (status === "deleted") {
+      tasks.delete(id);
+      return true;
+    }
+    const subject = stringField(input, "subject")?.trim();
+    tasks.set(id, {
+      ...current,
+      ...(subject ? { text: subject } : {}),
+      ...(status ? { status: normalizeTaskListStatus(status) } : {}),
+    });
+    return true;
+  }
+  return false;
+}
+
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
-  if (isTodoTool(toolName)) return "tasks";
+  if (isTodoTool(toolName) || isClaudeTaskTool(toolName)) return "tasks";
   if (
     normalized.includes("bash") ||
     normalized.includes("command") ||

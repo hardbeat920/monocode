@@ -319,6 +319,23 @@ describe("btwVisibleBlocks", () => {
 });
 
 describe("serializeBtwBlock", () => {
+  it("serializes generated image blocks by name and description", () => {
+    expect(
+      serializeBtwBlock({
+        id: "image-1",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      }),
+    ).toBe("Image: generated-image — A clean product photo");
+  });
+
   it("serializes regular blocks and attachments with normalized text", () => {
     expect(
       serializeBtwBlock({

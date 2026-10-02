@@ -22,6 +22,35 @@ import { isReviewablePlan } from "../../../features/sessions/model/plan";
 import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 
+/** Apply one delivery batch without copying the transcript for every token. */
+export function applyHarnessEvents(
+  session: Session,
+  events: readonly HarnessEvent[],
+): Session {
+  let next = session;
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.type !== "message.delta" && event.type !== "reasoning.delta") {
+      next = applyHarnessEvent(next, event);
+      continue;
+    }
+    const texts = [event.text];
+    while (index + 1 < events.length) {
+      const following = events[index + 1];
+      if (following.type !== event.type) break;
+      texts.push(following.text);
+      index++;
+    }
+    next = patchStreaming(
+      next,
+      event.type === "message.delta" ? "assistant" : "reasoning",
+      texts,
+      true,
+    );
+  }
+  return next;
+}
+
 export function applyHarnessEvent(
   session: Session,
   event: HarnessEvent,
@@ -31,6 +60,9 @@ export function applyHarnessEvent(
       return patchStreaming(session, "assistant", event.text, true);
     case "message.completed":
       return finishRole(session, "assistant");
+    case "image.generated":
+      if (!("path" in event)) return session;
+      return appendImage(session, event);
     case "reasoning.delta":
       return patchStreaming(session, "reasoning", event.text, true);
     case "reasoning.completed":
@@ -273,7 +305,14 @@ function upsertTaskList(
   );
   const existing = lastMatchingBlock(session.blocks, (block, index) => {
     if (block.role !== "tasks") return false;
-    if (key) return block.taskList?.key === key;
+    if (key) {
+      if (block.taskList?.key !== key) return false;
+      // A list from another provider conversation stays as history.
+      return (
+        !event.providerSessionId ||
+        block.taskList?.providerSessionId === event.providerSessionId
+      );
+    }
     return index > lastUser;
   });
   const previousItems =
@@ -281,7 +320,9 @@ function upsertTaskList(
   const items = previousItems
     ? event.merge
       ? mergeTaskListItems(previousItems, event.items)
-      : preserveTaskListLabels(previousItems, event.items)
+      : event.authoritative
+        ? event.items
+        : preserveTaskListLabels(previousItems, event.items)
     : event.items;
 
   if (items.length === 0) {
@@ -294,6 +335,7 @@ function upsertTaskList(
 
   const taskList = {
     ...(key ? { key } : {}),
+    ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
     ...(event.explanation?.trim()
       ? { explanation: event.explanation.trim() }
       : {}),
@@ -383,6 +425,7 @@ type UserTurnExtra = {
   ciContext?: string;
   internal?: boolean;
   monocode?: boolean;
+  intent?: Block["intent"];
   appRequestId?: string;
 };
 
@@ -393,6 +436,7 @@ function userTurnFields(extra?: UserTurnExtra) {
     ...(extra?.ciContext ? { ciContext: extra.ciContext } : {}),
     ...(extra?.internal ? { internal: true } : {}),
     ...(extra?.monocode ? { monocode: true } : {}),
+    ...(extra?.intent ? { intent: extra.intent } : {}),
     ...(extra?.appRequestId ? { appRequestId: extra.appRequestId } : {}),
   };
 }
@@ -453,14 +497,14 @@ export function appendSteerUser(
   };
 }
 
-export function stopStreaming(session: Session): Session {
+export function stopStreaming(session: Session, endedAt = Date.now()): Session {
   const { backgroundTasks: _cleared, ...settled } =
     settlePendingApprovals(session);
   return {
     ...settled,
     busy: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress)),
+    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
   };
 }
 
@@ -629,7 +673,7 @@ function stopBlockProgress(block: Block): Block {
   };
 }
 
-function stampTurnDuration(blocks: Block[]): Block[] {
+function stampTurnDuration(blocks: Block[], endedAt: number): Block[] {
   let lastUser = -1;
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") {
@@ -643,7 +687,7 @@ function stampTurnDuration(blocks: Block[]): Block[] {
   const next = blocks.slice();
   next[lastUser] = {
     ...user,
-    durationMs: Math.max(0, Date.now() - user.startedAt),
+    durationMs: Math.max(0, endedAt - user.startedAt),
   };
   return next;
 }
@@ -663,6 +707,24 @@ function appendStatus(session: Session, text: string): Session {
   });
 }
 
+function appendImage(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "image.generated"; path: string }>,
+): Session {
+  return appendBlock(session, {
+    id: crypto.randomUUID(),
+    role: "image",
+    text: "",
+    image: {
+      path: event.path,
+      name: event.name,
+      mimeType: event.mimeType,
+      size: event.size,
+      ...(event.alt ? { alt: event.alt } : {}),
+    },
+  });
+}
+
 function appendBlock(session: Session, block: Block): Session {
   return {
     ...session,
@@ -679,10 +741,14 @@ function appendBlock(session: Session, block: Block): Session {
 function patchStreaming(
   session: Session,
   role: "assistant" | "reasoning",
-  text: string,
+  input: string | readonly string[],
   streaming: boolean,
 ): Session {
-  if (!text && role === "reasoning") return session;
+  if (
+    role === "reasoning" &&
+    (typeof input === "string" ? !input : input.every((text) => !text))
+  )
+    return session;
   let index = session.blocks.length - 1;
   while (
     index >= 0 &&
@@ -695,7 +761,12 @@ function patchStreaming(
   // even when no tool or status row landed between them; joining the two can
   // turn separate Markdown blocks into text such as `commitConnect`.
   if (last?.role === role && last.streaming) {
-    const nextText = joinStreamText(last.text, text);
+    // Fold against the existing text in order: providers can mix tokens and
+    // full snapshots, so concatenating the incoming chunks would duplicate text.
+    const nextText =
+      typeof input === "string"
+        ? joinStreamText(last.text, input)
+        : input.reduce(joinStreamText, last.text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
     blocks[index] = {
@@ -709,7 +780,7 @@ function patchStreaming(
   blocks.push({
     id: crypto.randomUUID(),
     role,
-    text,
+    text: typeof input === "string" ? input : input.reduce(joinStreamText, ""),
     streaming,
   });
   return { ...session, blocks };
@@ -977,12 +1048,14 @@ function recordAgentStep(
   if (!text && event.kind !== "tool") return session;
 
   const run = prev.agentRun;
+  const detail = capToolDetail(event.detail);
   const step: AgentStep = {
     id: event.stepId,
     kind: event.kind,
     text,
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
+    ...(detail ? { detail } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
@@ -1039,6 +1112,7 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
     a.text === b.text &&
     a.toolKind === b.toolKind &&
     a.status === b.status &&
+    a.detail === b.detail &&
     samePreview(a.preview, b.preview)
   );
 }

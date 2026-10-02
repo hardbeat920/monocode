@@ -1,6 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { readTextFile } from "../../../../platform/tauri/fs";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { AcpSubagents } from "../../core/acpSubagents";
 import {
@@ -9,6 +8,7 @@ import {
   spawnChild,
   unwatchChild,
   watchChild,
+  readHarnessTextFile,
 } from "../../core/child";
 import {
   HERMES_AUTH_HELP,
@@ -454,7 +454,7 @@ async function backgroundFinished(
   const states = await Promise.all(
     manifests.map(async (path) => {
       try {
-        const manifest = JSON.parse(await readTextFile(path));
+        const manifest = JSON.parse(await readHarnessTextFile(path));
         const tasks = Array.isArray(manifest?.tasks) ? manifest.tasks : [];
         return (
           Boolean(manifest?.completed) &&
@@ -514,7 +514,7 @@ async function backgroundHandoff(
       dispatch.transcripts.map(async (path) => {
         let tail = "";
         try {
-          const transcript = await readTextFile(path);
+          const transcript = await readHarnessTextFile(path);
           tail = transcript.slice(-TRANSCRIPT_TAIL_CHARS);
         } catch {
           // Hermes can still read the path itself if the desktop file bridge

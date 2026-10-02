@@ -226,7 +226,7 @@ describe("child bridge", () => {
     child.watchChild("thread#1", (line) => newLines.push(line), newExit);
 
     // Late output from the killed process arrives under its own key and is
-    // buffered there — it can never reach the replacement's handlers.
+    // dropped — it can never reach the replacement's handlers.
     emit("harness-stdout", { sessionId: "thread#0", line: "gen0-late" });
     emit("harness-exit", { sessionId: "thread#0", code: 1, pid: 42 });
     expect(oldLines).toEqual(["gen0"]);
@@ -237,6 +237,69 @@ describe("child bridge", () => {
     // The replacement still receives its own traffic.
     emit("harness-stdout", { sessionId: "thread#1", line: "gen1" });
     expect(newLines).toEqual(["gen1"]);
+    release();
+  });
+
+  it("does not hold output for children another window owns", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+
+    // Events are broadcast to every window; this one never spawned "other".
+    for (let i = 0; i < 5; i += 1) {
+      emit("harness-stdout", { sessionId: "other", line: `line ${i}` });
+      emit("harness-sse", { sessionId: "other", data: `event ${i}` });
+    }
+
+    const lines: string[] = [];
+    const events: string[] = [];
+    child.watchChild("other", (line) => lines.push(line), vi.fn());
+    child.watchSse("other", (data) => events.push(data));
+    expect(lines).toEqual([]);
+    expect(events).toEqual([]);
+    release();
+  });
+
+  it("still replays output a spawned child printed before it was watched", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockResolvedValue(42);
+
+    await child.spawnChild("mine", "agent", [], "/tmp");
+    emit("harness-stdout", { sessionId: "mine", line: "early" });
+    await child.openHarnessSse("mine", "http://127.0.0.1:1/event");
+    emit("harness-sse", { sessionId: "mine", data: "early-event" });
+
+    const lines: string[] = [];
+    const events: string[] = [];
+    child.watchChild("mine", (line) => lines.push(line), vi.fn());
+    child.watchSse("mine", (data) => events.push(data));
+    expect(lines).toEqual(["early"]);
+    expect(events).toEqual(["early-event"]);
+    release();
+  });
+
+  it("drops output a killed child prints after it was stopped", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockResolvedValue(42);
+
+    child.watchChild("probe", vi.fn(), vi.fn());
+    await child.spawnChild("probe", "agent", [], "/tmp");
+    await child.killChild("probe");
+    emit("harness-stdout", { sessionId: "probe", line: "late" });
+
+    const lines: string[] = [];
+    child.watchChild("probe", (line) => lines.push(line), vi.fn());
+    expect(lines).toEqual([]);
     release();
   });
 });

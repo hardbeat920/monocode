@@ -1,7 +1,7 @@
 {
   "name": "monocode-desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "host:build": "tsc --noEmit -p host/tsconfig.json && node host/build.mjs",
+    "host:package": "npm run host:build && node host/package.mjs",
+    "host": "node build/host/monocode-host.mjs",
+    "pretest:host": "npm run host:build",
+    "test:host": "vitest run --config host/vitest.config.ts",
     "check": "npm run check:web && npm run check:rust",
     "check:web": "vitest run && tsc --noEmit",
     "check:rust": "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test",
@@ -17,7 +22,9 @@
     "tauri": "tauri",
     "tauri:stable": "tauri dev --no-watch --config src-tauri/tauri.stable.conf.json",
     "setup:linux:deb": "bash scripts/install-linux-deps-debian.sh",
+    "setup:linux:fedora": "bash scripts/install-linux-deps-fedora.sh",
     "build:linux": "tauri build --bundles deb,appimage",
+    "build:fedora": "tauri build --bundles rpm",
     "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis"
   },
   "dependencies": {
@@ -57,14 +64,17 @@
     "react-dom": "^19.1.0",
     "react-material-icon-theme": "^1.2.0",
     "rehype-harden": "^1.1.8",
+    "shiki": "^3.23.0",
     "streamdown": "^2.5.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
     "@tauri-apps/cli": "^2",
+    "@types/node": "26.5.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "esbuild": "0.28.2",
     "happy-dom": "20.14.0",
     "tailwindcss": "^4",
     "typescript": "~5.8.3",

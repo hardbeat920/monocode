@@ -116,23 +116,26 @@ export function setHomeDir(path: string | undefined): void {
  * only be expanded when the project's own cwd sits under a recognisable home.
  */
 function homeDirFromCwd(cwd: string): string | undefined {
-  const trimmed = trimSlash(cwd);
+  const remoteRoot = /^remote:\/\/[^/]+\//.exec(cwd)?.[0];
+  const trimmed = trimSlash(remoteRoot ? `/${cwd.slice(remoteRoot.length)}` : cwd);
   if (trimmed === "~") return undefined;
   const parts = trimmed.split("/").filter(Boolean);
   if (parts.length >= 2 && (parts[0] === "Users" || parts[0] === "home")) {
-    return `/${parts[0]}/${parts[1]}`;
+    const home = `/${parts[0]}/${parts[1]}`;
+    return remoteRoot ? `${remoteRoot}${home.slice(1)}` : home;
   }
   if (
     parts.length >= 3 &&
     /^[A-Za-z]:$/.test(parts[0]) &&
     parts[1].toLowerCase() === "users"
   ) {
-    return `${parts[0]}/${parts[1]}/${parts[2]}`;
+    const home = `${parts[0]}/${parts[1]}/${parts[2]}`;
+    return remoteRoot ? `${remoteRoot}${home}` : home;
   }
   return undefined;
 }
 
-/** Absolute path for a workspace file href, or `undefined` if it is not a local file. */
+/** Absolute path for a workspace file href, local or on a connected machine. */
 export function resolveWorkspacePath(
   href: string,
   cwd?: string,
@@ -185,6 +188,9 @@ function parseWorkspaceFileReference(
   }
 
   value = slash(value);
+  const remoteRoot = cwd ? /^remote:\/\/[^/]+\//.exec(cwd)?.[0] : undefined;
+  if (remoteRoot && value.startsWith(remoteRoot))
+    return { path: value, navigation };
   // File URLs can also decode to UNC paths. Windows accepts mixed separators.
   if ((decodeUrl || fileUrl) && /^[\\/]{2}/.test(value)) return undefined;
   // A provider-relative `~/` reference means the user's home directory, not a
@@ -192,13 +198,17 @@ function parseWorkspaceFileReference(
   // front when a home directory can be recognised, so it flows through the
   // same absolute-path handling below instead of being joined onto cwd.
   if (value === "~" || value.startsWith("~/")) {
-    const home = cachedHomeDir ?? (cwd ? homeDirFromCwd(cwd) : undefined);
+    const home = remoteRoot
+      ? homeDirFromCwd(cwd!)
+      : cachedHomeDir ?? (cwd ? homeDirFromCwd(cwd) : undefined);
     // Without a recognisable home, joining "~/..." onto cwd like an ordinary
     // relative path would silently produce a nonsense location instead of
     // the file the reference actually means.
     if (!home) return undefined;
     value = value === "~" ? home : joinPath(home, value.slice(2));
   }
+  if (remoteRoot && value.startsWith(remoteRoot))
+    return { path: value, navigation };
   // A bare filename's :line[:column] suffix must be removed before this check.
   if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^[A-Za-z]:\//.test(value))
     return undefined;
@@ -207,10 +217,15 @@ function parseWorkspaceFileReference(
   }
   if (!looksLikeFilePath(value)) return undefined;
 
-  if (/^[A-Za-z]:\//.test(value)) return { path: value, navigation };
+  if (/^[A-Za-z]:\//.test(value))
+    return { path: remoteRoot ? `${remoteRoot}${value}` : value, navigation };
+  if (remoteRoot && value.startsWith("//"))
+    return { path: `${remoteRoot}${value.slice(1)}`, navigation };
   if (value.startsWith("/")) {
     return {
-      path: /^\/[A-Za-z]:\//.test(value) ? value.slice(1) : value,
+      path: remoteRoot
+        ? `${remoteRoot}${value.replace(/^\/+/, "")}`
+        : /^\/[A-Za-z]:\//.test(value) ? value.slice(1) : value,
       navigation,
     };
   }

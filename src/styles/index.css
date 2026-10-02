@@ -128,6 +128,8 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 /* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
@@ -163,10 +165,12 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
+/* Tint-less transparent rather than `transparent`, which browsers interpolate
+   through black and would dim the page on the way in and out of glass. */
 html.has-native-glass:not(.theme-light),
 html.has-native-glass:not(.theme-light) body,
 html.has-native-glass:not(.theme-light) #root {
-  background: transparent;
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 .reorder-item {
@@ -266,6 +270,8 @@ html.has-native-glass:not(.theme-light) #root {
 
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 html.theme-light .sidebar-glass {
@@ -292,6 +298,18 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
 
 .body-glass {
   background: var(--color-background-base);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .sidebar-glass,
+  .body-glass {
+    transition: none;
+  }
 }
 
 .chat-pane-background::before {
@@ -733,6 +751,407 @@ html.theme-light .monocode-sparkles {
   }
 }
 
+/*
+ * Plan and Orchestrator turns share the /operator bloom and upward exit.
+ * Numbered plan marks and a small agent network keep their own shapes and
+ * colors as they travel from the bottom of the bubble past its top edge.
+ */
+.plan-steps,
+.orchestrator-constellation {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: turn-mode-halo 2400ms 150ms ease-out both;
+}
+
+.plan-steps::before,
+.orchestrator-constellation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--mode-color) 32%, transparent) 48%,
+    color-mix(in srgb, var(--mode-glow) 28%, transparent) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+}
+
+.plan-steps::after,
+.orchestrator-constellation::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    color-mix(in srgb, var(--mode-glow) 35%, transparent),
+    transparent 70%
+  );
+  animation: monocode-ember-glow 2200ms 100ms ease-out both;
+}
+
+@keyframes turn-mode-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--mode-glow) 60%, transparent),
+      0 0 24px 3px color-mix(in srgb, var(--mode-glow) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes turn-mode-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+.plan-steps {
+  --mode-color: #fde047;
+  --mode-glow: rgb(250 204 21 / 0.85);
+  --mode-ink: #422006;
+}
+
+html.theme-light .plan-steps {
+  --mode-color: #ca8a04;
+  --mode-glow: rgb(202 138 4 / 0.55);
+  --mode-ink: #fff;
+}
+
+.plan-steps::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.plan-step {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 2;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-dot {
+  position: absolute;
+  bottom: -16px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--mode-color);
+  border-radius: 9999px;
+  color: var(--mode-color);
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  box-shadow: 0 0 8px var(--mode-glow);
+  animation: plan-step-dot var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-number,
+.plan-step-check {
+  grid-area: 1 / 1;
+}
+
+.plan-step-number {
+  animation: plan-step-number var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-check {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: var(--mode-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10;
+  animation: plan-step-check var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-ember {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-ember-glyph {
+  --spin: 0deg;
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fefce8, var(--mode-color) 70%);
+  box-shadow: 0 0 5px var(--mode-glow);
+  animation: monocode-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+@keyframes plan-step-dot {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  20%,
+  38% {
+    transform: scale(1);
+  }
+  34% {
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  44% {
+    transform: scale(1.14);
+    background: var(--mode-color);
+  }
+  52% {
+    transform: scale(1);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.8);
+    background: var(--mode-color);
+  }
+}
+
+@keyframes plan-step-number {
+  0%,
+  34% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  42%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+@keyframes plan-step-check {
+  0%,
+  36% {
+    opacity: 0;
+    stroke-dashoffset: 10;
+  }
+  50%,
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+.orchestrator-constellation {
+  --mode-color: #f0abfc;
+  --mode-glow: rgb(232 121 249 / 0.85);
+  --mode-spark: #fdf4ff;
+}
+
+html.theme-light .orchestrator-constellation {
+  --mode-color: #c026d3;
+  --mode-glow: rgb(192 38 211 / 0.5);
+  --mode-spark: #f5d0fe;
+}
+
+.orchestrator-constellation::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.orchestrator-network {
+  position: absolute;
+  inset: 0;
+  animation: orchestrator-network-rise 2200ms 300ms
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+}
+
+.orchestrator-edge,
+.orchestrator-pulse {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.orchestrator-edge {
+  stroke: color-mix(in srgb, var(--mode-color) 60%, transparent);
+  stroke-width: 1.25;
+  stroke-dasharray: var(--length);
+  animation: orchestrator-edge-draw var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+/* A bright head rides the tip of each edge as it draws out. */
+.orchestrator-pulse {
+  stroke: var(--mode-spark);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 var(--length);
+  filter: drop-shadow(0 0 3px var(--mode-glow));
+  animation: orchestrator-pulse var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-hub,
+.orchestrator-node {
+  position: absolute;
+  z-index: 2;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--mode-spark), var(--mode-color) 70%);
+  box-shadow: 0 0 8px var(--mode-glow);
+}
+
+.orchestrator-hub::after,
+.orchestrator-node::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--mode-color);
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.orchestrator-hub {
+  --size: 8px;
+  animation: orchestrator-hub 600ms 120ms ease-out both;
+}
+
+.orchestrator-hub::after {
+  animation: orchestrator-ring 700ms 220ms ease-out both;
+}
+
+.orchestrator-node {
+  --size: 6px;
+  animation: orchestrator-node 600ms var(--delay) ease-out both;
+}
+
+.orchestrator-node[data-child="true"] {
+  --size: 4.5px;
+}
+
+.orchestrator-node::after {
+  animation: orchestrator-ring 500ms var(--delay) ease-out both;
+}
+
+@keyframes orchestrator-edge-draw {
+  from {
+    stroke-dashoffset: var(--length);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes orchestrator-network-rise {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(calc(-100% - 12px));
+  }
+}
+
+@keyframes orchestrator-pulse {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 6;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    stroke-dashoffset: calc(var(--length) * -1);
+  }
+}
+
+@keyframes orchestrator-hub {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-node {
+  0% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.4);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-ring {
+  0% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(3.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-steps,
+  .orchestrator-constellation {
+    display: none;
+  }
+}
+
 .edit-last-turn-composer {
   border-style: dashed;
   border-color: color-mix(
@@ -1029,6 +1448,18 @@ html.has-user-accent .primary-action:disabled {
   -webkit-text-fill-color: transparent;
 }
 
+/* Keep selected text hidden so the styled highlight layer still shows through,
+   rather than the raw `/command` and `@path` text. */
+.composer-field::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 30%,
+    transparent
+  );
+}
+
 .composer-field::placeholder {
   color: color-mix(in srgb, var(--color-content) 40%, transparent);
   -webkit-text-fill-color: color-mix(
@@ -1280,6 +1711,47 @@ header[data-tauri-drag-region] button {
   visibility: hidden;
 }
 
+.agent-markdown .markdown-code-fallback-label {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  left: 34px;
+  right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+  pointer-events: none;
+}
+
+/* highlightLanguageFor swaps text/plaintext/txt/untagged fences to the "js"
+   grammar so Shiki still colors them, but Streamdown's own header reuses
+   that same value as its visible label. Hide the vendor label here and show
+   the real fence language via .markdown-code-fallback-label instead. */
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label)
+  [data-streamdown="code-block-header"]
+  > span {
+  visibility: hidden;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"] {
+  display: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"]
+  + [data-streamdown="code-block-body"] {
+  border-top: 0;
+}
+
 .agent-markdown [data-streamdown="heading-1"] {
   font-size: 22px;
 }
@@ -1410,16 +1882,22 @@ header[data-tauri-drag-region] button {
   color: color-mix(in srgb, var(--color-content) 78%, transparent);
 }
 
-/* AgentMarkdown passes dir="auto", so Streamdown puts every block in its own
-   <div dir="..." style="display: contents"> wrapper. A display:contents box
-   drops its own margins, so Streamdown's `space-y-4` on the root (it targets
-   those wrappers) paints no gap at all. Headings, blockquotes and rules keep
-   their spacing because their margin sits on the element itself (mt-6/mb-2,
-   my-4, my-6); paragraphs and lists carry none, so every "\n\n" started a new
-   <p> with no visible gap and the reply read as one dense block (#218).
+/* AgentMarkdown passes dir="auto", so every block sits in its own
+   <div dir="..." class="agent-markdown-block"> wrapper (a real block box, not
+   Streamdown's display:contents one, so triple-click stops at the block; #496).
+   The wrapper carries no margin of its own: Streamdown's `space-y-4` on the
+   root would otherwise space every wrapper, including empty ones, and override
+   the tighter list gap below. Headings, blockquotes and rules keep their
+   spacing because their margin sits on the element itself (mt-6/mb-2, my-4,
+   my-6) and collapses through the wrapper; paragraphs and lists carry none, so
+   every "\n\n" would start a new <p> with no visible gap (#218).
    Put the gap back on the block inside the wrapper, top side only, so a reply
    never ends with a trailing gap. Ignore empty wrappers before the first
    visible block, and keep lists closer to the paragraph that introduces them. */
+.agent-markdown > .agent-markdown-block {
+  margin: 0;
+}
+
 .agent-markdown > div:not(:empty) ~ div > p {
   margin-top: 1rem;
 }
@@ -1537,6 +2015,37 @@ header[data-tauri-drag-region] button {
   -webkit-background-clip: text;
   color: transparent;
   animation: shimmer-text var(--shimmer-duration, 2s) linear infinite;
+}
+
+/* One light sweep across a composer mode command as it appears. */
+.composer-mode-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0 40%,
+    color-mix(in srgb, currentColor 25%, white) 50%,
+    currentColor 60% 100%
+  );
+  background-size: 300% 100%;
+  background-position: 0% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: composer-mode-shimmer 900ms ease-out;
+}
+
+@keyframes composer-mode-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-mode-shimmer {
+    animation: none;
+  }
 }
 
 /* Two-frame mascot loop — a hard swap plus a one-pixel hop, arcade style. */

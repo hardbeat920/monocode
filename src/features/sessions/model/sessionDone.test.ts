@@ -56,4 +56,29 @@ describe("nextUnseenFinishedSessions", () => {
       }),
     ).toEqual(new Set(["b"]));
   });
+
+  it("never marks sessions the user cannot look at", () => {
+    // An unseen session stays loaded until focused; a worker never is.
+    expect(
+      nextUnseenFinishedSessions({
+        previousBusyIds: new Set(["lead", "worker"]),
+        busyIds: new Set(),
+        previousUnseenIds: new Set(),
+        focusedSessionId: "other",
+        untrackedIds: new Set(["worker"]),
+      }),
+    ).toEqual(new Set(["lead"]));
+  });
+
+  it("drops untracked sessions that were already marked", () => {
+    expect(
+      nextUnseenFinishedSessions({
+        previousBusyIds: new Set(),
+        busyIds: new Set(),
+        previousUnseenIds: new Set(["lead", "worker"]),
+        focusedSessionId: "other",
+        untrackedIds: new Set(["worker"]),
+      }),
+    ).toEqual(new Set(["lead"]));
+  });
 });

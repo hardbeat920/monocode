@@ -12,6 +12,7 @@ import {
   newChangesTab,
   newCommitTab,
   newFileTab,
+  newEditorWorkspaceTab,
   newReleaseNotesWorkspaceTab,
   newSessionChangesTab,
   newTab,
@@ -35,6 +36,59 @@ function chat(id: string, cwd: string): Session {
 }
 
 describe("project return snapshots", () => {
+  it("migrates saved host file tabs to shared remote paths", () => {
+    const project = "remote://env/repo";
+    const file = {
+      ...newFileTab("/repo/src/index.ts", "/repo", false, undefined, project),
+      remoteFile: {
+        machineId: "machine",
+        projectId: "project",
+        relativePath: "src/index.ts",
+      },
+    };
+    const tab = newEditorWorkspaceTab(file);
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [],
+      tab.id,
+      project,
+      new Map(),
+    );
+    const restored = parseWorkspaceSnapshot(snapshot);
+    expect(restored?.tabs[0].editorPanes[0].files[0]).toMatchObject({
+      path: "remote://env/repo/src/index.ts",
+      cwd: project,
+    });
+    expect(restored?.tabs[0].editorPanes[0].files[0].remoteFile).toBeUndefined();
+    const malformed = JSON.parse(JSON.stringify(snapshot));
+    malformed.tabs[0].editorPanes[0].files[0].remoteFile = { machineId: 42 };
+    expect(parseWorkspaceSnapshot(malformed)).toBeNull();
+  });
+  it("restores a host diff tab with its review state", () => {
+    const project = "remote://env/repo";
+    const file = {
+      ...newFileTab("/repo/a.ts", "/repo", true, "staged", project),
+      remoteFile: {
+        machineId: "machine",
+        projectId: "project",
+        relativePath: "a.ts",
+      },
+    };
+    const tab = newEditorWorkspaceTab(file);
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [],
+      tab.id,
+      project,
+      new Map(),
+    );
+    const restored = parseWorkspaceSnapshot(snapshot);
+    expect(restored?.tabs[0].editorPanes[0].files[0]).toMatchObject({
+      review: true,
+      changeKind: "staged",
+      path: "remote://env/repo/a.ts",
+    });
+  });
   function saved() {
     const sessions = [
       chat("a1", "/alpha"),
@@ -287,7 +341,13 @@ describe("collectWorkspaceSnapshot", () => {
       ...newTab("editor"),
       editorPanes: [{ id: "editor", files: [file], activeFileId: file.id }],
     };
-    const snapshot = collectWorkspaceSnapshot([tab], [], tab.id, "/repo", new Map());
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [],
+      tab.id,
+      "/repo",
+      new Map(),
+    );
     const restored = hydrateWorkspaceSnapshot(snapshot, new Map())?.tabs[0]
       ?.editorPanes[0]?.files[0];
     expect(restored).toMatchObject({
@@ -406,10 +466,7 @@ describe("parseWorkspaceSnapshot", () => {
       [createProjectTerminal("/tmp/a", term)],
       "right",
     );
-    const raw = JSON.parse(JSON.stringify(snapshot)) as Record<
-      string,
-      unknown
-    >;
+    const raw = JSON.parse(JSON.stringify(snapshot)) as Record<string, unknown>;
     expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBe("right");
     raw.lastDockSide = "diagonal";
     expect(parseWorkspaceSnapshot(raw)?.lastDockSide).toBeUndefined();
@@ -665,5 +722,26 @@ describe("hydrateWorkspaceSnapshot", () => {
     );
     const workspace = hydrateWorkspaceSnapshot(snapshot, new Map());
     expect(workspace?.lastDockSide).toBe("left");
+  });
+});
+
+describe("worktree tab cleanup", () => {
+  it("drops tabs the caller leaves out, with sessions only they showed", () => {
+    const main = chat("main", "/repo");
+    const feature = { ...chat("feature", "/repo"), worktreeCwd: "/trees/a" };
+    const mainTab = { ...newTab("main"), id: "tab-main" };
+    const featureTab = { ...newTab("feature"), id: "tab-feature" };
+    const snapshot = collectWorkspaceSnapshot(
+      [mainTab, featureTab],
+      [main, feature],
+      "tab-feature",
+      "/repo",
+      new Map(),
+      [],
+      undefined,
+      (tab) => tab.id !== "tab-feature",
+    );
+    expect(snapshot.tabs.map((tab) => tab.id)).toEqual(["tab-main"]);
+    expect(snapshot.sessions.map((stub) => stub.id)).toEqual(["main"]);
   });
 });

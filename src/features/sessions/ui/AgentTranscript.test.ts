@@ -25,6 +25,22 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("keeps the completed time beside actions when a turn has no BTW control", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Inspect",
+        startedAt: 1_000,
+        durationMs: 2_000,
+      },
+      { id: "answer", role: "assistant", text: "Done" },
+    ]);
+    expect(markup).toContain('aria-label="Worked for 2s"');
+    expect(markup).toContain("flex shrink-0 items-center gap-2.5");
+    expect(markup).not.toContain("ml-auto flex shrink-0 items-center gap-2.5");
+  });
+
   it("shows a /operator request without the command in its amber bubble", () => {
     const markup = render([
       { id: "user", role: "user", text: "list my notes", monocode: true },
@@ -563,6 +579,62 @@ describe("AgentTranscript collapsed work", () => {
     // no longer dumps every call it made on screen at once.
     expect(markup).toContain('class="zen-phase-body" data-open="false"');
     expect(markup).not.toContain("src/lib/session.ts");
+  });
+
+  it("offers failed subagent tool results in the same error control as top-level tools", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        tool: { callId: "agent-1", kind: "agent", status: "failed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              toolKind: "execute",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("Show error details for npm test");
+  });
+
+  it("counts a failed step on a folded subagent row, so it is not hidden", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        // The run itself finished; only one of its steps did not.
+        tool: { callId: "agent-1", kind: "agent", status: "completed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            { id: "read", kind: "tool", text: "Read package.json" },
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+            { id: "fix", kind: "tool", text: "Edit src/App.tsx" },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("3 steps, 1 failed");
   });
 
   it("opens a lone subagent straight into its own transcript", () => {

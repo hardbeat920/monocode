@@ -4,6 +4,8 @@ export function transcriptBlockText(block: Block): string {
   const parts: string[] = [];
   if (block.text.trim()) parts.push(block.text);
   if (block.tool?.title) parts.push(block.tool.title);
+  if (block.image?.name) parts.push(block.image.name);
+  if (block.image?.alt) parts.push(block.image.alt);
   if (block.tool?.detail) parts.push(block.tool.detail);
   if (block.tool?.preview?.query) parts.push(block.tool.preview.query);
   if (block.tool?.preview?.path) parts.push(block.tool.preview.path);
@@ -22,7 +24,8 @@ export function findTranscriptBlocks(blocks: Block[], query: string): string[] {
           block.role === "assistant" ||
           block.role === "tool" ||
           block.role === "tasks" ||
-          block.role === "plan") &&
+          block.role === "plan" ||
+          block.role === "image") &&
         transcriptBlockText(block).toLowerCase().includes(needle),
     )
     .map((block) => block.id);

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -41,6 +42,7 @@ import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
+import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -95,8 +97,10 @@ import {
   saveSidebarOpacity,
   saveThemeHue,
   saveThemeSaturation,
+  isLightScheme,
   saveTranscriptLayout,
   saveTranscriptAnchor,
+  syncNativeGlass,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
   loadShowExcludedFiles,
   saveShowExcludedFiles,
@@ -135,8 +139,7 @@ import {
   saveUiScale,
   subscribeUiScale,
   UI_SCALE_DEFAULT,
-  UI_SCALE_MAX,
-  UI_SCALE_MIN,
+  UI_SCALE_PERCENTS,
 } from "../model/uiScale";
 import {
   getHarnessAvailabilitySnapshot,
@@ -183,7 +186,7 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
-import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -220,9 +223,26 @@ import { removeProviderAccountCredentials } from "../../providers/model/provider
 import {
   identityKey,
   identityOrganizationTag,
-  identitySubtitle,
   useProviderAccountIdentities,
 } from "../../providers/model/providerAccountIdentity";
+import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
+import {
+  saveMaskEmails,
+  saveShowRemainingUsage,
+  useMaskEmails,
+  useShowRemainingUsage,
+} from "../model/displayPrefs";
+import {
+  accountStatus,
+  accountUsageKey,
+  useProviderAccountUsage,
+} from "../../providers/model/accountUsage";
+import { clearCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import {
+  AccountStatusLabel,
+  AccountUsageMeters,
+  AccountUsageRefresh,
+} from "../../providers/ui/ProviderAccountUsage";
 import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
@@ -527,11 +547,15 @@ export function SettingsView({
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
               ) : null}
+              {section === "connections" ? <ConnectionsSettings /> : null}
               {section === "appearance" ? (
                 <AppearancePage appearance={appearance} />
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
+              {section === "mcp" ? (
+                <McpSettings cwd={cwd} recents={recents} />
+              ) : null}
               {section === "providers" ? (
                 <ProvidersPage cwd={cwd} recents={recents} />
               ) : null}
@@ -1855,6 +1879,7 @@ function useAppearanceSettings(
     applyBodyGlass(next);
     saveBodyGlass(next);
     setBodyGlass(next);
+    if (IS_LINUX) syncNativeGlass(isLightScheme() ? "light" : "dark");
   }, []);
 
   const onShowExcludedFiles = useCallback((next: boolean) => {
@@ -2184,14 +2209,14 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           label="Interface scale"
           description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
         >
-          <Slider
+          <Select
             label="Interface scale"
-            value={Math.round(appearance.uiScale * 100)}
-            display={`${Math.round(appearance.uiScale * 100)}%`}
-            min={Math.round(UI_SCALE_MIN * 100)}
-            max={Math.round(UI_SCALE_MAX * 100)}
-            step={10}
-            onChange={appearance.onUiScale}
+            value={String(Math.round(appearance.uiScale * 100))}
+            options={UI_SCALE_PERCENTS.map((percent) => ({
+              value: String(percent),
+              label: `${percent}%`,
+            }))}
+            onChange={(value) => appearance.onUiScale(Number(value))}
           />
         </Row>
         <Row
@@ -2771,10 +2796,6 @@ function ProviderBinaryControl({
   );
 
   useEffect(() => {
-    void inspect(loadProviderBinaryPath(provider));
-  }, [inspect, provider]);
-
-  useEffect(() => {
     if (editing) editInput.current?.focus();
   }, [editing]);
 
@@ -2840,6 +2861,9 @@ function ProviderBinaryControl({
         aria-haspopup="dialog"
         title={`${title} CLI path${restartRequired ? " — restart required" : ""}`}
         onClick={() => {
+          if (!open && !inspection && !working && !error) {
+            void inspect(loadProviderBinaryPath(provider));
+          }
           setOpen((value) => !value);
           setEditing(false);
         }}
@@ -3153,6 +3177,8 @@ function ProvidersPage({
     <>
       <ProviderAccountsSettings />
 
+      <UsageDisplaySettings />
+
       <Group
         id="agent-clis"
         title="Agent CLIs"
@@ -3225,6 +3251,37 @@ function ProvidersPage({
         </Row>
       </Group>
     </>
+  );
+}
+
+function UsageDisplaySettings() {
+  const showRemainingUsage = useShowRemainingUsage();
+  const maskEmails = useMaskEmails();
+  return (
+    <Group title="Usage and privacy">
+      <Row
+        id="show-remaining-usage"
+        label="Show remaining usage"
+        description="Fill usage meters with what is left in each limit instead of what has been used."
+      >
+        <Toggle
+          label="Show remaining usage"
+          on={showRemainingUsage}
+          onChange={saveShowRemainingUsage}
+        />
+      </Row>
+      <Row
+        id="mask-emails"
+        label="Mask account emails"
+        description="Blur account emails in Settings and the usage popover until you click one, so they stay out of screenshots."
+      >
+        <Toggle
+          label="Mask account emails"
+          on={maskEmails}
+          onChange={saveMaskEmails}
+        />
+      </Row>
+    </Group>
   );
 }
 
@@ -3305,6 +3362,7 @@ function ProviderAccountsSettings() {
     try {
       await removeProviderAccountCredentials(account.provider, account.id);
       removeProviderAccount(account.provider, account.id);
+      clearCachedRateLimits(account.provider, account.id);
       if (
         editor?.provider === account.provider &&
         editor.accountId === account.id
@@ -3326,12 +3384,14 @@ function ProviderAccountsSettings() {
     PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
     version,
   );
+  const usage = useProviderAccountUsage(version);
 
   return (
     <Group
       id="provider-accounts"
       title="Accounts"
       description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+      action={<AccountUsageRefresh usage={usage} />}
     >
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
@@ -3374,6 +3434,7 @@ function ProviderAccountsSettings() {
                 const removing = working === `remove:${provider}:${account.id}`;
                 const identity = identities[identityKey(account)];
                 const orgTag = identityOrganizationTag(identity);
+                const limits = usage.usage[accountUsageKey(account)];
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -3403,14 +3464,24 @@ function ProviderAccountsSettings() {
                           </span>
                         ) : null}
                       </div>
-                      <div className="mt-0.5 truncate text-[10px] text-content/35">
-                        {identitySubtitle(identity) ??
-                          (account.isDefault
-                            ? "Provider CLI profile"
-                            : "Isolated profile")}
+                      <div className="mt-0.5 flex min-w-0 items-center gap-2.5 text-[10px]">
+                        <AccountStatusLabel
+                          status={accountStatus(limits, usage.now)}
+                          className="shrink-0"
+                        />
+                        <ProviderAccountSubtitle
+                          identity={identity}
+                          fallback={
+                            account.isDefault
+                              ? "Provider CLI profile"
+                              : "Isolated profile"
+                          }
+                          className="truncate text-content/30"
+                        />
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <AccountUsageMeters limits={limits} now={usage.now} />
+                    <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
                           Default

@@ -41,6 +41,7 @@ import { OMP_FLAVOR } from "../pi/piFlavor";
 import type { HarnessEvent, SendTurnInput } from "../../core/types";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import { ATTACHMENT_ONLY_PROMPT } from "../../../../features/sessions/model/attachments";
 
 function frame(sessionId: string, value: Record<string, unknown>) {
   transport.watchers.get(sessionId)?.(JSON.stringify(value));
@@ -306,13 +307,17 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
           transport.requests.find(
             (r) => r.sessionId === sessionId && r.command.type === "prompt",
           )?.command.message,
-        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+        ).toBe(
+          `${ATTACHMENT_ONLY_PROMPT}\n\nAttached file (read from disk): "/tmp/report.pdf"`,
+        );
         await steer(turnInput);
         expect(
           transport.requests.find(
             (r) => r.sessionId === sessionId && r.command.type === "steer",
           )?.command.message,
-        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+        ).toBe(
+          `${ATTACHMENT_ONLY_PROMPT}\n\nAttached file (read from disk): "/tmp/report.pdf"`,
+        );
       } finally {
         frame(sessionId, { type: "agent_end" });
         await turn;

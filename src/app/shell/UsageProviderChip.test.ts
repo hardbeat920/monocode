@@ -3,10 +3,19 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import type { ProviderRateLimits } from "../../features/providers/model/rateLimits";
 import { projectKey } from "../../shared/lib/paths";
 import { saveTabGroupMascot } from "../../features/workspace/model/tabGroups";
 import { needsProviderLogin, UsageProviderChip } from "./UsageProviderChip";
+import {
+  saveMaskEmails,
+  saveShowRemainingUsage,
+} from "../../features/settings/model/displayPrefs";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async () => null),
+}));
 
 const now = Date.parse("2026-09-16T12:00:00Z");
 
@@ -58,6 +67,7 @@ let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(invoke).mockReset().mockResolvedValue(null);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -122,6 +132,7 @@ describe("UsageProviderChip", () => {
   });
 
   it("opens a column of detailed progress bars", async () => {
+    saveShowRemainingUsage(true);
     act(() =>
       root.render(
         createElement(UsageProviderChip, { limits: codexLimits(), now }),
@@ -130,6 +141,9 @@ describe("UsageProviderChip", () => {
 
     const trigger = button("Codex usage details");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.querySelector(".w-8 > span")?.getAttribute("style")).toBe(
+      "width: 19%;",
+    );
     await act(async () => trigger.click());
 
     const dialog = document.querySelector('[role="dialog"]');
@@ -139,14 +153,77 @@ describe("UsageProviderChip", () => {
     expect(dialog?.textContent).toContain("58% remaining");
     expect(dialog?.textContent).toContain("19% remaining");
     expect(dialog?.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    const sessionBar = dialog?.querySelector(
+      '[aria-label="5-hour limit remaining"]',
+    );
+    const weeklyBar = dialog?.querySelector(
+      '[aria-label="Weekly limit remaining"]',
+    );
+    expect(sessionBar?.getAttribute("aria-valuenow")).toBe("58");
+    expect(sessionBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 58%;",
+    );
+    expect(weeklyBar?.getAttribute("aria-valuenow")).toBe("19");
+    expect(weeklyBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 19%;",
+    );
+  });
+
+  it("fills bars with used capacity by default", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, { limits: codexLimits(), now }),
+      ),
+    );
+
+    const trigger = button("Codex usage details");
+    expect(trigger.querySelector(".w-8 > span")?.getAttribute("style")).toBe(
+      "width: 81%;",
+    );
+    await act(async () => trigger.click());
+
+    const weeklyBar = document.querySelector(
+      '[role="dialog"] [aria-label="Weekly limit used"]',
+    );
+    expect(weeklyBar?.getAttribute("aria-valuenow")).toBe("81");
+    expect(weeklyBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 81%;",
+    );
+  });
+
+  it("shows a full bar before usage and an empty bar when exhausted", async () => {
+    saveShowRemainingUsage(true);
+    const limits = codexLimits();
+    limits.session!.usedPercent = 0;
+    limits.weekly!.usedPercent = 100;
+    act(() => root.render(createElement(UsageProviderChip, { limits, now })));
+
     expect(
-      dialog
-        ?.querySelector('[aria-label="Weekly limit used"]')
-        ?.getAttribute("aria-valuenow"),
-    ).toBe("81");
+      button("Codex usage details")
+        .querySelector(".w-8 > span")
+        ?.getAttribute("style"),
+    ).toBe("width: 0%;");
+    await act(async () => button("Codex usage details").click());
+
+    const dialog = document.querySelector('[role="dialog"]');
+    const sessionBar = dialog?.querySelector(
+      '[aria-label="5-hour limit remaining"]',
+    );
+    const weeklyBar = dialog?.querySelector(
+      '[aria-label="Weekly limit remaining"]',
+    );
+    expect(sessionBar?.getAttribute("aria-valuenow")).toBe("100");
+    expect(sessionBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 100%;",
+    );
+    expect(weeklyBar?.getAttribute("aria-valuenow")).toBe("0");
+    expect(weeklyBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 0%;",
+    );
   });
 
   it("switches between named accounts from the usage popover", async () => {
+    saveShowRemainingUsage(true);
     const onSelectAccount = vi.fn();
     act(() =>
       root.render(
@@ -173,10 +250,89 @@ describe("UsageProviderChip", () => {
     await act(async () => button("Switch Codex account").click());
     expect(document.body.textContent).toContain("Codex accounts");
     expect(document.body.textContent).toContain("Default account");
+    const accountRow = button("Default account").parentElement!;
+    const accountBar = accountRow.querySelector(
+      '[aria-label="5h limit remaining"]',
+    );
+    expect(accountRow.textContent).toContain("58% left");
+    expect(accountBar?.getAttribute("aria-valuenow")).toBe("58");
+    expect(accountBar?.querySelector("span")?.getAttribute("style")).toBe(
+      "width: 58%;",
+    );
     await act(async () => button("Work").click());
 
     expect(onSelectAccount).toHaveBeenCalledWith("account-work");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("reveals emails independently of account switching and hides them on reopening", async () => {
+    saveMaskEmails(true);
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "provider_account_identity"
+        ? { email: "user@example.com", plan: "Pro" }
+        : null,
+    );
+    const onSelectAccount = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: codexLimits(),
+          now,
+          accountId: "default",
+          accounts: [
+            {
+              id: "default",
+              provider: "codex",
+              label: "Main",
+              isDefault: true,
+            },
+          ],
+          onSelectAccount,
+          onAddAccount: vi.fn(),
+        }),
+      ),
+    );
+    await act(async () => button("Codex usage details").click());
+
+    const email = button("Reveal email");
+    expect(email.querySelector("span")?.className).toContain("blur-[5px]");
+    expect(email.querySelector("span")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(document.body.textContent).toContain("Pro");
+    await act(async () => email.click());
+    expect(button("Hide email").querySelector("span")?.className).not.toContain(
+      "blur",
+    );
+    expect(document.body.textContent).toContain("Codex usage");
+    expect(document.body.textContent).not.toContain("Codex accounts");
+    expect(onSelectAccount).not.toHaveBeenCalled();
+    await act(async () => button("Hide email").click());
+    expect(button("Reveal email").getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => button("Reveal email").click());
+    await act(async () => button("Codex usage details").click());
+    await act(async () => button("Codex usage details").click());
+    expect(button("Reveal email").getAttribute("aria-pressed")).toBe("false");
+
+    await act(async () => button("Switch Codex account").click());
+    expect(button("Reveal email").querySelector("span")?.className).toContain(
+      "blur-[5px]",
+    );
+    expect(document.querySelector("button button")).toBeNull();
+    expect(
+      [...document.querySelectorAll("[title], [aria-label]")].some((element) =>
+        [
+          element.getAttribute("title"),
+          element.getAttribute("aria-label"),
+        ].some((label) => label?.includes("user@example.com")),
+      ),
+    ).toBe(false);
+    await act(async () => button("Reveal email").click());
+    expect(onSelectAccount).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Codex accounts");
+    await act(async () => button("Main").click());
+    expect(onSelectAccount).toHaveBeenCalledWith("default");
   });
 
   it("keeps account switching available when the pinned account was removed", async () => {

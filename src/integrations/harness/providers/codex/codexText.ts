@@ -140,7 +140,9 @@ async function promptOnLive(input: {
   signal?: AbortSignal;
   onEvent?: (event: HarnessEvent) => void;
 }): Promise<string> {
+  input.signal?.throwIfAborted();
   const session = await ensureLive(input);
+  input.signal?.throwIfAborted();
   session.output = "";
   session.collecting = true;
   session.onEvent = input.onEvent;

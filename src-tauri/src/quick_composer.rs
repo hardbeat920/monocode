@@ -69,6 +69,12 @@ fn parse_shortcut(value: &str) -> Result<Shortcut, String> {
 #[serde(rename_all = "camelCase")]
 pub struct QuickLaunch {
     prompt: String,
+    /// Create an unsent user draft instead of starting an agent turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    draft: bool,
+    /// Turn mode picked with a leading composer command, e.g. `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intent: Option<String>,
     cwd: String,
     harness: String,
     /// Absent means the harness's default model.

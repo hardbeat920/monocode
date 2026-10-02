@@ -258,16 +258,20 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     expect(provider.refresh()).toBe(first);
     await first;
     expect(modelsFor(provider.id).map((model) => model.nativeId)).toEqual(["m1", "m2"]);
+    const probeId = mock.spawn.mock.calls
+      .map(([id]) => id as string)
+      .find((id) => id.startsWith(`monocode-${provider.id}-probe-`));
+    expect(probeId).toBeTruthy();
     expect(mock.spawn).toHaveBeenCalledWith(
-      `monocode-${provider.id}-probe`,
+      probeId,
       provider.path,
       provider.args,
       provider.id === "antigravity" ? "/fake/" : "/home/test",
       undefined,
       provider.id,
     );
-    expect(mock.kill).toHaveBeenCalledWith(`monocode-${provider.id}-probe`);
-    expect(mock.listeners.has(`monocode-${provider.id}-probe`)).toBe(false);
+    expect(mock.kill).toHaveBeenCalledWith(probeId);
+    expect(mock.listeners.has(probeId!)).toBe(false);
     mock.fail.add("session/new");
     await provider.refresh();
     expect(modelsFor(provider.id).map((model) => model.nativeId)).toEqual(["m1", "m2"]);
