@@ -74,6 +74,7 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Supplies a caller and one same-project target with observable host mutations. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";

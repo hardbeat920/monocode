@@ -129,6 +129,10 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+/**
+ * Builds the shared metadata for storage payloads and dirty-state fingerprints.
+ * Normalizes the project path and omits invalid provider IDs and work-item data.
+ */
 function persistableMeta(
   session: Session,
 ): Omit<SessionUpsertPayload, "blocks"> {
@@ -1109,6 +1113,10 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
   };
 }
 
+/**
+ * Hydrates sanitized blocks and saved metadata into an idle session.
+ * Retains explicit-title ownership; active harness state is not restored here.
+ */
 function recordToSession(record: SessionRecord): Session {
   const blocks = Array.isArray(record.blocks)
     ? record.blocks

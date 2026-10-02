@@ -349,6 +349,7 @@ export function hydrateWorkspaceSnapshot(
   };
 }
 
+/** Captures session choices without transcript or busy state; missing IDs are omitted. */
 function sessionStub(session: Session): WorkspaceSessionStub | null {
   if (!session.id) return null;
   return {
@@ -373,6 +374,7 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
   };
 }
 
+/** Restores an empty session from saved choices when no full record is available. */
 function sessionFromStub(stub: WorkspaceSessionStub): Session {
   const session = newSession(
     stub.harness,
@@ -403,6 +405,7 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
   };
 }
 
+/** Validates a snapshot entry, rejecting invalid identity/provider choices and defaulting optional fields. */
 function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;

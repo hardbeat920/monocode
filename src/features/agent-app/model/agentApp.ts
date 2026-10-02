@@ -193,6 +193,10 @@ export function notePreview(body: string): string {
     .slice(0, 400);
 }
 
+/**
+ * Validates operator launch fields and fills defaults from the calling session.
+ * Returns launch data without starting a turn; invalid input throws before dispatch.
+ */
 function startLaunch(
   source: Session,
   input: Record<string, unknown>,
@@ -286,6 +290,11 @@ function startLaunch(
   };
 }
 
+/**
+ * Validates and dispatches an operator action through the workspace host.
+ * Session targets require project membership; validation and host errors propagate.
+ * The request listener owns receipt deduplication across retries.
+ */
 export async function handleAgentApp(
   source: Session,
   requestId: string,

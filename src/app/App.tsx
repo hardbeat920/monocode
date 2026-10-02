@@ -894,6 +894,10 @@ export default function App(props: AppProps) {
   );
 }
 
+/**
+ * Owns a window's live sessions, layout, and project history, coordinating
+ * harness events and persistence with UI actions and operator requests.
+ */
 function Workspace({
   windowTransfer = null,
   resumed = null,
@@ -4309,6 +4313,10 @@ function Workspace({
     [],
   );
 
+  /**
+   * Applies a project-scoped rename, then refreshes cached history after saving.
+   * Rejects storage failures for the caller to display or return to the operator.
+   */
   const onRenameHistorySession = useCallback(
     async (
       sessionId: string,
@@ -5948,6 +5956,10 @@ function Workspace({
     [],
   );
 
+  /**
+   * Accepts one unsent draft without running a turn; false means not accepted.
+   * Local title/block updates use the workspace's normal persistence path.
+   */
   const onSaveDraft = useCallback(
     (
       sessionId: string,
@@ -6038,6 +6050,10 @@ function Workspace({
     [invalidateLoadedSession],
   );
 
+  /**
+   * Accepts or rejects a user turn, including draft promotion and provider handoff.
+   * Acceptance is separate from completion, reported through settlement callbacks.
+   */
   const submitSession = useCallback(
     (
       sessionId: string,
@@ -6482,6 +6498,7 @@ function Workspace({
       }
 
       dismissNoticesForContinuedSession(sessionId);
+      /** Update the latest transcript and promote its draft without replacing an explicit title. */
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
           prev.map((s) => {
@@ -6592,6 +6609,10 @@ function Workspace({
         flushSync(commitSubmittedTurn);
       }
 
+      /**
+       * Starts best-effort naming and work-item linking for eligible turns.
+       * Rechecks title ownership when delayed results reach the live session.
+       */
       const launchTitleGeneration = (workCwd: string) => {
         if (
           !live ||
@@ -9204,6 +9225,10 @@ function Workspace({
       action: string;
       input: Record<string, unknown>;
     }>("monocode-control-request", ({ payload }) => {
+      /**
+       * Dispatches control requests and reuses matching app request receipts.
+       * Changed retry inputs reject; failed app receipts are evicted for retry.
+       */
       const handle = async () => {
         if (payload.namespace === "control") {
           return orchestrator.handle(
@@ -9309,6 +9334,7 @@ function Workspace({
                 ? target
                 : null;
             },
+            /** Revalidates the caller's project during rename and propagates save errors. */
             rename: async (id, title) => {
               await renameHistorySessionRef.current(id, title, source.cwd);
             },

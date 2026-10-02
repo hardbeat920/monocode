@@ -650,6 +650,8 @@ fn ensure_column(conn: &Connection, name: &str, decl: &str) -> rusqlite::Result<
     Ok(())
 }
 
+/// Applies pending schema/data migrations and repairs required session columns.
+/// Safe to rerun on an upgraded database; SQLite errors propagate to the opener.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1080,6 +1082,8 @@ fn orchestration_summary(conn: &Connection, id: &str) -> rusqlite::Result<Option
     ))
 }
 
+/// Stores transcript and metadata while retaining creation time and sidebar flags.
+/// Metadata-only changes keep the previous activity timestamp; storage errors propagate.
 fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Result<SessionSummary> {
     let now = now_millis();
     let model_settings = serde_json::to_string(&session.model_settings)
@@ -1842,6 +1846,8 @@ fn set_linked_work_item(
     Ok(())
 }
 
+/// Loads a normal session and decodes its saved JSON; absent/inbox records return None.
+/// Database and JSON decoding failures remain errors rather than missing sessions.
 fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<SessionRecord>> {
     conn.query_row(
         "SELECT id, cwd, harness, model, model_settings, runtime_mode, title,
@@ -2050,6 +2056,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
+    /// Builds a persisted user conversation with automatic naming for storage regressions.
     fn sample(id: &str, cwd: &str, title: &str) -> SessionUpsert {
         SessionUpsert {
             id: id.into(),
@@ -2073,6 +2080,7 @@ mod tests {
         }
     }
 
+    /// Checks explicit-title round trips and retention after rerunning schema migration.
     #[test]
     fn explicit_titles_round_trip_and_legacy_sessions_default_to_automatic() {
         let store = SessionStore::open_in_memory().unwrap();

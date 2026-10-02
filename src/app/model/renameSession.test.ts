@@ -43,6 +43,7 @@ beforeEach(() => {
     });
 });
 
+/** A busy conversation whose prompt-derived title can collide with an explicit rename. */
 function chat(): Session {
   return {
     ...newSession("codex", "/repo"),
