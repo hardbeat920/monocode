@@ -35,6 +35,21 @@ import {
 } from "react";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
+  createUsagePricing,
+  fetchModelPrices,
+  fetchProviderUsage,
+  formatUsageCost,
+  formatUsageTokens,
+  summarizeUsage,
+  usageBreakdown,
+  usageDays,
+  USAGE_MAX_DAYS,
+  type AccountUsage,
+  type ModelPrices,
+  type UsageBreakdown,
+  type UsageDay,
+} from "../../providers/model/providerUsage";
+import {
   ColorPickerPopover,
   ColorSwatchRow,
 } from "../../../shared/ui/ColorPickerPopover";
@@ -3170,6 +3185,7 @@ function ProvidersPage({
   return (
     <>
       <ProviderAccountsSettings />
+      <ProviderUsageSettings />
 
       <Group
         id="agent-clis"
@@ -3251,6 +3267,406 @@ type AccountEditor = {
   accountId?: string;
   label: string;
 };
+
+type UsageRange = "7d" | "30d";
+type UsageMetric = "tokens" | "cost";
+const USAGE_RANGE_DAYS: Record<UsageRange, number> = { "7d": 7, "30d": 30 };
+const ALL_USAGE_ACCOUNTS = "all";
+
+type UsageLoad =
+  | { status: "loading" }
+  | { status: "ready"; usage: AccountUsage[]; failed: string[] };
+
+function usageAccountLabel(account: ProviderAccount): string {
+  return `${HARNESS_TITLE[account.provider]} · ${account.label}`;
+}
+
+function ProviderUsageSettings() {
+  const [version, setVersion] = useState(0);
+  const [reload, setReload] = useState(0);
+  const [load, setLoad] = useState<UsageLoad>({ status: "loading" });
+  // True while a scan runs, including reloads that keep the last results shown.
+  const [refreshing, setRefreshing] = useState(true);
+  const [accountKey, setAccountKey] = useState(ALL_USAGE_ACCOUNTS);
+  const [range, setRange] = useState<UsageRange>("7d");
+  const [metric, setMetric] = useState<UsageMetric>("tokens");
+  const [breakdown, setBreakdown] = useState<UsageBreakdown>("model");
+  // undefined while loading; null when OpenRouter and the cached copy both fail.
+  const [prices, setPrices] = useState<ModelPrices | null | undefined>();
+
+  useEffect(
+    () => subscribeProviderAccounts(() => setVersion((value) => value + 1)),
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchModelPrices().then((next) => {
+      if (!cancelled) setPrices(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [reload]);
+
+  const pricing = useMemo(() => createUsagePricing(prices?.models), [prices]);
+
+  const accounts = useMemo(
+    () => PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
+    [version],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setRefreshing(true);
+    setLoad((current) =>
+      current.status === "ready" ? current : { status: "loading" },
+    );
+    const since = usageDays(USAGE_MAX_DAYS, new Date())[0].getTime();
+    void Promise.all(
+      accounts.map(async (account) => {
+        try {
+          return {
+            account,
+            report: await fetchProviderUsage(
+              account.provider,
+              account.id,
+              since,
+            ),
+          };
+        } catch {
+          return { account, report: null };
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      setRefreshing(false);
+      setLoad({
+        status: "ready",
+        usage: results.flatMap(({ account, report }) =>
+          report ? [{ account, rows: report.rows }] : [],
+        ),
+        failed: results
+          .filter(({ report }) => !report)
+          .map(({ account }) => usageAccountLabel(account)),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts, reload]);
+
+  const selected = accounts.find(
+    (account) => identityKey(account) === accountKey,
+  );
+  const all = !selected;
+  // The Account breakdown only means something across several accounts.
+  const shownBreakdown = !all && breakdown === "account" ? "model" : breakdown;
+  const dayCount = USAGE_RANGE_DAYS[range];
+
+  const usage = useMemo(() => {
+    if (load.status !== "ready") return [];
+    return selected
+      ? load.usage.filter(
+          (entry) => identityKey(entry.account) === identityKey(selected),
+        )
+      : load.usage;
+  }, [load, selected]);
+
+  // Recomputed per render so "today" moves on when Settings stays open overnight.
+  const now = new Date();
+  const summary = summarizeUsage(usage, dayCount, now, pricing);
+  const rows = usageBreakdown(
+    usage,
+    dayCount,
+    now,
+    shownBreakdown,
+    usageAccountLabel,
+    pricing,
+  );
+
+  const accountOptions = [
+    { value: ALL_USAGE_ACCOUNTS, label: "All accounts" },
+    ...accounts.map((account) => ({
+      value: identityKey(account),
+      label: usageAccountLabel(account),
+      icon: <HarnessIcon harness={account.provider} className="size-3.5" />,
+    })),
+  ];
+
+  const notes = [
+    prices
+      ? `Prices from OpenRouter, updated ${formatUsageDay(new Date(prices.fetchedAt * 1000))}.`
+      : prices === null
+        ? "OpenRouter prices could not be loaded, so built-in prices are used."
+        : null,
+    summary.unpricedModels.length
+      ? `No price is known for ${summary.unpricedModels.join(", ")}, so its cost is left out.`
+      : null,
+    load.status === "ready" && load.failed.length
+      ? `Could not read the logs for ${load.failed.join(", ")}.`
+      : null,
+  ].filter(Boolean);
+
+  return (
+    <Group
+      id="provider-usage"
+      title="Usage"
+      description="Estimated from local session logs at standard API rates. Subscription plans are billed differently."
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Select
+            label="Usage account"
+            value={selected ? accountKey : ALL_USAGE_ACCOUNTS}
+            options={accountOptions}
+            onChange={setAccountKey}
+          />
+          <Segmented
+            label="Usage range"
+            value={range}
+            options={[
+              { value: "7d", label: "7 days" },
+              { value: "30d", label: "30 days" },
+            ]}
+            onChange={setRange}
+          />
+          <button
+            type="button"
+            aria-label="Reload usage"
+            title="Reload usage"
+            disabled={refreshing}
+            onClick={() => setReload((value) => value + 1)}
+            className="grid size-[26px] place-items-center rounded-md border border-content/10 text-content/50 hover:bg-content/10 hover:text-content disabled:opacity-40"
+          >
+            <RefreshCw
+              className={`size-3.5${refreshing ? " animate-spin" : ""}`}
+              strokeWidth={1.75}
+              aria-hidden
+            />
+          </button>
+        </div>
+      }
+    >
+      {load.status === "loading" ? (
+        <div className="px-4 py-6 text-[12px] text-content/45">
+          Reading session logs…
+        </div>
+      ) : summary.tokens === 0 ? (
+        <div className="px-4 py-6 text-[12px] leading-relaxed text-content/45">
+          No usage in the last {dayCount} days
+          {selected ? ` for ${usageAccountLabel(selected)}` : ""}. Usage appears
+          here once a Claude Code or Codex conversation has run on this
+          computer.
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 divide-y divide-content/5 border-b border-content/5 @min-[560px]/settings:grid-cols-3 @min-[560px]/settings:divide-x @min-[560px]/settings:divide-y-0">
+            <UsageStat
+              label="Estimated cost"
+              value={formatUsageCost(summary.cost)}
+              detail={`${formatUsageCost(summary.cost / Math.max(1, summary.activeDays))} per active day`}
+            />
+            <UsageStat
+              label="Tokens"
+              value={formatUsageTokens(summary.tokens)}
+              detail={`${summary.activeDays} of ${dayCount} days active`}
+            />
+            <UsageStat
+              label="Cache hit rate"
+              value={`${(summary.cacheHitRate * 100).toFixed(1)}%`}
+              detail={`Saved about ${formatUsageCost(summary.cacheSavings)}`}
+            />
+          </div>
+
+          <div className="border-b border-content/5 px-4 py-3.5">
+            <div className="flex items-center gap-4 pb-3">
+              <div className="min-w-0 flex-1 text-[13px] font-medium text-content">
+                Daily {metric === "cost" ? "cost" : "tokens"}
+              </div>
+              <Segmented
+                label="Chart metric"
+                value={metric}
+                options={[
+                  { value: "tokens", label: "Tokens" },
+                  { value: "cost", label: "Cost" },
+                ]}
+                onChange={setMetric}
+              />
+            </div>
+            <UsageDailyBars days={summary.days} metric={metric} />
+          </div>
+
+          <div>
+            <div className="flex items-center gap-4 px-4 py-3">
+              <div className="min-w-0 flex-1 text-[13px] font-medium text-content">
+                Breakdown
+              </div>
+              <Segmented
+                label="Breakdown"
+                value={shownBreakdown}
+                options={[
+                  { value: "model", label: "Model" },
+                  { value: "project", label: "Project" },
+                  ...(all
+                    ? [{ value: "account" as const, label: "Account" }]
+                    : []),
+                ]}
+                onChange={setBreakdown}
+              />
+            </div>
+            <div className="border-t border-content/5 bg-content/[0.015]">
+              {rows.map((row) => (
+                <div
+                  key={row.key}
+                  className="flex h-11 items-center gap-4 border-b border-content/5 px-4 last:border-b-0"
+                >
+                  <div
+                    className="flex min-w-0 flex-1 items-center gap-2"
+                    title={row.title}
+                  >
+                    {row.provider ? (
+                      <HarnessIcon
+                        harness={row.provider}
+                        className="size-3.5 shrink-0"
+                      />
+                    ) : null}
+                    <span
+                      className={`truncate text-[12px] text-content/85 ${shownBreakdown === "model" ? "font-mono" : ""}`}
+                    >
+                      {row.label}
+                    </span>
+                  </div>
+                  <div
+                    className="hidden h-1 w-28 shrink-0 overflow-hidden rounded-full bg-content/[0.07] @min-[560px]/settings:block"
+                    aria-hidden
+                  >
+                    <div
+                      className="h-full rounded-full bg-accent/70"
+                      style={{ width: `${Math.max(2, row.share * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-16 shrink-0 text-right text-[12px] tabular-nums text-content/50">
+                    {formatUsageTokens(row.tokens)}
+                  </span>
+                  <span className="w-20 shrink-0 text-right text-[12px] tabular-nums text-content/85">
+                    {formatUsageCost(row.cost)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      {notes.length ? (
+        <div className="border-t border-content/5 px-4 py-2.5 text-[11px] leading-relaxed text-content/40">
+          {notes.join(" ")}
+        </div>
+      ) : null}
+    </Group>
+  );
+}
+
+function UsageStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="min-w-0 px-4 py-3.5">
+      <div className="text-[12px] text-content/45">{label}</div>
+      <div className="mt-1 text-[20px] font-semibold leading-tight tabular-nums text-content">
+        {value}
+      </div>
+      <div className="mt-1 truncate text-[11px] text-content/40">{detail}</div>
+    </div>
+  );
+}
+
+function formatUsageDay(date: Date): string {
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function UsageDailyBars({
+  days,
+  metric,
+}: {
+  days: UsageDay[];
+  metric: UsageMetric;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const values = days.map((day) => (metric === "cost" ? day.cost : day.tokens));
+  const max = Math.max(...values, 0);
+  const format = metric === "cost" ? formatUsageCost : formatUsageTokens;
+
+  return (
+    <div>
+      <div className="relative">
+        <div className="pointer-events-none absolute inset-x-0 top-0 flex h-28 flex-col justify-between">
+          {[0, 1, 2].map((line) => (
+            <div
+              key={line}
+              className="border-t border-dashed border-content/[0.06]"
+            />
+          ))}
+        </div>
+        <div
+          className="relative flex h-28 items-end gap-[3px]"
+          onMouseLeave={() => setHover(null)}
+        >
+          {days.map((day, index) => {
+            const value = values[index];
+            return (
+              <div
+                key={day.date.getTime()}
+                className="flex h-full min-w-0 flex-1 items-end"
+                onMouseEnter={() => setHover(index)}
+              >
+                <div
+                  className={`mx-auto w-full max-w-8 rounded-t-[3px] transition-colors ${
+                    value <= 0
+                      ? "h-px bg-content/10"
+                      : hover === index
+                        ? "bg-accent"
+                        : hover != null
+                          ? "bg-accent/35"
+                          : "bg-accent/60"
+                  }`}
+                  style={
+                    value <= 0 || max <= 0
+                      ? undefined
+                      : { height: `${Math.max(3, (value / max) * 100)}%` }
+                  }
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-[11px] tabular-nums text-content/40">
+        {hover != null ? (
+          <>
+            <span className="text-content/70">
+              {formatUsageDay(days[hover].date)}
+            </span>
+            <span className="text-content/70">
+              {values[hover] <= 0 ? "No activity" : format(values[hover])}
+            </span>
+          </>
+        ) : (
+          <>
+            <span>{formatUsageDay(days[0].date)}</span>
+            <span>Peak {format(max)}</span>
+            <span>{formatUsageDay(days[days.length - 1].date)}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ProviderAccountsSettings() {
   const [version, setVersion] = useState(0);

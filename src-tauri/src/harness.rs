@@ -23,7 +23,7 @@ const EXIT_EVENT: &str = "harness-exit";
 const SSE_EVENT: &str = "harness-sse";
 const SSE_END_EVENT: &str = "harness-sse-end";
 
-const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
+pub(crate) const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
