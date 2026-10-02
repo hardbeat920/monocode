@@ -161,6 +161,28 @@ export function sameDirectory(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+/** Inserts into an insertion-ordered map, dropping the oldest entry past `limit`. */
+export function rememberBounded<K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+  limit: number,
+): void {
+  map.set(key, value);
+  dropOldest(map, limit);
+}
+
+export function rememberBoundedSet<K>(set: Set<K>, key: K, limit: number): void {
+  set.add(key);
+  dropOldest(set, limit);
+}
+
+function dropOldest<K>(collection: Map<K, unknown> | Set<K>, limit: number): void {
+  if (collection.size <= limit) return;
+  const oldest = collection.keys().next();
+  if (!oldest.done) collection.delete(oldest.value);
+}
+
 export function isOpenCodeNotFound(cause: unknown): boolean {
   const seen = new Set<object>();
   const queue: unknown[] = [cause];

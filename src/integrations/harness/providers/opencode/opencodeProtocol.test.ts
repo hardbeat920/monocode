@@ -12,6 +12,8 @@ import {
   buildOpenCodePermissionRules,
   compareSemver,
   sameDirectory,
+  rememberBounded,
+  rememberBoundedSet,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -71,6 +73,19 @@ describe("sameDirectory", () => {
     expect(sameDirectory("/repo/", "/repo")).toBe(true);
     expect(sameDirectory("C:\\work\\repo\\", "C:/work/repo")).toBe(true);
     expect(sameDirectory("/repo", "/repo-old-worktree")).toBe(false);
+  });
+});
+
+describe("rememberBounded", () => {
+  it("drops the oldest entries past the limit", () => {
+    const map = new Map<string, number>();
+    const set = new Set<string>();
+    for (const [index, key] of ["a", "b", "c"].entries()) {
+      rememberBounded(map, key, index, 2);
+      rememberBoundedSet(set, key, 2);
+    }
+    expect([...map.keys()]).toEqual(["b", "c"]);
+    expect([...set]).toEqual(["b", "c"]);
   });
 });
 

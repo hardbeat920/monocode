@@ -7,6 +7,7 @@ import {
 import {
   asRecord,
   normalizeOpenCodeV2Event,
+  rememberBounded,
   sameDirectory,
   stringField,
   toOpenCodeV2PermissionRules,
@@ -785,10 +786,7 @@ function normalizeV2Message(value: unknown): OpenCodeMessage {
 }
 
 function rememberPending<K, V>(map: Map<K, V>, key: K, value: V): void {
-  map.set(key, value);
-  if (map.size <= 256) return;
-  const oldest = map.keys().next().value;
-  if (oldest !== undefined) map.delete(oldest);
+  rememberBounded(map, key, value, 256);
 }
 
 function httpErrorMessage(

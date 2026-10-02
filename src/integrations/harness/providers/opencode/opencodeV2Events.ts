@@ -1,4 +1,9 @@
-import { asRecord, stringField } from "./opencodeProtocol";
+import {
+  asRecord,
+  rememberBounded,
+  rememberBoundedSet,
+  stringField,
+} from "./opencodeProtocol";
 
 type Event = Record<string, unknown>;
 
@@ -308,15 +313,9 @@ function partUpdated(part: Record<string, unknown>): Event {
 }
 
 function remember<V>(map: Map<string, V>, key: string, value: V): void {
-  map.set(key, value);
-  if (map.size <= MAX_TRACKED) return;
-  const oldest = map.keys().next().value;
-  if (oldest !== undefined) map.delete(oldest);
+  rememberBounded(map, key, value, MAX_TRACKED);
 }
 
 function rememberSet(set: Set<string>, key: string): void {
-  set.add(key);
-  if (set.size <= MAX_TRACKED) return;
-  const oldest = set.values().next().value;
-  if (oldest !== undefined) set.delete(oldest);
+  rememberBoundedSet(set, key, MAX_TRACKED);
 }
