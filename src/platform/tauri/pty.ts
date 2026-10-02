@@ -127,13 +127,29 @@ function release() {
   }, 500);
 }
 
+/**
+ * `reattached` when the PTY was already running under `id` (a reload, or
+ * macOS rebuilding a crashed page). `restore` then holds the terminal modes
+ * its program has switched on, to write to the view before anything else.
+ */
+export type PtyAttach = { reattached: boolean; restore: string };
+
 export async function spawnPty(
   id: string,
   cwd: string,
   cols: number,
   rows: number,
-): Promise<void> {
-  await invoke("pty_spawn", { id, cwd, cols, rows });
+): Promise<PtyAttach> {
+  // A reattach makes the program redraw right away. Listen before asking, or
+  // the redraw lands before the listener does and the view stays blank.
+  if (bridge) await bridge.catch(() => undefined);
+  const attach = await invoke<PtyAttach | null>("pty_spawn", {
+    id,
+    cwd,
+    cols,
+    rows,
+  });
+  return { reattached: !!attach?.reattached, restore: attach?.restore ?? "" };
 }
 
 export async function writePty(id: string, data: string): Promise<void> {

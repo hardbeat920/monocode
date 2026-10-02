@@ -9,10 +9,11 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::dirs_home;
 use crate::fs::expand_home;
+use crate::pty_modes::TermModes;
 
 const DATA_EVENT: &str = "pty-data";
 const EXIT_EVENT: &str = "pty-exit";
@@ -48,10 +49,46 @@ struct LivePty {
     /// Label of the window showing this terminal. A reload keeps the window,
     /// so the PTY outlives the page; destroying the window reaps it.
     owner: Mutex<String>,
+    /// What the program has switched on, fed by the reader thread, so a
+    /// reattached view starts in the modes the program is already using.
+    modes: Arc<Mutex<TermModes>>,
+}
+
+type Sessions = Arc<Mutex<HashMap<String, Arc<LivePty>>>>;
+
+/// Where a PTY's output and exit go: the webview, or a test.
+pub(crate) trait PtyOutput: Send + Sync + 'static {
+    fn data(&self, id: &str, bytes: &[u8]);
+    fn exit(&self, id: &str, code: Option<i32>);
+}
+
+impl PtyOutput for AppHandle {
+    fn data(&self, id: &str, bytes: &[u8]) {
+        emit_pty_data(self, id, bytes);
+    }
+
+    fn exit(&self, id: &str, code: Option<i32>) {
+        let _ = self.emit(
+            EXIT_EVENT,
+            PtyExit {
+                id: id.to_string(),
+                code,
+            },
+        );
+    }
+}
+
+/// What `pty_spawn` tells the view. `restore` is written to a reattached
+/// view before any output or input, so it matches the running program.
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PtyAttach {
+    reattached: bool,
+    restore: String,
 }
 
 pub struct PtyHost {
-    sessions: Mutex<HashMap<String, Arc<LivePty>>>,
+    sessions: Sessions,
     /// Background reaps of closed windows. Shutdown joins them so their
     /// SIGKILLs land before the process exits.
     reapers: Mutex<Vec<thread::JoinHandle<()>>>,
@@ -68,7 +105,7 @@ impl PtyHost {
 
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             reapers: Mutex::new(Vec::new()),
         }
     }
@@ -84,11 +121,82 @@ impl PtyHost {
     /// change and the redraw happen under the sessions lock, so a closing
     /// window's `kill_window` cannot reap the terminal mid-transfer. `None`
     /// when no PTY runs under `id`, and the caller spawns a fresh one.
-    fn reattach(&self, id: &str, owner: &str, cols: u16, rows: u16) -> Option<Result<(), String>> {
+    fn reattach(
+        &self,
+        id: &str,
+        owner: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Option<Result<PtyAttach, String>> {
         let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let live = sessions.get(id)?;
         live.set_owner(owner);
-        Some(reattach(live, cols, rows))
+        // Snapshot before the redraw nudge: anything the program prints from
+        // here on reaches the view after `restore`, and replaying a mode the
+        // snapshot already has is harmless.
+        let restore = live
+            .modes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restore_sequence();
+        Some(reattach(live, cols, rows).map(|()| PtyAttach {
+            reattached: true,
+            restore,
+        }))
+    }
+
+    /// Reattach the PTY running under `id`, or start `shell` there.
+    #[allow(clippy::too_many_arguments)]
+    fn open(
+        &self,
+        out: Arc<dyn PtyOutput>,
+        owner: &str,
+        id: String,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        shell: (String, Vec<String>),
+    ) -> Result<PtyAttach, String> {
+        let (cols, rows) = (cols.max(2), rows.max(2));
+        // A reloaded page restores its terminals under the same ids while the
+        // old shells are still running. Hand the live PTY to the new view
+        // instead of hanging up the shell and every job in it.
+        if let Some(attached) = self.reattach(&id, owner, cols, rows) {
+            return attached;
+        }
+
+        let workdir = working_dir(cwd);
+        let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
+
+        #[cfg(unix)]
+        {
+            spawn_unix(out, self, owner, id, workdir, cols, rows, shell)?;
+        }
+
+        #[cfg(windows)]
+        {
+            spawn_windows(out, self, owner, id, workdir, cols, rows, shell)?;
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (out, owner, id, workdir, cols, rows, shell);
+            return Err("Terminals are not supported on this platform.".into());
+        }
+
+        #[allow(unreachable_code)]
+        Ok(PtyAttach::default())
+    }
+
+    fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let mut writer = live.writer.lock().unwrap_or_else(|e| e.into_inner());
+        writer
+            .write_all(data)
+            .and_then(|_| writer.flush())
+            .map_err(|e| format!("Failed to write to terminal: {e}"))
     }
 
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
@@ -106,12 +214,9 @@ impl PtyHost {
             .remove(id)
     }
 
+    #[cfg(test)]
     fn remove_if_pid(&self, id: &str, pid: u32) -> Option<Arc<LivePty>> {
-        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if sessions.get(id).map(|live| live.pid) != Some(pid) {
-            return None;
-        }
-        sessions.remove(id)
+        remove_if_pid(&self.sessions, id, pid)
     }
 
     pub(crate) fn kill_all(&self) {
@@ -160,6 +265,14 @@ impl LivePty {
     }
 }
 
+fn remove_if_pid(sessions: &Sessions, id: &str, pid: u32) -> Option<Arc<LivePty>> {
+    let mut sessions = sessions.lock().unwrap_or_else(|e| e.into_inner());
+    if sessions.get(id).map(|live| live.pid) != Some(pid) {
+        return None;
+    }
+    sessions.remove(id)
+}
+
 fn reap(kids: Vec<Arc<LivePty>>) {
     let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
     for live in kids {
@@ -192,37 +305,21 @@ pub fn pty_spawn(
     cwd: String,
     cols: u16,
     rows: u16,
-) -> Result<(), String> {
-    let (cols, rows) = (cols.max(2), rows.max(2));
-    // A reloaded page restores its terminals under the same ids while the old
-    // shells are still running. Hand the live PTY to the new view instead of
-    // hanging up the shell and every job in it.
-    if let Some(attached) = host.reattach(&id, window.label(), cols, rows) {
-        return attached;
-    }
-
-    let workdir = working_dir(&cwd);
-    let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-
-    #[cfg(unix)]
-    {
-        spawn_unix(app, host, window.label(), id, workdir, cols, rows)
-    }
-
-    #[cfg(windows)]
-    {
-        spawn_windows(app, host, window.label(), id, workdir, cols, rows)
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (app, cwd, cols, rows);
-        Err("Terminals are not supported on this platform.".into())
-    }
+) -> Result<PtyAttach, String> {
+    host.open(
+        Arc::new(app),
+        window.label(),
+        id,
+        &cwd,
+        cols,
+        rows,
+        default_shell(),
+    )
 }
 
-/// The new view starts blank. Resizing and a SIGWINCH make the shell reprint
-/// its prompt and a full-screen program redraw, even when the size is the same.
+/// The new view starts blank. Resizing and a SIGWINCH make a full-screen
+/// program redraw, even when the size is the same. Shells at a prompt
+/// (bash, zsh, fish) ignore it, so the view stays blank until the next output.
 fn reattach(live: &LivePty, cols: u16, rows: u16) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -256,14 +353,7 @@ fn reattach(live: &LivePty, cols: u16, rows: u16) -> Result<(), String> {
 
 #[tauri::command]
 pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), String> {
-    let live = host
-        .get(&id)
-        .ok_or_else(|| "Terminal is not running".to_string())?;
-    let mut writer = live.writer.lock().unwrap_or_else(|e| e.into_inner());
-    writer
-        .write_all(data.as_bytes())
-        .and_then(|_| writer.flush())
-        .map_err(|e| format!("Failed to write to terminal: {e}"))
+    host.write(&id, data.as_bytes())
 }
 
 #[tauri::command]
@@ -338,21 +428,22 @@ pub fn pty_kill_all(host: State<'_, PtyHost>) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn spawn_unix(
-    app: AppHandle,
-    host: State<PtyHost>,
+    out: Arc<dyn PtyOutput>,
+    host: &PtyHost,
     owner: &str,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
+    (shell, args): (String, Vec<String>),
 ) -> Result<(), String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    let (shell, args) = default_shell();
     let (master, slave) = open_pty(cols, rows)?;
 
     let mut cmd = Command::new(&shell);
@@ -405,12 +496,15 @@ fn spawn_unix(
         master_fd: master,
         pid,
         owner: Mutex::new(owner.to_string()),
+        modes: Arc::default(),
     });
+    let modes = live.modes.clone();
     host.insert(id.clone(), live);
 
-    let data_app = app.clone();
+    let data_out = out.clone();
     let data_id = id.clone();
     thread::spawn(move || {
+        let track = |bytes: &[u8]| modes.lock().unwrap_or_else(|e| e.into_inner()).feed(bytes);
         let mut file = reader;
         let fd = file.as_raw_fd();
         let mut buf = vec![0_u8; READ_CHUNK];
@@ -421,6 +515,7 @@ fn spawn_unix(
                 match file.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        track(&buf[..n]);
                         acc.extend_from_slice(&buf[..n]);
                         last_emit = Instant::now();
                     }
@@ -429,39 +524,35 @@ fn spawn_unix(
             } else if pty_should_flush(acc.len(), last_emit.elapsed())
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
-                emit_pty_data(&data_app, &data_id, &acc);
+                data_out.data(&data_id, &acc);
                 acc.clear();
                 last_emit = Instant::now();
             } else {
                 match file.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => acc.extend_from_slice(&buf[..n]),
+                    Ok(n) => {
+                        track(&buf[..n]);
+                        acc.extend_from_slice(&buf[..n]);
+                    }
                     Err(_) => break,
                 }
             }
         }
-        emit_pty_data(&data_app, &data_id, &acc);
+        if !acc.is_empty() {
+            data_out.data(&data_id, &acc);
+        }
     });
 
-    let wait_app = app;
+    let sessions = host.sessions.clone();
     let wait_id = id;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
         // Only announce this child. A remount/respawn reuses the id, and the
         // previous wait thread must not paint "[process exited]" on the new PTY
         // or yank the replacement out of the host map.
-        let emit = if let Some(host) = wait_app.try_state::<PtyHost>() {
-            if let Some(live) = host.remove_if_pid(&wait_id, pid) {
-                close_fd(live.master_fd);
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if emit {
-            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+        if let Some(live) = remove_if_pid(&sessions, &wait_id, pid) {
+            close_fd(live.master_fd);
+            out.exit(&wait_id, code);
         }
     });
 
@@ -469,18 +560,19 @@ fn spawn_unix(
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn spawn_windows(
-    app: AppHandle,
-    host: State<PtyHost>,
+    out: Arc<dyn PtyOutput>,
+    host: &PtyHost,
     owner: &str,
     id: String,
     workdir: std::path::PathBuf,
     cols: u16,
     rows: u16,
+    (shell, args): (String, Vec<String>),
 ) -> Result<(), String> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-    let (shell, args) = default_shell();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -523,10 +615,12 @@ fn spawn_windows(
         master: Mutex::new(pair.master),
         pid,
         owner: Mutex::new(owner.to_string()),
+        modes: Arc::default(),
     });
+    let modes = live.modes.clone();
     host.insert(id.clone(), live);
 
-    let data_app = app.clone();
+    let data_out = out.clone();
     let data_id = id.clone();
     thread::spawn(move || {
         let mut buf = vec![0_u8; READ_CHUNK];
@@ -534,27 +628,26 @@ fn spawn_windows(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    modes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .feed(&buf[..n]);
                     // ponytail: caps bridge traffic at 125 emits/s; use a timed
                     // drain only if sustained PTY throughput becomes limiting.
                     thread::sleep(PTY_COALESCE);
-                    emit_pty_data(&data_app, &data_id, &buf[..n]);
+                    data_out.data(&data_id, &buf[..n]);
                 }
                 Err(_) => break,
             }
         }
     });
 
-    let wait_app = app;
+    let sessions = host.sessions.clone();
     let wait_id = id;
     thread::spawn(move || {
         let code = child.wait().ok().map(|status| status.exit_code() as i32);
-        let emit = if let Some(host) = wait_app.try_state::<PtyHost>() {
-            host.remove_if_pid(&wait_id, pid).is_some()
-        } else {
-            false
-        };
-        if emit {
-            let _ = wait_app.emit(EXIT_EVENT, PtyExit { id: wait_id, code });
+        if remove_if_pid(&sessions, &wait_id, pid).is_some() {
+            out.exit(&wait_id, code);
         }
     });
 
@@ -921,6 +1014,7 @@ mod tests {
             master_fd: -1,
             pid,
             owner: Mutex::new(owner.to_string()),
+            modes: Arc::default(),
         })
     }
 
@@ -970,3 +1064,7 @@ mod tests {
         assert!(host.get("term").is_none());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "pty_reattach_tests.rs"]
+mod reattach_tests;

@@ -4,12 +4,18 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
 import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
-import { newTab } from "../../features/workspace/model/layout";
+import {
+  newTab,
+  newTerminalFile,
+  newTerminalWorkspaceTab,
+} from "../../features/workspace/model/layout";
 import {
   askQuitConfirmation,
   closeBusyWindow,
   commitQuit,
   confirmReload,
+  reapUnloadRuntime,
+  reapWindowRuntime,
   reportQuitPoll,
   setQuitWorkspace,
 } from "./appLifecycle";
@@ -268,6 +274,34 @@ describe("closing a busy window", () => {
     } finally {
       release();
     }
+  });
+});
+
+describe("unloading the page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function ptyCalls() {
+    return vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => String(command).startsWith("pty_"));
+  }
+
+  it("leaves terminals running for the reloaded page to reattach", async () => {
+    const session = newSession("cursor", "/repo");
+    await reapUnloadRuntime([session]);
+    // Agent children still go: a reload restarts them from the transcript.
+    expect(forgetHarnessSession).toHaveBeenCalledWith("cursor", session.id);
+    expect(killAllChildren).toHaveBeenCalled();
+    expect(ptyCalls()).toEqual([]);
+  });
+
+  it("still stops terminals when the window itself goes away", async () => {
+    const session = newSession("cursor", "/repo");
+    const terminal = newTerminalFile("/repo");
+    await reapWindowRuntime([session], [newTerminalWorkspaceTab(terminal)]);
+    expect(ptyCalls()).toEqual([["pty_kill", { id: terminal.id }]]);
   });
 });
 

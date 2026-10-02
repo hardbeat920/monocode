@@ -29,6 +29,7 @@ mod pasteboard;
 mod pi_usage;
 mod project_logo;
 mod pty;
+mod pty_modes;
 #[cfg(target_os = "macos")]
 mod quick_composer;
 mod rate_limits;

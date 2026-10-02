@@ -8,6 +8,7 @@ import {
   subscribePty,
   writePty,
 } from "../../../platform/tauri/pty";
+import { createAttachGate } from "../model/terminalAttach";
 import { isOscColorQuery, oscColorReply } from "../model/terminalChrome";
 import {
   isMacTerminalClearShortcut,
@@ -218,24 +219,26 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
 
     let oscBuffer = "";
 
+    const gate = createAttachGate(term, (data) => {
+      const onMeta = onMetaChangeRef.current;
+      if (onMeta) {
+        const text = new TextDecoder().decode(data);
+        const scanned = scanOscCwd(text, oscBuffer);
+        oscBuffer = scanned.rest;
+        if (scanned.cwd) {
+          const patch: TerminalMetaPatch = { cwd: scanned.cwd };
+          if (!runningProcessRef.current) {
+            patch.title = defaultTerminalTitle(scanned.cwd);
+          }
+          onMeta(patch);
+        }
+      }
+      term.write(data);
+    });
+
     const unsubscribe = subscribePty(
       id,
-      (data) => {
-        const onMeta = onMetaChangeRef.current;
-        if (onMeta) {
-          const text = new TextDecoder().decode(data);
-          const scanned = scanOscCwd(text, oscBuffer);
-          oscBuffer = scanned.rest;
-          if (scanned.cwd) {
-            const patch: TerminalMetaPatch = { cwd: scanned.cwd };
-            if (!runningProcessRef.current) {
-              patch.title = defaultTerminalTitle(scanned.cwd);
-            }
-            onMeta(patch);
-          }
-        }
-        term.write(data);
-      },
+      (data) => gate.data(data),
       (code) => {
         if (closed) return;
         const status = code == null ? "" : ` (${code})`;
@@ -244,12 +247,15 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     );
 
     const starting = spawnPty(id, cwd, term.cols, term.rows)
-      .then(() => {
-        if (!closed) spawned.current = true;
+      .then(({ restore }) => {
+        if (closed) return;
+        gate.open(restore);
+        spawned.current = true;
       })
       .catch((error) => {
         spawned.current = false;
         if (!closed) {
+          gate.open("");
           const message =
             error instanceof Error ? error.message : String(error);
           term.writeln(`\x1b[31m${message}\x1b[0m`);
@@ -348,6 +354,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
 
     return () => {
       closed = true;
+      gate.close();
       cancelAnimationFrame(frame);
       if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
