@@ -6,7 +6,8 @@ const expandedByProject = new Map<string, Set<string>>();
 const selectedByProject = new Map<string, string | null>();
 const dirs = new Map<string, FsEntry[]>();
 const listeners = new Set<() => void>();
-const mountedRoots = new Set<string>();
+/** Roots with an explorer on screen, counted so two can share a cwd. */
+const mountedRoots = new Map<string, number>();
 
 const REFRESH_MS = 150;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -69,19 +70,27 @@ export function forgetDir(path: string) {
   }
 }
 
-/** Roots with an explorer on screen — only their listings stay worth keeping. */
+/**
+ * Roots with an explorer on screen — only their listings stay worth keeping.
+ *
+ * Counted rather than held in a set: two explorers can share a cwd, and the
+ * first one to unmount must not drop the root the other is still showing.
+ */
 export function registerExplorer(cwd: string) {
-  mountedRoots.add(cwd);
+  mountedRoots.set(cwd, (mountedRoots.get(cwd) ?? 0) + 1);
 }
 
 export function unregisterExplorer(cwd: string) {
-  mountedRoots.delete(cwd);
+  const count = mountedRoots.get(cwd);
+  if (count === undefined) return;
+  if (count > 1) mountedRoots.set(cwd, count - 1);
+  else mountedRoots.delete(cwd);
 }
 
 /** Folders the mounted explorers can actually show right now. */
 function visibleDirs(): Set<string> {
   const visible = new Set<string>();
-  for (const root of mountedRoots) {
+  for (const root of mountedRoots.keys()) {
     visible.add(root);
     const expanded = expandedByProject.get(root);
     if (!expanded) continue;

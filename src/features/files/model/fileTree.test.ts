@@ -158,6 +158,40 @@ describe("fileTree cache", () => {
     expect(listDir).not.toHaveBeenCalled();
   });
 
+  it("keeps a root mounted until its last explorer unmounts", async () => {
+    registerExplorer(root);
+    registerExplorer(root);
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+    unregisterExplorer(root);
+    listDir.mockClear();
+
+    await refreshCachedDirs();
+
+    expect(peekDir(root)).not.toBeNull();
+    expect(listDir.mock.calls.map(([path]) => path)).toEqual([root]);
+
+    unregisterExplorer(root);
+    listDir.mockClear();
+    await refreshCachedDirs();
+
+    expect(peekDir(root)).toBeNull();
+    expect(listDir).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unregister with no matching register", async () => {
+    registerExplorer(root);
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+    unregisterExplorer(root);
+    unregisterExplorer(root);
+    listDir.mockClear();
+
+    await refreshCachedDirs();
+
+    expect(peekDir(root)).toBeNull();
+  });
+
   it("notifyDirsChanged refreshes the cache and tells listeners", async () => {
     vi.useFakeTimers();
     registerExplorer(root);
