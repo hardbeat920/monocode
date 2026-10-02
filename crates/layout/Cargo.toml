@@ -1,0 +1,17 @@
+[package]
+name = "monocode-layout"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Pure workspace layout model: tabs, split panes, tab groups, snapshots"
+
+[dependencies]
+monocode-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Only the golden snapshot test reads SQLite, from a copy of a real monocode.db.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
