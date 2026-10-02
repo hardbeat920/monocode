@@ -4272,6 +4272,7 @@ dependencies = [
  "gpui_platform",
  "hayro",
  "image",
+ "lsp-types",
  "regex",
  "similar",
  "tree-sitter",
