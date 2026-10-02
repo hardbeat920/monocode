@@ -7022,7 +7022,7 @@ function Workspace({
           );
           if (operatorCommand.matched) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
+            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. Use sessions.btw to ask an isolated, read-only side question about another session in this project, including while that session is busy. Poll btw.get with the returned threadId for its answer and status. Reuse --request-id if retrying an ask. A side question is separate from the main conversation: it does not send instructions to or steer that session's main agent. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
           }
           await sendTurn(sendText);
           acceptEditedResend();
@@ -8225,6 +8225,7 @@ function Workspace({
     [updateBtwThread],
   );
 
+  /** Start one isolated BTW question against the selected transcript turn. */
   const onBtwSubmit = useCallback(
     (
       sessionId: string,
@@ -8331,6 +8332,8 @@ function Workspace({
     },
     [runBtwRequest, updateBtwThread],
   );
+  const onBtwSubmitRef = useRef(onBtwSubmit);
+  onBtwSubmitRef.current = onBtwSubmit;
 
   const onBtwModelChange = useCallback(
     (
@@ -9378,6 +9381,19 @@ function Workspace({
               );
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
+            },
+            /** Restore the target, then use the existing BTW submission callback. */
+            btwAsk: async (target, turn, threadId, messageId, question) => {
+              const open = await ensureOpenSessionRef.current(target.id);
+              if (!open || !sameProjectPath(open.cwd, source.cwd))
+                throw new Error("Session is unavailable in this project");
+              return onBtwSubmitRef.current(
+                target.id,
+                turn,
+                threadId,
+                messageId,
+                question,
+              );
             },
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>

@@ -82,12 +82,14 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 15] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
+    "sessions.btw",
+    "btw.get",
     "sessions.start",
     "worktrees.list",
     "worktrees.create",
@@ -116,6 +118,13 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
+  sessions.btw   {"sessionId":"...","question":"..."}
+                  Ask a read-only side question about the latest completed
+                  supported turn, including while its main session is busy.
+                  Returns a threadId immediately; reuse --request-id on retries.
+  btw.get        {"sessionId":"...","threadId":"..."}
+                  Read side-question status and messages: running, completed,
+                  failed (with error), or closed if the UI deleted the thread.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
@@ -525,7 +534,13 @@ mod tests {
             parse_args_for(&args(&["notes.list"]), true),
             Ok(Parsed::Call(_, _, _))
         ));
-        for action in ["sessions.read", "sessions.send", "sessions.draft"] {
+        for action in [
+            "sessions.read",
+            "sessions.send",
+            "sessions.draft",
+            "sessions.btw",
+            "btw.get",
+        ] {
             assert!(matches!(
                 parse_args_for(&args(&[action, "--json", r#"{"sessionId":"other"}"#]), true),
                 Ok(Parsed::Call(_, _, _))

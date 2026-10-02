@@ -94,6 +94,7 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
+    btwAsk: vi.fn(() => true),
     worktrees: vi.fn(async () => ({
       worktrees: [
         { ...featureWorktree },
@@ -203,6 +204,221 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.draft).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a side question on a busy session and returns its thread ID", async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.busy = true;
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Inspect the implementation",
+        startedAt: 1,
+        durationMs: 50,
+        turnModel: { harness: "codex", id: "codex:test", name: "Test" },
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    const result = await handleAgentApp(
+      source,
+      "ask-1",
+      "sessions.btw",
+      { sessionId: "other", question: "Why this design?" },
+      host,
+    );
+    expect(result).toEqual({
+      sessionId: "other",
+      threadId: "app-lead-btw-ask-1",
+      status: "running",
+    });
+    expect(host.btwAsk).toHaveBeenCalledWith(
+      target,
+      target.blocks,
+      "app-lead-btw-ask-1",
+      "app-lead-btw-ask-1",
+      "Why this design?",
+    );
+    expect(host.send).not.toHaveBeenCalled();
+    expect(target.busy).toBe(true);
+    expect(target.blocks[1]?.text).toBe("It is complete.");
+  });
+
+  it("deduplicates a retried side question by request ID", async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Inspect the implementation",
+        durationMs: 50,
+        turnModel: { harness: "codex", id: "codex:test", name: "Test" },
+        btwThreads: [
+          {
+            id: "app-lead-btw-ask-1",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 2,
+            status: "running",
+            harness: "codex",
+            messages: [{ id: "m1", role: "user", text: "Why?", createdAt: 2 }],
+          },
+        ],
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    const first = await handleAgentApp(
+      source,
+      "ask-1",
+      "sessions.btw",
+      { sessionId: "other", question: "Why?" },
+      host,
+    );
+    const retry = await handleAgentApp(
+      source,
+      "ask-1",
+      "sessions.btw",
+      { sessionId: "other", question: "Why?" },
+      host,
+    );
+    expect(retry).toEqual(first);
+    expect(host.btwAsk).not.toHaveBeenCalled();
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.btw",
+        { sessionId: "other", question: "Different question" },
+        host,
+      ),
+    ).rejects.toThrow("already used with another question");
+  });
+
+  it("returns side answers and maps deleted threads to closed", async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Review",
+        btwThreads: [
+          {
+            id: "running",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 2,
+            status: "running",
+            messages: [{ id: "q1", role: "user", text: "Why?", createdAt: 2 }],
+          },
+          {
+            id: "done",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 3,
+            status: "ready",
+            messages: [
+              { id: "q2", role: "user", text: "Why?", createdAt: 2 },
+              { id: "a2", role: "assistant", text: "Because.", createdAt: 3 },
+            ],
+          },
+          {
+            id: "failed",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 4,
+            status: "error",
+            error: "Provider unavailable",
+            messages: [{ id: "q3", role: "user", text: "Why?", createdAt: 2 }],
+          },
+        ],
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    for (const [threadId, status] of [
+      ["running", "running"],
+      ["done", "completed"],
+      ["failed", "failed"],
+      ["deleted", "closed"],
+    ]) {
+      const result = await handleAgentApp(
+        source,
+        `get-${threadId}`,
+        "btw.get",
+        { sessionId: "other", threadId },
+        host,
+      );
+      expect(result).toMatchObject({ sessionId: "other", threadId, status });
+    }
+    expect(
+      await handleAgentApp(
+        source,
+        "get-done",
+        "btw.get",
+        { sessionId: "other", threadId: "done" },
+        host,
+      ),
+    ).toMatchObject({ messages: [{ text: "Why?" }, { text: "Because." }] });
+    expect(
+      await handleAgentApp(
+        source,
+        "get-failed",
+        "btw.get",
+        { sessionId: "other", threadId: "failed" },
+        host,
+      ),
+    ).toMatchObject({ error: "Provider unavailable" });
+  });
+
+  it("keeps side questions inside the calling project and reports unsupported context", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.btw",
+        { sessionId: "missing", question: "Why?" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.btwAsk).not.toHaveBeenCalled();
+
+    const target = newSession("fx", source.cwd, "fx:test");
+    target.id = "other";
+    target.blocks = [
+      { id: "user-1", role: "user", text: "Review", durationMs: 20 },
+      { id: "answer-1", role: "assistant", text: "Done." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    await expect(
+      handleAgentApp(
+        source,
+        "unsupported",
+        "sessions.btw",
+        { sessionId: "other", question: "Why?" },
+        host,
+      ),
+    ).rejects.toThrow("provider does not support /btw");
+    expect(host.btwAsk).not.toHaveBeenCalled();
+
+    target.blocks = [];
+    await expect(
+      handleAgentApp(
+        source,
+        "no-context",
+        "sessions.btw",
+        { sessionId: "other", question: "Why?" },
+        host,
+      ),
+    ).rejects.toThrow("No completed turn with /btw context is available");
   });
 
   it("does not let app-supplied prompts enable Operator in another session", async () => {
