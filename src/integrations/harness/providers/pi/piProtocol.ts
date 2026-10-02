@@ -298,7 +298,7 @@ export function parseExtensionUiRequest(
       method,
       title: stringField(rec, "title") ?? method,
       placeholder: stringField(rec, "placeholder"),
-      prefill: stringField(rec, "prefill"),
+      prefill: typeof rec.prefill === "string" ? rec.prefill : undefined,
     };
   }
   if (

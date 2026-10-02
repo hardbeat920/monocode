@@ -1,3 +1,6 @@
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -38,6 +41,9 @@ vi.mock("./piClient", () => ({
 import { compactPiContext, stopPiSession } from "./pi";
 import { piAdapter } from "./piAdapter";
 import type { HarnessEvent } from "../../core/types";
+import { applyHarnessEvent } from "../../core/apply";
+import { newSession } from "../../../../features/sessions/model/session";
+import { QuestionForm } from "../../../../features/sessions/ui/QuestionForm";
 
 describe("Pi live session", () => {
   beforeEach(() => {
@@ -210,6 +216,94 @@ describe("Pi live session", () => {
         }),
       );
       await stopPiSession("pi-select");
+    });
+
+    it("submits overlapping dialogs through the form and adapter", async () => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const frame = await open("pi-overlap");
+      let session = newSession("pi", "/repo");
+      frame({
+        type: "extension_ui_request",
+        id: "first",
+        method: "select",
+        title: "First",
+        options: ["Other"],
+      });
+      frame({
+        type: "extension_ui_request",
+        id: "second",
+        method: "select",
+        title: "Second",
+        options: ["file"],
+      });
+      for (const event of events) session = applyHarnessEvent(session, event);
+      expect(session.queuedQuestions).toHaveLength(1);
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      const render = () =>
+        act(() =>
+          root.render(
+            createElement(QuestionForm, {
+              prompt: session.pendingQuestion!,
+              onReply: (requestId, reply) =>
+                piAdapter.respondQuestion!("pi-overlap", requestId, reply),
+            }),
+          ),
+        );
+      try {
+        render();
+        act(() =>
+          container
+            .querySelector<HTMLButtonElement>("button[aria-pressed]")!
+            .click(),
+        );
+        expect(
+          container.querySelector<HTMLButtonElement>('button[type="submit"]')!
+            .disabled,
+        ).toBe(false);
+        act(() =>
+          container
+            .querySelector<HTMLButtonElement>('button[type="submit"]')!
+            .click(),
+        );
+        await vi.waitFor(() =>
+          expect(replies()).toContainEqual({
+            type: "extension_ui_response",
+            id: "first",
+            value: "Other",
+          }),
+        );
+        for (const event of events.filter(
+          (event) => event.type === "question.resolved",
+        ))
+          session = applyHarnessEvent(session, event);
+        expect(session.pendingQuestion?.questions[0].id).toBe("second");
+        render();
+        act(() =>
+          container
+            .querySelector<HTMLButtonElement>("button[aria-pressed]")!
+            .click(),
+        );
+        act(() =>
+          container
+            .querySelector<HTMLButtonElement>('button[type="submit"]')!
+            .click(),
+        );
+        await vi.waitFor(() =>
+          expect(replies()).toContainEqual({
+            type: "extension_ui_response",
+            id: "second",
+            value: "file",
+          }),
+        );
+      } finally {
+        act(() => root.unmount());
+        container.remove();
+        vi.unstubAllGlobals();
+        await stopPiSession("pi-overlap");
+      }
     });
 
     it("shows input placeholders and editor prefill", async () => {

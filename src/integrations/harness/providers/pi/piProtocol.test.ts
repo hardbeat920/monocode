@@ -172,6 +172,16 @@ describe("buildPiPrompt", () => {
 });
 
 describe("RPC frames", () => {
+  it("preserves whitespace-only editor prefill", () => {
+    expect(
+      parseExtensionUiRequest({
+        type: "extension_ui_request",
+        id: "editor",
+        method: "editor",
+        prefill: "  \n\t",
+      }),
+    ).toMatchObject({ prefill: "  \n\t" });
+  });
   it("displays colored extension labels without changing RPC values", () => {
     const option = "\u001b[32mProceed\u001b[39m";
     const request = parseExtensionUiRequest({

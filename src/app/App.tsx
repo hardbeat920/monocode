@@ -4407,6 +4407,7 @@ function Workspace({
             busy: false,
             queueStatus: "paused" as const,
             pendingQuestion: undefined,
+            queuedQuestions: undefined,
           };
           sessionsRef.current = sessionsRef.current.map((entry) =>
             entry.id === id ? stopped : entry,

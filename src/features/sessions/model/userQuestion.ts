@@ -133,6 +133,7 @@ export function isCustomSelection(
   question: UserQuestion,
   optionId: string,
 ): boolean {
+  if (!question.allowCustom) return false;
   if (optionId === CUSTOM_OPTION_ID) return true;
   const option = question.options.find((item) => item.id === optionId);
   return option ? isOtherOption(option) : false;

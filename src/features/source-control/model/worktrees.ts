@@ -181,6 +181,7 @@ export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: str
     context: undefined,
     pendingSwitch: undefined,
     pendingQuestion: undefined,
+    queuedQuestions: undefined,
     busy: false,
     queueStatus: "paused" as const,
   };

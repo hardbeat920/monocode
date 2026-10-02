@@ -138,6 +138,47 @@ describe("QuestionForm keyboard navigation", () => {
 });
 
 describe("QuestionForm free text", () => {
+  it("submits a literal Other choice without requiring custom text", () => {
+    const onReply = vi.fn();
+    act(() =>
+      root.render(
+        createElement(QuestionForm, {
+          prompt: {
+            requestId: 11,
+            questions: [
+              {
+                id: "destination",
+                prompt: "Output to?",
+                multiSelect: false,
+                allowCustom: false,
+                options: [{ id: "other", label: "Other" }],
+              },
+            ],
+          },
+          onReply,
+        }),
+      ),
+    );
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>("button[aria-pressed]")!
+        .click(),
+    );
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[placeholder="Type your answer"]',
+      ),
+    ).toBeNull();
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[type="submit"]',
+    )!;
+    expect(submit.disabled).toBe(false);
+    act(() => submit.click());
+    expect(onReply).toHaveBeenCalledWith(11, {
+      kind: "answered",
+      answers: { destination: ["other"] },
+    });
+  });
   it("prefills a multi-line answer and submits it untrimmed", () => {
     const onReply = vi.fn();
     act(() =>

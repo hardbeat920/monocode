@@ -464,6 +464,7 @@ export type Session = {
    * In-memory; request ids do not survive restarts.
    */
   pendingQuestion?: UserQuestionPrompt;
+  queuedQuestions?: UserQuestionPrompt[];
 };
 
 export type PendingHarnessSwitch = {

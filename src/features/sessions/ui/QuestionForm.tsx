@@ -291,8 +291,7 @@ function QuestionFields({
           role="group"
         >
           {options.map((option, optionIndex) => {
-            const isCustom =
-              isOtherOption(option) || option.id === CUSTOM_OPTION_ID;
+            const isCustom = question.allowCustom && isOtherOption(option);
             const active = selected.includes(option.id);
             return (
               <div key={option.id}>
@@ -385,10 +384,12 @@ function displayOptions(question: UserQuestion): UserQuestion["options"] {
 }
 
 function customOptionId(question: UserQuestion): string {
+  if (!question.allowCustom) return CUSTOM_OPTION_ID;
   return question.options.find(isOtherOption)?.id ?? CUSTOM_OPTION_ID;
 }
 
 function isCustomId(question: UserQuestion, optionId: string): boolean {
+  if (!question.allowCustom) return false;
   return optionId === CUSTOM_OPTION_ID || optionId === customOptionId(question);
 }
 
