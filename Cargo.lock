@@ -4274,6 +4274,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -4309,6 +4310,8 @@ dependencies = [
  "monocode-process",
  "monocode-settings",
  "monocode-store",
+ "monocode-terminal",
+ "monocode-terminal-view",
  "parking_lot",
  "regex",
  "serde",

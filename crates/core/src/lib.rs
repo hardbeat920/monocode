@@ -24,6 +24,7 @@ pub mod paths;
 pub mod plan;
 pub mod platform;
 pub mod project_providers;
+pub mod reducer;
 pub mod session;
 pub mod settings;
 pub mod shortcut;

@@ -64,9 +64,43 @@ pub fn basename(path: &str) -> String {
         .unwrap_or(trimmed)
 }
 
+/// `displayPath`: `path` relative to `cwd` when it is inside it, the folder
+/// name when it is `cwd` itself, and otherwise the whole path.
+pub fn display_path(path: &str, cwd: Option<&str>) -> String {
+    let normalized = trim_slash(path);
+    let base = cwd.filter(|cwd| !cwd.is_empty()).map(trim_slash);
+    if let Some(base) = base.filter(|base| base != "~") {
+        let key = path_key(&normalized);
+        let base_key = path_key(&base);
+        if key == base_key {
+            return normalized
+                .split('/')
+                .rfind(|part| !part.is_empty())
+                .map(str::to_string)
+                .unwrap_or(normalized);
+        }
+        if key.starts_with(&format!("{base_key}/")) {
+            // JavaScript slices by the UTF-16 length of `${base}/`.
+            let prefix = crate::js::slice_prefix(&normalized, crate::js::len(&base) + 1);
+            return normalized[prefix.len()..].to_string();
+        }
+    }
+    normalized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_paths_are_relative_to_the_project() {
+        assert_eq!(display_path("/repo/src/a.ts", Some("/repo")), "src/a.ts");
+        assert_eq!(display_path("/repo/", Some("/repo")), "repo");
+        assert_eq!(display_path("/other/a.ts", Some("/repo")), "/other/a.ts");
+        assert_eq!(display_path("/repo/a.ts", Some("~")), "/repo/a.ts");
+        assert_eq!(display_path("C:\\Repo\\a.ts", Some("c:/repo")), "a.ts");
+        assert_eq!(display_path("/repo/a.ts", None), "/repo/a.ts");
+    }
 
     #[test]
     fn basename_matches_the_fs_helper() {

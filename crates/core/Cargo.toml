@@ -6,8 +6,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Block ids for the transcript reducer, `crypto.randomUUID()` in TypeScript.
+uuid.workspace = true
 
 [dev-dependencies]
 # Only the golden round-trip test reads SQLite, from a copy of a real monocode.db.
