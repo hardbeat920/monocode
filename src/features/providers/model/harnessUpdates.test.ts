@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "../../sessions/model/session";
 import {
   announceHarnessUpdated,
+  checkHarnessVersions,
   findHarnessUpdates,
+  isHarnessVersionBehind,
   onHarnessUpdated,
 } from "./harnessUpdates";
 
@@ -71,7 +73,7 @@ describe("harness update check", () => {
   });
 
   it("skips harnesses without a version feed or whose lookup fails", async () => {
-    expect(await find(["cursor", "pi"])).toEqual([]);
+    expect(await find(["cursor", "pi", "hermes", "antigravity"])).toEqual([]);
   });
 
   it("offers a harness still behind again, at the newest release", async () => {
@@ -86,6 +88,61 @@ describe("harness update check", () => {
       LATEST.claude = "2.1.285";
     }
   });
+});
+
+describe("per-harness version check", () => {
+  const installed: Partial<Record<HarnessId, string>> = {
+    cursor: "2026.09.18-9a7762b",
+    grok: "grok 1.0.46 (4220f3b224a6) [stable]",
+    fx: "fx v0.0.13-e3ad6d8 [dev]",
+    omp: "omp/18.4.8",
+    pi: "no version here",
+  };
+  const latest: Partial<Record<HarnessId, string>> = {
+    cursor: "2026.09.28-64d2043",
+    grok: "1.0.46",
+    fx: "v0.0.12",
+    pi: "0.80.0",
+  };
+
+  it("reports each harness as behind, current or unknown", async () => {
+    const checks = await checkHarnessVersions({
+      harnesses: ["cursor", "grok", "fx", "omp", "pi", "hermes"],
+      installedVersion: async (id) => installed[id],
+      latestVersion: async (id) => {
+        const version = latest[id];
+        if (!version) throw new Error("registry unreachable");
+        return version;
+      },
+    });
+    expect(checks).toEqual([
+      {
+        harness: "cursor",
+        status: "behind",
+        installed: "2026.09.18-9a7762b",
+        latest: "2026.09.28-64d2043",
+      },
+      { harness: "grok", status: "current", installed: "1.0.46", latest: "1.0.46" },
+      // A dev build ahead of the stable feed is not offered a downgrade.
+      { harness: "fx", status: "current", installed: "0.0.13", latest: "0.0.12" },
+      { harness: "omp", status: "unknown", error: "registry unreachable" },
+      { harness: "pi", status: "unknown", error: "The CLI reported no version." },
+    ]);
+  });
+});
+
+it("compares Cursor builds from the same day by their full build", () => {
+  expect(
+    isHarnessVersionBehind("cursor", "2026.09.28-9a7762b", "2026.09.28-64d2043"),
+  ).toBe(true);
+  expect(
+    isHarnessVersionBehind("cursor", "2026.09.28-64d2043", "2026.09.28-64d2043"),
+  ).toBe(false);
+  expect(
+    isHarnessVersionBehind("cursor", "2026.10.01-1111111", "2026.09.28-64d2043"),
+  ).toBe(false);
+  // Other harnesses compare release numbers only.
+  expect(isHarnessVersionBehind("grok", "1.0.46", "1.0.46")).toBe(false);
 });
 
 it("delivers updates to other windows while skipping the sender and respecting cleanup", async () => {

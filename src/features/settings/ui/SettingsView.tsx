@@ -227,6 +227,19 @@ import {
 } from "../../providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
+  checkInstalledHarnessVersions,
+  getHarnessUpdateSnapshot,
+  runHarnessUpdate,
+  subscribeHarnessUpdates,
+  type HarnessUpdateRun,
+} from "../../providers/model/harnessUpdateActions";
+import {
+  onHarnessUpdated,
+  pendingHarnessUpdates,
+  type HarnessUpdate,
+  type HarnessVersionCheck,
+} from "../../providers/model/harnessUpdates";
+import {
   accountStatus,
   accountUsageKey,
   useProviderAccountUsage,
@@ -3229,6 +3242,8 @@ function ProvidersPage({
         })}
       </Group>
 
+      <HarnessUpdatesGroup />
+
       <Group title="Advanced">
         <Row
           id="claude-hooks"
@@ -3243,6 +3258,158 @@ function ProvidersPage({
         </Row>
       </Group>
     </>
+  );
+}
+
+/**
+ * Lists every installed CLI with a release feed. The launch toast offers only
+ * harnesses shown in the model picker and is gone once dismissed. Opening the
+ * page runs no CLI: it shows the last check, and the button runs a new one.
+ */
+function HarnessUpdatesGroup() {
+  const { checks, checking, runs } = useSyncExternalStore(
+    subscribeHarnessUpdates,
+    getHarnessUpdateSnapshot,
+    getHarnessUpdateSnapshot,
+  );
+
+  useEffect(() => {
+    // Another window's update leaves this window's versions stale.
+    const unlisten = onHarnessUpdated(() => {
+      if (getHarnessUpdateSnapshot().checks) {
+        void checkInstalledHarnessVersions();
+      }
+    }).catch(() => undefined);
+    return () => {
+      void unlisten.then((stop) => stop?.());
+    };
+  }, []);
+
+  const stateOf = (harness: HarnessId): HarnessUpdateRun =>
+    runs[harness] ?? { status: "idle" };
+  // A harness updated earlier in this session can fall behind again when a
+  // newer release ships, so only a running update is left out.
+  const pending = pendingHarnessUpdates(checks ?? []).filter(
+    (update) => stateOf(update.harness).status !== "updating",
+  );
+  const start = (targets: HarnessUpdate[]) => {
+    for (const update of targets) void runHarnessUpdate(update);
+  };
+
+  return (
+    <Group
+      id="harness-updates"
+      title="CLI updates"
+      description="MonoCode compares each installed CLI with its newest release and updates it with the CLI's own updater. Hermes Agent and Antigravity have no release feed to compare against, so they are not listed."
+      action={
+        <div className="flex items-center gap-2">
+          {pending.length > 1 ? (
+            <SecondaryButton onClick={() => start(pending)}>
+              <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
+              Update all
+            </SecondaryButton>
+          ) : null}
+          <SecondaryButton
+            onClick={() =>
+              void checkInstalledHarnessVersions({ force: true }).catch(
+                () => undefined,
+              )
+            }
+            disabled={checking}
+          >
+            {checking ? (
+              <Loader className="size-3.5 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
+            )}
+            Check for updates
+          </SecondaryButton>
+        </div>
+      }
+    >
+      {checks === null ? (
+        <Row
+          label={checking ? "Checking installed CLIs…" : "Not checked yet"}
+          description="Check for updates runs each installed CLI to read its version, then looks up its newest release."
+        />
+      ) : checks.length === 0 ? (
+        <Row
+          label="No CLIs to check"
+          description="None of the CLIs with a release feed are installed."
+        />
+      ) : (
+        checks.map((entry) => (
+          <HarnessUpdateSettingsRow
+            key={entry.harness}
+            check={entry}
+            state={stateOf(entry.harness)}
+            onUpdate={(update) => start([update])}
+          />
+        ))
+      )}
+    </Group>
+  );
+}
+
+function HarnessUpdateSettingsRow({
+  check,
+  state,
+  onUpdate,
+}: {
+  check: HarnessVersionCheck;
+  state: HarnessUpdateRun;
+  onUpdate: (update: HarnessUpdate) => void;
+}) {
+  const title = HARNESS_TITLE[check.harness];
+  const description =
+    check.status === "unknown"
+      ? `Could not check: ${check.error}`
+      : check.status === "current"
+        ? state.status === "updated"
+          ? `Updated to ${state.version}.`
+          : "Up to date."
+        : state.status === "updating"
+          ? "Updating…"
+          : state.status === "failed"
+            ? state.error
+            : `Version ${check.latest} is available.`;
+
+  return (
+    <Row
+      label={
+        <span className="flex items-center gap-2">
+          <HarnessIcon harness={check.harness} className="size-4 shrink-0" />
+          {title}
+          {check.status !== "unknown" ? (
+            <span className="font-mono text-[12px] text-content/45">
+              {check.installed}
+            </span>
+          ) : null}
+        </span>
+      }
+      description={description}
+    >
+      {check.status === "behind" ? (
+        <SecondaryButton
+          onClick={() => onUpdate(check)}
+          disabled={state.status === "updating"}
+          aria-label={
+            state.status === "failed"
+              ? `Retry updating ${title}`
+              : `Update ${title} to ${check.latest}`
+          }
+        >
+          {state.status === "updating" ? (
+            <Loader className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
+          )}
+          {state.status === "failed" ? "Retry" : "Update"}
+        </SecondaryButton>
+      ) : check.status === "current" ? (
+        <Check className="size-4 text-emerald-400" aria-hidden />
+      ) : null}
+    </Row>
   );
 }
 
