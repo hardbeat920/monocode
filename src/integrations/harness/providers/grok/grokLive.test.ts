@@ -278,3 +278,117 @@ describe("grok live turn sequence", () => {
     await stopGrokSession("t4");
   });
 });
+
+describe("grok context window", () => {
+  beforeEach(() => {
+    sent.length = 0;
+  });
+
+  /** A usage report with no window of its own, as Grok usually sends. */
+  function emitUsage(totalTokens: number) {
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionUpdate: "usage_update",
+          usage: { totalTokens },
+        },
+      }),
+    );
+  }
+
+  // Returns the turn wrapped: returning the promise itself from an async
+  // function would make `await startTurn(...)` wait for the turn, which cannot
+  // finish until the test has replied to the prompt it is waiting for.
+  async function startTurn(
+    sessionId: string,
+    model: string,
+    events: HarnessEvent[],
+  ) {
+    const turn = sendGrokTurn({
+      sessionId,
+      cwd: "/repo",
+      model,
+      runtimeMode: "supervised",
+      text: "hey",
+      attachments: [],
+      onEvent: (e) => events.push(e),
+    });
+    await handshake();
+    return { turn };
+  }
+
+  const readings = (events: HarnessEvent[]) =>
+    events.filter((event) => event.type === "context");
+
+  it("fills in the window the session started on", async () => {
+    const events: HarnessEvent[] = [];
+    const { turn } = await startTurn("w1", "grok:grok-4.6", events);
+    await waitFor(
+      () => parse().some((m) => m.method === "session/prompt"),
+      "prompt",
+    );
+    emitUsage(120_000);
+    reply(
+      parse().find((m) => m.method === "session/prompt")!.id,
+      { stopReason: "end_turn" },
+    );
+    await turn;
+
+    expect(readings(events)).toEqual([
+      { type: "context", used: 120_000, window: 500_000 },
+    ]);
+    await stopGrokSession("w1");
+  });
+
+  it("stops filling in the old window after a model switch", async () => {
+    const events: HarnessEvent[] = [];
+    const { turn } = await startTurn("w2", "grok:grok-4.6", events);
+    await waitFor(
+      () => parse().some((m) => m.method === "session/prompt"),
+      "prompt",
+    );
+    reply(
+      parse().find((m) => m.method === "session/prompt")!.id,
+      { stopReason: "end_turn" },
+    );
+    await turn;
+    sent.length = 0;
+
+    // Switch to a model with a different window. The 500K we captured at
+    // startup belongs to grok-4.6, and reporting a new model's level against
+    // it is the mismatched-denominator bug.
+    const second: HarnessEvent[] = [];
+    const next = sendGrokTurn({
+      sessionId: "w2",
+      cwd: "/repo",
+      model: "grok:grok-mini",
+      runtimeMode: "supervised",
+      text: "again",
+      attachments: [],
+      onEvent: (e) => second.push(e),
+    });
+    await waitFor(
+      () => parse().some((m) => m.method === "session/set_model"),
+      "set_model",
+    );
+    reply(parse().find((m) => m.method === "session/set_model")!.id, {});
+    await waitFor(
+      () => parse().some((m) => m.method === "session/prompt"),
+      "second prompt",
+    );
+    emitUsage(64_000);
+    reply(
+      parse().find((m) => m.method === "session/prompt")!.id,
+      { stopReason: "end_turn" },
+    );
+    await next;
+
+    // No window is claimed. Grok reports one in its usage payload when it has
+    // one, and until then the ring stays hidden rather than divide by a window
+    // belonging to the model we just left.
+    expect(readings(second)).toEqual([{ type: "context", used: 64_000 }]);
+    await stopGrokSession("w2");
+  });
+});
