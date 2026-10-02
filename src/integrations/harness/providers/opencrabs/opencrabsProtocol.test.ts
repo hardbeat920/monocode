@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { writeFileSync, rmSync } from "node:fs";
 
 import { eventsFromAcpUpdate } from "./opencrabsProtocol";
 
@@ -68,5 +69,83 @@ describe("acpSizeField validation (CodeRabbit: spec is unsigned integer)", () =>
       update: { sessionUpdate: "usage", usage: { used: 10, size: 200000.5 } },
     });
     expect(events).toEqual([{ type: "context", used: 10, window: undefined }]);
+  });
+});
+
+describe("eventsFromAcpUpdate image resource_links", () => {
+  it("emits image.generated for a disk-backed image resource_link", () => {
+    const path = "/tmp/acp-adapter-img-test.png";
+    writeFileSync(path, Buffer.from("png"));
+    try {
+      const events = eventsFromAcpUpdate({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-img-1",
+          status: "completed",
+          rawOutput: "chart saved",
+          content: [
+            { type: "text", text: "chart saved" },
+            { type: "resource_link", uri: `file://${path}`, name: "chart.png" },
+          ],
+        },
+      });
+      const img = events.find((e) => e.type === "image.generated");
+      expect(img).toMatchObject({
+        type: "image.generated",
+        itemId: "call-img-1:1",
+        path,
+        name: "chart.png",
+        mimeType: "image/png",
+      });
+      expect(events.some((e) => e.type === "tool.updated")).toBe(true);
+    } finally {
+      rmSync(path);
+    }
+  });
+
+  it("ignores missing files, non-images, and non-file uris", () => {
+    const events = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-img-2",
+        content: [
+          { type: "resource_link", uri: "file:///nonexistent/nope.png" },
+          { type: "resource_link", uri: "file:///etc/hosts" },
+          { type: "resource_link", uri: "https://example.com/x.png" },
+        ],
+      },
+    });
+    expect(events.some((e) => e.type === "image.generated")).toBe(false);
+  });
+});
+
+describe("eventsFromAcpUpdate subagent classification", () => {
+  it("classifies the spawn title prefix as an agent card", () => {
+    const events = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-agent-1",
+        kind: "other",
+        title: "subagent: fix-auth",
+        status: "in_progress",
+        rawInput: { label: "fix-auth" },
+      },
+    });
+    const tool = events[0];
+    expect(tool.type).toBe("tool.updated");
+    expect((tool as { kind?: string }).kind).toBe("agent");
+  });
+
+  it("leaves ordinary tools unclassified", () => {
+    const events = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-bash-1",
+        kind: "execute",
+        title: "bash",
+        status: "in_progress",
+      },
+    });
+    expect((events[0] as { kind?: string }).kind).toBe("execute");
   });
 });
