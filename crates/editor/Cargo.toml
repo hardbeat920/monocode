@@ -1,0 +1,9 @@
+[package]
+name = "monocode-editor"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true

@@ -1,0 +1,8 @@
+[package]
+name = "monocode-integrations"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]

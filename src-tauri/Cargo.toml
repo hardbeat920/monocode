@@ -66,3 +66,19 @@ tauri-plugin-updater = "2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2.4.1"
+
+# The Tauri app has its own workspace and lockfile until cutover. Upstream GTK
+# crates pin toml_datetime 0.6.3, which cannot share a lockfile with GPUI's
+# cbindgen. The native crates live in the root workspace.
+[workspace]
+members = ["."]
+
+[workspace.package]
+version = "0.6.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"

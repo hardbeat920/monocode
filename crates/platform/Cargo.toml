@@ -1,0 +1,8 @@
+[package]
+name = "monocode-platform"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]

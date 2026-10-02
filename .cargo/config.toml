@@ -1,0 +1,4 @@
+# Both workspaces (the root native crates and src-tauri) build into ./target,
+# so release paths like target/release/bundle stay the same.
+[build]
+target-dir = "target"
