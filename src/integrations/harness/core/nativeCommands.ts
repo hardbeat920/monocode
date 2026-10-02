@@ -22,6 +22,13 @@ export type NativeCommandProvider = {
   ): () => void;
   /** Full command runtimes own slash arguments, including @file-like text. */
   rawSlashCommands?: boolean;
+  /**
+   * This provider's commands live alongside file-based Agent Skills rather
+   * than replacing them (e.g. Claude's `.claude/skills` scan). Without this,
+   * `loadCatalog` treats a native provider as the sole source and never scans
+   * disk at all.
+   */
+  mergesFileSkills?: boolean;
 };
 
 const RESERVED_COMMANDS = new Set(["plan", "compact", "add-to-folder"]);

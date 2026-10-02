@@ -16,6 +16,7 @@ import {
   isSubagentMessage,
   isTodoTool,
   listModelsFromControlResponse,
+  nativeCommandsFromControlResponse,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
   parseClaudeVersion,
@@ -32,6 +33,7 @@ import {
   sessionIdFromMessage,
   statusTextFromSystem,
   streamDeltaFromEvent,
+  terminalSlashCommandsFromSystemInit,
   toClaudePermissionResult,
   toolKindFromName,
   toolStartFromEvent,
@@ -625,6 +627,108 @@ describe("list_models catalog", () => {
     expect(isClaudeInitMessage({ type: "assistant", subtype: "init" })).toBe(
       false,
     );
+  });
+});
+
+describe("nativeCommandsFromControlResponse", () => {
+  const initialized = {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: "init_1",
+      response: {
+        commands: [
+          {
+            name: "compact",
+            description: "Free up context by summarizing the conversation so far",
+            argumentHint: "<optional custom summarization instructions>",
+            builtin: true,
+          },
+          {
+            name: "doctor",
+            description: "Health-check the user's Claude Code setup and fix issues",
+            argumentHint: "",
+            aliases: ["checkup"],
+            builtin: true,
+          },
+          { name: "claude-api", description: "Reference for the Claude API", argumentHint: "" },
+          { notAName: "skip me" },
+        ],
+      },
+    },
+  };
+
+  it("maps commands from the matching initialize response", () => {
+    const commands = nativeCommandsFromControlResponse(initialized, "init_1");
+    expect(commands).toEqual([
+      {
+        name: "compact",
+        description: "Free up context by summarizing the conversation so far",
+        invocation: "claude:compact",
+        source: "claude",
+        inputHint: "<optional custom summarization instructions>",
+      },
+      {
+        name: "doctor",
+        description: "Health-check the user's Claude Code setup and fix issues",
+        invocation: "doctor",
+        source: "claude",
+        aliases: ["checkup"],
+      },
+      {
+        name: "claude-api",
+        description: "Reference for the Claude API",
+        invocation: "claude-api",
+        source: "claude",
+      },
+    ]);
+  });
+
+  it("returns null for a response to a different request, [] on error", () => {
+    expect(nativeCommandsFromControlResponse(initialized, "other")).toBeNull();
+    expect(
+      nativeCommandsFromControlResponse(
+        {
+          type: "control_response",
+          response: { subtype: "error", request_id: "init_1", error: "nope" },
+        },
+        "init_1",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("terminalSlashCommandsFromSystemInit", () => {
+  it("reads terminal-only command names off the init line", () => {
+    expect(
+      terminalSlashCommandsFromSystemInit({
+        type: "system",
+        subtype: "init",
+        terminal_slash_commands: ["doctor", "color", "focus"],
+      }),
+    ).toEqual(["doctor", "color", "focus"]);
+  });
+
+  it("returns null for anything that isn't the init line", () => {
+    expect(
+      terminalSlashCommandsFromSystemInit({
+        type: "system",
+        subtype: "initialized",
+        terminal_slash_commands: ["doctor"],
+      }),
+    ).toBeNull();
+    expect(
+      terminalSlashCommandsFromSystemInit({
+        type: "control_response",
+        subtype: "init",
+      }),
+    ).toBeNull();
+  });
+
+  it("defaults to an empty list when the field is missing", () => {
+    expect(
+      terminalSlashCommandsFromSystemInit({ type: "system", subtype: "init" }),
+    ).toEqual([]);
   });
 });
 

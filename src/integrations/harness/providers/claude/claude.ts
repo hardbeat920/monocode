@@ -39,6 +39,8 @@ import {
   isTodoTool,
   applyClaudeTaskTool,
   isUsageLimitResult,
+  KNOWN_TERMINAL_ONLY_COMMANDS,
+  nativeCommandsFromControlResponse,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
   parseControlCancelId,
@@ -58,6 +60,7 @@ import {
   streamDeltaFromEvent,
   stringField,
   summarizeToolRequest,
+  terminalSlashCommandsFromSystemInit,
   toClaudePermissionResult,
   toolKindFromName,
   toolResultsFromUserMessage,
@@ -70,6 +73,12 @@ import {
   type ClaudeCliSettings,
   type ClaudeControlRequest,
 } from "./claudeProtocol";
+import { discoverClaudeCommands } from "./claudeSkills";
+import type {
+  CommandContext,
+  NativeCommand,
+  NativeCommandProvider,
+} from "../../core/nativeCommands";
 import { isAgentToolName } from "../../core/preview";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 import {
@@ -174,6 +183,12 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** The `initialize` control request's id, to match its response. */
+  initRequestId: string;
+  /** Every slash command Claude reported on `initialize`, unfiltered. */
+  availableCommands?: NativeCommand[];
+  /** Names only usable from Claude's interactive TUI, from `system/init`. */
+  terminalOnlyCommands: Set<string>;
 };
 
 type Resume = {
@@ -420,6 +435,34 @@ export function restoreClaudeTaskLists(
   });
 }
 
+/** Commands from `live.availableCommands`, minus TUI-only ones once known. */
+function visibleClaudeCommands(live: Live): NativeCommand[] {
+  const commands = live.availableCommands ?? [];
+  if (live.terminalOnlyCommands.size === 0) return commands;
+  return commands.filter((command) => !live.terminalOnlyCommands.has(command.name));
+}
+
+/**
+ * Claude's own built-in commands (`/compact`, `/model`, `/mcp`, …) plus
+ * whatever the user's project/user commands, skills, and plugins add — all
+ * reported by the CLI itself on `initialize`, so nothing here is guessed or
+ * hardcoded. A live session's own answer is reused when one exists; otherwise
+ * a disposable probe process asks the same question and exits.
+ */
+export const claudeCommandProvider: NativeCommandProvider = {
+  mergesFileSkills: true,
+  async discover(context: CommandContext): Promise<NativeCommand[]> {
+    const live = context.sessionId
+      ? liveByThread.get(context.sessionId)
+      : undefined;
+    if (live && live.cwd === context.cwd) {
+      if (!live.initialized) await waitForInit(live, INIT_TIMEOUT_MS);
+      if (live.availableCommands) return visibleClaudeCommands(live);
+    }
+    return discoverClaudeCommands(context.cwd);
+  },
+};
+
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const settingsKey = settingsKeyFor(input);
   const planning = input.intent === "plan";
@@ -511,6 +554,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    initRequestId: "",
+    terminalOnlyCommands: new Set(KNOWN_TERMINAL_ONLY_COMMANDS),
   };
   liveRef.current = live;
 
@@ -554,9 +599,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   });
 
   try {
+    live.initRequestId = nextControlId(live);
     await writeJson(
       input.sessionId,
-      buildControlRequest(nextControlId(live), { subtype: "initialize" }),
+      buildControlRequest(live.initRequestId, { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
     live.onEvent({
@@ -688,10 +734,18 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       stringField(rec, "subtype") === "initialized")
   ) {
     markInitialized(live);
-    if (stringField(rec, "subtype") === "init") noteClaudeTurnStarted(live);
+    if (stringField(rec, "subtype") === "init") {
+      noteClaudeTurnStarted(live);
+      const terminalOnly = terminalSlashCommandsFromSystemInit(rec);
+      if (terminalOnly) live.terminalOnlyCommands = new Set(terminalOnly);
+    }
   }
 
   if (type === "control_response") {
+    if (live.initRequestId) {
+      const commands = nativeCommandsFromControlResponse(rec, live.initRequestId);
+      if (commands) live.availableCommands = commands;
+    }
     markInitialized(live);
     return;
   }
