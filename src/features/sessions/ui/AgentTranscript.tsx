@@ -3784,7 +3784,7 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
  * When the live turn's clock started. A message sent while the agent is still
  * going (a steer, or a reply while background work runs) joins that run and
  * carries no clock of its own, so the clock keeps the time of the prompt that
- * started it. Without that the clock falls back to when it was drawn, and
+ * started it. The search stops at a turn that already ended. Without that the clock falls back to when it was drawn, and
  * starts over every time the transcript is shown again.
  */
 function turnClockStart(
@@ -3794,9 +3794,10 @@ function turnClockStart(
   if (!userBlock || userBlock.startedAt != null) return userBlock?.startedAt;
   for (let i = blocks.indexOf(userBlock) - 1; i >= 0; i--) {
     const block = blocks[i];
-    if (block.role === "user" && block.startedAt != null) {
-      return block.startedAt;
-    }
+    if (block.role !== "user") continue;
+    // That turn already ended, so this message started a new one.
+    if (block.durationMs != null) return undefined;
+    if (block.startedAt != null) return block.startedAt;
   }
   return undefined;
 }
