@@ -9,6 +9,7 @@ import {
 } from "../src/integrations/harness/core/apply";
 import { resolveModel } from "../src/features/sessions/model/models";
 import { isVisionImage } from "../src/features/sessions/model/attachments";
+import { disarmUsageLimit } from "../src/features/sessions/model/usageLimit";
 import type {
   HarnessEvent,
   HarnessSessionInput,
@@ -690,9 +691,14 @@ export class HostEngine {
               "This request belongs to a finished or replaced turn",
             );
           if (command.type === "cancel") {
+            // Stop means stop: resume-at-reset must not start a turn later.
+            value = { ...value, session: disarmUsageLimit(value.session) };
             effect = () => {
               const active = this.running.get(command.sessionId);
-              if (active) active.cancelled = true;
+              if (active) {
+                active.cancelled = true;
+                active.resumeAtReset = false;
+              }
               void provider
                 .cancel(command.sessionId)
                 .catch(() => provider.stop(command.sessionId));
@@ -890,7 +896,9 @@ export class HostEngine {
               : error;
           this.save(
             this.settled(
-              latest,
+              active.cancelled
+                ? { ...latest, session: disarmUsageLimit(latest.session) }
+                : latest,
               this.closing || active.persistenceFailed ? "interrupted" : "idle",
               message,
             ),

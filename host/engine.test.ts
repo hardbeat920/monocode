@@ -7,6 +7,10 @@ import type { HostProvider } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
+import {
+  USAGE_LIMIT_RESUME_GRACE_MS,
+  usageLimitResumeDue,
+} from "../src/features/sessions/model/usageLimit";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -953,6 +957,42 @@ describe("headless session ownership", () => {
     await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
     expect(store.session(id).session.usageLimit).toBeUndefined();
   });
+
+  it.each([
+    ["before", false],
+    ["after", true],
+  ] as const)(
+    "disarms resume-at-reset when the user stops a turn limited %s Stop",
+    async (_when, lateEvent) => {
+      const { engine, store, turns, id } = setup();
+      engine.command({
+        type: "send",
+        commandId: "limited",
+        sessionId: id,
+        text: "Work",
+        resumeAtReset: true,
+      });
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      const limited = { type: "usage.limited", resetsAt: 5_000 } as const;
+      if (!lateEvent) turns[0].input.onEvent(limited);
+      engine.command({
+        type: "cancel",
+        commandId: "stop",
+        sessionId: id,
+        runId: store.session(id).runId,
+      });
+      if (lateEvent) turns[0].input.onEvent(limited);
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+      const stopped = store.session(id).session;
+      expect(stopped.usageLimit).toEqual({
+        resetsAt: 5_000,
+        resumeAtReset: false,
+      });
+      expect(
+        usageLimitResumeDue(stopped, 5_000 + USAGE_LIMIT_RESUME_GRACE_MS),
+      ).toBe(false);
+    },
+  );
 
   it("validates untrusted commands before execution", () => {
     expect(() =>
