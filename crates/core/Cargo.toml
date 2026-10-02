@@ -1,0 +1,14 @@
+[package]
+name = "monocode-core"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Only the golden round-trip test reads SQLite, from a copy of a real monocode.db.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
