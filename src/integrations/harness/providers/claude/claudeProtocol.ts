@@ -601,6 +601,21 @@ export function isSubagentMessage(rec: Record<string, unknown>): boolean {
   return typeof parent === "string" && parent.length > 0;
 }
 
+/**
+ * On resume, the CLI re-reports every background task the session started
+ * that it considers unfinished — even ones already stopped and reported —
+ * and answers each with an empty, zero-turn result. That result belongs to
+ * no turn, so it must not end the one MonoCode is waiting on.
+ */
+export function isReplayedTaskNotificationResult(
+  rec: Record<string, unknown>,
+): boolean {
+  return (
+    stringField(asRecord(rec.origin), "kind") === "task-notification" &&
+    rec.num_turns === 0
+  );
+}
+
 export function isAgentTaskType(taskType: string | undefined): boolean {
   const key = (taskType ?? "").toLowerCase();
   return key === "local_agent" || key === "remote_agent";
