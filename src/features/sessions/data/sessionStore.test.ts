@@ -1,5 +1,7 @@
-import { appendUser } from "../../../integrations/harness/core/apply";
+import { appendUser, applyHarnessEvents } from "../../../integrations/harness/core/apply";
 import { describe, expect, it } from "vitest";
+import { mapCodexNotification } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { toolCallLabel } from "../model/transcriptActivity";
 import {
   newSession,
   type Block,
@@ -8,6 +10,7 @@ import {
 } from "../model/session";
 import {
   backfillClaudeShellCommands,
+  backfillCodexShellCommands,
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
@@ -53,6 +56,144 @@ describe("Claude Shell row recovery", () => {
     });
     expect(repaired[1]).toBe(blocks[1]);
     expect(backfillClaudeShellCommands(repaired, {})).toBe(repaired);
+  });
+});
+
+describe("Codex Shell row recovery", () => {
+  it("relabels from the command saved on the row, keeping redactions", () => {
+    // The command Codex sent with the item is already on the row as its preview
+    // title. Reading it back means whatever Codex redacted stays redacted.
+    const redacted = "/usr/bin/zsh -lc 'curl -H \"token=[redacted]\" example'";
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: redacted },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0].text).not.toBe("Shell");
+    expect(repaired[0].tool?.preview?.title).toContain("[redacted]");
+  });
+
+  it("leaves a row with no usable saved command as it is", () => {
+    // A weak preview title names no command, so there is nothing to relabel
+    // from and the row keeps its placeholder.
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "Shell" },
+        },
+      },
+    ];
+    expect(backfillCodexShellCommands(blocks)).toBe(blocks);
+  });
+
+  it("labels placeholder rows with the saved command and rebuilds the preview", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-1",
+          title: "Shell",
+          kind: "execute",
+          status: "failed",
+          detail: "exit 1",
+          preview: {
+            kind: "shell",
+            title: "rg --files -g AGENTS.md -g '!node_modules'",
+          },
+        },
+      },
+      {
+        id: "read",
+        role: "tool",
+        text: "Read file.ts",
+        tool: { callId: "exec-2", kind: "read" },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0]).toMatchObject({
+      text: "Find files",
+      tool: {
+        title: "Find files",
+        status: "failed",
+        detail: "exit 1",
+        preview: { kind: "shell", title: "rg --files -g AGENTS.md -g '!node_modules'" },
+      },
+    });
+    expect(repaired[1]).toBe(blocks[1]);
+    expect(backfillCodexShellCommands(repaired)).toBe(repaired);
+  });
+
+  it("keeps the raw command when no readable intent is inferred", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "exec-3",
+          title: "Shell",
+          kind: "execute",
+          preview: { kind: "shell", title: "git commit -m 'Fix shell labels'" },
+        },
+      },
+    ];
+    const repaired = backfillCodexShellCommands(blocks);
+    expect(repaired[0].text).toBe("git commit -m 'Fix shell labels'");
+  });
+
+  // A row repaired from the saved preview has to read the same as one rendered
+  // live, or reopening a session would relabel work the user already saw.
+  it("labels a recovered row exactly as the live item does", () => {
+    // Captured from `codex app-server`: the reported session's middle row was
+    // `rg --files -g AGENTS.md`, which Codex labels a path-less `listFiles`.
+    const item = {
+      type: "commandExecution",
+      id: "exec-88885872",
+      status: "inProgress",
+      command: `/usr/bin/zsh -lc "rg --files -g AGENTS.md -g '"'"'!node_modules'"'"'"`,
+      commandActions: [
+        { type: "listFiles", command: "rg --files -g AGENTS.md -g '!node_modules'", path: null },
+      ],
+    };
+    let live = newSession("codex", "/home/me/proj");
+    live = applyHarnessEvents(live, mapCodexNotification("item/started", { item }).events);
+    const liveRow = live.blocks[0];
+
+    // The same row as the buggy build saved it. No recovered map: the command
+    // is already on the row, which is how it reads in production.
+    const saved: Block[] = [
+      {
+        id: "e84ab067",
+        role: "tool",
+        text: "Shell",
+        tool: { ...liveRow.tool, title: "Shell" },
+      },
+    ];
+    const [recovered] = backfillCodexShellCommands(saved);
+
+    expect(recovered.text).not.toBe("Shell");
+    expect(recovered.text).toBe(liveRow.text);
+    expect(recovered.tool?.title).toBe(liveRow.tool?.title);
+    expect(toolCallLabel(recovered, "/home/me/proj")).toBe(
+      toolCallLabel(liveRow, "/home/me/proj"),
+    );
   });
 });
 

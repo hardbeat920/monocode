@@ -51,6 +51,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
 import { MOD } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
+import "./ModelPicker.css";
 
 type Props = {
   harness: HarnessId;
@@ -121,6 +122,51 @@ const PILL_ORDER = [
 
 function isEffortSetting(setting: ModelSetting): boolean {
   return isEffortSettingId(setting.id);
+}
+
+function effortTileTone(
+  harness: HarnessId,
+  setting: ModelSetting,
+  value: string,
+): "ultra" | "max" | undefined {
+  if (harness !== "codex" || !isEffortSetting(setting)) return undefined;
+  const normalized = value.toLowerCase();
+  return normalized === "ultra"
+    ? "ultra"
+    : normalized === "max"
+      ? "max"
+      : undefined;
+}
+
+const EFFORT_TILE_COLUMNS = 32;
+const EFFORT_TILE_ROWS = 5;
+
+function EffortTileShimmer() {
+  return (
+    <span className="codex-effort-tiles" aria-hidden="true">
+      {Array.from(
+        { length: EFFORT_TILE_COLUMNS * EFFORT_TILE_ROWS },
+        (_, index) => {
+          const column = index % EFFORT_TILE_COLUMNS;
+          const row = Math.floor(index / EFFORT_TILE_COLUMNS);
+          const centerColumn = (EFFORT_TILE_COLUMNS - 1) / 2;
+          const centerRow = (EFFORT_TILE_ROWS - 1) / 2;
+          const distance = Math.hypot(
+            (column - centerColumn) / centerColumn,
+            (row - centerRow) / centerRow,
+          );
+          const filled = (index * 73 + index * index * 19 + 23) % 101 < 65;
+          return (
+            <span
+              key={index}
+              className={`codex-effort-tile${filled ? " codex-effort-tile--filled" : ""}`}
+              style={{ "--tile-distance": distance } as React.CSSProperties}
+            />
+          );
+        },
+      )}
+    </span>
+  );
 }
 
 function effortSetting(model: AgentModel): ModelSetting | undefined {
@@ -828,6 +874,11 @@ export function ModelPicker({
                 const selected =
                   option.value === settingValue(submenu.setting, values);
                 const highlighted = index === activeSetting;
+                const tileTone = effortTileTone(
+                  current.harness,
+                  submenu.setting,
+                  option.value,
+                );
                 return (
                   <button
                     key={option.value}
@@ -841,8 +892,10 @@ export function ModelPicker({
                       highlighted
                         ? "bg-selection text-content"
                         : "text-content hover:bg-content/5"
-                    }`}
+                    } ${tileTone ? "codex-effort-option" : ""}`}
+                    data-effort-tone={tileTone}
                   >
+                    {tileTone ? <EffortTileShimmer /> : null}
                     <span className="min-w-0 flex-1 truncate">
                       {option.label}
                     </span>
@@ -995,6 +1048,7 @@ export function ModelControlPills({
             values={values}
             onSettingsChange={onSettingsChange}
             onClose={onClose}
+            harness={harness}
             additionalSettings={
               setting.id === effort?.id ? groupedSettings : undefined
             }
@@ -1042,12 +1096,14 @@ function SelectPill({
   values,
   onSettingsChange,
   onClose,
+  harness,
   additionalSettings,
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
+  harness: HarnessId;
   additionalSettings?: ModelSetting[];
 }) {
   const [open, setOpen] = useState(false);
@@ -1166,6 +1222,11 @@ function SelectPill({
                   const selected =
                     option.value === settingValue(menuSetting, values);
                   const highlighted = index === active;
+                  const tileTone = effortTileTone(
+                    harness,
+                    menuSetting,
+                    option.value,
+                  );
                   return (
                     <button
                       key={option.value}
@@ -1178,8 +1239,10 @@ function SelectPill({
                       onClick={() => pick(menuSetting, option.value)}
                       className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-content ${
                         highlighted ? "bg-selection" : "hover:bg-content/5"
-                      }`}
+                      } ${tileTone ? "codex-effort-option" : ""}`}
+                      data-effort-tone={tileTone}
                     >
+                      {tileTone ? <EffortTileShimmer /> : null}
                       <span className="min-w-0 flex-1 truncate">
                         {option.label}
                       </span>

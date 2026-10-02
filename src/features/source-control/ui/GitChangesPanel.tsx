@@ -109,7 +109,7 @@ type Props = {
   selectedKind?: GitFileDiffKind;
   selectedSha?: string;
   onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
-  onOpenAllChanges: () => void;
+  onOpenAllChanges: (kind: GitFileDiffKind) => void;
   onOpenCommit: (commit: GitHistoryCommit, pin?: boolean) => void;
 };
 
@@ -353,7 +353,7 @@ function ChangedFiles({
   busy: string | null;
   setBusy: (value: string | null) => void;
   onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
-  onOpenAllChanges: () => void;
+  onOpenAllChanges: (kind: GitFileDiffKind) => void;
   onMutated: (paths?: string[]) => void;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -857,7 +857,7 @@ function ChangedFiles({
                   {
                     title: "Open All Changes",
                     icon: <FileDiff className="size-3.5" strokeWidth={1.75} />,
-                    onClick: onOpenAllChanges,
+                    onClick: () => onOpenAllChanges("staged"),
                   },
                   {
                     title: "Unstage All Changes",
@@ -893,7 +893,7 @@ function ChangedFiles({
                   {
                     title: "Open All Changes",
                     icon: <FileDiff className="size-3.5" strokeWidth={1.75} />,
-                    onClick: onOpenAllChanges,
+                    onClick: () => onOpenAllChanges("unstaged"),
                   },
                   {
                     title: "Discard All Changes",

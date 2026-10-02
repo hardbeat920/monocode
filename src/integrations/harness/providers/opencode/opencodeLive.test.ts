@@ -3,6 +3,7 @@ import { newSession, type RuntimeMode } from "../../../../features/sessions/mode
 import { applyHarnessEvent } from "../../core/apply";
 
 let onStdout: ((line: string) => void) | undefined;
+let onChildExit: ((code: number | null) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
 let sessionMessages: unknown[] = [];
@@ -11,6 +12,7 @@ const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
 const killChild = vi.fn(async () => undefined);
+const closeHarnessSse = vi.fn(async (_id: string) => undefined);
 const harnessHttp = vi.fn(
   async (input: {
     url: string;
@@ -54,7 +56,7 @@ const harnessHttp = vi.fn(
 );
 
 vi.mock("../../core/child", () => ({
-  closeHarnessSse: async () => undefined,
+  closeHarnessSse,
   execChild: async (_command: string, args: string[]) =>
     args[0] !== "service"
       ? openCodeVersion
@@ -68,8 +70,13 @@ vi.mock("../../core/child", () => ({
   resolveOpenCodeBinary: async () => ({ path: "/fake/opencode" }),
   spawnChild,
   unwatchChild: () => undefined,
-  watchChild: (_id: string, stdout: (line: string) => void) => {
+  watchChild: (
+    _id: string,
+    stdout: (line: string) => void,
+    exit: (code: number | null) => void,
+  ) => {
     onStdout = stdout;
+    onChildExit = exit;
   },
   watchSse: (
     _id: string,
@@ -159,12 +166,14 @@ function idle(sessionID = "session_1") {
 
 beforeEach(() => {
   onStdout = undefined;
+  onChildExit = undefined;
   onSseEvent = undefined;
   onSseEnd = undefined;
   sessionMessages = [];
   openCodeVersion = "opencode 1.14.19";
   spawnChild.mockClear();
   killChild.mockClear();
+  closeHarnessSse.mockClear();
   harnessHttp.mockClear();
   __openCodeTestReset();
 });
@@ -1102,4 +1111,41 @@ describe("OpenCode child permission routing", () => {
       });
     },
   );
+});
+
+it("closes an event stream that ended on its own when the session stops", async () => {
+  const events: HarnessEvent[] = [];
+  const { done } = await startTurn(events);
+  onSseEnd?.("stream closed");
+  await done.catch(() => undefined);
+  closeHarnessSse.mockClear();
+
+  await stopOpenCodeSession("opencode-live");
+  expect(closeHarnessSse).toHaveBeenCalledWith("opencode-live");
+});
+
+it("closes the event stream after the server exits on its own", async () => {
+  const events: HarnessEvent[] = [];
+  const { done } = await startTurn(events);
+  onChildExit?.(1);
+  await expect(done).rejects.toThrow("OpenCode server exited");
+  expect(events).toContainEqual({ type: "session.ended", code: 1 });
+
+  await stopOpenCodeSession("opencode-live");
+  expect(closeHarnessSse).toHaveBeenCalledExactlyOnceWith("opencode-live");
+  expect(killChild).toHaveBeenCalledExactlyOnceWith("opencode-live");
+});
+
+it("still kills the child when closing an ended stream fails", async () => {
+  const events: HarnessEvent[] = [];
+  const { done } = await startTurn(events);
+  onSseEnd?.("stream closed");
+  await expect(done).rejects.toThrow("stream closed");
+  closeHarnessSse.mockClear();
+  killChild.mockClear();
+  closeHarnessSse.mockRejectedValueOnce(new Error("SSE close failed"));
+
+  await expect(stopOpenCodeSession("opencode-live")).resolves.toBeUndefined();
+  expect(closeHarnessSse).toHaveBeenCalledExactlyOnceWith("opencode-live");
+  expect(killChild).toHaveBeenCalledExactlyOnceWith("opencode-live");
 });

@@ -5765,10 +5765,14 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // explorer.exe returns 1 even when it opened the folder.
         let path_str = path.to_string_lossy().replace('/', "\\");
+        // `.arg` would wrap the whole `/select,...` switch in quotes when the
+        // path has spaces; explorer ignores a quoted switch and opens its
+        // default folder instead. Only the path itself may be quoted.
         Command::new("explorer")
-            .arg(format!("/select,{path_str}"))
+            .raw_arg(format!("/select,\"{path_str}\""))
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
