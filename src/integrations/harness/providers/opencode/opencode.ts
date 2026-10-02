@@ -115,9 +115,14 @@ type Live = {
   inbox: OpenCodeV2InboxTracker;
   /**
    * The v2 prompt or compaction whose completion the current latch waits
-   * for. `id` is unset until the server admits it.
+   * for. `id` is unset until the server admits it; `uncorrelated` marks an
+   * admission that returned no id, so the next completion has to count.
    */
-  awaitedInbox: { kind: "turn" | "compaction"; id?: string } | null;
+  awaitedInbox: {
+    kind: "turn" | "compaction";
+    id?: string;
+    uncorrelated?: boolean;
+  } | null;
 };
 
 type Resume = {
@@ -684,8 +689,9 @@ async function runCompaction(
       live.openCodeSessionId,
       model,
     );
-    if (!inboxID) return;
-    live.awaitedInbox = { kind: "compaction", id: inboxID };
+    live.awaitedInbox = inboxID
+      ? { kind: "compaction", id: inboxID }
+      : { kind: "compaction", uncorrelated: true };
     finishAwaitedInbox(live);
     await finished;
   } finally {
@@ -717,7 +723,12 @@ function gateAwaitedInbox(
     type === "session.compaction.ended" ||
     type === "session.compaction.failed";
   if (!terminal && !compactionEnd) return false;
-  if (!awaited.id) return true;
+  if (!awaited.id) {
+    if (awaited.uncorrelated) {
+      finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+    }
+    return true;
+  }
   if (live.inbox.outcome(awaited.id)) {
     finishAwaitedInbox(live);
   } else if (!live.inbox.reportsDelivery) {
@@ -990,7 +1001,8 @@ async function handleEvent(
       break;
     }
     case "session.idle": {
-      if (live.activeTurn) {
+      // v1 also emits this deprecated event; its turns end on session.status.
+      if (live.client.generation === "v2" && live.activeTurn) {
         finishActiveTurn(live, [
           { type: "message.completed" },
           { type: "reasoning.completed" },

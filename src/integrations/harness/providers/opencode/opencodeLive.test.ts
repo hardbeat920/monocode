@@ -228,6 +228,19 @@ it("reports when OpenCode accepts a turn", async () => {
   expect(onAccepted).toHaveBeenCalledOnce();
 });
 
+it("ends a 1.x turn on session.status, not the deprecated session.idle", async () => {
+  const events: HarnessEvent[] = [];
+  const { done } = await startTurn(events);
+  let finished = false;
+  void done.then(() => (finished = true));
+  onSseEvent?.({ type: "session.idle", properties: { sessionID: "session_1" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(finished).toBe(false);
+  idle();
+  await done;
+  expect(events).toContainEqual({ type: "message.completed" });
+});
+
 it("uses the v2 API and completes from a v2 event envelope", async () => {
   openCodeVersion = "opencode v2.0.15";
   const events: HarnessEvent[] = [];
@@ -557,6 +570,16 @@ describe("OpenCode 2.x completion correlation", () => {
     v2("session.execution.succeeded");
     await next;
     expect(replyText(events)).toBe("AFTER");
+  });
+
+  it("waits for compaction to end when admission returns no inbox id", async () => {
+    const compaction = compact([]);
+    const compacted = settled(compaction);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    expect(compacted()).toBe(false);
+    v2("session.compaction.ended", { reason: "manual", text: "summary" });
+    await compaction;
   });
 
   it("fails compaction when OpenCode reports a compaction failure", async () => {
