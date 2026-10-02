@@ -7,7 +7,6 @@ import {
 } from "../../features/providers/model/piUsage";
 import {
   idleRateLimits,
-  RATE_LIMIT_MIN_REFETCH_MS,
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
 import {
@@ -49,15 +48,9 @@ function PiProviderUsage({
   useEffect(() => {
     let disposed = false;
     let inflight = false;
-    let lastFetchAt = 0;
     const refresh = (force = false) => {
       if (disposed || inflight) return;
-      if (
-        !force &&
-        (document.visibilityState !== "visible" ||
-          Date.now() - lastFetchAt < RATE_LIMIT_MIN_REFETCH_MS)
-      )
-        return;
+      if (!force && document.visibilityState !== "visible") return;
       inflight = true;
       void loadRateLimits(
         source,
@@ -65,7 +58,6 @@ function PiProviderUsage({
         force ? true : "throttled",
       ).finally(() => {
         inflight = false;
-        lastFetchAt = Date.now();
       });
     };
     refreshRef.current = refresh;

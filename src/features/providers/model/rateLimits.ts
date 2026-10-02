@@ -400,7 +400,11 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     const bucket = asRecord(value);
     if (!bucket) continue;
     for (const id of ["primary", "secondary"] as const) {
-      const window = snapshotFrom(asRecord(bucket[id]));
+      // A named bucket may carry only credits. Recover missing windows from
+      // the compatibility view without losing other model-scoped buckets.
+      const window =
+        snapshotFrom(asRecord(bucket[id])) ??
+        (scope === defaultScope ? snapshotFrom(asRecord(wrapper?.[id])) : null);
       if (window)
         windows.push({
           id,

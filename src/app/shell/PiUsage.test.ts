@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   clearCachedRateLimits,
   getCachedRateLimits,
+  loadRateLimits,
 } from "../../features/providers/model/rateLimitsCache";
 import { UsageFooter } from "./UsageFooter";
 
@@ -207,4 +208,17 @@ it("polls only while visible and retries unavailable credentials", async () => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   await act(async () => vi.advanceTimersByTimeAsync(RATE_LIMIT_POLL_MS));
   expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+it("does not postpone the shared cooldown when mounting from a cached snapshot", async () => {
+  vi.useFakeTimers();
+  await loadRateLimits("pi:anthropic");
+  await act(async () => vi.advanceTimersByTimeAsync(4 * 60_000));
+  await show("pi:anthropic/claude");
+  expect(invoke).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  vi.mocked(invoke).mockResolvedValueOnce(quota(13));
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("13%");
 });

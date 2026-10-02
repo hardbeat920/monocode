@@ -117,7 +117,7 @@ export function usageSnapshot(source: Session, input: Record<string, unknown>) {
         ? getCachedRateLimits(target.source, target.cacheAccountId)
         : null;
       const windows = (
-        limits?.windows ??
+        (limits?.windows?.length ? limits.windows : null) ??
         (["session", "weekly", "monthly"] as const).flatMap((id) => {
           const window = limits?.[id];
           return window ? [{ id, scope: "account", ...window }] : [];

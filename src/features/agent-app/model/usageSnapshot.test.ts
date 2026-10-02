@@ -359,3 +359,69 @@ describe("usage.list through the app handler", () => {
       expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+it.each(["empty", "sparse", "mixed"])(
+  "keeps Codex account quota with %s normalized windows",
+  async (shape) => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        limitId: "codex",
+        primary: {
+          usedPercent: 12,
+          windowDurationMins: 120,
+          resetsAt: now + 10000,
+        },
+        secondary: {
+          usedPercent: 24,
+          windowDurationMins: 10080,
+          resetsAt: now + 20000,
+        },
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          credits: { hasCredits: true, unlimited: false, balance: "1.25" },
+        },
+        ...(shape === "mixed"
+          ? {
+              "gpt-model": {
+                primary: { usedPercent: 33, windowDurationMins: 60 },
+              },
+            }
+          : {}),
+      },
+    });
+    // Older cache writers may supply an empty normalized list beside legacy slots.
+    if (shape === "empty") limits.windows = [];
+    setCachedRateLimits("codex", "default", limits);
+    const row = (await list({ provider: "codex" })).accounts[0];
+    const scope = shape === "empty" ? "account" : "codex";
+    expect(row.status).toBe("ok");
+    expect(row.windows).toEqual([
+      expect.objectContaining({
+        scope,
+        usedPercent: 12,
+        remainingPercent: 88,
+        windowMinutes: 120,
+        resetsAt: now + 10000,
+      }),
+      expect.objectContaining({
+        scope,
+        usedPercent: 24,
+        remainingPercent: 76,
+        windowMinutes: 10080,
+        resetsAt: now + 20000,
+      }),
+      ...(shape === "mixed"
+        ? [
+            expect.objectContaining({
+              scope: "gpt-model",
+              usedPercent: 33,
+              windowMinutes: 60,
+            }),
+          ]
+        : []),
+    ]);
+    expect(row.credits).toHaveLength(1);
+    expect(fetches.codex).not.toHaveBeenCalled();
+  },
+);
