@@ -145,8 +145,9 @@ describe("LiveAgentsPreview", () => {
     expect(card.textContent).not.toContain("1.2K cached");
     expect(card.getAttribute("aria-label")).toContain("0 input");
     expect(card.getAttribute("aria-label")).not.toContain("output");
-    expect(card.getAttribute("aria-label")).toContain("1.2K cached");
-    expect(card.title).toContain("1.2K cached");
+    expect(card.getAttribute("aria-label")).not.toContain("cached");
+    expect(card.title).toContain("0 input");
+    expect(card.title).not.toContain("cached");
     act(() => card.focus());
     expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
       "1.2K cached",
@@ -169,6 +170,8 @@ describe("LiveAgentsPreview", () => {
     });
     expect(card.textContent).toContain("2K input · 84 output");
     expect(card.textContent).not.toContain("cached");
+    expect(card.getAttribute("aria-label")).toContain("2K input · 84 output");
+    expect(card.title).toContain("2K input · 84 output");
 
     render({
       agents: [agent("a", "/repo/a"), agents[1]],

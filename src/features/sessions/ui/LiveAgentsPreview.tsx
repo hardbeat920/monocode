@@ -190,7 +190,7 @@ function LiveAgentCard({
       ? `Cache hit ${Math.round(agent.turnMetrics.cacheHitPercent)}%`
       : null,
   ].filter(Boolean);
-  const metricsLabel = [...tokenCounts, ...cacheCounts].join(" · ");
+  const metricsLabel = tokenCounts.join(" · ");
   const showCacheTooltip = cacheCounts.length > 0 && (hovered || focused);
   const title = [agent.title, project, activity, elapsed, metricsLabel]
     .filter(Boolean)
