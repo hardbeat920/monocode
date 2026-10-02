@@ -315,13 +315,15 @@ export class OpenCodeClient {
             (value) => field.optionValues.get(value) ?? value,
           );
           const value =
-            field.type === "boolean"
-              ? /^(yes|true)$/i.test((mapped[0] ?? "").trim())
-              : field.type === "number" || field.type === "integer"
-                ? Number(mapped[0] ?? "")
-                : mapped.length <= 1
-                  ? (mapped[0] ?? "")
-                  : mapped;
+            field.type === "multiselect"
+              ? mapped
+              : field.type === "boolean"
+                ? /^(yes|true)$/i.test((mapped[0] ?? "").trim())
+                : field.type === "number" || field.type === "integer"
+                  ? Number(mapped[0] ?? "")
+                  : mapped.length <= 1
+                    ? (mapped[0] ?? "")
+                    : mapped;
           return [field.key, value];
         }),
       );
