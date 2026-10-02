@@ -4320,6 +4320,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
+ "url",
  "uuid",
 ]
 
