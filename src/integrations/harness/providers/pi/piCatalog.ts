@@ -5,10 +5,15 @@ import {
   spawnChild,
   unwatchChild,
   watchChild,
+  writeChild,
 } from "../../core/child";
 import { PiRpc } from "./piClient";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
-import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
+import {
+  autoDenyExtensionUi,
+  buildPiSpawnArgs,
+  modelsFromRpcData,
+} from "./piProtocol";
 
 const DISCOVERY_TIMEOUT_MS = 45_000;
 
@@ -35,7 +40,13 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
   const { path } = await flavor.resolveBinary();
   const cwd = workingDirectory ?? (await homeDir());
   const probeId = `${flavor.probeChildId}-${crypto.randomUUID()}`;
-  const rpc = new PiRpc(probeId, () => undefined, flavor.label);
+  // Discovery loads extensions because custom providers are registered by
+  // them, so the probe needs a UI reply handler it does not normally have.
+  const rpc = new PiRpc(
+    probeId,
+    autoDenyExtensionUi(probeId, writeChild),
+    flavor.label,
+  );
 
   const stop = async () => {
     rpc.close();
@@ -54,7 +65,7 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
+      buildPiSpawnArgs(flavor, { noSession: true }),
       cwd,
       undefined,
       flavor.id,

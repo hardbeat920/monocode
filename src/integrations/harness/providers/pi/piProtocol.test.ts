@@ -53,7 +53,7 @@ describe("buildPiSpawnArgs", () => {
     ]);
   });
 
-  it("strips extensions for throwaway catalog probes", () => {
+  it("strips extensions when a job asks for it", () => {
     expect(
       buildPiSpawnArgs(PI_FLAVOR, { noSession: true, noExtensions: true }),
     ).toEqual(["--mode", "rpc", "--no-session", "--no-extensions"]);

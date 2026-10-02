@@ -132,9 +132,10 @@ export function parsePiVersion(output: string): string | null {
 }
 
 /**
- * Spawn args for a live session. Intentionally omits `--no-extensions` so the
- * user's global Pi packages (todos, subagents, custom tools) still load.
- * Project-local `.pi` resources follow Pi's saved trust.json; RPC never prompts.
+ * Spawn args for live sessions and catalog probes. Extensions stay on so the
+ * user's global Pi packages (todos, subagents, custom providers) load. Only
+ * isolated one-shot jobs strip them. Project-local `.pi` resources follow Pi's
+ * saved trust.json; RPC never prompts.
  */
 export function buildPiSpawnArgs(
   flavor: PiFlavor,
@@ -143,7 +144,7 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Catalog probes and throwaway text jobs — never for live chat. */
+    /** One-shot isolated jobs: skip extension discovery. Never for chat or discovery. */
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
@@ -353,6 +354,25 @@ export function needsExtensionUiReply(request: PiExtensionUiRequest): boolean {
     request.method === "input" ||
     request.method === "editor"
   );
+}
+
+/**
+ * `onFrame` handler for probes that load extensions but have no UI attached.
+ * Answers every extension dialog with "deny" so a startup dialog cannot hold
+ * the process until the probe times out.
+ */
+export function autoDenyExtensionUi(
+  childId: string,
+  write: (childId: string, line: string) => Promise<void>,
+): (record: Record<string, unknown>) => void {
+  return (record) => {
+    const request = parseExtensionUiRequest(record);
+    if (!request || !needsExtensionUiReply(request)) return;
+    void write(
+      childId,
+      JSON.stringify(extensionUiResponse(request, "deny")),
+    ).catch(() => undefined);
+  };
 }
 
 export function sessionFromState(data: unknown): {
