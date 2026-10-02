@@ -240,6 +240,43 @@ describe("settings pages", () => {
       accountId: "account-work",
     });
     expect(providerAccounts("codex")).toHaveLength(1);
+    // Codex is not installed in this suite, so once its last isolated profile
+    // is gone there is nothing left to manage and it drops out of the list.
+    expect(
+      container.querySelector("#setting-provider-accounts")?.textContent,
+    ).not.toContain("Codex");
+  });
+
+  it("hides the default account of an uninstalled provider CLI", async () => {
+    await render("providers");
+    const accounts = container.querySelector("#setting-provider-accounts")!;
+
+    expect(accounts.textContent).toContain("Claude Code");
+    expect(accounts.textContent).not.toContain("Codex");
+    expect(
+      accounts.querySelectorAll('[aria-label="Rename Default account"]'),
+    ).toHaveLength(1);
+  });
+
+  it("keeps isolated profiles of an uninstalled CLI removable", async () => {
+    saveProviderAccount({
+      id: "account-work",
+      provider: "codex",
+      label: "Work",
+    });
+    await render("providers");
+    const accounts = container.querySelector("#setting-provider-accounts")!;
+
+    expect(accounts.textContent).toContain("CLI not installed");
+    expect(accounts.querySelector('[aria-label="Remove Work"]')).not.toBeNull();
+    expect(
+      accounts.querySelectorAll('[aria-label="Rename Default account"]'),
+    ).toHaveLength(1);
+    expect(
+      Array.from(accounts.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Add account",
+      ),
+    ).toHaveLength(1);
   });
 
   it("validates and stores Codex and OpenCode binary overrides", async () => {

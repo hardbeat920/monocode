@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
+  listedProviderAccounts,
   newProviderAccount,
   providerAccountLabel,
   providerAccountExists,
@@ -27,6 +28,29 @@ describe("provider accounts", () => {
         isDefault: true,
       },
     ]);
+  });
+
+  it("lists the default account only while its provider CLI is installed", () => {
+    saveProviderAccount({
+      id: "account-work",
+      provider: "codex",
+      label: "Work",
+    });
+    const ids = (cli: { installed: boolean; probed: boolean }) =>
+      listedProviderAccounts("codex", cli).map((account) => account.id);
+
+    expect(ids({ installed: true, probed: true })).toEqual([
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+      "account-work",
+    ]);
+    expect(ids({ installed: false, probed: false })).toEqual([
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+      "account-work",
+    ]);
+    expect(ids({ installed: false, probed: true })).toEqual(["account-work"]);
+    expect(
+      listedProviderAccounts("claude", { installed: false, probed: true }),
+    ).toEqual([]);
   });
 
   it("stores named profiles separately per provider", () => {

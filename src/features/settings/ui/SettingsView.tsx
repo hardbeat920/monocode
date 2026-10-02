@@ -142,6 +142,7 @@ import {
 import {
   getHarnessAvailabilitySnapshot,
   harnessUnavailableHint,
+  hasProbedHarnessAvailability,
   isHarnessAvailable,
   probeHarnessAvailability,
   subscribeHarnessAvailability,
@@ -207,8 +208,8 @@ import {
   subscribeProjectProviders,
 } from "../../sessions/model/projectProviders";
 import {
+  listedProviderAccounts,
   newProviderAccount,
-  providerAccounts,
   PROVIDER_ACCOUNT_PROVIDERS,
   removeProviderAccount,
   renameProviderAccount,
@@ -3256,6 +3257,23 @@ function ProviderAccountsSettings() {
     () => subscribeProviderAccounts(() => setVersion((value) => value + 1)),
     [],
   );
+  useSyncExternalStore(
+    subscribeHarnessAvailability,
+    getHarnessAvailabilitySnapshot,
+    getHarnessAvailabilitySnapshot,
+  );
+  const probed = hasProbedHarnessAvailability();
+  const cliInstalled = (provider: ProviderAccountProvider) =>
+    !probed || isHarnessAvailable(provider);
+  const listed = (provider: ProviderAccountProvider) =>
+    listedProviderAccounts(provider, {
+      installed: isHarnessAvailable(provider),
+      probed,
+    });
+  // An uninstalled CLI with no isolated profiles has nothing to manage.
+  const visibleProviders = PROVIDER_ACCOUNT_PROVIDERS.filter(
+    (provider) => listed(provider).length > 0,
+  );
 
   const startAdd = (provider: ProviderAccountProvider) => {
     setError(null);
@@ -3336,7 +3354,7 @@ function ProviderAccountsSettings() {
   };
 
   const identities = useProviderAccountIdentities(
-    PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
+    visibleProviders.flatMap(listed),
     version,
   );
   const usage = useProviderAccountUsage(version);
@@ -3348,8 +3366,14 @@ function ProviderAccountsSettings() {
       description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
       action={<AccountUsageRefresh usage={usage} />}
     >
-      {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
-        const accounts = providerAccounts(provider);
+      {visibleProviders.length === 0 ? (
+        <p className="px-4 py-3.5 text-[12px] text-content/45">
+          No provider CLI that supports accounts is installed.
+        </p>
+      ) : null}
+      {visibleProviders.map((provider) => {
+        const accounts = listed(provider);
+        const installed = cliInstalled(provider);
         const adding = editor?.provider === provider && !editor.accountId;
         return (
           <div
@@ -3368,18 +3392,21 @@ function ProviderAccountsSettings() {
                   <div className="mt-0.5 text-[11px] text-content/40">
                     {accounts.length}{" "}
                     {accounts.length === 1 ? "account" : "accounts"}
+                    {installed ? null : " · CLI not installed"}
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={Boolean(working)}
-                onClick={() => startAdd(provider)}
-                className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
-              >
-                <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
-                Add account
-              </button>
+              {installed ? (
+                <button
+                  type="button"
+                  disabled={Boolean(working)}
+                  onClick={() => startAdd(provider)}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+                >
+                  <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
+                  Add account
+                </button>
+              ) : null}
             </div>
             <div className="border-t border-content/5 bg-content/[0.015] pl-10">
               {accounts.map((account) => {

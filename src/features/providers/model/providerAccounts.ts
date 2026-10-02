@@ -84,6 +84,22 @@ export function providerAccounts(
   ];
 }
 
+/**
+ * The accounts worth listing for a provider. The default profile is the
+ * provider CLI's own sign-in, so it only exists while that CLI is installed.
+ * Isolated profiles stay listed regardless so their credentials can still be
+ * removed. Before the first availability probe everything is kept, so the list
+ * does not collapse and then jump back once CLIs are found.
+ */
+export function listedProviderAccounts(
+  provider: ProviderAccountProvider,
+  cli: { installed: boolean; probed: boolean },
+): ProviderAccount[] {
+  const accounts = providerAccounts(provider);
+  if (!cli.probed || cli.installed) return accounts;
+  return accounts.filter((account) => !account.isDefault);
+}
+
 export function newProviderAccount(
   provider: ProviderAccountProvider,
   label: string,
