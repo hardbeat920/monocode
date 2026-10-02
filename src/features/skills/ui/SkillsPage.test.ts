@@ -479,6 +479,38 @@ describe("Settings skill preview", () => {
     },
   );
 
+  it("labels plugin and synced skills by origin instead of Personal", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command !== "list_skills") throw new Error(`Unexpected command: ${command}`);
+      return [
+        ...skills,
+        {
+          name: "eng:open-pr",
+          description: "Open a PR",
+          path: "/home/test/.claude/plugins/cache/org/eng/1/skills/open-pr/SKILL.md",
+          scope: "user",
+          source: "claude",
+          origin: "plugin",
+        },
+        {
+          name: "anthropic-skills:pdf",
+          description: "Work with PDFs",
+          path: "/home/test/.claude/skills/synced/org_user/pdf/SKILL.md",
+          scope: "user",
+          source: "claude",
+          origin: "synced",
+        },
+      ] satisfies DiscoveredSkill[];
+    });
+    await render();
+    const badge = (name: string) =>
+      button(name).parentElement?.querySelector("span")?.textContent;
+    expect(badge("Project guide")).toBe("Project");
+    expect(badge("Personal guide")).toBe("Personal");
+    expect(badge("eng:open-pr")).toBe("Plugin");
+    expect(badge("anthropic-skills:pdf")).toBe("Synced");
+  });
+
   it("opens project and harness skills using Preview skill", async () => {
     await render();
     for (const skill of [skills[0], skills[2]]) {

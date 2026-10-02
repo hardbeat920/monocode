@@ -156,6 +156,7 @@ export type DiscoveredSkill = {
     | "hermes"
     | "antigravity"
     | "monocode";
+  origin?: "plugin" | "synced";
 };
 
 export function listSkills(
