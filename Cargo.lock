@@ -4522,6 +4522,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-view-composer"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-markdown",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-files"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-editor",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-scm"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-editor",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "monocode-view-transcript"
 version = "0.6.0"
 dependencies = [
