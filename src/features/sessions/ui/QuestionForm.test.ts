@@ -182,4 +182,45 @@ describe("QuestionForm free text", () => {
       custom: { msg: "fix: x\n\n  body\n" },
     });
   });
+
+  it("submits an empty answer when allowed, and Skip still skips", () => {
+    const onReply = vi.fn();
+    const render = (requestId: number) =>
+      act(() =>
+        root.render(
+          createElement(QuestionForm, {
+            prompt: {
+              requestId,
+              questions: [
+                {
+                  id: "pick",
+                  prompt: "Numbers?",
+                  multiSelect: false,
+                  allowCustom: true,
+                  options: [],
+                  allowEmpty: true,
+                },
+              ],
+            },
+            onReply,
+          }),
+        ),
+      );
+    const button = (label: string) =>
+      Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === label,
+      )!;
+
+    render(9);
+    act(() => button("Continue").click());
+    expect(onReply).toHaveBeenLastCalledWith(9, {
+      kind: "answered",
+      answers: {},
+      custom: { pick: "" },
+    });
+
+    render(10);
+    act(() => button("Skip").click());
+    expect(onReply).toHaveBeenLastCalledWith(10, { kind: "skipped" });
+  });
 });

@@ -1062,6 +1062,7 @@ async function handleExtensionUi(
             placeholder: request.placeholder,
             defaultText: request.prefill,
             multiline: request.method === "editor",
+            allowEmpty: true,
           }),
         },
       ],

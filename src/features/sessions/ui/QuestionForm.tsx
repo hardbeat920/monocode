@@ -369,7 +369,10 @@ function QuestionFields({
 
 function defaultCustom(questions: UserQuestion[]): Record<string, string> {
   return Object.fromEntries(
-    questions.flatMap((q) => (q.defaultText ? [[q.id, q.defaultText]] : [])),
+    questions.flatMap((q) => {
+      const text = q.defaultText ?? (q.allowEmpty ? "" : undefined);
+      return text === undefined ? [] : [[q.id, text]];
+    }),
   );
 }
 
