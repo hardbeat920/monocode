@@ -4,6 +4,7 @@ import {
   errorRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseDroidUsage,
   parseOpencodeGoUsage,
   unavailableRateLimits,
   type ProviderRateLimits,
@@ -40,9 +41,7 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
   } catch (error) {
     return errorRateLimits(
       "opencode",
-      error instanceof Error
-        ? error.message
-        : "OpenCode Go usage unavailable",
+      error instanceof Error ? error.message : "OpenCode Go usage unavailable",
     );
   }
   if (result.status === "ok" && result.body) {
@@ -134,7 +133,12 @@ export async function fetchCodexRateLimits(
       accountId,
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
+    if (
+      parsed.session ||
+      parsed.weekly ||
+      parsed.monthly ||
+      parsed.resetCredits
+    ) {
       return parsed;
     }
     const rec = asRecord(result);
@@ -297,4 +301,47 @@ async function withTimeout<T>(
     if (timer) clearTimeout(timer);
     void pending.catch(() => undefined);
   }
+}
+
+type DroidUsageFetch = {
+  status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
+  body?: string | null;
+  error?: string | null;
+};
+
+/**
+ * Fetch Factory Droid 5h / weekly / monthly usage. The Tauri command reads
+ * the token Droid stores in ~/.factory and calls Factory's billing API.
+ */
+export async function fetchDroidRateLimits(): Promise<ProviderRateLimits> {
+  let result: DroidUsageFetch;
+  try {
+    result = await invoke<DroidUsageFetch>("fetch_droid_usage");
+  } catch (error) {
+    return errorRateLimits(
+      "droid",
+      error instanceof Error ? error.message : "Droid usage unavailable",
+    );
+  }
+  if (result.status === "ok" && result.body) {
+    let parsed: ProviderRateLimits;
+    try {
+      parsed = parseDroidUsage(JSON.parse(result.body));
+    } catch {
+      return errorRateLimits("droid", "Droid usage response was not JSON");
+    }
+    if (parsed.session || parsed.weekly || parsed.monthly) return parsed;
+    return unavailableRateLimits("droid", "No Droid usage data");
+  }
+  if (result.status === "unavailable") {
+    return unavailableRateLimits(
+      "droid",
+      result.error?.trim() || "Droid not signed in",
+    );
+  }
+  return errorRateLimits(
+    "droid",
+    result.error?.trim() || "Droid usage unavailable",
+  );
 }

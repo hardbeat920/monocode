@@ -24,6 +24,7 @@ import {
   grokSessionNewParams,
   grokSpawnArgs,
   permissionOptionId,
+  permissionOutcome,
   permissionRequestFromAcp,
   pickAutoOption,
   planFromExitPlan,
@@ -37,7 +38,10 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
-import { questionPromptTitle, type UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
+import {
+  questionPromptTitle,
+  type UserQuestionReply,
+} from "../../../../features/sessions/model/userQuestion";
 
 type Live = {
   subagents: AcpSubagents;
@@ -496,7 +500,10 @@ function handleNotification(live: Live, method: string, params: unknown) {
         ? unwrapSessionNotification(params)
         : null;
   if (!updateParams) return;
-  for (const event of live.subagents.route(updateParams, eventsFromAcpUpdate(updateParams))) {
+  for (const event of live.subagents.route(
+    updateParams,
+    eventsFromAcpUpdate(updateParams),
+  )) {
     if (
       event.type === "context" &&
       event.window == null &&
@@ -571,7 +578,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
       request.optionIds,
     );
     await live.acp.respond(id, {
-      outcome: { outcome: "selected", optionId },
+      outcome: permissionOutcome(optionId),
     });
     return;
   }
@@ -580,6 +587,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
     live.runtimeMode,
     request.kind,
     request.optionIds,
+    request.optionKinds,
   );
   if (auto) {
     await live.acp.respond(id, {
@@ -604,10 +612,9 @@ async function handlePermission(live: Live, id: number, params: unknown) {
   live.onEvent({ type: "approval.resolved", requestId: id, decision });
 
   await live.acp.respond(id, {
-    outcome: {
-      outcome: "selected",
-      optionId: permissionOptionId(decision, request.optionIds),
-    },
+    outcome: permissionOutcome(
+      permissionOptionId(decision, request.optionIds, request.optionKinds),
+    ),
   });
 }
 

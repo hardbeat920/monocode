@@ -20,6 +20,7 @@ const binaryNames: Record<RemoteProvider, string[]> = {
   omp: ["omp"],
   fx: ["fx"],
   hermes: ["hermes"],
+  droid: ["droid"],
   antigravity: ["agy_acp_server.par"],
 };
 
@@ -37,6 +38,7 @@ const providerDirectories = (provider: RemoteProvider): string[] => {
       join(home, ".hermes", "hermes-agent", "venv", "bin"),
       join(home, ".hermes", "hermes-agent", ".venv", "bin"),
     ],
+    droid: [join(home, ".factory", "bin"), join(home, "bin")],
     antigravity: [join(home, ".local", "share", "agy-acp")],
   };
   return [

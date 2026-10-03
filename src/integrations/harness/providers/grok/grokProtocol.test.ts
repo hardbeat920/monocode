@@ -361,3 +361,38 @@ describe("grok protocol", () => {
     expect(planFromExitPlan({ planContent: "Ship it" })).toBe("Ship it");
   });
 });
+
+describe("ACP permission policy", () => {
+  it("requires review for unresolved and non-edit kinds", () => {
+    for (const kind of [
+      undefined,
+      "delete",
+      "move",
+      "switch_mode",
+      "execute",
+      "other",
+    ]) {
+      expect(
+        pickAutoOption("auto-accept-edits", kind, [
+          "allow-once",
+          "reject-once",
+        ]),
+      ).toBeNull();
+    }
+  });
+  it("uses offered kinds and never invents option identifiers", () => {
+    const ids = ["proceed_once", "cancel"];
+    const kinds = { proceed_once: "allow_once", cancel: "reject_once" };
+    expect(permissionOptionId("allow", ids, kinds)).toBe("proceed_once");
+    expect(permissionOptionId("deny", ids, kinds)).toBe("cancel");
+    expect(pickAutoOption("full-access", "execute", ids, kinds)).toBe(
+      "proceed_once",
+    );
+    expect(permissionOptionId("deny", ["allow-once"])).toBeNull();
+    expect(
+      permissionOptionId("allow", ["allow-once"], {
+        "allow-once": "reject_once",
+      }),
+    ).toBeNull();
+  });
+});

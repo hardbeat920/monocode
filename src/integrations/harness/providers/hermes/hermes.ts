@@ -24,6 +24,7 @@ import {
 import {
   eventsFromAcpUpdate,
   permissionOptionId,
+  permissionOutcome,
   permissionRequestFromAcp,
   pickAutoOption,
 } from "../grok/grokProtocol";
@@ -572,7 +573,11 @@ async function handlePermission(
     await respondPermission(
       live,
       id,
-      permissionOptionId(readOnly ? "allow" : "deny", request.optionIds),
+      permissionOptionId(
+        readOnly ? "allow" : "deny",
+        request.optionIds,
+        request.optionKinds,
+      ),
     );
     return;
   }
@@ -581,6 +586,7 @@ async function handlePermission(
     live.runtimeMode,
     request.kind,
     request.optionIds,
+    request.optionKinds,
   );
   if (automatic) {
     await respondPermission(live, id, automatic);
@@ -603,17 +609,17 @@ async function handlePermission(
   await respondPermission(
     live,
     id,
-    permissionOptionId(decision, request.optionIds),
+    permissionOptionId(decision, request.optionIds, request.optionKinds),
   );
 }
 
 async function respondPermission(
   live: Live,
   id: number,
-  optionId: string,
+  optionId: string | null,
 ): Promise<void> {
   await live.acp.respond(id, {
-    outcome: { outcome: "selected", optionId },
+    outcome: permissionOutcome(optionId),
   });
 }
 

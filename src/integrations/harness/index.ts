@@ -98,6 +98,14 @@ export {
   bindHermesSession,
 } from "./providers/hermes/hermes";
 export {
+  sendDroidTurn,
+  cancelDroidTurn,
+  respondDroidApproval,
+  stopDroidSession,
+  forgetDroidSession,
+  bindDroidSession,
+} from "./providers/droid/droid";
+export {
   sendAntigravityTurn,
   steerAntigravityTurn,
   cancelAntigravityTurn,
@@ -155,6 +163,7 @@ export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";
 export { refreshHermesCatalog } from "./providers/hermes/hermesCatalog";
+export { refreshDroidCatalog } from "./providers/droid/droidCatalog";
 export { refreshAntigravityCatalog } from "./providers/antigravity/antigravityCatalog";
 export { registerBuiltinHarnesses } from "./core/register";
 export {

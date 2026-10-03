@@ -3661,10 +3661,13 @@ function ProviderRow({
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
 
+  // Providers such as Droid and Hermes ship a placeholder model, so a
+  // non-empty list does not mean the live catalog has loaded. The refresh
+  // itself is a no-op once it has.
   useEffect(() => {
-    if (!available || models.length > 0) return;
+    if (!available) return;
     void refreshHarnessCatalogs([harness]);
-  }, [available, harness, models.length]);
+  }, [available, harness]);
 
   return (
     <Row

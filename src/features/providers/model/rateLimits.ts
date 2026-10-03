@@ -1,6 +1,6 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex" | "opencode";
+export type RateLimitProvider = "claude" | "codex" | "opencode" | "droid";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -514,4 +514,39 @@ function numberField(rec: Record<string, unknown>, key: string): number | null {
 function stringField(rec: Record<string, unknown>, key: string): string | null {
   const value = rec[key];
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Parse Factory's `/api/billing/limits` payload:
+ * { limits: { standard: { fiveHour: { usedPercent, windowEnd }, weekly, monthly },
+ *             core: {...} } }
+ * Only the standard pool is shown; it is the one Droid gates models on.
+ */
+export function parseDroidUsage(result: unknown): ProviderRateLimits {
+  const standard = asRecord(asRecord(asRecord(result)?.limits)?.standard);
+  return {
+    provider: "droid",
+    session: mapDroidWindow(standard?.fiveHour, SESSION_WINDOW_MINUTES),
+    weekly: mapDroidWindow(standard?.weekly, WEEKLY_WINDOW_MINUTES),
+    monthly: mapDroidWindow(standard?.monthly, MONTHLY_WINDOW_MINUTES),
+    resetCredits: null,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+function mapDroidWindow(
+  raw: unknown,
+  windowMinutes: number,
+): RateLimitWindow | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const usedPercent = numberField(rec, "usedPercent");
+  if (usedPercent == null) return null;
+  return {
+    usedPercent: clampUsedPercent(usedPercent),
+    windowMinutes,
+    resetsAt: parseResetTimestamp(rec.windowEnd),
+  };
 }
