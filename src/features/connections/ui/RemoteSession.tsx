@@ -21,6 +21,7 @@ import { notifyGitChanged } from "../../../platform/tauri/fs";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import { registerRemoteSessionActions } from "../model/remoteSessionActions";
+import { loadResumeAtReset } from "../../settings/model/settings";
 import {
   clearPendingRemoteCommand,
   loadRemoteSession,
@@ -828,11 +829,17 @@ function ConnectedRemoteSession({
     !attachments.length &&
     !draftBlockId &&
     intent === "default"
-      ? { type: "compact", commandId, sessionId: id }
+      ? {
+          type: "compact",
+          commandId,
+          sessionId: id,
+          resumeAtReset: loadResumeAtReset(),
+        }
       : {
           type: "send",
           commandId,
           sessionId: id,
+          resumeAtReset: loadResumeAtReset(),
           text,
           attachments,
           intent,
@@ -1132,6 +1139,16 @@ function ConnectedRemoteSession({
       decision,
     });
   };
+  // The host owns the limit; a local edit would be undone by its next snapshot.
+  const usageLimit = (action: "arm" | "disarm" | "dismiss") => {
+    if (!hostSession?.usageLimit) return;
+    void run({
+      type: "usageLimit",
+      commandId: crypto.randomUUID(),
+      sessionId: hostSession.id,
+      action,
+    });
+  };
   const answer = (
     requestId: number,
     reply: Parameters<SessionPaneProps["onQuestionReply"]>[2],
@@ -1251,8 +1268,9 @@ function ConnectedRemoteSession({
     onSteerQueuedMessage: noop,
     onResumeQueue: noop,
     onUsageLimitResume: noop,
-    onUsageLimitResumeAtReset: noop,
-    onUsageLimitDismiss: noop,
+    onUsageLimitResumeAtReset: (_, enabled) =>
+      usageLimit(enabled ? "arm" : "disarm"),
+    onUsageLimitDismiss: () => usageLimit("dismiss"),
     onOpenPlan: (_, blockId) => onOpenPlan(shell.id, blockId),
     onBuildPlan: (_, blockId, target) => buildPlan(blockId, target),
     onSecondOpinion: undefined,

@@ -160,11 +160,18 @@ export type HostCommand =
       modelSettings: Record<string, string>;
       runtimeMode: RuntimeMode;
     }
-  | { type: "compact"; commandId: string; sessionId: string }
+  | {
+      type: "compact";
+      commandId: string;
+      sessionId: string;
+      resumeAtReset?: boolean;
+    }
   | {
       type: "send";
       commandId: string;
       sessionId: string;
+      /** The desktop's "Resume at reset" setting for a limit this turn hits. */
+      resumeAtReset?: boolean;
       text: string;
       attachments?: RemoteAttachment[];
       intent?: "default" | "plan" | "build";
@@ -183,6 +190,12 @@ export type HostCommand =
       commandId: string;
       sessionId: string;
       draftBlockId: string;
+    }
+  | {
+      type: "usageLimit";
+      commandId: string;
+      sessionId: string;
+      action: "arm" | "disarm" | "dismiss";
     }
   | { type: "cancel"; commandId: string; sessionId: string; runId: string }
   | {

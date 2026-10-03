@@ -437,6 +437,7 @@ import {
   USAGE_LIMIT_RESUME_GRACE_MS,
   usageLimitResumeDue,
 } from "../features/sessions/model/usageLimit";
+import { stopSessionTurn } from "../features/sessions/model/stopTurn";
 import {
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
@@ -8701,17 +8702,7 @@ function Workspace({
         }
       }
       setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          const stopped = stopStreaming(s);
-          const completed = isPreparingHandoff(stopped)
-            ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
-            : stopped;
-          const ready = { ...completed, worktreePreparing: undefined };
-          return ready.queuedMessages?.length
-            ? { ...ready, queueStatus: "paused" }
-            : ready;
-        }),
+        prev.map((s) => (s.id === sessionId ? stopSessionTurn(s) : s)),
       );
       if (session) {
         notifyReviewChanged(sessionId);

@@ -7,6 +7,10 @@ import type { HostProvider } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
+import {
+  USAGE_LIMIT_RESUME_GRACE_MS,
+  usageLimitResumeDue,
+} from "../src/features/sessions/model/usageLimit";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -869,6 +873,127 @@ describe("headless session ownership", () => {
     expect(store.events(id, 100_000).snapshot?.session.id).toBe(id);
   });
 
+  it("arms a remote usage limit only from the desktop's setting", async () => {
+    const { engine, store, turns, id } = setup();
+    const limit = async (commandId: string, resumeAtReset?: boolean) => {
+      engine.command({
+        type: "send",
+        commandId,
+        sessionId: id,
+        text: "Work",
+        ...(resumeAtReset === undefined ? {} : { resumeAtReset }),
+      });
+      await vi.waitFor(() => expect(turns.at(-1)?.input.text).toBe("Work"));
+      const turn = turns.pop()!;
+      turn.input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+      turn.finish();
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+      return store.session(id).session.usageLimit;
+    };
+    expect(await limit("off", false)).toEqual({
+      resetsAt: 5_000,
+      resumeAtReset: false,
+    });
+    expect(await limit("on", true)).toEqual({
+      resetsAt: 5_000,
+      resumeAtReset: true,
+    });
+    // An older desktop never sends the setting; it must not auto-resume.
+    expect(await limit("older", undefined)).toEqual({
+      resetsAt: 5_000,
+      resumeAtReset: false,
+    });
+  });
+
+  it("cancels, re-arms, and dismisses a remote usage limit", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({
+      type: "send",
+      commandId: "limited",
+      sessionId: id,
+      text: "Work",
+      resumeAtReset: true,
+    });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+    turns[0].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+
+    engine.command({ type: "usageLimit", commandId: "cancel", sessionId: id, action: "disarm" });
+    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: 5_000, resumeAtReset: false });
+    engine.command({ type: "usageLimit", commandId: "arm", sessionId: id, action: "arm" });
+    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: 5_000, resumeAtReset: true });
+    engine.command({ type: "usageLimit", commandId: "dismiss", sessionId: id, action: "dismiss" });
+    expect(store.session(id).session.usageLimit).toBeUndefined();
+  });
+
+  it("clears the usage limit once the host accepts the next turn", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({
+      type: "send",
+      commandId: "limited",
+      sessionId: id,
+      text: "Work",
+      resumeAtReset: true,
+    });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+    turns[0].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    expect(store.session(id).session.usageLimit?.resumeAtReset).toBe(true);
+
+    engine.command({
+      type: "send",
+      commandId: "continue",
+      sessionId: id,
+      text: "Continue",
+      resumeAtReset: true,
+    });
+    // Left in place, the armed limit would resume this session again after
+    // the continue turn ends.
+    expect(store.session(id).session.usageLimit).toBeUndefined();
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    turns[1].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    expect(store.session(id).session.usageLimit).toBeUndefined();
+  });
+
+  it.each([
+    ["before", false],
+    ["after", true],
+  ] as const)(
+    "disarms resume-at-reset when the user stops a turn limited %s Stop",
+    async (_when, lateEvent) => {
+      const { engine, store, turns, id } = setup();
+      engine.command({
+        type: "send",
+        commandId: "limited",
+        sessionId: id,
+        text: "Work",
+        resumeAtReset: true,
+      });
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      const limited = { type: "usage.limited", resetsAt: 5_000 } as const;
+      if (!lateEvent) turns[0].input.onEvent(limited);
+      engine.command({
+        type: "cancel",
+        commandId: "stop",
+        sessionId: id,
+        runId: store.session(id).runId,
+      });
+      if (lateEvent) turns[0].input.onEvent(limited);
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+      const stopped = store.session(id).session;
+      expect(stopped.usageLimit).toEqual({
+        resetsAt: 5_000,
+        resumeAtReset: false,
+      });
+      expect(
+        usageLimitResumeDue(stopped, 5_000 + USAGE_LIMIT_RESUME_GRACE_MS),
+      ).toBe(false);
+    },
+  );
+
   it("validates untrusted commands before execution", () => {
     expect(() =>
       parseCommand({ type: "send", commandId: "x", sessionId: "y", text: "" }),
@@ -891,6 +1016,23 @@ describe("headless session ownership", () => {
         runId: "z",
         requestId: 1,
         reply: { kind: "answered", answers: { a: [42] } },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseCommand({
+        type: "usageLimit",
+        commandId: "x",
+        sessionId: "y",
+        action: "resume",
+      }),
+    ).toThrow();
+    expect(() =>
+      parseCommand({
+        type: "send",
+        commandId: "x",
+        sessionId: "y",
+        text: "Work",
+        resumeAtReset: "yes",
       }),
     ).toThrow();
   });

@@ -9,6 +9,7 @@ import {
 } from "../src/integrations/harness/core/apply";
 import { resolveModel } from "../src/features/sessions/model/models";
 import { isVisionImage } from "../src/features/sessions/model/attachments";
+import { disarmUsageLimit } from "../src/features/sessions/model/usageLimit";
 import type {
   HarnessEvent,
   HarnessSessionInput,
@@ -123,7 +124,25 @@ export function parseCommand(input: unknown): HostCommand {
       runtimeMode: v.runtimeMode as Session["runtimeMode"],
     };
   }
-  if (v.type === "compact") return { type: "compact", commandId, sessionId };
+  if (v.resumeAtReset !== undefined && typeof v.resumeAtReset !== "boolean")
+    throw new Error("Invalid resume at reset setting");
+  const resumeAtReset =
+    (v.type === "send" || v.type === "compact") &&
+    typeof v.resumeAtReset === "boolean"
+      ? { resumeAtReset: v.resumeAtReset }
+      : {};
+  if (v.type === "compact")
+    return { type: "compact", commandId, sessionId, ...resumeAtReset };
+  if (v.type === "usageLimit") {
+    if (!["arm", "disarm", "dismiss"].includes(String(v.action)))
+      throw new Error("Invalid usage limit action");
+    return {
+      type: "usageLimit",
+      commandId,
+      sessionId,
+      action: v.action as "arm" | "disarm" | "dismiss",
+    };
+  }
   if (v.type === "send" || v.type === "draft") {
     const attachments = parseRemoteAttachments(v.attachments);
     if (
@@ -150,6 +169,7 @@ export function parseCommand(input: unknown): HostCommand {
       type: v.type,
       commandId,
       sessionId,
+      ...resumeAtReset,
       text: v.text,
       ...(attachments.length ? { attachments } : {}),
       ...(v.type === "send" && v.intent
@@ -247,7 +267,13 @@ export class HostEngine {
   private switchingProjects = new Set<string>();
   private running = new Map<
     string,
-    { runId: string; done: Promise<void>; cancelled: boolean; persistenceFailed: boolean }
+    {
+      runId: string;
+      done: Promise<void>;
+      cancelled: boolean;
+      persistenceFailed: boolean;
+      resumeAtReset?: boolean;
+    }
   >();
   /** Running sessions, including streamed events not yet written to disk. */
   private live = new Map<
@@ -507,6 +533,24 @@ export class HostEngine {
               ],
             },
           };
+        } else if (command.type === "usageLimit") {
+          const limit = value.session.usageLimit;
+          if (limit) {
+            const { usageLimit: _dismissed, ...rest } = value.session;
+            value = {
+              ...value,
+              session:
+                command.action === "dismiss"
+                  ? rest
+                  : {
+                      ...value.session,
+                      usageLimit: {
+                        ...limit,
+                        resumeAtReset: command.action === "arm",
+                      },
+                    },
+            };
+          }
         } else if (command.type === "removeDraft") {
           const draft = value.session.blocks.find(
             (block) => block.id === command.draftBlockId && block.draft,
@@ -573,12 +617,15 @@ export class HostEngine {
             value.session.harness,
             value.session.model,
           );
+          // A new turn answers the last usage limit, so its notice (and any
+          // armed resume) must not outlive it.
+          const { usageLimit: _answered, ...current } = value.session;
           value = {
             ...value,
             status: "running",
             runId,
             session: {
-              ...value.session,
+              ...current,
               busy: true,
               pendingQuestion: undefined,
               title:
@@ -628,6 +675,7 @@ export class HostEngine {
               command.type === "compact" ? null : command.text,
               command.type === "send" ? command.intent : undefined,
               attachments,
+              command.resumeAtReset,
             );
             if (firstTurn && command.type === "send") {
               this.generateFirstTurnNames(
@@ -643,9 +691,14 @@ export class HostEngine {
               "This request belongs to a finished or replaced turn",
             );
           if (command.type === "cancel") {
+            // Stop means stop: resume-at-reset must not start a turn later.
+            value = { ...value, session: disarmUsageLimit(value.session) };
             effect = () => {
               const active = this.running.get(command.sessionId);
-              if (active) active.cancelled = true;
+              if (active) {
+                active.cancelled = true;
+                active.resumeAtReset = false;
+              }
               void provider
                 .cancel(command.sessionId)
                 .catch(() => provider.stop(command.sessionId));
@@ -780,10 +833,17 @@ export class HostEngine {
     prompt: string | null,
     intent?: "default" | "plan" | "build",
     attachments: Session["blocks"][number]["attachments"] = [],
+    resumeAtReset?: boolean,
   ): void {
     const { session, runId } = value;
     const provider = this.provider(session.harness);
-    const active = { runId: runId!, done: Promise.resolve(), cancelled: false, persistenceFailed: false };
+    const active = {
+      runId: runId!,
+      done: Promise.resolve(),
+      cancelled: false,
+      persistenceFailed: false,
+      resumeAtReset,
+    };
     this.running.set(session.id, active);
     this.live.set(session.id, { value, events: [] });
     active.done = Promise.resolve()
@@ -836,7 +896,9 @@ export class HostEngine {
               : error;
           this.save(
             this.settled(
-              latest,
+              active.cancelled
+                ? { ...latest, session: disarmUsageLimit(latest.session) }
+                : latest,
               this.closing || active.persistenceFailed ? "interrupted" : "idle",
               message,
             ),
@@ -865,7 +927,10 @@ export class HostEngine {
     const live = this.live.get(id);
     if (!live || live.value.runId !== runId || live.value.status !== "running")
       return;
-    const session = applyHarnessEvent(live.value.session, event);
+    // The host cannot read the desktop's settings; the turn carried them.
+    const session = applyHarnessEvent(live.value.session, event, {
+      resumeAtReset: this.running.get(id)?.resumeAtReset ?? false,
+    });
     if (session === live.value.session) return;
     live.value = { ...live.value, session };
     live.events.push(event);
