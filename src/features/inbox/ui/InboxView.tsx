@@ -85,6 +85,7 @@ import {
   applyInboxFilters,
   connectableInboxSources,
   hasActiveInboxFilters,
+  inboxSourceItems,
   loadInboxConnections,
   linearProjectOptions,
   inboxFetchState,
@@ -150,6 +151,22 @@ import {
   type JiraIssueThread,
   type JiraProject,
 } from "../model/jira";
+import {
+  ASANA_CHANGE_EVENT,
+  asanaConnected,
+  asanaProjectIdsLinkedTo,
+  loadAsanaProjectLinks,
+  asanaIssueComment,
+  asanaIssueDetails,
+  asanaIssueThread,
+  listAsanaProjects,
+  loadHiddenAsanaProjectIds,
+  peekAsanaIssueDetails,
+  peekAsanaIssueThread,
+  saveHiddenAsanaProjectIds,
+  type AsanaIssueThread,
+  type AsanaProject,
+} from "../model/asana";
 import {
   GITLAB_CHANGE_EVENT,
   gitlabConnected,
@@ -285,6 +302,7 @@ function peekInboxForRail(recents: RecentProject[], cwd: string) {
     search: "",
     linearHiddenTeamIds: loadHiddenLinearTeamIds(),
     jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
+    asanaHiddenProjectIds: loadHiddenAsanaProjectIds(),
   });
 }
 
@@ -451,6 +469,11 @@ export function InboxView({
     loadHiddenJiraProjectIds,
   );
   const [jiraProjects, setJiraProjects] = useState<JiraProject[]>([]);
+  const [asanaHiddenProjectIds, setAsanaHiddenProjectIds] = useState(
+    loadHiddenAsanaProjectIds,
+  );
+  const [asanaProjects, setAsanaProjects] = useState<AsanaProject[]>([]);
+  const [asanaLinks, setAsanaLinks] = useState(loadAsanaProjectLinks);
   const prevRefresh = useRef(refresh);
 
   const projects = useMemo(
@@ -475,6 +498,7 @@ export function InboxView({
     source,
     linearHiddenTeamIds,
     jiraHiddenProjectIds,
+    asanaHiddenProjectIds,
   );
   const fetchState = inboxFetchState(activeFilters);
   const fetchQuery = useMemo<InboxQuery>(
@@ -484,12 +508,14 @@ export function InboxView({
       search: "",
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      asanaHiddenProjectIds,
     }),
     [
       activeFilters.assignedToMe,
       fetchState,
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
+      asanaHiddenProjectIds,
     ],
   );
 
@@ -547,6 +573,16 @@ export function InboxView({
   }, []);
 
   useEffect(() => {
+    const onChange = () => {
+      setAsanaHiddenProjectIds(loadHiddenAsanaProjectIds());
+      setAsanaLinks(loadAsanaProjectLinks());
+      setRefresh((value) => value + 1);
+    };
+    window.addEventListener(ASANA_CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(ASANA_CHANGE_EVENT, onChange);
+  }, []);
+
+  useEffect(() => {
     const onChange = () => setRefresh((value) => value + 1);
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
@@ -568,9 +604,10 @@ export function InboxView({
         githubStatus(),
         linearConnected(),
         jiraConnected(),
+        asanaConnected(),
         gitlabConnected(),
         azureDevOpsConnected(),
-      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
+      ]).then(([github, linear, jira, asana, gitlab, azuredevops]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
           github:
@@ -582,6 +619,8 @@ export function InboxView({
               ? linear.value.connected
               : prev.linear,
           jira: jira.status === "fulfilled" ? jira.value.connected : prev.jira,
+          asana:
+            asana.status === "fulfilled" ? asana.value.connected : prev.asana,
           gitlab:
             gitlab.status === "fulfilled"
               ? gitlab.value.connected
@@ -596,12 +635,14 @@ export function InboxView({
     read();
     window.addEventListener(LINEAR_CHANGE_EVENT, read);
     window.addEventListener(JIRA_CHANGE_EVENT, read);
+    window.addEventListener(ASANA_CHANGE_EVENT, read);
     window.addEventListener(GITLAB_CHANGE_EVENT, read);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, read);
       window.removeEventListener(JIRA_CHANGE_EVENT, read);
+      window.removeEventListener(ASANA_CHANGE_EVENT, read);
       window.removeEventListener(GITLAB_CHANGE_EVENT, read);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
     };
@@ -667,6 +708,21 @@ export function InboxView({
   }, [source, jiraHiddenProjectIds]);
 
   useEffect(() => {
+    if (source !== "asana") return;
+    let cancelled = false;
+    void listAsanaProjects()
+      .then((next) => {
+        if (!cancelled) setAsanaProjects(next);
+      })
+      .catch(() => {
+        if (!cancelled) setAsanaProjects([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, asanaHiddenProjectIds]);
+
+  useEffect(() => {
     const force = refresh !== prevRefresh.current;
     prevRefresh.current = refresh;
     const cached = peekInboxList(projects, fetchQuery);
@@ -700,6 +756,7 @@ export function InboxView({
           github: message,
           linear: message,
           jira: message,
+          asana: message,
           gitlab: message,
           azuredevops: message,
         });
@@ -743,7 +800,7 @@ export function InboxView({
   const visibleItems = useMemo(() => {
     if (!sourceAvailable) return [];
     const visible = applyInboxFilters(
-      items,
+      inboxSourceItems(items, source, cwd),
       activeFilters,
       searchInput,
       Date.now(),
@@ -759,6 +816,7 @@ export function InboxView({
     return [targeted, ...visible];
   }, [
     activeFilters,
+    cwd,
     items,
     searchInput,
     source,
@@ -778,14 +836,12 @@ export function InboxView({
   const sourceEntries = useMemo(
     () =>
       sourceAvailable
-        ? items
-            .filter((item) => item.provider === source)
-            .map((item) => ({
-              key: inboxItemKey(item),
-              updatedAt: item.updatedAt,
-            }))
+        ? inboxSourceItems(items, source, cwd).map((item) => ({
+            key: inboxItemKey(item),
+            updatedAt: item.updatedAt,
+          }))
         : [],
-    [items, source, sourceAvailable],
+    [cwd, items, source, sourceAvailable],
   );
   const sourceHasUnseen = useMemo(
     () => sourceEntries.some(isInboxEntryUnseen),
@@ -794,6 +850,12 @@ export function InboxView({
 
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
+  const asanaUnlinked =
+    source === "asana" &&
+    !!cwd.trim() &&
+    asanaProjectIdsLinkedTo(asanaLinks, cwd).length === 0;
+  const trackerNoun = source === "asana" ? "tasks" : "issues";
+  const trackerItems = `${INBOX_SOURCE_LABELS[source]} ${trackerNoun}`;
   const sourceError = providerErrors[source] ?? null;
 
   const selectedByKey = visibleItems.find(
@@ -822,6 +884,7 @@ export function InboxView({
     if (scroller) scroller.scrollTop = 0;
   }, [
     activeFilters,
+    asanaHiddenProjectIds,
     jiraHiddenProjectIds,
     linearHiddenTeamIds,
     searchInput,
@@ -1002,6 +1065,19 @@ export function InboxView({
           <p className="px-3 py-3 text-[12px] text-content/50">
             Add a connection to start using the Inbox.
           </p>
+        ) : asanaUnlinked ? (
+          <div className="flex flex-col items-start gap-2 px-3 py-3">
+            <p className="text-[12px] text-content/50">
+              No Asana project linked to {projectName(cwd)}.
+            </p>
+            <button
+              type="button"
+              onClick={() => onOpenIntegrations("asana")}
+              className="text-[12px] text-content/65 hover:text-content"
+            >
+              Link Asana project
+            </button>
+          </div>
         ) : sourceError && visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">{sourceError}</p>
         ) : loading && items.length === 0 ? (
@@ -1013,12 +1089,12 @@ export function InboxView({
             {narrowedByUser
               ? searchNarrowed
                 ? isTrackerSource(source)
-                  ? `No matching ${INBOX_SOURCE_LABELS[source]} issues`
+                  ? `No matching ${trackerItems}`
                   : source === "gitlab"
                     ? "No matching issues or merge requests"
                     : "No matching issues or pull requests"
                 : isTrackerSource(source)
-                  ? `No ${INBOX_SOURCE_LABELS[source]} issues match these filters`
+                  ? `No ${trackerItems} match these filters`
                   : source === "gitlab" || source === "azuredevops"
                     ? activeFilters.assignedToMe
                       ? "Nothing needs your attention"
@@ -1027,7 +1103,9 @@ export function InboxView({
                         : "No ADO items match these filters"
                     : "No issues or pull requests match these filters"
               : isTrackerSource(source)
-                ? `No ${INBOX_SOURCE_LABELS[source]} issues`
+                ? source === "asana" && activeFilters.asanaDue !== "all"
+                  ? `No ${trackerItems} due in the next 7 days`
+                  : `No ${trackerItems}`
                 : source === "gitlab"
                   ? projects.length === 0
                     ? "Open a project to fill the inbox"
@@ -1099,11 +1177,14 @@ export function InboxView({
       hiddenLinearTeamIds={linearHiddenTeamIds}
       jiraProjects={jiraProjects}
       hiddenJiraProjectIds={jiraHiddenProjectIds}
+      asanaProjects={asanaProjects}
+      hiddenAsanaProjectIds={asanaHiddenProjectIds}
       source={source}
       filters={activeFilters}
       onChange={onFiltersChange}
       onLinearTeamsChange={saveHiddenLinearTeamIds}
       onJiraProjectsChange={saveHiddenJiraProjectIds}
+      onAsanaProjectsChange={saveHiddenAsanaProjectIds}
       onClose={() => setFilterMenu(null)}
     />
   ) : null;
@@ -1466,10 +1547,15 @@ function InboxCard({
       ? item.provider === "gitlab"
         ? "Merge request"
         : "Pull request"
-      : "Issue";
+      : item.provider === "asana"
+        ? "Task"
+        : "Issue";
   const time = formatRelativeTime(item.updatedAt);
   const name = projectName(item.projectPath);
-  const tracker = item.provider === "linear" || item.provider === "jira";
+  const tracker =
+    item.provider === "linear" ||
+    item.provider === "jira" ||
+    item.provider === "asana";
   const source = tracker ? item.teamName || item.repo : item.repo || name;
   const attentionLabel =
     item.provider === "gitlab" || item.provider === "azuredevops"
@@ -1969,8 +2055,10 @@ export function InboxDetail({
   const panel = mode === "panel";
   const linear = item.provider === "linear";
   const jira = item.provider === "jira";
-  const tracker = linear || jira;
+  const asana = item.provider === "asana";
+  const tracker = linear || jira || asana;
   const jiraKey = jira ? (item.identifier ?? "") : "";
+  const asanaId = asana ? (item.id ?? "") : "";
   const gitlab = item.provider === "gitlab";
   const azuredevops = item.provider === "azuredevops";
   const isPr = !tracker && item.kind === "pr";
@@ -1989,11 +2077,13 @@ export function InboxDetail({
         ? "Open in Linear"
         : jira
           ? "Open in Jira"
-          : gitlab
-            ? "Open on GitLab"
-            : azuredevops
-              ? "Open on ADO"
-              : "Open on GitHub";
+          : asana
+            ? "Open in Asana"
+            : gitlab
+              ? "Open on GitLab"
+              : azuredevops
+                ? "Open on ADO"
+                : "Open on GitHub";
   const gitlabKind =
     gitlab && (item.kind === "issue" || item.kind === "pr") ? item.kind : null;
   const azureDevOpsKind =
@@ -2004,17 +2094,19 @@ export function InboxDetail({
     ? peekLinearIssueDetails(item.id ?? "")
     : jira
       ? peekJiraIssueDetails(jiraKey)
-      : gitlabKind
-        ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
-        : azureDevOpsKind
-          ? peekAzureDevOpsWorkItemDetails(
-              item.repo,
-              azureDevOpsKind,
-              item.number,
-            )
-          : githubKind
-            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-            : null;
+      : asana
+        ? peekAsanaIssueDetails(asanaId)
+        : gitlabKind
+          ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
+          : azureDevOpsKind
+            ? peekAzureDevOpsWorkItemDetails(
+                item.repo,
+                azureDevOpsKind,
+                item.number,
+              )
+            : githubKind
+              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+              : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
@@ -2026,17 +2118,19 @@ export function InboxDetail({
     ? peekLinearIssueThread(item.id ?? "")
     : jira
       ? peekJiraIssueThread(jiraKey)
-      : gitlabKind
-        ? peekGitlabWorkItemThread(item.repo, gitlabKind, item.number)
-        : azureDevOpsKind
-          ? peekAzureDevOpsWorkItemThread(
-              item.repo,
-              azureDevOpsKind,
-              item.number,
-            )
-          : githubKind
-            ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
-            : null;
+      : asana
+        ? peekAsanaIssueThread(asanaId)
+        : gitlabKind
+          ? peekGitlabWorkItemThread(item.repo, gitlabKind, item.number)
+          : azureDevOpsKind
+            ? peekAzureDevOpsWorkItemThread(
+                item.repo,
+                azureDevOpsKind,
+                item.number,
+              )
+            : githubKind
+              ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
+              : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
@@ -2050,6 +2144,7 @@ export function InboxDetail({
     | GithubWorkItemThread
     | LinearIssueThread
     | JiraIssueThread
+    | AsanaIssueThread
     | GitlabWorkItemThread
     | AzureDevOpsWorkItemThread
     | null
@@ -2131,17 +2226,19 @@ export function InboxDetail({
       ? peekLinearIssueDetails(item.id ?? "")
       : jira
         ? peekJiraIssueDetails(jiraKey)
-        : gitlabKind
-          ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
-          : azureDevOpsKind
-            ? peekAzureDevOpsWorkItemDetails(
-                item.repo,
-                azureDevOpsKind,
-                item.number,
-              )
-            : githubKind
-              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-              : null;
+        : asana
+          ? peekAsanaIssueDetails(asanaId)
+          : gitlabKind
+            ? peekGitlabWorkItemDetails(item.repo, gitlabKind, item.number)
+            : azureDevOpsKind
+              ? peekAzureDevOpsWorkItemDetails(
+                  item.repo,
+                  azureDevOpsKind,
+                  item.number,
+                )
+              : githubKind
+                ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+                : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
       setLoading(false);
@@ -2159,7 +2256,11 @@ export function InboxDetail({
         ? jiraKey
           ? jiraIssueDetails(jiraKey)
           : Promise.reject(new Error("Missing Jira issue"))
-        : gitlabKind
+        : asana
+          ? asanaId
+            ? asanaIssueDetails(asanaId)
+            : Promise.reject(new Error("Missing Asana task"))
+          : gitlabKind
         ? gitlabWorkItemDetails(item.repo, gitlabKind, item.number)
         : azureDevOpsKind
           ? azureDevOpsWorkItemDetails(
@@ -2193,6 +2294,8 @@ export function InboxDetail({
       cancelled = true;
     };
   }, [
+    asana,
+    asanaId,
     azureDevOpsKind,
     githubKind,
     gitlabKind,
@@ -2250,6 +2353,35 @@ export function InboxDetail({
         setThread(null);
       }
       void jiraIssueThread(jiraKey)
+        .then((next) => {
+          if (cancelled) return;
+          setThread(next);
+          setThreadError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (cachedThread) return;
+          setThreadError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancelled) setThreadLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (asana) {
+      const cachedThread = peekAsanaIssueThread(asanaId);
+      if (cachedThread) {
+        setThread(cachedThread);
+        setThreadLoading(false);
+        setThreadError(null);
+      } else {
+        setThreadLoading(true);
+        setThreadError(null);
+        setThread(null);
+      }
+      void asanaIssueThread(asanaId)
         .then((next) => {
           if (cancelled) return;
           setThread(next);
@@ -2371,6 +2503,8 @@ export function InboxDetail({
       cancelled = true;
     };
   }, [
+    asana,
+    asanaId,
     azureDevOpsKind,
     githubKind,
     gitlabKind,
@@ -2457,6 +2591,16 @@ export function InboxDetail({
         setReplyTo(null);
         try {
           setThread(await jiraIssueThread(jiraKey, { force: true }));
+        } catch (err: unknown) {
+          setPostError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      if (asana) {
+        await asanaIssueComment(asanaId, body);
+        setReplyTo(null);
+        try {
+          setThread(await asanaIssueThread(asanaId, { force: true }));
         } catch (err: unknown) {
           setPostError(err instanceof Error ? err.message : String(err));
         }
@@ -2550,7 +2694,9 @@ export function InboxDetail({
           ? gitlab
             ? "Merge request"
             : "Pull request"
-          : "Issue"}
+          : asana
+            ? "Task"
+            : "Issue"}
       </span>
       <span className="shrink-0 tabular-nums">{inboxItemRef(item)}</span>
       <span
@@ -2957,7 +3103,7 @@ export function InboxDetail({
                   replyMode={
                     linear
                       ? "parent"
-                      : jira || gitlab || azuredevops
+                      : jira || asana || gitlab || azuredevops
                         ? undefined
                         : "thread"
                   }

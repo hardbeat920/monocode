@@ -1,4 +1,4 @@
-import type { InboxItem, InboxProvider } from "./githubTasks";
+import { inboxItemKey, type InboxItem, type InboxProvider } from "./githubTasks";
 import { inboxNotificationProject } from "../../notifications/model/notificationProjects";
 import type { NotificationSubject } from "../../notifications/model/notificationPreferences";
 
@@ -11,6 +11,17 @@ export function inboxNotificationSubject(
     category: item.kind === "pr" ? "pullRequests" : "issues",
     occurredAt: Date.parse(item.updatedAt),
   };
+}
+
+function revisionKey(item: InboxItem): string {
+  // An Asana task's project comes from the user's links, so linking one must
+  // not make the task look new.
+  if (item.provider === "asana") return inboxItemKey(item);
+  return JSON.stringify([
+    inboxNotificationProject(item).id,
+    item.kind,
+    item.id || item.number,
+  ]);
 }
 
 export type InboxObservation = {
@@ -36,11 +47,7 @@ export class InboxNotificationTracker {
     const appeared: InboxItem[] = [];
     for (const item of items) {
       if (failed.has(item.provider)) continue;
-      const key = JSON.stringify([
-        inboxNotificationProject(item).id,
-        item.kind,
-        item.id || item.number,
-      ]);
+      const key = revisionKey(item);
       const updatedAt = Date.parse(item.updatedAt);
       if (!Number.isFinite(updatedAt)) continue;
       const previous = this.revisions.get(key);
@@ -61,6 +68,7 @@ export class InboxNotificationTracker {
       "gitlab",
       "linear",
       "jira",
+      "asana",
       "azuredevops",
     ] as const) {
       if (!failed.has(provider)) this.primed.add(provider);

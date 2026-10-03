@@ -66,6 +66,26 @@ describe("inbox automation events", () => {
     expect(matchInboxAutomations([automation({ triggers: [trigger] })], [{ ...jira, repo: "OPS" }])).toEqual([]);
   });
 
+  it("matches Asana tasks linked to the automation's project by stable task gid", () => {
+    const asana = item({ provider: "asana", kind: "asana", id: "1200000000000042", identifier: "1200000000000042", repo: "Acme", teamId: "1200000000000001", projectPath: "/tmp/web" });
+    const trigger = createAutomationTrigger("asana", "issue_created");
+    expect(inboxAppearedEvent(asana)).toEqual({ kind: "asana", event: "issue_created" });
+    expect(automationEventKey(asana)).toBe("asana:task:1200000000000042");
+    expect(automationEventKey({ ...asana, repo: "Other", teamId: "1200000000000002" })).toBe("asana:task:1200000000000042");
+    const matches = matchInboxAutomations([automation({ triggers: [trigger] })], [asana]);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].prompt).toContain("Work on this Asana task:");
+    const jiraOnly = createAutomationTrigger("jira", "issue_created");
+    expect(matchInboxAutomations([automation({ triggers: [jiraOnly] })], [asana])).toEqual([]);
+  });
+
+  it("skips Asana tasks that are unlinked or linked to another project", () => {
+    const trigger = createAutomationTrigger("asana", "issue_created");
+    const unlinked = item({ provider: "asana", kind: "asana", id: "1200000000000042", repo: "Acme", projectPath: "" });
+    const elsewhere = { ...unlinked, projectPath: "/tmp/api" };
+    expect(matchInboxAutomations([automation({ triggers: [trigger] })], [unlinked, elsewhere])).toEqual([]);
+  });
+
   it("maps opened PRs, drafts, and issues", () => {
     expect(inboxAppearedEvent(item())).toEqual({
       kind: "github",
