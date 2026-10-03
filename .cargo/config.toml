@@ -2,3 +2,8 @@
 # so release paths like target/release/bundle stay the same.
 [build]
 target-dir = "target"
+
+# Incremental caches grew past 25 GB with many crates rebuilding in parallel
+# during the port. Dependencies are never incremental, so turning it off only
+# costs a little on rebuilds of the crate being edited.
+incremental = false

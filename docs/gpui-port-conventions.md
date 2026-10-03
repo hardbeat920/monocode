@@ -60,7 +60,7 @@ Read this before working on any crate under `crates/` or `apps/`. The plan and m
 
 ## Screenshots
 
-Agents cannot capture the screen. `monocode-app` built with `--features screenshot` takes `--screenshot <path.png>` and writes what the window draws through GPUI's `Window::render_to_image`, then exits. Open the PNG with the Read tool to check a view.
+Agents cannot capture the screen. `monocode-app` built with `--features screenshot` takes `--screenshot <path.png>` and writes what the window draws through GPUI's `Window::render_to_image`, then exits. Open the PNG with the Read tool to check a view. Screenshot windows must never activate or take focus: the user works on this machine, and a focused window would receive their keystrokes.
 
 ## Working in the shared checkout
 
@@ -68,7 +68,7 @@ Several agents work in this checkout at once.
 
 - Edit only the files your task names. Do not edit the root `Cargo.toml`. If your crate needs a dependency that is not in `[workspace.dependencies]`, add it with an explicit version in your crate's own `Cargo.toml`.
 - Build and test only your crate: `cargo check -p <crate> -j 4`, `cargo test -p <crate> -j 4`. Do not run workspace-wide `cargo check`, `cargo fmt`, or `cargo clippy`; run `cargo fmt -p <crate>` and `cargo clippy -p <crate> -j 4`.
-- Crates that do not depend on GPUI build fast in their own target directory: set `CARGO_TARGET_DIR=target/agent-<crate>` so you are not blocked by another agent's GPUI build lock.
+- Crates that do not depend on GPUI build fast in their own target directory: set `CARGO_TARGET_DIR=target/agent-<crate>` so you are not blocked by another agent's GPUI build lock. Crates that depend on GPUI use the shared root `target/` (views) or `target/agent-engine-shared` (engine packages), because every private GPUI build costs about 2.5 GB of disk.
 - Run long commands in the background or with a long timeout. A cold GPUI build takes about 4 minutes.
 - Do not commit. The lead reviews and commits.
 - Sessions can be interrupted and resumed. Write code to disk early, and keep a short `PROGRESS.md` in your crate (done, in progress, next) updated after each step, so a restart loses little. The lead deletes these files at cutover.
