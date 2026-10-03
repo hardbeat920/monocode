@@ -1216,6 +1216,7 @@ pub struct GitHubStatus {
     pub connected: bool,
     pub installed: bool,
     pub authenticated: bool,
+    pub host: String,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1242,10 +1243,12 @@ fn git_github_status_for() -> GitHubStatus {
             connected: false,
             installed: false,
             authenticated: false,
+            host: crate::github_host::host(),
         };
     };
+    let host = crate::github_host::host();
     let mut cmd = Command::new(program);
-    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
+    cmd.args(["auth", "status", "--active", "--hostname", host.as_str()])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
@@ -1260,6 +1263,7 @@ fn git_github_status_for() -> GitHubStatus {
         connected: authenticated,
         installed: true,
         authenticated,
+        host,
     }
 }
 
@@ -1274,7 +1278,13 @@ pub async fn github_monocode_star_status() -> Result<GitHubStarStatus, String> {
 fn github_monocode_star_status_for() -> GitHubStarStatus {
     let result = gh_run(
         Path::new("."),
-        &["api", "--silent", MONOCODE_STAR_ENDPOINT],
+        &[
+            "api",
+            "--silent",
+            "--hostname",
+            crate::github_host::DEFAULT_HOST,
+            MONOCODE_STAR_ENDPOINT,
+        ],
         true,
     );
     github_star_status_from_result(result)
@@ -1294,7 +1304,15 @@ pub async fn github_star_monocode() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         gh_run(
             Path::new("."),
-            &["api", "--silent", "--method", "PUT", MONOCODE_STAR_ENDPOINT],
+            &[
+                "api",
+                "--silent",
+                "--hostname",
+                crate::github_host::DEFAULT_HOST,
+                "--method",
+                "PUT",
+                MONOCODE_STAR_ENDPOINT,
+            ],
             true,
         )
         .map(|_| ())
@@ -1585,10 +1603,11 @@ pub async fn git_github_check_details(
     job_id: String,
 ) -> Result<GitHubCheckDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let host = crate::github_host::host();
         github_check_details_with(&repo, &job_id, |endpoint| {
             gh_checked(
                 &expand_home(&cwd),
-                &["api", "--hostname", "github.com", endpoint],
+                &["api", "--hostname", host.as_str(), endpoint],
             )
         })
     })
@@ -1651,7 +1670,7 @@ fn github_check_details_with(
         annotations: vec![],
         notice: None,
     };
-    let check_prefix = format!("https://api.github.com/{prefix}/check-runs/");
+    let check_prefix = format!("{}/{prefix}/check-runs/", crate::github_host::api_base());
     let check_id = job
         .check_run_url
         .as_deref()
@@ -3571,6 +3590,12 @@ fn github_avatar_url(login: &str) -> String {
             _ => encoded.push_str(&format!("%{byte:02X}")),
         }
     }
+    if crate::github_host::is_enterprise() {
+        return format!(
+            "https://{}/{encoded}.png?size=64",
+            crate::github_host::host()
+        );
+    }
     format!("https://avatars.githubusercontent.com/{encoded}?s=64")
 }
 
@@ -3886,18 +3911,18 @@ fn remote_matching_github_url(root: &Path, url: &str) -> Option<String> {
 }
 
 fn normalize_github_remote_url(url: &str) -> String {
+    normalize_github_remote_url_for(url, &crate::github_host::host())
+}
+
+fn normalize_github_remote_url_for(url: &str, host: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some((_, rest)) = trimmed.split_once("github.com:") {
-        return format!(
-            "github.com/{}",
-            rest.trim_start_matches('/').to_ascii_lowercase()
-        );
-    }
-    if let Some((_, rest)) = trimmed.split_once("github.com/") {
-        return format!(
-            "github.com/{}",
-            rest.trim_start_matches('/').to_ascii_lowercase()
-        );
+    for separator in [":", "/"] {
+        if let Some((_, rest)) = trimmed.split_once(&format!("{host}{separator}")) {
+            return format!(
+                "{host}/{}",
+                rest.trim_start_matches('/').to_ascii_lowercase()
+            );
+        }
     }
     trimmed.to_ascii_lowercase()
 }
@@ -4104,6 +4129,7 @@ fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, Strin
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
+    crate::github_host::apply_gh_env(&mut cmd);
     crate::hide_window_console(&mut cmd);
     let output = cmd.output().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
@@ -7853,6 +7879,24 @@ mod tests {
         }"#;
         let error = parse_github_work_item_thread(json, "pr").unwrap_err();
         assert!(error.contains("Could not resolve to a Repository"));
+    }
+
+    #[test]
+    fn github_remote_urls_normalize_for_the_configured_host() {
+        assert_eq!(
+            normalize_github_remote_url_for("git@github.com:Acme/Web.git", "github.com"),
+            "github.com/acme/web"
+        );
+        assert_eq!(
+            normalize_github_remote_url_for(
+                "https://github.example.com/Acme/Web.git",
+                "github.example.com"
+            ),
+            normalize_github_remote_url_for(
+                "git@github.example.com:acme/web",
+                "github.example.com"
+            )
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { githubOrigin } from "./githubHost";
 
 export type GithubPrCheckState =
   "pass" | "fail" | "pending" | "skipping" | "cancel" | "unknown";
@@ -35,7 +36,7 @@ export function githubActionsJobId(
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (parsed.origin !== "https://github.com") return null;
+    if (parsed.origin !== githubOrigin()) return null;
     const prefix = `/${repo}/`;
     if (!parsed.pathname.toLowerCase().startsWith(prefix.toLowerCase()))
       return null;
