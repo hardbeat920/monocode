@@ -24,6 +24,7 @@ import {
   persistNativeContextDelivery,
   withAcceptancePersistenceError,
 } from "./model/acceptancePersistence";
+import { saveProviderContextSession } from "./model/providerContextPersistence";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -6107,9 +6108,7 @@ function Workspace({
         )));
         void acceptancePersistence.current.reconcile(sessionId, async () => {
           const latest = sessionsRef.current.find((session) => session.id === sessionId);
-          if (!latest || !(await upsertSession(latest))) {
-            throw new Error("The accepted session could not be saved.");
-          }
+          await saveProviderContextSession(latest, "The accepted session could not be saved.");
         }).then(() => {
           enqueueHarnessEvent(sessionId, {
             type: "status",
@@ -6137,7 +6136,7 @@ function Workspace({
           const latest = sessionsRef.current.find((session) => session.id === sessionId);
           if (!latest || latest.providerContext?.delivery?.switchId !== switchId) return;
           const confirmed = confirmProviderDeliveryInspection(latest);
-          if (!(await upsertSession(confirmed))) throw new Error("The inspection acknowledgment could not be saved.");
+          await saveProviderContextSession(confirmed, "The inspection acknowledgment could not be saved.");
           flushSync(() => setSessions((prev) => prev.map((session) =>
             session.id === sessionId && session.providerContext?.delivery?.switchId === switchId
               ? confirmProviderDeliveryInspection(session)
@@ -7002,9 +7001,7 @@ function Workspace({
                 : session)));
               await persistNativeContextDelivery(receipt.mode, async () => {
                 const latest = sessionsRef.current.find((session) => session.id === sessionId);
-                if (!latest || !(await upsertSession(latest))) {
-                  throw new Error("The native context import could not be saved.");
-                }
+                await saveProviderContextSession(latest, "The native context import could not be saved.");
               });
             },
           };
@@ -7218,9 +7215,7 @@ function Workspace({
                     : session)));
                   void acceptancePersistence.current.start(sessionId, transferSwitchId, async () => {
                     const accepted = sessionsRef.current.find((session) => session.id === sessionId);
-                    if (!accepted || !(await upsertSession(accepted))) {
-                      throw new Error("The accepted session could not be saved.");
-                    }
+                    await saveProviderContextSession(accepted, "The accepted session could not be saved.");
                   }, (error) => {
                     flushSync(() => setSessions((prev) => prev.map((session) =>
                       session.id === sessionId ? withAcceptancePersistenceError(session, error) : session,
@@ -7246,9 +7241,7 @@ function Workspace({
               )));
               await dispatchAfterContextSave(async () => {
                 const submitted = sessionsRef.current.find((session) => session.id === sessionId);
-                if (!submitted || !(await upsertSession(submitted))) {
-                  throw new Error("The provider submission marker could not be saved. The request was not sent.");
-                }
+                await saveProviderContextSession(submitted, "The provider submission marker could not be saved. The request was not sent.");
               }, () => turnGen.current.get(sessionId) === gen, async () => {
                 providerDispatched = true;
                 submittedTransfers.current.set(sessionId, transferSwitchId!);

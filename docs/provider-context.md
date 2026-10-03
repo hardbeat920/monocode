@@ -18,6 +18,8 @@ Codex imports historical user and assistant messages through `thread/inject_item
 
 Picker intent, provider bindings, and transfer receipts persist separately from the transcript. A provider startup ID does not prove that it accepted a user request. MonoCode saves native import completion before submitting the current turn. It commits the accepted transfer only after the provider acknowledges that turn or supplies delivery evidence.
 
+A session whose working directory is `~` or an inbox path follows MonoCode's existing temporary-session behavior. It keeps transfer state in memory and skips conversation record saves.
+
 Claude confirms the resumed native ID before sending input. It gives each user request a unique input ID and records acceptance after the input write succeeds and Claude echoes that ID. Startup output and manual compaction do not accept a user request. The [CLI replay flag](https://code.claude.com/docs/en/cli-reference) provides this acknowledgment.
 
 MonoCode saves a submission marker before dispatching the transferred request. A failed acceptance save pauses follow-ups and reports the storage error. Reconciliation retries the save without submitting the request again.
@@ -35,6 +37,8 @@ A remote provider choice made during an active turn waits in the open client unt
 `providerContext.ts` defines bindings and delivery state. `portableContext.ts` exports and budgets history. `contextTransfer.ts` shares native and attributed-text delivery rules between the desktop registry and the Node host. `contextAssets.ts` and the owning storage implementation preserve historical asset references. The existing composer and handoff row display transfer state.
 
 The SQLite session record stores a versioned provider-context envelope. Old records remain readable without it. Context snapshots and assets live under the owning application's data directory.
+
+Native snapshot writes and attachment copies release the shared database lock during file work. A per-session lock orders those writes and deletion so unrelated sessions can keep saving.
 
 Permanent session deletion records a cleanup obligation in the same database transaction as record removal. The host and desktop attempt file removal after that transaction. Failed removal stays pending and retries when the store opens or another session is deleted. The store saves each deleted session ID and rejects late session, history, and asset writes even after cleanup succeeds. It keeps no transcript or asset bytes with that ID. The host also keeps the project ID so repeated delete commands must name the same project.
 

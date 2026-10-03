@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -44,19 +44,20 @@ impl SessionStore {
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         crate::worktrees::reconcile_removals(&conn)?;
-        if let Some(root) = path.parent() {
-            if let Err(error) = retry_context_cleanup(&conn, root) {
-                eprintln!("Shared context cleanup will need a retry: {error}");
-            }
-        }
         let read_conn = Connection::open(&path).map_err(|e| e.to_string())?;
         read_conn
             .execute_batch("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000;")
             .map_err(|e| e.to_string())?;
-        Ok(Self {
+        let store = Self {
             conn: Arc::new(Mutex::new(conn)),
             read_conn: Mutex::new(Some(read_conn)),
-        })
+        };
+        if let Some(root) = path.parent() {
+            if let Err(error) = retry_context_cleanup(&store.conn, root) {
+                eprintln!("Shared context cleanup will need a retry: {error}");
+            }
+        }
+        Ok(store)
     }
 
     #[cfg(test)]
@@ -326,19 +327,67 @@ pub fn session_context_snapshot(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
-    let conn = store.lock_conn()?;
-    write_stored_context_snapshot(&conn, &root, &session_id, &switch_id, &content)
+    write_stored_context_snapshot(&store.conn, &root, &session_id, &switch_id, &content)
 }
 
 fn write_stored_context_snapshot(
-    conn: &Connection,
+    connection: &Mutex<Connection>,
     data_dir: &Path,
     session_id: &str,
     switch_id: &str,
     content: &str,
 ) -> Result<String, String> {
-    ensure_context_writable(conn, session_id).map_err(|error| error.to_string())?;
-    write_context_snapshot(data_dir, session_id, switch_id, content)
+    with_context_write(connection, data_dir, session_id, || {
+        write_context_snapshot(data_dir, session_id, switch_id, content)
+    })
+}
+
+pub(crate) fn with_context_write<T>(
+    connection: &Mutex<Connection>,
+    data_dir: &Path,
+    session_id: &str,
+    write: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_context_lifecycle(data_dir, session_id, || {
+        {
+            let conn = connection.lock().map_err(|_| "Session store is locked")?;
+            ensure_context_writable(&conn, session_id).map_err(|error| error.to_string())?;
+        }
+        write()
+    })
+}
+
+type ContextLifecycleLocks = HashMap<(PathBuf, String), Weak<Mutex<()>>>;
+static CONTEXT_LIFECYCLE_LOCKS: OnceLock<Mutex<ContextLifecycleLocks>> = OnceLock::new();
+
+fn with_context_lifecycle<T>(
+    data_dir: &Path,
+    session_id: &str,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    validate_id(session_id, "session")?;
+    let root = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    let lock = {
+        let mut locks = CONTEXT_LIFECYCLE_LOCKS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| "Shared context lifecycle registry is locked")?;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let key = (root, session_id.to_string());
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            locks.insert(key, Arc::downgrade(&lock));
+            lock
+        }
+    };
+    // Writers and cleanup acquire this lock before the database lock.
+    // Filesystem work holds only this session's lifecycle lock.
+    let _guard = lock
+        .lock()
+        .map_err(|_| "Shared context lifecycle is locked")?;
+    action()
 }
 
 fn write_context_snapshot(
@@ -575,21 +624,9 @@ pub fn session_delete(
     session_id: String,
     mut image_paths: Vec<String>,
 ) -> Result<(), String> {
-    validate_id(&session_id, "session")?;
-    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    let persisted_paths = get_session(&conn, &session_id)
-        .ok()
-        .flatten()
-        .map(|record| generated_image_paths(&record.blocks))
-        .unwrap_or_default();
+    let data_dir = app.path().app_data_dir().ok();
+    let persisted_paths = delete_stored_session(&store.conn, data_dir.as_deref(), &session_id)?;
     image_paths.extend(persisted_paths);
-    delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
-    if let Ok(data_dir) = app.path().app_data_dir() {
-        if let Err(error) = retry_context_cleanup(&conn, &data_dir) {
-            eprintln!("Shared context cleanup will need a retry: {error}");
-        }
-    }
-    drop(conn);
     if !image_paths.is_empty() {
         if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {
             eprintln!("Generated image cleanup will need a retry: {error}");
@@ -597,6 +634,35 @@ pub fn session_delete(
     }
     let _ = app.emit(crate::reminders::CHANGED, ());
     Ok(())
+}
+
+fn delete_stored_session(
+    connection: &Mutex<Connection>,
+    data_dir: Option<&Path>,
+    session_id: &str,
+) -> Result<Vec<String>, String> {
+    validate_id(session_id, "session")?;
+    let delete = || {
+        let conn = connection.lock().map_err(|_| "Session store is locked")?;
+        let paths = get_session(&conn, session_id)
+            .ok()
+            .flatten()
+            .map(|record| generated_image_paths(&record.blocks))
+            .unwrap_or_default();
+        delete_session(&conn, session_id).map_err(|error| error.to_string())?;
+        Ok(paths)
+    };
+    let paths = if let Some(root) = data_dir {
+        with_context_lifecycle(root, session_id, delete)?
+    } else {
+        delete()?
+    };
+    if let Some(root) = data_dir {
+        if let Err(error) = retry_context_cleanup(connection, root) {
+            eprintln!("Shared context cleanup will need a retry: {error}");
+        }
+    }
+    Ok(paths)
 }
 
 #[tauri::command(async)]
@@ -2127,32 +2193,49 @@ pub(crate) fn ensure_context_writable(conn: &Connection, session_id: &str) -> ru
     Ok(())
 }
 
-fn retry_context_cleanup(conn: &Connection, root: &Path) -> Result<(), String> {
-    let pending = conn
-        .prepare("SELECT session_id FROM context_history_cleanup WHERE pending = 1")
-        .map_err(|error| error.to_string())?
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| error.to_string())?;
+fn retry_context_cleanup(connection: &Mutex<Connection>, root: &Path) -> Result<(), String> {
+    let pending = {
+        let conn = connection.lock().map_err(|_| "Session store is locked")?;
+        let mut statement = conn
+            .prepare("SELECT session_id FROM context_history_cleanup WHERE pending = 1")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())?
+    };
     for id in pending {
-        if let Err(error) = validate_id(&id, "session") {
-            eprintln!("Shared context cleanup will need a retry: {error}");
-            continue;
-        }
-        match std::fs::remove_dir_all(root.join("context-history").join(&id)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                eprintln!("Shared context cleanup will need a retry: {error}");
-                continue;
+        let result = with_context_lifecycle(root, &id, || {
+            {
+                let conn = connection.lock().map_err(|_| "Session store is locked")?;
+                let pending: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM context_history_cleanup WHERE session_id = ?1 AND pending = 1)",
+                        [&id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if !pending {
+                    return Ok(());
+                }
             }
+            match std::fs::remove_dir_all(root.join("context-history").join(&id)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            let conn = connection.lock().map_err(|_| "Session store is locked")?;
+            conn.execute(
+                "UPDATE context_history_cleanup SET pending = 0 WHERE session_id = ?1",
+                [&id],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            eprintln!("Shared context cleanup will need a retry: {error}");
         }
-        conn.execute(
-            "UPDATE context_history_cleanup SET pending = 0 WHERE session_id = ?1",
-            [&id],
-        )
-        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -3151,6 +3234,198 @@ mod tests {
     }
 
     #[test]
+    fn blocked_context_snapshot_does_not_block_another_session_upsert() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!(
+            "monocode-context-concurrency-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Arc::new(SessionStore::open(root.join("monocode.db")).unwrap());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_store = Arc::clone(&store);
+        let writer_root = root.clone();
+        let writer = std::thread::spawn(move || {
+            with_context_write(&writer_store.conn, &writer_root, "slow-session", || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                write_context_snapshot(&writer_root, "slow-session", "switch-1", "History")
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (saved_tx, saved_rx) = mpsc::channel();
+        let saving_store = Arc::clone(&store);
+        let saving = std::thread::spawn(move || {
+            let conn = saving_store.lock_conn().unwrap();
+            upsert_session(&conn, &sample("other-session", "/tmp/other", "Independent")).unwrap();
+            saved_tx.send(()).unwrap();
+        });
+        let saved_before_release = saved_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        assert!(writer.join().unwrap().is_ok());
+        saving.join().unwrap();
+        assert!(get_session(&store.lock_conn().unwrap(), "other-session")
+            .unwrap()
+            .is_some());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            saved_before_release.is_ok(),
+            "An unrelated upsert waited for context filesystem work"
+        );
+    }
+
+    #[test]
+    fn deletion_waits_for_context_publication_and_prevents_late_snapshots() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!(
+            "monocode-context-concurrency-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Arc::new(SessionStore::open(root.join("monocode.db")).unwrap());
+        upsert_session(
+            &store.lock_conn().unwrap(),
+            &sample("deleted-session", "/tmp/a", "First"),
+        )
+        .unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_store = Arc::clone(&store);
+        let writer_root = root.clone();
+        let writer = std::thread::spawn(move || {
+            with_context_write(&writer_store.conn, &writer_root, "deleted-session", || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                write_context_snapshot(&writer_root, "deleted-session", "switch-1", "History")
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (deleting_tx, deleting_rx) = mpsc::channel();
+        let (deleted_tx, deleted_rx) = mpsc::channel();
+        let deleting_store = Arc::clone(&store);
+        let deleting_root = root.clone();
+        let deleting = std::thread::spawn(move || {
+            deleting_tx.send(()).unwrap();
+            let result = delete_stored_session(
+                &deleting_store.conn,
+                Some(&deleting_root),
+                "deleted-session",
+            );
+            deleted_tx.send(result).unwrap();
+        });
+        deleting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let deleted_before_release = deleted_rx.recv_timeout(Duration::from_millis(200));
+        release_tx.send(()).unwrap();
+        assert!(writer.join().unwrap().is_ok());
+        let deleted = deleted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        deleting.join().unwrap();
+        assert!(
+            deleted_before_release.is_err(),
+            "Deletion finished before an active context writer"
+        );
+        assert!(deleted.is_ok());
+        assert!(!root.join("context-history/deleted-session").exists());
+        assert!(get_session(&store.lock_conn().unwrap(), "deleted-session")
+            .unwrap()
+            .is_none());
+        delete_stored_session(&store.conn, Some(&root), "deleted-session").unwrap();
+        assert!(write_stored_context_snapshot(
+            &store.conn,
+            &root,
+            "deleted-session",
+            "switch-2",
+            "Late history"
+        )
+        .is_err());
+        let pending: bool = store
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT pending FROM context_history_cleanup WHERE session_id = 'deleted-session'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!pending);
+        assert!(!root.join("context-history/deleted-session").exists());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn waiting_context_cleanup_leaves_the_database_available() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = std::env::temp_dir().join(format!(
+            "monocode-context-concurrency-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Arc::new(SessionStore::open(root.join("monocode.db")).unwrap());
+        delete_session(&store.lock_conn().unwrap(), "deleted-session").unwrap();
+        write_context_snapshot(&root, "deleted-session", "switch-1", "Pending removal").unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let busy_root = root.clone();
+        let busy = std::thread::spawn(move || {
+            with_context_lifecycle(&busy_root, "deleted-session", || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (cleanup_tx, cleanup_rx) = mpsc::channel();
+        let cleanup_store = Arc::clone(&store);
+        let cleanup_root = root.clone();
+        let cleanup = std::thread::spawn(move || {
+            cleanup_tx.send(()).unwrap();
+            retry_context_cleanup(&cleanup_store.conn, &cleanup_root).unwrap();
+        });
+        cleanup_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (saved_tx, saved_rx) = mpsc::channel();
+        let saving_store = Arc::clone(&store);
+        let saving = std::thread::spawn(move || {
+            upsert_session(
+                &saving_store.lock_conn().unwrap(),
+                &sample("other-session", "/tmp/b", "Other"),
+            )
+            .unwrap();
+            saved_tx.send(()).unwrap();
+        });
+        let saved_before_release = saved_rx.recv_timeout(Duration::from_secs(2));
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let reopening_root = root.clone();
+        let reopening = std::thread::spawn(move || {
+            let reopened = SessionStore::open(reopening_root.join("monocode.db")).unwrap();
+            opened_tx.send(()).unwrap();
+            reopened
+        });
+        let opened_before_release = opened_rx.recv_timeout(Duration::from_millis(200));
+        release_tx.send(()).unwrap();
+        busy.join().unwrap();
+        cleanup.join().unwrap();
+        saving.join().unwrap();
+        drop(reopening.join().unwrap());
+        assert!(
+            saved_before_release.is_ok(),
+            "Cleanup waited for a session lifecycle lock while holding the database"
+        );
+        assert!(
+            opened_before_release.is_err(),
+            "Startup cleanup ignored the active session lifecycle lock"
+        );
+        assert!(!root.join("context-history/deleted-session").exists());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn deleted_context_recovers_a_crash_before_filesystem_removal() {
         let root =
             std::env::temp_dir().join(format!("monocode-context-cleanup-{}", uuid::Uuid::new_v4()));
@@ -3192,8 +3467,11 @@ mod tests {
         std::fs::write(&history, "A file blocks recursive directory cleanup").unwrap();
         upsert_session(&conn, &sample("deleted-session", "/tmp/a", "First")).unwrap();
         delete_session(&conn, "deleted-session").unwrap();
-        retry_context_cleanup(&conn, &root).unwrap();
-        let pending: i64 = conn
+        drop(conn);
+        retry_context_cleanup(&store.conn, &root).unwrap();
+        let pending: i64 = store
+            .lock_conn()
+            .unwrap()
             .query_row(
                 "SELECT pending FROM context_history_cleanup WHERE session_id = 'deleted-session'",
                 [],
@@ -3202,9 +3480,11 @@ mod tests {
             .unwrap();
         assert_eq!(pending, 1);
         std::fs::remove_file(&history).unwrap();
-        retry_context_cleanup(&conn, &root).unwrap();
-        retry_context_cleanup(&conn, &root).unwrap();
-        let pending: i64 = conn
+        retry_context_cleanup(&store.conn, &root).unwrap();
+        retry_context_cleanup(&store.conn, &root).unwrap();
+        let pending: i64 = store
+            .lock_conn()
+            .unwrap()
             .query_row(
                 "SELECT pending FROM context_history_cleanup WHERE session_id = 'deleted-session'",
                 [],
@@ -3213,7 +3493,7 @@ mod tests {
             .unwrap();
         assert_eq!(pending, 0);
         assert!(write_stored_context_snapshot(
-            &conn,
+            &store.conn,
             &root,
             "deleted-session",
             "switch-1",
@@ -3221,7 +3501,6 @@ mod tests {
         )
         .is_err());
         assert!(!history.exists());
-        drop(conn);
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }

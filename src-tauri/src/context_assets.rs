@@ -11,7 +11,6 @@ use tauri::{AppHandle, Manager, State};
 
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_SESSION_BYTES: u64 = 64 * 1024 * 1024;
-static ASSET_WRITES: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,22 +48,21 @@ pub async fn session_context_assets(
         .map_err(|error| error.to_string())?;
     let connection = store.shared_conn();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = connection.lock().map_err(|_| "Session store is locked")?;
-        snapshot_stored_assets(&conn, &root, &session_id, attachments)
+        snapshot_stored_assets(&connection, &root, &session_id, attachments)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 fn snapshot_stored_assets(
-    conn: &rusqlite::Connection,
+    connection: &Mutex<rusqlite::Connection>,
     root: &Path,
     session_id: &str,
     attachments: Vec<ContextAssetSource>,
 ) -> Result<Vec<ContextAssetSnapshot>, String> {
-    crate::session_store::ensure_context_writable(conn, session_id)
-        .map_err(|error| error.to_string())?;
-    snapshot_assets(root, session_id, attachments)
+    crate::session_store::with_context_write(connection, root, session_id, || {
+        snapshot_assets(root, session_id, attachments)
+    })
 }
 
 fn snapshot_assets(
@@ -79,9 +77,6 @@ fn snapshot_assets(
     {
         return Err("Invalid session id for historical attachment storage".into());
     }
-    let _guard = ASSET_WRITES
-        .lock()
-        .map_err(|_| "Historical attachment storage is locked")?;
     let assets = root.join("context-history").join(session_id).join("assets");
     fs::create_dir_all(&assets).map_err(|error| error.to_string())?;
     let mut total = saved_asset_bytes(&assets)?;
@@ -341,8 +336,9 @@ mod tests {
         let store = crate::session_store::SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         conn.execute("INSERT INTO context_history_cleanup (session_id, pending) VALUES ('deleted-session', 0)", []).unwrap();
+        drop(conn);
         assert!(snapshot_stored_assets(
-            &conn,
+            &store.shared_conn(),
             &fixture.0,
             "deleted-session",
             vec![inline("late", b"Late asset")]
