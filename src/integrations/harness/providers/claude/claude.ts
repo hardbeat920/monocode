@@ -34,6 +34,7 @@ import {
   inputJsonDeltaFromEvent,
   isAgentTaskType,
   isClaudeUltracodeEffort,
+  isMissingConversationResult,
   isSubagentMessage,
   isTerminalAgentTaskStatus,
   isTodoTool,
@@ -174,6 +175,13 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /**
+   * Claude has written this conversation to disk, so `--resume` can find it.
+   * A fresh process only writes it once it takes the first prompt.
+   */
+  conversationSaved: boolean;
+  /** `--resume` named a conversation Claude has no transcript for. */
+  conversationMissing: boolean;
 };
 
 type Resume = {
@@ -511,6 +519,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    conversationSaved: canResume,
+    conversationMissing: false,
   };
   liveRef.current = live;
 
@@ -524,7 +534,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     (code) => {
       liveByThread.delete(input.sessionId);
       const current = liveRef.current;
-      if (!current?.muteUpdates) {
+      // A missing conversation is retried with a new one, not reported.
+      if (!current?.muteUpdates && !current?.conversationMissing) {
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
       current?.turnFailed?.(new Error("Claude Code exited"));
@@ -547,11 +558,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   );
 
   liveByThread.set(input.sessionId, live);
-  resumeByThread.set(input.sessionId, {
-    sessionId: claudeSessionId,
-    cwd: input.cwd,
-    providerAccountId: input.providerAccountId,
-  });
 
   try {
     await writeJson(
@@ -559,16 +565,50 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
-    live.onEvent({
-      type: "session.providerBound",
-      providerSessionId: live.claudeSessionId,
-    });
-    live.onEvent({ type: "session.started" });
-    return live;
   } catch (error) {
     await stopClaudeSession(input.sessionId);
     throw error;
   }
+  if (live.conversationMissing) {
+    // The saved id points at a conversation Claude never wrote, for example
+    // when the first prompt was stopped before Claude took it. There is
+    // nothing to resume, so start a new conversation instead of failing
+    // every turn.
+    await stopClaudeSession(input.sessionId);
+    resumeByThread.delete(input.sessionId);
+    tasksByThread.delete(input.sessionId);
+    input.onEvent({
+      type: "status",
+      text: "Claude Code had no saved conversation to resume, so a new one was started.",
+    });
+    return ensureLive(input);
+  }
+  // A new conversation is bound once Claude saves it. Binding the id now
+  // would leave a `--resume` target that does not exist if the first prompt
+  // never reaches Claude.
+  if (live.conversationSaved) bindConversation(input.sessionId, live);
+  live.onEvent({ type: "session.started" });
+  return live;
+}
+
+function bindConversation(threadId: string, live: Live): void {
+  live.conversationSaved = true;
+  resumeByThread.set(threadId, {
+    sessionId: live.claudeSessionId,
+    cwd: live.cwd,
+    providerAccountId: live.providerAccountId,
+  });
+  live.onEvent({
+    type: "session.providerBound",
+    providerSessionId: live.claudeSessionId,
+  });
+}
+
+/** Lines Claude only sends after it has saved the user's prompt. */
+function showsSavedConversation(rec: Record<string, unknown>): boolean {
+  const type = stringField(rec, "type");
+  if (type === "result") return stringField(rec, "subtype") === "success";
+  return type === "assistant" || type === "user" || type === "stream_event";
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
@@ -660,10 +700,15 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
-  if (live.muteUpdates) return;
+  if (type === "result" && isMissingConversationResult(rec)) {
+    live.conversationMissing = true;
+    return;
+  }
 
   const sessionIdFromLine = sessionIdFromMessage(rec);
-  if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
+  const switched =
+    sessionIdFromLine != null && sessionIdFromLine !== live.claudeSessionId;
+  if (switched) {
     live.claudeSessionId = sessionIdFromLine;
     // A different conversation starts with its own task ids.
     live.claudeTasks = new Map();
@@ -671,16 +716,12 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       providerSessionId: sessionIdFromLine,
       tasks: live.claudeTasks,
     });
-    resumeByThread.set(sessionId, {
-      sessionId: sessionIdFromLine,
-      cwd: live.cwd,
-      providerAccountId: live.providerAccountId,
-    });
-    live.onEvent({
-      type: "session.providerBound",
-      providerSessionId: sessionIdFromLine,
-    });
   }
+  if (live.conversationSaved ? switched : showsSavedConversation(rec)) {
+    bindConversation(sessionId, live);
+  }
+
+  if (live.muteUpdates) return;
 
   if (
     type === "system" &&
