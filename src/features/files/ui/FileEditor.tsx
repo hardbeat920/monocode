@@ -146,7 +146,11 @@ export function FileEditor({
   } | null>(null);
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
-  const [mode, setMode] = useMarkdownMode(path);
+  // Diff tabs open as source: the git gutter only renders in the editor.
+  const [mode, setMode] = useMarkdownMode(
+    showDiff ? `review:${path}` : path,
+    showDiff ? "source" : "preview",
+  );
   const sourceNavigationToken = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (
