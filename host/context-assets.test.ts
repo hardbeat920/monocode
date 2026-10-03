@@ -53,7 +53,9 @@ it("saves content by hash and preserves it after the original file changes", () 
   expect(readFileSync(saved.path!, "utf8")).toBe("original");
   unlinkSync(s.original);
   expect(snapshotHostContextAssets(s.assets, [s.attachment])[0]).toEqual(saved);
-  expect(statSync(saved.path!).mode & 0o777).toBe(0o400);
+  const mode = statSync(saved.path!).mode;
+  expect(mode & 0o222).toBe(0);
+  if (process.platform !== "win32") expect(mode & 0o777).toBe(0o400);
 });
 
 it("deduplicates matching content without charging the total limit twice", () => {
