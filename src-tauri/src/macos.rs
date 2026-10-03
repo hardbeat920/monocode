@@ -21,26 +21,28 @@
 //! shadow without that outline.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, OsStr};
 use std::path::{Component, Path};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
 use objc2::{
-    define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
+    define_class, msg_send, sel, AnyThread, ClassType, DefinedClass, MainThreadMarker,
+    MainThreadOnly,
 };
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSColor, NSMenu, NSMenuItem,
     NSRequestUserAttentionType, NSTitlebarSeparatorStyle, NSUserInterfaceItemIdentification,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowOrderingMode,
+    NSWindow, NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
+    NSWindowOrderingMode, NSWindowWillEnterFullScreenNotification,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WindowEvent};
 
 /// Must match the HTML title bar (`h-10` = 40px).
 const TAB_BAR_HEIGHT: f64 = 40.0;
@@ -59,9 +61,243 @@ const GLASS_BACKING_ID: &str = "monocode.webview-glass-backing";
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
 static PINNED: AtomicBool = AtomicBool::new(false);
-static BLUR_RADIUS: AtomicU8 = AtomicU8::new(BLUR_DEFAULT);
 static WINDOW_BADGES: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
-static GLASS_WINDOWS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+pub const FULLSCREEN_APPEARANCE_EVENT: &str = "macos-fullscreen-appearance";
+
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct FullscreenAppearance {
+    fullscreen: bool,
+    revision: u64,
+}
+
+struct WindowAppearance {
+    observer: Retained<FullscreenObserver>,
+    preferences: AppearancePreferences,
+}
+
+struct AppearancePreferences {
+    requested_glass: bool,
+    background: crate::window::Rgb,
+    blur: u8,
+    state: FullscreenAppearance,
+    generation: u64,
+}
+
+impl AppearancePreferences {
+    fn effective_glass(&self) -> bool {
+        self.requested_glass && !self.state.fullscreen
+    }
+
+    fn update(&mut self, enabled: bool, background: crate::window::Rgb, generation: u64) {
+        if generation >= self.generation {
+            self.generation = generation;
+            self.requested_glass = enabled;
+            self.background = background;
+        }
+    }
+}
+
+thread_local! {
+    // AppKit notifications and dispatched appearance updates run on the main thread.
+    static APPEARANCES: RefCell<HashMap<String, WindowAppearance>> = RefCell::new(HashMap::new());
+}
+
+struct FullscreenObserverIvars {
+    window: WebviewWindow,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "MonoCodeFullscreenObserver"]
+    #[ivars = FullscreenObserverIvars]
+    struct FullscreenObserver;
+
+    impl FullscreenObserver {
+        #[unsafe(method(enterFullscreen:))]
+        fn enter(&self, _notification: &NSNotification) {
+            fullscreen_changed(&self.ivars().window, true);
+            self.schedule_reconciliation();
+        }
+        #[unsafe(method(enteredFullscreen:))]
+        fn entered(&self, _notification: &NSNotification) {
+            self.cancel_reconciliation();
+            fullscreen_changed(&self.ivars().window, true);
+        }
+        #[unsafe(method(reconcileFullscreen:))]
+        fn reconcile(&self, _sender: Option<&NSObject>) {
+            // Tao's existing delegate clears its fullscreen state on failed
+            // entry. Unlike the style mask, it stays true during the animation.
+            let window = &self.ivars().window;
+            if !window.is_fullscreen().unwrap_or(true) {
+                fullscreen_changed(window, false);
+            } else {
+                self.schedule_reconciliation();
+            }
+        }
+        #[unsafe(method(exitFullscreen:))]
+        fn exit(&self, _notification: &NSNotification) {
+            // Defer until Tao's delegate has processed exit (and any queued
+            // re-entry), regardless of AppKit's notification/delegate order.
+            self.cancel_reconciliation();
+            unsafe {
+                let _: () = msg_send![self,
+                    performSelector: sel!(reconcileFullscreen:),
+                    withObject: None::<&NSObject>,
+                    afterDelay: 0.0_f64
+                ];
+            }
+        }
+    }
+);
+
+impl FullscreenObserver {
+    fn cancel_reconciliation(&self) {
+        unsafe {
+            let _: () = msg_send![NSObject::class(),
+                cancelPreviousPerformRequestsWithTarget: self,
+                selector: sel!(reconcileFullscreen:),
+                object: None::<&NSObject>
+            ];
+        }
+    }
+
+    fn schedule_reconciliation(&self) {
+        self.cancel_reconciliation();
+        unsafe {
+            let _: () = msg_send![self,
+                performSelector: sel!(reconcileFullscreen:),
+                withObject: None::<&NSObject>,
+                afterDelay: 0.25_f64
+            ];
+        }
+    }
+}
+
+fn install_fullscreen_appearance(window: &WebviewWindow) {
+    if !crate::window::is_workspace_window(window.label()) {
+        return;
+    }
+    let Some(native) = ns_window(window) else {
+        return;
+    };
+    let observer = FullscreenObserver::alloc().set_ivars(FullscreenObserverIvars {
+        window: window.clone(),
+    });
+    let observer: Retained<FullscreenObserver> = unsafe { msg_send![super(observer), init] };
+    let center = NSNotificationCenter::defaultCenter();
+    // Observe the existing NSWindow; never replace Tao's delegate or owner.
+    // Keep the fallback throughout exit animation. Entry reconciliation observes
+    // Tao's failure cleanup without intercepting its delegate methods.
+    for (name, selector) in unsafe {
+        [
+            (
+                NSWindowWillEnterFullScreenNotification,
+                sel!(enterFullscreen:),
+            ),
+            (
+                NSWindowDidEnterFullScreenNotification,
+                sel!(enteredFullscreen:),
+            ),
+            (NSWindowDidExitFullScreenNotification, sel!(exitFullscreen:)),
+        ]
+    } {
+        unsafe {
+            center.addObserver_selector_name_object(&observer, selector, Some(name), Some(&native));
+        }
+    }
+    APPEARANCES.with(|slot| {
+        slot.borrow_mut().insert(
+            window.label().to_string(),
+            WindowAppearance {
+                observer,
+                preferences: AppearancePreferences {
+                    requested_glass: false,
+                    background: crate::window::Rgb {
+                        r: 23,
+                        g: 23,
+                        b: 23,
+                    },
+                    blur: BLUR_DEFAULT,
+                    state: FullscreenAppearance {
+                        fullscreen: window.is_fullscreen().unwrap_or(false),
+                        revision: 0,
+                    },
+                    generation: 0,
+                },
+            },
+        );
+    });
+}
+
+fn fullscreen_changed(window: &WebviewWindow, fullscreen: bool) {
+    let state = APPEARANCES.with(|slot| {
+        let mut map = slot.borrow_mut();
+        let appearance = &mut map.get_mut(window.label())?.preferences;
+        appearance.state.fullscreen = fullscreen;
+        appearance.state.revision += 1;
+        Some(appearance.state)
+    });
+    if let Some(state) = state {
+        render_appearance(window);
+        let _ = window.emit_to(
+            EventTarget::webview_window(window.label()),
+            FULLSCREEN_APPEARANCE_EVENT,
+            state,
+        );
+    }
+}
+
+fn forget_appearance(window: &WebviewWindow) {
+    if MainThreadMarker::new().is_none() {
+        let target = window.clone();
+        let _ = window
+            .app_handle()
+            .run_on_main_thread(move || forget_appearance(&target));
+        return;
+    }
+    APPEARANCES.with(|slot| {
+        if let Some(appearance) = slot.borrow_mut().remove(window.label()) {
+            appearance.observer.cancel_reconciliation();
+            unsafe { NSNotificationCenter::defaultCenter().removeObserver(&appearance.observer) };
+        }
+    });
+}
+
+fn render_appearance(window: &WebviewWindow) {
+    let rendering = APPEARANCES.with(|slot| {
+        slot.borrow().get(window.label()).map(|a| {
+            let a = &a.preferences;
+            (a.effective_glass(), a.background, a.blur)
+        })
+    });
+    if let Some((enabled, background, blur)) = rendering {
+        if enabled {
+            prepare_glass(window);
+            apply_blur(window, blur);
+        } else {
+            apply_blur(window, 0);
+            set_launch_background(window, background.r, background.g, background.b);
+        }
+    }
+}
+
+pub fn set_appearance(
+    window: &WebviewWindow,
+    enabled: bool,
+    background: crate::window::Rgb,
+    generation: Option<u64>,
+) -> Option<FullscreenAppearance> {
+    assert!(MainThreadMarker::new().is_some());
+    let state = APPEARANCES.with(|slot| {
+        let mut map = slot.borrow_mut();
+        let appearance = &mut map.get_mut(window.label())?.preferences;
+        let generation = generation.unwrap_or(appearance.generation + 1);
+        appearance.update(enabled, background, generation);
+        Some(appearance.state)
+    });
+    render_appearance(window);
+    state
+}
 
 type CgsConnection = usize;
 type SetBlurFn = unsafe extern "C" fn(CgsConnection, c_int, c_int) -> c_int;
@@ -72,9 +308,15 @@ unsafe extern "C" {
 }
 
 pub fn install(window: &WebviewWindow) {
+    if MainThreadMarker::new().is_none() {
+        let target = window.clone();
+        let _ = window.run_on_main_thread(move || install(&target));
+        return;
+    }
     // Opaque for the dock bounce so the first frames are a solid field,
     // not a frosted desktop. Glass turns on after the first UI paint.
     prepare_launch(window);
+    install_fullscreen_appearance(window);
     let _ = pin(window);
 
     let event_window = window.clone();
@@ -87,7 +329,7 @@ pub fn install(window: &WebviewWindow) {
         }
         WindowEvent::Destroyed => {
             set_window_badge(&event_window, 0);
-            set_glass_enabled(&event_window, false);
+            forget_appearance(&event_window);
         }
         _ => {}
     });
@@ -157,33 +399,17 @@ pub fn set_visible(window: &WebviewWindow, visible: bool) {
 }
 
 pub fn set_background_blur_radius(window: &WebviewWindow, radius: u8) {
-    let radius = radius.clamp(BLUR_MIN, BLUR_MAX);
-    BLUR_RADIUS.store(radius, Ordering::Relaxed);
-    if glass_enabled(window) {
-        apply_blur(window, radius);
+    if MainThreadMarker::new().is_none() {
+        let target = window.clone();
+        let _ = window.run_on_main_thread(move || set_background_blur_radius(&target, radius));
+        return;
     }
-}
-
-fn glass_windows() -> &'static Mutex<HashSet<String>> {
-    GLASS_WINDOWS.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-fn glass_enabled(window: &WebviewWindow) -> bool {
-    glass_windows()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .contains(window.label())
-}
-
-fn set_glass_enabled(window: &WebviewWindow, enabled: bool) {
-    let mut windows = glass_windows()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    if enabled {
-        windows.insert(window.label().to_string());
-    } else {
-        windows.remove(window.label());
-    }
+    APPEARANCES.with(|slot| {
+        if let Some(appearance) = slot.borrow_mut().get_mut(window.label()) {
+            appearance.preferences.blur = radius.clamp(BLUR_MIN, BLUR_MAX);
+        }
+    });
+    render_appearance(window);
 }
 
 /// Solid field behind the dock bounce. Same colour as the HTML sheet.
@@ -209,20 +435,6 @@ fn set_launch_background(window: &WebviewWindow, r: u8, g: u8, b: u8) {
         b as f64 / 255.0,
         1.0,
     )));
-}
-
-/// Turn on desktop blur after the first UI paint.
-pub fn enable_glass(window: &WebviewWindow) {
-    set_glass_enabled(window, true);
-    prepare_glass(window);
-    apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
-}
-
-/// Turn off the blur and fall back to an opaque window in the caller's colour.
-pub fn disable_glass(window: &WebviewWindow, r: u8, g: u8, b: u8) {
-    set_glass_enabled(window, false);
-    apply_blur(window, 0);
-    set_launch_background(window, r, g, b);
 }
 
 fn prepare_glass(window: &WebviewWindow) {
@@ -794,5 +1006,108 @@ mod tests {
         let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev")).unwrap();
         assert!(plist.contains("<string>MonoCode Dev</string>"));
         assert!(!plist.contains("<string>MonoCode</string>"));
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_appearance_tests {
+    use super::*;
+
+    fn preferences(fullscreen: bool) -> AppearancePreferences {
+        AppearancePreferences {
+            requested_glass: true,
+            background: crate::window::Rgb {
+                r: 23,
+                g: 23,
+                b: 23,
+            },
+            blur: 42,
+            state: FullscreenAppearance {
+                fullscreen,
+                revision: 0,
+            },
+            generation: 0,
+        }
+    }
+
+    #[test]
+    fn restored_fullscreen_overrides_rendering_and_exit_restores_preferences() {
+        let mut appearance = preferences(true);
+        assert!(!appearance.effective_glass());
+        assert!(appearance.requested_glass);
+        assert_eq!(appearance.blur, 42);
+        appearance.state.fullscreen = false;
+        assert!(appearance.effective_glass());
+        assert_eq!(appearance.blur, 42);
+    }
+
+    #[test]
+    fn theme_updates_in_fullscreen_and_stale_requests_do_not_win() {
+        let mut appearance = preferences(true);
+        appearance.update(
+            false,
+            crate::window::Rgb {
+                r: 247,
+                g: 247,
+                b: 247,
+            },
+            2,
+        );
+        appearance.update(
+            true,
+            crate::window::Rgb {
+                r: 23,
+                g: 23,
+                b: 23,
+            },
+            1,
+        );
+        assert_eq!(appearance.background.r, 247);
+        appearance.state.fullscreen = false;
+        assert!(!appearance.effective_glass());
+        appearance.update(
+            true,
+            crate::window::Rgb {
+                r: 51,
+                g: 51,
+                b: 51,
+            },
+            3,
+        );
+        assert!(appearance.effective_glass());
+    }
+
+    #[test]
+    fn workspace_windows_have_independent_effective_glass_and_blur() {
+        let mut windows = HashMap::from([
+            ("main", preferences(false)),
+            ("window-2", preferences(false)),
+        ]);
+        let main = windows.get_mut("main").unwrap();
+        main.state.fullscreen = true;
+        main.update(
+            true,
+            crate::window::Rgb {
+                r: 51,
+                g: 51,
+                b: 51,
+            },
+            100,
+        );
+        main.blur = 12;
+        assert!(!main.effective_glass());
+        let second = windows.get_mut("window-2").unwrap();
+        second.update(
+            true,
+            crate::window::Rgb {
+                r: 80,
+                g: 80,
+                b: 80,
+            },
+            1,
+        );
+        assert!(second.effective_glass());
+        assert_eq!(second.background.r, 80);
+        assert_eq!(second.blur, 42);
     }
 }

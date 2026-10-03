@@ -167,9 +167,9 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
 
 /* Tint-less transparent rather than `transparent`, which browsers interpolate
    through black and would dim the page on the way in and out of glass. */
-html.has-native-glass:not(.theme-light),
-html.has-native-glass:not(.theme-light) body,
-html.has-native-glass:not(.theme-light) #root {
+html.has-native-glass:not(.theme-light):not(.macos-fullscreen),
+html.has-native-glass:not(.theme-light):not(.macos-fullscreen) body,
+html.has-native-glass:not(.theme-light):not(.macos-fullscreen) #root {
   background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
@@ -278,7 +278,7 @@ html.theme-light .sidebar-glass {
   background: var(--color-background-base);
 }
 
-html.has-native-glass:not(.theme-light) .sidebar-glass {
+html.has-native-glass:not(.theme-light):not(.macos-fullscreen) .sidebar-glass {
   background: hsl(
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
@@ -1230,12 +1230,23 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
   }
 }
 
-html.has-native-glass.glass-body:not(.theme-light) .body-glass {
+html.has-native-glass.glass-body:not(.theme-light):not(.macos-fullscreen) .body-glass {
   background: color-mix(
     in srgb,
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
     transparent
   );
+}
+
+/* Native fullscreen uses the current theme without changing glass preferences.
+   Disable the fade so entry cannot expose the fullscreen Space's black backing. */
+html.macos-fullscreen,
+html.macos-fullscreen body,
+html.macos-fullscreen #root,
+html.macos-fullscreen .sidebar-glass,
+html.macos-fullscreen .body-glass {
+  background: var(--color-background-base);
+  transition: none;
 }
 
 textarea,

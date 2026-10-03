@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
@@ -141,18 +141,33 @@ impl Rgb {
     }
 }
 
+/// macOS keeps requested glass separate from its fullscreen override.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn set_window_glass_enabled(
+    window: WebviewWindow,
+    enabled: bool,
+    background: Rgb,
+    generation: Option<u64>,
+) -> Option<crate::macos::FullscreenAppearance> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let target = window.clone();
+    if window
+        .run_on_main_thread(move || {
+            let state = crate::macos::set_appearance(&target, enabled, background, generation);
+            let _ = sender.try_send(state);
+        })
+        .is_err()
+    {
+        return None;
+    }
+    receiver.recv().await.flatten()
+}
+
 /// Desktop blur goes on after the first UI paint and only in dark mode.
+#[cfg(not(target_os = "macos"))]
 #[tauri::command]
 pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool, background: Rgb) {
-    #[cfg(target_os = "macos")]
-    {
-        if enabled {
-            let _ = window.set_background_color(Some(Color(0, 0, 0, 3)));
-            crate::macos::enable_glass(&window);
-        } else {
-            crate::macos::disable_glass(&window, background.r, background.g, background.b);
-        }
-    }
     #[cfg(target_os = "windows")]
     {
         if enabled {

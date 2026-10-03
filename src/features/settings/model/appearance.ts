@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
@@ -34,7 +35,67 @@ const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
 let glassFadeTimer: number | undefined;
-let glassSyncGeneration = 0;
+let glassSyncGeneration = Date.now() * 1000;
+let fullscreenAppearance = false;
+let fullscreenRevision = -1;
+let fullscreenListener: Promise<void> | undefined;
+let stopFullscreenListener: (() => void) | undefined;
+let appearanceDisposed = false;
+
+interface FullscreenAppearance {
+  fullscreen: boolean;
+  revision: number;
+}
+
+/** Native notifications are scoped to the current workspace window. */
+function receiveFullscreenAppearance(state: FullscreenAppearance) {
+  if (appearanceDisposed || state.revision < fullscreenRevision) return;
+  fullscreenRevision = state.revision;
+  const changed = fullscreenAppearance !== state.fullscreen;
+  fullscreenAppearance = state.fullscreen;
+  document.documentElement.classList.toggle("macos-fullscreen", state.fullscreen);
+  if (changed && nativeGlassReady) {
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }
+}
+
+function watchFullscreenAppearance(): Promise<void> {
+  if (!IS_MAC) return Promise.resolve();
+  if (!fullscreenListener) {
+    appearanceDisposed = false;
+    try {
+      fullscreenListener = getCurrentWebviewWindow()
+        .listen<FullscreenAppearance>("macos-fullscreen-appearance", (event) => {
+          receiveFullscreenAppearance(event.payload);
+        })
+        .then((stop) => {
+          if (appearanceDisposed) stop();
+          else stopFullscreenListener = stop;
+        })
+        .catch(() => {});
+    } catch {
+      // Browser-only previews have no native window.
+      fullscreenListener = Promise.resolve();
+    }
+    window.addEventListener("pagehide", disposeWindowAppearance, { once: true });
+  }
+  return fullscreenListener;
+}
+
+/** Also invalidates pending fades and IPC completions during teardown. */
+export function disposeWindowAppearance() {
+  appearanceDisposed = true;
+  nativeGlassReady = false;
+  ++glassSyncGeneration;
+  if (glassFadeTimer !== undefined) window.clearTimeout(glassFadeTimer);
+  glassFadeTimer = undefined;
+  stopFullscreenListener?.();
+  stopFullscreenListener = undefined;
+  fullscreenListener = undefined;
+  fullscreenAppearance = false;
+  fullscreenRevision = -1;
+  window.removeEventListener("pagehide", disposeWindowAppearance);
+}
 
 export const CHAT_BACKGROUND_PATH_CHANGE_EVENT =
   "monocode:chat-background-path-change";
@@ -282,6 +343,9 @@ export function applyThemeDarkLightness(value: number) {
     "--theme-dark-lightness",
     `${next}%`,
   );
+  if (IS_MAC && nativeGlassReady) {
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }
   return next;
 }
 
@@ -295,10 +359,14 @@ export function applyThemeTint(hue: number, saturation: number) {
     "--theme-saturation",
     `${nextSaturation}%`,
   );
+  if (IS_MAC && nativeGlassReady) {
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }
   return { hue: nextHue, saturation: nextSaturation };
 }
 
 export function initAppearance() {
+  void watchFullscreenAppearance();
   document.documentElement.classList.toggle("is-mac", IS_MAC);
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
@@ -401,14 +469,21 @@ function glassFadeMs(): number {
  * overtaken is dropped rather than left to settle last.
  */
 export function syncNativeGlass(scheme: ColorScheme) {
-  const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
+  const requested = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
+  const enabled = requested && !(IS_MAC && fullscreenAppearance);
   const root = document.documentElement;
   const generation = ++glassSyncGeneration;
   const setWindow = () =>
-    invoke("set_window_glass_enabled", {
-      enabled,
+    invoke<FullscreenAppearance | null>("set_window_glass_enabled", {
+      // Native retains the requested appearance while overriding fullscreen.
+      enabled: requested,
       background: opaqueWindowBackground(),
-    }).catch(() => {});
+      ...(IS_MAC ? { generation } : {}),
+    })
+      .then((state) => {
+        if (IS_MAC && state) receiveFullscreenAppearance(state);
+      })
+      .catch(() => {});
 
   if (glassFadeTimer !== undefined) {
     window.clearTimeout(glassFadeTimer);
@@ -417,7 +492,7 @@ export function syncNativeGlass(scheme: ColorScheme) {
 
   if (enabled) {
     void setWindow().finally(() => {
-      if (generation === glassSyncGeneration) {
+      if (generation === glassSyncGeneration && !appearanceDisposed) {
         root.classList.add("has-native-glass");
       }
     });
@@ -425,6 +500,10 @@ export function syncNativeGlass(scheme: ColorScheme) {
   }
 
   root.classList.remove("has-native-glass");
+  if (IS_MAC && fullscreenAppearance) {
+    void setWindow();
+    return;
+  }
   glassFadeTimer = window.setTimeout(() => {
     glassFadeTimer = undefined;
     void setWindow();
@@ -433,8 +512,17 @@ export function syncNativeGlass(scheme: ColorScheme) {
 
 /** Applies native transparency once the opaque launch cover can be removed. */
 export function activateWindowAppearance() {
-  nativeGlassReady = true;
-  syncNativeGlass(isLightScheme() ? "light" : "dark");
+  appearanceDisposed = false;
+  if (!IS_MAC) {
+    nativeGlassReady = true;
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+    return;
+  }
+  void watchFullscreenAppearance().then(() => {
+    if (appearanceDisposed) return;
+    nativeGlassReady = true;
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  });
 }
 
 /** Keeps the "system" preference in sync when the OS flips appearance. */
