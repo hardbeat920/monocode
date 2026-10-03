@@ -73,19 +73,26 @@ export function planComposerSwitch(
   next: HarnessId,
 ): ComposerSwitchPlan {
   if (session.harness === next) return { kind: "model" };
-  if (session.pendingSwitch && next === session.pendingSwitch.from) {
+  const last = lastHandoffBlock(session.blocks)?.handoff;
+  // History may include an executed target request. Returning to its source
+  // requires a new transfer before or after inspection acknowledgment.
+  const unknownRequestIntent = session.pendingSwitch &&
+    last?.from === session.pendingSwitch.from &&
+    (last.transfer?.needsInspection === true || last.transfer?.inspectionConfirmed === true);
+  const pending = unknownRequestIntent ? undefined : session.pendingSwitch;
+  if (pending && next === pending.from) {
     return {
       kind: "revert",
-      ...(session.pendingSwitch.fromProviderSessionId
+      ...(pending.fromProviderSessionId
         ? {
             restoreProviderSessionId:
-              session.pendingSwitch.fromProviderSessionId,
+              pending.fromProviderSessionId,
           }
         : {}),
-      ...(session.pendingSwitch.fromProviderAccountId
+      ...(pending.fromProviderAccountId
         ? {
             restoreProviderAccountId:
-              session.pendingSwitch.fromProviderAccountId,
+              pending.fromProviderAccountId,
           }
         : {}),
     };
@@ -98,7 +105,7 @@ export function planComposerSwitch(
   }
   return {
     kind: "arm",
-    pending: session.pendingSwitch ?? {
+    pending: pending ?? {
       from: session.harness,
       fromModel: session.model,
       fromSettings: session.modelSettings,

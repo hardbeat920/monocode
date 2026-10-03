@@ -5,6 +5,7 @@ import type { LinkedWorkItem } from "../../sessions/model/session";
 
 export const HOST_PROTOCOL_VERSION = 1;
 export const SESSION_PROVIDER_SWITCH_CAPABILITY = "sessionProviderSwitchV1";
+export const SESSION_PROVIDER_INSPECTION_CAPABILITY = "sessionProviderInspectionV1";
 export const REMOTE_PROVIDERS = [
   "codex",
   "claude",
@@ -171,6 +172,12 @@ export type HostCommand =
       modelSettings: Record<string, string>;
       runtimeMode: RuntimeMode;
     }
+  | {
+      type: "confirmProviderInspection";
+      commandId: string;
+      sessionId: string;
+      expectedRevision: number;
+    }
   | { type: "compact"; commandId: string; sessionId: string }
   | {
       type: "send";
@@ -245,6 +252,10 @@ export function isRemoteProvider(value: unknown): value is RemoteProvider {
 
 export function hostSupportsProviderSwitch(host?: HostDescriptor): boolean {
   return !!host?.capabilities?.includes(SESSION_PROVIDER_SWITCH_CAPABILITY);
+}
+
+export function hostSupportsProviderInspection(host?: HostDescriptor): boolean {
+  return host?.protocolVersion === HOST_PROTOCOL_VERSION && host.capabilities.includes(SESSION_PROVIDER_INSPECTION_CAPABILITY);
 }
 
 export function requireHostDescriptor(value: HostDescriptor): HostDescriptor {

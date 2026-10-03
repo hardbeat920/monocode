@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession, type Session } from "../model/session";
-import { getSession, persistFingerprint, sanitizeSessionForPersist } from "./sessionStore";
+import { getSession, persistFingerprint, sanitizeSessionForPersist, upsertSession } from "./sessionStore";
 import { buildPortableContext } from "../model/portableContext";
+import { canDispatchQueuedHead } from "../model/messageQueue";
 import {
   failProviderDelivery,
   recordProviderBound,
@@ -98,6 +99,42 @@ describe("durable provider switching", () => {
     expect(buildPortableContext(restored!).items.some((item) => item.sourceBlockId === "user-3")).toBe(true);
   });
 
+  it.each(["preparing", "imported"] as const)("requires inspection when a submitted %s request was acknowledged but its acceptance save failed", async (status) => {
+    const original = switchingSession();
+    original.providerSessionId = "codex-1";
+    original.providerContext!.delivery = {
+      ...original.providerContext!.delivery!, status, requestSubmitted: true,
+    };
+    original.providerContext!.bindings.push({ harness: "codex", providerSessionId: "codex-1", cwd: "/repo" });
+    original.blocks.push({ id: "user-2", role: "user", text: "Apply the external action once" });
+    original.queuedMessages = [{ id: "queued-1", text: "Continue automatically", attachments: [] }];
+    original.queueStatus = "active";
+    const savedBeforeAcceptance = sanitizeSessionForPersist(original);
+    const accepted = {
+      ...original,
+      pendingSwitch: undefined,
+      providerContext: {
+        ...original.providerContext!,
+        delivery: { ...original.providerContext!.delivery!, status: "accepted" as const },
+      },
+    };
+    invoke.mockRejectedValueOnce(new Error("Disk full"));
+    await expect(upsertSession(accepted)).rejects.toThrow("Disk full");
+    invoke.mockResolvedValue({ ...savedBeforeAcceptance, createdAt: 1, updatedAt: 2 });
+
+    const restored = await getSession(original.id);
+
+    expect(restored?.providerContext?.delivery).toMatchObject({
+      status: "uncertain", requestSubmitted: true, needsInspection: true,
+    });
+    expect(restored?.blocks.find((block) => block.id === "user-2")?.draft).toBeFalsy();
+    expect(restored?.providerSessionId).toBe("codex-1");
+    expect(restored?.providerContext?.bindings).toEqual(original.providerContext!.bindings);
+    expect(canDispatchQueuedHead({
+      ...restored!, queuedMessages: original.queuedMessages, queueStatus: "active",
+    })).toBe(false);
+  });
+
   it("recovers a crash during snapshot preparation before a delivery receipt exists", async () => {
     const original = switchingSession();
     original.providerContext!.delivery = undefined;
@@ -112,6 +149,27 @@ describe("durable provider switching", () => {
     expect(restored?.blocks.filter((block) => block.draft).map((block) => block.id)).toEqual(["user-2"]);
     expect(restored?.blocks.find((block) => block.id === "preflight")?.handoff?.status).toBe("ready");
     expect(restored?.pendingSwitch?.fromProviderSessionId).toBe("claude-1");
+  });
+
+  it("does not turn an inspection-required request into a draft on a later reload", async () => {
+    const original = switchingSession();
+    original.providerSessionId = "codex-1";
+    original.providerContext!.delivery = {
+      ...original.providerContext!.delivery!, status: "uncertain", requestSubmitted: true, needsInspection: true,
+    };
+    original.blocks.push(
+      { id: "handoff", role: "handoff", text: "Shared history", handoff: {
+        from: "claude", to: "codex", status: "preparing", pending: true,
+        transfer: { switchId: "switch-1", status: "uncertain", mode: "native", included: 1, omitted: 0, historicalAttachments: 0, requestSubmitted: true, needsInspection: true },
+      } },
+      { id: "user-2", role: "user", text: "May already have executed" },
+    );
+    const saved = sanitizeSessionForPersist(original);
+    invoke.mockResolvedValue({ ...saved, createdAt: 1, updatedAt: 2 });
+    const restored = await getSession(original.id);
+    expect(restored?.blocks.find((block) => block.id === "user-2")?.draft).toBeFalsy();
+    expect(restored?.providerContext).toEqual(original.providerContext);
+    expect(restored?.providerSessionId).toBe("codex-1");
   });
 
   it("loads old records without adding a synthetic transcript turn", async () => {
@@ -134,7 +192,7 @@ describe("durable provider switching", () => {
 
   it("retains transfer status and omissions in persisted handoff rows", () => {
     const session = switchingSession();
-    const transfer = { switchId: "switch-1", status: "uncertain" as const, mode: "native" as const, included: 12, omitted: 4, historicalAttachments: 2, retrievalPath: "/data/history/switch-1.md" };
+    const transfer = { switchId: "switch-1", status: "uncertain" as const, mode: "native" as const, included: 12, omitted: 4, historicalAttachments: 2, retrievalPath: "/data/history/switch-1.md", requestSubmitted: true as const, needsInspection: true as const };
     session.blocks.push({ id: "handoff", role: "handoff", text: "Shared history", handoff: { from: "claude", to: "codex", status: "ready", pending: true, transfer } });
     expect(sanitizeSessionForPersist(session).blocks[1].handoff?.transfer).toEqual(transfer);
   });

@@ -17,6 +17,13 @@ import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
+import {
+  AcceptancePersistenceError,
+  createAcceptancePersistence,
+  dispatchAfterContextSave,
+  persistNativeContextDelivery,
+  withAcceptancePersistenceError,
+} from "./model/acceptancePersistence";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -291,12 +298,15 @@ import {
   beginProviderDelivery,
   canApplyRunningConfiguration,
   canResumeProviderBinding,
+  confirmProviderDeliveryInspection,
   failProviderDelivery,
   failUnstartedProviderRequest,
   markProviderContextDelivered,
+  markProviderRequestSubmitted,
   providerBinding,
   recordProviderBound,
   recordProviderContextUsage,
+  recoverSubmittedProviderDelivery,
   rememberProviderBinding,
   requiresFreshProviderBinding,
   runningProviderSelection,
@@ -1159,6 +1169,9 @@ function Workspace({
   >(new Map());
   const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
   const queueDispatchingRef = useRef(new Set<string>());
+  const acceptancePersistence = useRef(createAcceptancePersistence());
+  const deliveryInspectionPending = useRef(new Set<string>());
+  const submittedTransfers = useRef(new Map<string, string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
   const tabsRef = useRef(tabs);
@@ -6084,6 +6097,60 @@ function Workspace({
       const remote = sessionsRef.current.find((session) => session.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd))
         return !!remoteSessionActions(sessionId)?.submit(text, attachments, options);
+      if (acceptancePersistence.current.hasPending(sessionId)) {
+        flushSync(() => setSessions((prev) => prev.map((session) =>
+          session.id === sessionId ? { ...session, queueStatus: "paused" } : session,
+        )));
+        void acceptancePersistence.current.reconcile(sessionId, async () => {
+          const latest = sessionsRef.current.find((session) => session.id === sessionId);
+          if (!latest || !(await upsertSession(latest))) {
+            throw new Error("The accepted session could not be saved.");
+          }
+        }).then(() => {
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "The accepted request is saved. Submit again to send a new request.",
+          });
+          flushHarnessEvents();
+        }, () => {
+          // The tracked save reports its storage error and keeps the queue paused.
+        });
+        return false;
+      }
+      if (remote?.providerContext?.delivery?.needsInspection) {
+        if (
+          remote.busy || options?.queuedMessageId || options?.managed ||
+          options?.ciRepair || options?.appRequestId ||
+          deliveryInspectionPending.current.has(sessionId)
+        ) return false;
+        const switchId = remote.providerContext.delivery.switchId;
+        if (!window.confirm(
+          "MonoCode could not confirm whether the previous request reached the provider. Check the working copy and any external effects. Inspect the previous native conversation if it is available.\n\nConfirm that you checked those results. This action saves your acknowledgment and sends no request. Submit a new request afterward to continue.",
+        )) return false;
+        deliveryInspectionPending.current.add(sessionId);
+        void (async () => {
+          const latest = sessionsRef.current.find((session) => session.id === sessionId);
+          if (!latest || latest.providerContext?.delivery?.switchId !== switchId) return;
+          const confirmed = confirmProviderDeliveryInspection(latest);
+          if (!(await upsertSession(confirmed))) throw new Error("The inspection acknowledgment could not be saved.");
+          flushSync(() => setSessions((prev) => prev.map((session) =>
+            session.id === sessionId && session.providerContext?.delivery?.switchId === switchId
+              ? confirmProviderDeliveryInspection(session)
+              : session,
+          )));
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Inspection acknowledgment saved. The previous request was not resent. Submit a new request to continue.",
+          });
+          flushHarnessEvents();
+        })().catch((error: unknown) => {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          flushSync(() => setSessions((prev) => prev.map((session) =>
+            session.id === sessionId ? withAcceptancePersistenceError(session, failure) : session,
+          )));
+        }).finally(() => deliveryInspectionPending.current.delete(sessionId));
+        return false;
+      }
       if (editedResends.isActive(sessionId)) return false;
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
@@ -6735,6 +6802,7 @@ function Workspace({
       let controlText = "";
       let providerAccepted = false;
       let transferSwitchId: string | undefined;
+      let providerDispatched = false;
       let proposalText = "";
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
@@ -6915,8 +6983,12 @@ function Workspace({
                     ...(receipt.throughBlockId ? { sourceThroughBlockId: receipt.throughBlockId } : {}),
                   })
                 : session)));
-              const latest = sessionsRef.current.find((session) => session.id === sessionId);
-              if (latest) await upsertSession(latest);
+              await persistNativeContextDelivery(receipt.mode, async () => {
+                const latest = sessionsRef.current.find((session) => session.id === sessionId);
+                if (!latest || !(await upsertSession(latest))) {
+                  throw new Error("The native context import could not be saved.");
+                }
+              });
             },
           };
           const historicalFiles = context.items.reduce((count, item) => count + (item.attachments?.length ?? 0), 0);
@@ -7047,6 +7119,8 @@ function Workspace({
         }
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
+        let providerTurnCompleted = false;
+        let acceptancePersistenceFailed = false;
         try {
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
@@ -7125,15 +7199,56 @@ function Workspace({
                   flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
                     ? consumeHandoff(acceptProviderDelivery(session, transferSwitchId!))
                     : session)));
-                  const latest = sessionsRef.current.find((session) => session.id === sessionId);
-                  if (latest) void upsertSession(latest).catch(() => undefined);
+                  void acceptancePersistence.current.start(sessionId, transferSwitchId, async () => {
+                    const accepted = sessionsRef.current.find((session) => session.id === sessionId);
+                    if (!accepted || !(await upsertSession(accepted))) {
+                      throw new Error("The accepted session could not be saved.");
+                    }
+                  }, (error) => {
+                    flushSync(() => setSessions((prev) => prev.map((session) =>
+                      session.id === sessionId ? withAcceptancePersistenceError(session, error) : session,
+                    )));
+                  });
                   // Later repair prompts belong to this accepted native turn.
                   contextTransfer = undefined;
                 }
               },
               onEvent: routeTurnEvent,
             });
-          await sendTurn(sendText);
+          let sendFailure: unknown;
+          try {
+            if (transferSwitchId) {
+              flushSync(() => setSessions((prev) => prev.map((session) =>
+                session.id === sessionId
+                  ? markProviderRequestSubmitted(session, transferSwitchId!)
+                  : session,
+              )));
+              await dispatchAfterContextSave(async () => {
+                const submitted = sessionsRef.current.find((session) => session.id === sessionId);
+                if (!submitted || !(await upsertSession(submitted))) {
+                  throw new Error("The provider submission marker could not be saved. The request was not sent.");
+                }
+              }, () => turnGen.current.get(sessionId) === gen, async () => {
+                providerDispatched = true;
+                submittedTransfers.current.set(sessionId, transferSwitchId!);
+                await sendTurn(sendText);
+              });
+            } else {
+              await sendTurn(sendText);
+            }
+            providerTurnCompleted = true;
+          } catch (error: unknown) {
+            sendFailure = error;
+          }
+          let acceptanceFailure: unknown;
+          try {
+            await acceptancePersistence.current.wait(sessionId, transferSwitchId);
+          } catch (error: unknown) {
+            acceptanceFailure = error;
+          }
+          if (sendFailure) throw sendFailure;
+          if (acceptanceFailure) throw acceptanceFailure;
+          if (turnGen.current.get(sessionId) !== gen) return;
           acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(
@@ -7178,6 +7293,11 @@ function Workspace({
               ? error.message
               : String(error) || `${current.harness} adapter failed`;
           controlOutcome.error = message;
+          if (error instanceof AcceptancePersistenceError) {
+            acceptancePersistenceFailed = true;
+            buildSucceeded = providerTurnCompleted && !providerFailureSeen;
+            return;
+          }
           if (!providerFailureSeen) {
             enqueueHarnessEvent(sessionId, {
               type: "session.error",
@@ -7191,18 +7311,19 @@ function Workspace({
           controlOutcome = {
             status:
               providerFailureSeen ||
+              acceptancePersistenceFailed ||
               isProviderFailureText(controlText) ||
               !buildSucceeded
                 ? "failed"
                 : "completed",
             text: controlText.trim(),
-            ...(providerFailureSeen ? { error: controlOutcome.error } : {}),
+            ...(providerFailureSeen || acceptancePersistenceFailed ? { error: controlOutcome.error } : {}),
           };
           // A failed provider can leave its process alive with a dead event
           // stream or poisoned turn state. Park it now; the next prompt will
           // reconnect and resume through a fresh transport.
           if (providerFailureSeen) {
-            await (transferSwitchId && !providerAccepted
+            await (transferSwitchId && !providerAccepted && !providerDispatched
               ? forgetHarnessSession(current.harness, sessionId)
               : stopHarnessSession(current.harness, sessionId)).catch(
               () => undefined,
@@ -7214,7 +7335,9 @@ function Workspace({
               if (s.id !== sessionId) return s;
               let stopped = stopStreaming(s);
               if (transferSwitchId && !providerAccepted) {
-                stopped = failProviderDelivery(stopped, transferSwitchId);
+                stopped = providerDispatched
+                  ? recoverSubmittedProviderDelivery(stopped, transferSwitchId)
+                  : failProviderDelivery(stopped, transferSwitchId);
               } else if (providerAccepted) {
                 stopped = settleProviderBinding(stopped, current.harness, workCwd, providerAccountId);
               }
@@ -7231,7 +7354,7 @@ function Workspace({
                         : completeOrchestrationProposal(
                             proposalDraft,
                             nativeProposalText || proposalText,
-                            providerFailed || !buildSucceeded
+                            providerFailed || !buildSucceeded || acceptancePersistenceFailed
                               ? (controlOutcome.error ??
                                   "The lead could not finish planning.")
                               : undefined,
@@ -7285,9 +7408,11 @@ function Workspace({
                   recovered = isPreparingHandoff(recovered)
                     ? completeHandoff(recovered, "The context transfer failed. Retry the request or select the previous provider.")
                     : recovered;
-                  if (transferSwitchId) recovered = failProviderDelivery(recovered, transferSwitchId);
+                  if (transferSwitchId) recovered = providerDispatched
+                    ? recoverSubmittedProviderDelivery(recovered, transferSwitchId)
+                    : failProviderDelivery(recovered, transferSwitchId);
                   const user = [...recovered.blocks].reverse().find((block) => block.role === "user");
-                  if (user) recovered = { ...recovered, blocks: recovered.blocks.map((block) => block.id === user.id ? { ...block, draft: true } : block) };
+                  if (user && !providerDispatched) recovered = { ...recovered, blocks: recovered.blocks.map((block) => block.id === user.id ? { ...block, draft: true } : block) };
                 }
                 const stopped = {
                   ...recovered,
@@ -7312,6 +7437,7 @@ function Workspace({
           }
         })
         .finally(() => {
+          if (submittedTransfers.current.get(sessionId) === transferSwitchId) submittedTransfers.current.delete(sessionId);
           if (turnGen.current.get(sessionId) === gen) runningSelections.current.delete(sessionId);
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
@@ -8727,6 +8853,10 @@ function Workspace({
       if (current && remoteProjectFor(current.cwd))
         return remoteSessionActions(sessionId)?.compact() ?? false;
       if (!current || current.busy || current.pendingSwitch || current.worktreeRemoved) return false;
+      if (
+        acceptancePersistence.current.hasPending(sessionId) ||
+        current.providerContext?.delivery?.needsInspection
+      ) return false;
       if (!canCompactHarnessContext(current.harness)) {
         const unsupported = sessionsRef.current.map((session) =>
           session.id === sessionId
@@ -8836,6 +8966,7 @@ function Workspace({
       const interruptedDelivery = session?.providerContext?.delivery;
       const unacceptedSwitch = interruptedDelivery && interruptedDelivery.to === session?.harness &&
         ["preparing", "imported"].includes(interruptedDelivery.status) ? interruptedDelivery : undefined;
+      const requestDispatched = !!unacceptedSwitch && submittedTransfers.current.get(sessionId) === unacceptedSwitch.switchId;
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
       runningSelections.current.delete(sessionId);
       flushHarnessEvents();
@@ -8843,13 +8974,15 @@ function Workspace({
         for (const id of sessionChildHarnesses(session)) {
           void cancelHarnessTurn(id, sessionId);
         }
-        if (unacceptedSwitch) void forgetHarnessSession(unacceptedSwitch.to, sessionId).catch(() => undefined);
+        if (unacceptedSwitch && !requestDispatched) void forgetHarnessSession(unacceptedSwitch.to, sessionId).catch(() => undefined);
       }
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
           const stopped = unacceptedSwitch
-            ? failProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
+            ? requestDispatched
+              ? recoverSubmittedProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
+              : failProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
             : failUnstartedProviderRequest(stopStreaming(s));
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
@@ -9291,6 +9424,10 @@ function Workspace({
         flushHarnessEvents();
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (!session) throw new Error("This agent is no longer available");
+        if (
+          acceptancePersistence.current.hasPending(id) ||
+          session.providerContext?.delivery?.needsInspection
+        ) throw new Error("Save or inspect the previous provider request before sending a follow-up.");
         if (!session.busy)
           throw new Error(
             "This agent is not running a turn; send it a fresh one with message.",

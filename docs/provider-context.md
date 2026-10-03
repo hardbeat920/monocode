@@ -20,7 +20,11 @@ Picker intent, provider bindings, and transfer receipts persist separately from 
 
 Claude confirms the resumed native ID before sending input. It gives each user request a unique input ID and records acceptance after the input write succeeds and Claude echoes that ID. Startup output and manual compaction do not accept a user request. The [CLI replay flag](https://code.claude.com/docs/en/cli-reference) provides this acknowledgment.
 
-An unconfirmed import or acceptance can leave the target native conversation ambiguous. MonoCode retains the source, discards the uncertain target identity, and keeps the unaccepted request as a draft. Retry that draft to send its original request once into a fresh target conversation. A failed native resume uses eligible full portable history rather than an empty conversation.
+MonoCode saves a submission marker before dispatching the transferred request. A failed acceptance save pauses follow-ups and reports the storage error. Reconciliation retries the save without submitting the request again.
+
+After a restart, a saved submission marker without a durable acceptance record means the request may have run. MonoCode preserves that request and its native bindings instead of converting it to an unsent draft. Inspect the provider result, working copy, and any external effects before confirming that inspection. Confirmation saves the recovery decision without sending another request. A later deliberate submission can continue the conversation.
+
+A request that failed before dispatch can return as a draft for a fresh-target retry. A failed native resume uses eligible full portable history rather than an empty conversation. Provider acknowledgment and local storage cannot guarantee exactly-once external actions across a crash.
 
 The remote host owns history export, attachment snapshots, provider processes, and delivery receipts. Provider-switch commands include an expected session revision and use the existing command deduplication and persistent outbox. Older hosts retain their model-only configuration behavior. Switching providers does not move a session to another host.
 

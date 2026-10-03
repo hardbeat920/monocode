@@ -30,6 +30,9 @@ export type ProviderContextDelivery = {
   includedBlockIds: string[];
   omittedBlockIds: string[];
   targetProviderSessionId?: string;
+  /** Saved before dispatch, so a missing acknowledgment can mean execution occurred. */
+  requestSubmitted?: true;
+  needsInspection?: true;
 };
 
 export type ProviderContextState = {
@@ -168,6 +171,8 @@ export function sanitizeProviderContext(
       ...(text(delivery.targetProviderSessionId)
         ? { targetProviderSessionId: delivery.targetProviderSessionId }
         : {}),
+      ...(delivery.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(delivery.needsInspection === true ? { needsInspection: true } : {}),
     };
   }
   return result;
@@ -463,6 +468,81 @@ export function acceptProviderDelivery(
   );
 }
 
+/** Save this marker before dispatching the first request into the target. */
+export function markProviderRequestSubmitted(
+  session: Session,
+  switchId: string,
+): Session {
+  const state = session.providerContext;
+  const delivery = state?.delivery;
+  if (
+    !delivery || delivery.switchId !== switchId ||
+    delivery.status === "accepted" || delivery.status === "uncertain" ||
+    delivery.requestSubmitted
+  ) return session;
+  return updateProviderHandoff({
+    ...session,
+    providerContext: {
+      ...state!,
+      delivery: { ...delivery, requestSubmitted: true },
+    },
+  }, switchId, { requestSubmitted: true });
+}
+
+/** A saved dispatch marker cannot prove whether the provider executed the request. */
+export function recoverSubmittedProviderDelivery(
+  session: Session,
+  switchId: string,
+): Session {
+  const state = session.providerContext;
+  const delivery = state?.delivery;
+  if (
+    !delivery || delivery.switchId !== switchId || !delivery.requestSubmitted ||
+    (delivery.status !== "preparing" && delivery.status !== "imported")
+  ) return session;
+  return updateProviderHandoff({
+    ...session,
+    blocks: session.blocks.map((block) =>
+      block.id === delivery.currentUserBlockId && block.role === "user"
+        ? { ...block, draft: undefined }
+        : block,
+    ),
+    ...(session.queuedMessages?.length ? { queueStatus: "paused" } : {}),
+    providerContext: {
+      ...state!,
+      delivery: { ...delivery, status: "uncertain", needsInspection: true },
+    },
+  }, switchId, { status: "uncertain", needsInspection: true });
+}
+
+/** Confirm inspection without replaying the original request or claiming acceptance. */
+export function confirmProviderDeliveryInspection(
+  session: Session,
+): Session {
+  const state = session.providerContext;
+  const delivery = state?.delivery;
+  if (!delivery?.needsInspection || delivery.status !== "uncertain" || session.busy)
+    return session;
+  const targetBinding = providerBinding(session, delivery.to, delivery.cwd, delivery.providerAccountId);
+  // Imported history does not prove the current request reached the provider.
+  // Keep its identity for inspection and reconstruct full history on next send.
+  const retainedState = targetBinding
+    ? rememberProviderBinding(session, { ...targetBinding, deliveredThroughBlockId: undefined }).providerContext!
+    : state!;
+  const inspected = updateProviderHandoff({
+    ...session,
+    providerContext: { ...retainedState, delivery: undefined },
+  }, delivery.switchId, { needsInspection: undefined, inspectionConfirmed: true });
+  return {
+    ...inspected,
+    blocks: inspected.blocks.map((block) =>
+      block.handoff?.transfer?.switchId === delivery.switchId
+        ? { ...block, handoff: { ...block.handoff, pending: false } }
+        : block,
+    ),
+  };
+}
+
 export function failProviderDelivery(
   session: Session,
   switchId: string,
@@ -543,6 +623,7 @@ export function requiresFreshProviderBinding(
   return Boolean(
     delivery &&
     delivery.status !== "accepted" &&
+    !delivery.needsInspection &&
     sameSelection(
       {
         harness: delivery.to,

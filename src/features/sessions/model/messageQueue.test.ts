@@ -60,6 +60,19 @@ describe("canDispatchQueuedHead", () => {
     ).toBe(false);
   });
 
+  it("requires inspection even if a submitted request's queue is resumed explicitly", () => {
+    const session = chat({ providerContext: {
+      version: 1, bindings: [], delivery: {
+        switchId: "switch", status: "uncertain", mode: "inline", from: "codex", to: "claude",
+        cwd: "/tmp/project", currentUserBlockId: "user", includedBlockIds: [], omittedBlockIds: [],
+        requestSubmitted: true, needsInspection: true,
+      },
+    } });
+    expect(canDispatchQueuedHead(session)).toBe(false);
+    expect(queuedMessageForSubmit(session, "a", "dispatch")).toBeUndefined();
+    expect(queuedMessageForSubmit(session, "a", "steer")).toBeUndefined();
+  });
+
   it("holds only when the head item is being edited", () => {
     expect(
       canDispatchQueuedHead(chat({ editingQueuedMessageId: "a" })),

@@ -9,6 +9,7 @@ import {
 } from "../../sessions/ui/SessionPane";
 import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
+import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
 import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
@@ -127,6 +128,7 @@ let deletedSessions: string[];
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  clearComposerDraft("shell");
   localStorage.setItem("monocode.modelControls", "beside");
   commands = [];
   host = undefined;
@@ -286,6 +288,12 @@ function dispatch(command: HostCommand) {
         blocks: [],
       },
     };
+  } else if (host && command.type === "confirmProviderInspection") {
+    host = {
+      ...host, revision: host.revision + 1,
+      session: { ...host.session, pendingSwitch: undefined,
+        providerContext: { ...host.session.providerContext!, delivery: undefined } },
+    };
   } else if (host && (command.type === "configure" || command.type === "switchProvider")) {
     host = {
       ...host,
@@ -345,7 +353,7 @@ function dispatch(command: HostCommand) {
   }
   return {
     commandId: command.commandId,
-    sessionId: "host-session",
+    sessionId: host?.session.id ?? "host-session",
     revision: host?.revision ?? 1,
   };
 }
@@ -1006,6 +1014,91 @@ it("keeps started sessions on their provider when the host lacks switch support"
   await vi.waitFor(() => expect(host?.session.blocks).toHaveLength(2));
   expect(await openProviderModels("Cursor")).toBeNull();
   expect(commands.some((command) => command.type === "switchProvider")).toBe(false);
+});
+
+function inspectionHost(id: string): HostSession {
+  return {
+    projectId: "project", revision: 9, status: "interrupted", updatedAt: 0,
+    session: {
+      id, cwd: "/home/me/repo", harness: "codex", model: gpt.id,
+      modelSettings: {}, runtimeMode: "supervised", title: "Interrupted transfer",
+      providerSessionId: "retained-native",
+      blocks: [{ id: "submitted", role: "user", text: "This request may already have run" }],
+      providerContext: {
+        version: 1, bindings: [{ harness: "codex", cwd: "/home/me/repo", providerSessionId: "retained-native" }],
+        delivery: { switchId: "switch", from: "claude", to: "codex", cwd: "/home/me/repo",
+          currentUserBlockId: "submitted", includedBlockIds: [], omittedBlockIds: [],
+          status: "uncertain", mode: "native", requestSubmitted: true, needsInspection: true },
+      },
+    },
+  };
+}
+
+it("requires a revision-checked remote inspection confirmation without resubmitting the request", async () => {
+  capabilities.push("sessionProviderInspectionV1", "sessionProviderSwitchV1");
+  host = inspectionHost("inspection-current");
+  rememberRemoteSession("shell", host.session.id);
+  await render();
+  expect(container.textContent).toContain("Inspect its work before continuing");
+  expect(container.querySelector('[aria-label="Send remote draft"]')).toBeNull();
+  await send("A future follow-up");
+  expect(commands).toHaveLength(0);
+  const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Confirm inspection");
+  expect(confirm).toBeDefined();
+  await act(async () => confirm!.click());
+  await settle();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({ type: "confirmProviderInspection", sessionId: "inspection-current", expectedRevision: 9 });
+  expect(host!.session.providerContext?.delivery).toBeUndefined();
+  expect(host!.session.providerSessionId).toBe("retained-native");
+  expect(host!.session.blocks).toHaveLength(1);
+  expect(commands.some((command) => command.type === "send")).toBe(false);
+});
+
+it("keeps inspection commands unavailable on older hosts", async () => {
+  capabilities.push("sessionProviderSwitchV1");
+  host = inspectionHost("inspection-old-host");
+  rememberRemoteSession("shell", host.session.id);
+  await render();
+  expect(container.textContent).toContain("Update this host to confirm inspection");
+  expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Confirm inspection")).toBe(false);
+  await send("A future follow-up");
+  expect(commands).toHaveLength(0);
+});
+
+it("retries a lost inspection receipt after remount with its original command ID", async () => {
+  capabilities.push("sessionProviderInspectionV1");
+  host = inspectionHost("inspection-lost-receipt");
+  rememberRemoteSession("shell", host.session.id);
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let receipt: ReturnType<typeof dispatch> | undefined;
+  const attempts: HostCommand[] = [];
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "confirmProviderInspection") {
+      attempts.push(request.params);
+      if (receipt) return receipt;
+      receipt = dispatch(request.params);
+      throw new Error("Inspection receipt lost");
+    }
+    return original(command, input);
+  });
+  await render();
+  const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Confirm inspection")!;
+  await act(async () => confirm.click());
+  await settle();
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render();
+  expect(attempts).toHaveLength(1);
+  const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!;
+  expect(retry).toBeDefined();
+  await act(async () => retry.click());
+  await settle();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(commands.filter((command) => command.type === "confirmProviderInspection")).toHaveLength(1);
+  expect(commands.some((command) => command.type === "send")).toBe(false);
 });
 
 it("waits for a running turn before applying the remote provider selection", async () => {

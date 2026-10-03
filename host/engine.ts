@@ -18,12 +18,15 @@ import {
   acceptProviderDelivery,
   beginProviderDelivery,
   canResumeProviderBinding,
+  confirmProviderDeliveryInspection,
   failProviderDelivery,
   markProviderContextDelivered,
+  markProviderRequestSubmitted,
   providerBinding,
   recordProviderBound,
   recordProviderContextUsage,
   rememberProviderBinding,
+  recoverSubmittedProviderDelivery,
   requiresFreshProviderBinding,
   settleProviderBinding,
   updateProviderHandoff,
@@ -164,6 +167,14 @@ export function parseCommand(input: unknown): HostCommand {
       model: text(v.model, "model", 200),
       modelSettings: modelSettings(v.modelSettings),
       runtimeMode: v.runtimeMode as Session["runtimeMode"],
+    };
+  }
+  if (v.type === "confirmProviderInspection") {
+    if (!Number.isSafeInteger(v.expectedRevision) || Number(v.expectedRevision) < 0)
+      throw new Error("Invalid expected session revision");
+    return {
+      type: "confirmProviderInspection", commandId, sessionId,
+      expectedRevision: Number(v.expectedRevision),
     };
   }
   if (v.type === "compact") return { type: "compact", commandId, sessionId };
@@ -327,7 +338,9 @@ export class HostEngine {
       if (delivery && delivery.status !== "accepted" && delivery.status !== "uncertain") {
         recovered = this.save({
           ...recovered,
-          session: this.contextStatus(failProviderDelivery(recovered.session, delivery.switchId), delivery.switchId, "uncertain"),
+          session: this.contextStatus(delivery.requestSubmitted
+            ? recoverSubmittedProviderDelivery(recovered.session, delivery.switchId)
+            : failProviderDelivery(recovered.session, delivery.switchId), delivery.switchId, "uncertain"),
         }, { type: "providerContext.recovered", switchId: delivery.switchId });
       }
       if (recovered.session.providerSessionId &&
@@ -409,7 +422,9 @@ export class HostEngine {
       ? `Continued with shared history. ${detail}`
       : status === "imported"
         ? `${detail} The current request awaits acceptance.`
-        : "The provider did not acknowledge this transfer. The next turn will use a fresh conversation with shared history. You can also return to the source provider.";
+        : delivery.needsInspection
+          ? "The provider request may already have run. Inspect its work, then confirm inspection before continuing."
+          : "The provider did not acknowledge this transfer. The next turn will use a fresh conversation with shared history. You can also return to the source provider.";
     return {
       ...session,
       blocks: session.blocks.map((block) => block.id === `${switchId}-context`
@@ -422,9 +437,14 @@ export class HostEngine {
     const live = this.live.get(id);
     if (!live || live.value.runId !== runId || live.value.status !== "running") return false;
     try {
-      this.flush(id);
       const session = update(live.value.session);
-      if (session !== live.value.session) live.value = this.save({ ...live.value, session }, event);
+      const changed = session !== live.value.session;
+      if (changed) {
+        // Retain evidence in memory even if its receipt cannot be saved yet.
+        live.value = { ...live.value, session };
+      }
+      this.flush(id);
+      if (changed) live.value = this.save(live.value, event);
       return true;
     } catch (error) {
       const active = this.running.get(id);
@@ -488,12 +508,20 @@ export class HostEngine {
         try {
           await provider.stop(id);
           this.flush(id);
-          let latest = this.store.session(id);
+          const persisted = this.store.session(id);
+          let latest = persisted.runId === runId && persisted.status === "running" ? this.live.get(id)?.value ?? persisted : persisted;
           if (latest.runId === runId && latest.status === "running") {
             const delivery = latest.session.providerContext?.delivery;
-            if (delivery && delivery.status !== "accepted") {
-              latest = { ...latest, session: this.contextStatus(failProviderDelivery(latest.session, delivery.switchId), delivery.switchId, "uncertain") };
-              await (provider.forget ?? provider.stop).call(provider, id);
+            if (this.running.get(id)?.accepted) {
+              if (delivery) latest = { ...latest, session: this.contextStatus(acceptProviderDelivery(latest.session, delivery.switchId), delivery.switchId, "accepted") };
+              latest = { ...latest, session: settleProviderBinding(latest.session, latest.session.harness, latest.session.cwd) };
+            } else if (delivery && delivery.status !== "accepted") {
+              const recovered = delivery.requestSubmitted
+                ? recoverSubmittedProviderDelivery(latest.session, delivery.switchId)
+                : failProviderDelivery(latest.session, delivery.switchId);
+              latest = { ...latest, session: this.contextStatus(recovered, delivery.switchId, "uncertain") };
+              if (!recovered.providerContext?.delivery?.needsInspection)
+                await (provider.forget ?? provider.stop).call(provider, id);
             }
             latest = this.save(
               this.settled(
@@ -576,7 +604,17 @@ export class HostEngine {
         )
           throw new Error("Wait for the branch switch to finish");
         const provider = this.provider(value.session.harness);
-        if (command.type === "switchProvider") {
+        if (command.type === "confirmProviderInspection") {
+          if (value.status === "running") throw new Error("Wait for host storage to reconcile before confirming inspection");
+          if (value.revision !== command.expectedRevision)
+            throw new Error("Session changed on the host. Reload it before confirming inspection");
+          if (!value.session.providerContext?.delivery?.needsInspection)
+            throw new Error("This session does not need inspection confirmation");
+          value = { ...value, session: confirmProviderDeliveryInspection(value.session) };
+        } else if (value.session.providerContext?.delivery?.needsInspection &&
+          (command.type === "send" || command.type === "compact" || command.type === "switchProvider")) {
+          throw new Error("Inspect the interrupted provider request and confirm inspection before continuing");
+        } else if (command.type === "switchProvider") {
           if (value.status === "running")
             throw new Error("Wait for the current turn before changing providers");
           if (value.revision !== command.expectedRevision)
@@ -816,6 +854,7 @@ export class HostEngine {
               ],
             },
           };
+          if (transfer) value = { ...value, session: markProviderRequestSubmitted(value.session, transfer.switchId) };
           effect = (saved) => {
             this.run(
               saved,
@@ -1016,41 +1055,54 @@ export class HostEngine {
                     : file,
                 ),
                 onAccepted: () => {
-                  const saved = this.updateProviderState(session.id, runId!, (current) => {
-                    if (!transfer) return current;
-                    return this.contextStatus(acceptProviderDelivery(current, transfer.switchId), transfer.switchId, "accepted");
-                  }, { type: "providerContext.accepted", switchId: transfer?.switchId });
-                  if (saved) active.accepted = true;
+                  if (this.live.get(session.id)?.value.runId !== runId) return;
+                  active.accepted = true;
+                  try {
+                    this.updateProviderState(session.id, runId!, (current) => {
+                      if (!transfer) return current;
+                      return this.contextStatus(acceptProviderDelivery(current, transfer.switchId), transfer.switchId, "accepted");
+                    }, { type: "providerContext.accepted", switchId: transfer?.switchId });
+                  } catch {
+                    // The receipt failure must not escape the provider's stdout listener.
+                    // Settlement retries storage with the retained acknowledgment.
+                  }
                 },
                 ...(transfer ? {
                   contextTransfer: {
                     context: transfer.context,
                     fallbackContext: transfer.fallbackContext,
                     onDelivered: (receipt) => {
-                      this.updateProviderState(session.id, runId!, (current) => {
-                        const knownItems = [...transfer.context.items, ...transfer.fallbackContext.items];
-                        const includedIds = receipt.includedIds?.map((id) => knownItems.find((item) => item.id === id)?.sourceBlockId ?? id);
-                        let delivered = markProviderContextDelivered(current, transfer.switchId, receipt.mode, receipt.providerSessionId, {
-                          ...(includedIds ? { includedBlockIds: includedIds } : {}),
-                          ...(receipt.throughBlockId ? { sourceThroughBlockId: receipt.throughBlockId } : {}),
-                        });
-                        if (receipt.includedIds && delivered.providerContext?.delivery) delivered = {
-                          ...delivered,
-                          providerContext: {
-                            ...delivered.providerContext,
-                            delivery: {
-                              ...delivered.providerContext.delivery,
-                              includedBlockIds: includedIds!,
-                              omittedBlockIds: receipt.omittedIds ?? delivered.providerContext.delivery.omittedBlockIds,
-                              sourceThroughBlockId: receipt.throughBlockId ?? delivered.providerContext.delivery.sourceThroughBlockId,
+                      if (this.live.get(session.id)?.value.runId !== runId) return;
+                      // Inline history arrives in the acknowledged current request.
+                      if (receipt.mode === "inline") active.accepted = true;
+                      try {
+                        this.updateProviderState(session.id, runId!, (current) => {
+                          const knownItems = [...transfer.context.items, ...transfer.fallbackContext.items];
+                          const includedIds = receipt.includedIds?.map((id) => knownItems.find((item) => item.id === id)?.sourceBlockId ?? id);
+                          let delivered = markProviderContextDelivered(current, transfer.switchId, receipt.mode, receipt.providerSessionId, {
+                            ...(includedIds ? { includedBlockIds: includedIds } : {}),
+                            ...(receipt.throughBlockId ? { sourceThroughBlockId: receipt.throughBlockId } : {}),
+                          });
+                          if (receipt.includedIds && delivered.providerContext?.delivery) delivered = {
+                            ...delivered,
+                            providerContext: {
+                              ...delivered.providerContext,
+                              delivery: {
+                                ...delivered.providerContext.delivery,
+                                includedBlockIds: includedIds!,
+                                omittedBlockIds: receipt.omittedIds ?? delivered.providerContext.delivery.omittedBlockIds,
+                                sourceThroughBlockId: receipt.throughBlockId ?? delivered.providerContext.delivery.sourceThroughBlockId,
+                              },
                             },
-                          },
-                        };
-                        delivered = updateProviderHandoff(delivered, transfer.switchId, {
-                          omitted: delivered.providerContext!.delivery!.omittedBlockIds.length,
-                        });
-                        return this.contextStatus(delivered, transfer.switchId, "imported");
-                      }, { type: "providerContext.delivered", switchId: transfer.switchId, mode: receipt.mode });
+                          };
+                          delivered = updateProviderHandoff(delivered, transfer.switchId, {
+                            omitted: delivered.providerContext!.delivery!.omittedBlockIds.length,
+                          });
+                          return this.contextStatus(delivered, transfer.switchId, "imported");
+                        }, { type: "providerContext.delivered", switchId: transfer.switchId, mode: receipt.mode });
+                      } catch (error) {
+                        if (receipt.mode !== "inline") throw error;
+                      }
                     },
                   },
                 } : {}),
@@ -1065,13 +1117,20 @@ export class HostEngine {
         // a follow-up can race cleanup and have its newly spawned child killed.
         await provider.stop(session.id);
         this.flush(session.id);
-        this.live.delete(session.id);
-        let latest = this.store.session(session.id);
-        if (latest.runId === runId) {
-          if (active.accepted) latest = { ...latest, session: settleProviderBinding(latest.session, session.harness, session.cwd) };
+        const stored = this.store.session(session.id);
+        let latest = stored.runId === runId && stored.status === "running" ? this.live.get(session.id)?.value ?? stored : stored;
+        if (latest.runId === runId && latest.status === "running") {
+          if (active.accepted) {
+            if (transfer) latest = { ...latest, session: this.contextStatus(acceptProviderDelivery(latest.session, transfer.switchId), transfer.switchId, "accepted") };
+            latest = { ...latest, session: settleProviderBinding(latest.session, session.harness, session.cwd) };
+          }
           else if (transfer) {
-            latest = { ...latest, session: this.contextStatus(failProviderDelivery(latest.session, transfer.switchId), transfer.switchId, "uncertain") };
-            await (provider.forget ?? provider.stop).call(provider, session.id);
+            const recovered = latest.session.providerContext?.delivery?.requestSubmitted
+              ? recoverSubmittedProviderDelivery(latest.session, transfer.switchId)
+              : failProviderDelivery(latest.session, transfer.switchId);
+            latest = { ...latest, session: this.contextStatus(recovered, transfer.switchId, "uncertain") };
+            if (!recovered.providerContext?.delivery?.needsInspection)
+              await (provider.forget ?? provider.stop).call(provider, session.id);
           }
           const message = this.closing
             ? "Host stopped. This turn was interrupted."
@@ -1089,6 +1148,7 @@ export class HostEngine {
             { type: "settled", error, cancelled: active.cancelled },
           );
         }
+        this.live.delete(session.id);
         this.running.delete(session.id);
         // stop/forget releases callbacks and native resources; bind only retained
         // provider conversation identity for an explicit future follow-up.

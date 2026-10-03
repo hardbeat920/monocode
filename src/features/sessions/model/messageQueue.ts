@@ -37,6 +37,7 @@ export function dequeueQueuedMessage(
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
   if (session.usageLimit) return false;
+  if (session.providerContext?.delivery?.needsInspection) return false;
   if (session.queueStatus === "paused" || session.queueStatus === "resuming") {
     return false;
   }
@@ -53,6 +54,7 @@ export function queuedMessageForSubmit(
   messageId: string,
   mode: "dispatch" | "steer",
 ): QueuedMessage | undefined {
+  if (session.providerContext?.delivery?.needsInspection) return undefined;
   const message = session.queuedMessages?.find(
     (entry) => entry.id === messageId,
   );

@@ -9,6 +9,7 @@ import { persistableAttachment } from "../model/attachments";
 import {
   failProviderDelivery,
   failUnstartedProviderRequest,
+  recoverSubmittedProviderDelivery,
   sanitizeProviderContext,
   type ProviderContextState,
 } from "../model/providerContext";
@@ -1218,8 +1219,11 @@ function recordToSession(record: SessionRecord): Session {
     ...(contextFromRecord(record) ?? {}),
   };
   const delivery = session.providerContext?.delivery;
+  if (delivery?.needsInspection) return session;
   return delivery && (delivery.status === "preparing" || delivery.status === "imported")
-    ? failProviderDelivery(session, delivery.switchId)
+    ? delivery.requestSubmitted
+      ? recoverSubmittedProviderDelivery(session, delivery.switchId)
+      : failProviderDelivery(session, delivery.switchId)
     : failUnstartedProviderRequest(session, preparingHandoffId);
 }
 
@@ -1279,6 +1283,9 @@ function sanitizeHandoff(value: Block["handoff"], preservePreparing = false): Ha
       historicalAttachments: transfer.historicalAttachments,
       ...(typeof transfer.retrievalPath === "string" && !transfer.retrievalPath.includes("\0")
         ? { retrievalPath: transfer.retrievalPath } : {}),
+      ...(transfer.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(transfer.needsInspection === true ? { needsInspection: true } : {}),
+      ...(transfer.inspectionConfirmed === true ? { inspectionConfirmed: true } : {}),
     } } : {}),
   };
 }

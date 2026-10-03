@@ -8,6 +8,7 @@ import { hostProviders } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
+import { markProviderRequestSubmitted } from "../src/features/sessions/model/providerContext";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -169,7 +170,7 @@ describe("host-owned provider switching", () => {
     await finishTurn(s, 2, "fresh-native", "Recovered");
   });
 
-  it("retains the source after failed startup and can return before retrying", async () => {
+  it("retains the source after failed startup and requires inspection before returning", async () => {
     const s = setup();
     s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
     await vi.waitFor(() => expect(s.turns).toHaveLength(1));
@@ -180,9 +181,18 @@ describe("host-owned provider switching", () => {
     await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
     expect(s.store.session(s.id).session.providerContext?.delivery?.status).toBe("uncertain");
     expect(s.store.session(s.id).session.pendingSwitch?.fromProviderSessionId).toBe("source-native");
+    s.engine.command({ type: "confirmProviderInspection", commandId: "inspect-failure", sessionId: s.id, expectedRevision: s.store.session(s.id).revision });
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
     s.engine.command(switchCommand(s, "codex", "return-after-failure"));
     expect(s.store.session(s.id).session.providerSessionId).toBe("source-native");
-    expect(s.store.session(s.id).session.pendingSwitch).toBeUndefined();
+    expect(s.store.session(s.id).session.pendingSwitch?.from).toBe("claude");
+    s.engine.command({ type: "send", commandId: "continue-source", sessionId: s.id, text: "Continue after inspection" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    expect(s.turns[1].input.text).toBe("Continue after inspection");
+    expect(s.turns[1].input.contextTransfer?.context.items.filter((item) => item.text === "Next request")).toHaveLength(1);
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "source-native" });
+    s.turns[1].input.onAccepted?.();
+    await finishTurn(s, 1, "source-native", "Continued");
   });
 
   it("does not accept a resumed Claude request from a startup plan before initialization fails", async () => {
@@ -222,12 +232,13 @@ describe("host-owned provider switching", () => {
     const failed = s.store.session(s.id).session;
     expect(s.provider.bind).toHaveBeenCalledWith(s.id, "target-native", s.directory);
     expect(failed.providerContext?.delivery?.status).toBe("uncertain");
-    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native"]);
+    expect(failed.providerContext?.delivery?.needsInspection).toBe(true);
+    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["target-native", "source-native"]);
     expect(failed.pendingSwitch?.fromProviderSessionId).toBe("source-native");
-    expect(failed.providerSessionId).toBeUndefined();
+    expect(failed.providerSessionId).toBe("target-native");
     const requests = failed.blocks.filter((block) => block.role === "user" && block.text === "Submit this exactly once");
     expect(requests).toHaveLength(1);
-    expect(requests[0].draft).toBe(true);
+    expect(requests[0].draft).not.toBe(true);
     const failedEvents = s.store.events(s.id, beforeFailure).events;
     expect(failedEvents).toBeDefined();
     expect(failedEvents).not.toEqual(expect.arrayContaining([
@@ -236,10 +247,10 @@ describe("host-owned provider switching", () => {
     expect(failedEvents).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ event: expect.objectContaining({ type: "providerContext.delivered" }) }),
     ]));
-    expect(s.provider.forget).toHaveBeenCalledWith(s.id);
+    expect(s.provider.forget).not.toHaveBeenCalled();
   });
 
-  it("abandons an imported target whose current request was not acknowledged", async () => {
+  it("preserves an imported target for inspection when the current request was not acknowledged", async () => {
     const s = setup();
     s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
     s.provider.forget = vi.fn(async () => {});
@@ -255,16 +266,118 @@ describe("host-owned provider switching", () => {
     s.engine.command({ type: "send", commandId: "uncertain", sessionId: s.id, text: "Uncertain request" });
     await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
     const failed = s.store.session(s.id).session;
-    expect(failed.providerSessionId).toBeUndefined();
-    expect(failed.providerContext?.delivery?.status).toBe("uncertain");
-    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native"]);
+    expect(failed.providerSessionId).toBe("ambiguous-target");
+    expect(failed.providerContext?.delivery).toMatchObject({ status: "uncertain", needsInspection: true });
+    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native", "ambiguous-target"]);
+    s.engine.command({ type: "confirmProviderInspection", commandId: "inspect-import", sessionId: s.id, expectedRevision: s.store.session(s.id).revision });
+    const inspected = s.store.session(s.id).session;
+    expect(inspected.pendingSwitch?.from).toBe("codex");
+    expect(inspected.providerContext?.bindings.find((binding) => binding.providerSessionId === "ambiguous-target")?.deliveredThroughBlockId).toBeUndefined();
+    vi.mocked(s.provider.bind).mockClear();
     s.engine.command({ type: "send", commandId: "retry", sessionId: s.id, text: "Inspect and continue" });
     await vi.waitFor(() => expect(s.turns).toHaveLength(2));
-    expect(s.turns[1].input.contextTransfer?.context.items.some((item) => item.text === "Original")).toBe(true);
-    expect(s.provider.forget).toHaveBeenCalledTimes(3);
+    expect(s.turns[1].input.text).toBe("Inspect and continue");
+    expect(s.turns[1].input.contextTransfer?.context.items.map((item) => item.text)).toEqual(expect.arrayContaining(["Original", "Source answer", "Uncertain request"]));
+    expect(s.turns[1].input.contextTransfer?.context.items.filter((item) => item.text === "Uncertain request")).toHaveLength(1);
+    expect(s.provider.bind).not.toHaveBeenCalled();
+    expect(s.provider.forget).toHaveBeenCalledTimes(2);
+    s.turns[1].input.onEvent({ type: "session.providerBound", providerSessionId: "fresh-target" });
     await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "fresh-target" });
     s.turns[1].input.onAccepted?.();
     await finishTurn(s, 1, "fresh-target", "Recovered");
+  });
+
+  it("preserves an acknowledged request when saving its acceptance receipt fails", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.provider.forget = vi.fn(async () => {});
+    s.engine.command(switchCommand(s, "claude", "choose-target"));
+    s.engine.command({ type: "send", commandId: "acknowledged-request", sessionId: s.id, text: "Execute exactly once" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    expect(s.store.session(s.id).session.providerContext?.delivery?.requestSubmitted).toBe(true);
+    s.turns[1].input.onEvent({ type: "session.providerBound", providerSessionId: "target-native" });
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "target-native" });
+    vi.mocked(s.provider.forget).mockClear();
+    const save = s.store.save.bind(s.store);
+    let failed = false;
+    let settlementFailed = false;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(s.store, "save").mockImplementation((value, event) => {
+      if (!failed && (event as { type?: string }).type === "providerContext.accepted") {
+        failed = true;
+        throw new Error("Acceptance receipt storage failed");
+      }
+      if (!settlementFailed && (event as { type?: string }).type === "settled") {
+        settlementFailed = true;
+        throw new Error("Settlement storage failed");
+      }
+      return save(value, event);
+    });
+    expect(() => s.turns[1].input.onAccepted?.()).not.toThrow();
+    await vi.waitFor(() => expect(settlementFailed).toBe(true));
+    expect(() => s.engine.command({ type: "send", commandId: "blocked-during-storage", sessionId: s.id, text: "Follow up" })).toThrow("already running");
+    await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("interrupted"), { timeout: 3_000 });
+    const recovered = s.store.session(s.id).session;
+    expect(failed).toBe(true);
+    expect(recovered.providerContext?.delivery?.status).toBe("accepted");
+    expect(recovered.providerSessionId).toBe("target-native");
+    expect(recovered.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native", "target-native"]);
+    expect(recovered.blocks.filter((block) => block.id === "acknowledged-request")).toHaveLength(1);
+    expect(recovered.blocks.find((block) => block.id === "acknowledged-request")?.draft).not.toBe(true);
+    expect(s.provider.forget).not.toHaveBeenCalled();
+    expect(s.turns).toHaveLength(2);
+    log.mockRestore();
+  });
+
+  it("requires explicit inspection after restarting a submitted target request", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.engine.command(switchCommand(s, "claude", "choose-target"));
+    s.engine.command({ type: "send", commandId: "submitted-request", sessionId: s.id, text: "Inspect before continuing" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    s.turns[1].input.onEvent({ type: "session.providerBound", providerSessionId: "target-native" });
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "target-native" });
+    const before = s.store.session(s.id);
+    s.store.transaction(() => s.store.save({
+      ...before, revision: before.revision + 1,
+      session: markProviderRequestSubmitted(before.session, "submitted-request"),
+    }, { type: "fixture" }));
+    const restarted = new HostEngine(s.store, { codex: s.provider, claude: s.provider });
+    cleanups.push(() => restarted.close());
+    const recovered = s.store.session(s.id);
+    expect(recovered.status).toBe("interrupted");
+    expect(recovered.session.providerContext?.delivery).toMatchObject({ status: "uncertain", requestSubmitted: true, needsInspection: true });
+    expect(recovered.session.providerSessionId).toBe("target-native");
+    expect(recovered.session.blocks.find((block) => block.id === "submitted-request")?.draft).not.toBe(true);
+    expect(() => restarted.command({ type: "send", commandId: "blocked", sessionId: s.id, text: "Continue" })).toThrow("Inspect");
+    expect(() => restarted.command({ type: "compact", commandId: "blocked-compact", sessionId: s.id })).toThrow("Inspect");
+    expect(() => restarted.command(switchCommand(s, "codex", "blocked-switch"))).toThrow("Inspect");
+    expect(() => restarted.command({ type: "confirmProviderInspection", commandId: "stale-confirmation", sessionId: s.id, expectedRevision: recovered.revision - 1 })).toThrow("Session changed");
+    const confirmation = { type: "confirmProviderInspection", commandId: "confirm-inspection", sessionId: s.id, expectedRevision: recovered.revision };
+    const receipt = restarted.command(confirmation);
+    expect(restarted.command(confirmation)).toEqual(receipt);
+    const inspected = s.store.session(s.id).session;
+    expect(inspected.providerContext?.delivery).toBeUndefined();
+    expect(inspected.pendingSwitch?.from).toBe("codex");
+    expect(inspected.providerSessionId).toBe("target-native");
+    expect(inspected.providerContext?.bindings.find((binding) => binding.providerSessionId === "target-native")?.deliveredThroughBlockId).toBeUndefined();
+    expect(inspected.blocks.find((block) => block.id === "submitted-request")?.draft).not.toBe(true);
+    expect(s.turns).toHaveLength(2);
+    restarted.command({ type: "send", commandId: "after-inspection", sessionId: s.id, text: "A new request" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(3));
+    expect(s.turns[2].input.text).toBe("A new request");
+    expect(s.turns[2].input.contextTransfer?.context.items.map((item) => item.text)).toEqual(expect.arrayContaining(["Original", "Source answer", "Inspect before continuing"]));
+    expect(s.turns[2].input.contextTransfer?.context.items.filter((item) => item.text === "Inspect before continuing")).toHaveLength(1);
+    s.turns[2].input.onEvent({ type: "session.providerBound", providerSessionId: "fresh-target" });
+    await s.turns[2].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "fresh-target" });
+    s.turns[2].input.onAccepted?.();
+    await finishTurn(s, 2, "fresh-target", "Continued");
   });
 
   it("stores omitted visible history on the owning host and excludes private reasoning", async () => {
@@ -1229,6 +1342,8 @@ describe("headless session ownership", () => {
         expectedRevision, harness: "claude", model: "claude:test",
         modelSettings: {}, runtimeMode: "supervised",
       })).toThrow("Invalid expected session revision");
+      expect(() => parseCommand({ type: "confirmProviderInspection", commandId: "inspect", sessionId: "session", expectedRevision }))
+        .toThrow("Invalid expected session revision");
     }
     expect(() =>
       parseCommand({ type: "send", commandId: "x", sessionId: "y", text: "" }),

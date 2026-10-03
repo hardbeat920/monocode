@@ -46,6 +46,7 @@ import {
 } from "../model/remoteModels";
 import {
   hostSupportsProviderSwitch,
+  hostSupportsProviderInspection,
   isRemoteProvider,
   REMOTE_PROVIDERS,
   requireHostDescriptor,
@@ -325,6 +326,7 @@ function ConnectedRemoteSession({
     !hasHostBlock(pending.commandId);
   const busy =
     !!hostSession?.busy || unseenActive || (startingActive && !starting?.draft) || pendingSendActive;
+  const needsInspection = hostSession?.providerContext?.delivery?.needsInspection === true;
   // An accepted turn stays on screen until a sync shows the host's copy, so
   // the transcript never drops it for a moment in between.
   useEffect(() => {
@@ -499,7 +501,7 @@ function ConnectedRemoteSession({
     settings: hostSession.modelSettings ?? {},
     mode: hostSession.runtimeMode,
   };
-  const canSwitchProvider = hostSupportsProviderSwitch(descriptor);
+  const canSwitchProvider = hostSupportsProviderSwitch(descriptor) && !needsInspection;
   const configuration = saved ? (changes ?? saved) : draft;
   const updateConfiguration = (
     update: (current: Configuration) => Configuration,
@@ -542,6 +544,10 @@ function ConnectedRemoteSession({
     followup?: HostCommand,
   ): Promise<CommandReceipt | undefined> => {
     if (sendingRef.current) return undefined;
+    if (needsInspection && (command.type === "send" || command.type === "compact" || command.type === "switchProvider")) {
+      setError("Inspect the interrupted provider request before continuing.");
+      return undefined;
+    }
     const version = bindingVersion.current;
     sendingRef.current = true;
     setSending(true);
@@ -698,7 +704,7 @@ function ConnectedRemoteSession({
     if (rejectedConfiguration.current &&
       rejectedConfiguration.current.revision === snapshot?.revision &&
       same(changes, rejectedConfiguration.current.value)) return;
-    if (busy || !online || pending || applying.current) return;
+    if (busy || needsInspection || !online || pending || applying.current) return;
     if (changes.harness !== saved.harness && !canSwitchProvider) return;
     applying.current = true;
     const sent = changes;
@@ -865,6 +871,7 @@ function ConnectedRemoteSession({
       preparingRef.current ||
       pending ||
       busy ||
+      needsInspection ||
       (!text.trim() && !attachments.length)
     )
       return false;
@@ -1044,7 +1051,23 @@ function ConnectedRemoteSession({
       if (next) await run(next);
     }
   };
-  const notice = pending && !sending
+  const confirmInspection = () => {
+    if (!hostSession || !snapshot || hostSession.busy || sending || !online ||
+      !hostSupportsProviderInspection(descriptor)) return;
+    void run({
+      type: "confirmProviderInspection", commandId: crypto.randomUUID(),
+      sessionId: hostSession.id, expectedRevision: snapshot.revision,
+    });
+  };
+  const notice: { text: string; detail?: string; action?: { label: string; run: () => void } } | undefined = needsInspection && pending?.type !== "confirmProviderInspection"
+    ? {
+        text: "The provider request may already have run. Inspect its work before continuing.",
+        detail: hostSupportsProviderInspection(descriptor) ? error : "Update this host to confirm inspection.",
+        ...(hostSupportsProviderInspection(descriptor) ? {
+          action: { label: "Confirm inspection", run: confirmInspection },
+        } : {}),
+      }
+    : pending && !sending
     ? { text: "Waiting for the host to confirm your request.", detail: error,
         action: { label: "Retry", run: () => void retryPending() } }
     : starting?.failed
@@ -1160,7 +1183,7 @@ function ConnectedRemoteSession({
     });
   };
   const compact = () => {
-    if (!hostSession || busy || pending || changes || !online) return false;
+    if (!hostSession || busy || needsInspection || pending || changes || !online) return false;
     void run(message(hostSession.id, "/compact"));
     return true;
   };

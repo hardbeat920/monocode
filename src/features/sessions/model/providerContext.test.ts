@@ -4,12 +4,15 @@ import {
   beginProviderDelivery,
   canApplyRunningConfiguration,
   canResumeProviderBinding,
+  confirmProviderDeliveryInspection,
   failProviderDelivery,
   failUnstartedProviderRequest,
   markProviderContextDelivered,
+  markProviderRequestSubmitted,
   providerBinding,
   recordProviderBound,
   recordProviderContextUsage,
+  recoverSubmittedProviderDelivery,
   rememberProviderBinding,
   requiresFreshProviderBinding,
   runningProviderSelection,
@@ -319,6 +322,142 @@ describe("durable provider bindings", () => {
     expect(accepted.providerContext?.delivery?.status).toBe("accepted");
     expect(accepted.pendingSwitch).toBeUndefined();
     expect(requiresFreshProviderBinding(accepted, "codex", cwd)).toBe(false);
+  });
+
+  it("preserves a possibly executed request and its native conversation until explicit inspection", () => {
+    const session: Session = {
+      ...preparing(),
+      blocks: [
+        ...preparing().blocks,
+        { id: "switch", role: "handoff", text: "Shared history", handoff: {
+          from: "claude", to: "codex", status: "ready", pending: true,
+          transfer: { switchId: "switch-1", status: "preparing", mode: "pending", included: 2, omitted: 0, historicalAttachments: 0 },
+        } },
+        { id: "u2", role: "user", text: "Apply the change once" },
+      ],
+      queuedMessages: [{ id: "q1", text: "Follow up", attachments: [] }],
+      queueStatus: "active",
+    };
+    const marked = markProviderRequestSubmitted(session, "switch-1");
+    expect(marked.providerContext?.delivery?.requestSubmitted).toBe(true);
+    expect(marked.blocks.find((block) => block.id === "switch")?.handoff?.transfer?.requestSubmitted).toBe(true);
+    expect(markProviderRequestSubmitted(marked, "switch-1")).toBe(marked);
+    const bound = recordProviderBound(
+      markProviderContextDelivered(marked, "switch-1", "native", "target-native"),
+      "codex", cwd, "target-native",
+    );
+    const imported = rememberProviderBinding(bound, {
+      ...providerBinding(bound, "codex", cwd)!, deliveredThroughBlockId: "a1",
+    });
+    expect(imported.providerContext?.delivery?.requestSubmitted).toBe(true);
+    const recovered = recoverSubmittedProviderDelivery(imported, "switch-1");
+    expect(recovered.providerContext?.delivery).toMatchObject({ status: "uncertain", needsInspection: true });
+    expect(recovered.providerContext?.bindings).toEqual(imported.providerContext?.bindings);
+    expect(recovered.providerSessionId).toBe("target-native");
+    expect(recovered.blocks.find((block) => block.id === "u2")?.draft).toBeFalsy();
+    expect(recovered.queueStatus).toBe("paused");
+    expect(recovered.queuedMessages).toEqual(session.queuedMessages);
+    expect(requiresFreshProviderBinding(recovered, "codex", cwd)).toBe(false);
+    expect(confirmProviderDeliveryInspection({ ...recovered, busy: true })).toEqual({ ...recovered, busy: true });
+    const inspected = confirmProviderDeliveryInspection(recovered);
+    expect(inspected.providerContext?.delivery).toBeUndefined();
+    expect(inspected.pendingSwitch).toEqual(recovered.pendingSwitch);
+    expect(providerBinding(inspected, "claude", cwd)).toEqual(providerBinding(imported, "claude", cwd));
+    expect(providerBinding(inspected, "codex", cwd)).toMatchObject({ providerSessionId: "target-native" });
+    expect(providerBinding(inspected, "codex", cwd)?.deliveredThroughBlockId).toBeUndefined();
+    expect(inspected.blocks.find((block) => block.id === "u2")?.draft).toBeFalsy();
+    expect(inspected.blocks.find((block) => block.id === "switch")?.handoff?.transfer).toMatchObject({
+      status: "uncertain", inspectionConfirmed: true,
+    });
+    expect(inspected.blocks.find((block) => block.id === "switch")?.handoff?.transfer?.needsInspection).toBeUndefined();
+    expect(inspected.blocks.find((block) => block.id === "switch")?.handoff?.pending).toBe(false);
+    expect(inspected.queueStatus).toBe("paused");
+  });
+
+  it("keeps an explicitly unaccepted submitted request retryable", () => {
+    const marked = markProviderRequestSubmitted({
+      ...preparing(), blocks: [...preparing().blocks, { id: "u2", role: "user", text: "Not sent" }],
+    }, "switch-1");
+    const failed = failProviderDelivery(marked, "switch-1");
+    expect(failed.providerContext?.delivery?.needsInspection).toBeUndefined();
+    expect(failed.blocks.find((block) => block.id === "u2")?.draft).toBe(true);
+    expect(confirmProviderDeliveryInspection(failed)).toBe(failed);
+  });
+
+  it("retains a newer provider switch when confirming inspection", () => {
+    const recovered = recoverSubmittedProviderDelivery(markProviderRequestSubmitted(preparing(), "switch-1"), "switch-1");
+    const selected: Session = { ...recovered, harness: "grok", model: "grok:new" };
+    const inspected = confirmProviderDeliveryInspection(selected);
+    expect(inspected.pendingSwitch).toEqual(selected.pendingSwitch);
+    expect(inspected.providerContext?.delivery).toBeUndefined();
+    expect(inspected.harness).toBe("grok");
+  });
+
+  it("retains full-history transfer intent when the submitted target never reported a native binding", () => {
+    const original = markProviderRequestSubmitted({
+      ...preparing(), blocks: [...preparing().blocks, { id: "u2", role: "user", text: "Possibly executed" }],
+    }, "switch-1");
+    const recovered = recoverSubmittedProviderDelivery(original, "switch-1");
+    const inspected = confirmProviderDeliveryInspection(recovered);
+    expect(inspected.pendingSwitch).toEqual(original.pendingSwitch);
+    expect(inspected.providerContext?.delivery).toBeUndefined();
+    expect(inspected.blocks.find((block) => block.id === "u2")?.draft).toBeFalsy();
+    expect(providerBinding(inspected, "claude", cwd)?.providerSessionId).toBe("claude-native");
+  });
+
+  it("reconstructs the unacknowledged current request after a saved native history import", () => {
+    const currentFact = "The new user fact was never acknowledged by the target.";
+    const marked = markProviderRequestSubmitted({
+      ...preparing(),
+      blocks: [...preparing().blocks, { id: "u2", role: "user", text: currentFact }],
+    }, "switch-1");
+    const imported = rememberProviderBinding(
+      markProviderContextDelivered(marked, "switch-1", "native", "target-native"),
+      { harness: "codex", cwd, providerSessionId: "target-native", deliveredThroughBlockId: "a1" },
+    );
+    const recovered = recoverSubmittedProviderDelivery({ ...imported, providerSessionId: "target-native" }, "switch-1");
+    const inspected = confirmProviderDeliveryInspection(recovered);
+    expect(inspected.pendingSwitch).toEqual(recovered.pendingSwitch);
+    expect(inspected.providerSessionId).toBe("target-native");
+    expect(providerBinding(inspected, "codex", cwd)?.providerSessionId).toBe("target-native");
+    expect(canResumeProviderBinding(inspected, providerBinding(inspected, "codex", cwd))).toBe(false);
+    expect(buildPortableContext(inspected).items.map((item) => item.text)).toContain(currentFact);
+    expect(inspected.blocks.find((block) => block.id === "u2")?.draft).toBeUndefined();
+  });
+
+  it.each([
+    { label: "startup identity without import", mode: "pending" as const, boundary: "a1" },
+    { label: "native import without a saved boundary", mode: "native" as const, boundary: undefined },
+    { label: "inline delivery with a removed boundary", mode: "inline" as const, boundary: "removed" },
+    { label: "native import with an old boundary", mode: "native" as const, boundary: "a1" },
+    { label: "inline delivery with an old boundary", mode: "inline" as const, boundary: "a1" },
+    { label: "native import with a current user watermark", mode: "native" as const, boundary: "u2" },
+    { label: "inline delivery with a current user watermark", mode: "inline" as const, boundary: "u2" },
+  ])("requires fresh history after inspecting unknown execution with $label", ({ mode, boundary }) => {
+    const bound = rememberProviderBinding(markProviderRequestSubmitted({
+      ...preparing(), blocks: [...preparing().blocks, { id: "u2", role: "user", text: "Unacknowledged request" }],
+    }, "switch-1"), {
+      harness: "codex", cwd, providerSessionId: "target-native", deliveredThroughBlockId: boundary,
+    });
+    const submitted: Session = {
+      ...bound, providerSessionId: "target-native",
+      providerContext: { ...bound.providerContext!, delivery: { ...bound.providerContext!.delivery!, mode } },
+    };
+    const recovered = recoverSubmittedProviderDelivery(submitted, "switch-1");
+    const inspected = confirmProviderDeliveryInspection(recovered);
+    expect(inspected.pendingSwitch).toEqual(recovered.pendingSwitch);
+    expect(providerBinding(inspected, "codex", cwd)?.providerSessionId).toBe("target-native");
+    expect(canResumeProviderBinding(inspected, providerBinding(inspected, "codex", cwd))).toBe(false);
+  });
+
+  it("sanitizes dispatch and inspection markers as literal true values", () => {
+    const marked = markProviderRequestSubmitted(preparing(), "switch-1");
+    expect(sanitizeProviderContext(marked.providerContext)?.delivery?.requestSubmitted).toBe(true);
+    const malformed = { ...marked.providerContext, delivery: {
+      ...marked.providerContext!.delivery!, requestSubmitted: "true", needsInspection: 1,
+    } };
+    expect(sanitizeProviderContext(malformed)?.delivery?.requestSubmitted).toBeUndefined();
+    expect(sanitizeProviderContext(malformed)?.delivery?.needsInspection).toBeUndefined();
   });
 
   it("discards an uncertain target while preserving a retryable source", () => {

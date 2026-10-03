@@ -124,6 +124,9 @@ export type HandoffMeta = {
     omitted: number;
     historicalAttachments: number;
     retrievalPath?: string;
+    requestSubmitted?: true;
+    needsInspection?: true;
+    inspectionConfirmed?: true;
   };
 };
 

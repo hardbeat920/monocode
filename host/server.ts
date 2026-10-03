@@ -290,6 +290,7 @@ export function createHostServer(
                 "sessions.draft",
                 "sessions.plan",
                 "sessionProviderSwitchV1",
+                "sessionProviderInspectionV1",
               ],
             };
             break;

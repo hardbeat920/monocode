@@ -3635,8 +3635,16 @@ function HandoffDivider({ block }: { block: Block }) {
 
   const transfer = meta.transfer;
   const uncertain = transfer?.status === "uncertain";
+  const needsInspection = transfer?.needsInspection;
+  const inspected = transfer?.inspectionConfirmed;
   const preparing = meta.status === "preparing" && !uncertain;
-  const label = preparing
+  const label = needsInspection
+    ? transfer?.status === "accepted"
+      ? "Acceptance needs saving"
+      : "Execution needs inspection"
+    : inspected
+      ? "Execution inspected"
+      : preparing
     ? "Preparing shared history"
     : uncertain
       ? "Handoff needs retry"
@@ -3689,7 +3697,11 @@ function HandoffDivider({ block }: { block: Block }) {
             {transfer.retrievalPath && (
               <p>The saved history is available at <code>{transfer.retrievalPath}</code>.</p>
             )}
-            {uncertain && <p>The request was not confirmed. Retry the unsent message to continue.</p>}
+            {needsInspection && <p>{transfer.status === "accepted"
+              ? "The provider acknowledged this request, but MonoCode could not save its receipt. Restore saving before continuing."
+              : "The request may have run. Inspect the provider conversation and changed files before continuing. MonoCode will not resend it automatically."}</p>}
+            {inspected && <p>You confirmed inspection of this request. MonoCode did not resend it.</p>}
+            {uncertain && !needsInspection && !inspected && <p>The request was not confirmed. Retry the unsent message to continue.</p>}
           </div>
         </details>
       )}

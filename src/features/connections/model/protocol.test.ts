@@ -2,6 +2,8 @@ import { expect, it } from "vitest";
 import {
   applySessionSync,
   hostSupportsProviderSwitch,
+  hostSupportsProviderInspection,
+  SESSION_PROVIDER_INSPECTION_CAPABILITY,
   SESSION_PROVIDER_SWITCH_CAPABILITY,
   type HostDescriptor,
   type HostSession,
@@ -83,8 +85,12 @@ it("enables provider switching only when the host advertises it", () => {
   };
   expect(hostSupportsProviderSwitch()).toBe(false);
   expect(hostSupportsProviderSwitch(host)).toBe(false);
+  expect(hostSupportsProviderInspection(host)).toBe(false);
   expect(hostSupportsProviderSwitch({
     ...host,
     capabilities: [SESSION_PROVIDER_SWITCH_CAPABILITY],
   })).toBe(true);
+  expect(hostSupportsProviderInspection({ ...host, capabilities: [SESSION_PROVIDER_SWITCH_CAPABILITY] })).toBe(false);
+  expect(hostSupportsProviderInspection({ ...host, capabilities: [SESSION_PROVIDER_INSPECTION_CAPABILITY] })).toBe(true);
+  expect(hostSupportsProviderInspection({ ...host, protocolVersion: 2, capabilities: [SESSION_PROVIDER_INSPECTION_CAPABILITY] })).toBe(false);
 });

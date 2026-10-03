@@ -301,6 +301,8 @@ describe("remote host API", () => {
     const s = await setup(["codex", "cursor"]);
     expect((await s.call("environment.describe")).value.result.capabilities)
       .toContain("sessionProviderSwitchV1");
+    expect((await s.call("environment.describe")).value.result.capabilities)
+      .toContain("sessionProviderInspectionV1");
     expect((await s.call("environment.describe")).value.result.providers)
       .toEqual(["codex"]);
     expect((await s.call("environment.describe", {

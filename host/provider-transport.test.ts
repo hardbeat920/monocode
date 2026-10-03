@@ -266,6 +266,50 @@ describe("existing providers over headless process I/O", () => {
     }
   });
 
+  it.each(["providerContext.delivered", "providerContext.accepted"])(
+    "contains a %s storage failure in the real Claude stdout callback", async (failedEvent) => {
+      const project = await engine.openProject(directory);
+      const key = failedEvent.replaceAll(".", "-");
+      const { sessionId } = engine.command({
+        type: "create", commandId: `${key}-create`, projectId: project.id,
+        harness: "codex", model: "codex:test", runtimeMode: "supervised",
+      });
+      engine.command({ type: "send", commandId: `${key}-source`, sessionId, text: "Preserve this source requirement" });
+      await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+      engine.command({
+        type: "switchProvider", commandId: `${key}-switch`, sessionId,
+        expectedRevision: store.session(sessionId).revision,
+        harness: "claude", model: "claude:test", modelSettings: {}, runtimeMode: "supervised",
+      });
+      const targetCommandId = `${key}-target`;
+      const save = store.save.bind(store);
+      let failed = false;
+      const write = vi.spyOn(store, "save").mockImplementation((value, event) => {
+        const receipt = event as { type?: string; switchId?: string };
+        if (!failed && receipt.type === failedEvent && receipt.switchId === targetCommandId) {
+          failed = true;
+          throw new Error("Injected receipt storage failure");
+        }
+        return save(value, event);
+      });
+      try {
+        engine.command({ type: "send", commandId: targetCommandId, sessionId, text: "Current request was submitted exactly once" });
+        await vi.waitFor(() => expect(store.session(sessionId).status).toBe("interrupted"), { timeout: 4_000 });
+        const recovered = store.session(sessionId).session;
+        expect(failed).toBe(true);
+        expect(recovered.providerContext?.delivery).toMatchObject({ status: "accepted", mode: "inline", requestSubmitted: true });
+        expect(recovered.providerSessionId).toBe("fixture-claude");
+        expect(recovered.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["fixture-thread", "fixture-claude"]);
+        const requests = recovered.blocks.filter((block) => block.id === targetCommandId);
+        expect(requests).toHaveLength(1);
+        expect(requests[0].draft).not.toBe(true);
+        expect(recovered.pendingSwitch).toBeUndefined();
+      } finally {
+        write.mockRestore();
+      }
+    },
+  );
+
   it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
     "completes a %s turn over the headless ACP transport",
     async (harness) => {
