@@ -25,7 +25,10 @@ orchestration = ["package-deps"]
 workspace = ["package-deps", "dep:monocode-terminal", "dep:monocode-terminal-view"]
 projects = ["package-deps"]
 history = ["package-deps", "dep:chrono"]
-automations = ["package-deps"]
+# automations: launches go through submit; reminders read attention's
+# notification rules; session folders (history) and recents (projects);
+# local schedule times (chrono).
+automations = ["package-deps", "submit", "attention", "history", "projects", "dep:chrono"]
 # inbox: tracker clients (integrations), ISO timestamps and local midnight
 # (chrono), and URL parsing (url).
 inbox = ["package-deps", "dep:monocode-integrations", "dep:chrono", "dep:url"]
