@@ -2,13 +2,13 @@
 
 Choose another provider and model in the composer, then send a message. MonoCode keeps the session and working copy. A request submitted during an active local turn waits for that turn to finish and keeps its selected provider and model. The remote client applies a provider change after its current turn settles when the host advertises `sessionProviderSwitchV1`.
 
-MonoCode saves native conversation bindings by provider, account, and working directory. A supported return to an earlier provider resumes its native conversation with the missing interval of shared history. A fresh conversation receives eligible saved history. Changing a model within one provider keeps the existing continuation behavior.
+MonoCode saves native conversation bindings by provider, account, and working directory. A supported return to an earlier provider resumes its native conversation with the missing interval of shared history. A missing saved transcript boundary requires a fresh conversation with the surviving history. Changing a model within one provider keeps the existing continuation behavior.
 
 ## What shared history contains
 
 The exporter preserves complete selected user and assistant messages, recorded command and tool outcomes, file activity, plans, task lists, and error notices. It records each item's original provider and model when available. Historical tool records are evidence. Importing them never executes a tool call.
 
-The default allowance is 16,000 bytes, with a 64,000-byte ceiling. Known model capacity and native occupancy reduce that allowance after reserves for the current request, current attachments, and further work. The exporter keeps items whole, orders them chronologically, and records omissions. Oversized history can be read from a durable snapshot through the target provider's file tools. Transfer details show the delivery mode and selected and omitted item counts.
+The default allowance is 16,000 bytes, with a 64,000-byte ceiling. Known model capacity and native occupancy reduce that allowance after reserves for the fully prepared current request, attachment content and paths, and further work. Request preparation includes approved plans and MonoCode instructions before the exporter checks capacity or changes provider processes. The exporter keeps items whole, orders them chronologically, and records omissions. Oversized history can be read from a durable snapshot through the target provider's file tools. Transfer details show the delivery mode and selected and omitted item counts.
 
 Private reasoning, unsent drafts, internal prompts, and unfinished activity stay outside the portable history. Historical attachments travel as references to durable saved copies when available. Their bytes are not inserted as historical image messages. Missing or oversized assets carry an unavailable reason. The current request and its attachments still use the provider's ordinary input path.
 

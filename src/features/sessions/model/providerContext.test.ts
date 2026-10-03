@@ -3,6 +3,7 @@ import {
   acceptProviderDelivery,
   beginProviderDelivery,
   canApplyRunningConfiguration,
+  canResumeProviderBinding,
   failProviderDelivery,
   failUnstartedProviderRequest,
   markProviderContextDelivered,
@@ -173,6 +174,82 @@ describe("durable provider bindings", () => {
     expect(
       providerBinding(session, "claude", "/tmp/other", "work"),
     ).toBeUndefined();
+  });
+
+  it("requires fresh history when an edited resend removed the saved native boundary", () => {
+    const session = switched();
+    const saved = providerBinding(session, "claude", cwd);
+    expect(canResumeProviderBinding(session, saved)).toBe(true);
+    const recovered = {
+      ...session,
+      blocks: [
+        session.blocks[0],
+        {
+          id: "b1",
+          role: "assistant" as const,
+          text: "The later provider response.",
+        },
+      ],
+    };
+    const stale = providerBinding(recovered, "claude", cwd);
+    expect(stale?.deliveredThroughBlockId).toBe("a1");
+    expect(canResumeProviderBinding(recovered, stale)).toBe(false);
+    const target = canResumeProviderBinding(recovered, stale)
+      ? stale
+      : undefined;
+    expect(
+      buildPortableContext(recovered, {
+        afterBlockId: target?.deliveredThroughBlockId,
+      }).items.map((item) => item.sourceBlockId),
+    ).toEqual(["u1", "b1"]);
+    expect(
+      canResumeProviderBinding(session, {
+        ...source,
+        deliveredThroughBlockId: undefined,
+      }),
+    ).toBe(false);
+    expect(canResumeProviderBinding(session, undefined)).toBe(false);
+  });
+
+  it("restores legacy native identities through the default account picker", () => {
+    const legacy = {
+      ...newSession("claude", cwd),
+      providerSessionId: "legacy-native",
+    };
+    expect(
+      providerBinding(legacy, "claude", cwd, "default")?.providerSessionId,
+    ).toBe("legacy-native");
+    const pending = { ...switched(), providerContext: undefined };
+    expect(
+      providerBinding(pending, "claude", cwd, "default")?.providerSessionId,
+    ).toBe("claude-native");
+    expect(
+      providerBinding(switched(), "claude", cwd, "default")?.providerSessionId,
+    ).toBe("claude-native");
+  });
+
+  it("replaces default account aliases without merging named accounts", () => {
+    let session = rememberProviderBinding(switched(), {
+      ...source,
+      providerAccountId: "work",
+      providerSessionId: "work-native",
+    });
+    session = rememberProviderBinding(session, {
+      ...source,
+      providerAccountId: "default",
+      providerSessionId: "default-native",
+    });
+    expect(session.providerContext?.bindings).toHaveLength(2);
+    expect(providerBinding(session, "claude", cwd)?.providerSessionId).toBe(
+      "default-native",
+    );
+    expect(providerBinding(session, "claude", cwd, "")?.providerSessionId).toBe(
+      "default-native",
+    );
+    expect(
+      providerBinding(session, "claude", cwd, "work")?.providerSessionId,
+    ).toBe("work-native");
+    expect(providerBinding(session, "claude", cwd, "personal")).toBeUndefined();
   });
 
   it("keeps the target selection when a still-running source reports its identity", () => {

@@ -12,6 +12,7 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
+import { firstProviderRequest, firstProviderRequestBudget } from "./model/firstProviderRequest";
 import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
@@ -36,8 +37,6 @@ import { isHarnessAvailable } from "../integrations/harness/core/availability";
 import {
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
-  orchestrationPlanningPrompt,
-  orchestrationRepairPrompt,
   proposalBlock,
   validateOrchestrationSettings,
   withOrchestrationProposal,
@@ -286,12 +285,12 @@ import {
   sessionThroughTurn,
   type HandoffComposerCard,
   userMessagesAfterHandoff,
-  wrapHandoffPrompt,
 } from "../features/sessions/model/handoff";
 import {
   acceptProviderDelivery,
   beginProviderDelivery,
   canApplyRunningConfiguration,
+  canResumeProviderBinding,
   failProviderDelivery,
   failUnstartedProviderRequest,
   markProviderContextDelivered,
@@ -353,11 +352,9 @@ import {
 } from "../features/sessions/model/models";
 
 import {
-  buildPlanPrompt,
   isProviderFailureText,
   planTitle,
   planTurnKey,
-  planTurnPrompt,
 } from "../features/sessions/model/plan";
 import {
   displayPath,
@@ -832,9 +829,11 @@ function withHarnessChoice(
             harness,
             sessionDisplayTitle(session.title, session.harness),
           ),
-    ...(session.model === model
-      ? {}
-      : { context: dropContextWindow(session.context) }),
+    ...(session.harness !== harness
+      ? { context: undefined }
+      : session.model === model
+        ? {}
+        : { context: dropContextWindow(session.context) }),
     ...(session.harness === harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
@@ -6819,11 +6818,38 @@ function Workspace({
               text: handoffCard.brief,
             }
           : queuedHandoff;
+        const prepared = await prepareAttachments(attachments);
+        const prompt = intent === "build" && approvedPlan
+          ? harnessText
+          : await preparePrompt(harnessText, {
+              harness: current.harness,
+              sessionId,
+              cwd: workCwd,
+            });
+        const operatorCli = operatorCommand.matched
+          ? `${shellPath(await invoke<string>("app_cli_path"))} app`
+          : undefined;
+        const sendText = firstProviderRequest({
+          prompt,
+          intent,
+          approvedPlan: intent === "build" ? approvedPlan?.text : undefined,
+          proposal: proposalDraft,
+          orchestrationRetry: options?.orchestrationRetry,
+          rawCommand,
+          handoff: pendingSwitch ? null : wrap,
+          earlierRequests: queuedHandoff ? userMessagesAfterHandoff(current) : [],
+          inboxAsk: current.inboxAsk,
+          orchestratorPrompt: (text) => orchestrator.prompt(sessionId, text),
+          operatorCli,
+        });
+        if (turnGen.current.get(sessionId) !== gen) return;
         let contextTransfer: ContextTransferInput | undefined;
         if (pendingSwitch && !rawCommand) {
+          const savedTarget = providerBinding(current, current.harness, workCwd, providerAccountId);
           const target = canResumeHarnessWithContext(current.harness) &&
-            !requiresFreshProviderBinding(current, current.harness, workCwd, providerAccountId)
-            ? providerBinding(current, current.harness, workCwd, providerAccountId)
+            !requiresFreshProviderBinding(current, current.harness, workCwd, providerAccountId) &&
+            canResumeProviderBinding(current, savedTarget)
+            ? savedTarget
             : undefined;
           const fresh = !target;
           const sourceThroughBlockId = current.blocks[current.blocks.length - 1]?.id;
@@ -6831,9 +6857,8 @@ function Workspace({
           if (turnGen.current.get(sessionId) !== gen) return;
           const budget = {
             throughBlockId: sourceThroughBlockId,
-            currentRequest: harnessText,
+            ...firstProviderRequestBudget({ text: sendText, attachments: prepared }),
             windowTokens: modelContextWindow(current.model) ?? target?.contextWindow,
-            attachmentTokens: attachments.reduce((total, attachment) => total + (attachment.kind === "image" ? 4_000 : Math.min(16_000, Math.ceil(attachment.size / 2))), 0),
             assetSnapshots,
           };
           const fallbackContext = buildPortableContext(current, budget);
@@ -7023,33 +7048,6 @@ function Workspace({
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
-          const prepared = await prepareAttachments(attachments);
-          const prompt =
-            intent === "build" && approvedPlan
-              ? buildPlanPrompt(approvedPlan.text)
-              : await preparePrompt(harnessText, {
-                  harness: current.harness,
-                  sessionId,
-                  cwd: workCwd,
-                });
-          const turnPrompt = proposalDraft
-            ? options?.orchestrationRetry?.response
-              ? orchestrationRepairPrompt({
-                  ...proposalDraft,
-                  error: options.orchestrationRetry.error,
-                  response: options.orchestrationRetry.response,
-                })
-              : orchestrationPlanningPrompt(
-                  prompt,
-                  proposalDraft.settings,
-                  proposalDraft.checkoutCwd ?? proposalDraft.cwd,
-                )
-            : intent === "plan" && !rawCommand
-              ? planTurnPrompt(prompt)
-              : prompt;
-          const earlier = queuedHandoff
-            ? userMessagesAfterHandoff(current)
-            : [];
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
               await rewindHarnessLastTurn({
@@ -7135,24 +7133,6 @@ function Workspace({
               },
               onEvent: routeTurnEvent,
             });
-          let sendText = orchestrator.prompt(
-            sessionId,
-            inboxAskPrompt(
-              rawCommand ? undefined : current.inboxAsk,
-              wrap && !rawCommand
-                ? wrapHandoffPrompt(
-                    wrap.text,
-                    wrap.from,
-                    turnPrompt.trim() || CONTINUE_PROMPT,
-                    earlier,
-                  )
-                : turnPrompt,
-            ),
-          );
-          if (operatorCommand.matched) {
-            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
-          }
           await sendTurn(sendText);
           acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
@@ -7313,7 +7293,7 @@ function Workspace({
                   ...recovered,
                   worktreePreparing: undefined,
                 };
-                return proposalId && proposalDraft
+                const finalized = proposalId && proposalDraft
                   ? withOrchestrationProposal(
                       stopped,
                       proposalId,
@@ -7324,6 +7304,9 @@ function Workspace({
                       ),
                     )
                   : stopped;
+                return approvedPlan && intent === "build" && !providerAccepted
+                  ? withPlanStatus(finalized, approvedPlan.id, "ready")
+                  : finalized;
               }),
             );
           }

@@ -17,6 +17,7 @@ import type {
 import {
   acceptProviderDelivery,
   beginProviderDelivery,
+  canResumeProviderBinding,
   failProviderDelivery,
   markProviderContextDelivered,
   providerBinding,
@@ -31,6 +32,7 @@ import {
 import {
   buildPortableContext,
   buildPortableContextSnapshot,
+  currentAttachmentTokens,
   historicalContextAttachments,
   type PortableContext,
 } from "../src/features/sessions/model/portableContext";
@@ -713,11 +715,11 @@ export class HostEngine {
           if (command.type === "send" && (switching || uncertain)) {
             const switchId = command.commandId;
             const binding = providerBinding(value.session, value.session.harness, value.session.cwd);
-            const canResume = !uncertain && provider.contextTransferCapabilities?.resumedAppend === true && binding;
-            const currentRequest = draft?.text ?? command.text;
+            const canResume = !uncertain && provider.contextTransferCapabilities?.resumedAppend === true && canResumeProviderBinding(value.session, binding);
+            const currentRequest = command.text;
             const historicalAttachments = historicalContextAttachments(value.session);
             const assetSnapshots = snapshotHostContextAssets(join(this.contextDirectory(value.session.id), "assets"), historicalAttachments);
-            const attachmentTokens = attachments.reduce((total, attachment) => total + (attachment.kind === "image" ? 4_000 : Math.min(16_000, Math.ceil(attachment.size / 2))), 0);
+            const attachmentTokens = currentAttachmentTokens(attachments);
             const context = this.portableHistory(value.session, switchId, currentRequest, canResume ? binding : undefined, assetSnapshots, attachmentTokens);
             const fallbackContext = canResume
               ? this.portableHistory(value.session, `${switchId}-fallback`, currentRequest, undefined, assetSnapshots, attachmentTokens)

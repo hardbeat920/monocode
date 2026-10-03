@@ -5,6 +5,7 @@ import {
   type ModelTarget,
   type Session,
 } from "./session";
+import { sameProviderAccountId } from "../../providers/model/providerAccounts";
 
 export type ProviderBinding = {
   harness: HarnessId;
@@ -181,7 +182,10 @@ function sameSelection(
   return (
     binding.harness === harness &&
     binding.cwd === cwd &&
-    (binding.providerAccountId ?? "") === (providerAccountId ?? "")
+    sameProviderAccountId(
+      binding.providerAccountId || undefined,
+      providerAccountId || undefined,
+    )
   );
 }
 
@@ -198,7 +202,10 @@ export function providerBinding(
   if (
     session.harness === harness &&
     session.providerSessionId &&
-    (session.providerAccountId ?? "") === (providerAccountId ?? "") &&
+    sameProviderAccountId(
+      session.providerAccountId || undefined,
+      providerAccountId || undefined,
+    ) &&
     (session.worktreeCwd ?? session.cwd) === cwd
   ) {
     return {
@@ -219,7 +226,10 @@ export function providerBinding(
   if (
     source?.from === harness &&
     source.fromProviderSessionId &&
-    (source.fromProviderAccountId ?? "") === (providerAccountId ?? "") &&
+    sameProviderAccountId(
+      source.fromProviderAccountId || undefined,
+      providerAccountId || undefined,
+    ) &&
     (session.worktreeCwd ?? session.cwd) === cwd
   ) {
     return {
@@ -231,6 +241,16 @@ export function providerBinding(
     };
   }
   return undefined;
+}
+
+export function canResumeProviderBinding(
+  session: Session,
+  binding: ProviderBinding | undefined,
+): binding is ProviderBinding {
+  return (
+    !!binding?.deliveredThroughBlockId &&
+    session.blocks.some((block) => block.id === binding.deliveredThroughBlockId)
+  );
 }
 
 export function rememberProviderBinding(

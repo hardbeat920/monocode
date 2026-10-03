@@ -53,6 +53,25 @@ function bytes(value: string): number {
   return encoder.encode(value).byteLength;
 }
 
+export function currentAttachmentTokens(attachments: Attachment[]): number {
+  return attachments.reduce((total, attachment) => {
+    const mediaTokens = attachment.kind === "image"
+      ? 4_000
+      : Math.min(16_000, Math.ceil(attachment.size / 2));
+    // Providers add path instructions or URI metadata even for empty folders.
+    // URI escaping can use three bytes for each source byte.
+    const pathTokens = attachment.path
+      ? 128 + 3 * bytes(JSON.stringify({
+          kind: attachment.kind,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          path: attachment.path,
+        }))
+      : 0;
+    return total + mediaTokens + pathTokens;
+  }, 0);
+}
+
 /** Preserve complete settled items. Selection never shortens a message. */
 export function buildPortableContext(
   session: Session,

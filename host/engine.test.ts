@@ -130,6 +130,44 @@ describe("host-owned provider switching", () => {
     s.turns[0].finish();
   });
 
+  it("starts fresh with surviving history when the saved target boundary disappears", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.provider.forget = vi.fn(async () => {});
+    s.engine.command(switchCommand(s, "claude", "choose-other"));
+    s.engine.command({ type: "send", commandId: "other", sessionId: s.id, text: "Other provider" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "target-native" });
+    s.turns[1].input.onAccepted?.();
+    await finishTurn(s, 1, "target-native", "Target answer");
+    const before = s.store.session(s.id);
+    s.store.transaction(() => s.store.save({
+      ...before,
+      revision: before.revision + 1,
+      session: { ...before.session, providerContext: {
+        ...before.session.providerContext!,
+        bindings: before.session.providerContext!.bindings.map((binding) => binding.harness === "codex"
+          ? { ...binding, deliveredThroughBlockId: "removed-boundary" }
+          : binding),
+      } },
+    }, { type: "fixture" }));
+    s.engine.command(switchCommand(s, "codex", "return-source"));
+    vi.mocked(s.provider.bind).mockClear();
+    vi.mocked(s.provider.forget).mockClear();
+    s.engine.command({ type: "send", commandId: "fresh-return", sessionId: s.id, text: "Continue safely" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(3));
+    expect(s.provider.forget).toHaveBeenCalledWith(s.id);
+    expect(s.provider.bind).not.toHaveBeenCalled();
+    expect(s.turns[2].input.contextTransfer?.context.items.map((item) => item.text))
+      .toEqual(["Original", "Source answer", "Other provider", "Target answer"]);
+    await s.turns[2].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "fresh-native" });
+    s.turns[2].input.onAccepted?.();
+    await finishTurn(s, 2, "fresh-native", "Recovered");
+  });
+
   it("retains the source after failed startup and can return before retrying", async () => {
     const s = setup();
     s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
@@ -270,7 +308,7 @@ describe("host-owned provider switching", () => {
     await finishTurn(s, 1, "target-native", "Continued");
   });
 
-  it("reserves current attachment capacity before accepting a target turn", async () => {
+  it.each(["image", "file references", "edited draft", "approved plan"] as const)("reserves the actual %s request capacity before accepting a target turn", async (request) => {
     const s = setup();
     s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
     s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
@@ -286,9 +324,32 @@ describe("host-owned provider switching", () => {
     await finishTurn(s, 1, "target-native", "Target answer");
     s.engine.command(switchCommand(s, "codex", "return-full"));
     const fileId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-    writeAttachmentChunk(s.store, { id: fileId, offset: 0, size: 5, data: Buffer.from("image").toString("base64") });
+    let text = "Continue";
+    let draftBlockId: string | undefined;
+    let planBlockId: string | undefined;
+    let attachments: Array<{ id: string; name: string; mimeType: string; kind: "image" | "file"; size: number }> = [];
+    if (request === "image") {
+      writeAttachmentChunk(s.store, { id: fileId, offset: 0, size: 5, data: Buffer.from("image").toString("base64") });
+      attachments = [{ id: fileId, name: "image.png", mimeType: "image/png", kind: "image", size: 5 }];
+    } else if (request === "file references") {
+      attachments = Array.from({ length: 20 }, (_, index) => {
+        const id = `${index.toString(16).padStart(8, "0")}-dddd-4ddd-8ddd-dddddddddddd`;
+        writeAttachmentChunk(s.store, { id, offset: 0, size: 0, data: "" });
+        return { id, name: `${"資料".repeat(80)}-${index}.txt`, mimeType: "text/plain", kind: "file" as const, size: 0 };
+      });
+    } else if (request === "edited draft") {
+      s.engine.command({ type: "draft", commandId: "short-draft", sessionId: s.id, text: "Short draft" });
+      draftBlockId = "short-draft";
+      text = "Edited request ".repeat(400);
+    } else {
+      const before = s.store.session(s.id);
+      planBlockId = "reviewed-plan";
+      const plan = "Approved step ".repeat(400);
+      s.store.transaction(() => s.store.save({ ...before, revision: before.revision + 1, session: { ...before.session, blocks: [...before.session.blocks, { id: planBlockId!, role: "plan", text: plan, plan: { status: "ready" } }] } }, { type: "fixture" }));
+      text = `Build the approved plan:\n\n${plan}`;
+    }
     const stops = vi.mocked(s.provider.stop).mock.calls.length;
-    expect(() => s.engine.command({ type: "send", commandId: "capacity", sessionId: s.id, text: "Continue", attachments: [{ id: fileId, name: "image.png", mimeType: "image/png", kind: "image", size: 5 }] }))
+    expect(() => s.engine.command({ type: "send", commandId: "capacity", sessionId: s.id, text, attachments, ...(draftBlockId ? { draftBlockId } : {}), ...(planBlockId ? { planBlockId, intent: "build" as const } : {}) }))
       .toThrow("enough remaining context");
     expect(s.store.session(s.id).status).toBe("idle");
     expect(s.store.session(s.id).session.blocks.some((block) => block.id === "capacity")).toBe(false);
