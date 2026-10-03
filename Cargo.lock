@@ -4461,6 +4461,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-host"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "log",
+ "monocode-core",
+ "monocode-engine",
+ "monocode-git",
+ "monocode-harness",
+ "monocode-process",
+ "monocode-remote",
+ "monocode-settings",
+ "monocode-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "monocode-integrations"
 version = "0.6.0"
 dependencies = [
@@ -4656,6 +4675,7 @@ version = "0.6.0"
 dependencies = [
  "futures",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_platform",
  "image",
