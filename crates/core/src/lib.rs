@@ -29,6 +29,7 @@ pub mod session;
 pub mod settings;
 pub mod shortcut;
 pub mod task_list;
+pub mod transcript;
 pub mod user_question;
 
 pub use attachment::{Attachment, AttachmentKind};

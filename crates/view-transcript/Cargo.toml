@@ -1,0 +1,34 @@
+[package]
+name = "monocode-view-transcript"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Transcript views: turns, activity, tool calls, cards, side threads"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-markdown.workspace = true
+monocode-editor.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# localtime_r, for the wall-clock time under a finished turn.
+libc.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+rusqlite.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "transcript_gallery"
+path = "examples/transcript_gallery.rs"

@@ -48,6 +48,13 @@ monocode-terminal-view = { path = "crates/terminal-view" }
 monocode-editor = { path = "crates/editor" }
 monocode-layout = { path = "crates/layout" }
 monocode-settings = { path = "crates/settings" }
+monocode-view-transcript = { path = "crates/view-transcript" }
+monocode-view-composer = { path = "crates/view-composer" }
+monocode-view-files = { path = "crates/view-files" }
+monocode-view-scm = { path = "crates/view-scm" }
+monocode-view-settings = { path = "crates/view-settings" }
+monocode-view-pages = { path = "crates/view-pages" }
+monocode-view-inbox = { path = "crates/view-inbox" }
 
 # GPUI: zeronsh/zui plus its gpui-component fork. Bump both revs together,
 # following the pair that zeronsh/comet pins.
