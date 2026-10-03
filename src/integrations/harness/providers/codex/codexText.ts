@@ -32,6 +32,7 @@ type LiveText = {
   cwd: string;
   providerAccountId?: string;
   threadId: string;
+  retainThread?: boolean;
   model: string;
   effort: string;
   serviceTier?: string;
@@ -368,6 +369,7 @@ async function openThread(
   requestedThreadId?: string,
 ): Promise<void> {
   let opened: { thread?: { id?: string } } | undefined;
+  let resumed = false;
   if (requestedThreadId) {
     try {
       opened = await session.rpc.request<{ thread?: { id?: string } }>(
@@ -383,6 +385,7 @@ async function openThread(
         },
         INIT_TIMEOUT_MS,
       );
+      if (opened?.thread?.id?.trim()) resumed = true;
     } catch (error) {
       if (!isRecoverableThreadResumeError(error)) throw error;
       opened = undefined;
@@ -405,11 +408,22 @@ async function openThread(
   if (!threadId) throw new Error("Codex did not return a thread id");
   session.cwd = cwd;
   session.threadId = threadId;
+  session.retainThread = resumed;
 }
-async function dropLive(): Promise<void> {
+async function dropLive(options?: { retainThread?: boolean }): Promise<void> {
   const current = live;
   live = null;
   if (current) {
+    const shouldRetain = options?.retainThread ?? current.retainThread;
+    if (current.threadId && !current.closed && !shouldRetain) {
+      await current.rpc
+        .request(
+          "thread/delete",
+          { threadId: current.threadId },
+          INIT_TIMEOUT_MS,
+        )
+        .catch(() => undefined);
+    }
     current.closed = true;
     current.rpc.close();
   }
