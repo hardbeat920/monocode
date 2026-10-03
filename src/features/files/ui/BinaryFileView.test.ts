@@ -22,6 +22,11 @@ vi.mock("../model/fileWatch", () => ({
   watchFile: () => () => {},
 }));
 
+vi.mock("./PdfView", () => ({
+  PdfView: ({ size }: { size: number }) =>
+    createElement("div", { "data-testid": "pdf-view" }, `pdf ${size}`),
+}));
+
 vi.mock("../../../platform/tauri/platform", () => ({
   IS_MAC: true,
   IS_WIN: false,
@@ -100,5 +105,39 @@ describe("BinaryFileView image copy", () => {
       "/repo/art/original image.png",
     );
     expect(container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+  });
+});
+
+describe("BinaryFileView routing", () => {
+  it("hands PDF bytes to the PDF viewer", async () => {
+    const pdf = new TextEncoder().encode("%PDF-1.7\n%EOF");
+    actions.readBinaryFile.mockResolvedValueOnce(pdf);
+
+    await act(async () => {
+      root.render(
+        createElement(BinaryFileView, { path: "/repo/spec.pdf", cwd: "/repo" }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('[data-testid="pdf-view"]')?.textContent,
+    ).toBe(`pdf ${pdf.byteLength}`);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("shows the unsupported card for bytes that are neither image nor PDF", async () => {
+    actions.readBinaryFile.mockResolvedValueOnce(
+      new TextEncoder().encode("<html></html>"),
+    );
+
+    await act(async () => {
+      root.render(
+        createElement(BinaryFileView, { path: "/repo/fake.pdf", cwd: "/repo" }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("not a readable image or PDF");
   });
 });
