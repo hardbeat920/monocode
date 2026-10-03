@@ -36,6 +36,7 @@ pub struct HarnessAccount {
 #[serde(rename_all = "camelCase")]
 struct HarnessLine {
     session_id: String,
+    pid: u32,
     line: String,
 }
 
@@ -382,14 +383,30 @@ fn resolve_mcp_binary(provider: &str, binary_path: Option<&str>) -> Result<PathB
     }
 }
 
+pub(crate) struct ClaudeMcpProfile {
+    config_dir: Option<PathBuf>,
+    named: bool,
+}
+
+pub(crate) fn claude_mcp_profile(
+    app: &AppHandle,
+    account_id: Option<&str>,
+) -> Result<ClaudeMcpProfile, String> {
+    Ok(ClaudeMcpProfile {
+        config_dir: provider_account_dir(app, "claude", account_id)?,
+        named: account_id.is_some_and(|id| id != DEFAULT_PROVIDER_ACCOUNT_ID),
+    })
+}
+
 fn claude_mcp_command(
     args: Vec<String>,
     cwd: String,
     timeout: Duration,
     binary_path: Option<&str>,
+    profile: Option<&ClaudeMcpProfile>,
 ) -> Result<String, String> {
     let binary = resolve_mcp_binary("claude", binary_path)?;
-    mcp_command(binary, args, cwd, timeout)
+    mcp_command(binary, args, cwd, timeout, profile)
 }
 
 fn mcp_command(
@@ -397,12 +414,19 @@ fn mcp_command(
     args: Vec<String>,
     cwd: String,
     timeout: Duration,
+    profile: Option<&ClaudeMcpProfile>,
 ) -> Result<String, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
         return Err("Project directory does not exist".into());
     }
-    let output = exec_output(&binary.to_string_lossy(), &args, Some(&cwd), timeout)?;
+    let output = exec_output_with_profile(
+        &binary.to_string_lossy(),
+        &args,
+        Some(&cwd),
+        timeout,
+        profile,
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if output.status.success() {
         return Ok(stdout);
@@ -412,7 +436,13 @@ fn mcp_command(
 }
 
 #[tauri::command]
-pub async fn claude_mcp_list(host: State<'_, HarnessHost>, cwd: String) -> Result<String, String> {
+pub async fn claude_mcp_list(
+    app: AppHandle,
+    host: State<'_, HarnessHost>,
+    cwd: String,
+    account_id: Option<String>,
+) -> Result<String, String> {
+    let profile = claude_mcp_profile(&app, account_id.as_deref())?;
     let binary_path = host.runtime_binary_path("claude");
     tauri::async_runtime::spawn_blocking(move || {
         let mut output = claude_mcp_command(
@@ -420,8 +450,9 @@ pub async fn claude_mcp_list(host: State<'_, HarnessHost>, cwd: String) -> Resul
             cwd.clone(),
             Duration::from_secs(30),
             binary_path.as_deref(),
+            Some(&profile),
         )?;
-        for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
+        for name in configured_ws_mcp_servers(&expand_home(&cwd), profile.config_dir.as_deref()) {
             if !output
                 .lines()
                 .any(|line| line.starts_with(&format!("{name}:")))
@@ -437,7 +468,7 @@ pub async fn claude_mcp_list(host: State<'_, HarnessHost>, cwd: String) -> Resul
     .map_err(|e| e.to_string())?
 }
 
-fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
+fn configured_ws_mcp_servers(cwd: &Path, config_dir: Option<&Path>) -> Vec<String> {
     let mut names = Vec::new();
     let read = |path: &Path| -> Option<serde_json::Value> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
@@ -454,8 +485,8 @@ fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
             }
         }
     };
-    if let Some(home) = dirs_home() {
-        if let Some(settings) = read(&Path::new(&home).join(".claude.json")) {
+    if let Some(path) = claude_config_path(config_dir) {
+        if let Some(settings) = read(&path) {
             collect(settings.get("mcpServers"), &mut names);
             collect(
                 settings
@@ -479,6 +510,8 @@ fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
 
 #[tauri::command]
 pub async fn claude_mcp_add(
+    app: AppHandle,
+    account_id: Option<String>,
     host: State<'_, HarnessHost>,
     cwd: String,
     name: String,
@@ -495,6 +528,7 @@ pub async fn claude_mcp_add(
     if !value.is_object() {
         return Err("Server configuration must be a JSON object".into());
     }
+    let profile = claude_mcp_profile(&app, account_id.as_deref())?;
     let binary_path = host.runtime_binary_path("claude");
     tauri::async_runtime::spawn_blocking(move || {
         claude_mcp_command(
@@ -509,6 +543,7 @@ pub async fn claude_mcp_add(
             cwd,
             Duration::from_secs(30),
             binary_path.as_deref(),
+            Some(&profile),
         )
     })
     .await
@@ -523,9 +558,16 @@ pub(crate) fn add_mcp_via_cli(
     name: &str,
     config: &serde_json::Value,
     binary_path: Option<&str>,
+    profile: Option<&ClaudeMcpProfile>,
 ) -> Result<(), String> {
     let (binary, args) = mcp_add_args(provider, scope, name, config, binary_path)?;
-    mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
+    mcp_command(
+        binary,
+        args,
+        cwd.to_owned(),
+        Duration::from_secs(30),
+        profile,
+    )?;
     Ok(())
 }
 
@@ -536,6 +578,7 @@ pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Re
         vec!["--version".into()],
         cwd.to_owned(),
         Duration::from_secs(10),
+        None,
     )?;
     version
         .split_whitespace()
@@ -664,6 +707,8 @@ fn mcp_key_values(
 
 #[tauri::command]
 pub async fn claude_mcp_remove(
+    app: AppHandle,
+    account_id: Option<String>,
     host: State<'_, HarnessHost>,
     cwd: String,
     name: String,
@@ -675,6 +720,7 @@ pub async fn claude_mcp_remove(
     if !matches!(scope.as_str(), "local" | "project" | "user") {
         return Err("Invalid MCP scope".into());
     }
+    let profile = claude_mcp_profile(&app, account_id.as_deref())?;
     let binary_path = host.runtime_binary_path("claude");
     tauri::async_runtime::spawn_blocking(move || {
         claude_mcp_command(
@@ -682,6 +728,7 @@ pub async fn claude_mcp_remove(
             cwd,
             Duration::from_secs(30),
             binary_path.as_deref(),
+            Some(&profile),
         )
     })
     .await
@@ -691,6 +738,8 @@ pub async fn claude_mcp_remove(
 
 #[tauri::command]
 pub async fn mcp_provider_login(
+    app: AppHandle,
+    account_id: Option<String>,
     host: State<'_, HarnessHost>,
     cwd: String,
     provider: String,
@@ -704,6 +753,11 @@ pub async fn mcp_provider_login(
     if !valid_name {
         return Err("Invalid MCP server name".into());
     }
+    let profile = if provider == "claude" {
+        Some(claude_mcp_profile(&app, account_id.as_deref())?)
+    } else {
+        None
+    };
     let binary_path = host.runtime_binary_path(&provider);
     tauri::async_runtime::spawn_blocking(move || {
         let args = match provider.as_str() {
@@ -717,6 +771,7 @@ pub async fn mcp_provider_login(
             args.into_iter().map(String::from).chain([name]).collect(),
             cwd,
             Duration::from_secs(180),
+            profile.as_ref(),
         )?;
         Ok(())
     })
@@ -856,6 +911,9 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
+    if binary_provider.as_deref() == Some("claude") && command_basename(&command) != "claude" {
+        apply_claude_env(&mut cmd);
+    }
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
@@ -903,6 +961,7 @@ pub fn harness_spawn(
             let _ = stdout_app.emit(
                 STDOUT_EVENT,
                 HarnessLine {
+                    pid,
                     session_id: stdout_id.clone(),
                     line,
                 },
@@ -918,6 +977,7 @@ pub fn harness_spawn(
             let _ = stderr_app.emit(
                 STDERR_EVENT,
                 HarnessLine {
+                    pid,
                     session_id: stderr_id.clone(),
                     line,
                 },
@@ -948,13 +1008,36 @@ pub fn harness_spawn(
     Ok(pid)
 }
 
+pub(crate) fn configured_claude_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| login_shell_env("CLAUDE_CONFIG_DIR").map(PathBuf::from))
+}
+
+pub(crate) fn configured_claude_secure_storage_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| login_shell_env("CLAUDE_SECURESTORAGE_CONFIG_DIR").map(PathBuf::from))
+}
+
+pub(crate) fn claude_config_path(dir: Option<&Path>) -> Option<PathBuf> {
+    dir.map(|dir| dir.join(".claude.json"))
+        .or_else(|| dirs_home().map(|home| PathBuf::from(home).join(".claude.json")))
+}
+
 pub(crate) fn provider_account_dir(
     app: &AppHandle,
     provider: &str,
     account_id: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     let Some(account_id) = account_id.filter(|id| *id != DEFAULT_PROVIDER_ACCOUNT_ID) else {
-        return Ok(None);
+        return Ok(if provider == "claude" {
+            configured_claude_dir()
+        } else {
+            None
+        });
     };
     let dir = provider_account_path(app, provider, account_id)?;
     std::fs::create_dir_all(&dir).map_err(|error| {
@@ -1040,6 +1123,9 @@ fn apply_provider_account(
     let Some(account) = account else {
         return Ok(());
     };
+    if account.id == DEFAULT_PROVIDER_ACCOUNT_ID {
+        return Ok(());
+    }
     let Some(dir) = provider_account_dir(app, &account.provider, Some(&account.id))? else {
         return Ok(());
     };
@@ -1342,12 +1428,42 @@ pub(crate) fn exec_output(
     cwd: Option<&str>,
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
+    exec_output_with_profile(command, args, cwd, timeout, None)
+}
+
+fn exec_output_with_profile(
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    timeout: Duration,
+    profile: Option<&ClaudeMcpProfile>,
+) -> Result<std::process::Output, String> {
     let mut cmd = Command::new(command);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, command);
+    if let Some(profile) = profile {
+        if command_basename(command) != "claude" {
+            apply_claude_env(&mut cmd);
+        }
+        if let Some(dir) = &profile.config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", dir);
+            if profile.named {
+                cmd.env("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir);
+            }
+        }
+        if profile.named {
+            for key in [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+            ] {
+                cmd.env_remove(key);
+            }
+        }
+    }
     if let Some(dir) = cwd {
         let workdir = expand_home(dir);
         if workdir.is_dir() {
@@ -2802,6 +2918,9 @@ fn prepare_child(cmd: &mut Command, command: &str) {
     if command_basename(command) == "fx" {
         apply_fx_env(cmd);
     }
+    if command_basename(command) == "claude" {
+        apply_claude_env(cmd);
+    }
     if command_basename(command) == "grok" {
         apply_grok_env(cmd);
     }
@@ -2835,6 +2954,60 @@ fn apply_grok_env(cmd: &mut Command) {
         }
         if let Some(value) = login_shell_env(key) {
             cmd.env(key, value);
+        }
+    }
+}
+
+const CLAUDE_ENV_KEYS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "CLOUD_ML_REGION",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "ANTHROPIC_FOUNDRY_BASE_URL",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
+fn apply_claude_env(cmd: &mut Command) {
+    for key in CLAUDE_ENV_KEYS {
+        if std::env::var_os(key).is_none() {
+            if let Some(value) = login_shell_env(key) {
+                cmd.env(key, value);
+            }
         }
     }
 }
@@ -2918,12 +3091,18 @@ fn load_unix_login_shell_env() -> HashMap<String, String> {
             return HashMap::new();
         }
     };
+    parse_login_shell_env(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn parse_login_shell_env(output: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if LOGIN_SHELL_KEYS.contains(&key) && !value.is_empty() {
+        if (LOGIN_SHELL_KEYS.contains(&key) || CLAUDE_ENV_KEYS.contains(&key)) && !value.is_empty()
+        {
             map.insert(key.to_string(), value.to_string());
         }
     }
@@ -2942,6 +3121,18 @@ fn command_basename(command: &str) -> &str {
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn login_shell_env_keeps_claude_routing_and_auth_without_unrelated_variables() {
+        let env = parse_login_shell_env("PATH=/bin\nANTHROPIC_API_KEY=dummy\nANTHROPIC_BASE_URL=http://localhost\nCLAUDE_CONFIG_DIR=/tmp/profile\nAWS_PROFILE=testing\nGOOGLE_APPLICATION_CREDENTIALS=/tmp/fixture\nHTTPS_PROXY=http://localhost:8000\nNODE_EXTRA_CA_CERTS=/tmp/certs\nUNRELATED_SECRET=excluded\nANTHROPIC_AUTH_TOKEN=\n");
+        assert_eq!(env.len(), 8);
+        assert_eq!(
+            env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("dummy")
+        );
+        assert!(!env.contains_key("UNRELATED_SECRET"));
+        assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN"));
+    }
 
     fn spawn_group(script: &str) -> std::process::Child {
         Command::new("sh")
@@ -3305,6 +3496,7 @@ mod tests {
                     vec!["mcp".into(), "login".into(), "docs".into()],
                     cwd.clone(),
                     Duration::from_secs(5),
+                    None,
                 )
                 .unwrap(),
                 "mcp\nlogin\ndocs"
@@ -3316,6 +3508,7 @@ mod tests {
                 cwd.clone(),
                 Duration::from_secs(5),
                 paths.get("claude").map(String::as_str),
+                None,
             )
             .unwrap(),
             "mcp\nlist"
@@ -3350,6 +3543,7 @@ mod tests {
                 "docs",
                 &config,
                 paths.get(provider).map(String::as_str),
+                None,
             )
             .unwrap();
         }
@@ -3364,6 +3558,40 @@ mod tests {
         .is_err());
         assert!(resolve_mcp_binary("claude", paths.get("codex").map(String::as_str)).is_err());
         assert!(resolve_mcp_binary("pi", paths.get("claude").map(String::as_str)).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_mcp_commands_select_named_storage_and_remove_default_tokens() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("monocode-mcp-profile-{}", uuid::Uuid::new_v4()));
+        let profile_dir = root.join("profile");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let binary = root.join("claude");
+        std::fs::write(&binary, r#"#!/bin/sh
+if [ "$1" = --version ]; then echo '2.1.287 (Claude Code)'; exit 0; fi
+printf '%s\n' "$CLAUDE_CONFIG_DIR" "$CLAUDE_SECURESTORAGE_CONFIG_DIR"
+if [ -n "${ANTHROPIC_API_KEY-}${ANTHROPIC_AUTH_TOKEN-}${CLAUDE_CODE_OAUTH_TOKEN-}" ]; then echo default-token-present; fi
+"#).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let profile = ClaudeMcpProfile {
+            config_dir: Some(profile_dir.clone()),
+            named: true,
+        };
+        let output = claude_mcp_command(
+            vec!["mcp".into(), "list".into()],
+            root.to_string_lossy().into_owned(),
+            Duration::from_secs(5),
+            Some(&binary.to_string_lossy()),
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(
+            output,
+            format!("{}\n{}", profile_dir.display(), profile_dir.display())
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -21,13 +21,16 @@ vi.mock("../../../integrations/harness/core/availability", () => ({
   isHarnessAvailable: (id: string) => id === "claude",
 }));
 let installed = "2.1.284 (Claude Code)";
+let updateInstructions = "";
 vi.mock("../../../integrations/harness/core/child", () => ({
   inspectHarnessBinary: vi.fn(async () => ({
     path: "/bin/claude",
     version: installed,
   })),
   updateHarnessCli: vi.fn(async () => {
+    if (updateInstructions) return updateInstructions;
     installed = "2.1.285 (Claude Code)";
+    return "Updated";
   }),
 }));
 vi.mock("../../sessions/model/models", () => ({
@@ -56,7 +59,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../../sessions/ui/HarnessIcon", () => ({ HarnessIcon: () => null }));
 
 describe("HarnessUpdateNotice", () => {
-  beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
+  beforeEach(() => {
+    claimed = false;
+    installed = "2.1.284 (Claude Code)";
+    updateInstructions = "";
+    refreshHarnessCatalogs.mockClear();
+    emit.mockClear();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("survives a StrictMode remount and updates from the card", async () => {
@@ -104,6 +114,31 @@ describe("HarnessUpdateNotice", () => {
     expect(refreshHarnessCatalogs).toHaveBeenLastCalledWith(["claude"], {
       force: true,
     });
+    act(() => root.unmount());
+  });
+
+  it("shows package manager instructions when the installed version is unchanged", async () => {
+    updateInstructions =
+      "Claude is managed by Homebrew. Run brew upgrade claude-code.";
+    const root = createRoot(document.createElement("div"));
+    await act(async () => {
+      root.render(createElement(HarnessUpdateNotice));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const notice = document.body.querySelector(
+      '[aria-label="Harness updates"]',
+    )!;
+    const button = Array.from(notice.querySelectorAll("button")).find(
+      (value) => value.textContent === "Update",
+    )!;
+    await act(async () => {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(notice.textContent).toContain(updateInstructions);
+    expect(refreshHarnessCatalogs).not.toHaveBeenCalled();
     act(() => root.unmount());
   });
 });

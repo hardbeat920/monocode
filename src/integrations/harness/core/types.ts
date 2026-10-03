@@ -15,7 +15,8 @@ export type HarnessEvent =
   | { type: "session.ended"; code?: number | null }
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
-  | { type: "turn.started"; providerTurnId: string }
+  | { type: "turn.started"; providerTurnId: string; native?: boolean }
+  | { type: "turn.finished"; native?: boolean }
   | {
       type: "session.configChanged";
       model?: string;
@@ -30,7 +31,7 @@ export type HarnessEvent =
    */
   | { type: "background.updated"; tasks: string[] }
   | ({ type: "interjection"; text: string } & InterjectionMeta)
-  | { type: "message.delta"; text: string }
+  | { type: "message.delta"; text: string; append?: boolean }
   | { type: "message.completed" }
   | {
       type: "image.generated";
@@ -48,7 +49,7 @@ export type HarnessEvent =
       size: number;
       alt?: string;
     }
-  | { type: "reasoning.delta"; text: string }
+  | { type: "reasoning.delta"; text: string; append?: boolean }
   | { type: "reasoning.completed" }
   | {
       type: "tool.started";

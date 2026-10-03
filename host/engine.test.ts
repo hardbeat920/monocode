@@ -61,27 +61,145 @@ function setup(harness: "codex" | "claude" = "codex") {
 }
 
 describe("headless session ownership", () => {
-  it.each(["send", "compact"] as const)("clears the old draft when a normal %s starts", async (type) => {
-    const { engine, store, turns, provider, id } = setup();
-    provider.compact = (input) => provider.send({ ...input, text: "/compact" });
-    engine.command({ type: "draft", commandId: "draft", sessionId: id, text: "Later" });
-    engine.command({ type, commandId: "next", sessionId: id, text: "New work" });
-    expect(store.session(id).session.blocks.some((block) => block.draft)).toBe(false);
+  it("parks idle Claude only after its scheduled tasks are gone", async () => {
+    const { engine, store, turns, provider, id } = setup("claude");
+    provider.persistent = true;
+    provider.needsProcess = vi.fn(() => true);
+    engine.command({ type: "send", commandId: "explicit", sessionId: id, text: "Schedule work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    vi.useFakeTimers();
+    try {
+      turns[0].finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.session(id).status).toBe("idle");
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(provider.stop).not.toHaveBeenCalled();
+      provider.needsProcess = () => false;
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(provider.stop).toHaveBeenCalledWith(id);
+      expect(store.session(id).status).toBe("idle");
+    } finally { vi.useRealTimers(); }
+  });
+  it("retains Claude and gives each native wakeup a new persisted turn", async () => {
+    const { engine, store, turns, provider, id } = setup("claude");
+    provider.persistent = true;
+    engine.command({
+      type: "send",
+      commandId: "explicit",
+      sessionId: id,
+      text: "Schedule work",
+    });
     await vi.waitFor(() => expect(turns).toHaveLength(1));
     turns[0].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    expect(provider.stop).not.toHaveBeenCalled();
+    for (const runId of ["native-one", "native-two"]) {
+      turns[0].input.onEvent({
+        type: "turn.started",
+        native: true,
+        providerTurnId: runId,
+      });
+      expect(store.session(id)).toMatchObject({
+        runId,
+        status: "running",
+        session: { busy: true },
+      });
+      turns[0].input.onEvent({
+        type: "message.delta",
+        text: runId,
+        append: true,
+      });
+      turns[0].input.onEvent({ type: "turn.finished", native: true });
+      expect(store.session(id)).toMatchObject({
+        runId,
+        status: "idle",
+        session: { busy: false },
+      });
+      expect(
+        store.session(id).session.blocks.some((block) => block.text === runId),
+      ).toBe(true);
+    }
   });
+
+  it("interrupts a native Claude wakeup when the host closes", async () => {
+    const { engine, store, turns, provider, id } = setup("claude");
+    provider.persistent = true;
+    engine.command({
+      type: "send",
+      commandId: "explicit",
+      sessionId: id,
+      text: "Schedule work",
+    });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    turns[0].input.onEvent({
+      type: "turn.started",
+      native: true,
+      providerTurnId: "native",
+    });
+    await engine.close();
+    expect(provider.stop).toHaveBeenCalledWith(id);
+    expect(store.session(id)).toMatchObject({
+      status: "interrupted",
+      session: { busy: false },
+    });
+  });
+
+  it.each(["send", "compact"] as const)(
+    "clears the old draft when a normal %s starts",
+    async (type) => {
+      const { engine, store, turns, provider, id } = setup();
+      provider.compact = (input) =>
+        provider.send({ ...input, text: "/compact" });
+      engine.command({
+        type: "draft",
+        commandId: "draft",
+        sessionId: id,
+        text: "Later",
+      });
+      engine.command({
+        type,
+        commandId: "next",
+        sessionId: id,
+        text: "New work",
+      });
+      expect(
+        store.session(id).session.blocks.some((block) => block.draft),
+      ).toBe(false);
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      turns[0].finish();
+    },
+  );
 
   it("contains a persistence failure while requesting approval", async () => {
     const { engine, store, turns, provider, id } = setup();
-    engine.command({ type: "send", commandId: "approval-failure", sessionId: id, text: "Work" });
+    engine.command({
+      type: "send",
+      commandId: "approval-failure",
+      sessionId: id,
+      text: "Work",
+    });
     await vi.waitFor(() => expect(turns).toHaveLength(1));
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(store, "save").mockImplementationOnce(() => { throw new Error("disk full"); });
+    vi.spyOn(store, "save").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
     try {
-      expect(() => turns[0].input.onEvent({ type: "approval.requested", requestId: 1, title: "Run?" })).not.toThrow();
+      expect(() =>
+        turns[0].input.onEvent({
+          type: "approval.requested",
+          requestId: 1,
+          title: "Run?",
+        }),
+      ).not.toThrow();
       await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
-      await vi.waitFor(() => expect(store.session(id).status).toBe("interrupted"));
-    } finally { log.mockRestore(); }
+      await vi.waitFor(() =>
+        expect(store.session(id).status).toBe("interrupted"),
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("stores a remote draft with an uploaded file, then sends it in plan mode", async () => {

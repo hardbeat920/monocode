@@ -247,7 +247,12 @@ export class HostEngine {
   private switchingProjects = new Set<string>();
   private running = new Map<
     string,
-    { runId: string; done: Promise<void>; cancelled: boolean; persistenceFailed: boolean }
+    {
+      runId: string;
+      done: Promise<void>;
+      cancelled: boolean;
+      persistenceFailed: boolean;
+    }
   >();
   /** Running sessions, including streamed events not yet written to disk. */
   private live = new Map<
@@ -259,6 +264,8 @@ export class HostEngine {
     }
   >();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private parkingProviders = new Map<string, Promise<void>>();
   private closing = false;
 
   constructor(
@@ -364,6 +371,10 @@ export class HostEngine {
         error instanceof Error ? error.message : "unknown error",
       );
       void provider.stop(id);
+      if (!active) {
+        const runId = this.live.get(id)?.value.runId;
+        if (runId) this.retrySettlement(id, runId, provider);
+      }
     }
   }
 
@@ -754,8 +765,13 @@ export class HostEngine {
           const currentBeforeRename = this.store.session(id);
           if (currentBeforeRename.autoWorktreeBranch !== temporary) return;
           const project = this.store.project(value.projectId);
-          await renameHostWorktreeBranch(project.cwd, cwd, temporary, branch,
-            () => this.store.session(id).autoWorktreeBranch === temporary);
+          await renameHostWorktreeBranch(
+            project.cwd,
+            cwd,
+            temporary,
+            branch,
+            () => this.store.session(id).autoWorktreeBranch === temporary,
+          );
           this.flush(id);
           const current = this.store.session(id);
           const saved = this.save(
@@ -782,14 +798,23 @@ export class HostEngine {
     attachments: Session["blocks"][number]["attachments"] = [],
   ): void {
     const { session, runId } = value;
+    clearTimeout(this.idleTimers.get(session.id));
+    this.idleTimers.delete(session.id);
     const provider = this.provider(session.harness);
-    const active = { runId: runId!, done: Promise.resolve(), cancelled: false, persistenceFailed: false };
+    const active = {
+      runId: runId!,
+      done: Promise.resolve(),
+      cancelled: false,
+      persistenceFailed: false,
+    };
     this.running.set(session.id, active);
     this.live.set(session.id, { value, events: [] });
     active.done = Promise.resolve()
       .then(async () => {
         let error: string | undefined;
+        let callbackRunId = runId!;
         try {
+          await this.parkingProviders.get(session.id);
           if (!this.closing && !active.cancelled) {
             const input: HarnessSessionInput = {
               sessionId: session.id,
@@ -798,7 +823,11 @@ export class HostEngine {
               modelSettings: session.modelSettings,
               runtimeMode: session.runtimeMode,
               intent,
-              onEvent: (event) => this.event(session.id, runId!, event),
+              onEvent: (event) => {
+                if (event.type === "turn.started" && event.native)
+                  callbackRunId = event.providerTurnId;
+                this.event(session.id, callbackRunId, event);
+              },
             };
             if (prompt === null) await provider.compact!(input);
             else
@@ -822,9 +851,17 @@ export class HostEngine {
         }
         // Keep the session running until the old process has stopped. Otherwise
         // a follow-up can race cleanup and have its newly spawned child killed.
-        await provider.stop(session.id);
+        if (
+          !provider.persistent ||
+          this.closing ||
+          active.cancelled ||
+          error ||
+          active.persistenceFailed
+        )
+          await provider.stop(session.id);
         this.flush(session.id);
-        this.live.delete(session.id);
+        if (this.live.get(session.id)?.value.runId === runId)
+          this.live.delete(session.id);
         const latest = this.store.session(session.id);
         if (latest.runId === runId) {
           const message = this.closing
@@ -832,8 +869,8 @@ export class HostEngine {
             : active.persistenceFailed
               ? "Session storage failed during this turn. Inspect its work before continuing."
               : active.cancelled
-              ? "Stopped by you."
-              : error;
+                ? "Stopped by you."
+                : error;
           this.save(
             this.settled(
               latest,
@@ -844,8 +881,8 @@ export class HostEngine {
           );
         }
         this.running.delete(session.id);
-        // stop/forget releases callbacks and native resources; bind only retained
-        // provider conversation identity for an explicit future follow-up.
+        if (provider.persistent) this.parkIdleProvider(session.id, provider);
+        // Retain the conversation identity for the next explicit follow-up.
         const persisted = this.store.session(session.id).session;
         if (persisted.providerSessionId)
           provider.bind(session.id, persisted.providerSessionId, persisted.cwd);
@@ -862,9 +899,48 @@ export class HostEngine {
   }
 
   private event(id: string, runId: string, event: HarnessEvent): void {
-    const live = this.live.get(id);
+    let live = this.live.get(id);
+    if (event.type === "turn.started" && event.native && !this.closing) {
+      clearTimeout(this.idleTimers.get(id));
+      this.idleTimers.delete(id);
+      const current = this.store.session(id);
+      if (
+        current.session.harness !== "claude" ||
+        (current.status !== "idle" && !this.running.has(id))
+      )
+        return;
+      const previous = this.settled(current, "idle");
+      const value = this.save(
+        {
+          ...previous,
+          runId,
+          status: "running",
+          session: { ...previous.session, busy: true },
+        },
+        { type: "native.started" },
+      );
+      live = { value, events: [] };
+      this.live.set(id, live);
+    }
     if (!live || live.value.runId !== runId || live.value.status !== "running")
       return;
+    if (event.type === "turn.finished" && event.native) {
+      try {
+        this.flush(id);
+        this.save(this.settled(this.store.session(id), "idle"), {
+          type: "native.settled",
+        });
+        this.live.delete(id);
+        this.parkIdleProvider(id, this.provider(live.value.session.harness));
+      } catch {
+        this.retrySettlement(
+          id,
+          runId,
+          this.provider(live.value.session.harness),
+        );
+      }
+      return;
+    }
     const session = applyHarnessEvent(live.value.session, event);
     if (session === live.value.session) return;
     live.value = { ...live.value, session };
@@ -876,6 +952,35 @@ export class HostEngine {
         () => this.scheduledFlush(id, this.provider(session.harness)),
         FLUSH_MS,
       );
+  }
+
+  private parkIdleProvider(id: string, provider: HostProvider): void {
+    if (this.closing || this.idleTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(id);
+      if (
+        this.store.session(id).status === "running" ||
+        provider.needsProcess?.(id)
+      ) {
+        this.parkIdleProvider(id, provider);
+        return;
+      }
+      const parking = provider
+        .stop(id)
+        .then(() => {
+          const session = this.store.session(id).session;
+          if (session.providerSessionId)
+            provider.bind(id, session.providerSessionId, session.cwd);
+        })
+        .catch((error) => console.error("Could not park provider:", error))
+        .finally(() => {
+          if (this.parkingProviders.get(id) === parking)
+            this.parkingProviders.delete(id);
+        });
+      this.parkingProviders.set(id, parking);
+    }, 5 * 60_000);
+    timer.unref?.();
+    this.idleTimers.set(id, timer);
   }
 
   private settled(
@@ -914,13 +1019,32 @@ export class HostEngine {
 
   async close(): Promise<void> {
     this.closing = true;
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
     await Promise.all(
-      [...this.running.keys()].map((id) =>
+      [
+        ...new Set([
+          ...this.running.keys(),
+          ...this.store.sessions().map((value) => value.session.id),
+        ]),
+      ].map((id) =>
         this.provider(this.store.session(id).session.harness).stop(id),
       ),
     );
     await Promise.all([...this.running.values()].map((active) => active.done));
+    for (const [id, live] of this.live) {
+      this.flush(id);
+      this.save(
+        this.settled(
+          live.value,
+          "interrupted",
+          "Host stopped. This turn was interrupted.",
+        ),
+        { type: "interrupted" },
+      );
+      this.live.delete(id);
+    }
   }
 }

@@ -10,8 +10,11 @@ import {
 import { isAgentToolName } from "../../core/preview";
 import {
   assistantTextBlocks,
+  toolResultsFromUserMessage,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  buildControlRequest,
+  parseControlResponse,
   inputJsonDeltaFromEvent,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -29,7 +32,7 @@ import {
 } from "./claudeProtocol";
 import type { TurnIntent } from "../../../../features/sessions/model/session";
 import type { HarnessEvent } from "../../core/types";
-import { mergeStream } from "../../core/streamText";
+import { snapshotRemainder } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-claude-text";
 const INIT_TIMEOUT_MS = 8_000;
@@ -44,6 +47,7 @@ type TextSettings = {
   settings: Record<string, boolean>;
   permissionMode?: "plan";
   maxTurns?: number;
+  tools: string[];
 };
 
 type InFlightTool = {
@@ -61,8 +65,11 @@ type LiveText = {
   settingsKey: string;
   collecting: boolean;
   output: string;
+  messageText: string;
   closed: boolean;
   ready: boolean;
+  initError: Error | null;
+  readyFailed: ((error: Error) => void) | null;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
   readyDone: (() => void) | null;
@@ -85,16 +92,19 @@ function textSettings(
   const fast = modelSettings?.fast === "true";
   const readOnly = intent === "plan";
   const settings: Record<string, boolean> = {};
-  if (thinking) settings.alwaysThinkingEnabled = true;
+  if (modelSettings?.thinking !== undefined)
+    settings.alwaysThinkingEnabled = thinking;
   if (fast) settings.fastMode = true;
   if (isClaudeUltracodeEffort(effort)) settings.ultracode = true;
   return {
-    key: JSON.stringify({ effort, context, thinking, fast, readOnly }),
+    key: JSON.stringify({ effort, context, settings, readOnly }),
     launchModel: resolveClaudeApiModelId(model, context),
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
     settings,
-    ...(readOnly ? { permissionMode: "plan" as const, maxTurns: 1 } : {}),
+    tools: readOnly ? ["Read", "Glob", "Grep"] : [],
+    maxTurns: readOnly ? 12 : 1,
+    ...(readOnly ? { permissionMode: "plan" as const } : {}),
   };
 }
 
@@ -167,12 +177,14 @@ async function promptOnLive(input: {
   );
   input.signal?.throwIfAborted();
   session.output = "";
+  session.messageText = "";
   session.collecting = true;
   session.onEvent = input.onEvent;
   session.toolsByIndex = new Map();
   session.toolsById = new Map();
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let abortHandler: (() => void) | undefined;
+  let requestTimer: ReturnType<typeof setTimeout> | undefined;
   const abortPromise = input.signal
     ? new Promise<never>((_, reject) => {
         const cancel = () => {
@@ -204,7 +216,7 @@ async function promptOnLive(input: {
     await Promise.race([
       turnPromise,
       new Promise<void>((_, reject) => {
-        setTimeout(
+        requestTimer = setTimeout(
           () => reject(new Error("Claude text generation timed out")),
           timeoutMs,
         );
@@ -216,9 +228,10 @@ async function promptOnLive(input: {
     if (!output) throw new Error("Claude returned empty output.");
     return output;
   } catch (error) {
-    if (session.closed) await dropLive();
+    await dropLive();
     throw error;
   } finally {
+    if (requestTimer) clearTimeout(requestTimer);
     if (abortHandler && input.signal) {
       input.signal.removeEventListener("abort", abortHandler);
     }
@@ -265,8 +278,11 @@ async function startLive(
     settingsKey: settings.key,
     collecting: false,
     output: "",
+    messageText: "",
     closed: false,
     ready: false,
+    initError: null,
+    readyFailed: null,
     turnDone: null,
     turnFailed: null,
     readyDone: null,
@@ -299,13 +315,22 @@ async function startLive(
         settings: settings.settings,
         permissionMode: settings.permissionMode,
         maxTurns: settings.maxTurns,
+        tools: settings.tools,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
       "claude",
     );
     live = session;
+    await writeChild(
+      TEXT_CHILD_ID,
+      JSON.stringify(
+        buildControlRequest("monocode_text_init", { subtype: "initialize" }),
+      ),
+    );
     await waitForReady(session, INIT_TIMEOUT_MS);
+    if (session.closed)
+      throw new Error("Claude text generator exited during initialization");
     return session;
   } catch (error) {
     session.closed = true;
@@ -334,19 +359,42 @@ function handleLine(session: LiveText, line: string): void {
   const rec = parseJsonLine(line);
   if (!rec) return;
   const type = stringField(rec, "type");
-  if (
-    type === "system" &&
-    (stringField(rec, "subtype") === "init" ||
-      stringField(rec, "subtype") === "initialized")
-  ) {
-    session.ready = true;
-    session.readyDone?.();
-    session.readyDone = null;
+  const control = parseControlResponse(rec);
+  if (control?.requestId === "monocode_text_init") {
+    if (control.ok) {
+      session.ready = true;
+      session.readyDone?.();
+    } else {
+      session.initError = new Error(
+        control.error ?? "Claude text generator initialization failed",
+      );
+      session.readyFailed?.(session.initError);
+    }
+    return;
   }
   if (!session.collecting) return;
   if (type === "assistant") {
     const snapshot = assistantTextBlocks(rec).join("");
-    if (snapshot) session.output = mergeStream(session.output, snapshot);
+    const extra = snapshotRemainder(session.messageText, snapshot);
+    session.output += extra;
+    if (extra)
+      session.onEvent?.({ type: "message.delta", text: extra, append: true });
+    session.messageText = "";
+    session.onEvent?.({ type: "message.completed" });
+    return;
+  }
+  if (type === "user") {
+    for (const result of toolResultsFromUserMessage(rec)) {
+      const tool = session.toolsById.get(result.toolUseId);
+      if (!tool) continue;
+      session.onEvent?.({
+        type: "tool.updated",
+        callId: tool.id,
+        status: result.isError ? "failed" : "completed",
+        detail: result.text.slice(0, 32_000),
+        preview: previewFromTool(tool.name, tool.input, result.text),
+      });
+    }
     return;
   }
   if (type === "stream_event") {
@@ -372,10 +420,19 @@ function handleStreamEvent(
   const delta = streamDeltaFromEvent(rec);
   if (delta) {
     if (delta.kind === "assistant") {
-      session.output = mergeStream(session.output, delta.text);
-      session.onEvent?.({ type: "message.delta", text: delta.text });
+      session.output += delta.text;
+      session.messageText += delta.text;
+      session.onEvent?.({
+        type: "message.delta",
+        text: delta.text,
+        append: true,
+      });
     } else {
-      session.onEvent?.({ type: "reasoning.delta", text: delta.text });
+      session.onEvent?.({
+        type: "reasoning.delta",
+        text: delta.text,
+        append: true,
+      });
     }
     return;
   }
@@ -429,13 +486,23 @@ function handleStreamEvent(
 }
 
 function waitForReady(session: LiveText, timeoutMs: number): Promise<void> {
+  if (session.initError) return Promise.reject(session.initError);
+  if (session.closed)
+    return Promise.reject(new Error("Claude text generator exited"));
   if (session.ready) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       session.readyDone = null;
-      resolve();
+      reject(new Error("Claude text generator initialization timed out"));
     }, timeoutMs);
+    session.readyFailed = (error) => {
+      clearTimeout(timer);
+      session.readyDone = null;
+      session.readyFailed = null;
+      reject(error);
+    };
     session.readyDone = () => {
+      session.readyFailed = null;
       clearTimeout(timer);
       if (session.closed) {
         reject(new Error("Claude text generator exited"));

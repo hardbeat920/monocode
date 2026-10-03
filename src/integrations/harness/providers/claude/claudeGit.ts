@@ -19,12 +19,14 @@ const GIT_TIMEOUT_MS = 90_000;
 export async function generateClaudeCommitMessage(
   cwd: string,
   signal?: AbortSignal,
+  providerAccountId?: string,
 ): Promise<string> {
   signal?.throwIfAborted();
   const context = await gitStagedContext(cwd);
   signal?.throwIfAborted();
   const output = await runClaudeTextPrompt({
     cwd,
+    providerAccountId,
     prompt: buildCommitMessagePrompt({
       branch: context.branch,
       stagedSummary: context.summary,
@@ -45,12 +47,14 @@ export async function generateClaudeCommitMessage(
 
 export async function generateClaudePrContent(
   cwd: string,
+  providerAccountId?: string,
 ): Promise<(PrContent & { base: string; head: string }) | null> {
   const range = await gitRangeContext(cwd);
   let parsed: PrContent | null = null;
   try {
     const output = await runClaudeTextPrompt({
       cwd,
+      providerAccountId,
       prompt: buildPrContentPrompt({
         baseBranch: range.base,
         headBranch: range.head,
@@ -79,10 +83,12 @@ export async function generateClaudePrContent(
 export async function generateClaudeBranchName(
   cwd: string,
   message: string,
+  providerAccountId?: string,
 ): Promise<string | null> {
   try {
     const output = await runClaudeTextPrompt({
       cwd,
+      providerAccountId,
       prompt: buildBranchNamePrompt(message),
       timeoutMs: GIT_TIMEOUT_MS,
     });
