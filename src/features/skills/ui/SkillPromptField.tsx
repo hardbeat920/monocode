@@ -23,6 +23,8 @@ import { isImeComposition } from "../../../shared/lib/keyboard";
 import { SkillPicker } from "./SkillPicker";
 import { Popover } from "../../../shared/ui/Popover";
 import { useComposerSkills } from "../../sessions/ui/useComposerSkills";
+import { SavedPromptMenu } from "../../prompts/ui/SavedPromptMenu";
+import { useSavedPromptMenu } from "../../prompts/ui/useSavedPromptMenu";
 
 type Props = {
   value: string;
@@ -76,12 +78,27 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
     }
   }, [value]);
 
+  // `!` inserts a saved prompt (Settings → Prompts) at the caret.
+  const promptMenu = useSavedPromptMenu({
+    apply: (next, cursor) => {
+      const field = fieldRef.current;
+      if (!field) return;
+      field.value = next;
+      resizeComposer(field, Number.POSITIVE_INFINITY);
+      field.setSelectionRange(cursor, cursor);
+      onChange(next);
+      field.focus();
+    },
+  });
+  const syncPromptMenu = promptMenu.sync;
+
   const syncSlashToken = useCallback(
     (field: HTMLTextAreaElement) => {
       const cursor = field.selectionStart ?? 0;
       setSlash(slashTokenAt(field.value, cursor, hasNativeCommands(harness)));
+      syncPromptMenu(field);
     },
-    [harness],
+    [harness, syncPromptMenu],
   );
 
   const pickSkill = useCallback(
@@ -107,6 +124,7 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (promptMenu.onKeyDown(event)) return;
     if (isImeComposition(event.nativeEvent) || !slash) return;
 
     if (event.key === "ArrowDown") {
@@ -169,6 +187,11 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
           />
         </Popover>
       ) : null}
+      {promptMenu.open ? (
+        <div className="absolute inset-x-0 top-full z-30 mt-1">
+          <SavedPromptMenu state={promptMenu} />
+        </div>
+      ) : null}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 min-h-28 overflow-hidden whitespace-pre-wrap break-words px-3 py-3 font-sans text-sm leading-5.5 text-content"
@@ -188,7 +211,10 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
         aria-haspopup="listbox"
         aria-expanded={slash !== null}
         value={value}
-        onBlur={() => setSlash(null)}
+        onBlur={() => {
+          setSlash(null);
+          promptMenu.close();
+        }}
         onChange={(event) => {
           const field = event.currentTarget;
           resizeComposer(field, Number.POSITIVE_INFINITY);
