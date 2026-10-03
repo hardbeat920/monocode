@@ -3634,8 +3634,8 @@ function HandoffDivider({ block }: { block: Block }) {
   if (!meta) return null;
 
   const transfer = meta.transfer;
-  const preparing = meta.status === "preparing";
   const uncertain = transfer?.status === "uncertain";
+  const preparing = meta.status === "preparing" && !uncertain;
   const label = preparing
     ? "Preparing shared history"
     : uncertain

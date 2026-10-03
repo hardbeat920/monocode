@@ -25,7 +25,7 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
-  it("shows provider handoff fidelity and a retry state", () => {
+  it.each(["ready", "preparing"] as const)("shows an uncertain retry when the handoff row remains %s", (status) => {
     const transfer = {
       switchId: "switch-1", status: "uncertain" as const, mode: "native" as const,
       included: 12, omitted: 3, historicalAttachments: 2,
@@ -33,9 +33,10 @@ describe("AgentTranscript collapsed work", () => {
     };
     const markup = render([
       { id: "u", role: "user", text: "Continue" },
-      { id: "switch", role: "handoff", text: "Shared history", handoff: { from: "claude", to: "codex", status: "ready", pending: true, transfer } },
+      { id: "switch", role: "handoff", text: "Shared history", handoff: { from: "claude", to: "codex", status, pending: true, transfer } },
     ]);
     expect(markup).toContain("Handoff needs retry");
+    expect(markup).not.toContain("Preparing shared history");
     expect(markup).toContain("12 conversation items selected");
     expect(markup).toContain("3 items omitted");
     expect(markup).toContain("2 historical attachments are file references");
