@@ -11,7 +11,7 @@ use monocode_ui::widgets::{diff_stat, dot, icon_button, spinner, tooltip};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
 
 use super::{ResizeTarget, Shell, SidebarTab, WhenMac as _};
-use crate::mock::Project;
+use crate::view_data::{Project, ShellData};
 
 /// One `RailAction` row: 32px, 16px icon at 70% of the row ink, 14px label.
 pub(super) fn rail_action(
@@ -79,7 +79,10 @@ pub(super) fn shortcut(text: &'static str, theme: &Theme) -> AnyElement {
 
 /// A stand-in for `ProjectMascot`: the project's tint in a 12px tile.
 // TODO(port): draw the pixel mascots from ProjectMascot.tsx.
-fn project_mark(project: &Project, size: f32, theme: &Theme) -> AnyElement {
+fn project_mark(project: Option<&Project>, size: f32, theme: &Theme) -> AnyElement {
+    let Some(project) = project else {
+        return div().flex_none().size(u(size)).into_any_element();
+    };
     if project.busy {
         return spinner(gpui::SharedString::from(format!(
             "project-busy-{}",
@@ -99,6 +102,7 @@ fn project_mark(project: &Project, size: f32, theme: &Theme) -> AnyElement {
 impl Shell {
     pub(super) fn render_project_rail(
         &self,
+        data: &ShellData,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -154,7 +158,7 @@ impl Shell {
             )
             .child(shortcut("⌘K", &theme));
 
-        let inbox_dot = self.data.inbox_unseen.then(|| dot(8.).into_any_element());
+        let inbox_dot = data.inbox_unseen.then(|| dot(8.).into_any_element());
         let actions = div()
             .flex()
             .flex_col()
@@ -191,8 +195,9 @@ impl Shell {
             ));
 
         let mut cards = div().flex().flex_col().gap(gpui::px(1.)).px(u(8.));
-        for (index, project) in self.data.projects.iter().enumerate() {
-            cards = cards.child(self.render_project_card(index, project, &theme, cx));
+        for (index, project) in data.projects.iter().enumerate() {
+            let selected = data.active_project == Some(index);
+            cards = cards.child(self.render_project_card(index, project, selected, &theme, cx));
         }
         let projects = div()
             .id("rail-projects")
@@ -270,11 +275,11 @@ impl Shell {
         &self,
         index: usize,
         project: &Project,
+        selected: bool,
         theme: &Theme,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = theme.colors;
-        let selected = index == self.data.active_project;
         let mut card = div()
             .id(("project", index))
             .relative()
@@ -291,7 +296,7 @@ impl Shell {
                     .size(u(16.))
                     .items_center()
                     .justify_center()
-                    .child(project_mark(project, 12., theme)),
+                    .child(project_mark(Some(project), 12., theme)),
             )
             .child(
                 div()
@@ -301,9 +306,13 @@ impl Shell {
                     .text_px(theme.text.ui)
                     .medium()
                     .leading(theme.leading.tight)
-                    .child(project.name),
+                    .child(project.name.clone()),
             )
-            .child(diff_stat(project.additions, project.deletions).gap(4.));
+            .child(diff_stat(project.additions, project.deletions).gap(4.))
+            .on_click({
+                let path = project.path.clone();
+                cx.listener(move |this, _: &gpui::ClickEvent, _, cx| this.select_project(&path, cx))
+            });
         if selected {
             card = card.bg(c.selection_strong).text_color(c.content);
         } else {
@@ -313,7 +322,7 @@ impl Shell {
                 .text_color(c.content)
                 .hover(move |s| s.bg(hover).opacity(1.0));
         }
-        card.tooltip(tooltip(project.path))
+        card.tooltip(tooltip(project.path.clone()))
     }
 
     /// `TabVisitNav`: back, forward, and the project panel toggle.
@@ -345,12 +354,19 @@ impl Shell {
     }
 
     /// The 48px rail shown when the project rail is collapsed in compact mode.
-    pub(super) fn render_compact_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_compact_rail(
+        &self,
+        data: &ShellData,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let c = theme.colors;
         let metrics = theme.metrics;
-        let project = &self.data.projects[self.data.active_project];
-        let has_changes = project.additions > 0 || project.deletions > 0;
+        let project = data
+            .active_project
+            .and_then(|index| data.projects.get(index));
+        let has_changes =
+            project.is_some_and(|project| project.additions > 0 || project.deletions > 0);
 
         let action =
             |id: &'static str, label: &'static str, glyph: IconName, active: bool, dotted: bool| {
@@ -445,7 +461,11 @@ impl Shell {
                 move |s| s.bg(fill)
             })
             .child(project_mark(project, 14., &theme))
-            .tooltip(tooltip(project.name));
+            .tooltip(tooltip(
+                project
+                    .map(|project| project.name.clone())
+                    .unwrap_or_default(),
+            ));
 
         div()
             .id("compact-rail")
@@ -495,7 +515,7 @@ impl Shell {
                         "Inbox",
                         IconName::Inbox,
                         false,
-                        self.data.inbox_unseen,
+                        data.inbox_unseen,
                     ))
                     .child(action(
                         "compact-notes",

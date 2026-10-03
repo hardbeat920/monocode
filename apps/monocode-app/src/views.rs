@@ -13,17 +13,21 @@ use crate::shell::{self, ShellOptions};
 pub struct ViewEntry {
     pub name: &'static str,
     pub description: &'static str,
+    /// The view reads the engine, so the app boots it on the data dir.
+    pub engine: bool,
     pub build: fn(&mut Window, &mut App) -> AnyView,
 }
 
 pub const VIEWS: &[ViewEntry] = &[
     ViewEntry {
         name: "shell",
-        description: "The app shell with mock data: project rail, sidebar, main pane",
+        description: "The app: project rail, session sidebar, workspace panes",
+        engine: true,
         build: |window, cx| shell::build(ShellOptions::full(), window, cx),
     },
     ViewEntry {
         name: "shell-compact",
+        engine: true,
         description: "The shell with the 48px compact project rail",
         build: |window, cx| {
             shell::build(
@@ -39,6 +43,7 @@ pub const VIEWS: &[ViewEntry] = &[
     },
     ViewEntry {
         name: "shell-no-rail",
+        engine: true,
         description: "The shell with the project rail closed",
         build: |window, cx| {
             shell::build(
@@ -53,6 +58,7 @@ pub const VIEWS: &[ViewEntry] = &[
     },
     ViewEntry {
         name: "shell-menu",
+        engine: true,
         description: "The shell with the session context menu open",
         build: |window, cx| {
             shell::build(
@@ -67,21 +73,25 @@ pub const VIEWS: &[ViewEntry] = &[
     },
     ViewEntry {
         name: "widgets",
+        engine: false,
         description: "Every monocode-ui widget, with a toast",
         build: WidgetsGallery::build,
     },
     ViewEntry {
         name: "modal",
+        engine: true,
         description: "A modal over the shell",
         build: ModalDemo::build,
     },
     ViewEntry {
         name: "icons",
+        engine: false,
         description: "Chrome icons, provider logos, and file-type icons",
         build: IconsGallery::build,
     },
     ViewEntry {
         name: "blank",
+        engine: false,
         description: "An empty themed window, for checking the harness",
         build: |_, cx| cx.new(|_| Blank).into(),
     },

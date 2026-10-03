@@ -5,9 +5,17 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result, bail};
 
 pub const USAGE: &str = "\
-usage: monocode-app [--view <name>] [--theme dark|light|system] [--size WxH]
-                    [--ui-scale <0.5..2>] [--screenshot <out.png>]
+usage: monocode-app [--data-dir <dir>] [--open-session <id>] [--view <name>]
+                    [--theme dark|light|system] [--size WxH] [--ui-scale <0.5..2>]
+                    [--screenshot <out.png>] [--settle-ms <ms>]
                     [--backdrop <#rrggbb|none>]
+       monocode-app app <command> ...      The agent app CLI.
+       monocode-app control <command> ...  The control CLI.
+
+  --data-dir <dir>       The app data directory. Default: MONOCODE_DATA_DIR,
+                         else the Tauri app's (~/Library/Application Support/
+                         com.monocode.desktop on macOS).
+  --open-session <id>    Opens this stored session once the workspace restores.
 
   --view <name>          Which view fills the window. Default: shell.
                          Run with --list-views to print the names.
@@ -16,6 +24,8 @@ usage: monocode-app [--view <name>] [--theme dark|light|system] [--size WxH]
   --ui-scale <factor>    Interface scale, like the Appearance setting. Default: 1.
   --screenshot <path>    Writes the first settled frame as a PNG and exits.
                          Needs a build with --features screenshot.
+  --settle-ms <ms>       Screenshot only: how long to redraw before the
+                         capture. Default: 900, or 2500 for engine views.
   --backdrop <color>     Screenshot only: the color the transparent window is
                          composited over, standing in for the blurred desktop.
                          Default: #5f5560. `none` keeps the alpha channel.
@@ -31,6 +41,9 @@ pub struct Args {
     pub screenshot: Option<PathBuf>,
     pub backdrop: Option<[u8; 3]>,
     pub list_views: bool,
+    pub data_dir: Option<PathBuf>,
+    pub open_session: Option<String>,
+    pub settle_ms: Option<u64>,
 }
 
 impl Default for Args {
@@ -43,6 +56,9 @@ impl Default for Args {
             screenshot: None,
             backdrop: Some([0x5f, 0x55, 0x60]),
             list_views: false,
+            data_dir: None,
+            open_session: None,
+            settle_ms: None,
         }
     }
 }
@@ -96,6 +112,14 @@ impl Args {
                 "--screenshot" => out.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--backdrop" => out.backdrop = parse_color(&value("--backdrop")?)?,
                 "--list-views" => out.list_views = true,
+                "--data-dir" => out.data_dir = Some(PathBuf::from(value("--data-dir")?)),
+                "--open-session" => out.open_session = Some(value("--open-session")?),
+                "--settle-ms" => {
+                    let ms: u64 = value("--settle-ms")?
+                        .parse()
+                        .context("--settle-ms takes a whole number of milliseconds")?;
+                    out.settle_ms = Some(ms);
+                }
                 "-h" | "--help" => {
                     print!("{USAGE}");
                     std::process::exit(0);
@@ -136,6 +160,12 @@ mod tests {
             "light",
             "--backdrop",
             "none",
+            "--data-dir",
+            "/tmp/mc/appdata",
+            "--open-session",
+            "abc",
+            "--settle-ms",
+            "3000",
         ])
         .unwrap();
         assert_eq!(args.screenshot.unwrap().to_str(), Some("/tmp/a.png"));
@@ -143,6 +173,9 @@ mod tests {
         assert_eq!(args.view, "widgets");
         assert_eq!(args.theme.as_deref(), Some("light"));
         assert_eq!(args.backdrop, None);
+        assert_eq!(args.data_dir.unwrap().to_str(), Some("/tmp/mc/appdata"));
+        assert_eq!(args.open_session.as_deref(), Some("abc"));
+        assert_eq!(args.settle_ms, Some(3000));
     }
 
     #[test]

@@ -9,7 +9,8 @@ use monocode_ui::widgets::{icon_button, tooltip};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, provider_logo, u};
 
 use super::Shell;
-use crate::mock::{UsageChip, format_percent};
+use crate::format::format_percent;
+use crate::view_data::{ShellData, UsageChip};
 
 /// `barClass` in ProviderAccountUsage.tsx.
 fn bar_color(theme: &Theme, used: f32) -> gpui::Hsla {
@@ -23,7 +24,11 @@ fn bar_color(theme: &Theme, used: f32) -> gpui::Hsla {
 }
 
 impl Shell {
-    pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_footer(
+        &self,
+        data: &ShellData,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let c = theme.colors;
         let mut footer = div()
@@ -38,7 +43,7 @@ impl Shell {
             .border_color(c.stroke)
             .text_px(theme.text.caption)
             .text_color(theme.content(0.55));
-        for (index, chip) in self.data.usage.iter().enumerate() {
+        for (index, chip) in data.usage.iter().enumerate() {
             footer = footer.child(usage_chip(index, chip, &theme));
         }
         footer
@@ -95,7 +100,7 @@ fn usage_chip(index: usize, chip: &UsageChip, theme: &Theme) -> impl IntoElement
         windows = windows.child(format!(
             "{} {}",
             format_percent(window.used_percent),
-            window.label
+            window.label.clone()
         ));
     }
     div()

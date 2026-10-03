@@ -6,9 +6,22 @@ license.workspace = true
 publish = false
 description = "MonoCode, native GPUI app"
 
+# The engine boot lives in the library so the live integration test can run
+# it headless.
+[lib]
+name = "monocode_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "monocode-app"
 path = "src/main.rs"
+
+# Runs real Claude Code. The test needs the main thread for GPUI's run loop,
+# so it has its own `main` and skips itself unless run with `--ignored`.
+[[test]]
+name = "live_engine"
+path = "tests/live_engine.rs"
+harness = false
 
 [features]
 # Builds the `--screenshot` flag, which needs `Window::render_to_image`.
@@ -19,5 +32,33 @@ gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
 monocode-ui.workspace = true
+monocode-core.workspace = true
+monocode-settings.workspace = true
+monocode-store.workspace = true
+monocode-git.workspace = true
+monocode-process.workspace = true
+monocode-harness.workspace = true
+# Only the packages M1 needs. The others are still being written.
+monocode-engine = { path = "../../crates/engine", default-features = false, features = ["submit", "attention", "workspace", "side_threads"] }
+monocode-layout.workspace = true
+monocode-view-transcript.workspace = true
+monocode-view-composer.workspace = true
+gpui-base.workspace = true
+monocode-editor.workspace = true
+monocode-markdown.workspace = true
+monocode-terminal-view.workspace = true
+monocode-platform.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+smol.workspace = true
+async-channel.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+log.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# localtime_r, for the sidebar's month and day labels.
+libc.workspace = true

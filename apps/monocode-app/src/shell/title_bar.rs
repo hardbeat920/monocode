@@ -5,11 +5,11 @@ use gpui::{
     AnyElement, ClickEvent, Context, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div,
 };
-use monocode_ui::widgets::{icon_button, tooltip};
+use monocode_ui::widgets::{icon_button, spinner, tooltip};
 use monocode_ui::{IconName, Theme, UiStyled as _, file_type_icon, icon, provider_logo, u};
 
 use super::{Shell, WhenMac as _};
-use crate::mock::{TabKind, WorkspaceTab};
+use crate::view_data::{HarnessState, ShellData, TabLead, TitleTabView};
 
 /// A tab slot is `w-56 min-w-28`; at 176px and wider its text splits into a
 /// 10px headline and a meta line (`@min-[11rem]`).
@@ -17,7 +17,11 @@ const TAB_WIDTH: f32 = 224.0;
 const TAB_MIN_WIDTH: f32 = 112.0;
 
 impl Shell {
-    pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_title_bar(
+        &self,
+        data: &ShellData,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let c = theme.colors;
         let compact_title_bar = cfg!(target_os = "macos") && self.compact_rail_visible();
@@ -66,29 +70,26 @@ impl Shell {
             );
         }
 
+        // The strip scrolls sideways once the tabs reach their minimum
+        // width, and keeps the active tab in view.
         let mut strip = div()
+            .id("title-tabs")
             .flex()
+            .flex_1()
             .h_full()
             .min_w_0()
             .items_center()
             .gap(u(2.))
             .pl(u(6.))
-            .pr(u(10.));
-        let closable = self.data.tabs.len() > 1;
-        for (index, tab) in self.data.tabs.iter().enumerate() {
-            strip = strip.child(self.render_title_tab(index, tab, closable, &theme, cx));
+            .pr(u(10.))
+            .overflow_x_scroll()
+            .track_scroll(&self.title_scroll);
+        let closable = data.tabs.len() > 1;
+        for (index, tab) in data.tabs.iter().enumerate() {
+            let active = tab.id == data.active_tab_id;
+            strip = strip.child(self.render_title_tab(index, tab, active, closable, &theme, cx));
         }
-        let tabs = self.drag_region(
-            div()
-                .id("title-tabs")
-                .relative()
-                .h_full()
-                .min_w_0()
-                .flex_1()
-                .overflow_hidden()
-                .child(strip),
-            cx,
-        );
+        let tabs = self.drag_region(strip, cx);
         bar = bar.child(tabs);
 
         if rail_closed {
@@ -100,7 +101,11 @@ impl Shell {
                     .gap(u(2.))
                     .px(u(8.))
                     .child(icon_button("title-goto", IconName::Search).tooltip("Go to File (⌘P)"))
-                    .child(icon_button("title-new", IconName::Plus).tooltip("New session (⌘T)")),
+                    .child(
+                        icon_button("title-new", IconName::Plus)
+                            .tooltip("New session (⌘T)")
+                            .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
+                    ),
             );
         }
         bar
@@ -118,31 +123,51 @@ impl Shell {
     fn render_title_tab(
         &self,
         index: usize,
-        tab: &WorkspaceTab,
+        tab: &TitleTabView,
+        active: bool,
         closable: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = theme.colors;
-        let active = index == self.active_tab;
         let dim = if active { 1.0 } else { 0.55 };
         let group = format!("title-tab-{index}");
 
-        let lead: AnyElement = match &tab.kind {
-            TabKind::Session(providers) => {
-                let mut row = div().flex().flex_none().items_center().opacity(dim);
-                for (i, provider) in providers.iter().take(3).enumerate() {
-                    let mark = div().flex_none().when(i > 0, |el| el.ml(u(-2.)));
-                    row = row.child(mark.child(provider_logo(*provider).size(14.)));
+        let lead: AnyElement = match &tab.lead {
+            TabLead::Harnesses(providers) => {
+                let mut row = div().flex().flex_none().items_center();
+                for (i, (provider, state)) in providers.iter().enumerate() {
+                    let mark = div()
+                        .flex()
+                        .flex_none()
+                        .size(u(14.))
+                        .items_center()
+                        .justify_center()
+                        .when(i > 0, |el| el.ml(u(-2.)));
+                    let mark = match state {
+                        HarnessState::Busy => mark.child(
+                            spinner(gpui::SharedString::from(format!("tab-busy-{}-{i}", tab.id)))
+                                .color(c.accent),
+                        ),
+                        HarnessState::Done => mark.child(
+                            icon(IconName::CheckCircle)
+                                .size(u(14.))
+                                .text_color(c.success),
+                        ),
+                        HarnessState::Idle => {
+                            mark.opacity(dim).child(provider_logo(*provider).size(14.))
+                        }
+                    };
+                    row = row.child(mark);
                 }
                 row.into_any_element()
             }
-            TabKind::File(name) => div()
+            TabLead::File(name) => div()
                 .flex_none()
                 .opacity(dim)
-                .child(file_type_icon(*name).size(14.))
+                .child(file_type_icon(name.clone()).size(14.))
                 .into_any_element(),
-            TabKind::Terminal => icon(IconName::Terminal)
+            TabLead::Terminal => icon(IconName::Terminal)
                 .size(u(14.))
                 .text_color(if active {
                     c.content
@@ -160,12 +185,13 @@ impl Shell {
             .gap(u(4.))
             .child({
                 let line = div().min_w_0().truncate().leading(theme.leading.tight);
+                let line = if tab.preview { line.italic() } else { line };
                 if tab.meta.is_some() {
                     line.text_px(theme.text.micro).medium()
                 } else {
                     line.text_px(theme.text.body)
                 }
-                .child(tab.headline)
+                .child(tab.headline.clone())
             })
             .when(tab.dirty, |el| {
                 el.child(
@@ -177,7 +203,7 @@ impl Shell {
                 )
             });
         text = text.child(headline);
-        if let Some(meta) = tab.meta {
+        if let Some(meta) = tab.meta.clone() {
             text = text.child(
                 div()
                     .min_w_0()
@@ -209,14 +235,11 @@ impl Shell {
             .text_color(ink)
             .child(lead)
             .child(text)
-            .tooltip(tooltip(match tab.meta {
-                Some(meta) => format!("{} · {meta}", tab.headline),
-                None => tab.headline.to_string(),
-            }))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.active_tab = index;
-                cx.notify();
-            }));
+            .tooltip(tooltip(tab.tooltip.clone()))
+            .on_click({
+                let id = tab.id.clone();
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.activate_tab(&id, cx))
+            });
         if let Some(fill) = fill {
             button = button.bg(fill);
         } else {
@@ -261,7 +284,14 @@ impl Shell {
                                 s.text_color(close_hover)
                             }),
                     )
-                    .tooltip(tooltip("Close Tab")),
+                    .tooltip(tooltip("Close Tab"))
+                    .on_click({
+                        let id = tab.id.clone();
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.close_tab(&id, cx)
+                        })
+                    }),
             );
         }
         slot

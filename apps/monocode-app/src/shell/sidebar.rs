@@ -10,11 +10,13 @@ use monocode_ui::widgets::{diff_stat, icon_button, spinner, text_field};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, provider_logo, u};
 
 use super::{ResizeTarget, Shell, SidebarTab, WhenMac as _};
-use crate::mock::{Session, SessionStatus, format_relative};
+use crate::format::{format_relative, now_ms};
+use crate::view_data::{SessionCard, SessionStatus, ShellData};
 
 impl Shell {
     pub(super) fn render_sidebar(
         &self,
+        data: &ShellData,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -71,14 +73,15 @@ impl Shell {
                             )
                             .child(
                                 icon_button("sidebar-new", IconName::Plus)
-                                    .tooltip("New session (⌘T)"),
+                                    .tooltip("New session (⌘T)")
+                                    .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             ),
                     ),
                 cx,
             );
             pane = pane
                 .child(header)
-                .child(self.render_sidebar_tabs(&theme, cx));
+                .child(self.render_sidebar_tabs(data, &theme, cx));
         } else if !compact_title_bar {
             let header = self.drag_region(
                 div()
@@ -98,13 +101,15 @@ impl Shell {
             pane = pane.child(header);
             if !self.compact_rail_visible() {
                 pane = pane
-                    .child(self.render_project_picker_row(&theme))
-                    .child(self.render_sidebar_tabs(&theme, cx));
+                    .child(self.render_project_picker_row(data, &theme, cx))
+                    .child(self.render_sidebar_tabs(data, &theme, cx));
             }
         }
 
         let body: AnyElement = match self.sidebar_tab {
-            SidebarTab::Sessions => self.render_session_list(&theme, cx).into_any_element(),
+            SidebarTab::Sessions => self
+                .render_session_list(data, &theme, cx)
+                .into_any_element(),
             other => div()
                 .px(u(12.))
                 .py(u(8.))
@@ -135,9 +140,18 @@ impl Shell {
     }
 
     /// The project picker row shown when the project rail is closed.
-    fn render_project_picker_row(&self, theme: &Theme) -> impl IntoElement {
+    fn render_project_picker_row(
+        &self,
+        data: &ShellData,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let c = theme.colors;
-        let project = &self.data.projects[self.data.active_project];
+        let (name, color) = data
+            .active_project
+            .and_then(|index| data.projects.get(index))
+            .map(|project| (project.name.clone(), project.color))
+            .unwrap_or_else(|| ("~".to_string(), 0x7dd3fc));
         let picker = div()
             .id("sidebar-project-picker")
             .flex()
@@ -158,7 +172,7 @@ impl Shell {
                     .flex_none()
                     .size(u(12.))
                     .rounded(u(3.))
-                    .bg(monocode_ui::color::hex(project.color)),
+                    .bg(monocode_ui::color::hex(color)),
             )
             .child(
                 div()
@@ -166,7 +180,7 @@ impl Shell {
                     .truncate()
                     .medium()
                     .text_color(theme.content(0.90))
-                    .child(project.name),
+                    .child(name),
             )
             .child(
                 icon(IconName::ChevronDown)
@@ -183,16 +197,29 @@ impl Shell {
             .border_b_1()
             .border_color(c.stroke)
             .child(div().flex_1().min_w_0().child(picker))
-            .child(icon_button("picker-new", IconName::Plus).tooltip("New tab (⌘T)"))
+            .child(
+                icon_button("picker-new", IconName::Plus)
+                    .tooltip("New tab (⌘T)")
+                    .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
+            )
             .child(icon_button("picker-search", IconName::Search).tooltip("Search (⌘K)"))
             .child(icon_button("picker-inbox", IconName::Inbox).tooltip("Inbox"))
             .child(icon_button("picker-automations", IconName::Zap).tooltip("Automations"))
     }
 
     /// The workspace tab strip (`h-9`, four equal 24px tabs).
-    fn render_sidebar_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar_tabs(
+        &self,
+        data: &ShellData,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let c = theme.colors;
-        let project = &self.data.projects[self.data.active_project];
+        let (additions, deletions) = data
+            .active_project
+            .and_then(|index| data.projects.get(index))
+            .map(|project| (project.additions, project.deletions))
+            .unwrap_or_default();
         let mut row = div()
             .flex()
             .flex_none()
@@ -204,10 +231,9 @@ impl Shell {
             .border_color(c.stroke);
         for tab in SidebarTab::ORDER {
             let active = self.sidebar_tab == tab;
-            let has_stats =
-                tab == SidebarTab::Changes && (project.additions > 0 || project.deletions > 0);
+            let has_stats = tab == SidebarTab::Changes && (additions > 0 || deletions > 0);
             let label: AnyElement = if has_stats {
-                diff_stat(project.additions, project.deletions).into_any_element()
+                diff_stat(additions, deletions).into_any_element()
             } else {
                 div()
                     .truncate()
@@ -220,9 +246,12 @@ impl Shell {
                 .flex()
                 .flex_1()
                 .min_w_0()
+                .overflow_hidden()
                 .h(u(24.))
                 .items_center()
-                .justify_center()
+                // Large counts do not fit; keep their sign in view.
+                .when(has_stats, |el| el.justify_start())
+                .when(!has_stats, |el| el.justify_center())
                 .px(u(8.))
                 .rounded(u(theme.radius.md))
                 .text_px(theme.text.label)
@@ -246,7 +275,12 @@ impl Shell {
         row
     }
 
-    fn render_session_list(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_session_list(
+        &self,
+        data: &ShellData,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let c = theme.colors;
         let search_row = div()
             .flex()
@@ -265,8 +299,20 @@ impl Shell {
                     .tooltip("Filter sessions"),
             );
         let mut list = div().flex().flex_col().gap(u(2.)).p(u(6.));
-        for (index, session) in self.data.sessions.iter().enumerate() {
-            list = list.child(self.render_session_card(index, session, theme, cx));
+        let now = now_ms();
+        for (index, session) in data.sessions.iter().enumerate() {
+            let active = data.active_session_id.as_deref() == Some(session.id.as_str());
+            list = list.child(self.render_session_card(index, session, active, now, theme, cx));
+        }
+        if data.sessions.is_empty() && !data.sessions_loading {
+            list = list.child(
+                div()
+                    .px(u(6.))
+                    .py(u(8.))
+                    .text_px(theme.text.label)
+                    .text_color(theme.content(0.45))
+                    .child("No sessions yet"),
+            );
         }
         div()
             .flex()
@@ -289,13 +335,15 @@ impl Shell {
     fn render_session_card(
         &self,
         index: usize,
-        session: &Session,
+        session: &SessionCard,
+        is_active: bool,
+        now: i64,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = theme.colors;
-        let is_active = self.active_session == Some(index);
-        let is_selected = self.selected_session == Some(index);
+        let is_selected = self.menu_session.as_deref() == Some(session.id.as_str())
+            && self.session_menu.is_some();
         let needs_approval = session.status == SessionStatus::NeedsApproval;
         let draft = session.status == SessionStatus::Draft;
 
@@ -338,7 +386,7 @@ impl Shell {
                     .into_any_element(),
                 SessionStatus::Idle => row
                     .text_color(theme.content(0.45))
-                    .child(format_relative(session.updated_minutes_ago))
+                    .child(format_relative(session.updated_at, now))
                     .into_any_element(),
             }
         };
@@ -361,7 +409,7 @@ impl Shell {
                             .truncate()
                             .text_px(theme.text.caption)
                             .text_color(theme.content(0.50))
-                            .child(session.model),
+                            .child(session.model.clone()),
                     ),
             )
             .child(status);
@@ -387,9 +435,9 @@ impl Shell {
                     .semibold()
                     .leading(theme.leading.snug)
                     .text_color(c.content)
-                    .child(session.title),
+                    .child(session.title.clone()),
             );
-        let branch = format!("{}/{}", session.repo, session.branch);
+        let branch = session.git.clone();
         let footer = div()
             .mt(u(4.))
             .flex()
@@ -427,18 +475,21 @@ impl Shell {
             .child(header)
             .child(title)
             .child(footer)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.active_session = Some(index);
-                this.selected_session = None;
-                cx.notify();
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
+            .on_click({
+                let id = session.id.clone();
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.open_session(&id, cx);
+                    cx.notify();
+                })
+            })
+            .on_mouse_down(MouseButton::Right, {
+                let id = session.id.clone();
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                     this.session_menu = Some(event.position);
+                    this.menu_session = Some(id.clone());
                     cx.notify();
-                }),
-            );
+                })
+            });
         if is_selected {
             card = card.bg(theme.accent(0.15)).text_color(c.content);
         } else if needs_approval {

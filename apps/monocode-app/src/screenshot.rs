@@ -9,9 +9,9 @@ use anyhow::{Context as _, Result};
 use gpui::{AnyWindowHandle, App, AsyncApp};
 use image::{Rgba, RgbaImage};
 
-/// How long to keep redrawing before the capture. SVG and image assets load
-/// on a background thread and show up a frame or two after first paint.
-const SETTLE: Duration = Duration::from_millis(900);
+/// How often to redraw while the window settles. SVG and image assets load
+/// on a background thread and show up a frame or two after first paint, and
+/// engine views wait for the store.
 const FRAME: Duration = Duration::from_millis(60);
 
 /// Captures `window` once it settles, writes `out`, and quits the app.
@@ -19,16 +19,24 @@ pub fn capture_and_quit(
     window: AnyWindowHandle,
     out: PathBuf,
     backdrop: Option<[u8; 3]>,
+    settle: Duration,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let result = capture(window, &out, backdrop, cx).await;
+        let result = capture(window, &out, backdrop, settle, cx).await;
         match &result {
             Ok(size) => eprintln!("wrote {} ({}x{})", out.display(), size.0, size.1),
             Err(err) => eprintln!("screenshot failed: {err:#}"),
         }
         let code = if result.is_ok() { 0 } else { 1 };
-        cx.update(|cx| cx.quit());
+        // Let the store settle before the process ends.
+        let shutdown = cx.update(|cx| {
+            monocode_app::boot::AppServices::try_global(cx)
+                .map(|_| monocode_app::boot::shutdown(cx))
+        });
+        if let Some(shutdown) = shutdown {
+            shutdown.await;
+        }
         std::process::exit(code);
     })
     .detach();
@@ -38,10 +46,11 @@ async fn capture(
     window: AnyWindowHandle,
     out: &Path,
     backdrop: Option<[u8; 3]>,
+    settle: Duration,
     cx: &mut AsyncApp,
 ) -> Result<(u32, u32)> {
     let mut waited = Duration::ZERO;
-    while waited < SETTLE {
+    while waited < settle {
         cx.background_executor().timer(FRAME).await;
         waited += FRAME;
         window.update(cx, |_, window, cx| {

@@ -1,21 +1,51 @@
 //! MonoCode, the native GPUI app.
+//!
+//! Startup follows src-tauri/src/main.rs and main.tsx: the `app` and
+//! `control` subcommands run the agent CLI and exit; otherwise the app
+//! resolves its data directory, boots the engine there
+//! (`monocode_app::boot`), applies the stored appearance, and opens the
+//! window.
 
 mod cli;
+mod composer_host;
+mod file_pane;
+mod format;
 mod gallery;
-mod mock;
+mod glass;
 #[cfg(feature = "screenshot")]
 mod screenshot;
+mod session_pane;
 mod shell;
+mod view_data;
 mod views;
 
+use std::time::Duration;
+
 use gpui::{
-    App, AppContext as _, Bounds, Styled as _, TitlebarOptions, WindowBounds, WindowHandle,
-    WindowOptions, point, px, size,
+    App, AppContext as _, Bounds, KeyBinding, Styled as _, TitlebarOptions, WindowBounds,
+    WindowHandle, WindowOptions, actions, point, px, size,
 };
 use gpui_component::Root;
+use monocode_app::boot::{self, AppServices, BootOptions};
+use monocode_app::data_dir;
 use monocode_ui::{AppearanceSettings, Theme, ThemePreference};
 
+actions!(monocode, [Quit]);
+
+/// `app` and `control` run the agent CLI against a running MonoCode, as the
+/// Tauri binary did, so agents can call this binary as their CLI.
+fn run_cli_subcommand() {
+    let mut args = std::env::args().skip(1);
+    let code = match args.next().as_deref() {
+        Some("control") => monocode_process::control_cli::run(args.collect()),
+        Some("app") => monocode_process::control_cli::run_app(args.collect()),
+        _ => return,
+    };
+    std::process::exit(code);
+}
+
 fn main() {
+    run_cli_subcommand();
     let args = match cli::Args::parse(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(err) => {
@@ -37,12 +67,37 @@ fn main() {
         eprintln!("--screenshot needs a build with `--features screenshot`");
         std::process::exit(2);
     }
+    let data_dir = if entry.engine {
+        match data_dir::resolve(args.data_dir.as_deref()) {
+            Ok(dir) => {
+                eprintln!("data dir: {}", dir.path.display());
+                Some(dir)
+            }
+            Err(err) => {
+                eprintln!("{err:#}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
 
     gpui_platform::application()
         .with_assets(monocode_ui::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-            let mut appearance = AppearanceSettings::default();
+            if let Some(dir) = data_dir.clone()
+                && let Err(err) = boot::boot(BootOptions::app(dir), cx)
+            {
+                eprintln!("could not start: {err:#}");
+                std::process::exit(1);
+            }
+            let mut appearance = AppServices::try_global(cx)
+                .map(|services| glass::appearance_from_settings(&services.settings.appearance))
+                .unwrap_or_else(|| AppearanceSettings {
+                    theme_preference: ThemePreference::Dark,
+                    ..AppearanceSettings::default()
+                });
             if let Some(theme) = &args.theme {
                 appearance.theme_preference = ThemePreference::parse(Some(theme));
             }
@@ -50,14 +105,57 @@ fn main() {
                 appearance.ui_scale = scale;
             }
             monocode_ui::init(appearance, cx);
+            monocode_view_transcript::transcript::init(cx);
+            monocode_editor::init(cx);
+            monocode_view_composer::composer::init(cx);
+            monocode_view_composer::pickers::init(cx);
+            cx.set_global(shell::StartupSession(args.open_session.clone()));
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                // `onNew` (⌘T): a new chat in a new tab.
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-t"
+                    } else {
+                        "ctrl-t"
+                    },
+                    shell::NewSession,
+                    None,
+                ),
+            ]);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_app_quit(|cx| {
+                let shutdown = AppServices::try_global(cx).map(|_| boot::shutdown(cx));
+                async move {
+                    if let Some(shutdown) = shutdown {
+                        shutdown.await;
+                    }
+                }
+            })
+            .detach();
 
             let window = open_main_window(&args, entry, cx);
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
             #[cfg(feature = "screenshot")]
             if let Some(out) = args.screenshot.clone() {
-                screenshot::capture_and_quit(window.into(), out, args.backdrop, cx);
+                let settle = args
+                    .settle_ms
+                    .unwrap_or(if entry.engine { 2500 } else { 900 });
+                screenshot::capture_and_quit(
+                    window.into(),
+                    out,
+                    args.backdrop,
+                    Duration::from_millis(settle),
+                    cx,
+                );
             }
             #[cfg(not(feature = "screenshot"))]
-            let _ = window;
+            let _ = (window, Duration::ZERO);
             cx.activate(true);
         });
 }
@@ -90,11 +188,11 @@ fn open_main_window(
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
-        monocode_ui::sync_window(window, cx);
+        glass::sync_window(window, cx);
         window
             .observe_window_appearance(|window, cx| {
                 monocode_ui::set_system_scheme(window.appearance(), cx);
-                monocode_ui::sync_window(window, cx);
+                glass::sync_window(window, cx);
             })
             .detach();
         let view = (entry.build)(window, cx);

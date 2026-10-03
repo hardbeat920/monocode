@@ -4353,6 +4353,7 @@ dependencies = [
  "monocode-store",
  "monocode-terminal-view",
  "monocode-ui",
+ "monocode-view-composer",
  "monocode-view-transcript",
  "parking_lot",
  "serde",
@@ -4465,18 +4466,23 @@ name = "monocode-host"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "gpui",
+ "async-channel",
+ "base64 0.22.1",
+ "futures",
  "log",
  "monocode-core",
- "monocode-engine",
  "monocode-git",
  "monocode-harness",
  "monocode-process",
  "monocode-remote",
- "monocode-settings",
- "monocode-store",
+ "parking_lot",
+ "regex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "smol",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -4673,6 +4679,7 @@ dependencies = [
 name = "monocode-view-files"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "futures",
  "gpui",
  "gpui-base",
@@ -4695,27 +4702,43 @@ dependencies = [
 name = "monocode-view-inbox"
 version = "0.6.0"
 dependencies = [
+ "chrono",
+ "futures",
  "gpui",
  "gpui-component",
+ "gpui_platform",
+ "image",
  "monocode-core",
  "monocode-editor",
+ "monocode-layout",
  "monocode-markdown",
  "monocode-ui",
+ "regex",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
 name = "monocode-view-pages"
 version = "0.6.0"
 dependencies = [
+ "chrono",
  "gpui",
+ "gpui-base",
  "gpui-component",
+ "gpui_platform",
+ "image",
  "monocode-core",
+ "monocode-layout",
  "monocode-markdown",
+ "monocode-store",
  "monocode-ui",
+ "monocode-view-composer",
+ "regex",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -4724,6 +4747,7 @@ version = "0.6.0"
 dependencies = [
  "futures",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_platform",
  "image",
