@@ -57,6 +57,7 @@ monocode-view-pages = { path = "crates/view-pages" }
 monocode-view-inbox = { path = "crates/view-inbox" }
 monocode-host = { path = "crates/host" }
 monocode-view-workbench = { path = "crates/view-workbench" }
+monocode-view-remote = { path = "crates/view-remote" }
 
 # GPUI: zeronsh/zui plus its gpui-component fork. Bump both revs together,
 # following the pair that zeronsh/comet pins.

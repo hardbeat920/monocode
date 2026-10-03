@@ -4744,6 +4744,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-view-remote"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-remote",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "monocode-view-scm"
 version = "0.6.0"
 dependencies = [
