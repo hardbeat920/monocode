@@ -14,15 +14,19 @@ default = ["submit", "attention", "side_threads", "orchestration", "workspace", 
 # crates, so a half-finished change there cannot break a runtime-only build.
 # Each package feature turns on the ones packages may need.
 package-deps = ["dep:monocode-harness", "dep:monocode-process", "dep:monocode-layout", "dep:monocode-settings"]
-submit = ["package-deps"]
+# submit: link previews (integrations), URL parsing (url), and pasted
+# attachment bytes (base64).
+submit = ["package-deps", "dep:monocode-integrations", "dep:url", "dep:base64"]
 attention = ["package-deps", "dep:monocode-integrations", "dep:monocode-platform", "dep:chrono", "dep:url"]
 side_threads = ["package-deps"]
 orchestration = ["package-deps"]
 workspace = ["package-deps", "dep:monocode-terminal", "dep:monocode-terminal-view"]
 projects = ["package-deps"]
-history = ["package-deps"]
+history = ["package-deps", "dep:chrono"]
 automations = ["package-deps"]
-inbox = ["package-deps"]
+# inbox: tracker clients (integrations), ISO timestamps and local midnight
+# (chrono), and URL parsing (url).
+inbox = ["package-deps", "dep:monocode-integrations", "dep:chrono", "dep:url"]
 remote = ["package-deps"]
 # `runtime::testing`: the fake store backend and workspace hooks, for other
 # crates' tests.
@@ -56,6 +60,8 @@ monocode-integrations = { workspace = true, optional = true }
 monocode-platform = { workspace = true, optional = true }
 chrono = { version = "0.4.45", optional = true, default-features = false, features = ["clock", "std"] }
 url = { workspace = true, optional = true }
+# submit: pasted attachment bytes.
+base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
