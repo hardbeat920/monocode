@@ -284,6 +284,7 @@ fn frontmatter(bytes: &[u8]) -> Result<(String, String, Vec<String>)> {
     }
     let text = std::str::from_utf8(bytes)
         .map_err(|_| Error::InvalidBundle("SKILL.md must be UTF-8".into()))?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text.lines();
     if lines.next().map(str::trim_end) != Some("---") {
         return Err(Error::InvalidBundle(

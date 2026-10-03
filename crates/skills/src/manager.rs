@@ -275,9 +275,10 @@ impl SkillManager {
 
     /// Forget an account before the caller deletes its profile directory.
     /// This changes library metadata only. It never changes provider files.
+    /// Removing a final symlink preserves exports in its physical destination.
     pub fn retire_targets_under(&self, root: &Path) -> Result<ReconcileReport> {
         let root = absolute(root)?;
-        let resolved = resolve_missing_path(&root)?;
+        let resolved = resolve_retirement_root(&root)?;
         let _lock = self.lock()?;
         let mut registry = self.load()?;
         let under_root = |path: &Path| path.starts_with(&root) || path.starts_with(&resolved);
@@ -961,6 +962,19 @@ fn exists(path: &Path) -> Result<bool> {
 
 fn increment(value: u64, limit: &'static str) -> Result<u64> {
     value.checked_add(1).ok_or(Error::LimitReached(limit))
+}
+
+fn resolve_retirement_root(path: &Path) -> Result<PathBuf> {
+    let unfollowed = match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => resolve_missing_path(parent)?.join(name),
+        _ => path.to_path_buf(),
+    };
+    match fs::symlink_metadata(&unfollowed) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(unfollowed),
+        Ok(_) => resolve_missing_path(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => resolve_missing_path(path),
+        Err(error) => Err(io("Inspect removed account root", &unfollowed, error)),
+    }
 }
 
 fn resolve_missing_path(path: &Path) -> Result<PathBuf> {

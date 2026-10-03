@@ -142,6 +142,73 @@ fn snapshot_reports_the_remembered_plan_and_catalog_with_one_generation() {
 }
 
 #[test]
+fn bom_import_and_apply_preserve_original_bytes_and_digest() {
+    let fixture = Fixture::new();
+    let original = format!("\u{feff}{}", instructions("Original BOM instructions."));
+    fs::write(fixture.source.join("SKILL.md"), &original).unwrap();
+    let manager = fixture.manager();
+    let imported = manager.import(&fixture.source).unwrap();
+    assert_eq!(
+        fs::read(fixture.source.join("SKILL.md")).unwrap(),
+        original.as_bytes()
+    );
+    assert_eq!(
+        fs::read(imported.entry.source_path.join("SKILL.md")).unwrap(),
+        original.as_bytes()
+    );
+    assert_eq!(
+        fs::read(imported.entry.applied_path.join("SKILL.md")).unwrap(),
+        original.as_bytes()
+    );
+    for status in &imported.entry.statuses {
+        if status.state == ExportState::Exported {
+            assert_eq!(
+                fs::read(status.path.join("SKILL.md")).unwrap(),
+                original.as_bytes()
+            );
+        }
+    }
+
+    let plain = fixture.root().join("same skill without BOM");
+    fs::create_dir(&plain).unwrap();
+    fs::write(
+        plain.join("SKILL.md"),
+        original.strip_prefix('\u{feff}').unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        Bundle::read(&plain, true).unwrap().digest,
+        imported.entry.digest
+    );
+    assert!(matches!(
+        manager.import(&plain),
+        Err(Error::NameConflict { .. })
+    ));
+
+    let edited = format!("\u{feff}{}", instructions("Applied BOM instructions."));
+    fs::write(imported.entry.source_path.join("SKILL.md"), &edited).unwrap();
+    manager.apply(&imported.entry.id).unwrap();
+    let applied = manager.snapshot().unwrap().entries.remove(0);
+    assert_eq!(applied.revision, 2);
+    assert_eq!(
+        fs::read(applied.applied_path.join("SKILL.md")).unwrap(),
+        edited.as_bytes()
+    );
+    for status in &applied.statuses {
+        if status.state == ExportState::Exported {
+            assert_eq!(
+                fs::read(status.path.join("SKILL.md")).unwrap(),
+                edited.as_bytes()
+            );
+        }
+    }
+    assert_eq!(
+        fs::read(fixture.source.join("SKILL.md")).unwrap(),
+        original.as_bytes()
+    );
+}
+
+#[test]
 fn imports_full_bundle_and_preserves_bytes_executable_modes_and_unknown_yaml() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.source.join("references")).unwrap();
@@ -580,6 +647,138 @@ fn absent_home_under_symlinked_parent_has_stable_registry_paths_after_import() {
         .filter(|status| status.state != ExportState::Unsupported)
         .all(|status| status.state == ExportState::Exported));
     assert!(manager.reconcile(&[]).unwrap().changed_paths.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn retiring_account_symlink_preserves_physical_exports_and_surviving_alias() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let manager = fixture.manager();
+    let imported = manager.import(&fixture.source).unwrap();
+    let profile_root = fixture.data.join("provider-accounts/claude");
+    fs::create_dir_all(&profile_root).unwrap();
+    let physical = fixture.home.join(".claude");
+    let removed = profile_root.join("work");
+    let surviving = profile_root.join("personal");
+    symlink(&physical, &removed).unwrap();
+    symlink(&physical, &surviving).unwrap();
+    let target = ExportTarget::new(
+        "surviving-account",
+        surviving.join("skills"),
+        vec!["claude".into()],
+    );
+    manager.reconcile(&[target]).unwrap();
+    let before = fs::read(manager.registry_path()).unwrap();
+    let generation = manager.generation().unwrap();
+
+    let trailing_separator = PathBuf::from(format!("{}/", removed.display()));
+    for spelling in [&removed, &trailing_separator] {
+        let retired = manager.retire_targets_under(spelling).unwrap();
+        assert_eq!(retired.generation, generation);
+        assert_eq!(fs::read(manager.registry_path()).unwrap(), before);
+        assert!(retired.changed_paths.is_empty());
+    }
+    fs::remove_file(&removed).unwrap();
+    change_source(&manager, &imported.entry.id, "Updated surviving account.");
+    manager.apply(&imported.entry.id).unwrap();
+
+    let physical_export = physical.join("skills/example-skill");
+    assert!(fs::read_to_string(physical_export.join("SKILL.md"))
+        .unwrap()
+        .contains("Updated surviving account."));
+    assert!(surviving.join("skills/example-skill/SKILL.md").exists());
+    assert!(!removed.exists());
+    let registry = manager.load().unwrap();
+    assert!(registry.targets.iter().any(|target| target.key == "claude"));
+    assert!(registry
+        .targets
+        .iter()
+        .any(|target| target.key == "surviving-account"));
+    assert!(registry.owned.contains_key(&physical_export));
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_resolves_parent_symlinks_for_an_ordinary_account_directory() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let manager = fixture.manager();
+    let imported = manager.import(&fixture.source).unwrap();
+    let physical_parent = fixture.root().join("physical-accounts");
+    let alias_parent = fixture.root().join("accounts-alias");
+    fs::create_dir(&physical_parent).unwrap();
+    symlink(&physical_parent, &alias_parent).unwrap();
+    let profile = alias_parent.join("WorkProfile");
+    manager
+        .reconcile(&[ExportTarget::new(
+            "work-account",
+            profile.join("skills"),
+            vec!["codex".into()],
+        )])
+        .unwrap();
+    let physical_profile = physical_parent.join("WorkProfile");
+    assert!(physical_profile
+        .join("skills/example-skill/SKILL.md")
+        .exists());
+
+    let different_spelling = alias_parent.join("workprofile");
+    let retirement_root = if different_spelling.is_dir() {
+        &different_spelling
+    } else {
+        &profile
+    };
+    manager.retire_targets_under(retirement_root).unwrap();
+    fs::remove_dir_all(&profile).unwrap();
+    change_source(
+        &manager,
+        &imported.entry.id,
+        "After ordinary account removal.",
+    );
+    manager.apply(&imported.entry.id).unwrap();
+    assert!(!profile.exists());
+    assert!(!physical_profile.exists());
+    let registry = manager.load().unwrap();
+    assert!(registry
+        .targets
+        .iter()
+        .all(|target| !target.root.starts_with(&physical_profile)));
+    assert!(registry
+        .owned
+        .keys()
+        .all(|destination| !destination.starts_with(&physical_profile)));
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_resolves_a_broken_final_symlink_without_following_it() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    let manager = fixture.manager();
+    manager.import(&fixture.source).unwrap();
+    let physical_parent = fixture.root().join("physical-accounts");
+    let alias_parent = fixture.root().join("accounts-alias");
+    fs::create_dir(&physical_parent).unwrap();
+    symlink(&physical_parent, &alias_parent).unwrap();
+    let account = alias_parent.join("work");
+    let missing_destination = fixture.root().join("missing-profile");
+    symlink(&missing_destination, &account).unwrap();
+    let before = fs::read(manager.registry_path()).unwrap();
+    let generation = manager.generation().unwrap();
+
+    let resolved = resolve_retirement_root(&account).unwrap();
+    assert_eq!(resolved, physical_parent.join("work"));
+    assert!(fs::symlink_metadata(&resolved)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(!resolved.exists());
+    assert_eq!(
+        manager.retire_targets_under(&account).unwrap().generation,
+        generation
+    );
+    assert_eq!(fs::read(manager.registry_path()).unwrap(), before);
+    assert!(!missing_destination.exists());
 }
 
 #[test]
