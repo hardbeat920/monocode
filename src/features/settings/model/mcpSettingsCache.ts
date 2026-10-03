@@ -1,3 +1,4 @@
+import { selectedProviderAccountId } from "../../providers/model/providerAccounts";
 import { invoke } from "@tauri-apps/api/core";
 import { parseClaudeMcpList, type McpConnection } from "./mcp";
 
@@ -17,44 +18,57 @@ const listeners = new Map<
   Set<(snapshot: McpSettingsSnapshot) => void>
 >();
 
-export function getCachedMcpSettings(cwd: string) {
-  return snapshots.get(cwd);
+function scopeFor(
+  cwd: string,
+  accountId = selectedProviderAccountId("claude", cwd),
+) {
+  return {
+    key: `${cwd}\0${accountId}`,
+    args: { cwd, ...(accountId === "default" ? {} : { accountId }) },
+  };
+}
+
+export function getCachedMcpSettings(cwd: string, accountId?: string) {
+  return snapshots.get(scopeFor(cwd, accountId).key);
 }
 
 export function subscribeMcpSettings(
   cwd: string,
   listener: (snapshot: McpSettingsSnapshot) => void,
+  accountId?: string,
 ) {
-  const subscribers = listeners.get(cwd) ?? new Set();
+  const key = scopeFor(cwd, accountId).key;
+  const subscribers = listeners.get(key) ?? new Set();
   subscribers.add(listener);
-  listeners.set(cwd, subscribers);
+  listeners.set(key, subscribers);
   return () => {
     subscribers.delete(listener);
-    if (subscribers.size === 0) listeners.delete(cwd);
+    if (subscribers.size === 0) listeners.delete(key);
   };
 }
 
-function publish(cwd: string, snapshot: McpSettingsSnapshot) {
-  snapshots.set(cwd, snapshot);
-  listeners.get(cwd)?.forEach((listener) => listener(snapshot));
+function publish(key: string, snapshot: McpSettingsSnapshot) {
+  snapshots.set(key, snapshot);
+  listeners.get(key)?.forEach((listener) => listener(snapshot));
 }
 
 /** Discovery is shared across settings and pickers; health never delays the list. */
 export function loadMcpSettings(
   cwd: string,
   force = false,
-  options: { claudeHealth?: boolean } = {},
+  options: { claudeHealth?: boolean; accountId?: string } = {},
 ) {
-  let request = requests.get(cwd);
+  const { key, args } = scopeFor(cwd, options.accountId);
+  let request = requests.get(key);
   if (!request || force) {
-    const discovery = fetchMcpSettings(cwd).then((snapshot) => {
-      if (requests.get(cwd) === discovery) {
-        healthRequests.delete(cwd);
-        publish(cwd, snapshot);
+    const discovery = fetchMcpSettings(args).then((snapshot) => {
+      if (requests.get(key) === discovery) {
+        healthRequests.delete(key);
+        publish(key, snapshot);
       }
       return snapshot;
     });
-    requests.set(cwd, discovery);
+    requests.set(key, discovery);
     request = discovery;
   }
   const discovery = request;
@@ -62,17 +76,20 @@ export function loadMcpSettings(
     if (
       options.claudeHealth !== false &&
       !snapshot.error &&
-      requests.get(cwd) === discovery
+      requests.get(key) === discovery
     ) {
-      loadClaudeHealth(cwd, discovery);
+      loadClaudeHealth(key, args, discovery);
     }
-    return snapshots.get(cwd) ?? snapshot;
+    return snapshots.get(key) ?? snapshot;
   });
 }
 
-async function fetchMcpSettings(cwd: string): Promise<McpSettingsSnapshot> {
+async function fetchMcpSettings(args: {
+  cwd: string;
+  accountId?: string;
+}): Promise<McpSettingsSnapshot> {
   try {
-    const configured = await invoke<McpConnection[]>("mcp_discover", { cwd });
+    const configured = await invoke<McpConnection[]>("mcp_discover", args);
     const servers = configured.map((server) => ({
       ...server,
       status: server.enabled === false ? "Disabled" : "Configured",
@@ -84,14 +101,15 @@ async function fetchMcpSettings(cwd: string): Promise<McpSettingsSnapshot> {
 }
 
 function loadClaudeHealth(
-  cwd: string,
+  key: string,
+  args: { cwd: string; accountId?: string },
   discovery: Promise<McpSettingsSnapshot>,
 ) {
-  if (healthRequests.has(cwd)) return;
-  const request = invoke<string>("claude_mcp_list", { cwd })
+  if (healthRequests.has(key)) return;
+  const request = invoke<string>("claude_mcp_list", args)
     .then((output) => {
-      if (requests.get(cwd) !== discovery) return;
-      const snapshot = snapshots.get(cwd)!;
+      if (requests.get(key) !== discovery) return;
+      const snapshot = snapshots.get(key)!;
       const health = new Map(
         parseClaudeMcpList(output).map((server) => [
           server.name,
@@ -124,13 +142,13 @@ function loadClaudeHealth(
           status,
         });
       }
-      publish(cwd, { ...snapshot, servers, claudeError: "" });
+      publish(key, { ...snapshot, servers, claudeError: "" });
     })
     .catch((cause) => {
-      if (requests.get(cwd) !== discovery) return;
-      publish(cwd, { ...snapshots.get(cwd)!, claudeError: String(cause) });
+      if (requests.get(key) !== discovery) return;
+      publish(key, { ...snapshots.get(key)!, claudeError: String(cause) });
     });
-  healthRequests.set(cwd, request);
+  healthRequests.set(key, request);
 }
 
 export function clearMcpSettingsCache() {

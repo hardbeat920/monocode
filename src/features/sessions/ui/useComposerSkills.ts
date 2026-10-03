@@ -1,3 +1,8 @@
+import {
+  selectedProviderAccountId,
+  subscribeProviderAccounts,
+  supportsProviderAccounts,
+} from "../../providers/model/providerAccounts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   loadSkills,
@@ -49,15 +54,33 @@ export function useComposerSkills(input: {
   harness: HarnessId;
   executionCwd: string;
   sessionId?: string;
+  providerAccountId?: string;
   pickerOpen: boolean;
 }) {
+  const [accountVersion, setAccountVersion] = useState(0);
+  useEffect(
+    () =>
+      subscribeProviderAccounts(() => setAccountVersion((value) => value + 1)),
+    [],
+  );
   const context = useMemo<SkillCatalogContext>(
     () => ({
       harness: input.harness,
       cwd: input.executionCwd,
       sessionId: input.sessionId,
+      providerAccountId:
+        input.providerAccountId ??
+        (supportsProviderAccounts(input.harness)
+          ? selectedProviderAccountId(input.harness, input.executionCwd)
+          : undefined),
     }),
-    [input.executionCwd, input.harness, input.sessionId],
+    [
+      input.executionCwd,
+      input.harness,
+      input.sessionId,
+      input.providerAccountId,
+      accountVersion,
+    ],
   );
   const contextKey = skillCatalogKey(context);
   const fallback = useMemo<Skill[]>(

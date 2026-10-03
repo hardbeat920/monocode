@@ -1506,25 +1506,27 @@ function Workspace({
     const harnesses = [
       ...new Set(sessionsRef.current.map((session) => session.harness)),
     ];
-    void refreshHarnessCatalogs(harnesses).then(() => {
-      setSessions((prev) =>
-        prev.map((session) => {
-          if (!isLiveHarness(session.harness)) return session;
-          const resolved = resolveModel(session.harness, session.model);
-          const modelSettings = mergeModelSettings(
-            resolved,
-            session.modelSettings,
-          );
-          if (
-            resolved.id === session.model &&
-            sameSettings(modelSettings, session.modelSettings)
-          ) {
-            return session;
-          }
-          return { ...session, model: resolved.id, modelSettings };
-        }),
-      );
-    });
+    void refreshHarnessCatalogs(harnesses, { cwd: projectCwdRef.current }).then(
+      () => {
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (!isLiveHarness(session.harness)) return session;
+            const resolved = resolveModel(session.harness, session.model);
+            const modelSettings = mergeModelSettings(
+              resolved,
+              session.modelSettings,
+            );
+            if (
+              resolved.id === session.model &&
+              sameSettings(modelSettings, session.modelSettings)
+            ) {
+              return session;
+            }
+            return { ...session, model: resolved.id, modelSettings };
+          }),
+        );
+      },
+    );
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
@@ -1682,10 +1684,14 @@ function Workspace({
    * until the picker happened to be opened. Idempotent: refreshHarnessCatalogs
    * dedupes via hasLiveCatalog and its inflight map. */
   const activeHarness = active?.harness;
+  const activeCatalogCwd = active ? sessionWorkCwd(active) : undefined;
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
-    void refreshHarnessCatalogs([activeHarness]);
-  }, [activeHarness]);
+    void refreshHarnessCatalogs([activeHarness], {
+      cwd: activeCatalogCwd,
+      providerAccountId: active?.providerAccountId,
+    });
+  }, [activeHarness, activeCatalogCwd, active?.providerAccountId]);
 
   const usageProviders = useMemo(() => {
     if (
@@ -6741,6 +6747,7 @@ function Workspace({
             pickTextHarness(current.harness),
             workCwd,
             branchMessage,
+            current.providerAccountId,
           )
             .then(async (fragment) => {
               const branch = fragment ? namedWorktreeBranch(fragment) : null;

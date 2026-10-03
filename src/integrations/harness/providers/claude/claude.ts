@@ -1,9 +1,11 @@
+import { elicitationQuestions, elicitationResponse } from "./claudeElicitation";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
   RuntimeMode,
   TaskListItem,
   TaskListMeta,
+  TurnMetrics,
 } from "../../../../features/sessions/model/session";
 import { loadClaudeHooks } from "../../../../features/settings/model/settings";
 import {
@@ -71,7 +73,7 @@ import {
   type ClaudeControlRequest,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
-import { joinStreamText, snapshotRemainder } from "../../core/streamText";
+import { snapshotRemainder } from "../../core/streamText";
 import {
   questionPromptTitle,
   questionsFromUnknown,
@@ -131,6 +133,17 @@ type Live = {
   providerAccountId?: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
+  providerPlanning: boolean;
+  model: string;
+  outstandingResults: number;
+  metrics: TurnMetrics;
+  narration: Map<string, string>;
+  nativeTasks: Set<string>;
+  nativeTurn: boolean;
+  closed: boolean;
+  initRequestId: string;
+  initError: Error | null;
+  initFailed: ((error: Error) => void) | null;
   settingsKey: string;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
@@ -169,6 +182,7 @@ type Live = {
   activeTurn: boolean;
   initDone: (() => void) | null;
   initialized: boolean;
+  started: boolean;
   emittedAssistant: string;
   emittedReasoning: string;
   pendingAssistantBoundary: boolean;
@@ -203,6 +217,7 @@ const tasksByThread = new Map<
 /** Task-list block key for TaskCreate/TaskUpdate items. */
 const CLAUDE_TASKS_KEY = "claude-tasks";
 const cancelledThreads = new Set<string>();
+const cancellationEpochs = new Map<string, number>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
   resolveClaudeBinary;
@@ -215,12 +230,18 @@ export function setClaudeBinaryResolver(
 }
 
 export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
+  const epoch = cancellationEpochs.get(input.sessionId) ?? 0;
   let live: Live;
   try {
     live = await ensureLive(input);
   } catch (error) {
     cancelledThreads.delete(input.sessionId);
+    if (epoch !== (cancellationEpochs.get(input.sessionId) ?? 0)) return;
     throw error;
+  }
+  if (epoch !== (cancellationEpochs.get(input.sessionId) ?? 0)) {
+    cancelledThreads.delete(input.sessionId);
+    return;
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
@@ -229,6 +250,11 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      if (
+        epoch !== (cancellationEpochs.get(input.sessionId) ?? 0) ||
+        live.closed
+      )
+        return;
       live.cancelled = false;
       live.muteUpdates = false;
       try {
@@ -244,11 +270,19 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
 export async function compactClaudeContext(
   input: CompactContextInput,
 ): Promise<void> {
+  const epoch = cancellationEpochs.get(input.sessionId) ?? 0;
   const settingsKey = settingsKeyFor(input);
   let live = liveByThread.get(input.sessionId);
   if (!live || live.cwd !== input.cwd || live.settingsKey !== settingsKey) {
-    live = await ensureLive(input);
+    try {
+      live = await ensureLive(input);
+    } catch (error) {
+      cancelledThreads.delete(input.sessionId);
+      if (epoch !== (cancellationEpochs.get(input.sessionId) ?? 0)) return;
+      throw error;
+    }
   }
+  if (epoch !== (cancellationEpochs.get(input.sessionId) ?? 0)) return;
   if (cancelledThreads.delete(input.sessionId)) return;
 
   live.onEvent = input.onEvent;
@@ -256,6 +290,11 @@ export async function compactClaudeContext(
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
+      if (
+        epoch !== (cancellationEpochs.get(input.sessionId) ?? 0) ||
+        live.closed
+      )
+        return;
       live.cancelled = false;
       live.muteUpdates = false;
       live.manualCompaction = true;
@@ -292,7 +331,14 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
-  await writeJson(input.sessionId, message);
+  live.outstandingResults += 1;
+  try {
+    await writeJson(input.sessionId, message);
+  } catch (error) {
+    live.outstandingResults -= 1;
+    maybeFinishTurn(live);
+    throw error;
+  }
 }
 
 export function respondClaudeApproval(
@@ -318,6 +364,10 @@ export function respondClaudeQuestion(
 }
 
 export async function cancelClaudeTurn(sessionId: string): Promise<void> {
+  cancellationEpochs.set(
+    sessionId,
+    (cancellationEpochs.get(sessionId) ?? 0) + 1,
+  );
   const live = liveByThread.get(sessionId);
   if (!live) {
     cancelledThreads.add(sessionId);
@@ -325,30 +375,31 @@ export async function cancelClaudeTurn(sessionId: string): Promise<void> {
   }
   live.cancelled = true;
   live.muteUpdates = true;
-  for (const [, pending] of live.approvals) pending.resolve("deny");
-  live.approvals.clear();
-  for (const [, pending] of live.questions)
-    pending.resolve({ kind: "skipped" });
-  live.questions.clear();
-  // Stop means the whole run, including what Claude left going in the
-  // background. Otherwise it finishes later and wakes Claude up again.
-  for (const taskId of live.backgroundTasks.keys()) {
-    await writeJson(
-      sessionId,
-      buildControlRequest(nextControlId(live), {
-        subtype: "stop_task",
-        task_id: taskId,
-      }),
-    ).catch(() => undefined);
+  let failure: unknown;
+  if (live.initialized) {
+    try {
+      await writeJson(
+        sessionId,
+        buildControlRequest(nextControlId(live), { subtype: "interrupt" }),
+      );
+    } catch (error) {
+      failure = error;
+    }
   }
-  await writeJson(
-    sessionId,
-    buildControlRequest(nextControlId(live), { subtype: "interrupt" }),
-  ).catch(() => undefined);
   finishActiveTurn(live, [
     { type: "message.completed" },
     { type: "reasoning.completed" },
   ]);
+  // A cancelled process cannot deliver an old result into the next send.
+  // Keep its conversation id so the next process resumes the same transcript.
+  await stopClaudeSession(sessionId);
+  if (failure) {
+    live.onEvent({
+      type: "session.error",
+      message: String(failure instanceof Error ? failure.message : failure),
+    });
+    throw failure;
+  }
 }
 
 export async function stopClaudeSession(sessionId: string): Promise<void> {
@@ -357,6 +408,10 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
   liveByThread.delete(sessionId);
   if (live) {
     live.muteUpdates = true;
+    live.closed = true;
+    clearAwaitingResume(live);
+    live.initError = new Error("Claude Code stopped");
+    live.initFailed?.(live.initError);
     for (const [, pending] of live.approvals) pending.resolve("deny");
     live.approvals.clear();
     for (const [, pending] of live.questions)
@@ -366,7 +421,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
-    live.initDone?.();
+    live.initFailed = null;
     live.initDone = null;
   }
   unwatchChild(sessionId);
@@ -428,7 +483,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     existing &&
     existing.cwd === input.cwd &&
     existing.settingsKey === settingsKey &&
-    existing.planning === planning
+    existing.planning === planning &&
+    !(input.intent === "build" && existing.providerPlanning) &&
+    !existing.closed
   ) {
     existing.onEvent = input.onEvent;
     existing.runtimeMode = input.runtimeMode;
@@ -455,6 +512,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.delete(input.sessionId);
   }
   const { path } = await resolveClaudeBinaryImpl();
+  if (cancelledThreads.has(input.sessionId))
+    throw new Error("Claude Code stopped before initialization");
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
@@ -479,6 +538,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     providerAccountId: input.providerAccountId,
     runtimeMode: input.runtimeMode,
     planning,
+    providerPlanning: planning,
+    model: launch.model ?? nativeModelId(input.model),
+    outstandingResults: 0,
+    metrics: {},
+    narration: new Map(),
+    nativeTasks: new Set(),
+    nativeTurn: false,
+    closed: false,
+    initRequestId: "",
+    initError: null,
+    initFailed: null,
     settingsKey,
     onEvent: input.onEvent,
     approvals: new Map(),
@@ -506,6 +576,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     activeTurn: false,
     initDone: null,
     initialized: false,
+    started: false,
     emittedAssistant: "",
     emittedReasoning: "",
     pendingAssistantBoundary: false,
@@ -518,17 +589,26 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     input.sessionId,
     (line) => {
       const current = liveRef.current;
-      if (!current) return;
+      if (!current || current.closed) return;
       handleLine(input.sessionId, current, line);
     },
     (code) => {
-      liveByThread.delete(input.sessionId);
       const current = liveRef.current;
+      if (liveByThread.get(input.sessionId) === current)
+        liveByThread.delete(input.sessionId);
+      if (current) {
+        current.closed = true;
+        clearAwaitingResume(current);
+        current.initError = new Error(
+          "Claude Code exited during initialization",
+        );
+        current.initFailed?.(current.initError);
+      }
       if (!current?.muteUpdates) {
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
       current?.turnFailed?.(new Error("Claude Code exited"));
-      current?.initDone?.();
+
       if (current) {
         current.turnDone = null;
         current.turnFailed = null;
@@ -537,15 +617,27 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(
-    input.sessionId,
-    path,
-    buildClaudeSpawnArgs(launch),
-    input.cwd,
-    { provider: "claude", id: input.providerAccountId ?? "default" },
-    "claude",
-  );
+  try {
+    await spawnChild(
+      input.sessionId,
+      path,
+      buildClaudeSpawnArgs(launch),
+      input.cwd,
+      { provider: "claude", id: input.providerAccountId ?? "default" },
+      "claude",
+    );
+  } catch (error) {
+    live.closed = true;
+    unwatchChild(input.sessionId);
+    throw error;
+  }
 
+  if (live.closed || cancelledThreads.has(input.sessionId)) {
+    live.closed = true;
+    unwatchChild(input.sessionId);
+    await killChild(input.sessionId);
+    throw new Error("Claude Code stopped during initialization");
+  }
   liveByThread.set(input.sessionId, live);
   resumeByThread.set(input.sessionId, {
     sessionId: claudeSessionId,
@@ -554,15 +646,23 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   });
 
   try {
+    live.initRequestId = nextControlId(live);
     await writeJson(
       input.sessionId,
-      buildControlRequest(nextControlId(live), { subtype: "initialize" }),
+      buildControlRequest(live.initRequestId, { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    if (
+      live.closed ||
+      live.cancelled ||
+      liveByThread.get(input.sessionId) !== live
+    )
+      throw new Error("Claude Code stopped during initialization");
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
     });
+    live.started = true;
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {
@@ -586,6 +686,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.pendingAssistantBoundary = false;
   live.toolsByIndex.clear();
   live.toolsById.clear();
+  live.nativeTurn = false;
   live.agentTasks.clear();
   live.backgroundTasks.clear();
   live.backgroundRows.clear();
@@ -593,6 +694,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  live.turnEndPending = false;
+  live.outstandingResults = 1;
+  live.metrics = {};
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -687,12 +791,20 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     (stringField(rec, "subtype") === "init" ||
       stringField(rec, "subtype") === "initialized")
   ) {
-    markInitialized(live);
-    if (stringField(rec, "subtype") === "init") noteClaudeTurnStarted(live);
+    if (live.initialized && stringField(rec, "subtype") === "init")
+      noteClaudeTurnStarted(live);
   }
 
   if (type === "control_response") {
-    markInitialized(live);
+    const response = asRecord(rec.response);
+    if (stringField(response, "request_id") !== live.initRequestId) return;
+    if (stringField(response, "subtype") === "success") markInitialized(live);
+    else {
+      live.initError = new Error(
+        stringField(response, "error") ?? "Claude Code initialization failed",
+      );
+      live.initFailed?.(live.initError);
+    }
     return;
   }
 
@@ -745,11 +857,11 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
     if (subagent) return;
     if (delta.kind === "assistant") {
       closePendingAssistantMessage(live);
-      live.emittedAssistant = joinStreamText(live.emittedAssistant, delta.text);
-      live.onEvent({ type: "message.delta", text: delta.text });
+      live.emittedAssistant += delta.text;
+      live.onEvent({ type: "message.delta", text: delta.text, append: true });
     } else {
-      live.emittedReasoning = joinStreamText(live.emittedReasoning, delta.text);
-      live.onEvent({ type: "reasoning.delta", text: delta.text });
+      live.emittedReasoning += delta.text;
+      live.onEvent({ type: "reasoning.delta", text: delta.text, append: true });
     }
     return;
   }
@@ -820,6 +932,7 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
     return;
   }
 
+  live.model = stringField(asRecord(rec.message), "model") ?? live.model;
   const used = contextUsedFromAssistant(rec);
   if (used !== undefined) live.onEvent({ type: "context", used });
 
@@ -827,8 +940,8 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (snapshot) closePendingAssistantMessage(live);
   const extra = snapshotRemainder(live.emittedAssistant, snapshot);
   if (extra) {
-    live.emittedAssistant = joinStreamText(live.emittedAssistant, extra);
-    live.onEvent({ type: "message.delta", text: extra });
+    live.emittedAssistant += extra;
+    live.onEvent({ type: "message.delta", text: extra, append: true });
   }
 
   for (const use of assistantToolUses(rec)) {
@@ -906,6 +1019,20 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
+    if (!result.isError && tool.name === "CronCreate") {
+      const created = tryParseJsonRecord(result.text);
+      const id =
+        stringField(created, "id") ??
+        /(?:job|task)\s+(?:with\s+)?id[:\s]+([\w-]+)/i.exec(result.text)?.[1] ??
+        result.toolUseId;
+      live.nativeTasks.add(id);
+    }
+    if (!result.isError && tool.name === "CronDelete")
+      live.nativeTasks.delete(String(tool.input.id ?? tool.input.job_id));
+    if (!result.isError && tool.name === "EnterPlanMode")
+      live.providerPlanning = true;
+    if (!result.isError && tool.name === "ExitPlanMode")
+      live.providerPlanning = false;
     if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
       continue;
     }
@@ -970,11 +1097,28 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A /compact result reports the summarizer call's usage, not the rebuilt
   // conversation level. The next real turn will provide the fresh reading.
   if (!live.manualCompaction) {
-    const context = contextFromResult(rec);
+    const context = contextFromResult(rec, live.model);
     if (context) live.onEvent({ type: "context", ...context });
   }
   const metrics = turnMetricsFromResult(rec);
-  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
+  if (metrics) {
+    for (const key of [
+      "inputTokens",
+      "outputTokens",
+      "cacheReadTokens",
+      "cacheWriteTokens",
+    ] as const) {
+      live.metrics[key] = (live.metrics[key] ?? 0) + (metrics[key] ?? 0);
+    }
+    const cacheable =
+      (live.metrics.inputTokens ?? 0) +
+      (live.metrics.cacheReadTokens ?? 0) +
+      (live.metrics.cacheWriteTokens ?? 0);
+    live.metrics.cacheHitPercent = cacheable
+      ? ((live.metrics.cacheReadTokens ?? 0) / cacheable) * 100
+      : 0;
+    live.onEvent({ type: "turn.metrics", ...live.metrics });
+  }
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {
@@ -983,12 +1127,12 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // A refused window can still fall back to another model, so only a turn
   // that ended in error was stopped by it.
   const turnErrored = rec.is_error === true || result.status === "failed";
-  const usageLimit =
-    live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
   live.usageLimit = null;
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
   }
+  live.outstandingResults = Math.max(0, live.outstandingResults - 1);
   live.turnResultSeen = true;
   maybeFinishTurn(live);
   showBackgroundRows(live);
@@ -1000,11 +1144,70 @@ async function handleControlRequest(
   live: Live,
   control: ClaudeControlRequest,
 ): Promise<void> {
+  if (control.subtype === "elicitation") {
+    const request = control.request ?? {};
+    if (live.cancelled || live.muteUpdates) {
+      await writeJson(
+        sessionId,
+        buildControlResponse(control.requestId, { action: "cancel" }),
+      );
+      return;
+    }
+    try {
+      const questions = elicitationQuestions(request);
+      let title = stringField(request, "message") ?? "MCP form";
+      for (;;) {
+        const uiId = live.nextApprovalUiId++;
+        const pending = waitQuestion(live, uiId, control.requestId, {
+          type: "question.asked",
+          requestId: uiId,
+          title,
+          questions,
+        });
+        showNextQuestion(live);
+        const reply = await pending;
+        if (live.closed || liveByThread.get(sessionId) !== live) return;
+        live.onEvent({
+          type: "question.resolved",
+          requestId: uiId,
+          decision:
+            reply === "cancelled"
+              ? "cancelled"
+              : reply.kind === "answered"
+                ? "answered"
+                : "skipped",
+        });
+        showNextQuestion(live);
+        if (reply === "cancelled") return;
+        let response: Record<string, unknown>;
+        try {
+          response = elicitationResponse(request, questions, reply);
+        } catch (error) {
+          title = error instanceof Error ? error.message : String(error);
+          live.onEvent({ type: "status", text: title });
+          continue;
+        }
+        await writeJson(
+          sessionId,
+          buildControlResponse(control.requestId, response),
+        );
+        break;
+      }
+    } catch (error) {
+      if (live.closed || liveByThread.get(sessionId) !== live) return;
+      live.onEvent({
+        type: "status",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      await writeJson(
+        sessionId,
+        buildControlResponse(control.requestId, { action: "decline" }),
+      );
+    }
+    return;
+  }
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -1035,6 +1238,7 @@ async function handleControlRequest(
     });
     showNextQuestion(live);
     const outcome = await pending;
+    if (live.closed || liveByThread.get(sessionId) !== live) return;
     const decision =
       outcome === "cancelled"
         ? "cancelled"
@@ -1061,7 +1265,7 @@ async function handleControlRequest(
     return;
   }
 
-  if (toolName === "ExitPlanMode") {
+  if (toolName === "ExitPlanMode" && live.planning) {
     const plan = extractExitPlanModePlan(input);
     if (plan) live.onEvent({ type: "plan", text: plan });
     await writeJson(
@@ -1091,6 +1295,8 @@ async function handleControlRequest(
   }
 
   if (live.runtimeMode === "full-access") {
+    if (toolName === "EnterPlanMode") live.providerPlanning = true;
+    if (toolName === "ExitPlanMode") live.providerPlanning = false;
     await writeJson(
       sessionId,
       buildControlResponse(
@@ -1112,8 +1318,13 @@ async function handleControlRequest(
     preview: previewFromTool(toolName, input),
   });
   const decision = await pending;
+  if (live.closed || liveByThread.get(sessionId) !== live) return;
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
   if (decision === "cancelled") return;
+  if (decision === "allow" && toolName === "EnterPlanMode")
+    live.providerPlanning = true;
+  if (decision === "allow" && toolName === "ExitPlanMode")
+    live.providerPlanning = false;
   await writeJson(
     sessionId,
     buildControlResponse(
@@ -1199,7 +1410,10 @@ function handleAgentLifecycle(
 ): boolean {
   const started = parseTaskStarted(rec);
   if (started) {
-    if (started.ambient) return true;
+    if (started.ambient) {
+      live.nativeTasks.add(started.taskId);
+      return true;
+    }
     live.backgroundTasks.set(started.taskId, {
       description: started.description,
       toolUseId: started.toolUseId,
@@ -1410,10 +1624,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1435,8 +1646,12 @@ function noteSubagentNarration(
       text: thinking,
     });
   }
-  const text = assistantTextBlocks(rec).join("").trim();
+  const chunk = assistantTextBlocks(rec).join("").trim();
+  const key = `${parent.id}:${messageId}:text`;
+  const prior = live.narration.get(key) ?? "";
+  const text = chunk === prior ? prior : prior ? `${prior}\n${chunk}` : chunk;
   if (text) {
+    live.narration.set(key, text);
     live.onEvent({
       type: "agent.step",
       callId: parent.id,
@@ -1448,10 +1663,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1462,7 +1674,7 @@ function noteSubagentResults(
       kind: "tool",
       text: "",
       status: result.isError ? "failed" : "completed",
-      ...(result.isError && result.text ? { detail: result.text } : {}),
+      ...(result.text ? { detail: result.text.slice(0, 32_000) } : {}),
     });
   }
 }
@@ -1568,7 +1780,7 @@ function completeAgentTask(
  */
 function finishBackgroundTask(live: Live, taskId: string): void {
   if (!live.backgroundTasks.delete(taskId)) return;
-  if (live.turnResultSeen && live.activeTurn && !live.awaitingResume) {
+  if (live.activeTurn && !live.awaitingResume) {
     live.awaitingResume = setTimeout(() => {
       live.awaitingResume = null;
       maybeFinishTurn(live);
@@ -1585,7 +1797,19 @@ function finishBackgroundTask(live: Live, taskId: string): void {
  * earlier one, decides when the MonoCode turn ends.
  */
 function noteClaudeTurnStarted(live: Live): void {
-  if (!live.activeTurn || !live.turnResultSeen) return;
+  if (!live.started) return;
+  if (!live.activeTurn) {
+    live.activeTurn = true;
+    live.nativeTurn = true;
+    live.metrics = {};
+    live.outstandingResults = 1;
+    live.onEvent({
+      type: "turn.started",
+      providerTurnId: crypto.randomUUID(),
+      native: true,
+    });
+  }
+  if (!live.turnResultSeen) return;
   live.turnResultSeen = false;
   // A new message, not more of the last one: its snapshot must not be
   // compared against what the earlier turn streamed.
@@ -1612,7 +1836,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1626,7 +1851,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
@@ -1695,7 +1922,7 @@ function syncBackgroundWait(live: Live): void {
 }
 
 function maybeFinishTurn(live: Live): void {
-  if (!live.turnResultSeen) return;
+  if (!live.turnResultSeen || live.outstandingResults > 0) return;
   if (live.agentTasks.size > 0 || live.backgroundTasks.size > 0) return;
   if (live.awaitingResume) return;
   if (!live.activeTurn && !live.turnDone) return;
@@ -1709,6 +1936,10 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearAwaitingResume(live);
   live.turnEndPending = false;
   live.activeTurn = false;
+  if (live.nativeTurn) {
+    live.nativeTurn = false;
+    live.onEvent({ type: "turn.finished", native: true });
+  }
   for (const event of extraEvents) live.onEvent(event);
   const done = live.turnDone;
   const failed = live.turnFailed;
@@ -1734,15 +1965,25 @@ function markInitialized(live: Live): void {
 }
 
 function waitForInit(live: Live, timeoutMs: number): Promise<void> {
+  if (live.initError) return Promise.reject(live.initError);
   if (live.initialized) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
       live.initDone = null;
-      resolve();
+      live.initFailed = null;
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Claude Code initialization timed out"));
     }, timeoutMs);
     live.initDone = () => {
-      clearTimeout(timer);
+      cleanup();
       resolve();
+    };
+    live.initFailed = (error) => {
+      cleanup();
+      reject(error);
     };
   });
 }
@@ -1787,8 +2028,8 @@ function launchOptions(
   const effortRaw = input.modelSettings?.effort;
   const context = input.modelSettings?.context;
   const settings: ClaudeCliSettings = {};
-  if (input.modelSettings?.thinking === "true") {
-    settings.alwaysThinkingEnabled = true;
+  if (input.modelSettings?.thinking !== undefined) {
+    settings.alwaysThinkingEnabled = input.modelSettings.thinking === "true";
   }
   if (input.modelSettings?.fast === "true") {
     settings.fastMode = true;
@@ -1812,8 +2053,15 @@ function launchOptions(
   };
 }
 
+export function claudeSessionNeedsProcess(sessionId: string): boolean {
+  const live = liveByThread.get(sessionId);
+  return !!live && (live.activeTurn || live.nativeTasks.size > 0);
+}
+
 /** Exported for tests. */
 export function __claudeTestReset(): void {
+  for (const live of liveByThread.values()) clearAwaitingResume(live);
+  cancellationEpochs.clear();
   liveByThread.clear();
   resumeByThread.clear();
   tasksByThread.clear();

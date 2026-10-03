@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
+  relevantRateLimitWindows,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -12,9 +13,15 @@ import {
   type RateLimitWindow,
 } from "../../features/providers/model/rateLimits";
 import type { CodexRateLimitResetOutcome } from "../../features/providers/model/rateLimitsFetch";
-import { mascotPath, projectMascot } from "../../features/projects/model/projectMascots";
+import {
+  mascotPath,
+  projectMascot,
+} from "../../features/projects/model/projectMascots";
 import { projectKey, projectName } from "../../shared/lib/paths";
-import { HARNESS_TITLE, type HarnessId } from "../../features/sessions/model/session";
+import {
+  HARNESS_TITLE,
+  type HarnessId,
+} from "../../features/sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -23,7 +30,13 @@ import {
   resolveTabGroupMascot,
 } from "../../features/workspace/model/tabGroups";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
-import { ArrowLeft, Check, ChevronRight, Plus, RefreshCw } from "../../shared/ui/icons";
+import {
+  ArrowLeft,
+  Check,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+} from "../../shared/ui/icons";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
 import {
   ProviderSignInPanel,
@@ -55,7 +68,8 @@ import { ProviderAccountSubtitle } from "../../features/providers/ui/ProviderAcc
 import { useShowRemainingUsage } from "../../features/settings/model/displayPrefs";
 
 type UsageWindowEntry = {
-  key: "session" | "weekly" | "monthly";
+  key: string;
+  label?: string;
   window: RateLimitWindow;
 };
 
@@ -64,6 +78,7 @@ type ResetActionState =
 
 export function UsageProviderChip({
   limits,
+  model,
   now,
   project,
   accounts = [],
@@ -76,6 +91,7 @@ export function UsageProviderChip({
   presentation,
 }: {
   limits: ProviderRateLimits;
+  model?: string;
   now: number;
   presentation?: { harness: HarnessId; label: string; sourceLabel?: string };
   project?: string;
@@ -112,12 +128,15 @@ export function UsageProviderChip({
     windows.length === 0 &&
     (needsProviderLogin(limits) || reconnectState !== "idle"),
   );
-  const tightest = windows.reduce<RateLimitWindow | null>((best, entry) => {
-    if (!best || entry.window.usedPercent > best.usedPercent) {
-      return entry.window;
-    }
-    return best;
-  }, null);
+  const relevant = relevantRateLimitWindows(limits, model);
+  const tightest = windows
+    .filter((entry) => relevant.includes(entry.window))
+    .reduce<RateLimitWindow | null>((best, entry) => {
+      if (!best || entry.window.usedPercent > best.usedPercent) {
+        return entry.window;
+      }
+      return best;
+    }, null);
   const tooltip = windows
     .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
     .join(" · ");
@@ -149,10 +168,10 @@ export function UsageProviderChip({
     account.id === accountId
       ? limits
       : accountUsage.usage[accountUsageKey(account)];
-  const activeStatus = accountStatus(limits, now);
+  const activeStatus = accountStatus(limits, now, model);
   const suggestion =
     activeStatus.tone === "exhausted" || activeStatus.tone === "low"
-      ? bestAlternativeAccount(otherAccounts, usageFor, now)
+      ? bestAlternativeAccount(otherAccounts, usageFor, now, model)
       : null;
   const mascotProject = project ? projectName(project) : providerLabel;
   const appearanceKey = project ? projectKey(project) : mascotProject;
@@ -354,9 +373,7 @@ export function UsageProviderChip({
                     </p>
                   ) : null}
                   {canManageAccounts ? (
-                    <div
-                      className="pointer-events-none relative mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55"
-                    >
+                    <div className="pointer-events-none relative mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55">
                       {/* Keep account switching separate from email revelation. */}
                       <button
                         type="button"
@@ -404,6 +421,7 @@ export function UsageProviderChip({
                     <UsageWindowCard
                       key={entry.key}
                       kind={entry.key}
+                      label={entry.label}
                       window={entry.window}
                       now={now}
                     />
@@ -413,8 +431,17 @@ export function UsageProviderChip({
                 <EmptyUsageState limits={limits} loading={loading} />
               )}
 
+              {limits.extraUsage ? (
+                <p className="mt-2 text-[10px] text-content/60">
+                  {limits.extraUsage.enabled
+                    ? `Usage credits enabled${limits.extraUsage.usedPercent == null ? "" : `, ${Math.round(limits.extraUsage.usedPercent)}% used`}.`
+                    : "Usage credits disabled."}
+                </p>
+              ) : null}
+
               {suggestion && onSelectAccount ? (
                 <SwitchSuggestion
+                  model={model}
                   account={suggestion}
                   limits={usageFor(suggestion)}
                   exhausted={activeStatus.tone === "exhausted"}
@@ -484,6 +511,7 @@ function AccountSwitchRow({
 }
 
 function ProviderAccountPicker({
+  model,
   providerLabel,
   accounts,
   identities,
@@ -496,6 +524,7 @@ function ProviderAccountPicker({
   onSelect,
 }: {
   providerLabel: string;
+  model?: string;
   accounts: ProviderAccount[];
   identities: Record<string, ProviderAccountIdentity | null>;
   accountId: string;
@@ -572,7 +601,7 @@ function ProviderAccountPicker({
                     className={meters.length > 0 ? "shrink-0" : "min-w-0"}
                   >
                     <AccountStatusLabel
-                      status={accountStatus(usage, now)}
+                      status={accountStatus(usage, now, model)}
                       className="min-w-0"
                     />
                   </span>
@@ -627,6 +656,7 @@ function ProviderAccountPicker({
 }
 
 function SwitchSuggestion({
+  model,
   account,
   limits,
   exhausted,
@@ -634,6 +664,7 @@ function SwitchSuggestion({
   onSwitch,
 }: {
   account: ProviderAccount;
+  model?: string;
   limits: ProviderRateLimits | undefined;
   exhausted: boolean;
   now: number;
@@ -648,7 +679,7 @@ function SwitchSuggestion({
         <p className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px]">
           <span className="min-w-0 truncate font-medium">{account.label}</span>
           <AccountStatusLabel
-            status={accountStatus(limits, now)}
+            status={accountStatus(limits, now, model)}
             className="text-[10px]"
           />
         </p>
@@ -745,7 +776,7 @@ function AddProviderAccount({
 }
 
 function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
-  return [
+  const windows: Array<UsageWindowEntry | null> = [
     limits.session
       ? ({ key: "session", window: limits.session } as const)
       : null,
@@ -753,15 +784,23 @@ function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
     limits.monthly
       ? ({ key: "monthly", window: limits.monthly } as const)
       : null,
-  ].filter((entry): entry is UsageWindowEntry => entry != null);
+    ...(limits.scopedWeekly ?? []).map((window) => ({
+      key: `scoped:${window.model}`,
+      label: `Weekly ${window.label}`,
+      window,
+    })),
+  ];
+  return windows.filter((entry): entry is UsageWindowEntry => entry != null);
 }
 
 function UsageWindowCard({
   kind,
+  label,
   window,
   now,
 }: {
   kind: UsageWindowEntry["key"];
+  label?: string;
   window: RateLimitWindow;
   now: number;
 }) {
@@ -770,13 +809,14 @@ function UsageWindowCard({
   const remaining = 100 - pct;
   const shown = showRemaining ? remaining : pct;
   const title =
-    kind === "session"
+    label ??
+    (kind === "session"
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"
         : kind === "monthly"
           ? "Monthly limit"
-          : `${formatWindowLabel(window.windowMinutes)} limit`;
+          : `${formatWindowLabel(window.windowMinutes)} limit`);
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">

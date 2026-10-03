@@ -37,7 +37,8 @@ export function applyHarnessEvents(
     const texts = [event.text];
     while (index + 1 < events.length) {
       const following = events[index + 1];
-      if (following.type !== event.type) break;
+      if (following.type !== event.type || following.append !== event.append)
+        break;
       texts.push(following.text);
       index++;
     }
@@ -46,6 +47,7 @@ export function applyHarnessEvents(
       event.type === "message.delta" ? "assistant" : "reasoning",
       texts,
       true,
+      event.append,
     );
   }
   return next;
@@ -56,15 +58,34 @@ export function applyHarnessEvent(
   event: HarnessEvent,
 ): Session {
   switch (event.type) {
+    case "turn.finished":
+      return event.native
+        ? {
+            ...finishRole(finishRole(session, "assistant"), "reasoning"),
+            busy: false,
+          }
+        : session;
     case "message.delta":
-      return patchStreaming(session, "assistant", event.text, true);
+      return patchStreaming(
+        session,
+        "assistant",
+        event.text,
+        true,
+        event.append,
+      );
     case "message.completed":
       return finishRole(session, "assistant");
     case "image.generated":
       if (!("path" in event)) return session;
       return appendImage(session, event);
     case "reasoning.delta":
-      return patchStreaming(session, "reasoning", event.text, true);
+      return patchStreaming(
+        session,
+        "reasoning",
+        event.text,
+        true,
+        event.append,
+      );
     case "reasoning.completed":
       return finishRole(session, "reasoning");
     case "tool.started":
@@ -161,6 +182,7 @@ export function applyHarnessEvent(
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
     case "turn.started": {
+      if (event.native) return { ...session, busy: true };
       const index = lastMatchingBlock(
         session.blocks,
         (block) => block.role === "user",
@@ -335,7 +357,9 @@ function upsertTaskList(
 
   const taskList = {
     ...(key ? { key } : {}),
-    ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
+    ...(event.providerSessionId
+      ? { providerSessionId: event.providerSessionId }
+      : {}),
     ...(event.explanation?.trim()
       ? { explanation: event.explanation.trim() }
       : {}),
@@ -743,6 +767,7 @@ function patchStreaming(
   role: "assistant" | "reasoning",
   input: string | readonly string[],
   streaming: boolean,
+  append = false,
 ): Session {
   if (
     role === "reasoning" &&
@@ -763,10 +788,11 @@ function patchStreaming(
   if (last?.role === role && last.streaming) {
     // Fold against the existing text in order: providers can mix tokens and
     // full snapshots, so concatenating the incoming chunks would duplicate text.
+    const merge = append ? (a: string, b: string) => a + b : joinStreamText;
     const nextText =
       typeof input === "string"
-        ? joinStreamText(last.text, input)
-        : input.reduce(joinStreamText, last.text);
+        ? merge(last.text, input)
+        : input.reduce(merge, last.text);
     if (nextText === last.text && last.streaming === streaming) return session;
     const blocks = session.blocks.slice();
     blocks[index] = {
@@ -780,7 +806,10 @@ function patchStreaming(
   blocks.push({
     id: crypto.randomUUID(),
     role,
-    text: typeof input === "string" ? input : input.reduce(joinStreamText, ""),
+    text:
+      typeof input === "string"
+        ? input
+        : input.reduce(append ? (a, b) => a + b : joinStreamText, ""),
     streaming,
   });
   return { ...session, blocks };

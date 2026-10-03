@@ -4,7 +4,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import type { ProviderRateLimits } from "../../features/providers/model/rateLimits";
+import { parseClaudeOAuthUsage, type ProviderRateLimits } from "../../features/providers/model/rateLimits";
 import { projectKey } from "../../shared/lib/paths";
 import { saveTabGroupMascot } from "../../features/workspace/model/tabGroups";
 import { needsProviderLogin, UsageProviderChip } from "./UsageProviderChip";
@@ -91,6 +91,13 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("UsageProviderChip", () => {
+  it("shows scoped weekly quotas and usage credit state", async () => {
+    const limits = parseClaudeOAuthUsage(JSON.stringify({ five_hour: { utilization: 10 }, limits: [{ kind: "weekly_scoped", scope: { model: { display_name: "Fable 5.1" } }, percent: 91, resets_at: "2026-09-20T00:00:00Z" }], extra_usage: { is_enabled: true, utilization: 25 } }));
+    await act(async () => root.render(createElement(UsageProviderChip, { limits, now, model: "claude:fable-5" })));
+    await act(async () => button("Claude Code usage details").click());
+    expect(document.body.textContent).toContain("Weekly Fable 5.1");
+    expect(document.body.textContent).toContain("Usage credits enabled, 25% used.");
+  });
   it("offers the provider-owned login flow for an expired Claude session", async () => {
     const limits: ProviderRateLimits = {
       provider: "claude",

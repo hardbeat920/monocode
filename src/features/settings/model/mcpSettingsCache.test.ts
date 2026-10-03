@@ -26,6 +26,50 @@ beforeEach(() => {
 });
 afterEach(clearMcpSettingsCache);
 
+it("keeps MCP discovery and late health isolated between profiles in one checkout", async () => {
+  const health = new Map<string, (value: string) => void>();
+  invoke.mockImplementation((command: string, args: { accountId: string }) =>
+    command === "mcp_discover"
+      ? Promise.resolve([{ ...configured[0], name: args.accountId }])
+      : new Promise((resolve) => {
+          health.set(args.accountId, resolve);
+        }),
+  );
+  const oldProfile = vi.fn();
+  const newProfile = vi.fn();
+  const stopOld = subscribeMcpSettings("/repo", oldProfile, "old");
+  const stopNew = subscribeMcpSettings("/repo", newProfile, "new");
+  try {
+    await loadMcpSettings("/repo", false, { accountId: "old" });
+    await loadMcpSettings("/repo", false, { accountId: "new" });
+    health.get("new")!("new: local - Connected");
+    await vi.waitFor(() =>
+      expect(getCachedMcpSettings("/repo", "new")?.servers[0].status).toBe(
+        "Connected",
+      ),
+    );
+    const updates = newProfile.mock.calls.length;
+    health.get("old")!("old: local - Failed");
+    await vi.waitFor(() =>
+      expect(getCachedMcpSettings("/repo", "old")?.servers[0].status).toBe(
+        "Failed",
+      ),
+    );
+    expect(newProfile).toHaveBeenCalledTimes(updates);
+    expect(invoke).toHaveBeenCalledWith("mcp_discover", {
+      cwd: "/repo",
+      accountId: "new",
+    });
+    expect(invoke).toHaveBeenCalledWith("claude_mcp_list", {
+      cwd: "/repo",
+      accountId: "old",
+    });
+  } finally {
+    stopOld();
+    stopNew();
+  }
+});
+
 it("publishes discovery before slow health and shares both requests across consumers", async () => {
   let resolveHealth!: (output: string) => void;
   invoke.mockImplementation((command: string) =>

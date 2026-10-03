@@ -313,12 +313,17 @@ export function UsageFooter({
       className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {session?.harness === "pi" ? (
-        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
+        <PiUsage
+          key={`${session.id}:${session.model}`}
+          model={session.model}
+          now={now}
+        />
       ) : showUsage ? (
         <>
           {wantClaude ? (
             <UsageProviderChip
               limits={claude}
+              model={session?.model}
               now={now}
               accounts={claudeAccounts}
               accountId={claudeAccountId}

@@ -629,6 +629,9 @@ describe("list_models catalog", () => {
 });
 
 describe("helpers", () => {
+  it("retains provider notifications about usage credits", () => {
+    expect(statusTextFromSystem({ type: "system", subtype: "notification", message: "Fable is now using usage credits instead of your plan limits" })).toBe("Fable is now using usage credits instead of your plan limits");
+  });
   it("parses CLI version strings", () => {
     expect(parseClaudeVersion("2.1.233 (Claude Code)")).toBe("2.1.233");
   });
@@ -785,7 +788,10 @@ describe("contextFromResult", () => {
         "claude-sonnet-5": { contextWindow: 1000000, maxOutputTokens: 64000 },
       },
     };
-    expect(contextFromResult(rec)).toEqual({ used: 29608, window: 1000000 });
+    expect(contextFromResult(rec)).toEqual({
+      used: undefined,
+      window: 1000000,
+    });
   });
 
   it("uses the last iteration, since top-level usage sums the whole turn", () => {

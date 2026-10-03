@@ -46,13 +46,33 @@ const {
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
-import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TurnIntent,
+} from "../../../../features/sessions/model/session";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function emit(rec: Record<string, unknown>) {
+  if (rec.type === "system" && rec.subtype === "init") {
+    const request = parse().findLast(
+      (message) =>
+        (message.request as Record<string, unknown>)?.subtype === "initialize",
+    );
+    if (request)
+      onLine!(
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: request.request_id,
+            response: {},
+          },
+        }),
+      );
+  }
   onLine!(JSON.stringify(rec));
 }
 
@@ -99,7 +119,7 @@ async function startTurn(
   emit({ type: "system", subtype: "init", session_id: "sess_1" });
   emit({
     type: "control_response",
-    response: { subtype: "success", request_id: "monocode_1" },
+    response: { subtype: "success", request_id: "monocode_2" },
   });
   await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
   return { events, turn };
@@ -245,7 +265,8 @@ function emitBashFinished(taskId = "b1") {
     task_id: taskId,
     tool_use_id: "toolu_bash",
     status: "completed",
-    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+    summary:
+      'Background command "sleep 30 && echo done" completed (exit code 0)',
   });
 }
 
@@ -706,7 +727,9 @@ describe("claude task tools", () => {
       {
         key: "claude-tasks",
         providerSessionId: "sess_2",
-        items: [{ id: "1", text: "Other conversation", status: "pending" as const }],
+        items: [
+          { id: "1", text: "Other conversation", status: "pending" as const },
+        ],
       },
     ];
 
@@ -749,7 +772,9 @@ describe("claude task tools", () => {
     );
 
     const events: HarnessEvent[] = [];
-    const { turn } = await restartedTurn(events, { providerSessionId: "sess_2" });
+    const { turn } = await restartedTurn(events, {
+      providerSessionId: "sess_2",
+    });
     expect(spawned.at(-1)).toEqual(
       expect.arrayContaining(["--resume", "sess_2"]),
     );
@@ -808,7 +833,9 @@ describe("claude task tools", () => {
     await first.turn;
 
     const events: HarnessEvent[] = [];
-    const { turn: second } = await restartedTurn(events, { providerAccountId: "home" });
+    const { turn: second } = await restartedTurn(events, {
+      providerAccountId: "home",
+    });
     expect(spawned.at(-1)).not.toContain("--resume");
     emitTaskTool(
       "toolu_u1",
@@ -857,8 +884,8 @@ describe("claude assistant message boundaries", () => {
       update,
     ]);
     expect(events.filter((event) => event.type === "message.delta")).toEqual([
-      { type: "message.delta", text: progress },
-      { type: "message.delta", text: update },
+      { type: "message.delta", text: progress, append: true },
+      { type: "message.delta", text: update, append: true },
     ]);
   });
 });
@@ -1242,6 +1269,7 @@ describe("claude subagents", () => {
         summary: "Second agent finished",
       });
       emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      emitFollowUpTurn("Review finished.");
       await turn;
     },
   );
@@ -1293,6 +1321,7 @@ describe("claude subagents", () => {
       summary: "Found the auth entry points",
     });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    emitFollowUpTurn("Review finished.");
     await turn;
 
     const finished = events.reduce(
@@ -1779,9 +1808,9 @@ describe("claude background tasks", () => {
     });
     const items = groupTurnItems(session.blocks.slice(1));
     const group = items.at(-1);
-    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
-      "Running in background",
-    );
+    expect(
+      group?.type === "activity" && workSummaryLine(group.blocks, true),
+    ).toBe("Running in background");
   });
 
   it("lets the turn go if a finished task never wakes Claude", async () => {
@@ -1814,7 +1843,9 @@ describe("claude background tasks", () => {
       const request = m.request as Record<string, unknown> | undefined;
       return request ? [request] : [];
     });
-    expect(requests).toContainEqual({ subtype: "stop_task", task_id: "b7" });
+    expect(requests.some((request) => request.subtype === "interrupt")).toBe(
+      true,
+    );
     expect(requests.at(-1)).toEqual({ subtype: "interrupt" });
     expect(events.some((event) => event.type === "message.completed")).toBe(
       true,

@@ -564,6 +564,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       cwd={session.cwd}
       executionCwd={workCwd}
       sessionId={session.id}
+      providerAccountId={session.providerAccountId}
       compactSupported={canCompactHarnessContext(session.harness)}
       recents={recents}
       hideProjectPicker={

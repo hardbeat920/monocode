@@ -1,3 +1,4 @@
+import { selectedProviderAccountId } from "../../providers/model/providerAccounts";
 import {
   createPath,
   homeDir,
@@ -8,7 +9,10 @@ import {
 } from "../../../platform/tauri/fs";
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { joinPath } from "../../../shared/lib/paths";
-import { isLocalProject, normalizeProjectPath } from "../../projects/model/recents";
+import {
+  isLocalProject,
+  normalizeProjectPath,
+} from "../../projects/model/recents";
 import { isMarkdownBlockquotePosition } from "../../sessions/model/quoteDraft";
 import type { HarnessId } from "../../sessions/model/session";
 import { getHarness } from "../../../integrations/harness/core/registry";
@@ -120,6 +124,7 @@ export type SkillCatalogContext = {
   harness: HarnessId;
   cwd: string;
   sessionId?: string;
+  providerAccountId?: string;
 };
 
 type CatalogRequest = {
@@ -140,7 +145,7 @@ const catalogEntries = new Map<string, CatalogEntry>();
 
 export function skillCatalogKey(context: SkillCatalogContext): string {
   const sessionScoped = !!getHarness(context.harness)?.commands?.subscribe;
-  return `${context.harness}\0${normalizeProjectPath(context.cwd)}${sessionScoped && context.sessionId ? `\0${context.sessionId}` : ""}`;
+  return `${context.harness}\0${context.harness === "claude" ? (context.providerAccountId ?? selectedProviderAccountId("claude", context.cwd)) : ""}\0${normalizeProjectPath(context.cwd)}${sessionScoped && context.sessionId ? `\0${context.sessionId}` : ""}`;
 }
 
 export function hasNativeCommands(harness: HarnessId): boolean {
@@ -172,6 +177,13 @@ export function subscribeSkills(
       }));
       catalogEntries.set(key, {
         cwd: normalizeProjectPath(context.cwd),
+        ...(context.harness === "claude"
+          ? {
+              providerAccountId:
+                context.providerAccountId ??
+                selectedProviderAccountId(context.harness, context.cwd),
+            }
+          : {}),
         skills,
         loadedAt: Date.now(),
         retryAt: 0,
@@ -209,6 +221,13 @@ export function loadSkills(
   const normalized = {
     harness: context.harness,
     cwd: normalizeProjectPath(context.cwd),
+    ...(context.harness === "claude"
+      ? {
+          providerAccountId:
+            context.providerAccountId ??
+            selectedProviderAccountId(context.harness, context.cwd),
+        }
+      : {}),
     ...(context.sessionId ? { sessionId: context.sessionId } : {}),
   } satisfies SkillCatalogContext;
   const key = skillCatalogKey(normalized);
@@ -312,7 +331,10 @@ async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
     }));
   }
   const disabledPaths = loadDisabledSkillPaths();
-  const discovered = await listSkills(context.cwd, disabledPaths);
+  const discovered = await listSkills(context.cwd, disabledPaths, {
+    provider: context.harness,
+    accountId: context.providerAccountId,
+  });
   const disabled = disabledSkillPathSet();
   return mergeCatalog(discovered.filter((skill) => !disabled.has(skill.path)));
 }

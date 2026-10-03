@@ -274,3 +274,20 @@ describe("useProviderAccountUsage", () => {
     expect(fetches.claude).toHaveBeenCalledTimes(2);
   });
 });
+
+it("selects account headroom for the current model's weekly quota", () => {
+  const scoped = limits(window(10), window(20), {
+    scopedWeekly: [{ ...window(100), label: "Fable 5.1", model: "Fable 5.1" }],
+  });
+  expect(accountHeadroom(scoped, now, "claude:fable-5-1")).toBe(0);
+  expect(accountStatus(scoped, now, "claude:fable-5-1").tone).toBe("exhausted");
+  expect(accountHeadroom(scoped, now, "claude:sonnet-5")).toBe(80);
+  expect(
+    bestAlternativeAccount(
+      [account("spent")],
+      () => scoped,
+      now,
+      "claude:fable-5-1",
+    ),
+  ).toBeNull();
+});

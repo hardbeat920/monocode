@@ -83,22 +83,41 @@ fn normalize_path_for_compare(path: &str) -> String {
 /// same-name files can fall through.
 #[tauri::command(async)]
 pub fn list_skills(
+    app: tauri::AppHandle,
     cwd: String,
+    provider: Option<String>,
+    account_id: Option<String>,
     disabled_paths: Option<Vec<String>>,
 ) -> Result<Vec<DiscoveredSkill>, String> {
     let project = expand_home(&cwd);
     let home = dirs_home().map(PathBuf::from);
-    Ok(list_skills_from(
+    let claude_dir = if provider.as_deref() == Some("claude") {
+        crate::harness::provider_account_dir(&app, "claude", account_id.as_deref())?
+    } else {
+        crate::harness::configured_claude_dir()
+    };
+    Ok(list_skills_with_config(
         &project,
         home.as_deref(),
         disabled_paths.as_deref(),
+        claude_dir.as_deref(),
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn list_skills_from(
     project: &Path,
     home: Option<&Path>,
     disabled_paths: Option<&[String]>,
+) -> Vec<DiscoveredSkill> {
+    list_skills_with_config(project, home, disabled_paths, None)
+}
+
+fn list_skills_with_config(
+    project: &Path,
+    home: Option<&Path>,
+    disabled_paths: Option<&[String]>,
+    claude_dir: Option<&Path>,
 ) -> Vec<DiscoveredSkill> {
     let disabled_filter = DisabledFilter::new(disabled_paths);
     let mut by_name: HashMap<String, DiscoveredSkill> = HashMap::new();
@@ -145,7 +164,14 @@ pub(crate) fn list_skills_from(
     ] {
         add_root(project.join(dir), "project", source);
         if let Some(home) = home {
-            add_root(home.join(dir), "user", source);
+            let root = if source == "claude" {
+                claude_dir
+                    .map(|dir| dir.join("skills"))
+                    .unwrap_or_else(|| home.join(dir))
+            } else {
+                home.join(dir)
+            };
+            add_root(root, "user", source);
         }
     }
     if let Some(home) = home {
@@ -157,7 +183,11 @@ pub(crate) fn list_skills_from(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
-        for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
+        for (root, scope, namespace) in claude_plugin_skill_roots_with_config(
+            home,
+            project,
+            claude_dir.unwrap_or(&home.join(".claude")),
+        ) {
             add_namespaced_root(
                 &mut by_name,
                 root,
@@ -197,8 +227,12 @@ fn add_namespaced_root(
     }
 }
 
-fn claude_plugin_skill_roots(home: &Path, project: &Path) -> Vec<(PathBuf, &'static str, String)> {
-    let registry = home.join(".claude/plugins/installed_plugins.json");
+fn claude_plugin_skill_roots_with_config(
+    home: &Path,
+    project: &Path,
+    claude_dir: &Path,
+) -> Vec<(PathBuf, &'static str, String)> {
+    let registry = claude_dir.join("plugins/installed_plugins.json");
     let Ok(raw) = std::fs::read_to_string(registry) else {
         return Vec::new();
     };
@@ -211,7 +245,7 @@ fn claude_plugin_skill_roots(home: &Path, project: &Path) -> Vec<(PathBuf, &'sta
 
     let mut roots = Vec::new();
     for (plugin_id, installed) in plugins {
-        if !claude_plugin_enabled(home, project, plugin_id) {
+        if !claude_plugin_enabled_with_config(project, plugin_id, claude_dir) {
             continue;
         }
         let namespace = plugin_id
@@ -272,7 +306,12 @@ fn resolve_home_path(raw: &str, home: &Path) -> PathBuf {
     }
 }
 
+#[cfg(test)]
 fn claude_plugin_enabled(home: &Path, project: &Path, plugin_id: &str) -> bool {
+    claude_plugin_enabled_with_config(project, plugin_id, &home.join(".claude"))
+}
+
+fn claude_plugin_enabled_with_config(project: &Path, plugin_id: &str, claude_dir: &Path) -> bool {
     if let Some(enabled) = managed_plugin_setting(plugin_id) {
         return enabled;
     }
@@ -280,7 +319,7 @@ fn claude_plugin_enabled(home: &Path, project: &Path, plugin_id: &str) -> bool {
     for settings in [
         project_root.join(".claude/settings.local.json"),
         project_root.join(".claude/settings.json"),
-        home.join(".claude/settings.json"),
+        claude_dir.join("settings.json"),
     ] {
         if let Some(enabled) = plugin_setting(&settings, plugin_id) {
             return enabled;
@@ -590,6 +629,46 @@ mod tests {
         let dir = root.join(folder);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("SKILL.md"), body).unwrap();
+    }
+
+    #[test]
+    fn named_claude_profile_uses_its_skills_and_plugin_registry() {
+        let project = tmp("profile-project");
+        let home = tmp("profile-home");
+        let profile = tmp("profile");
+        write_skill(
+            &home.0.join(".claude/skills"),
+            "default-only",
+            "---\nname: default-only\ndescription: Default skill\n---\nDefault",
+        );
+        write_skill(
+            &profile.0.join("skills"),
+            "named-only",
+            "---\nname: named-only\ndescription: Named skill\n---\nNamed",
+        );
+        write_skill(
+            &project.0.join(".claude/skills"),
+            "project-only",
+            "---\nname: project-only\ndescription: Project skill\n---\nProject",
+        );
+        let plugin = profile.0.join("plugins/cache/community/workflow-kit/1.0.0");
+        write_skill(
+            &plugin.join("skills"),
+            "plugin-only",
+            "---\nname: plugin-only\ndescription: Profile plugin\n---\nPlugin",
+        );
+        let registry = serde_json::json!({"version": 2, "plugins": {"workflow-kit@community": [{"scope": "user", "installPath": plugin, "version": "1.0.0"}]}});
+        std::fs::write(
+            profile.0.join("plugins/installed_plugins.json"),
+            serde_json::to_vec(&registry).unwrap(),
+        )
+        .unwrap();
+        let found = list_skills_with_config(&project.0, Some(&home.0), None, Some(&profile.0));
+        let names: Vec<_> = found.iter().map(|skill| skill.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["named-only", "project-only", "workflow-kit:plugin-only"]
+        );
     }
 
     fn write_plugin_setting(root: &Path, file: &str, plugin_id: &str, enabled: bool) {

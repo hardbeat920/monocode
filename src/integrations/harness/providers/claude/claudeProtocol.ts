@@ -55,6 +55,7 @@ export type ClaudeControlRequest = {
   toolName?: string;
   input?: Record<string, unknown>;
   toolUseId?: string;
+  request?: Record<string, unknown>;
 };
 
 export type ClaudeMappedLine = {
@@ -250,6 +251,7 @@ export function buildClaudeSpawnArgs(input: {
   includePartialMessages?: boolean;
   maxTurns?: number;
   isolated?: boolean;
+  tools?: string[];
 }): string[] {
   const args = [
     "--output-format",
@@ -259,6 +261,7 @@ export function buildClaudeSpawnArgs(input: {
     "stream-json",
   ];
   if (!input.isolated) {
+    args.push("--forward-subagent-text");
     args.push("--permission-prompt-tool", "stdio");
   }
   if (input.includePartialMessages !== false) {
@@ -280,6 +283,7 @@ export function buildClaudeSpawnArgs(input: {
     args.push(`--setting-sources=${CLAUDE_SETTING_SOURCES}`);
     args.push("--settings", JSON.stringify(settings));
   }
+  if (input.tools) args.push("--tools", input.tools.join(","));
   if (input.model) args.push("--model", input.model);
   if (input.effort) args.push("--effort", input.effort);
   if (input.permissionMode) {
@@ -402,6 +406,7 @@ export function parseControlRequest(
   return {
     requestId,
     subtype,
+    request: nested ?? undefined,
     toolName: stringField(nested, "tool_name") ?? stringField(rec, "tool_name"),
     input,
     toolUseId:
@@ -467,7 +472,8 @@ export function statusTextFromSystem(
   if (stringField(rec, "type") !== "system") return undefined;
   const subtype = stringField(rec, "subtype") ?? "";
   const compact = subtype.startsWith("compact");
-  if (subtype !== "status" && !compact) return undefined;
+  if (subtype !== "status" && subtype !== "notification" && !compact)
+    return undefined;
   // Prose lives in `message`; `status` carries the bare lifecycle token.
   const text = (stringField(rec, "message") ?? "").trim();
   const notable =
@@ -482,7 +488,6 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
   error?: string;
 } {
   const subtype = stringField(rec, "subtype") ?? "";
-  if (subtype === "success") return { status: "completed" };
   const errors = Array.isArray(rec.errors)
     ? rec.errors.filter((item): item is string => typeof item === "string")
     : [];
@@ -496,8 +501,17 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
     return { status: "interrupted" };
   }
   if (joined.includes("cancel")) return { status: "cancelled" };
+  if (
+    subtype === "success" &&
+    rec.is_error !== true &&
+    (!terminal || terminal === "success" || terminal === "end_turn")
+  )
+    return { status: "completed" };
   const error = errors.find((item) => !item.startsWith("[ede_diagnostic]"));
-  return { status: "failed", error: error ?? "Claude turn failed." };
+  return {
+    status: "failed",
+    error: error ?? stringField(rec, "result") ?? "Claude turn failed.",
+  };
 }
 
 /**
@@ -807,7 +821,9 @@ export function assistantTextBlocks(rec: Record<string, unknown>): string[] {
 }
 
 /** Reasoning a message carries, used to mirror a subagent's thinking. */
-export function assistantThinkingBlocks(rec: Record<string, unknown>): string[] {
+export function assistantThinkingBlocks(
+  rec: Record<string, unknown>,
+): string[] {
   const message = asRecord(rec.message);
   const content = message?.content;
   if (!Array.isArray(content)) return [];
@@ -963,8 +979,7 @@ export function applyClaudeTaskTool(
   if (name === "TaskCreate") {
     const text = [input.subject, input.activeForm, input.description]
       .find(
-        (value): value is string =>
-          typeof value === "string" && !!value.trim(),
+        (value): value is string => typeof value === "string" && !!value.trim(),
       )
       ?.trim();
     const id = resultText.match(/Task #([^\s:]+)/)?.[1];
@@ -1140,10 +1155,10 @@ export function turnMetricsFromResult(
   const cacheableInput = inputTokens + cacheReadTokens + cacheWriteTokens;
   if (!inputTokens && !outputTokens && !cacheableInput) return undefined;
   return {
-    ...(inputTokens ? { inputTokens } : {}),
-    ...(outputTokens ? { outputTokens } : {}),
-    ...(cacheReadTokens ? { cacheReadTokens } : {}),
-    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     ...(cacheReported && cacheableInput
       ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
       : {}),
@@ -1173,20 +1188,26 @@ export function contextUsedFromAssistant(
  */
 export function contextFromResult(
   rec: Record<string, unknown>,
+  model?: string,
 ): { used?: number; window?: number } | undefined {
   const usage = asRecord(rec.usage);
   const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
   const last = asRecord(iterations[iterations.length - 1]);
-  const used = contextUsedFromUsage(last ?? usage);
+  const used = contextUsedFromUsage(last);
 
   let window: number | undefined;
   const modelUsage = asRecord(rec.modelUsage);
-  for (const entry of Object.values(modelUsage ?? {})) {
-    const contextWindow = numberField(asRecord(entry), "contextWindow");
-    if (contextWindow > 0) {
-      window = Math.max(window ?? 0, contextWindow);
-    }
-  }
+  const entries = Object.entries(modelUsage ?? {});
+  const entry = model
+    ? (modelUsage?.[model] ??
+      entries.find(
+        ([id]) => id.replace(/\[1m\]$/i, "") === model.replace(/\[1m\]$/i, ""),
+      )?.[1])
+    : entries.length === 1
+      ? entries[0][1]
+      : undefined;
+  const contextWindow = numberField(asRecord(entry), "contextWindow");
+  if (contextWindow > 0) window = contextWindow;
 
   if (!used && !window) return undefined;
   return { used: used > 0 ? used : undefined, window };

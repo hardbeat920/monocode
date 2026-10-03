@@ -37,6 +37,13 @@ export type ProviderRateLimits = {
   monthly: RateLimitWindow | null;
   /** Codex-only banked rate-limit reset rewards, when supplied by app-server. */
   resetCredits: RateLimitResetCredits | null;
+  scopedWeekly?: Array<RateLimitWindow & { label: string; model: string }>;
+  extraUsage?: {
+    enabled: boolean;
+    usedCredits: number | null;
+    monthlyLimit: number | null;
+    usedPercent: number | null;
+  };
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
@@ -219,14 +226,33 @@ export function rateLimitWindowTooltip(
 /** When a used-up window resets; the later one when several are spent. */
 export function exhaustedWindowResetAt(
   limits: ProviderRateLimits,
+  model?: string,
 ): number | null {
   let latest: number | null = null;
-  for (const window of [limits.session, limits.weekly, limits.monthly]) {
+  for (const window of relevantRateLimitWindows(limits, model)) {
     if (!window || window.usedPercent < 100 || window.resetsAt == null)
       continue;
     latest = Math.max(latest ?? 0, window.resetsAt);
   }
   return latest;
+}
+
+export function relevantRateLimitWindows(
+  limits: ProviderRateLimits,
+  model?: string,
+): RateLimitWindow[] {
+  const selected = model?.toLowerCase() ?? "";
+  const scoped = (limits.scopedWeekly ?? []).filter((window) => {
+    if (!selected) return true;
+    const family = window.model
+      .toLowerCase()
+      .replace(/^claude[:-]/, "")
+      .split(/[- \d]/)[0];
+    return !!family && selected.includes(family);
+  });
+  return [limits.session, limits.weekly, limits.monthly, ...scoped].filter(
+    (window): window is RateLimitWindow => window != null,
+  );
 }
 
 export function parseResetTimestamp(value: unknown): number | null {
@@ -286,8 +312,47 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   if (!rec) {
     return errorRateLimits("claude", "Claude usage response was empty");
   }
+  const scopedWeekly: NonNullable<ProviderRateLimits["scopedWeekly"]> = [];
+  for (const [key, label] of [
+    ["seven_day_opus", "Opus"],
+    ["seven_day_sonnet", "Sonnet"],
+    ["seven_day_fable", "Fable"],
+  ]) {
+    const window = mapUsageWindow(rec[key], WEEKLY_WINDOW_MINUTES);
+    if (window) scopedWeekly.push({ ...window, label, model: label });
+  }
+  for (const raw of Array.isArray(rec.limits) ? rec.limits : []) {
+    const limit = asRecord(raw);
+    const scopedModel = asRecord(asRecord(limit?.scope)?.model) ?? {};
+    const label = stringField(scopedModel, "display_name");
+    if (limit?.kind !== "weekly_scoped" || !label) continue;
+    const window = mapUsageWindow(
+      { utilization: limit.percent, resets_at: limit.resets_at },
+      WEEKLY_WINDOW_MINUTES,
+    );
+    if (!window) continue;
+    const model = stringField(scopedModel, "id") ?? label;
+    const index = scopedWeekly.findIndex(
+      (row) => row.label.toLowerCase() === label.toLowerCase(),
+    );
+    const row = { ...window, label, model };
+    if (index < 0) scopedWeekly.push(row);
+    else scopedWeekly[index] = row;
+  }
+  const extra = asRecord(rec.extra_usage);
   return {
     provider: "claude",
+    ...(scopedWeekly.length ? { scopedWeekly } : {}),
+    ...(extra
+      ? {
+          extraUsage: {
+            enabled: extra.is_enabled === true,
+            usedCredits: numberField(extra, "used_credits"),
+            monthlyLimit: numberField(extra, "monthly_limit"),
+            usedPercent: numberField(extra, "utilization"),
+          },
+        }
+      : {}),
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
     monthly: null,

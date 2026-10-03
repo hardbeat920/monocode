@@ -41,7 +41,9 @@ export function AccountStatusLabel({
   return (
     <span
       className={`inline-flex min-w-0 items-center gap-1.5 ${className}`}
-      title={status.detail ? `${status.label} · ${status.detail}` : status.label}
+      title={
+        status.detail ? `${status.label} · ${status.detail}` : status.label
+      }
     >
       <span
         className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[status.tone]}`}
@@ -87,6 +89,10 @@ export function meterWindows(
     limits?.session ? { title: "5h", window: limits.session } : null,
     limits?.weekly ? { title: "Weekly", window: limits.weekly } : null,
     limits?.monthly ? { title: "Monthly", window: limits.monthly } : null,
+    ...(limits?.scopedWeekly ?? []).map((window) => ({
+      title: `Weekly ${window.label}`,
+      window,
+    })),
   ].filter((entry) => entry != null);
 }
 
