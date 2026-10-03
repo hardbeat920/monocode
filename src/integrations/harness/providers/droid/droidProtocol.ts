@@ -1,6 +1,15 @@
-import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
-import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
-import type { Attachment, RuntimeMode } from "../../../../features/sessions/model/session";
+import {
+  promptBlocks,
+  type PromptContentBlock,
+} from "../../../../features/sessions/model/attachments";
+import type {
+  AgentModel,
+  ModelSetting,
+} from "../../../../features/sessions/model/models";
+import type {
+  Attachment,
+  RuntimeMode,
+} from "../../../../features/sessions/model/session";
 
 export const DROID_AUTH_HELP =
   "Sign in by running `droid` once in Terminal and using /login, or set FACTORY_API_KEY, then retry.";
@@ -75,7 +84,9 @@ export function readDroidConfigOptions(raw: unknown): DroidConfigOption[] {
 }
 
 /** Config options from a session/new result or a `config_option_update`. */
-export function droidConfigOptionsFrom(value: unknown): DroidConfigOption[] | null {
+export function droidConfigOptionsFrom(
+  value: unknown,
+): DroidConfigOption[] | null {
   const rec = asRecord(value);
   const update = asRecord(rec?.update) ?? rec;
   const raw = update?.configOptions ?? update?.config_options;

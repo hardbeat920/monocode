@@ -28,7 +28,7 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 > - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 > - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
 > - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - macOS/Linux: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; Windows PowerShell: `iex (irm https://hermes-agent.nousresearch.com/install.ps1)`; then run `hermes model`
-> - [Factory Droid](https://docs.factory.ai/cli/getting-started/overview) - `curl -fsSL https://app.factory.ai/cli | sh`, then run `droid` once to sign in (or set `FACTORY_API_KEY`)
+> - [Factory Droid](docs/factory-droid.md) - `curl -fsSL https://app.factory.ai/cli | sh`, then run `droid` once to sign in. You can also set `FACTORY_API_KEY`.
 
 macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg), open it, drag MonoCode to Applications.
 

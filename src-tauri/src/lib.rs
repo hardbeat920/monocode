@@ -452,6 +452,7 @@ pub fn run() {
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
+            rate_limits::fetch_droid_usage,
             rate_limits::fetch_opencode_go_usage,
             pty::pty_spawn,
             pty::pty_write,

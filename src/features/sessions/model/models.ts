@@ -254,6 +254,7 @@ const EMPTY_MODELS: AgentModel[] = [];
 
 let overlays: Partial<Record<HarnessId, AgentModel[]>> = {};
 let overlayDefaults: Partial<Record<HarnessId, string>> = {};
+const incompleteCatalogs = new Set<HarnessId>();
 let catalogVersion = 0;
 const listeners = new Set<() => void>();
 
@@ -276,9 +277,25 @@ export function getModelSnapshot(): number {
   return catalogVersion;
 }
 
-export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
+export function setHarnessModels(
+  harness: HarnessId,
+  models: AgentModel[],
+  complete = true,
+) {
   if (models.length === 0) return;
-  overlays = { ...overlays, [harness]: models };
+  if (complete) incompleteCatalogs.delete(harness);
+  else incompleteCatalogs.add(harness);
+  overlays = {
+    ...overlays,
+    [harness]: models.map((model) => {
+      const previous = overlays[harness]?.find(
+        (entry) => entry.id === model.id,
+      );
+      return !complete && !model.settings && previous?.settings
+        ? { ...model, settings: previous.settings }
+        : model;
+    }),
+  };
   overlayDefaults = {
     ...overlayDefaults,
     [harness]: pickDefaultId(harness, models),
@@ -288,12 +305,13 @@ export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
 
 /** True after a live CLI catalog has replaced the built-in fallback list. */
 export function hasLiveCatalog(harness: HarnessId): boolean {
-  return overlays[harness] != null;
+  return overlays[harness] != null && !incompleteCatalogs.has(harness);
 }
 
 /** Test seam. */
 export function resetHarnessModelOverlays() {
   overlays = {};
+  incompleteCatalogs.clear();
   overlayDefaults = {};
   emit();
 }
@@ -358,6 +376,21 @@ function lookupModel(id: string): AgentModel | undefined {
 
 export function resolveModel(harness: HarnessId, id?: string): AgentModel {
   const available = modelsFor(harness);
+  if (
+    harness === "droid" &&
+    !hasLiveCatalog(harness) &&
+    id?.startsWith("droid:") &&
+    id !== "droid:default"
+  ) {
+    return (
+      findModel(id) ?? {
+        id,
+        harness,
+        name: nativeModelId(id),
+        nativeId: nativeModelId(id),
+      }
+    );
+  }
   if (id) {
     const exact = findModel(id);
     if (exact && exact.harness === harness) return exact;
@@ -519,7 +552,11 @@ export function mergeModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
-  if (modelsFor(model.harness).length === 0) return { ...current };
+  if (
+    modelsFor(model.harness).length === 0 ||
+    (model.harness === "droid" && !hasLiveCatalog("droid"))
+  )
+    return { ...current };
   const next = defaultModelSettings(model);
   if (!current) return next;
   for (const setting of model.settings ?? []) {
@@ -572,7 +609,11 @@ export function preferredModelSettings(
   model: AgentModel,
   current?: Record<string, string>,
 ): Record<string, string> {
-  if (modelsFor(model.harness).length === 0) return { ...current };
+  if (
+    modelsFor(model.harness).length === 0 ||
+    (model.harness === "droid" && !hasLiveCatalog("droid"))
+  )
+    return { ...current };
   return mergeModelSettings(model, {
     ...current,
     ...loadLastModelSettings(),

@@ -16,9 +16,11 @@ export type AcpHandlers = {
   ) => void | Promise<void>;
 };
 
-/** ACP JSON-RPC client — thin wrapper preserving the Cursor numeric-id API. */
+/** Numeric UI approval ids map back to the original JSON-RPC request ids. */
 export class AcpClient {
   private readonly rpc: JsonRpcClient;
+  private readonly requestIds = new Map<number, JsonRpcId>();
+  private nextRequestId = -1;
 
   constructor(
     sessionId: string,
@@ -28,9 +30,16 @@ export class AcpClient {
       onNotification: (method, params) =>
         this.handlers.onNotification?.(method, params),
       onRequest: (id, method, params) => {
-        const numeric =
-          typeof id === "number" ? id : Number(id);
-        void this.handlers.onRequest?.(numeric, method, params);
+        let numeric = typeof id === "number" ? id : this.nextRequestId--;
+        while (this.requestIds.has(numeric)) numeric = this.nextRequestId--;
+        this.requestIds.set(numeric, id);
+        try {
+          void Promise.resolve(
+            this.handlers.onRequest?.(numeric, method, params),
+          ).catch(() => undefined);
+        } catch {
+          return;
+        }
       },
     };
     this.rpc = new JsonRpcClient(sessionId, rpcHandlers, {
@@ -39,12 +48,19 @@ export class AcpClient {
     });
   }
 
+  private rawId(id: number): JsonRpcId {
+    const raw = this.requestIds.get(id) ?? id;
+    this.requestIds.delete(id);
+    return raw;
+  }
+
   pushLine(line: string) {
     this.rpc.pushLine(line);
   }
 
   close(error?: Error) {
     this.rpc.close(error);
+    this.requestIds.clear();
   }
 
   rejectPending(error?: Error) {
@@ -60,13 +76,13 @@ export class AcpClient {
   }
 
   respond(id: number, result: unknown): Promise<void> {
-    return this.rpc.respond(id as JsonRpcId, result);
+    return this.rpc.respond(this.rawId(id), result);
   }
 
   respondError(
     id: number,
     error: { code: number; message: string; data?: unknown },
   ): Promise<void> {
-    return this.rpc.respondError(id as JsonRpcId, error);
+    return this.rpc.respondError(this.rawId(id), error);
   }
 }

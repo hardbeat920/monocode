@@ -1,5 +1,8 @@
 import { homeDir } from "../../../../platform/tauri/fs";
-import { setHarnessModels, type AgentModel } from "../../../../features/sessions/model/models";
+import {
+  setHarnessModels,
+  type AgentModel,
+} from "../../../../features/sessions/model/models";
 import { AcpClient } from "../../core/acp";
 import {
   killChild,
@@ -26,8 +29,8 @@ let inflight: Promise<void> | null = null;
 
 export function refreshDroidCatalog(): Promise<void> {
   if (inflight) return inflight;
-  inflight = discoverDroidModels((models) => {
-    if (models.length > 0) setHarnessModels("droid", models);
+  inflight = probeDroidModels((models, complete) => {
+    if (models.length > 0) setHarnessModels("droid", models, complete);
   })
     .catch((error: unknown) => {
       console.debug("[monocode] droid catalog", error);
@@ -38,19 +41,32 @@ export function refreshDroidCatalog(): Promise<void> {
   return inflight;
 }
 
+/** Resolves with the full catalog, including each model's effort choices. */
+export async function discoverDroidModels(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
+  let latest: AgentModel[] = [];
+  await probeDroidModels((models) => {
+    latest = models;
+  }, workingDirectory);
+  return latest;
+}
+
 /**
  * Droid lists its models on session/new but only reports reasoning levels
  * for the selected one. Publish the plain list first, then walk the models on
  * the throwaway probe session (a local switch, no inference) to attach each
  * model's own effort choices.
  */
-async function discoverDroidModels(
-  publish: (models: AgentModel[]) => void,
+async function probeDroidModels(
+  publish: (models: AgentModel[], complete: boolean) => void,
+  workingDirectory?: string,
 ): Promise<void> {
   const { path } = await resolveDroidBinary();
-  const cwd = await homeDir();
+  const cwd = workingDirectory ?? (await homeDir());
+  const probeId = `${PROBE_ID}-${crypto.randomUUID()}`;
   let latestConfig: DroidConfigOption[] | null = null;
-  const acp = new AcpClient(PROBE_ID, {
+  const acp = new AcpClient(probeId, {
     onNotification: (method, params) => {
       if (method !== "session/update") return;
       const options = droidConfigOptionsFrom(params);
@@ -68,18 +84,18 @@ async function discoverDroidModels(
 
   const stop = async () => {
     acp.close();
-    unwatchChild(PROBE_ID);
-    await killChild(PROBE_ID).catch(() => undefined);
+    unwatchChild(probeId);
+    await killChild(probeId).catch(() => undefined);
   };
 
   watchChild(
-    PROBE_ID,
+    probeId,
     (line) => acp.pushLine(line),
     () => acp.close(new Error("Droid catalog probe exited")),
   );
 
   try {
-    await spawnChild(PROBE_ID, path, DROID_ACP_ARGS, cwd);
+    await spawnChild(probeId, path, DROID_ACP_ARGS, cwd, undefined, "droid");
     await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {
@@ -101,12 +117,15 @@ async function discoverDroidModels(
           REQUEST_TIMEOUT_MS,
         );
         const models = modelsFromDroidSession(created);
-        publish(models);
+        publish(models, false);
         const sessionId = droidSessionId(created);
         if (!sessionId || models.length === 0) return;
 
         const efforts = new Map<string, DroidConfigOption>();
-        const initial = droidEffortConfig(droidConfigOptionsFrom(created) ?? []);
+        let complete = true;
+        const initial = droidEffortConfig(
+          droidConfigOptionsFrom(created) ?? [],
+        );
         for (const model of models) {
           const nativeId = model.nativeId ?? "";
           if (!nativeId) continue;
@@ -122,15 +141,17 @@ async function discoverDroidModels(
               (await settledConfig(() => latestConfig));
             const effort = options ? droidEffortConfig(options) : undefined;
             if (effort) efforts.set(nativeId, effort);
+            if (!options) complete = false;
+            publish(modelsFromDroidSession(created, efforts), false);
           } catch {
-            // Keep the model without effort choices rather than drop it.
+            complete = false;
           }
         }
         if (efforts.size === 0 && initial) {
           const current = models[0]?.nativeId;
           if (current) efforts.set(current, initial);
         }
-        publish(modelsFromDroidSession(created, efforts));
+        publish(modelsFromDroidSession(created, efforts), complete);
       },
       () => {
         void stop();

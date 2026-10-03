@@ -566,7 +566,11 @@ import {
 } from "../features/connections/model/connections";
 import { buildRemotePlan, remoteSessionActions } from "../features/connections/model/remoteSessionActions";
 import { remoteSessionState } from "../features/connections/model/remoteSessionState";
-import { remotePath, remoteProjectFor } from "../features/connections/model/remoteProjects";
+import {
+  parseRemotePath,
+  remotePath,
+  remoteProjectFor,
+} from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
@@ -1691,7 +1695,8 @@ function Workspace({
     if (
       active?.harness === "claude" ||
       active?.harness === "codex" ||
-      active?.harness === "opencode"
+      active?.harness === "opencode" ||
+      active?.harness === "droid"
     ) {
       return [active.harness];
     }
@@ -1703,6 +1708,7 @@ function Workspace({
       id: active.id,
       harness: active.harness,
       model: active.model,
+      environmentId: parseRemotePath(active.cwd)?.environmentId ?? "local",
       authRequired: latestTurnNeedsHarnessLogin(active.blocks),
       providerAccountId:
         active.providerAccountId ??
@@ -1710,7 +1716,14 @@ function Workspace({
           ? DEFAULT_PROVIDER_ACCOUNT_ID
           : undefined),
     };
-  }, [active?.id, active?.harness, active?.model, active?.blocks, active?.providerAccountId]);
+  }, [
+    active?.id,
+    active?.harness,
+    active?.model,
+    active?.blocks,
+    active?.providerAccountId,
+    active?.cwd,
+  ]);
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||

@@ -1,11 +1,28 @@
-import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
-import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
-import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
+import {
+  promptBlocks,
+  type PromptContentBlock,
+} from "../../../../features/sessions/model/attachments";
+import type {
+  AgentModel,
+  ModelSetting,
+  ModelSettingChoice,
+} from "../../../../features/sessions/model/models";
+import type {
+  Attachment,
+  RuntimeMode,
+  ToolPreview,
+} from "../../../../features/sessions/model/session";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
 import { acpAgentInfo } from "../../core/acpSubagents";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
-import type { UserQuestion, UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
-import { questionsFromUnknown, selectedAnswerLabels } from "../../../../features/sessions/model/userQuestion";
+import type {
+  UserQuestion,
+  UserQuestionReply,
+} from "../../../../features/sessions/model/userQuestion";
+import {
+  questionsFromUnknown,
+  selectedAnswerLabels,
+} from "../../../../features/sessions/model/userQuestion";
 import {
   composeToolTitle,
   extractSearchQuery,
@@ -54,6 +71,7 @@ export type GrokPermissionRequest = {
   callId?: string;
   preview?: ToolPreview;
   optionIds: string[];
+  optionKinds: Record<string, string>;
 };
 
 export type GrokAskQuestion = UserQuestion;
@@ -181,59 +199,52 @@ export function pickAutoOption(
   runtimeMode: RuntimeMode,
   kind: string | undefined,
   optionIds: string[],
+  optionKinds: Record<string, string> = {},
 ): string | null {
-  if (optionIds.length === 0) return null;
-  const tool = (kind ?? "").toLowerCase();
   if (runtimeMode === "supervised") return null;
+  // Delete, move, switch_mode and unresolved kinds require review.
   if (
     runtimeMode === "auto-accept-edits" &&
-    (tool === "execute" || tool === "other" || tool === "fetch")
-  ) {
+    !["read", "search", "edit"].includes(kind ?? "")
+  )
     return null;
-  }
-  if (runtimeMode === "full-access") {
-    return pickOption(optionIds, [
-      "allow-always",
-      "allow_always",
-      "allow-once",
-      "allow_once",
-      "allow",
-    ]);
-  }
-  return pickOption(optionIds, [
-    "allow-once",
-    "allow_once",
-    "allow-always",
-    "allow_always",
-    "allow",
-  ]);
+  return permissionOptionId("allow", optionIds, optionKinds);
 }
 
 export function permissionOptionId(
   decision: ApprovalDecision,
   optionIds: string[],
-): string {
-  if (decision === "allow") {
-    return (
-      pickOption(optionIds, [
-        "allow-once",
-        "allow_once",
-        "allow-always",
-        "allow_always",
-        "allow",
-      ]) ?? "allow-once"
-    );
+  optionKinds: Record<string, string> = {},
+): string | null {
+  const kinds =
+    decision === "allow"
+      ? ["allow_once", "allow_always"]
+      : ["reject_once", "reject_always"];
+  for (const kind of kinds) {
+    const id = optionIds.find((id) => optionKinds[id] === kind);
+    if (id) return id;
   }
-  return (
-    pickOption(optionIds, [
-      "reject-once",
-      "reject_once",
-      "reject-always",
-      "reject_always",
-      "reject",
-      "deny",
-    ]) ?? "reject-once"
+  const preferred =
+    decision === "allow"
+      ? ["allow-once", "allow_once", "allow-always", "allow_always", "allow"]
+      : [
+          "reject-once",
+          "reject_once",
+          "reject-always",
+          "reject_always",
+          "reject",
+          "deny",
+        ];
+  return pickOption(
+    optionIds.filter((id) => !optionKinds[id]),
+    preferred,
   );
+}
+
+export function permissionOutcome(optionId: string | null) {
+  return optionId
+    ? { outcome: "selected", optionId }
+    : { outcome: "cancelled" };
 }
 
 export function permissionRequestFromAcp(
@@ -283,6 +294,15 @@ export function permissionRequestFromAcp(
       stringField(rec ?? {}, "toolCallId"),
     preview: mergePreview(preview, grok.path, grok.query, kind),
     optionIds,
+    optionKinds: Object.fromEntries(
+      options.flatMap((item) => {
+        const option = asRecord(item);
+        const id = option?.optionId ?? option?.option_id;
+        return typeof id === "string" && typeof option?.kind === "string"
+          ? [[id, option.kind]]
+          : [];
+      }),
+    ),
   };
 }
 

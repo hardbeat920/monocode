@@ -19,7 +19,11 @@ const SESSION_NEW = {
   sessionId: "06480ace-4dc2-480f-9b83-950224e10c22",
   models: {
     availableModels: [
-      { modelId: "auto", name: "Auto Model", description: "1x Factory token rate" },
+      {
+        modelId: "auto",
+        name: "Auto Model",
+        description: "1x Factory token rate",
+      },
       { modelId: "claude-opus-5-5", name: "Opus 5.5" },
       { modelId: "gpt-6-luna", name: "GPT-6 Luna" },
     ],
@@ -150,7 +154,9 @@ describe("Factory Droid ACP protocol", () => {
       "model",
       "reasoning_effort",
     ]);
-    expect(droidConfigOptionsFrom({ update: { sessionUpdate: "x" } })).toBeNull();
+    expect(
+      droidConfigOptionsFrom({ update: { sessionUpdate: "x" } }),
+    ).toBeNull();
   });
 
   it("maps MonoCode effort values onto the model's levels", () => {
@@ -211,7 +217,9 @@ describe("Factory Droid ACP protocol", () => {
         toolCall: {
           toolCallId: "t2",
           kind: "switch_mode",
-          content: [{ type: "content", content: { type: "text", text: "Spec body" } }],
+          content: [
+            { type: "content", content: { type: "text", text: "Spec body" } },
+          ],
         },
       }),
     ).toBe("Spec body");

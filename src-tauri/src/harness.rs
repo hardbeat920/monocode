@@ -1929,6 +1929,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "omp" => resolve_omp(),
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
+        "droid" => resolve_droid(),
         "antigravity" => resolve_antigravity(),
         _ => None,
     }
@@ -1974,6 +1975,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
+        "droid" => &["droid"],
         "antigravity" => &["agy_acp_server.par"],
         _ => {
             return Err(format!(
