@@ -37,6 +37,7 @@ mod remote;
 mod remote_ssh;
 mod search;
 mod session_store;
+mod shared_skills;
 mod skills;
 pub mod ssh_askpass;
 #[cfg(target_os = "windows")]
@@ -413,6 +414,11 @@ pub fn run() {
             fs::claude_shell_commands,
             fs::write_text_file,
             skills::list_skills,
+            shared_skills::shared_skills_snapshot,
+            shared_skills::shared_skills_import,
+            shared_skills::shared_skills_apply,
+            shared_skills::shared_skills_set_shared,
+            shared_skills::shared_skills_repair,
             search::search_project,
             search::cancel_project_search,
             cursor_store::cursor_tool_calls,

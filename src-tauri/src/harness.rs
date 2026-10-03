@@ -25,7 +25,7 @@ const SSE_END_EVENT: &str = "harness-sse-end";
 
 const DEFAULT_PROVIDER_ACCOUNT_ID: &str = "default";
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessAccount {
     provider: String,
@@ -110,6 +110,7 @@ struct LiveSse {
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
     epochs: HashMap<String, u64>,
+    account_generations: HashMap<HarnessAccount, u64>,
 }
 
 pub struct HarnessHost {
@@ -143,6 +144,7 @@ impl HarnessHost {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
                 epochs: HashMap::new(),
+                account_generations: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
             runtime_binary_paths: Mutex::new(None),
@@ -158,14 +160,49 @@ impl HarnessHost {
         self.lock_inner().children.get(session_id).cloned()
     }
 
-    /// Stamp this spawn and drop any child already registered under the id.
-    fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
+    /// Stamp before waiting for account preparation so Stop can cancel that wait.
+    fn stamp_spawn(
+        &self,
+        session_id: &str,
+        account: Option<&HarnessAccount>,
+    ) -> (u64, u64, Option<(HarnessAccount, u64)>) {
         let mut inner = self.lock_inner();
         let kill_all = self.kill_all_gen.load(Ordering::SeqCst);
         let epoch = inner.epochs.entry(session_id.to_string()).or_insert(0);
         *epoch += 1;
         let epoch = *epoch;
-        let prev = inner.children.remove(session_id);
+        let account = account.map(|account| {
+            let generation = inner.account_generations.get(account).copied().unwrap_or(0);
+            (account.clone(), generation)
+        });
+        (epoch, kill_all, account)
+    }
+
+    fn start_stamped_spawn(
+        &self,
+        session_id: &str,
+        epoch: u64,
+        kill_all: u64,
+        account: Option<&(HarnessAccount, u64)>,
+    ) -> Result<Option<Arc<LiveChild>>, String> {
+        let mut inner = self.lock_inner();
+        if self.kill_all_gen.load(Ordering::SeqCst) != kill_all
+            || inner.epochs.get(session_id) != Some(&epoch)
+            || account.is_some_and(|(account, generation)| {
+                inner.account_generations.get(account).copied().unwrap_or(0) != *generation
+            })
+        {
+            return Err(SPAWN_CANCELLED.into());
+        }
+        Ok(inner.children.remove(session_id))
+    }
+
+    #[cfg(all(test, unix))]
+    fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
+        let (epoch, kill_all, _) = self.stamp_spawn(session_id, None);
+        let prev = self
+            .start_stamped_spawn(session_id, epoch, kill_all, None)
+            .unwrap();
         (epoch, kill_all, prev)
     }
 
@@ -214,6 +251,11 @@ impl HarnessHost {
     fn kill_account(&self, provider: &str, account_id: &str) {
         let children: Vec<(String, Arc<LiveChild>)> = {
             let mut inner = self.lock_inner();
+            let account = HarnessAccount {
+                provider: provider.into(),
+                id: account_id.into(),
+            };
+            *inner.account_generations.entry(account).or_insert(0) += 1;
             let session_ids: Vec<String> = inner
                 .children
                 .iter()
@@ -819,11 +861,41 @@ pub fn harness_free_port() -> Result<u16, String> {
 /// Off the main thread: fork/exec, and `apply_gui_env` can wait on the first
 /// login-shell read. Callers await this before writing to the child. Kill can
 /// still race the fork, so a cancelled spawn must not reinsert the child.
-#[tauri::command(async)]
+#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn harness_spawn(
+pub async fn harness_spawn(
     app: AppHandle,
-    host: State<'_, HarnessHost>,
+    session_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    account: Option<HarnessAccount>,
+    binary_provider: Option<String>,
+    binary_path: Option<String>,
+) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let host_app = app.clone();
+        let host = host_app.state::<HarnessHost>();
+        harness_spawn_sync(
+            app,
+            &host,
+            session_id,
+            command,
+            args,
+            cwd,
+            account,
+            binary_provider,
+            binary_path,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn harness_spawn_sync(
+    app: AppHandle,
+    host: &HarnessHost,
     session_id: String,
     command: String,
     args: Vec<String>,
@@ -844,7 +916,24 @@ pub fn harness_spawn(
     }
 
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
+    let (epoch, kill_all, account_stamp) = host.stamp_spawn(&session_id, account.as_ref());
+    let lifecycle = match crate::shared_skills::lock_account_lifecycle(&app) {
+        Ok(lifecycle) => Some(lifecycle),
+        Err(error)
+            if account
+                .as_ref()
+                .is_some_and(|account| account.id != DEFAULT_PROVIDER_ACCOUNT_ID) =>
+        {
+            return Err(format!(
+                "Cannot prepare provider account lifecycle: {error}"
+            ));
+        }
+        Err(error) => {
+            eprintln!("Shared skill exports were not updated: {error}. Open Settings > Skills to repair sharing.");
+            None
+        }
+    };
+    let prev = host.start_stamped_spawn(&session_id, epoch, kill_all, account_stamp.as_ref())?;
     if let Some(prev) = prev {
         terminate(prev.pid);
     }
@@ -857,6 +946,23 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    if !args
+        .iter()
+        .any(|arg| arg == "--bare" || arg == "--no-skills")
+    {
+        if let Some(lifecycle) = lifecycle.as_ref() {
+            if let Some(warning) = crate::shared_skills::prepare_child(
+                lifecycle,
+                &cmd,
+                &workdir,
+                binary_provider
+                    .as_deref()
+                    .or_else(|| account.as_ref().map(|account| account.provider.as_str())),
+            ) {
+                eprintln!("Shared skill exports were not updated: {warning}. Open Settings > Skills to repair sharing.");
+            }
+        }
+    }
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -894,6 +1000,7 @@ pub fn harness_spawn(
         });
         return Err(SPAWN_CANCELLED.to_string());
     }
+    drop(lifecycle);
 
     let stdout_app = app.clone();
     let stdout_id = session_id.clone();
@@ -994,15 +1101,30 @@ pub(crate) fn provider_account_path(
         .join(account_id))
 }
 
-#[tauri::command(async)]
-pub fn provider_account_remove(
+#[tauri::command]
+pub async fn provider_account_remove(
     app: AppHandle,
-    host: State<'_, HarnessHost>,
     provider: String,
     account_id: String,
 ) -> Result<(), String> {
-    let dir = provider_account_path(&app, &provider, &account_id)?;
-    host.kill_account(&provider, &account_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let host = app.state::<HarnessHost>();
+        provider_account_remove_sync(&app, &host, &provider, &account_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn provider_account_remove_sync(
+    app: &AppHandle,
+    host: &HarnessHost,
+    provider: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    let dir = provider_account_path(app, provider, account_id)?;
+    let lifecycle = crate::shared_skills::lock_account_lifecycle(app)?;
+    crate::shared_skills::retire_account(&lifecycle, &dir)?;
+    host.kill_account(provider, account_id);
 
     #[cfg(target_os = "macos")]
     if provider == "claude" {
@@ -1063,6 +1185,69 @@ fn apply_provider_account(
         _ => unreachable!("provider_account_dir validates the provider"),
     }
     Ok(())
+}
+
+/// Resolve existing symlink prefixes without creating a configuration directory.
+pub(crate) fn resolve_provider_home(path: &Path, cwd: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            component => {
+                resolved.push(component.as_os_str());
+                match std::fs::symlink_metadata(&resolved) {
+                    Ok(_) => {
+                        resolved = std::fs::canonicalize(&resolved).map_err(|error| {
+                            format!(
+                                "Cannot resolve provider directory {}: {error}",
+                                resolved.display()
+                            )
+                        })?
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!(
+                            "Cannot inspect provider directory {}: {error}",
+                            resolved.display()
+                        ))
+                    }
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+pub(crate) fn child_env_path(
+    command: &Command,
+    key: &str,
+    cwd: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let explicit = command.get_envs().find(|(name, _)| {
+        if cfg!(windows) {
+            name.to_string_lossy().eq_ignore_ascii_case(key)
+        } else {
+            *name == std::ffi::OsStr::new(key)
+        }
+    });
+    let value = match explicit {
+        Some((_, value)) => value.map(|value| value.to_os_string()),
+        None => std::env::var_os(key),
+    };
+    match value.filter(|value| !value.is_empty()) {
+        Some(value) => resolve_provider_home(Path::new(&value), cwd).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// A child that stops draining stdin can block `write_all` for minutes, so the
@@ -3042,6 +3227,50 @@ mod tests {
         assert!(host.spawn_stamp_current("s1", epoch, kill_all));
         host.kill_session("s1");
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
+    }
+
+    #[test]
+    fn stopped_spawn_waiting_for_account_preparation_preserves_a_newer_child() {
+        let host = HarnessHost::new();
+        let waiting = host.stamp_spawn("s1", None);
+        host.kill_session("s1");
+        let current = host.begin_spawn("s1");
+        let (live, child) = live_child();
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("s1".into(), current.0, current.1, live)
+            .is_none());
+        assert_eq!(
+            host.start_stamped_spawn("s1", waiting.0, waiting.1, None)
+                .err()
+                .as_deref(),
+            Some(SPAWN_CANCELLED)
+        );
+        assert_eq!(host.get("s1").map(|live| live.pid), Some(pid));
+        reap(child);
+    }
+
+    #[test]
+    fn account_removal_cancels_a_queued_spawn_without_a_live_child() {
+        let host = HarnessHost::new();
+        let account = HarnessAccount {
+            provider: "codex".into(),
+            id: "work".into(),
+        };
+        let waiting = host.stamp_spawn("s1", Some(&account));
+        assert!(host.get("s1").is_none());
+        host.kill_account("codex", "work");
+        assert_eq!(
+            host.start_stamped_spawn("s1", waiting.0, waiting.1, waiting.2.as_ref())
+                .err()
+                .as_deref(),
+            Some(SPAWN_CANCELLED)
+        );
+        assert!(host.get("s1").is_none());
+        let fresh = host.stamp_spawn("s2", Some(&account));
+        assert!(host
+            .start_stamped_spawn("s2", fresh.0, fresh.1, fresh.2.as_ref())
+            .is_ok());
     }
 
     #[test]
