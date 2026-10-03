@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Remote hosts detect the Pi coding agent installed via npm. The npm bin launcher is a thin `#!/usr/bin/env node` stub with no marker strings in its first bytes, so the host now resolves the launcher's symlink and reads the enclosing package's `package.json` name to confirm the install. In #673.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added
