@@ -37,6 +37,7 @@ import { TabWidthMotion } from "./ClosingTab";
 import { FileTypeIcon } from "../../features/files/ui/FileTypeIcon";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useTrafficLights } from "./useTrafficLights";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { WindowControls } from "./WindowControls";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
@@ -86,10 +87,6 @@ type Props = {
   projectRailOpen?: boolean;
   sessionSidebarOpen?: boolean;
   compactRail?: boolean;
-  canGoBack?: boolean;
-  canGoForward?: boolean;
-  onGoBack?: () => void;
-  onGoForward?: () => void;
   onToggleSidebar: () => void;
   onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
@@ -605,10 +602,6 @@ function TitleBarComponent({
   projectRailOpen = true,
   sessionSidebarOpen = true,
   compactRail = false,
-  canGoBack = false,
-  canGoForward = false,
-  onGoBack,
-  onGoForward,
   onToggleSidebar,
   onToggleSessionSidebar,
   onSelect,
@@ -840,6 +833,7 @@ function TitleBarComponent({
   };
 
   const railClosed = !projectRailOpen;
+  const trafficLights = useTrafficLights();
   const showCurrentProject = looksLikeProject(cwd);
   // Until a project is picked, the rail and the sidebar hide, so nothing
   // project-scoped is actionable and the window controls need room.
@@ -894,23 +888,13 @@ function TitleBarComponent({
   // exempts buttons, links and inputs on its own.
   return (
     <header
-      className={`flex h-10 shrink-0 select-none items-stretch border-b border-stroke${
-        compactRail ? " body-glass" : ""
-      }`}
+      className="flex h-10 shrink-0 select-none items-stretch border-b border-stroke"
       data-tauri-drag-region="deep"
     >
-      {compactRail ? (
-        <div
-          data-compact-title-nav
-          className="flex shrink-0 items-center pl-[70px]"
-        >
-          <TabVisitNav
-            canGoBack={canGoBack}
-            canGoForward={canGoForward}
-            onGoBack={onGoBack}
-            onGoForward={onGoForward}
-          />
-        </div>
+      {/* Without the sidebar, the traffic lights spill past the compact rail
+          into the title bar. */}
+      {compactRail && trafficLights && (!sessionSidebarOpen || projectless) ? (
+        <div data-compact-title-spacer className="w-6 shrink-0" />
       ) : null}
       {/* Both the rail and the sidebar step aside without a project, so the
           title bar takes over the traffic lights and the rail toggle. */}

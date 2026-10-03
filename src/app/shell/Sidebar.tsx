@@ -12,6 +12,7 @@ import {
   Chatting,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleDashed,
@@ -135,6 +136,7 @@ import { useGitFileStatuses } from "../../features/source-control/hooks/useGitFi
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { useSortable } from "../../shared/hooks/useSortable";
+import { useTrafficLights } from "./useTrafficLights";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { normalizeHex } from "../../shared/lib/colorUtils";
 import {
@@ -312,7 +314,6 @@ type Props = {
   onToggleProjectRail?: () => void;
   projectRailOpen?: boolean;
   compactProjectRail?: boolean;
-  titleBarAbove?: boolean;
   unseenFinishedIds?: Set<string>;
   inboxUnseen?: boolean;
   /** Linked GitHub work changed after the session last advanced. */
@@ -404,7 +405,6 @@ function SidebarComponent({
   onToggleProjectRail,
   projectRailOpen = true,
   compactProjectRail = true,
-  titleBarAbove = false,
   unseenFinishedIds: unseenFinishedIdsProp,
   inboxUnseen = false,
   linkedSessionUpdateIds = new Set(),
@@ -755,6 +755,7 @@ function SidebarComponent({
   if (railVisible) railMounted.current = true;
   const compactRailVisible =
     compactProjectRail && showProjectRail && !railVisible;
+  const trafficLights = useTrafficLights();
   const inProject = looksLikeProject(cwd);
   const showSidebarFooter = !projectRailOpen;
   // A blank session has no project to browse, so the shell stands alone until
@@ -1621,12 +1622,17 @@ function SidebarComponent({
       ref={resize.setPaneRef}
       className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
-      {railVisible ? (
+      {railVisible || compactRailVisible ? (
         <>
           <div
             className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
             data-tauri-drag-region="deep"
           >
+            {/* The traffic lights end 66px in; the compact rail covers 48 of
+                that, so step the rest aside like the 78px spacers elsewhere. */}
+            {trafficLights && compactRailVisible ? (
+              <div className="w-[18px] shrink-0" />
+            ) : null}
             <div className="flex min-w-0 flex-1 items-center">
               {!remoteProject && cwd && cwd !== "~" ? (
                 <SidebarWorktreeSwitcher
@@ -1654,25 +1660,23 @@ function SidebarComponent({
         </>
       ) : (
         <>
-          {titleBarAbove ? null : (
-            <div
-              className="flex h-10 shrink-0 select-none items-center border-b border-stroke pr-1.5"
-              data-tauri-drag-region="deep"
-            >
-              {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
-              <DevModeSlot />
-              <TabVisitNav
-                canGoBack={canGoBack}
-                canGoForward={canGoForward}
-                onGoBack={onGoBack}
-                onGoForward={onGoForward}
-                onTogglePanel={
-                  compactProjectRail ? undefined : onToggleProjectRail
-                }
-              />
-            </div>
-          )}
-          {onSelectProject && !compactRailVisible ? (
+          <div
+            className="flex h-10 shrink-0 select-none items-center border-b border-stroke pr-1.5"
+            data-tauri-drag-region="deep"
+          >
+            {IS_MAC ? <div className="w-[78px] shrink-0" /> : null}
+            <DevModeSlot />
+            <TabVisitNav
+              canGoBack={canGoBack}
+              canGoForward={canGoForward}
+              onGoBack={onGoBack}
+              onGoForward={onGoForward}
+              onTogglePanel={
+                compactProjectRail ? undefined : onToggleProjectRail
+              }
+            />
+          </div>
+          {onSelectProject ? (
             <SidebarProjectPicker
               cwd={cwd}
               recents={recents}
@@ -1693,15 +1697,13 @@ function SidebarComponent({
               inboxUnseen={inboxUnseen}
             />
           ) : null}
-          {!compactRailVisible ? (
-            <div
-              role="tablist"
-              aria-label="Workspace"
-              className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
-            >
-              {workspaceTabItems}
-            </div>
-          ) : null}
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
+          >
+            {workspaceTabItems}
+          </div>
         </>
       )}
       <>
@@ -2188,7 +2190,9 @@ function SidebarComponent({
           cwd={cwd}
           recents={recents}
           busy={projectPathBusy(busyProjectPaths, cwd)}
-          tabs={visibleTabs}
+          // The pinned sidebar keeps its own tabs; the rail only offers them
+          // as drawer shortcuts while the sidebar is collapsed.
+          tabs={drawerMode ? visibleTabs : []}
           activeTab={tab}
           tabShown={panelOpen}
           changesLabel={changesLabel}
@@ -2210,7 +2214,11 @@ function SidebarComponent({
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
-          titleBarAbove={titleBarAbove}
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          onGoBack={onGoBack}
+          onGoForward={onGoForward}
+          trafficLights={trafficLights}
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
@@ -2450,7 +2458,11 @@ function CompactProjectRail({
   onOpenSettings,
   onTogglePanel,
   onLeaveActive,
-  titleBarAbove,
+  canGoBack,
+  canGoForward,
+  onGoBack,
+  onGoForward,
+  trafficLights,
 }: {
   cwd: string;
   recents: RecentProject[];
@@ -2477,7 +2489,11 @@ function CompactProjectRail({
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
   onLeaveActive?: () => void;
-  titleBarAbove: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
+  trafficLights: boolean;
 }) {
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
@@ -2498,17 +2514,20 @@ function CompactProjectRail({
       data-compact-project-rail
       className="sidebar-glass relative flex h-full w-12 shrink-0 flex-col items-center"
     >
-      {titleBarAbove ? null : (
+      {/* Shares one header row with the sidebar beside it, so the traffic
+          lights sit in that row and the divider starts below it. Without
+          them, the rail runs the full height. */}
+      {trafficLights ? (
         <div
           className="h-10 w-full shrink-0 border-b border-stroke"
           data-tauri-drag-region="deep"
         />
-      )}
+      ) : null}
       <span
         aria-hidden
         data-compact-rail-divider
         className={`pointer-events-none absolute bottom-0 right-0 w-px bg-stroke ${
-          titleBarAbove ? "top-0" : "top-10"
+          trafficLights ? "top-10" : "top-0"
         }`}
       />
       <div
@@ -2520,36 +2539,19 @@ function CompactProjectRail({
           icon={PanelLeft}
           onClick={onTogglePanel}
         />
-        {onSelectProject ? (
-          <SearchableProjectPickerWithMenu
-            cwd={cwd}
-            recents={recents}
-            busy={busy}
-            compact
-            className="w-full justify-center"
-            onSelectProject={onSelectProject}
-            onOpenProject={onOpenProject}
-            onRemoveProject={onRemoveProject}
-            onOpenNotificationSettings={onOpenNotificationSettings}
+        <div data-compact-rail-nav className="flex items-center">
+          <CompactRailAction
+            half
+            label={`Back (${MOD}[)`}
+            icon={ChevronLeft}
+            onClick={canGoBack ? onGoBack : undefined}
           />
-        ) : null}
-        <div
-          role="tablist"
-          aria-label="Workspace"
-          aria-orientation="vertical"
-          className="flex flex-col items-center gap-1.5"
-        >
-          {tabs.map((itemId) => (
-            <CompactRailAction
-              key={itemId}
-              tab
-              label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
-              icon={COMPACT_TAB_ICONS[itemId]}
-              active={workspaceActive && tabShown && activeTab === itemId}
-              dot={itemId === "changes" && hasChanges}
-              onClick={() => openWorkspaceTab(itemId)}
-            />
-          ))}
+          <CompactRailAction
+            half
+            label={`Forward (${MOD}])`}
+            icon={ChevronRight}
+            onClick={canGoForward ? onGoForward : undefined}
+          />
         </div>
         <CompactRailAction
           label={`Search (${MOD}K)`}
@@ -2585,6 +2587,39 @@ function CompactProjectRail({
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
         />
+        {onSelectProject ? (
+          <SearchableProjectPickerWithMenu
+            cwd={cwd}
+            recents={recents}
+            busy={busy}
+            compact
+            className="w-full justify-center"
+            onSelectProject={onSelectProject}
+            onOpenProject={onOpenProject}
+            onRemoveProject={onRemoveProject}
+            onOpenNotificationSettings={onOpenNotificationSettings}
+          />
+        ) : null}
+        {tabs.length > 0 ? (
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            aria-orientation="vertical"
+            className="flex flex-col items-center gap-1.5"
+          >
+            {tabs.map((itemId) => (
+              <CompactRailAction
+                key={itemId}
+                tab
+                label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
+                icon={COMPACT_TAB_ICONS[itemId]}
+                active={workspaceActive && tabShown && activeTab === itemId}
+                dot={itemId === "changes" && hasChanges}
+                onClick={() => openWorkspaceTab(itemId)}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">
@@ -2615,11 +2650,14 @@ function CompactRailAction({
   tab = false,
   active = false,
   dot = false,
+  half = false,
   onClick,
   onOpenContextMenu,
 }: {
   label: string;
   icon: typeof PanelLeft;
+  /** Half width, so two fit side by side in the rail. */
+  half?: boolean;
   tab?: boolean;
   active?: boolean;
   dot?: boolean;
@@ -2662,14 +2700,18 @@ function CompactRailAction({
             }
           : undefined
       }
-      className={`relative grid size-8 shrink-0 place-items-center rounded-md active:scale-[0.97] ${
+      className={`relative grid shrink-0 place-items-center rounded-md active:scale-[0.97] ${
+        half ? "h-8 w-5" : "size-8"
+      } ${
         active
           ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/10 hover:text-content"
       } disabled:cursor-default disabled:opacity-35`}
     >
       <Icon
-        className={`size-4 ${dot ? "compact-rail-icon-with-dot" : ""}`}
+        className={`${half ? "size-3.5" : "size-4"} ${
+          dot ? "compact-rail-icon-with-dot" : ""
+        }`}
         strokeWidth={1.75}
       />
       {dot ? (

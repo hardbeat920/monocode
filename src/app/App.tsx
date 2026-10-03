@@ -10727,7 +10727,7 @@ function Workspace({
     automationsViewOpen;
   const compactProjectRail = collapsedProjectRailMode === "compact";
   const compactRailActive = compactProjectRail && !projectRailOpen;
-  const compactTitleBar = IS_MAC && compactRailActive && !chromeSurfaceOpen;
+  const compactTitleBar = compactRailActive && !chromeSurfaceOpen;
   const workspaceTitleBar = (
     <TitleBar
       tabs={titleTabs}
@@ -10736,10 +10736,6 @@ function Workspace({
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleBar}
-      canGoBack={tabVisitNav.canBack}
-      canGoForward={tabVisitNav.canForward}
-      onGoBack={onRailBack}
-      onGoForward={onRailForward}
       onToggleSidebar={onToggleSidebar}
       onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
@@ -10769,7 +10765,6 @@ function Workspace({
             HAS_NATIVE_GLASS ? "bg-background-base/40" : "bg-background-base"
           }`}
         >
-          {compactTitleBar ? workspaceTitleBar : null}
           <div className="flex min-h-0 min-w-0 flex-1">
             <Sidebar
               cwd={sidebarCwd}
@@ -10868,7 +10863,6 @@ function Workspace({
               notesEnabled={notesEnabled}
               projectRailOpen={projectRailOpen}
               compactProjectRail={compactProjectRail}
-              titleBarAbove={compactTitleBar}
               onToggleProjectRail={onToggleProjectRail}
               unseenFinishedIds={unseenFinishedIds}
               inboxUnseen={inboxUnseen}
@@ -10944,7 +10938,7 @@ function Workspace({
                     }}
                   />
                 ) : null}
-                {compactTitleBar ? null : workspaceTitleBar}
+                {workspaceTitleBar}
 
                 <main className="relative flex min-h-0 min-w-0 flex-1">
                   <div
