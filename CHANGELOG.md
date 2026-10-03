@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Model picker submenus stay open while the pointer moves diagonally toward them, instead of switching to rows it crosses on the way.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added
