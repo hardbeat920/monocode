@@ -136,3 +136,132 @@ describe("QuestionForm keyboard navigation", () => {
     expect(options[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("QuestionForm free text", () => {
+  it("submits a literal Other choice without requiring custom text", () => {
+    const onReply = vi.fn();
+    act(() =>
+      root.render(
+        createElement(QuestionForm, {
+          prompt: {
+            requestId: 11,
+            questions: [
+              {
+                id: "destination",
+                prompt: "Output to?",
+                multiSelect: false,
+                allowCustom: false,
+                options: [{ id: "other", label: "Other" }],
+              },
+            ],
+          },
+          onReply,
+        }),
+      ),
+    );
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>("button[aria-pressed]")!
+        .click(),
+    );
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[placeholder="Type your answer"]',
+      ),
+    ).toBeNull();
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[type="submit"]',
+    )!;
+    expect(submit.disabled).toBe(false);
+    act(() => submit.click());
+    expect(onReply).toHaveBeenCalledWith(11, {
+      kind: "answered",
+      answers: { destination: ["other"] },
+    });
+  });
+  it("prefills a multi-line answer and submits it untrimmed", () => {
+    const onReply = vi.fn();
+    act(() =>
+      root.render(
+        createElement(QuestionForm, {
+          prompt: {
+            requestId: 8,
+            questions: [
+              {
+                id: "msg",
+                prompt: "Commit message",
+                multiSelect: false,
+                allowCustom: true,
+                options: [],
+                placeholder: "Describe the change",
+                multiline: true,
+                defaultText: "fix: x\n\n  body\n",
+              },
+            ],
+          },
+          onReply,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.value).toBe("fix: x\n\n  body\n");
+    expect(textarea.placeholder).toBe("Describe the change");
+
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(onReply).toHaveBeenCalledWith(8, {
+      kind: "answered",
+      answers: {},
+      custom: { msg: "fix: x\n\n  body\n" },
+    });
+  });
+
+  it("submits an empty answer when allowed, and Skip still skips", () => {
+    const onReply = vi.fn();
+    const render = (requestId: number) =>
+      act(() =>
+        root.render(
+          createElement(QuestionForm, {
+            prompt: {
+              requestId,
+              questions: [
+                {
+                  id: "pick",
+                  prompt: "Numbers?",
+                  multiSelect: false,
+                  allowCustom: true,
+                  options: [],
+                  allowEmpty: true,
+                },
+              ],
+            },
+            onReply,
+          }),
+        ),
+      );
+    const button = (label: string) =>
+      Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === label,
+      )!;
+
+    render(9);
+    act(() => button("Continue").click());
+    expect(onReply).toHaveBeenLastCalledWith(9, {
+      kind: "answered",
+      answers: {},
+      custom: { pick: "" },
+    });
+
+    render(10);
+    act(() => button("Skip").click());
+    expect(onReply).toHaveBeenLastCalledWith(10, { kind: "skipped" });
+  });
+});

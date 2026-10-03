@@ -15,6 +15,12 @@ export type UserQuestion = {
   multiSelect: boolean;
   allowCustom: boolean;
   options: UserQuestionOption[];
+  placeholder?: string;
+  defaultText?: string;
+  /** Multi-line free text, returned untrimmed. */
+  multiline?: boolean;
+  /** Free text may be submitted empty; Skip still skips. */
+  allowEmpty?: boolean;
 };
 
 export type UserQuestionPrompt = {
@@ -59,6 +65,7 @@ export function questionIsComplete(
   answers: Record<string, string[]>,
   custom: Record<string, string> = {},
 ): boolean {
+  if (question.allowEmpty) return custom[question.id] !== undefined;
   const selected = answers[question.id] ?? [];
   if (selected.length === 0) {
     return question.allowCustom && !!custom[question.id]?.trim();
@@ -96,8 +103,9 @@ export function buildQuestionReply(
   for (const question of answered) {
     const selected = answers[question.id];
     if (selected?.length) nextAnswers[question.id] = selected;
-    const text = custom[question.id]?.trim();
-    if (text) nextCustom[question.id] = text;
+    const text = custom[question.id];
+    if (text !== undefined && (text.trim() || question.allowEmpty))
+      nextCustom[question.id] = question.multiline ? text : text.trim();
   }
   return {
     kind: "answered",
@@ -125,6 +133,7 @@ export function isCustomSelection(
   question: UserQuestion,
   optionId: string,
 ): boolean {
+  if (!question.allowCustom) return false;
   if (optionId === CUSTOM_OPTION_ID) return true;
   const option = question.options.find((item) => item.id === optionId);
   return option ? isOtherOption(option) : false;

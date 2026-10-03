@@ -676,7 +676,11 @@ export class HostEngine {
               throw new Error("Question is already resolved");
             value = {
               ...value,
-              session: { ...value.session, pendingQuestion: undefined },
+              session: applyHarnessEvent(value.session, {
+                type: "question.resolved",
+                requestId: command.requestId,
+                decision: command.reply.kind === "answered" ? "answered" : "skipped",
+              }),
             };
             effect = () =>
               provider.answer(
