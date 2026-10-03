@@ -55,7 +55,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "General",
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
-    keywords: "version update sounds notifications notes rail",
+    keywords: "version update sounds notifications notes rail sleep",
   },
   {
     id: "connections",
@@ -227,6 +227,19 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Tab animations",
     keywords: "motion open close resize transition",
   },
+  {
+    id: "keep-awake",
+    section: "general",
+    label: "Prevent sleep while agents work",
+    keywords:
+      "sleep awake idle running agents windows linux macos duration 15 30 hour forever hold after",
+  },
+  {
+    id: "keep-awake-screen",
+    section: "general",
+    label: "Keep the screen on",
+    keywords: "sleep display screen blank dim lock awake",
+  },
   ...(IS_WIN
     ? [
         {
@@ -362,7 +375,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "agent-clis",
     section: "providers",
     label: "Agent CLIs",
-    keywords: "codex opencode cursor grok pi omp fx hermes antigravity binary path",
+    keywords:
+      "codex opencode cursor grok pi omp fx hermes antigravity binary path",
   },
   {
     id: "provider-accounts",
@@ -810,6 +824,144 @@ export function subscribeLiveAgentsEnabled(onStoreChange: () => void) {
 
 const CLOSE_TO_TRAY_KEY = "monocode.closeToTray";
 
+const KEEP_AWAKE_KEY = "monocode.keepAwakeWhileAgentsWork";
+export const KEEP_AWAKE_DEFAULT = false;
+export const KEEP_AWAKE_CHANGE_EVENT = "monocode:keep-awake-change";
+
+export function loadKeepAwakeEnabled(): boolean {
+  return readFlag(KEEP_AWAKE_KEY) ?? KEEP_AWAKE_DEFAULT;
+}
+
+export function saveKeepAwakeEnabled(value: boolean): void {
+  writeFlag(KEEP_AWAKE_KEY, value);
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent<boolean>(KEEP_AWAKE_CHANGE_EVENT, { detail: value }),
+    );
+}
+
+export function subscribeKeepAwakeEnabled(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === KEEP_AWAKE_KEY || event.key === null) onChange();
+  };
+  window.addEventListener(KEEP_AWAKE_CHANGE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(KEEP_AWAKE_CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+export const KEEP_AWAKE_HOLD_AFTER = [
+  { value: "0", label: "When it ends" },
+  { value: "15m", label: "15 minutes" },
+  { value: "30m", label: "30 minutes" },
+  { value: "1h", label: "1 hour" },
+  { value: "4h", label: "4 hours" },
+  { value: "forever", label: "Forever" },
+] as const;
+
+export type KeepAwakeHoldAfter =
+  (typeof KEEP_AWAKE_HOLD_AFTER)[number]["value"];
+
+const KEEP_AWAKE_HOLD_AFTER_KEY = "monocode.keepAwakeHoldAfter";
+export const KEEP_AWAKE_HOLD_AFTER_DEFAULT: KeepAwakeHoldAfter = "0";
+export const KEEP_AWAKE_HOLD_AFTER_CHANGE_EVENT =
+  "monocode:keep-awake-hold-after-change";
+
+export function isKeepAwakeHoldAfter(
+  value: unknown,
+): value is KeepAwakeHoldAfter {
+  return KEEP_AWAKE_HOLD_AFTER.some((option) => option.value === value);
+}
+
+export function keepAwakeHoldAfterMs(value: KeepAwakeHoldAfter): number {
+  switch (value) {
+    case "0":
+      return 0;
+    case "15m":
+      return 15 * 60 * 1000;
+    case "30m":
+      return 30 * 60 * 1000;
+    case "1h":
+      return 60 * 60 * 1000;
+    case "4h":
+      return 4 * 60 * 60 * 1000;
+    case "forever":
+      return Number.POSITIVE_INFINITY;
+  }
+}
+
+export function loadKeepAwakeHoldAfter(): KeepAwakeHoldAfter {
+  try {
+    const raw = localStorage.getItem(KEEP_AWAKE_HOLD_AFTER_KEY);
+    return isKeepAwakeHoldAfter(raw) ? raw : KEEP_AWAKE_HOLD_AFTER_DEFAULT;
+  } catch {
+    return KEEP_AWAKE_HOLD_AFTER_DEFAULT;
+  }
+}
+
+export function saveKeepAwakeHoldAfter(value: KeepAwakeHoldAfter): void {
+  try {
+    localStorage.setItem(KEEP_AWAKE_HOLD_AFTER_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent<KeepAwakeHoldAfter>(KEEP_AWAKE_HOLD_AFTER_CHANGE_EVENT, {
+        detail: value,
+      }),
+    );
+}
+
+const KEEP_AWAKE_SCREEN_KEY = "monocode.keepAwakeScreen";
+export const KEEP_AWAKE_SCREEN_DEFAULT = false;
+export const KEEP_AWAKE_SCREEN_CHANGE_EVENT =
+  "monocode:keep-awake-screen-change";
+
+export function loadKeepAwakeScreen(): boolean {
+  return readFlag(KEEP_AWAKE_SCREEN_KEY) ?? KEEP_AWAKE_SCREEN_DEFAULT;
+}
+
+export function saveKeepAwakeScreen(value: boolean): void {
+  writeFlag(KEEP_AWAKE_SCREEN_KEY, value);
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent<boolean>(KEEP_AWAKE_SCREEN_CHANGE_EVENT, {
+        detail: value,
+      }),
+    );
+}
+
+export function subscribeKeepAwakeScreen(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === KEEP_AWAKE_SCREEN_KEY || event.key === null) onChange();
+  };
+  window.addEventListener(KEEP_AWAKE_SCREEN_CHANGE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(KEEP_AWAKE_SCREEN_CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+export function subscribeKeepAwakeHoldAfter(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === KEEP_AWAKE_HOLD_AFTER_KEY || event.key === null)
+      onChange();
+  };
+  window.addEventListener(KEEP_AWAKE_HOLD_AFTER_CHANGE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(KEEP_AWAKE_HOLD_AFTER_CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 export const CLOSE_TO_TRAY_DEFAULT = true;
 
 export function loadCloseToTray(): boolean {
@@ -1131,9 +1283,7 @@ function defaultShortcutsFor(command: string): string[] {
     return value ? [value] : [];
   };
   if (row.keys.includes("…")) {
-    return [1, 2, 3, 4, 5, 6, 7, 8].flatMap((digit) =>
-      chords(`Digit${digit}`),
-    );
+    return [1, 2, 3, 4, 5, 6, 7, 8].flatMap((digit) => chords(`Digit${digit}`));
   }
   if (/^[A-Za-z]$/.test(rest)) return chords(`Key${rest.toUpperCase()}`);
   if (/^[0-9]$/.test(rest)) return chords(`Digit${rest}`);
@@ -1153,9 +1303,7 @@ function shortcutOwners(): Map<string, string> {
         : defaultShortcutsFor(row.command);
     for (const chord of chords) owners.set(chord, row.command);
   }
-  for (const [command, override] of Object.entries(
-    loadKeybindingOverrides(),
-  )) {
+  for (const [command, override] of Object.entries(loadKeybindingOverrides())) {
     if (override.shortcut) owners.set(override.shortcut, command);
   }
   return owners;
@@ -1306,9 +1454,7 @@ export function keybindingShortcutTokens(
 ): string | null {
   const override = loadKeybindingOverrides()[command];
   if (override?.disabled) return null;
-  return override?.shortcut
-    ? shortcutTokens(override.shortcut)
-    : fallback;
+  return override?.shortcut ? shortcutTokens(override.shortcut) : fallback;
 }
 
 export function subscribeKeybindings(onStoreChange: () => void) {
