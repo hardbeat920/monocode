@@ -1,0 +1,36 @@
+[package]
+name = "monocode-view-files"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "File views: explorer tree, quick open and command palette, file pane, preview search"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-editor.workspace = true
+monocode-markdown.workspace = true
+monocode-layout.workspace = true
+# The data trait's default IO goes through these, like LocalFs in the engine.
+monocode-git.workspace = true
+monocode-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "files_gallery"
+path = "examples/files_gallery.rs"
