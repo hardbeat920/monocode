@@ -29,11 +29,22 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // applied between turns reach the provider.
 const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify(value) + '\\n');
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
+let pendingPermissionPrompt;
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   if (request.jsonrpc === '2.0') {
     if (request.id == null) return;
+    if (request.id === 'droid-host-permission' && request.result?.outcome) {
+      record({permissionReplyId: request.id, permissionOutcome: request.result.outcome});
+      send({jsonrpc: '2.0', id: pendingPermissionPrompt, result: {stopReason: 'end_turn'}});
+      return;
+    }
     if (request.method === 'session/prompt') {
+      if (request.params.prompt.some(block => block.type === 'text' && block.text === 'request-permission')) {
+        pendingPermissionPrompt = request.id;
+        send({jsonrpc: '2.0', id: 'droid-host-permission', method: 'session/request_permission', params: {sessionId: 'fixture_acp', toolCall: {toolCallId: 'fixture-edit', kind: 'edit', title: 'Edit a fixture'}, options: [{optionId: 'proceed_once', kind: 'allow_once', name: 'Allow'}, {optionId: 'cancel_once', kind: 'reject_once', name: 'Deny'}]}});
+        return;
+      }
       send({jsonrpc: '2.0', method: 'session/update', params: {sessionId: 'fixture_acp', update: {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'Headless ACP completed'}}}});
       setTimeout(() => send({jsonrpc: '2.0', id: request.id, result: {stopReason: 'end_turn'}}), 30);
     } else {
@@ -224,6 +235,65 @@ describe("existing providers over headless process I/O", () => {
       const state = store.session(sessionId).session;
       expect(state.blocks.at(-1)?.text).toContain("Headless ACP completed");
       expect(state.providerSessionId).toBe("fixture_acp");
+    },
+  );
+
+  it.each(["allow", "deny"] as const)(
+    "round-trips a string Droid permission ID through host %s approval",
+    async (decision) => {
+      const project = await engine.openProject(directory);
+      const { sessionId } = engine.command({
+        type: "create",
+        commandId: `droid-permission-create-${decision}`,
+        projectId: project.id,
+        harness: "droid",
+        model: "droid:default",
+        runtimeMode: "supervised",
+      });
+      engine.command({
+        type: "send",
+        commandId: `droid-permission-send-${decision}`,
+        sessionId,
+        text: "request-permission",
+      });
+      await vi.waitFor(
+        () =>
+          expect(
+            store.session(sessionId).session.blocks.some(
+              (block) => block.approval && !block.approval.decided,
+            ),
+          ).toBe(true),
+        { timeout: 4_000 },
+      );
+      const pending = store.session(sessionId);
+      const requestId = pending.session.blocks.find(
+        (block) => block.approval && !block.approval.decided,
+      )!.approval!.requestId;
+      const log = join(directory, "calls.log");
+      writeFileSync(log, "");
+      engine.command({
+        type: "approve",
+        commandId: `droid-permission-approve-${decision}`,
+        sessionId,
+        runId: pending.runId!,
+        requestId,
+        decision,
+      });
+      await vi.waitFor(
+        () => expect(store.session(sessionId).status).toBe("idle"),
+        { timeout: 4_000 },
+      );
+      const calls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls.find((call) => call.permissionReplyId)).toEqual({
+        permissionReplyId: "droid-host-permission",
+        permissionOutcome: {
+          outcome: "selected",
+          optionId: decision === "allow" ? "proceed_once" : "cancel_once",
+        },
+      });
     },
   );
 

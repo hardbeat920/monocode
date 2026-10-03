@@ -58,7 +58,14 @@ describe("ACP request identifiers", () => {
         requests.push(id);
       },
     });
-    const incoming = ["permission-abc", -1, "12", 12];
+    const incoming = [
+      "permission-abc",
+      Number.MAX_SAFE_INTEGER,
+      "12",
+      12,
+      -1,
+      1.5,
+    ];
     for (const id of incoming)
       client.pushLine(
         JSON.stringify({
@@ -70,6 +77,9 @@ describe("ACP request identifiers", () => {
       );
     await Promise.resolve();
     expect(new Set(requests).size).toBe(incoming.length);
+    expect(requests.every((id) => Number.isSafeInteger(id) && id >= 0)).toBe(
+      true,
+    );
     for (const id of requests)
       await client.respond(id, { outcome: { outcome: "cancelled" } });
     expect(sent.map((line) => JSON.parse(line).id)).toEqual(incoming);

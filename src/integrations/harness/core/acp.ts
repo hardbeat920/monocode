@@ -20,7 +20,8 @@ export type AcpHandlers = {
 export class AcpClient {
   private readonly rpc: JsonRpcClient;
   private readonly requestIds = new Map<number, JsonRpcId>();
-  private nextRequestId = -1;
+  // The host accepts non-negative safe integers for UI approval ids.
+  private nextRequestId = Number.MAX_SAFE_INTEGER;
 
   constructor(
     sessionId: string,
@@ -30,7 +31,10 @@ export class AcpClient {
       onNotification: (method, params) =>
         this.handlers.onNotification?.(method, params),
       onRequest: (id, method, params) => {
-        let numeric = typeof id === "number" ? id : this.nextRequestId--;
+        let numeric =
+          typeof id === "number" && Number.isSafeInteger(id) && id >= 0
+            ? id
+            : this.nextRequestId--;
         while (this.requestIds.has(numeric)) numeric = this.nextRequestId--;
         this.requestIds.set(numeric, id);
         try {
