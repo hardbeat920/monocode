@@ -196,9 +196,9 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
     );
     if (!callId) return [];
     const status = stringField(update, "status") ?? stringField(tool, "status");
-    // fx sends no rawInput/locations/diff, so the generic ACP extraction has
-    // nothing to work with. Mine the result blob instead, and only fall back to
-    // the shared path if fx ever starts sending structured fields.
+    // fx sends no locations/diff, so mine the result blob first. A pending call
+    // has no blob yet; fx 0.0.8+ puts the tool arguments in rawInput there, and
+    // the shared path reads the edit target from it before the edit runs.
     const fx = fxToolInfo(update, tool);
     const toolKind =
       fx.kind ?? stringField(update, "kind") ?? stringField(tool, "kind");

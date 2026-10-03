@@ -254,6 +254,28 @@ describe("local orchestration", () => {
       vi.mocked(f.host.submit).mock.calls.find(([id]) => id === "lead")?.[1],
     ).toContain('"modelSettings":{"reasoningEffort":"xhigh"}');
   });
+  it("prepares a worker before its first turn and excludes only the lead from edit tracking", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.startApproved("lead", "card", proposal());
+    await vi.waitFor(() =>
+      expect(f.host.createWorker).toHaveBeenCalledTimes(1),
+    );
+    const worker = f.tasks().find((task) => task.status === "running")!;
+    const created = vi.mocked(f.host.createWorker).mock.invocationCallOrder[0];
+    const firstTurn = vi
+      .mocked(f.host.submit)
+      .mock.calls.findIndex(([id]) => id === worker.sessionId);
+    expect(firstTurn).toBeGreaterThanOrEqual(0);
+    expect(
+      vi.mocked(f.host.submit).mock.invocationCallOrder[firstTurn],
+    ).toBeGreaterThan(created);
+    // App.tsx records edits for every session where run() is undefined.
+    expect(f.manager.forSession(worker.sessionId)?.leadId).toBe("lead");
+    expect(f.manager.run(worker.sessionId)).toBeUndefined();
+    expect(f.manager.run("lead")).toBeDefined();
+  });
+
   it("names the conversation that blocks a paused run from resuming", async () => {
     const f = setup();
     f.lead.busy = false;
@@ -524,9 +546,91 @@ describe("local orchestration", () => {
       expect.anything(),
       expect.objectContaining({ id: task.id }),
       false,
+      false,
     );
     expect(f.tasks()[0].workspace).toBeUndefined();
     expect(f.manager.run("lead")?.dispatches?.[0].stage).toBe("cleaned");
+  });
+  it("keeps out-of-scope files until the lead discards them, and holds dependents", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/types.ts"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const upstream = f.tasks()[0];
+    await f.delegate(["src/ui"], { dependsOn: [upstream.id] });
+    f.completions.get(upstream.sessionId)!({ status: "completed", text: "Done" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    vi.mocked(f.host.integrateWorker).mockResolvedValueOnce({
+      files: ["src/types.ts"],
+      alreadyApplied: 0,
+      skipped: ["coverage/out.json"],
+    });
+    // App keeps a worktree that still holds out-of-scope files.
+    vi.mocked(f.host.cleanupWorker).mockResolvedValue(false);
+
+    const first = JSON.stringify(
+      await f.call("review", { taskId: upstream.id }),
+    );
+    expect(first).toContain('"outsideAssignment":["coverage/out.json"]');
+    expect(first).toContain(`still in /worktrees/${upstream.id}`);
+    expect(first).toContain("discardOutside");
+    expect(f.tasks()[0].accepted).toBe(true);
+    expect(f.saved.get("lead")?.dispatches?.[0].outsideAssignment).toEqual([
+      "coverage/out.json",
+    ]);
+
+    // A repeated review reports the files again and applies nothing twice.
+    const again = JSON.stringify(
+      await f.call("review", { taskId: upstream.id }),
+    );
+    expect(again).toContain('"outsideAssignment":["coverage/out.json"]');
+    expect(f.host.integrateWorker).toHaveBeenCalledOnce();
+    await f.call("list");
+    expect(f.tasks()[1].status).toBe("queued");
+
+    vi.mocked(f.host.cleanupWorker).mockResolvedValue(true);
+    const discarded = JSON.stringify(
+      await f.call("review", { taskId: upstream.id, discardOutside: true }),
+    );
+    expect(f.host.cleanupWorker).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: upstream.id }),
+      false,
+      true,
+    );
+    expect(discarded).not.toContain("outsideAssignment");
+    expect(f.tasks()[0].workspace).toBeUndefined();
+    await vi.waitFor(() => expect(f.tasks()[1].status).toBe("running"));
+  });
+  it("keeps gitignored files a worker created until the lead discards them", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["src/types.ts"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const upstream = f.tasks()[0];
+    await f.delegate(["src/ui"], { dependsOn: [upstream.id] });
+    f.completions.get(upstream.sessionId)!({ status: "completed", text: "Done" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    vi.mocked(f.host.integrateWorker).mockResolvedValueOnce({
+      files: ["src/types.ts"],
+      alreadyApplied: 0,
+      skipped: [],
+      ignored: [".env.local"],
+    });
+    vi.mocked(f.host.cleanupWorker).mockResolvedValue(false);
+
+    const result = JSON.parse(
+      JSON.stringify(await f.call("review", { taskId: upstream.id })),
+    );
+    expect(JSON.stringify(result)).toContain('"ignoredCreated":[".env.local"]');
+    expect(JSON.stringify(result)).not.toContain("outsideAssignment");
+    expect(JSON.stringify(result)).toContain("gitignored files the worker created");
+    await f.call("list");
+    expect(f.tasks()[1].status).toBe("queued");
+
+    vi.mocked(f.host.cleanupWorker).mockResolvedValue(true);
+    await f.call("review", { taskId: upstream.id, discardOutside: true });
+    await vi.waitFor(() => expect(f.tasks()[1].status).toBe("running"));
   });
   it("reports a cancelled dirty worktree instead of silently orphaning it", async () => {
     const f = setup();
