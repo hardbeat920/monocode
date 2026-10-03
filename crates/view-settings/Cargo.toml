@@ -1,0 +1,42 @@
+[package]
+name = "monocode-view-settings"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "The settings page, its sections, the chat background effects, and the account views"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+# Settings fields style gpui-base's unframed inputs themselves (InputEditorStyle).
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-markdown.workspace = true
+# Kv: every setting that lived in localStorage reads and writes through it.
+monocode-settings.workspace = true
+# pretty_cwd and project_name for the archive and provider scope rows.
+monocode-layout.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-channel.workspace = true
+# `Shared` futures dedupe background effect work across callers.
+futures.workspace = true
+# Decodes chat backgrounds and draws the dither, ASCII, halftone, scanline,
+# and haze effects. The same 0.25 line GPUI's RenderImage frames use.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[target.'cfg(unix)'.dependencies]
+# localtime_r, for the archive's month and day dates.
+libc.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+
+[[example]]
+name = "settings_gallery"
+path = "examples/settings_gallery.rs"
