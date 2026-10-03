@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyInboxFilters,
+  inboxSourceQueries,
+  loadInboxFiltersBySource,
+  saveInboxFiltersBySource,
   DEFAULT_INBOX_FILTERS,
   filterInboxByKind,
   filterInboxByLinearProject,
@@ -711,5 +714,32 @@ describe("inbox connection cache", () => {
       gitlab: null,
       azuredevops: null,
     });
+  });
+});
+
+describe("per-source inbox filters", () => {
+  const KEY = "monocode.inboxFilters";
+  beforeEach(mockLocalStorage);
+
+  it("keeps Assigned to me on Jira without touching GitHub", () => {
+    const filters = loadInboxFiltersBySource();
+    saveInboxFiltersBySource({
+      ...filters,
+      jira: { ...filters.jira, assignedToMe: true },
+    });
+    const loaded = loadInboxFiltersBySource();
+    expect(loaded.jira.assignedToMe).toBe(true);
+    expect(loaded.github.assignedToMe).toBe(false);
+    const queries = inboxSourceQueries(loaded);
+    expect(queries.jira.assignedToMe).toBe(true);
+    expect(queries.github.assignedToMe).toBe(false);
+  });
+
+  it("seeds every source from a filter saved before the split", () => {
+    localStorage.setItem(KEY, JSON.stringify({ assignedToMe: true }));
+    const loaded = loadInboxFiltersBySource();
+    expect(loaded.github.assignedToMe).toBe(true);
+    expect(loaded.jira.assignedToMe).toBe(true);
+    expect(loaded.linear.assignedToMe).toBe(true);
   });
 });
