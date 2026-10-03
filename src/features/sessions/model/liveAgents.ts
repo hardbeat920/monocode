@@ -6,6 +6,7 @@ import {
   type Block,
   type HarnessId,
   type Session,
+  type TurnMetrics,
 } from "./session";
 
 export type LiveAgent = {
@@ -16,6 +17,7 @@ export type LiveAgent = {
   activity: string;
   startedAt?: number;
   durationMs?: number;
+  turnMetrics?: TurnMetrics;
   needsApproval: boolean;
   done: boolean;
 };
@@ -28,6 +30,10 @@ export function isLiveAgentSession(
   return !session.inboxAsk && !session.orchestrationLeadId;
 }
 
+/**
+ * Builds cards for active sessions and finished sessions the user has not seen.
+ * Approval waits sort first, followed by active turns from longest-running.
+ */
 export function liveAgentsFromSessions(
   sessions: Session[],
   unseenFinishedIds: ReadonlySet<string> = new Set(),
@@ -54,6 +60,7 @@ export function formatLiveElapsed(startedAt: number, now: number): string {
   return minRest ? `${hours}h ${minRest}m` : `${hours}h`;
 }
 
+/** Maps a session to its card, including metrics from its latest user turn. */
 function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
   const pending = session.blocks.find(
     (block) => block.approval && !block.approval.decided,
@@ -61,6 +68,7 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
   const pendingQuestion = session.pendingQuestion;
   const done = unseenFinished && !isInFlightSession(session);
   const activityBlock = pending ?? lastActivityBlock(session.blocks);
+  const turnMetrics = lastTurnMetrics(session.blocks);
   return {
     id: session.id,
     cwd: session.cwd,
@@ -75,11 +83,13 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
         : activityLabel(activityBlock, session.cwd),
     startedAt: turnStartedAt(session.blocks),
     durationMs: done ? turnDurationMs(session.blocks) : undefined,
+    ...(turnMetrics ? { turnMetrics } : {}),
     needsApproval: Boolean(pending) || Boolean(pendingQuestion),
     done,
   };
 }
 
+/** Sorts approval waits first, then active cards before done cards by start time. */
 function compareLiveAgents(a: LiveAgent, b: LiveAgent): number {
   if (a.needsApproval !== b.needsApproval) return a.needsApproval ? -1 : 1;
   if (a.done !== b.done) return a.done ? 1 : -1;
@@ -107,9 +117,20 @@ function turnStartedAt(blocks: Block[]): number | undefined {
   return undefined;
 }
 
+/** Returns the duration saved on the latest user turn for a completed card. */
 function turnDurationMs(blocks: Block[]): number | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].role === "user") return blocks[i].durationMs;
+  }
+  return undefined;
+}
+
+/**
+ * Returns metrics from the latest user turn only; earlier turns never carry forward.
+ */
+function lastTurnMetrics(blocks: Block[]): TurnMetrics | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    if (blocks[i].role === "user") return blocks[i].turnMetrics;
   }
   return undefined;
 }
