@@ -1,5 +1,7 @@
 import { isPreparingHandoff } from "./handoff";
-import type { QueuedMessage, Session } from "./session";
+import { mergeModelSettings, resolveModel } from "./models";
+import { runningProviderSelection } from "./providerContext";
+import type { ModelTarget, QueuedMessage, Session } from "./session";
 
 export function queuedHead(session: Session): QueuedMessage | undefined {
   return session.queuedMessages?.[0];
@@ -48,18 +50,52 @@ export function canDispatchQueuedHead(session: Session): boolean {
   return true;
 }
 
+function sameSteeringSelection(
+  saved: ModelTarget,
+  active: ModelTarget,
+): boolean {
+  if (saved.harness !== active.harness || saved.model !== active.model)
+    return false;
+  const model = resolveModel(saved.harness, saved.model);
+  const savedSettings = {
+    ...saved.modelSettings,
+    ...mergeModelSettings(model, saved.modelSettings),
+  };
+  const activeSettings = {
+    ...active.modelSettings,
+    ...mergeModelSettings(model, active.modelSettings),
+  };
+  const keys = new Set([
+    ...Object.keys(savedSettings),
+    ...Object.keys(activeSettings),
+  ]);
+  return [...keys].every((key) => savedSettings[key] === activeSettings[key]);
+}
+
 /** Resolve a queued row for auto-dispatch (head, idle) or an explicit Steer. */
 export function queuedMessageForSubmit(
   session: Session,
   messageId: string,
   mode: "dispatch" | "steer",
+  activeSelection?: ModelTarget,
 ): QueuedMessage | undefined {
   if (session.providerContext?.delivery?.needsInspection) return undefined;
   const message = session.queuedMessages?.find(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
-  if (mode === "steer") return message;
+  if (mode === "steer") {
+    if (
+      session.busy &&
+      message.selection &&
+      !sameSteeringSelection(
+        message.selection,
+        activeSelection ?? runningProviderSelection(session),
+      )
+    )
+      return undefined;
+    return message;
+  }
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;

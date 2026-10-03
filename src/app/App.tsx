@@ -6219,6 +6219,15 @@ function Workspace({
         currentAcceptanceSubmission === "reconcile"
       ) return false;
       const acceptanceSavePending = currentAcceptanceSubmission === "queue";
+      if (options?.queuedMessageId) {
+        const mode = options.followUpBehavior === "steer" ? "steer" : "dispatch";
+        if (!queuedMessageForSubmit(
+          storedCurrent,
+          options.queuedMessageId,
+          mode,
+          runningProviderSelection(storedCurrent, runningSelections.current.get(sessionId)),
+        )) return false;
+      }
       const draftBlock = options?.draftBlockId
         ? storedCurrent.blocks.find(
             (block) =>
@@ -6271,13 +6280,6 @@ function Workspace({
           )
         : undefined;
       if (intent === "build" && !approvedPlan?.text.trim()) return false;
-      if (options?.queuedMessageId) {
-        const mode =
-          options.followUpBehavior === "steer" ? "steer" : "dispatch";
-        if (!queuedMessageForSubmit(current, options.queuedMessageId, mode)) {
-          return false;
-        }
-      }
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -7979,7 +7981,12 @@ function Workspace({
         (entry) => entry.id === sessionId,
       );
       const message = session
-        ? queuedMessageForSubmit(session, messageId, "steer")
+        ? queuedMessageForSubmit(
+            session,
+            messageId,
+            "steer",
+            runningProviderSelection(session, runningSelections.current.get(sessionId)),
+          )
         : undefined;
       if (!session || !message) return;
       if (message.intent === "orchestrate" && session.busy) {
