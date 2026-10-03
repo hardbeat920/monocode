@@ -906,6 +906,7 @@ export function askUserQuestionAllowInput(
 ): Record<string, unknown> {
   const questions = questionsFromUnknown(input);
   const answers: Record<string, string> = {};
+  const annotations: Record<string, { preview: string }> = {};
   if (reply?.kind === "answered") {
     for (const question of questions) {
       const labels = selectedAnswerLabels(question, reply);
@@ -913,9 +914,19 @@ export function askUserQuestionAllowInput(
       answers[question.prompt] = question.multiSelect
         ? labels.join(", ")
         : (labels[0] ?? "");
+      // Claude Code echoes the chosen option's preview back to the model.
+      const preview = question.multiSelect
+        ? undefined
+        : question.options.find((o) => o.id === reply.answers[question.id]?.[0])
+            ?.preview;
+      if (preview) annotations[question.prompt] = { preview };
     }
   }
-  return { questions: input.questions, answers };
+  return {
+    questions: input.questions,
+    answers,
+    ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
+  };
 }
 
 export function tryParseJsonRecord(

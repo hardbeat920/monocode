@@ -136,3 +136,44 @@ describe("QuestionForm keyboard navigation", () => {
     expect(options[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("QuestionForm previews", () => {
+  it("shows the highlighted option's preview", () => {
+    const base = prompt();
+    act(() =>
+      root.render(
+        createElement(QuestionForm, {
+          prompt: {
+            ...base,
+            questions: base.questions.map((question) => ({
+              ...question,
+              options: [
+                { id: "grid", label: "Grid", preview: "[ ][ ]" },
+                { id: "list", label: "List", preview: "[    ]" },
+                { id: "none", label: "None" },
+              ],
+            })),
+          },
+          onReply: vi.fn(),
+        }),
+      ),
+    );
+    const options = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+    );
+    const preview = () =>
+      container.querySelector("[data-question-preview]")?.textContent;
+
+    expect(preview()).toBe("[ ][ ]");
+    act(() => options[0].focus());
+    keyDown(options[0], "ArrowDown");
+    expect(preview()).toBe("[    ]");
+    keyDown(options[1], "ArrowDown");
+    expect(preview()).toBeUndefined();
+  });
+
+  it("renders nothing when no option has a preview", () => {
+    renderQuestion();
+    expect(container.querySelector("[data-question-preview]")).toBeNull();
+  });
+});

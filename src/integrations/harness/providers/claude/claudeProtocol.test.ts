@@ -686,6 +686,29 @@ describe("helpers", () => {
     });
   });
 
+  it("echoes the chosen option's preview as an annotation", () => {
+    const input = {
+      questions: [
+        {
+          question: "Which layout?",
+          options: [
+            { label: "Grid", preview: "[ ][ ]" },
+            { label: "List", preview: "[    ]" },
+          ],
+        },
+      ],
+    };
+    expect(
+      askUserQuestionAllowInput(input, {
+        kind: "answered",
+        answers: { "Which layout?": ["List"] },
+      }),
+    ).toMatchObject({
+      answers: { "Which layout?": "List" },
+      annotations: { "Which layout?": { preview: "[    ]" } },
+    });
+  });
+
   it("drops request lifecycle status pings", () => {
     expect(
       statusTextFromSystem({

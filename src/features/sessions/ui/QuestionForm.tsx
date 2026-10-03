@@ -212,6 +212,9 @@ function QuestionFields({
     return selectedIndex >= 0 ? selectedIndex : 0;
   });
   const optionButtons = useRef<Array<HTMLButtonElement | null>>([]);
+  const preview =
+    options[highlighted]?.preview ??
+    options.find((option) => selected.includes(option.id))?.preview;
 
   const highlight = (index: number) => {
     setHighlighted(index);
@@ -261,6 +264,14 @@ function QuestionFields({
       </p>
       {question.multiSelect ? (
         <p className="mt-0.5 text-[11px] text-content/40">Select all that apply</p>
+      ) : null}
+      {preview ? (
+        <pre
+          data-question-preview
+          className="my-2.5 max-h-48 overflow-auto overscroll-contain rounded-md border border-content/10 bg-content/5 px-2 py-1.5 font-mono text-[11px] leading-snug text-content/75"
+        >
+          {preview}
+        </pre>
       ) : null}
       {options.length === 0 && question.allowCustom ? (
         <input

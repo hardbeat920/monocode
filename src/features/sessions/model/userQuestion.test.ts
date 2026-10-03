@@ -44,6 +44,22 @@ describe("questionsFromUnknown", () => {
     expect(questionPromptTitle(questions)).toBe("Format");
   });
 
+  it("keeps option previews", () => {
+    const [question] = questionsFromUnknown({
+      questions: [
+        {
+          question: "Which layout?",
+          options: [
+            { label: "Grid", preview: "\n[ ][ ]\n[ ][ ]\n" },
+            { label: "List" },
+          ],
+        },
+      ],
+    });
+    expect(question?.options[0]?.preview).toBe("[ ][ ]\n[ ][ ]");
+    expect(question?.options[1]).not.toHaveProperty("preview");
+  });
+
   it("parses Cursor-style ask_question params without adding Other", () => {
     const questions = questionsFromUnknown({
       title: "Need input",
