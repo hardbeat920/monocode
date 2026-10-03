@@ -91,11 +91,15 @@ export function buildPortableContext(
     if (eligible[index].sourceRole === "assistant") lastAssistant = index;
   }
   const firstUser = eligible.findIndex((item) => item.role === "user");
+  const queued = new Set<number>();
   for (const index of [lastUser, lastAssistant, firstUser]) {
-    if (index >= 0 && !priority.includes(index)) priority.push(index);
+    if (index >= 0 && !queued.has(index)) {
+      queued.add(index);
+      priority.push(index);
+    }
   }
   for (let index = eligible.length - 1; index >= 0; index--) {
-    if (!priority.includes(index)) priority.push(index);
+    if (!queued.has(index)) priority.push(index);
   }
   // The full omission list stays in storage. Transport sends counts and a
   // retrieval path, so its fixed metadata does not grow with the transcript.
@@ -140,6 +144,7 @@ export function exportPortableContext(
     byteLength: 0,
   };
   const eligible: PortableContextItem[] = [];
+  const positions = new Map<string, number>();
   let turnModel: TurnModel | undefined;
   // Attribution begins before the delta so switchback retains the turn label.
   for (const block of session.blocks.slice(0, afterIndex + 1)) {
@@ -155,9 +160,11 @@ export function exportPortableContext(
     }
     const item = exportItem(block, id, turnModel);
     if (item) {
-      const previous = eligible.findIndex((entry) => entry.id === item.id);
-      if (previous < 0) eligible.push(item);
-      else eligible[previous] = item;
+      const previous = positions.get(item.id);
+      if (previous === undefined) {
+        positions.set(item.id, eligible.length);
+        eligible.push(item);
+      } else eligible[previous] = item;
     }
   }
 

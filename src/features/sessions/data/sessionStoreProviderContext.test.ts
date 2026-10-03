@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession, type Session } from "../model/session";
 import { getSession, persistFingerprint, sanitizeSessionForPersist } from "./sessionStore";
 import { buildPortableContext } from "../model/portableContext";
+import {
+  failProviderDelivery,
+  recordProviderBound,
+  settleProviderBinding,
+} from "../model/providerContext";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -69,6 +74,28 @@ describe("durable provider switching", () => {
     expect(restored?.pendingSwitch?.fromProviderSessionId).toBe("claude-1");
     expect(restored?.blocks.filter((block) => block.draft).map((block) => block.id)).toEqual(["user-2"]);
     expect(buildPortableContext(restored!).items.some((item) => item.sourceBlockId === "user-2")).toBe(false);
+  });
+
+  it("preserves a later provider binding when loading an already uncertain transfer", async () => {
+    const interrupted = switchingSession();
+    interrupted.providerSessionId = "codex-1";
+    interrupted.blocks.push({ id: "user-2", role: "user", text: "Restore this interrupted request" });
+    let recovered = failProviderDelivery(interrupted, "switch-1");
+    recovered = recordProviderBound(recovered, "codex", "/repo", "codex-2");
+    recovered = {
+      ...recovered,
+      blocks: [...recovered.blocks, { id: "user-3", role: "user", text: "A later accepted command" }],
+    };
+    recovered = settleProviderBinding(recovered, "codex", "/repo");
+    const payload = sanitizeSessionForPersist(recovered);
+    invoke.mockResolvedValue({ ...payload, createdAt: 1, updatedAt: 2 });
+
+    const restored = await getSession(recovered.id);
+
+    expect(restored?.providerContext).toEqual(recovered.providerContext);
+    expect(restored?.providerSessionId).toBe("codex-2");
+    expect(restored?.blocks.filter((block) => block.draft).map((block) => block.id)).toEqual(["user-2"]);
+    expect(buildPortableContext(restored!).items.some((item) => item.sourceBlockId === "user-3")).toBe(true);
   });
 
   it("recovers a crash during snapshot preparation before a delivery receipt exists", async () => {

@@ -1218,7 +1218,7 @@ function recordToSession(record: SessionRecord): Session {
     ...(contextFromRecord(record) ?? {}),
   };
   const delivery = session.providerContext?.delivery;
-  return delivery && delivery.status !== "accepted"
+  return delivery && (delivery.status === "preparing" || delivery.status === "imported")
     ? failProviderDelivery(session, delivery.switchId)
     : failUnstartedProviderRequest(session, preparingHandoffId);
 }

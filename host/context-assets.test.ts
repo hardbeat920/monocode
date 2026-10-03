@@ -1,8 +1,11 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   mkdtempSync,
+  existsSync,
+  linkSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -14,14 +17,25 @@ import { join } from "node:path";
 import { snapshotHostContextAssets } from "./context-assets";
 import type { Attachment } from "../src/features/sessions/model/session";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    linkSync: vi.fn(actual.linkSync),
+  };
+});
+
 const directories: string[] = [];
-afterEach(() =>
+afterEach(() => {
+  vi.mocked(writeFileSync).mockReset();
+  vi.mocked(linkSync).mockReset();
   directories
     .splice(0)
     .forEach((directory) =>
       rmSync(directory, { recursive: true, force: true }),
-    ),
-);
+    );
+});
 
 function setup() {
   const directory = mkdtempSync(join(tmpdir(), "monocode-context-assets-"));
@@ -69,6 +83,60 @@ it("deduplicates matching content without charging the total limit twice", () =>
   expect(snapshots[0].path).toBe(snapshots[1].path);
   expect(snapshots.every((entry) => !entry.unavailableReason)).toBe(true);
 });
+
+it("keeps a partial write outside the published hash path and allows retry", async () => {
+  const s = setup();
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const finalPath = join(
+    s.assets,
+    createHash("sha256").update("original").digest("hex"),
+  );
+  let exposedPartialBytes = false;
+  vi.mocked(writeFileSync).mockImplementationOnce((path, data, options) => {
+    actual.writeFileSync(path, (data as Buffer).subarray(0, 3), options);
+    exposedPartialBytes = existsSync(finalPath);
+    throw new Error("Interrupted asset write");
+  });
+  const [failed] = snapshotHostContextAssets(s.assets, [s.attachment]);
+  expect(exposedPartialBytes).toBe(false);
+  expect(failed.path).toBeUndefined();
+  expect(failed.unavailableReason).toContain("Interrupted asset write");
+  expect(existsSync(finalPath)).toBe(false);
+  expect(readdirSync(s.assets)).toEqual([]);
+  const [saved] = snapshotHostContextAssets(s.assets, [s.attachment]);
+  expect(saved.path).toBe(finalPath);
+  expect(readFileSync(finalPath, "utf8")).toBe("original");
+});
+
+it.each([true, false])(
+  "preserves a racing publisher's existing file with matching content %s",
+  async (matching) => {
+    const s = setup();
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const contents = matching ? "original" : "different";
+    const finalPath = join(
+      s.assets,
+      createHash("sha256").update("original").digest("hex"),
+    );
+    vi.mocked(linkSync).mockImplementationOnce((_temporary, destination) => {
+      actual.writeFileSync(destination, contents, { flag: "wx", mode: 0o400 });
+      throw Object.assign(new Error("Existing destination"), {
+        code: "EEXIST",
+      });
+    });
+    const [saved] = snapshotHostContextAssets(s.assets, [s.attachment]);
+    expect(linkSync).toHaveBeenCalledOnce();
+    expect(readFileSync(finalPath, "utf8")).toBe(contents);
+    expect(readdirSync(s.assets)).toEqual([
+      finalPath.slice(s.assets.length + 1),
+    ]);
+    if (matching) expect(saved.path).toBe(finalPath);
+    else {
+      expect(saved.path).toBeUndefined();
+      expect(saved.unavailableReason).toContain("content hash check");
+    }
+  },
+);
 
 it("reports missing files, changed files, symbolic links, and both size limits", () => {
   const s = setup();

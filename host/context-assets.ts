@@ -3,6 +3,7 @@ import {
   constants,
   existsSync,
   fstatSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -136,11 +137,32 @@ export function snapshotHostContextAssets(
           throw new Error(
             "The session attachment snapshots exceed the total size limit",
           );
+        const temporary = join(directory, `.${randomUUID()}.tmp`);
         try {
-          writeFileSync(path, data, { flag: "wx", mode: 0o400 });
-        } catch (error) {
-          if (existsSync(path)) unlinkSync(path);
-          throw error;
+          writeFileSync(temporary, data, {
+            flag: "wx",
+            mode: 0o400,
+            flush: true,
+          });
+          try {
+            linkSync(temporary, path);
+          } catch (error) {
+            if (!(
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "EEXIST"
+            ))
+              throw error;
+            if (
+              createHash("sha256").update(readFileSync(path)).digest("hex") !==
+              sha256
+            )
+              throw new Error(
+                "The saved attachment failed its content hash check",
+              );
+          }
+        } finally {
+          if (existsSync(temporary)) unlinkSync(temporary);
         }
         totalBytes += data.length;
       }

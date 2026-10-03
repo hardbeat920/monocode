@@ -910,6 +910,200 @@ describe("claude model switching", () => {
 });
 
 describe("claude legacy account resume", () => {
+  async function initializingTurn(providerSessionId?: string) {
+    if (providerSessionId) bindClaudeSession("s1", providerSessionId, "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:sonnet-5",
+      runtimeMode: "supervised",
+      text: "Current request",
+      onEvent: (event) => events.push(event),
+    });
+    void turn.catch(() => undefined);
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.request as Record<string, unknown>)?.subtype ===
+            "initialize",
+        ),
+      "initialize",
+    );
+    return { events, turn };
+  }
+
+  it("waits for a validated native identity after the resume initialize response", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(parse().some((message) => message.type === "user")).toBe(false);
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "different-native",
+    });
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+
+    sent.length = 0;
+    const retry = await startTurn("s1", {
+      providerSessionId: "expected-native",
+    });
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "expected-native"]),
+    );
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await retry.turn;
+  });
+
+  it("accepts a matching commands record before system init on resume", async () => {
+    const { turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await turn;
+  });
+
+  it("rejects a later mismatched parent identity before releasing the resumed request", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(parse().some((message) => message.type === "user")).toBe(false);
+  });
+
+  it("fails an active resumed turn if a later parent record changes its identity", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({
+      type: "stream_event",
+      session_id: "expected-native",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Accepted response" },
+      },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "child-native",
+      parent_tool_use_id: "child-tool",
+      event: { type: "message_start" },
+    });
+    emit({
+      type: "system",
+      subtype: "hook_started",
+      session_id: "hook-native",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.error" &&
+          event.message.includes("different provider conversation"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects unconfirmed resume after the initialization timeout without sending input", async () => {
+    vi.useFakeTimers();
+    try {
+      bindClaudeSession("s1", "expected-native", "/repo");
+      const turn = sendClaudeTurn({
+        sessionId: "s1",
+        cwd: "/repo",
+        model: "claude:sonnet-5",
+        runtimeMode: "supervised",
+        text: "Current request",
+        onEvent: () => {},
+      });
+      const rejected = expect(turn).rejects.toThrow("did not confirm");
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        type: "control_response",
+        response: { subtype: "success", request_id: "monocode_1" },
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await rejected;
+      expect(parse().some((message) => message.type === "user")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows fresh initialization without a provider identity record", async () => {
+    const { turn } = await initializingTurn();
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
   it("resumes a legacy thread when the missing account resolves to default", async () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
     const { turn } = await startTurn("s1", {

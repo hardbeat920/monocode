@@ -5958,9 +5958,9 @@ function Workspace({
       if (selected && plan.kind === "revert" && selected.providerSessionId) {
         bindHarnessSession(selected.harness, selected.id, selected.providerSessionId, sessionWorkCwd(selected), selected.providerAccountId, selected.blocks);
       }
-      if (selected) void upsertSession(selected).catch(() => undefined);
+      persistSession(selected);
     },
-    [],
+    [persistSession],
   );
 
   const onModelSettingsChange = useCallback(

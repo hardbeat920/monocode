@@ -168,6 +168,9 @@ type Live = {
   turnEndPending: boolean;
   activeTurn: boolean;
   initDone: (() => void) | null;
+  initReady: boolean;
+  initError?: Error;
+  resumeIdentity?: { expected: string; confirmed: boolean };
   initialized: boolean;
   emittedAssistant: string;
   emittedReasoning: string;
@@ -505,6 +508,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     turnEndPending: false,
     activeTurn: false,
     initDone: null,
+    initReady: false,
+    ...(canResume && resume
+      ? { resumeIdentity: { expected: resume.sessionId, confirmed: false } }
+      : {}),
     initialized: false,
     emittedAssistant: "",
     emittedReasoning: "",
@@ -559,9 +566,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
-    if (canResume && resume && live.claudeSessionId !== resume.sessionId) {
-      throw new Error("Claude resumed a different provider conversation. Retry with a fresh conversation and shared history.");
-    }
+    if (live.initError) throw live.initError;
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -575,6 +580,12 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+  if (live.initError) throw live.initError;
+  if (live.resumeIdentity && !live.initialized) {
+    throw new Error(
+      "Claude has not confirmed the resumed provider conversation. Retry after initialization finishes.",
+    );
+  }
   const effort = input.modelSettings?.effort;
   const message = buildClaudeUserMessage({
     text: input.text,
@@ -663,9 +674,25 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
-  if (live.muteUpdates) return;
+  if (live.muteUpdates || live.initError) return;
 
   const sessionIdFromLine = sessionIdFromMessage(rec);
+  if (sessionIdFromLine && live.resumeIdentity) {
+    if (sessionIdFromLine !== live.resumeIdentity.expected) {
+      live.initError = new Error(
+        "Claude resumed a different provider conversation. Retry with a fresh conversation and shared history.",
+      );
+      live.turnFailed?.(live.initError);
+      live.initDone?.();
+      live.initDone = null;
+      void stopClaudeSession(sessionId);
+      return;
+    }
+    if (!live.resumeIdentity.confirmed) {
+      live.resumeIdentity.confirmed = true;
+      if (live.initReady) markInitialized(live);
+    }
+  }
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
     // A different conversation starts with its own task ids.
@@ -1730,23 +1757,39 @@ function settlePendingTurn(live: Live): void {
 }
 
 function markInitialized(live: Live): void {
-  if (live.initialized) return;
+  if (live.initialized || live.initError) return;
+  live.initReady = true;
+  if (live.resumeIdentity && !live.resumeIdentity.confirmed) return;
   live.initialized = true;
   live.initDone?.();
   live.initDone = null;
 }
 
 function waitForInit(live: Live, timeoutMs: number): Promise<void> {
+  if (live.initError) return Promise.reject(live.initError);
   if (live.initialized) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      const error =
+        live.initError ??
+        (live.resumeIdentity && !live.initialized
+          ? new Error(
+              "Claude did not confirm the resumed provider conversation before initialization finished. Retry with a fresh conversation and shared history.",
+            )
+          : undefined);
+      if (error) {
+        live.initError = error;
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
     const timer = setTimeout(() => {
       live.initDone = null;
-      resolve();
+      finish();
     }, timeoutMs);
-    live.initDone = () => {
-      clearTimeout(timer);
-      resolve();
-    };
+    live.initDone = finish;
   });
 }
 
