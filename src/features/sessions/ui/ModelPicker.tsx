@@ -914,6 +914,7 @@ export function ModelPicker({
           {showSubmenu && submenu.kind === "models" ? (
             <ModelFlyout
               anchor={activeRow}
+              autoFocusSearch
               harnesses={pickerHarnesses}
               tab={visibleTab}
               models={visibleModels}
@@ -1310,6 +1311,18 @@ function ModelFlyout({
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  // The popover frame starts hidden until its layout effect measures the
+  // anchor, and browsers silently drop focus() on a hidden element. React's
+  // autoFocus fires during that first commit, so defer one frame to focus
+  // once the flyout is on screen.
+  useEffect(() => {
+    if (!autoFocusSearch) return;
+    const frame = requestAnimationFrame(() => {
+      searchRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocusSearch, searchRef]);
+
   const onSearchKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -1423,7 +1436,6 @@ function ModelFlyout({
             value={query}
             placeholder="Search models"
             aria-label="Search models"
-            autoFocus={autoFocusSearch}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={onSearchKey}
