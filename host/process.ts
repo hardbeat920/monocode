@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, readlink, stat } from "node:fs/promises";
+import { access, readFile, realpath, readlink, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, extname, join, basename } from "node:path";
@@ -69,17 +69,7 @@ async function matchesProvider(
     }
     return fileContains(candidate, ["cursor-agent"], 64 * 1024);
   }
-  if (provider === "pi" && name === "pi")
-    return fileContains(
-      candidate,
-      [
-        "pi-coding-agent",
-        "@earendil-works/pi",
-        "@mariozechner/pi-coding-agent",
-        "pi_coding_agent",
-      ],
-      64 * 1024,
-    );
+  if (provider === "pi" && name === "pi") return isPiLaunchCandidate(candidate);
   if (provider === "fx")
     return fileContains(candidate, [
       "vercel-labs/fx",
@@ -109,6 +99,53 @@ async function fileContains(
     carry = text.slice(-64);
     read += length;
     if (read >= maxBytes) break;
+  }
+  return false;
+}
+
+/** Marker strings that identify a Pi coding agent install. */
+const PI_MARKERS = [
+  "pi-coding-agent",
+  "@earendil-works/pi",
+  "@mariozechner/pi-coding-agent",
+  "pi_coding_agent",
+];
+
+/**
+ * npm's bin launcher for pi is a thin `#!/usr/bin/env node` stub whose only
+ * job is to `createRequire(...)("./cli-runtime.js")` — the marker strings live
+ * megabytes deeper in `dist/bundle/chunks/*.js`, past any reasonable head
+ * scan. Identify the enclosing package instead: resolve symlinks (npm bins
+ * symlink into `lib/node_modules/<pkg>/...`), then walk up to the nearest
+ * `package.json` and check its `name`/`dependencies` against the Pi markers.
+ */
+async function isPiLaunchCandidate(candidate: string): Promise<boolean> {
+  if (await fileContains(candidate, PI_MARKERS, 64 * 1024)) return true;
+  let real: string;
+  try {
+    real = await realpath(candidate);
+  } catch {
+    return false;
+  }
+  let dir = dirname(real);
+  // A scoped package's package.json sits two directories up from a nested
+  // bin/script; a few hops bound the walk without leaving the package.
+  for (let hop = 0; hop < 6; hop += 1) {
+    const manifest = join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(await readFile(manifest, "utf8")) as {
+        name?: string;
+      };
+      const name = pkg.name?.toLowerCase();
+      if (name && PI_MARKERS.some((marker) => name.includes(marker))) {
+        return true;
+      }
+    } catch {
+      /* not a package root; keep walking */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
   }
   return false;
 }
