@@ -4773,6 +4773,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "image",
+ "libc",
  "monocode-core",
  "monocode-layout",
  "monocode-markdown",
@@ -4807,10 +4808,13 @@ version = "0.6.0"
 dependencies = [
  "gpui",
  "gpui-component",
+ "gpui_platform",
+ "image",
  "monocode-core",
  "monocode-layout",
  "monocode-terminal-view",
  "monocode-ui",
+ "regex",
  "serde",
  "serde_json",
 ]
