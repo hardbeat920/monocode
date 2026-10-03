@@ -3092,7 +3092,7 @@ fn load_unix_login_shell_env() -> HashMap<String, String> {
     parse_login_shell_env(&String::from_utf8_lossy(&output.stdout))
 }
 
-#[cfg(any(unix, test))]
+#[cfg(not(windows))]
 fn parse_login_shell_env(output: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in output.lines() {
