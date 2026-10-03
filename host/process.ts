@@ -55,6 +55,7 @@ const providerDirectories = (provider: RemoteProvider): string[] => {
   ];
 };
 
+/** Verify that an ambiguous launcher name belongs to requested provider. */
 async function matchesProvider(
   candidate: string,
   provider: RemoteProvider,
@@ -80,6 +81,7 @@ async function matchesProvider(
   return true;
 }
 
+/** Scan file content for any marker, stopping after optional byte limit. */
 async function fileContains(
   path: string,
   markers: string[],
@@ -111,13 +113,18 @@ const PI_MARKERS = [
   "pi_coding_agent",
 ];
 
+const PI_PACKAGE_NAMES = new Set([
+  "@earendil-works/pi-coding-agent",
+  "@mariozechner/pi-coding-agent",
+]);
+
 /**
  * npm's bin launcher for pi is a thin `#!/usr/bin/env node` stub whose only
  * job is to `createRequire(...)("./cli-runtime.js")` — the marker strings live
  * megabytes deeper in `dist/bundle/chunks/*.js`, past any reasonable head
  * scan. Identify the enclosing package instead: resolve symlinks (npm bins
  * symlink into `lib/node_modules/<pkg>/...`), then walk up to the nearest
- * `package.json` and check its `name`/`dependencies` against the Pi markers.
+ * `package.json` and check its exact `name` against supported Pi packages.
  */
 async function isPiLaunchCandidate(candidate: string): Promise<boolean> {
   if (await fileContains(candidate, PI_MARKERS, 64 * 1024)) return true;
@@ -137,9 +144,7 @@ async function isPiLaunchCandidate(candidate: string): Promise<boolean> {
         name?: string;
       };
       const name = pkg.name?.toLowerCase();
-      if (name && PI_MARKERS.some((marker) => name.includes(marker))) {
-        return true;
-      }
+      return name !== undefined && PI_PACKAGE_NAMES.has(name);
     } catch {
       /* not a package root; keep walking */
     }
@@ -150,6 +155,7 @@ async function isPiLaunchCandidate(candidate: string): Promise<boolean> {
   return false;
 }
 
+/** Resolve executable launcher for remote provider without running it. */
 export async function resolveProvider(
   provider: RemoteProvider,
 ): Promise<string> {

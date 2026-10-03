@@ -80,23 +80,22 @@ it.runIf(process.platform !== "win32")(
     const directory = mkdtempSync(join(tmpdir(), "monocode-pi-unrelated-"));
     const packageDirectory = join(
       directory,
-      "lib/node_modules/unrelated-pkg/dist",
+      "lib/node_modules/pi-coding-agent-tools/dist",
     );
     mkdirSync(packageDirectory, { recursive: true });
     writeFileSync(join(packageDirectory, "cli.js"), "#!/usr/bin/env node\n");
     chmodSync(join(packageDirectory, "cli.js"), 0o755);
     writeFileSync(
       join(packageDirectory, "../../package.json"),
-      JSON.stringify({ name: "unrelated-pkg" }),
+      JSON.stringify({ name: "pi-coding-agent-tools" }),
     );
     const candidate = join(directory, "bin/pi");
     mkdirSync(join(directory, "bin"), { recursive: true });
     symlinkSync(join(packageDirectory, "cli.js"), candidate);
     vi.stubEnv("PATH", join(directory, "bin"));
     try {
-      await expect(() => resolveProvider("pi")).rejects.toThrow(
-        /not installed/,
-      );
+      const resolved = await resolveProvider("pi").catch(() => undefined);
+      expect(resolved).not.toBe(candidate);
     } finally {
       vi.unstubAllEnvs();
       rmSync(directory, { recursive: true, force: true });
