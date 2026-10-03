@@ -257,6 +257,7 @@ import {
   DEFAULT_GITHUB_HOST,
   githubHost,
   saveGithubHost,
+  setGithubHost,
 } from "../../inbox/model/githubHost";
 import {
   disconnectGitlab,
@@ -1255,7 +1256,11 @@ function GithubSettings() {
       const next = await githubStatus();
       if (generation === request.current) {
         setStatus(next);
-        if (next.host) setSavedHost(next.host);
+        if (next.host) {
+          // Only the latest status response may update the shared host.
+          setGithubHost(next.host);
+          setSavedHost(next.host);
+        }
       }
     } catch (err: unknown) {
       if (generation === request.current) {

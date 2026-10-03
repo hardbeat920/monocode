@@ -148,7 +148,7 @@ pub async fn jira_set_config(
             cloud: true,
         };
         let info = jira_get(&config, "/rest/api/2/serverInfo")?;
-        config.cloud = server_info_is_cloud(&info);
+        config.cloud = server_info_is_cloud(&info, &config.site);
         let myself = jira_get(&config, &api_path(&config, "/myself"))?;
         let user_field = if config.cloud { "accountId" } else { "name" };
         if string_field(&myself, user_field)
@@ -323,8 +323,12 @@ fn api_path(config: &JiraConfig, path: &str) -> String {
     format!("/rest/api/{version}{path}")
 }
 
-fn server_info_is_cloud(info: &Value) -> bool {
-    string_field(info, "deploymentType").is_some_and(|kind| kind.eq_ignore_ascii_case("cloud"))
+/// Explicit deployment metadata wins; without it, an Atlassian Cloud hostname decides.
+fn server_info_is_cloud(info: &Value, site: &str) -> bool {
+    match string_field(info, "deploymentType").filter(|kind| !kind.is_empty()) {
+        Some(kind) => kind.eq_ignore_ascii_case("cloud"),
+        None => is_atlassian_cloud_site(site),
+    }
 }
 
 fn is_atlassian_cloud_site(site: &str) -> bool {
@@ -1117,14 +1121,21 @@ mod tests {
 
     #[test]
     fn server_info_detects_cloud_deployments() {
-        assert!(server_info_is_cloud(&json!({ "deploymentType": "Cloud" })));
-        assert!(!server_info_is_cloud(
-            &json!({ "deploymentType": "Server" })
+        let server = "https://jira.example.com";
+        assert!(server_info_is_cloud(
+            &json!({ "deploymentType": "Cloud" }),
+            server
         ));
         assert!(!server_info_is_cloud(
-            &json!({ "deploymentType": "DataCenter" })
+            &json!({ "deploymentType": "Server" }),
+            SITE
         ));
-        assert!(!server_info_is_cloud(&json!({})));
+        assert!(!server_info_is_cloud(
+            &json!({ "deploymentType": "DataCenter" }),
+            SITE
+        ));
+        assert!(!server_info_is_cloud(&json!({}), server));
+        assert!(server_info_is_cloud(&json!({}), SITE));
         assert!(is_atlassian_cloud_site(SITE));
         assert!(!is_atlassian_cloud_site("https://jira.example.com"));
     }

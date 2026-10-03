@@ -124,13 +124,13 @@ fn normalize_github_host(raw: &str) -> Result<String, String> {
         .filter(|host| !host.is_empty())
         .ok_or_else(|| "GitHub host is invalid".to_string())?
         .to_ascii_lowercase();
-    let host = match host.as_str() {
+    // `gh` addresses hosts by name, and link matching compares hostnames.
+    if url.port().is_some() {
+        return Err("GitHub host must not include a port".into());
+    }
+    Ok(match host.as_str() {
         "www.github.com" | "api.github.com" => DEFAULT_HOST.to_string(),
         _ => host,
-    };
-    Ok(match url.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host,
     })
 }
 
@@ -149,10 +149,7 @@ mod tests {
             normalize_github_host(" https://GitHub.Example.com/acme/web/ ").unwrap(),
             "github.example.com"
         );
-        assert_eq!(
-            normalize_github_host("github.example.com:8443").unwrap(),
-            "github.example.com:8443"
-        );
+        assert!(normalize_github_host("github.example.com:8443").is_err());
         assert!(normalize_github_host("http://github.example.com").is_err());
         assert!(normalize_github_host("https://user@github.example.com").is_err());
         assert!(normalize_github_host("").is_err());
