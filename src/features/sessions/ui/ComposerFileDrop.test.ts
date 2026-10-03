@@ -106,7 +106,7 @@ describe("Composer Explorer file drops", () => {
       window.dispatchEvent(
         explorerDrag({
           type: "move",
-          path: "/project/src/main.ts",
+          paths: ["/project/src/main.ts", "/project/src/app.ts"],
           x: 100,
           y: 100,
         }),
@@ -118,7 +118,7 @@ describe("Composer Explorer file drops", () => {
       window.dispatchEvent(
         explorerDrag({
           type: "drop",
-          path: "/project/src/main.ts",
+          paths: ["/project/src/main.ts", "/project/src/app.ts"],
           x: 100,
           y: 100,
         }),
@@ -126,10 +126,13 @@ describe("Composer Explorer file drops", () => {
     });
 
     expect(invoke).toHaveBeenCalledWith("inspect_paths", {
-      paths: ["/project/src/main.ts"],
+      paths: ["/project/src/main.ts", "/project/src/app.ts"],
     });
     expect(
       container.querySelector('[title="/project/src/main.ts"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[title="/project/src/app.ts"]'),
     ).not.toBeNull();
   });
 });

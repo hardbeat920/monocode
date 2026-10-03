@@ -31,6 +31,7 @@ import {
   subscribeShowExcludedFiles,
 } from "../../settings/model/appearance";
 import {
+  bulkError,
   createParentOf,
   dirsTouchedByCreate,
   dirsTouchedByMove,
@@ -44,6 +45,8 @@ import {
   saveExpanded,
   saveSelected,
   subscribeDirsChanged,
+  visibleChildren,
+  visibleTreeOrder,
 } from "../model/fileTree";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
@@ -59,7 +62,19 @@ import {
   revealPath,
   type FsEntry,
 } from "../../../platform/tauri/fs";
-import { displayPath, parentPath, rebasePath } from "../../../shared/lib/paths";
+import {
+  displayPath,
+  isEqualOrInside,
+  parentPath,
+  rebasePath,
+  topLevelPaths,
+} from "../../../shared/lib/paths";
+import { runSequential } from "../../../shared/lib/concurrent";
+import {
+  selectionMode,
+  type SelectMode,
+} from "../../../shared/lib/multiSelection";
+import { useMultiSelection } from "../../../shared/hooks/useMultiSelection";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
 import type { OpenFileFn } from "../../search/model/search";
 import type { GitStatusMap } from "../../source-control/hooks/useGitFileStatuses";
@@ -91,8 +106,14 @@ type Props = {
 };
 
 type Creating = { id: number; parent: string; isDir: boolean };
-type Clip = { mode: "copy" | "cut"; path: string; isDir: boolean };
-type MenuTarget = { path: string; isDir: boolean; isRoot: boolean };
+type Clip = { mode: "copy" | "cut"; paths: string[] };
+/** `paths` are the rows the action applies to: the selection when `path` is in it. */
+type MenuTarget = {
+  path: string;
+  paths: string[];
+  isDir: boolean;
+  isRoot: boolean;
+};
 type MenuState = { x: number; y: number; target: MenuTarget };
 
 const REVEAL_LABEL = IS_MAC
@@ -106,7 +127,11 @@ type TreeCtxValue = {
   selectedPath: string | null;
   creating: Creating | null;
   renaming: string | null;
-  cutPath: string | null;
+  cutPaths: readonly string[];
+  /** Whether the multi-selection holds any row; the focus is only highlighted when not. */
+  hasSelection: boolean;
+  isSelected: (path: string) => boolean;
+  onRowClick: (event: ReactMouseEvent, path: string) => SelectMode;
   dragOverPath: string | null;
   epoch: number;
   showExcludedFiles: boolean;
@@ -172,10 +197,32 @@ function explorerItems(
   clip: Clip | null,
   canOpenTerminal: boolean,
 ): ExplorerMenuItem[] {
+  if (target.paths.length > 1) {
+    return [
+      { kind: "item", id: "cut", label: "Cut", shortcut: `${MOD}X` },
+      { kind: "item", id: "copy", label: "Copy", shortcut: `${MOD}C` },
+      { kind: "sep" },
+      {
+        kind: "item",
+        id: "copy-path",
+        label: "Copy Path",
+        shortcut: `${MOD}${SHIFT}C`,
+      },
+      { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
+      { kind: "sep" },
+      {
+        kind: "item",
+        id: "delete",
+        label: "Delete",
+        shortcut: "⌫",
+        danger: true,
+      },
+    ];
+  }
   const pasteParent = target.isDir ? target.path : parentPath(target.path);
-  const pasteBlocked =
-    !!clip?.isDir &&
-    (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
+  const pasteBlocked = !!clip?.paths.some((path) =>
+    isEqualOrInside(pasteParent, path),
+  );
   return [
     { kind: "item", id: "new-file", label: "New File" },
     { kind: "item", id: "new-folder", label: "New Folder" },
@@ -275,6 +322,12 @@ export const FileTree = memo(function FileTree({
     loadShowExcludedFiles,
     loadShowExcludedFiles,
   );
+  // Rows picked with Cmd/Ctrl/Shift-click; `selectedPath` stays the focus
+  // (shortcut anchor, rename, create parent) and is the only persisted part.
+  const sel = useMultiSelection({
+    visibleOrder: () => visibleTreeOrder(cwd, expanded, showExcludedFiles),
+    fallbackAnchor: () => (selectedPath !== cwd ? selectedPath : null),
+  });
   const creatingRef = useRef(creating);
   creatingRef.current = creating;
   const fileDragCleanup = useRef<(() => void) | null>(null);
@@ -299,6 +352,16 @@ export const FileTree = memo(function FileTree({
     saveSelected(cwd, path);
   };
 
+  /** Focuses a row the tree just produced (created, pasted…), dropping the multi-selection. */
+  const focusPath = (path: string) => {
+    onSelect(path);
+    sel.clear();
+  };
+
+  /** Rows a shortcut acts on: the selection, else the focus. */
+  const keyTargets = (focus: string) =>
+    sel.selection.ids.length ? topLevelPaths(sel.selection.ids) : [focus];
+
   const onFilePointerDown = (
     path: string,
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -311,6 +374,8 @@ export const FileTree = memo(function FileTree({
     let lastX = startX;
     let lastY = startY;
     let active = false;
+    // Set on activation: the grabbed file, or every selected file with it.
+    let paths = [path];
     let restoreSelection: (() => void) | undefined;
     let preview: HTMLDivElement | null = null;
 
@@ -345,6 +410,12 @@ export const FileTree = memo(function FileTree({
       const label = handle.children.item(2)?.cloneNode(true);
       if (icon) preview.append(icon);
       if (label) preview.append(label);
+      if (paths.length > 1) {
+        const count = document.createElement("span");
+        count.classList.add("explorer-file-drag-count");
+        count.textContent = `+${paths.length - 1}`;
+        preview.append(count);
+      }
 
       document.body.append(preview);
       movePreview();
@@ -375,12 +446,19 @@ export const FileTree = memo(function FileTree({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onCancel);
       release();
-      if (active) emitExplorerFilePointerDrag({ type: "end", path });
+      if (active) emitExplorerFilePointerDrag({ type: "end", paths });
       fileDragCleanup.current = null;
     };
 
     const activate = () => {
       active = true;
+      // Dragging a row outside the selection drags that row alone, as Finder.
+      if (!sel.isSelected(path)) sel.select(path, undefined, "single");
+      // Folders aren't draggable: drop them first, so files selected inside a
+      // selected folder still come along.
+      paths = topLevelPaths(
+        sel.targetsFor(path).filter((p) => !isDirAt(cwd, p)),
+      );
       onSelect(path);
       restoreSelection = suppressTextSelection();
       setGrabbing(true);
@@ -404,7 +482,7 @@ export const FileTree = memo(function FileTree({
       }
       moveEvent.preventDefault();
       movePreview();
-      emitExplorerFilePointerDrag({ type: "move", path, x: lastX, y: lastY });
+      emitExplorerFilePointerDrag({ type: "move", paths, x: lastX, y: lastY });
     }
 
     function finish(commit: boolean, upEvent?: PointerEvent) {
@@ -414,7 +492,7 @@ export const FileTree = memo(function FileTree({
         if (commit) {
           emitExplorerFilePointerDrag({
             type: "drop",
-            path,
+            paths,
             x: lastX,
             y: lastY,
           });
@@ -476,8 +554,8 @@ export const FileTree = memo(function FileTree({
       return next;
     });
     setClip((cur) =>
-      cur && (cur.path === from || cur.path.startsWith(`${from}/`))
-        ? { ...cur, path: rebasePath(cur.path, from, to) }
+      cur
+        ? { ...cur, paths: cur.paths.map((p) => rebasePath(p, from, to)) }
         : cur,
     );
   };
@@ -514,8 +592,7 @@ export const FileTree = memo(function FileTree({
     await refreshTouched(touched);
     setCreating((cur) => (cur?.id === id ? null : cur));
     expandDirs(touched);
-    setSelectedPath(created);
-    saveSelected(cwd, created);
+    focusPath(created);
     if (!asFolder) onOpenFile(created, undefined, { exact: true });
   };
 
@@ -540,46 +617,59 @@ export const FileTree = memo(function FileTree({
     onFileMoved?.(path, next);
   };
 
-  const removeEntry = async (path: string) => {
-    if (path === cwd) return;
-    const isDir = isDirAt(cwd, path);
-    const label = basename(path);
+  const removeEntries = async (paths: string[]) => {
+    const targets = paths.filter((path) => path !== cwd);
+    if (!targets.length) return;
+    const dirs = new Set(targets.filter((path) => isDirAt(cwd, path)));
+    const label = basename(targets[0]);
     const ok = window.confirm(
-      isDir
-        ? `Delete folder “${label}” and everything inside it?`
-        : `Delete “${label}”?`,
+      targets.length > 1
+        ? `Delete ${targets.length} items?`
+        : dirs.size
+          ? `Delete folder “${label}” and everything inside it?`
+          : `Delete “${label}”?`,
     );
     if (!ok) return;
-    await deletePath(path);
-    await refreshTouched([parentPath(path)], isDir ? [path] : []);
-    setSelectedPath((prev) => {
-      if (!prev || prev === path || prev.startsWith(`${path}/`)) {
-        const parent = parentPath(path);
+    const { done, failed } = await runSequential(targets, deletePath);
+    if (done.length) {
+      await refreshTouched(
+        done.map(parentPath),
+        done.filter((path) => dirs.has(path)),
+      );
+      setSelectedPath((prev) => {
+        const gone = prev
+          ? done.find((path) => isEqualOrInside(prev, path))
+          : done[0];
+        if (!gone) return prev;
+        const parent = parentPath(gone);
         saveSelected(cwd, parent);
         return parent;
-      }
-      return prev;
-    });
-    setClip((cur) =>
-      cur && (cur.path === path || cur.path.startsWith(`${path}/`))
-        ? null
-        : cur,
-    );
-    onFileDeleted?.(path);
+      });
+      setClip((cur) => {
+        const kept = cur?.paths.filter(
+          (p) => !done.some((path) => isEqualOrInside(p, path)),
+        );
+        return cur && kept?.length ? { ...cur, paths: kept } : null;
+      });
+      sel.clear();
+      for (const path of done) onFileDeleted?.(path);
+    }
+    const error = bulkError(failed);
+    if (error) throw error;
   };
 
   const copyExternalFiles = async (paths: string[], destParent: string) => {
     let created: string | null = null;
-    try {
-      for (const from of paths) created = await copyPath(from, destParent);
-    } finally {
-      if (created) {
-        await refreshTouched([destParent]);
-        expandDirs([destParent]);
-        setSelectedPath(created);
-        saveSelected(cwd, created);
-      }
+    const { failed } = await runSequential(paths, async (from) => {
+      created = await copyPath(from, destParent);
+    });
+    if (created) {
+      await refreshTouched([destParent]);
+      expandDirs([destParent]);
+      focusPath(created);
     }
+    const error = bulkError(failed);
+    if (error) throw error;
   };
 
   const pasteAt = async (targetPath: string) => {
@@ -588,33 +678,42 @@ export const FileTree = memo(function FileTree({
       await copyExternalFiles(await clipboardFilePaths(), destParent);
       return;
     }
-    if (
-      clip.isDir &&
-      (destParent === clip.path || destParent.startsWith(`${clip.path}/`))
-    ) {
+    if (clip.paths.some((path) => isEqualOrInside(destParent, path))) {
       throw new Error("Cannot paste a folder into itself.");
     }
-    const from = clip.path;
-    const mode = clip.mode;
-    const isDir = clip.isDir;
-    const created =
-      mode === "cut"
-        ? await movePath(from, destParent)
-        : await copyPath(from, destParent);
-    if (mode === "cut") {
-      await refreshTouched(
-        dirsTouchedByMove(from, created),
-        isDir ? [from] : [],
+    const { mode, paths } = clip;
+    const dirs = new Set(paths.filter((path) => isDirAt(cwd, path)));
+    const created = new Map<string, string>();
+    const { failed } = await runSequential(paths, async (from) => {
+      created.set(
+        from,
+        mode === "cut"
+          ? await movePath(from, destParent)
+          : await copyPath(from, destParent),
       );
-      remapTreePaths(from, created);
-      onFileMoved?.(from, created);
-      setClip(null);
-    } else {
-      await refreshTouched([destParent]);
+    });
+    if (created.size) {
+      const moves = [...created];
+      if (mode === "cut") {
+        await refreshTouched(
+          moves.flatMap(([from, to]) => dirsTouchedByMove(from, to)),
+          moves.filter(([from]) => dirs.has(from)).map(([from]) => from),
+        );
+        for (const [from, to] of moves) {
+          remapTreePaths(from, to);
+          onFileMoved?.(from, to);
+        }
+        // Keep what failed to move on the clipboard so Paste can retry it.
+        const left = paths.filter((path) => !created.has(path));
+        setClip(left.length ? { mode, paths: left } : null);
+      } else {
+        await refreshTouched([destParent]);
+      }
+      expandDirs([destParent]);
+      focusPath(moves[moves.length - 1][1]);
     }
-    expandDirs([destParent]);
-    setSelectedPath(created);
-    saveSelected(cwd, created);
+    const error = bulkError(failed);
+    if (error) throw error;
   };
 
   const duplicateAt = async (path: string) => {
@@ -622,8 +721,7 @@ export const FileTree = memo(function FileTree({
     const destParent = parentPath(path);
     const created = await copyPath(path, destParent);
     await refreshTouched([destParent]);
-    setSelectedPath(created);
-    saveSelected(cwd, created);
+    focusPath(created);
   };
 
   const run = async (work: () => Promise<void>) => {
@@ -657,11 +755,11 @@ export const FileTree = memo(function FileTree({
         return;
       case "cut":
         if (target.isRoot) return;
-        setClip({ mode: "cut", path: target.path, isDir: target.isDir });
+        setClip({ mode: "cut", paths: target.paths });
         return;
       case "copy":
         if (target.isRoot) return;
-        setClip({ mode: "copy", path: target.path, isDir: target.isDir });
+        setClip({ mode: "copy", paths: target.paths });
         return;
       case "paste":
         await run(() => pasteAt(target.path));
@@ -670,16 +768,18 @@ export const FileTree = memo(function FileTree({
         await run(() => duplicateAt(target.path));
         return;
       case "copy-path":
-        await copyText(target.path);
+        await copyText(target.paths.join("\n"));
         return;
       case "copy-relative-path":
-        await copyText(displayPath(target.path, cwd));
+        await copyText(
+          target.paths.map((path) => displayPath(path, cwd)).join("\n"),
+        );
         return;
       case "rename":
         startRename(target.path);
         return;
       case "delete":
-        await run(() => removeEntry(target.path));
+        await run(() => removeEntries(target.paths));
         return;
       case "reveal":
         await run(() => revealPath(target.path));
@@ -696,8 +796,26 @@ export const FileTree = memo(function FileTree({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+    // A row outside the selection replaces it; one inside keeps it.
+    if (!sel.isSelected(entry.path)) {
+      sel.select(entry.path, undefined, "single");
+    }
     openMenu(
-      { path: entry.path, isDir: entry.isDir, isRoot: false },
+      {
+        path: entry.path,
+        paths: topLevelPaths(sel.targetsFor(entry.path)),
+        isDir: entry.isDir,
+        isRoot: false,
+      },
+      e.clientX,
+      e.clientY,
+    );
+  };
+
+  const openRootMenu = (e: ReactMouseEvent) => {
+    sel.clear();
+    openMenu(
+      { path: cwd, paths: [cwd], isDir: true, isRoot: true },
       e.clientX,
       e.clientY,
     );
@@ -706,7 +824,7 @@ export const FileTree = memo(function FileTree({
   const onBackgroundMenu = (e: ReactMouseEvent) => {
     if ((e.target as HTMLElement).closest("input")) return;
     e.preventDefault();
-    openMenu({ path: cwd, isDir: true, isRoot: true }, e.clientX, e.clientY);
+    openRootMenu(e);
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -719,26 +837,28 @@ export const FileTree = memo(function FileTree({
     ) {
       return;
     }
+    // Escape clears the selection, Mod+A selects every visible row.
+    if (sel.onKeyDown(e, "")) return;
     const path = selectedPath ?? cwd;
-    const isRoot = path === cwd;
-    const isDir = isDirAt(cwd, path);
+    const targets = keyTargets(path);
+    const isRoot = targets.includes(cwd);
     const mod = e.metaKey || e.ctrlKey;
     const key = shortcutLetter(e);
     if (mod && !e.altKey && e.shiftKey && key === "c") {
       e.preventDefault();
-      void copyText(path);
+      void copyText(targets.join("\n"));
       return;
     }
     if (mod && !e.altKey && !e.shiftKey && key === "c") {
       if (isRoot) return;
       e.preventDefault();
-      setClip({ mode: "copy", path, isDir });
+      setClip({ mode: "copy", paths: targets });
       return;
     }
     if (mod && !e.altKey && !e.shiftKey && key === "x") {
       if (isRoot) return;
       e.preventDefault();
-      setClip({ mode: "cut", path, isDir });
+      setClip({ mode: "cut", paths: targets });
       return;
     }
     if (mod && !e.altKey && !e.shiftKey && key === "v") {
@@ -747,13 +867,14 @@ export const FileTree = memo(function FileTree({
       return;
     }
     if (e.key === "F2") {
+      if (targets.length !== 1) return;
       e.preventDefault();
-      startRename(path);
+      startRename(targets[0]);
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
-      void run(() => removeEntry(path));
+      void run(() => removeEntries(targets));
       return;
     }
     if (e.key === "Escape" && clip?.mode === "cut") {
@@ -761,6 +882,14 @@ export const FileTree = memo(function FileTree({
       setClip(null);
     }
   };
+
+  // The selection only holds visible rows: collapsing a folder, hiding
+  // excluded files or a filesystem change drops the rows that went away.
+  const { prune } = sel;
+  useEffect(() => {
+    const visible = new Set(visibleTreeOrder(cwd, expanded, showExcludedFiles));
+    prune((path) => visible.has(path));
+  }, [cwd, epoch, expanded, showExcludedFiles, prune]);
 
   useEffect(() => {
     if (!menu) return;
@@ -862,7 +991,10 @@ export const FileTree = memo(function FileTree({
         selectedPath,
         creating,
         renaming,
-        cutPath: clip?.mode === "cut" ? clip.path : null,
+        cutPaths: clip?.mode === "cut" ? clip.paths : [],
+        hasSelection: sel.selection.ids.length > 0,
+        isSelected: sel.isSelected,
+        onRowClick: sel.onRowClick,
         dragOverPath,
         epoch,
         showExcludedFiles,
@@ -924,17 +1056,14 @@ export const FileTree = memo(function FileTree({
             aria-expanded={rootOpen}
             title={cwd}
             onClick={() => {
+              sel.clear();
               onSelect(cwd);
               toggle(cwd);
             }}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              openMenu(
-                { path: cwd, isDir: true, isRoot: true },
-                e.clientX,
-                e.clientY,
-              );
+              openRootMenu(e);
             }}
             className={`flex min-w-0 flex-1 items-center gap-1 h-full pl-2 text-left ${
               dragOverPath === cwd ? "bg-selection" : ""
@@ -962,7 +1091,11 @@ export const FileTree = memo(function FileTree({
             </p>
           ) : null}
           {rootOpen ? (
-            <div role="tree" aria-label={`${name} files`}>
+            <div
+              role="tree"
+              aria-label={`${name} files`}
+              aria-multiselectable="true"
+            >
               <TreeChildren
                 parent={cwd}
                 depth={0}
@@ -1048,11 +1181,10 @@ function TreeChildren({
         onCancel={() => ctx.onCreateCancel(creating.id)}
       />
     ) : null;
-  const visible = ctx.showExcludedFiles
-    ? entries
-    : entries?.filter((e) => !e.ignored);
-  const folders = visible?.filter((e) => e.isDir) ?? [];
-  const files = visible?.filter((e) => !e.isDir) ?? [];
+  const { folders, files } = visibleChildren(
+    entries ?? [],
+    ctx.showExcludedFiles,
+  );
   const pad = { paddingLeft: 28 + depth * 12 };
 
   return (
@@ -1084,7 +1216,10 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
     expanded,
     selectedPath,
     renaming,
-    cutPath,
+    cutPaths,
+    hasSelection,
+    isSelected,
+    onRowClick,
     dragOverPath,
     epoch,
     gitStatuses,
@@ -1102,7 +1237,8 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
     entry.isDir ? peekDir(entry.path) : null,
   );
   const [error, setError] = useState<string | null>(null);
-  const selected = selectedPath === entry.path;
+  const selected =
+    isSelected(entry.path) || (!hasSelection && selectedPath === entry.path);
   const editing = renaming === entry.path;
   const gitStatus = entry.isDir
     ? gitStatuses?.dirs.get(entry.path)
@@ -1136,9 +1272,12 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
     };
   }, [entry.isDir, entry.path, open, epoch]);
 
-  const onClick = () => {
+  const onClick = (event: ReactMouseEvent) => {
     if (consumeFileClick()) return;
+    const mode = onRowClick(event, entry.path);
     onSelect(entry.path);
+    // Cmd/Ctrl/Shift-click only selects.
+    if (mode !== "single") return;
     if (entry.isDir) onToggle(entry.path);
     else onOpenFile(entry.path, undefined, { exact: true });
   };
@@ -1165,9 +1304,16 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           role="treeitem"
           title={entry.path}
           aria-expanded={entry.isDir ? open : undefined}
+          aria-selected={selected}
           onClick={onClick}
-          onDoubleClick={() => {
-            if (!entry.isDir) {
+          onMouseDown={(event) => {
+            // Shift-click extends the selection, not the page's text selection.
+            if (!event.shiftKey) return;
+            event.preventDefault();
+            event.currentTarget.focus();
+          }}
+          onDoubleClick={(event) => {
+            if (!entry.isDir && selectionMode(event) === "single") {
               onOpenFile(entry.path, undefined, { exact: true, pin: true });
             }
           }}
@@ -1180,7 +1326,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
             selected
               ? "bg-selection text-content"
               : "text-content hover:bg-content/5"
-          } ${cutPath === entry.path ? "opacity-50" : ""} ${
+          } ${cutPaths.includes(entry.path) ? "opacity-50" : ""} ${
             dragOverPath === entry.path ? "bg-selection" : ""
           }`}
         >

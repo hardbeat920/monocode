@@ -73,6 +73,19 @@ export function isEqualOrInside(path: string, root: string): boolean {
   return key === baseKey || key.startsWith(`${baseKey}/`);
 }
 
+/** `paths` without duplicates or paths inside another listed path, in first-seen order. */
+export function topLevelPaths(paths: readonly string[]): string[] {
+  return paths.filter(
+    (path, i) =>
+      !paths.some(
+        (other, j) =>
+          j !== i &&
+          isEqualOrInside(path, other) &&
+          (j < i || !isEqualOrInside(other, path)),
+      ),
+  );
+}
+
 export function joinPath(parent: string, relative: string): string {
   const base = trimSlash(parent);
   const parts = relative

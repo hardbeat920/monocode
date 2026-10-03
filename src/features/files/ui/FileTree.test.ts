@@ -17,24 +17,56 @@ import {
 } from "../../../shared/lib/drag";
 import { FileTree } from "./FileTree";
 
-const { iconRender, directories, clipboardFiles, copied, dragDrop } =
-  vi.hoisted(() => ({
-    iconRender: vi.fn(),
-    directories: new Map<string, FsEntry[]>(),
-    clipboardFiles: [] as string[],
-    copied: [] as { from: string; destParent: string }[],
-    dragDrop: {
-      handler: null as null | ((event: { payload: unknown }) => void),
+const {
+  iconRender,
+  directories,
+  clipboardFiles,
+  copied,
+  moved,
+  deleted,
+  dragDrop,
+  platform,
+} = vi.hoisted(() => ({
+  iconRender: vi.fn(),
+  directories: new Map<string, FsEntry[]>(),
+  clipboardFiles: [] as string[],
+  copied: [] as { from: string; destParent: string }[],
+  moved: [] as string[],
+  deleted: [] as string[],
+  dragDrop: {
+    handler: null as null | ((event: { payload: unknown }) => void),
+  },
+  platform: { mac: true },
+}));
+
+vi.mock("../../../platform/tauri/platform", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../platform/tauri/platform")>();
+  return {
+    ...actual,
+    get IS_MAC() {
+      return platform.mac;
     },
-  }));
+  };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, string>) => {
     if (command === "list_dir") return directories.get(args.path) ?? [];
     if (command === "clipboard_file_paths") return [...clipboardFiles];
     if (command === "copy_path") {
+      if (args.from.includes("locked")) throw new Error("Permission denied");
       copied.push({ from: args.from, destParent: args.destParent });
       return `${args.destParent}/${args.from.split("/").pop()}`;
+    }
+    if (command === "move_path") {
+      if (args.from.endsWith("/b.ts")) throw new Error("Permission denied");
+      moved.push(args.from);
+      return `${args.destParent}/${args.from.split("/").pop()}`;
+    }
+    if (command === "delete_path") {
+      deleted.push(args.path);
+      return;
     }
     throw new Error(`Unexpected command: ${command}`);
   }),
@@ -129,6 +161,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   clipboardFiles.length = 0;
   copied.length = 0;
+  moved.length = 0;
+  deleted.length = 0;
+  platform.mac = true;
 });
 
 describe("FileTree render isolation", () => {
@@ -244,6 +279,22 @@ describe("FileTree accepts files from outside the tree", () => {
       { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
       { from: "/Users/me/Desktop/b.txt", destParent: `${cwd}/docs` },
     ]);
+  });
+
+  it("keeps pasting past a failed clipboard file and reports it", async () => {
+    clipboardFiles.push(
+      "/Users/me/Desktop/a.txt",
+      "/Users/me/Desktop/locked.txt",
+      "/Users/me/Desktop/b.txt",
+    );
+    saveSelected(cwd, `${cwd}/docs`);
+    await act(async () => render());
+    await pressPaste(row("docs"));
+    expect(copied).toEqual([
+      { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
+      { from: "/Users/me/Desktop/b.txt", destParent: `${cwd}/docs` },
+    ]);
+    expect(container.textContent).toContain("Permission denied");
   });
 
   it("pastes into the parent folder when a file is selected", async () => {
@@ -430,11 +481,11 @@ describe("FileTree starts Explorer file drags", () => {
     expect(events.slice(-2)).toEqual([
       {
         type: "drop",
-        path: `${cwd}/first.ts`,
+        paths: [`${cwd}/first.ts`],
         x: 40,
         y: 40,
       },
-      { type: "end", path: `${cwd}/first.ts` },
+      { type: "end", paths: [`${cwd}/first.ts`] },
     ]);
     expect(props.onOpenFile).not.toHaveBeenCalled();
 
@@ -467,5 +518,370 @@ describe("FileTree starts Explorer file drags", () => {
     expect(events).toEqual([]);
 
     window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+  });
+});
+
+describe("FileTree multi-selection", () => {
+  const entry = (path: string, isDir = false): FsEntry => ({
+    name: path.split("/").pop()!,
+    path: `${cwd}/${path}`,
+    isDir,
+    ignored: false,
+  });
+
+  beforeEach(async () => {
+    directories.set(cwd, [
+      entry("docs", true),
+      entry("src", true),
+      entry("a.ts"),
+      entry("b.ts"),
+      entry("c.ts"),
+    ]);
+    directories.set(`${cwd}/docs`, [entry("docs/readme.md")]);
+    directories.set(`${cwd}/src`, [entry("src/main.ts")]);
+    await refreshDir(cwd);
+    await refreshDir(`${cwd}/docs`);
+    await refreshDir(`${cwd}/src`);
+    saveExpanded(cwd, new Set([cwd, `${cwd}/docs`]));
+    await act(async () => render());
+  });
+
+  function click(name: string, init: MouseEventInit = {}) {
+    return act(async () => {
+      row(name).dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, ...init }),
+      );
+    });
+  }
+
+  function selected(): string[] {
+    return [
+      ...container.querySelectorAll<HTMLElement>(
+        '[role="treeitem"][aria-selected="true"]',
+      ),
+    ].map((el) => el.title.slice(cwd.length + 1));
+  }
+
+  function isCut(name: string): boolean {
+    return row(name).className.split(/\s+/).includes("opacity-50");
+  }
+
+  function openMenuOn(name: string) {
+    return act(async () => {
+      row(name).dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+  }
+
+  function menuItems(): HTMLButtonElement[] {
+    return [
+      ...document.querySelectorAll<HTMLButtonElement>("[role='menuitem']"),
+    ];
+  }
+
+  function pick(label: string) {
+    const item = menuItems().find((el) => el.textContent?.startsWith(label));
+    if (!item) throw new Error(`No menu item ${label}`);
+    return act(async () => item.click());
+  }
+
+  it("marks the tree as multi-selectable", () => {
+    expect(
+      container
+        .querySelector('[role="tree"]')
+        ?.getAttribute("aria-multiselectable"),
+    ).toBe("true");
+  });
+
+  it("opens files and toggles folders on a plain click, selecting one row", async () => {
+    await click("a.ts");
+    expect(props.onOpenFile).toHaveBeenCalledWith(`${cwd}/a.ts`, undefined, {
+      exact: true,
+    });
+    expect(selected()).toEqual(["a.ts"]);
+
+    await click("src");
+    expect(row("src").getAttribute("aria-expanded")).toBe("true");
+    expect(selected()).toEqual(["src"]);
+  });
+
+  it("toggles rows on Cmd-click without opening or expanding them", async () => {
+    await click("a.ts");
+    await click("src", { metaKey: true });
+    await click("c.ts", { metaKey: true });
+    expect(selected()).toEqual(["src", "a.ts", "c.ts"]);
+    expect(row("src").getAttribute("aria-expanded")).toBe("false");
+    expect(props.onOpenFile).toHaveBeenCalledTimes(1);
+
+    await click("a.ts", { metaKey: true });
+    expect(selected()).toEqual(["src", "c.ts"]);
+    expect(props.onOpenFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles on Ctrl-click off macOS", async () => {
+    platform.mac = false;
+    await click("a.ts");
+    await click("b.ts", { ctrlKey: true });
+    expect(selected()).toEqual(["a.ts", "b.ts"]);
+    expect(props.onOpenFile).toHaveBeenCalledTimes(1);
+
+    await click("c.ts", { metaKey: true });
+    expect(selected()).toEqual(["c.ts"]);
+    expect(props.onOpenFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("selects an on-screen range on Shift-click, skipping collapsed children", async () => {
+    await click("docs/readme.md");
+    await click("b.ts", { shiftKey: true });
+    expect(selected()).toEqual(["docs/readme.md", "src", "a.ts", "b.ts"]);
+    expect(props.onOpenFile).toHaveBeenCalledTimes(1);
+
+    await click("docs", { shiftKey: true });
+    expect(selected()).toEqual(["docs", "docs/readme.md"]);
+    expect(row("docs").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("clears the selection on a root click", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>("[data-explorer-root]")!
+        .click(),
+    );
+    expect(selected()).toEqual([]);
+  });
+
+  it("offers bulk items on a selected row and applies them to every row", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await openMenuOn("b.ts");
+    const labels = menuItems().map((el) => el.textContent ?? "");
+    expect(labels).toHaveLength(5);
+    ["Cut", "Copy", "Copy Path", "Copy Relative Path", "Delete"].forEach(
+      (label, i) => expect(labels[i].startsWith(label)).toBe(true),
+    );
+    expect(selected()).toEqual(["a.ts", "b.ts"]);
+
+    await pick("Copy Relative Path");
+    expect(await navigator.clipboard.readText()).toBe("a.ts\nb.ts");
+
+    await openMenuOn("a.ts");
+    await pick("Delete");
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(window.confirm).toHaveBeenCalledWith("Delete 2 items?");
+    expect(deleted).toEqual([`${cwd}/a.ts`, `${cwd}/b.ts`]);
+    expect(selected()).toEqual([]);
+  });
+
+  it("replaces the selection when right-clicking outside it", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await openMenuOn("c.ts");
+    expect(selected()).toEqual(["c.ts"]);
+    expect(menuItems().some((el) => el.textContent?.startsWith("Rename"))).toBe(
+      true,
+    );
+  });
+
+  it("clears the selection on a background right-click", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await act(async () => {
+      container
+        .querySelector('[role="tree"]')!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+    });
+    expect(selected()).toEqual([]);
+  });
+
+  it("deletes only top-level selected paths after one confirm", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    await click("docs", { metaKey: true });
+    await click("docs/readme.md", { metaKey: true });
+    await click("a.ts", { metaKey: true });
+    await press(row("a.ts"), { key: "Delete" });
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(window.confirm).toHaveBeenCalledWith("Delete 2 items?");
+    expect(deleted).toEqual([`${cwd}/docs`, `${cwd}/a.ts`]);
+  });
+
+  it("does not delete when the confirm is declined", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await press(row("b.ts"), { key: "Backspace" });
+    expect(deleted).toEqual([]);
+    expect(selected()).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("copies every selected file on Copy then Paste", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await press(row("b.ts"), { key: "c", metaKey: true });
+    await click("docs");
+    await pressPaste(row("docs"));
+    expect(copied).toEqual([
+      { from: `${cwd}/a.ts`, destParent: `${cwd}/docs` },
+      { from: `${cwd}/b.ts`, destParent: `${cwd}/docs` },
+    ]);
+  });
+
+  it("keeps cut files that failed to move for another Paste", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await press(row("b.ts"), { key: "x", metaKey: true });
+    await click("docs");
+    await pressPaste(row("docs"));
+    expect(moved).toEqual([`${cwd}/a.ts`]);
+    expect(container.textContent).toContain("Permission denied");
+    expect(isCut("b.ts")).toBe(true);
+
+    await pressPaste(row("docs"));
+    expect(moved).toEqual([`${cwd}/a.ts`]);
+    expect(isCut("b.ts")).toBe(true);
+  });
+
+  it("copies every selected path on Mod+Shift+C, one per line", async () => {
+    await click("a.ts");
+    await click("src", { metaKey: true });
+    await press(row("src"), { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(
+      `${cwd}/a.ts\n${cwd}/src`,
+    );
+  });
+
+  it("clears the selection on Escape before clearing the cut", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    await press(row("b.ts"), { key: "x", metaKey: true });
+    expect(isCut("a.ts")).toBe(true);
+    expect(isCut("b.ts")).toBe(true);
+
+    // Only the focused row stays highlighted.
+    await press(row("b.ts"), { key: "Escape" });
+    expect(selected()).toEqual(["b.ts"]);
+    expect(isCut("a.ts")).toBe(true);
+
+    await press(row("b.ts"), { key: "Escape" });
+    expect(isCut("a.ts")).toBe(false);
+  });
+
+  it("selects every visible row on Mod+A", async () => {
+    await press(row("a.ts"), { key: "a", metaKey: true });
+    expect(selected()).toEqual([
+      "docs",
+      "docs/readme.md",
+      "src",
+      "a.ts",
+      "b.ts",
+      "c.ts",
+    ]);
+  });
+
+  it("drops selected rows hidden by collapsing their folder", async () => {
+    await click("docs/readme.md", { metaKey: true });
+    await click("a.ts", { metaKey: true });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[title="Collapse All"]')!
+        .click(),
+    );
+    expect(selected()).toEqual(["a.ts"]);
+
+    await click("docs", { metaKey: true });
+    await click("docs");
+    expect(row("docs/readme.md")).not.toBeNull();
+    expect(selected()).toEqual(["docs"]);
+    await click("a.ts", { metaKey: true });
+    expect(selected()).toEqual(["docs", "a.ts"]);
+  });
+
+  function drag(name: string) {
+    const events: ExplorerFilePointerDragDetail[] = [];
+    const onDrag = (event: Event) => {
+      events.push((event as CustomEvent<ExplorerFilePointerDragDetail>).detail);
+    };
+    window.addEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+    act(() => {
+      row(name).dispatchEvent(
+        new PointerEvent("pointerdown", {
+          button: 0,
+          pointerId: 1,
+          clientX: 10,
+          clientY: 10,
+          bubbles: true,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerId: 1,
+          clientX: 30,
+          clientY: 30,
+        }),
+      );
+    });
+    const preview = document.querySelector(
+      ".explorer-file-drag-preview",
+    )?.textContent;
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 1,
+          clientX: 30,
+          clientY: 30,
+        }),
+      );
+    });
+    window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+    return { drop: events.find((e) => e.type === "drop"), preview };
+  }
+
+  it("drags every selected file when grabbing a selected row", async () => {
+    await click("a.ts");
+    await click("src", { metaKey: true });
+    await click("c.ts", { metaKey: true });
+    const { drop, preview } = drag("c.ts");
+    expect(drop).toEqual({
+      type: "drop",
+      paths: [`${cwd}/a.ts`, `${cwd}/c.ts`],
+      x: 30,
+      y: 30,
+    });
+    expect(preview).toContain("+1");
+    expect(selected()).toEqual(["src", "a.ts", "c.ts"]);
+  });
+
+  it("drags files selected inside a selected folder", async () => {
+    await click("docs", { metaKey: true });
+    await click("docs/readme.md", { metaKey: true });
+    await click("a.ts", { metaKey: true });
+    const { drop } = drag("docs/readme.md");
+    expect(drop?.type === "drop" && drop.paths).toEqual([
+      `${cwd}/docs/readme.md`,
+      `${cwd}/a.ts`,
+    ]);
+  });
+
+  it("drags only the grabbed file when it is outside the selection", async () => {
+    await click("a.ts");
+    await click("b.ts", { metaKey: true });
+    const { drop, preview } = drag("c.ts");
+    expect(drop?.type === "drop" && drop.paths).toEqual([`${cwd}/c.ts`]);
+    expect(preview).not.toContain("+");
+    expect(selected()).toEqual(["c.ts"]);
   });
 });

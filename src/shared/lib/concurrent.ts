@@ -22,3 +22,28 @@ export async function forEachConcurrent<T>(
 
   await Promise.all(Array.from({ length: workerCount }, worker));
 }
+
+export type SequentialResult<T> = {
+  done: T[];
+  failed: { item: T; error: unknown }[];
+};
+
+/**
+ * Runs `task` on each item one after another, continuing past failures.
+ * For commands that must not overlap (e.g. git's index lock).
+ */
+export async function runSequential<T>(
+  items: readonly T[],
+  task: (item: T) => Promise<unknown>,
+): Promise<SequentialResult<T>> {
+  const result: SequentialResult<T> = { done: [], failed: [] };
+  for (const item of items) {
+    try {
+      await task(item);
+      result.done.push(item);
+    } catch (error) {
+      result.failed.push({ item, error });
+    }
+  }
+  return result;
+}

@@ -1,9 +1,10 @@
 export const EXPLORER_FILE_POINTER_DRAG_EVENT =
   "monocode:explorer-file-pointer-drag";
 
+/** `paths` are the dragged files: the selection when the grabbed row is in it. */
 export type ExplorerFilePointerDragDetail =
-  | { type: "move" | "drop"; path: string; x: number; y: number }
-  | { type: "end"; path: string };
+  | { type: "move" | "drop"; paths: string[]; x: number; y: number }
+  | { type: "end"; paths: string[] };
 
 export function emitExplorerFilePointerDrag(
   detail: ExplorerFilePointerDragDetail,

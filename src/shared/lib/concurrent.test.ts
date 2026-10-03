@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { forEachConcurrent } from "./concurrent";
+import { forEachConcurrent, runSequential } from "./concurrent";
 
 describe("forEachConcurrent", () => {
   it("bounds in-flight work and visits every item", async () => {
@@ -34,5 +34,28 @@ describe("forEachConcurrent", () => {
     );
 
     expect(seen).toEqual([0]);
+  });
+});
+
+describe("runSequential", () => {
+  it("runs one item at a time, in order", async () => {
+    const log: string[] = [];
+    let running = 0;
+    await runSequential(["a", "b", "c"], async (item) => {
+      running += 1;
+      expect(running).toBe(1);
+      log.push(item);
+      await Promise.resolve();
+      running -= 1;
+    });
+    expect(log).toEqual(["a", "b", "c"]);
+  });
+
+  it("continues past failures and reports them", async () => {
+    const error = new Error("locked");
+    const result = await runSequential([1, 2, 3], async (item) => {
+      if (item === 2) throw error;
+    });
+    expect(result).toEqual({ done: [1, 3], failed: [{ item: 2, error }] });
   });
 });

@@ -11,6 +11,7 @@ import {
   slash,
   resolveWorkspaceFileReference,
   resolveWorkspacePath,
+  topLevelPaths,
 } from "./paths";
 
 describe("workspace file references", () => {
@@ -244,5 +245,29 @@ describe("path relations", () => {
     expect(displayPath("c:/USERS/me/App/src/a.ts", "C:/Users/ME/app")).toBe(
       "src/a.ts",
     );
+  });
+});
+
+describe("topLevelPaths", () => {
+  it("drops duplicates and paths inside another listed path", () => {
+    expect(
+      topLevelPaths([
+        "/repo/src/a.ts",
+        "/repo/src",
+        "/repo/readme.md",
+        "/repo/src",
+        "/repo/srcx/b.ts",
+      ]),
+    ).toEqual(["/repo/src", "/repo/readme.md", "/repo/srcx/b.ts"]);
+  });
+
+  it("compares Windows paths without case", () => {
+    expect(topLevelPaths(["C:/Repo/src/a.ts", "c:/repo/SRC/"])).toEqual([
+      "c:/repo/SRC/",
+    ]);
+  });
+
+  it("keeps an empty list empty", () => {
+    expect(topLevelPaths([])).toEqual([]);
   });
 });

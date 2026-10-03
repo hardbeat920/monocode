@@ -1,6 +1,7 @@
 import { listDir, type FsEntry } from "../../../platform/tauri/fs";
 import { pathSegments } from "./fileName";
 import { joinPath, parentPath } from "../../../shared/lib/paths";
+import { flattenVisible } from "../../../shared/lib/treeOrder";
 
 const expandedByProject = new Map<string, Set<string>>();
 const selectedByProject = new Map<string, string | null>();
@@ -106,6 +107,38 @@ async function runRefresh() {
   }
 }
 
+/** A folder's rows as the explorer renders them: folders first, then files; ignored entries hidden unless shown. */
+export function visibleChildren(
+  entries: readonly FsEntry[],
+  showExcluded: boolean,
+): { folders: FsEntry[]; files: FsEntry[] } {
+  const visible = showExcluded ? entries : entries.filter((e) => !e.ignored);
+  return {
+    folders: visible.filter((e) => e.isDir),
+    files: visible.filter((e) => !e.isDir),
+  };
+}
+
+/** Absolute paths of visible explorer rows (folders and files) in on-screen order, under the root `cwd`. */
+export function visibleTreeOrder(
+  cwd: string,
+  expanded: ReadonlySet<string>,
+  showExcluded: boolean,
+): string[] {
+  const rowsOf = (path: string): FsEntry[] | null => {
+    const entries = peekDir(path);
+    if (!entries) return null;
+    const { folders, files } = visibleChildren(entries, showExcluded);
+    return [...folders, ...files];
+  };
+  if (!expanded.has(cwd)) return [];
+  return flattenVisible(rowsOf(cwd) ?? [], {
+    children: (entry) =>
+      entry.isDir && expanded.has(entry.path) ? rowsOf(entry.path) : null,
+    id: (entry) => entry.path,
+  });
+}
+
 /** Folder to create into, given the explorer selection. */
 export function createParentOf(cwd: string, selectedPath: string | null): string {
   if (!selectedPath || selectedPath === cwd) return cwd;
@@ -133,4 +166,17 @@ export function dirsTouchedByMove(from: string, to: string): string[] {
   const fromParent = parentPath(from);
   const toParent = parentPath(to);
   return fromParent === toParent ? [fromParent] : [fromParent, toParent];
+}
+
+/** One error for the items a bulk operation failed on, or null when none did. */
+export function bulkError(
+  failed: readonly { item: string; error: unknown }[],
+): Error | null {
+  if (!failed.length) return null;
+  const [first] = failed;
+  const message =
+    first.error instanceof Error ? first.error.message : String(first.error);
+  return new Error(
+    failed.length === 1 ? message : `${failed.length} items failed. ${message}`,
+  );
 }
