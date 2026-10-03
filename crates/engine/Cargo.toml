@@ -18,7 +18,9 @@ package-deps = ["dep:monocode-harness", "dep:monocode-process", "dep:monocode-la
 # attachment bytes (base64).
 submit = ["package-deps", "dep:monocode-integrations", "dep:url", "dep:base64"]
 attention = ["package-deps", "dep:monocode-integrations", "dep:monocode-platform", "dep:chrono", "dep:url"]
-side_threads = ["package-deps"]
+# side_threads: reuses submit's handoff and second-opinion models and its
+# submit action, and attention's live agents port.
+side_threads = ["package-deps", "submit", "attention"]
 orchestration = ["package-deps"]
 workspace = ["package-deps", "dep:monocode-terminal", "dep:monocode-terminal-view"]
 projects = ["package-deps"]
