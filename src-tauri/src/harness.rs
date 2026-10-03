@@ -1277,10 +1277,18 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["agent", "list"],
 ];
 
-fn exec_args_allowed(args: &[String]) -> bool {
-    EXEC_ALLOWED_ARGS
-        .iter()
-        .any(|a| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y))
+// OpenCode 2.x runs as a background service; other providers' CLIs may give
+// these subcommands unrelated meanings, so they stay OpenCode-only.
+const OPENCODE_EXEC_ALLOWED_ARGS: &[&[&str]] = &[
+    &["service", "status"],
+    &["service", "start"],
+    &["service", "get", "password"],
+];
+
+fn exec_args_allowed(binary_provider: Option<&str>, args: &[String]) -> bool {
+    let matches = |a: &&[&str]| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y);
+    EXEC_ALLOWED_ARGS.iter().any(matches)
+        || (binary_provider == Some("opencode") && OPENCODE_EXEC_ALLOWED_ARGS.iter().any(matches))
 }
 
 /// Must be a path a resolver would hand back, not an arbitrary binary
@@ -1310,7 +1318,7 @@ pub async fn harness_exec(
     binary_provider: Option<String>,
     binary_path: Option<String>,
 ) -> Result<String, String> {
-    if !exec_args_allowed(&args) {
+    if !exec_args_allowed(binary_provider.as_deref(), &args) {
         return Err("harness_exec: unsupported arguments".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -3762,22 +3770,44 @@ mod exec_allowlist_tests {
 
     #[test]
     fn allows_known_catalog_args() {
-        assert!(exec_args_allowed(&args(&["--version"])));
-        assert!(exec_args_allowed(&args(&["--list-models"])));
-        assert!(exec_args_allowed(&args(&["models", "--verbose"])));
-        assert!(exec_args_allowed(&args(&["models", "--json"])));
-        assert!(exec_args_allowed(&args(&["models"])));
-        assert!(exec_args_allowed(&args(&["status", "--json"])));
-        assert!(exec_args_allowed(&args(&["agent", "list"])));
+        for provider in [None, Some("cursor"), Some("opencode")] {
+            assert!(exec_args_allowed(provider, &args(&["--version"])));
+            assert!(exec_args_allowed(provider, &args(&["--list-models"])));
+            assert!(exec_args_allowed(provider, &args(&["models", "--verbose"])));
+            assert!(exec_args_allowed(provider, &args(&["models", "--json"])));
+            assert!(exec_args_allowed(provider, &args(&["models"])));
+            assert!(exec_args_allowed(provider, &args(&["status", "--json"])));
+            assert!(exec_args_allowed(provider, &args(&["agent", "list"])));
+        }
+    }
+
+    #[test]
+    fn allows_service_args_only_for_opencode() {
+        for service in [
+            &["service", "status"][..],
+            &["service", "start"][..],
+            &["service", "get", "password"][..],
+        ] {
+            assert!(exec_args_allowed(Some("opencode"), &args(service)));
+            assert!(!exec_args_allowed(None, &args(service)));
+            assert!(!exec_args_allowed(Some("cursor"), &args(service)));
+        }
     }
 
     #[test]
     fn rejects_other_args() {
-        assert!(!exec_args_allowed(&args(&[])));
-        assert!(!exec_args_allowed(&args(&["--help"])));
-        assert!(!exec_args_allowed(&args(&["--version", "--json"])));
-        assert!(!exec_args_allowed(&args(&["-c", "id"])));
-        assert!(!exec_args_allowed(&args(&["agent", "list", "--json"])));
+        for rejected in [
+            &[][..],
+            &["--help"][..],
+            &["--version", "--json"][..],
+            &["-c", "id"][..],
+            &["agent", "list", "--json"][..],
+            &["service", "stop"][..],
+            &["service", "get"][..],
+            &["service", "status", "--json"][..],
+        ] {
+            assert!(!exec_args_allowed(Some("opencode"), &args(rejected)));
+        }
     }
 }
 

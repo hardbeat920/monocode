@@ -40,6 +40,34 @@ it("resolves every provider and runs only allowed catalog commands", async () =>
         binaryProvider: "fx",
       }),
     ).rejects.toThrow("Unsupported headless catalog command");
+    for (const args of [
+      ["service", "status"],
+      ["service", "start"],
+      ["service", "get", "password"],
+    ]) {
+      const serviceOutput = await backend.invoke<string>("harness_exec", {
+        command: file,
+        args,
+        binaryProvider: "opencode",
+        cwd: directory,
+      });
+      expect(JSON.parse(serviceOutput)).toEqual(args);
+    }
+    for (const [provider, args] of [
+      ["fx", ["service", "start"]],
+      ["opencode", ["service", "stop"]],
+      ["opencode", ["service get", "password"]],
+      ["opencode", ["service", "get", "password", "--json"]],
+      ["opencode", ["models --json"]],
+    ] as const) {
+      await expect(
+        backend.invoke("harness_exec", {
+          command: file,
+          args,
+          binaryProvider: provider,
+        }),
+      ).rejects.toThrow("Unsupported headless catalog command");
+    }
     writeFileSync(join(directory, "note.txt"), "host-owned transcript");
     expect(
       await backend.invoke("harness_read_text_file", {

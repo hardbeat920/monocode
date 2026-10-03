@@ -17,15 +17,32 @@ import {
 import { providerLaunch, resolveProvider } from "./process";
 
 const exec = promisify(execFile);
-const ALLOWED_EXEC_ARGS = new Set([
-  "--version",
-  "--list-models",
-  "models --verbose",
-  "models --json",
-  "models",
-  "status --json",
-  "agent list",
-]);
+const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["--version"],
+  ["--list-models"],
+  ["models", "--verbose"],
+  ["models", "--json"],
+  ["models"],
+  ["status", "--json"],
+  ["agent", "list"],
+];
+// OpenCode 2.x runs as a background service; other providers' CLIs may give
+// these subcommands unrelated meanings, so they stay OpenCode-only.
+const OPENCODE_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["service", "status"],
+  ["service", "start"],
+  ["service", "get", "password"],
+];
+
+function execArgsAllowed(provider: RemoteProvider, args: string[]): boolean {
+  const matches = (allowed: readonly string[]) =>
+    allowed.length === args.length &&
+    allowed.every((arg, index) => arg === args[index]);
+  return (
+    ALLOWED_EXEC_ARGS.some(matches) ||
+    (provider === "opencode" && OPENCODE_EXEC_ARGS.some(matches))
+  );
+}
 
 function loopbackUrl(value: unknown): string {
   const url = new URL(String(value));
@@ -97,7 +114,7 @@ export class HostChildBackend implements ChildBackend {
           args.command !== commandPath ||
           !Array.isArray(args.args) ||
           !args.args.every((arg) => typeof arg === "string") ||
-          !ALLOWED_EXEC_ARGS.has(args.args.join(" "))
+          !execArgsAllowed(provider, args.args as string[])
         )
           throw new Error("Unsupported headless catalog command");
         const launch = await providerLaunch(commandPath, args.args as string[]);

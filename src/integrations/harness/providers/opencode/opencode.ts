@@ -19,8 +19,8 @@ import {
 import {
   appendOpenCodeAssistantTextDelta,
   asRecord,
+  assertSupportedOpenCodeVersion,
   buildOpenCodePermissionRules,
-  compareSemver,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -28,21 +28,27 @@ import {
   isOpenCodeNotFound,
   openCodeChildSessionId,
   mergeOpenCodeAssistantText,
-  MINIMUM_OPENCODE_VERSION,
   KNOWN_HIDDEN_AGENTS,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
   permissionTitle,
   previewFromToolPart,
+  sameDirectory,
   sessionErrorMessage,
   stringField,
   textDeltaEvent,
   toOpenCodePromptParts,
   toOpenCodePermissionReply,
   toolKindFromName,
+  type OpenCodeApiGeneration,
   type OpenCodePart,
 } from "./opencodeProtocol";
+import { resolveOpenCodeV2Service } from "./opencodeService";
+import {
+  OpenCodeV2InboxTracker,
+  type OpenCodeV2InboxOutcome,
+} from "./opencodeV2Events";
 import {
   composeToolTitle,
   extractShellCommand,
@@ -106,6 +112,17 @@ type Live = {
   turnFailed: ((error: Error) => void) | null;
   turnEndPending: boolean;
   activeTurn: boolean;
+  inbox: OpenCodeV2InboxTracker;
+  /**
+   * The v2 prompt or compaction whose completion the current latch waits
+   * for. `id` is unset until the server admits it; `uncorrelated` marks an
+   * admission that returned no id, so the next completion has to count.
+   */
+  awaitedInbox: {
+    kind: "turn" | "compaction";
+    id?: string;
+    uncorrelated?: boolean;
+  } | null;
 };
 
 type Resume = {
@@ -114,6 +131,8 @@ type Resume = {
 };
 
 const SERVER_TIMEOUT_MS = 30_000;
+// Matches the v1 summarize request timeout.
+const COMPACTION_TIMEOUT_MS = 30 * 60_000;
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
@@ -267,6 +286,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
     agent: input.modelSettings?.agent,
     variant: input.modelSettings?.variant,
     parts,
+    delivery: "steer",
   });
 }
 
@@ -377,55 +397,69 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const { path } = await resolveOpenCodeBinaryImpl();
-  await assertOpenCodeVersion(path, input.cwd);
+  const generation = await assertOpenCodeVersion(path, input.cwd);
 
   const liveRef: { current: Live | null } = { current: null };
-  let serverUrl = "";
+  const service =
+    generation === "v2"
+      ? await resolveOpenCodeV2Service(path, input.cwd)
+      : undefined;
+  let serverUrl = service?.url ?? "";
   let serverExited: number | null | undefined;
 
-  watchChild(
-    input.sessionId,
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-    (code) => {
-      serverExited = code;
-      liveByThread.delete(input.sessionId);
-      const live = liveRef.current;
-      if (!live?.muteUpdates) {
-        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
-      }
-      if (live) live.muteUpdates = true;
-      live?.turnFailed?.(new Error("OpenCode server exited"));
-      if (live) {
-        live.turnDone = null;
-        live.turnFailed = null;
-      }
-    },
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-  );
+  if (generation === "v1") {
+    watchChild(
+      input.sessionId,
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+      (code) => {
+        serverExited = code;
+        liveByThread.delete(input.sessionId);
+        const live = liveRef.current;
+        if (!live?.muteUpdates) {
+          (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+        }
+        if (live) live.muteUpdates = true;
+        live?.turnFailed?.(new Error("OpenCode server exited"));
+        if (live) {
+          live.turnDone = null;
+          live.turnFailed = null;
+        }
+      },
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+    );
 
-  const port = await freeHarnessPort();
-  await spawnChild(
-    input.sessionId,
-    path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
-    input.cwd,
-    undefined,
-    "opencode",
-  );
+    const port = await freeHarnessPort();
+    await spawnChild(
+      input.sessionId,
+      path,
+      ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+      input.cwd,
+      undefined,
+      "opencode",
+    );
+  }
 
   try {
-    const url = await waitForServerUrl(
-      () => serverUrl,
-      () => serverExited,
-      SERVER_TIMEOUT_MS,
+    const url =
+      generation === "v2"
+        ? serverUrl
+        : await waitForServerUrl(
+            () => serverUrl,
+            () => serverExited,
+            SERVER_TIMEOUT_MS,
+          );
+    const client = new OpenCodeClient(
+      url,
+      input.cwd,
+      generation,
+      service?.password,
     );
-    const client = new OpenCodeClient(url, input.cwd);
     const openCodeSession = await resolveSession(client, {
       resume: canResume ? resume : undefined,
       runtimeMode: input.runtimeMode,
@@ -464,6 +498,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnFailed: null,
       turnEndPending: false,
       activeTurn: false,
+      inbox: new OpenCodeV2InboxTracker(),
+      awaitedInbox: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -554,10 +590,24 @@ async function resolveSession(
         .catch(() => undefined);
       return forked;
     } catch (error) {
-      if (!isOpenCodeNotFound(error) && !isHttpNotFound(error)) throw error;
+      if (
+        !isOpenCodeNotFound(error) &&
+        !isHttpNotFound(error) &&
+        !isEmptySessionFork(error)
+      )
+        throw error;
     }
   }
   return client.createSession({ permission });
+}
+
+/** v2 refuses to fork a session without history; nothing is lost by starting fresh. */
+function isEmptySessionFork(error: unknown): boolean {
+  return (
+    error instanceof OpenCodeHttpError &&
+    error.status === 400 &&
+    stringField(asRecord(error.body), "kind") === "empty_session"
+  );
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
@@ -576,10 +626,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   });
   live.activeTurn = true;
   live.turnMetricsByMessageId.clear();
+  const v2 = live.client.generation === "v2";
+  live.awaitedInbox = v2 ? { kind: "turn" } : null;
   settlePendingTurn(live);
 
   try {
-    await live.client.promptAsync({
+    const inboxID = await live.client.promptAsync({
       sessionID: live.openCodeSessionId,
       model: parsed,
       agent: openCodeAgentForTurn(input),
@@ -587,6 +639,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       parts,
     });
     input.onAccepted?.();
+    if (v2) {
+      live.awaitedInbox = inboxID ? { kind: "turn", id: inboxID } : null;
+      // Fast runs can be delivered and finish before the admission response.
+      finishAwaitedInbox(live);
+    }
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -597,6 +654,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
   }
@@ -606,10 +664,136 @@ async function runCompaction(
   live: Live,
   model: { providerID: string; modelID: string },
 ): Promise<void> {
-  // Unlike prompt_async, summarize responds only after the compaction pass.
-  // Keep this outside the normal turn latch: its eventual session.status=idle
-  // must not become a pending completion for the next user turn.
-  await live.client.summarizeSession(live.openCodeSessionId, model);
+  if (live.client.generation !== "v2") {
+    // Unlike prompt_async, summarize responds only after the compaction pass.
+    // Keep this outside the normal turn latch: its eventual session.status=idle
+    // must not become a pending completion for the next user turn.
+    await live.client.summarizeSession(live.openCodeSessionId, model);
+    return;
+  }
+  // v2 only queues the compaction. Hold the turn chain until it actually
+  // ends so the next prompt is not sent into a context being rewritten.
+  const finished = new Promise<void>((resolve, reject) => {
+    live.turnDone = resolve;
+    live.turnFailed = reject;
+  });
+  // Rejections can land before the admission request returns.
+  finished.catch(() => undefined);
+  live.awaitedInbox = { kind: "compaction" };
+  const timer = setTimeout(
+    () => live.turnFailed?.(new Error("OpenCode compaction timed out")),
+    COMPACTION_TIMEOUT_MS,
+  );
+  try {
+    const inboxID = await live.client.summarizeSession(
+      live.openCodeSessionId,
+      model,
+    );
+    live.awaitedInbox = inboxID
+      ? { kind: "compaction", id: inboxID }
+      : { kind: "compaction", uncorrelated: true };
+    finishAwaitedInbox(live);
+    await finished;
+  } finally {
+    clearTimeout(timer);
+    live.awaitedInbox = null;
+    live.turnDone = null;
+    live.turnFailed = null;
+  }
+}
+
+/**
+ * Routes v2 completion events through the awaited inbox item. Returns true
+ * when the event belongs to that gate, settling the waiter only when the
+ * event finished the item it waits for; earlier runs' late events are dropped.
+ */
+function gateAwaitedInbox(
+  live: Live,
+  type: string,
+  properties: Record<string, unknown>,
+): boolean {
+  const awaited = live.awaitedInbox;
+  if (!awaited) return false;
+  const terminal =
+    type === "session.idle" ||
+    stringField(properties, "execution") !== undefined ||
+    (type === "session.status" &&
+      stringField(asRecord(properties.status), "type") === "idle");
+  const compactionEnd =
+    type === "session.compaction.ended" ||
+    type === "session.compaction.failed";
+  if (!terminal && !compactionEnd) return false;
+  if (!awaited.id) {
+    if (awaited.uncorrelated) {
+      finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+    }
+    return true;
+  }
+  if (live.inbox.outcome(awaited.id)) {
+    finishAwaitedInbox(live);
+  } else if (!live.inbox.reportsDelivery) {
+    // Servers that never report inbox delivery cannot be correlated; keep the
+    // uncorrelated completion so a turn cannot wait forever.
+    finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+  }
+  return true;
+}
+
+function inboxFallbackOutcome(
+  type: string,
+  properties: Record<string, unknown>,
+  awaited: NonNullable<Live["awaitedInbox"]>,
+): OpenCodeV2InboxOutcome | undefined {
+  if (type === "session.compaction.ended") {
+    return awaited.kind === "compaction" ? { kind: "succeeded" } : undefined;
+  }
+  if (type === "session.compaction.failed") {
+    return awaited.kind === "compaction"
+      ? { kind: "failed", error: properties.error }
+      : undefined;
+  }
+  const execution = stringField(properties, "execution");
+  if (execution === "failed") return { kind: "failed", error: properties.error };
+  return { kind: execution === "interrupted" ? "interrupted" : "succeeded" };
+}
+
+function finishAwaitedInbox(
+  live: Live,
+  fallback?: OpenCodeV2InboxOutcome,
+): void {
+  const awaited = live.awaitedInbox;
+  const outcome =
+    (awaited?.id && live.inbox.outcome(awaited.id)) || fallback;
+  if (!awaited || !outcome) return;
+  live.awaitedInbox = null;
+  if (awaited.kind === "compaction") {
+    const done = live.turnDone;
+    const failed = live.turnFailed;
+    live.turnDone = null;
+    live.turnFailed = null;
+    if (outcome.kind === "succeeded") done?.();
+    else
+      failed?.(
+        new Error(
+          outcome.kind === "failed"
+            ? sessionErrorMessage(outcome.error)
+            : "OpenCode compaction was interrupted",
+        ),
+      );
+    return;
+  }
+  if (outcome.kind === "failed") {
+    live.onEvent({
+      type: "session.error",
+      message: sessionErrorMessage(outcome.error),
+    });
+    finishActiveTurn(live);
+    return;
+  }
+  finishActiveTurn(live, [
+    { type: "message.completed" },
+    { type: "reasoning.completed" },
+  ]);
 }
 
 async function handleEvent(
@@ -646,6 +830,9 @@ async function handleEvent(
     const turn = live.turnDone;
     if (!(await isDescendantSession(live, payloadSessionId))) return;
     if (live.muteUpdates || live.turnDone !== turn) return;
+  } else if (live.client.generation === "v2") {
+    live.inbox.observe(type, properties);
+    if (gateAwaitedInbox(live, type, properties)) return;
   }
 
   switch (type) {
@@ -806,6 +993,16 @@ async function handleEvent(
         break;
       }
       if (statusType === "idle" && live.activeTurn) {
+        finishActiveTurn(live, [
+          { type: "message.completed" },
+          { type: "reasoning.completed" },
+        ]);
+      }
+      break;
+    }
+    case "session.idle": {
+      // v1 also emits this deprecated event; its turns end on session.status.
+      if (live.client.generation === "v2" && live.activeTurn) {
         finishActiveTurn(live, [
           { type: "message.completed" },
           { type: "reasoning.completed" },
@@ -1252,12 +1449,6 @@ function roleForPart(
     : undefined;
 }
 
-function sameDirectory(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value.replace(/\/+$/, "").replace(/\\/g, "/");
-  return normalize(left) === normalize(right);
-}
-
 function isHttpNotFound(error: unknown): boolean {
   return error instanceof OpenCodeHttpError && error.status === 404;
 }
@@ -1326,19 +1517,15 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
     ?.toLowerCase();
 }
 
-async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
-  const output = await execChild(path, ["--version"], cwd, "opencode").catch(() => "");
+async function assertOpenCodeVersion(
+  path: string,
+  cwd: string,
+): Promise<OpenCodeApiGeneration> {
+  const output = await execChild(path, ["--version"], cwd, "opencode").catch(
+    () => "",
+  );
   const version = parseOpenCodeVersion(output);
-  if (!version) {
-    throw new Error(
-      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
-  }
-  if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
-  }
+  return assertSupportedOpenCodeVersion(version);
 }
 
 function waitForServerUrl(
