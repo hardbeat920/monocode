@@ -4788,18 +4788,22 @@ name = "monocode-view-transcript"
 version = "0.6.0"
 dependencies = [
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_platform",
  "image",
  "libc",
  "monocode-core",
  "monocode-editor",
+ "monocode-layout",
  "monocode-markdown",
  "monocode-ui",
+ "monocode-view-composer",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
