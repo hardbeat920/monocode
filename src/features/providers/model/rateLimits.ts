@@ -241,14 +241,14 @@ export function relevantRateLimitWindows(
   limits: ProviderRateLimits,
   model?: string,
 ): RateLimitWindow[] {
-  const selected = model?.toLowerCase() ?? "";
+  const selected: string[] = model?.toLowerCase().match(/[a-z]+/g) ?? [];
   const scoped = (limits.scopedWeekly ?? []).filter((window) => {
-    if (!selected) return true;
-    const family = window.model
-      .toLowerCase()
-      .replace(/^claude[:-]/, "")
-      .split(/[- \d]/)[0];
-    return !!family && selected.includes(family);
+    if (!selected.length) return true;
+    const words = window.model.toLowerCase().match(/[a-z]+/g) ?? [];
+    const family =
+      words.find((word) => ["opus", "sonnet", "haiku"].includes(word)) ??
+      words.find((word) => word !== "claude");
+    return !family || selected.includes(family);
   });
   return [limits.session, limits.weekly, limits.monthly, ...scoped].filter(
     (window): window is RateLimitWindow => window != null,

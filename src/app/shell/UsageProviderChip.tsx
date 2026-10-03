@@ -312,6 +312,7 @@ export function UsageProviderChip({
           {accountView === "accounts" ? (
             <ProviderAccountPicker
               providerLabel={providerLabel}
+              model={model}
               accounts={accounts}
               identities={identities}
               accountId={accountId ?? ""}
@@ -608,10 +609,13 @@ function ProviderAccountPicker({
                   {meters.length > 0 ? (
                     <span className="flex min-w-0 flex-1 gap-2.5">
                       {meters.map((entry) => (
-                        // Short "5h" / "wk" titles, as on the footer chip.
                         <UsageMeter
                           key={entry.title}
-                          title={formatWindowLabel(entry.window.windowMinutes)}
+                          title={
+                            "model" in entry.window
+                              ? entry.title
+                              : formatWindowLabel(entry.window.windowMinutes)
+                          }
                           window={entry.window}
                           now={now}
                           className="min-w-0 flex-1"

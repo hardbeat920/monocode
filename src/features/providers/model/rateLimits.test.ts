@@ -14,6 +14,7 @@ import {
   parseOpencodeGoUsage,
   parseResetTimestamp,
   rateLimitWindowTooltip,
+  relevantRateLimitWindows,
 } from "./rateLimits";
 
 describe("formatWindowLabel", () => {
@@ -24,6 +25,28 @@ describe("formatWindowLabel", () => {
     expect(formatWindowLabel(45)).toBe("45m");
     expect(formatWindowLabel(1_440)).toBe("1d");
   });
+});
+
+it.each([
+  ["5.1", "claude:sonnet-5", true],
+  ["opus", "claude:octopus-5", false],
+  ["claude-4-opus", "claude:claude-opus-4", true],
+  ["us.anthropic.claude-opus-4", "claude:opus-4", true],
+  ["Fable 5.1", "claude:fable-5-1", true],
+  ["opus", "claude:sonnet-5", false],
+])("matches scoped quota %s against %s", (scope, model, relevant) => {
+  const limits = idleRateLimits("claude");
+  const window = {
+    model: scope,
+    label: scope,
+    usedPercent: 100,
+    windowMinutes: 10_080,
+    resetsAt: null,
+  };
+  limits.scopedWeekly = [window];
+  expect(relevantRateLimitWindows(limits, model).includes(window)).toBe(
+    relevant,
+  );
 });
 
 describe("formatResetDuration", () => {

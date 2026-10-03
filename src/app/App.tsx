@@ -6747,7 +6747,7 @@ function Workspace({
             pickTextHarness(current.harness),
             workCwd,
             branchMessage,
-            current.providerAccountId,
+            providerAccountId,
           )
             .then(async (fragment) => {
               const branch = fragment ? namedWorktreeBranch(fragment) : null;

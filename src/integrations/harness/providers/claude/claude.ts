@@ -1,4 +1,5 @@
 import { elicitationQuestions, elicitationResponse } from "./claudeElicitation";
+import { nextClaudeCronFire } from "./claudeSchedule";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
@@ -127,6 +128,11 @@ type BackgroundTask = {
   toolUseId?: string;
 };
 
+type ScheduledTask = {
+  fireAt: number | null;
+  expiresAt: number | null;
+};
+
 type Live = {
   cwd: string;
   claudeSessionId: string;
@@ -139,6 +145,7 @@ type Live = {
   metrics: TurnMetrics;
   narration: Map<string, string>;
   nativeTasks: Set<string>;
+  scheduledTasks: Map<string, ScheduledTask>;
   nativeTurn: boolean;
   closed: boolean;
   initRequestId: string;
@@ -544,6 +551,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     metrics: {},
     narration: new Map(),
     nativeTasks: new Set(),
+    scheduledTasks: new Map(),
     nativeTurn: false,
     closed: false,
     initRequestId: "",
@@ -1020,15 +1028,39 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
     if (!result.isError && tool.name === "CronCreate") {
-      const created = tryParseJsonRecord(result.text);
+      const created =
+        asRecord(rec.tool_use_result) ?? tryParseJsonRecord(result.text);
       const id =
         stringField(created, "id") ??
         /(?:job|task)\s+(?:with\s+)?id[:\s]+([\w-]+)/i.exec(result.text)?.[1] ??
+        /Scheduled\s+(?:(?:one-shot|recurring)\s+)?(?:task|job)\s+([\w-]+)/i.exec(
+          result.text,
+        )?.[1] ??
         result.toolUseId;
-      live.nativeTasks.add(id);
+      live.scheduledTasks.set(id, scheduledTask(tool.input, created));
     }
-    if (!result.isError && tool.name === "CronDelete")
-      live.nativeTasks.delete(String(tool.input.id ?? tool.input.job_id));
+    if (!result.isError && tool.name === "CronDelete") {
+      const id =
+        stringField(tool.input, "id") ?? stringField(tool.input, "job_id");
+      if (id) live.scheduledTasks.delete(id);
+    }
+    if (!result.isError && tool.name === "CronList") {
+      const listed =
+        asRecord(rec.tool_use_result) ?? tryParseJsonRecord(result.text);
+      if (Array.isArray(listed?.jobs)) {
+        const jobs = new Map<string, ScheduledTask>();
+        for (const raw of listed.jobs) {
+          const job = asRecord(raw);
+          const id = stringField(job, "id");
+          if (id && job)
+            jobs.set(
+              id,
+              live.scheduledTasks.get(id) ?? scheduledTask(job, job),
+            );
+        }
+        live.scheduledTasks = jobs;
+      }
+    }
     if (!result.isError && tool.name === "EnterPlanMode")
       live.providerPlanning = true;
     if (!result.isError && tool.name === "ExitPlanMode")
@@ -1467,6 +1499,7 @@ function handleAgentLifecycle(
       background.description = updated.description;
     }
     if (isTerminalAgentTaskStatus(updated.status)) {
+      live.nativeTasks.delete(updated.taskId);
       settleBackgroundRow(
         live,
         updated.taskId,
@@ -1486,6 +1519,7 @@ function handleAgentLifecycle(
 
   const notice = parseTaskNotification(rec);
   if (notice) {
+    live.nativeTasks.delete(notice.taskId);
     if (!notice.ambient) {
       noteTaskNotification(live, notice);
       finishBackgroundTask(live, notice.taskId);
@@ -1799,6 +1833,10 @@ function finishBackgroundTask(live: Live, taskId: string): void {
 function noteClaudeTurnStarted(live: Live): void {
   if (!live.started) return;
   if (!live.activeTurn) {
+    for (const [id, task] of live.scheduledTasks) {
+      if (task.fireAt !== null && task.fireAt <= Date.now())
+        live.scheduledTasks.delete(id);
+    }
     live.activeTurn = true;
     live.nativeTurn = true;
     live.metrics = {};
@@ -2055,7 +2093,37 @@ function launchOptions(
 
 export function claudeSessionNeedsProcess(sessionId: string): boolean {
   const live = liveByThread.get(sessionId);
-  return !!live && (live.activeTurn || live.nativeTasks.size > 0);
+  if (!live) return false;
+  for (const [id, task] of live.scheduledTasks) {
+    if (task.expiresAt !== null && task.expiresAt <= Date.now())
+      live.scheduledTasks.delete(id);
+  }
+  return (
+    live.activeTurn || live.nativeTasks.size > 0 || live.scheduledTasks.size > 0
+  );
+}
+
+function scheduledTask(
+  input: Record<string, unknown>,
+  result: Record<string, unknown> | null | undefined,
+): ScheduledTask {
+  const recurring =
+    typeof result?.recurring === "boolean"
+      ? result.recurring
+      : input.recurring === true;
+  const cron = stringField(input, "cron");
+  const fireAt =
+    !recurring && cron ? nextClaudeCronFire(cron, Date.now()) : null;
+  // Claude can fire one-shot jobs up to 90 seconds early at :00 and :30.
+  const jitter =
+    fireAt !== null && [0, 30].includes(new Date(fireAt).getMinutes())
+      ? 90_000
+      : 0;
+  return {
+    fireAt: fireAt === null ? null : fireAt - jitter,
+    // Recurring jobs expire after seven days, with up to 30 minutes of jitter.
+    expiresAt: recurring ? Date.now() + 7 * 86_400_000 + 30 * 60_000 : null,
+  };
 }
 
 /** Exported for tests. */

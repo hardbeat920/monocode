@@ -911,7 +911,7 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
-    if binary_provider.as_deref() == Some("claude") {
+    if binary_provider.as_deref() == Some("claude") && command_basename(&command) != "claude" {
         apply_claude_env(&mut cmd);
     }
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
@@ -1445,7 +1445,9 @@ fn exec_output_with_profile(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, command);
     if let Some(profile) = profile {
-        apply_claude_env(&mut cmd);
+        if command_basename(command) != "claude" {
+            apply_claude_env(&mut cmd);
+        }
         if let Some(dir) = &profile.config_dir {
             cmd.env("CLAUDE_CONFIG_DIR", dir);
             if profile.named {
