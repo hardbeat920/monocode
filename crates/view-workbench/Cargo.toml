@@ -1,0 +1,32 @@
+[package]
+name = "monocode-view-workbench"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Workbench views: split panes, surface tabs, tab groups, session surfaces, terminal dock"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+# Unframed inputs styled with InputEditorStyle, as the composer's pickers do.
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-layout.workspace = true
+monocode-terminal-view.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The Opus and Astra welcome screens match model names the way the TypeScript did.
+regex.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "workbench_gallery"
+path = "examples/workbench_gallery.rs"
