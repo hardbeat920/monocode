@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_SESSION_BYTES: u64 = 64 * 1024 * 1024;
@@ -39,6 +39,7 @@ pub struct ContextAssetSnapshot {
 #[tauri::command]
 pub async fn session_context_assets(
     app: AppHandle,
+    store: State<'_, crate::session_store::SessionStore>,
     session_id: String,
     attachments: Vec<ContextAssetSource>,
 ) -> Result<Vec<ContextAssetSnapshot>, String> {
@@ -46,9 +47,24 @@ pub async fn session_context_assets(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || snapshot_assets(&root, &session_id, attachments))
-        .await
-        .map_err(|error| error.to_string())?
+    let connection = store.shared_conn();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = connection.lock().map_err(|_| "Session store is locked")?;
+        snapshot_stored_assets(&conn, &root, &session_id, attachments)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn snapshot_stored_assets(
+    conn: &rusqlite::Connection,
+    root: &Path,
+    session_id: &str,
+    attachments: Vec<ContextAssetSource>,
+) -> Result<Vec<ContextAssetSnapshot>, String> {
+    crate::session_store::ensure_context_writable(conn, session_id)
+        .map_err(|error| error.to_string())?;
+    snapshot_assets(root, session_id, attachments)
 }
 
 fn snapshot_assets(
@@ -317,6 +333,22 @@ mod tests {
             path: None,
             data: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
         }
+    }
+
+    #[test]
+    fn deleted_session_cannot_recreate_historical_assets() {
+        let fixture = Fixture::new();
+        let store = crate::session_store::SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        conn.execute("INSERT INTO context_history_cleanup (session_id, pending) VALUES ('deleted-session', 0)", []).unwrap();
+        assert!(snapshot_stored_assets(
+            &conn,
+            &fixture.0,
+            "deleted-session",
+            vec![inline("late", b"Late asset")]
+        )
+        .is_err());
+        assert!(!fixture.0.join("context-history/deleted-session").exists());
     }
 
     #[test]

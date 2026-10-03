@@ -34,4 +34,8 @@ A remote provider choice made during an active turn waits in the open client unt
 
 `providerContext.ts` defines bindings and delivery state. `portableContext.ts` exports and budgets history. `contextTransfer.ts` shares native and attributed-text delivery rules between the desktop registry and the Node host. `contextAssets.ts` and the owning storage implementation preserve historical asset references. The existing composer and handoff row display transfer state.
 
-The SQLite session record stores a versioned provider-context envelope. Old records remain readable without it. Context snapshots and assets live under the owning application's data directory. Session deletion removes them. The host logs a filesystem cleanup failure while preserving the successful record deletion.
+The SQLite session record stores a versioned provider-context envelope. Old records remain readable without it. Context snapshots and assets live under the owning application's data directory.
+
+Permanent session deletion records a cleanup obligation in the same database transaction as record removal. The host and desktop attempt file removal after that transaction. Failed removal stays pending and retries when the store opens or another session is deleted. The store saves each deleted session ID and rejects late session, history, and asset writes even after cleanup succeeds. It keeps no transcript or asset bytes with that ID. The host also keeps the project ID so repeated delete commands must name the same project.
+
+Record deletion remains successful when the filesystem refuses cleanup. Persistent filesystem failures can delay removal, and the cleanup obligation remains saved until removal succeeds. Discarding a transient draft record keeps the blank session ID available for its next request.

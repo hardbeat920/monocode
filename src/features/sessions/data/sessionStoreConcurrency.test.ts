@@ -122,7 +122,11 @@ describe("session persistence concurrency", () => {
     });
     const { discardDraftSessionRecord, upsertSession } = await loadStore();
 
-    const draftWrite = upsertSession(session("s1"));
+    const draftWrite = upsertSession({
+      ...session("s1"),
+      busy: false,
+      blocks: [{ id: "draft", role: "user", text: "Not sent", draft: true }],
+    });
     await vi.waitFor(() => expect(commands).toEqual(["session_upsert"]));
     const discarding = discardDraftSessionRecord("s1");
     const laterTurn = upsertSession({ ...session("s1"), title: "later" });
@@ -131,8 +135,12 @@ describe("session persistence concurrency", () => {
     await Promise.all([draftWrite, discarding, laterTurn]);
     expect(commands).toEqual([
       "session_upsert",
-      "session_delete",
+      "session_discard_draft",
       "session_upsert",
+    ]);
+    expect(mocks.invoke.mock.calls[1]).toEqual([
+      "session_discard_draft",
+      { sessionId: "s1" },
     ]);
   });
 

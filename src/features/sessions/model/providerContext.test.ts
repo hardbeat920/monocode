@@ -384,6 +384,30 @@ describe("durable provider bindings", () => {
     expect(confirmProviderDeliveryInspection(failed)).toBe(failed);
   });
 
+  it("requires explicit pre-dispatch proof and clears it when submission becomes possible", () => {
+    const unknown = failProviderDelivery(preparing(), "switch-1");
+    expect(unknown.providerContext?.delivery?.failedBeforeSubmission).toBeUndefined();
+    const known = failProviderDelivery(markProviderRequestSubmitted(preparing(), "switch-1"), "switch-1", { beforeSubmission: true });
+    expect(known.providerContext?.delivery?.failedBeforeSubmission).toBe(true);
+    expect(known.providerContext?.delivery?.requestSubmitted).toBeUndefined();
+    const retry = {
+      ...known,
+      providerContext: {
+        ...known.providerContext!,
+        delivery: { ...known.providerContext!.delivery!, status: "preparing" as const },
+      },
+    };
+    const submitted = markProviderRequestSubmitted(retry, "switch-1");
+    expect(submitted.providerContext?.delivery?.failedBeforeSubmission).toBeUndefined();
+    expect(submitted.blocks.find((block) => block.id === "switch")?.handoff?.transfer?.failedBeforeSubmission).toBeUndefined();
+    const recovered = recoverSubmittedProviderDelivery({
+      ...submitted,
+      providerContext: { ...submitted.providerContext!, delivery: { ...submitted.providerContext!.delivery!, failedBeforeSubmission: true } },
+    }, "switch-1");
+    expect(recovered.providerContext?.delivery?.failedBeforeSubmission).toBeUndefined();
+    expect(recovered.providerContext?.delivery?.needsInspection).toBe(true);
+  });
+
   it("retains a newer provider switch when confirming inspection", () => {
     const recovered = recoverSubmittedProviderDelivery(markProviderRequestSubmitted(preparing(), "switch-1"), "switch-1");
     const selected: Session = { ...recovered, harness: "grok", model: "grok:new" };

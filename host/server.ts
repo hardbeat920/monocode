@@ -5,8 +5,7 @@ import {
 } from "node:http";
 import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
-import { realpath, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
@@ -365,12 +364,12 @@ export function createHostServer(
           }
           case "sessions.delete": {
             const sessionId = String(params.sessionId ?? "");
-            const current = engine.store.session(sessionId);
-            if (current.projectId !== params.projectId)
+            const projectId = engine.store.deletedSessionProject(sessionId) ?? engine.store.session(sessionId).projectId;
+            if (projectId !== params.projectId)
               throw new Error("Session does not belong to this project");
             engine.store.deleteSession(sessionId);
             try {
-              await rm(join(dirname(engine.store.attachmentDir), "context-history", current.session.id), { recursive: true, force: true });
+              await engine.store.retryContextCleanup();
             } catch (error) {
               console.error("Context history cleanup failed after session deletion", sessionId, error);
             }

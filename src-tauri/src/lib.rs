@@ -469,6 +469,7 @@ pub fn run() {
             session_store::session_context_snapshot,
             context_assets::session_context_assets,
             session_store::session_delete,
+            session_store::session_discard_draft,
             session_store::session_set_archived,
             session_store::session_set_pinned,
             session_store::session_set_linked_work_item,

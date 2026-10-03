@@ -594,7 +594,7 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
+    invoke<void>("session_discard_draft", { sessionId }),
   );
 }
 
@@ -1284,6 +1284,7 @@ function sanitizeHandoff(value: Block["handoff"], preservePreparing = false): Ha
       ...(typeof transfer.retrievalPath === "string" && !transfer.retrievalPath.includes("\0")
         ? { retrievalPath: transfer.retrievalPath } : {}),
       ...(transfer.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(transfer.failedBeforeSubmission === true ? { failedBeforeSubmission: true } : {}),
       ...(transfer.needsInspection === true ? { needsInspection: true } : {}),
       ...(transfer.inspectionConfirmed === true ? { inspectionConfirmed: true } : {}),
     } } : {}),

@@ -211,8 +211,18 @@ describe("remote host API", () => {
       expect(() => s.store.session(sessionId)).toThrow("Session not found");
       expect(deleted).toEqual({ status: 200, value: { result: { deleted: true } } });
       expect(existsSync(history)).toBe(true);
+      expect(s.store.db.prepare("SELECT pending FROM context_history_cleanup WHERE session_id=?").get(sessionId))
+        .toMatchObject({ pending: 1 });
       expect(remove).toHaveBeenCalledWith(history, { recursive: true, force: true });
       expect(log).toHaveBeenCalledWith("Context history cleanup failed after session deletion", sessionId, failure);
+      const filesystem = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      remove.mockImplementation(filesystem.rm);
+      const repeated = await s.call("sessions.delete", { projectId: s.project.id, sessionId });
+      expect(repeated).toEqual({ status: 200, value: { result: { deleted: true } } });
+      expect(existsSync(history)).toBe(false);
+      expect(s.store.db.prepare("SELECT pending FROM context_history_cleanup WHERE session_id=?").get(sessionId))
+        .toMatchObject({ pending: 0 });
+      expect((await s.call("sessions.delete", { projectId: "wrong-project", sessionId })).status).not.toBe(200);
     } finally {
       remove.mockReset();
       log.mockRestore();

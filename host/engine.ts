@@ -391,6 +391,7 @@ export class HostEngine {
   }
 
   private contextDirectory(sessionId: string): string {
+    this.store.assertContextWritable(sessionId);
     return join(dirname(this.store.attachmentDir), "context-history", sessionId);
   }
 

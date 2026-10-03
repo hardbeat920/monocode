@@ -125,6 +125,7 @@ export type HandoffMeta = {
     historicalAttachments: number;
     retrievalPath?: string;
     requestSubmitted?: true;
+    failedBeforeSubmission?: true;
     needsInspection?: true;
     inspectionConfirmed?: true;
   };

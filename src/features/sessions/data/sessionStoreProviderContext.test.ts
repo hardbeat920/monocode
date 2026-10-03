@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { newSession, type Session } from "../model/session";
-import { getSession, persistFingerprint, sanitizeSessionForPersist, upsertSession } from "./sessionStore";
+import { newSession, removeSessionDraft, type Session } from "../model/session";
+import { getSession, persistFingerprint, sanitizeSessionForPersist, shouldPersistSession, upsertSession } from "./sessionStore";
 import { buildPortableContext } from "../model/portableContext";
 import { canDispatchQueuedHead } from "../model/messageQueue";
 import {
   failProviderDelivery,
+  beginProviderDelivery,
+  markProviderRequestSubmitted,
   recordProviderBound,
   settleProviderBinding,
 } from "../model/providerContext";
+import { appendPreparingHandoff, planComposerSwitch } from "../model/handoff";
+import { appendUser, applyHarnessEvent } from "../../../integrations/harness/core/apply";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -34,6 +38,38 @@ function switchingSession(): Session {
 
 describe("durable provider switching", () => {
   beforeEach(() => invoke.mockReset());
+
+  it.each([false, true])("preserves a pre-dispatch failure with submission marker saved as %s", (markerSaved) => {
+    const original = {
+      ...newSession("codex", "/repo"),
+      blocks: [{ id: "original-draft", role: "user" as const, text: "Do this", draft: true }],
+    };
+    const plan = planComposerSwitch(original, "claude");
+    expect(plan.kind).toBe("arm");
+    if (plan.kind !== "arm") throw new Error("Expected a provider switch for the saved draft");
+    const selected: Session = { ...original, harness: "claude", pendingSwitch: plan.pending, blocks: [] };
+    const started = appendUser(appendPreparingHandoff(selected, "codex", "claude"), "Do this");
+    const currentUserBlockId = started.blocks.at(-1)!.id;
+    const prepared = beginProviderDelivery(started, {
+      switchId: "failed-switch", from: "codex", to: "claude", cwd: "/repo",
+      currentUserBlockId, includedBlockIds: [], omittedBlockIds: [],
+    });
+    const beforeDispatch = markerSaved ? markProviderRequestSubmitted(prepared, "failed-switch") : prepared;
+    const failed = failProviderDelivery(applyHarnessEvent(beforeDispatch, {
+      type: "session.error", message: "Could not prepare the provider process",
+    }), "failed-switch", { beforeSubmission: true });
+    expect(failed.blocks.map((block) => block.role)).toEqual(["handoff", "user", "system"]);
+    expect(failed.blocks.find((block) => block.id === currentUserBlockId)?.draft).toBe(true);
+    const removed = removeSessionDraft(failed, currentUserBlockId)!;
+    expect(shouldPersistSession(removed)).toBe(false);
+    expect(removed.blocks.map((block) => block.role)).toEqual(["handoff", "system"]);
+    expect(sanitizeSessionForPersist(failed).providerContext?.state?.delivery).toMatchObject({
+      status: "uncertain", mode: "pending", failedBeforeSubmission: true,
+      includedBlockIds: [], omittedBlockIds: [],
+    });
+    expect(sanitizeSessionForPersist(failed).providerContext?.state?.delivery?.requestSubmitted).toBeUndefined();
+    expect(sanitizeSessionForPersist(failed).blocks[0].handoff?.transfer?.failedBeforeSubmission).toBe(true);
+  });
 
   it("round trips picker intent and native bindings while recovering a partially delivered transfer", async () => {
     const original = switchingSession();

@@ -7358,7 +7358,7 @@ function Workspace({
               if (transferSwitchId && !providerAccepted) {
                 stopped = providerDispatched
                   ? recoverSubmittedProviderDelivery(stopped, transferSwitchId)
-                  : failProviderDelivery(stopped, transferSwitchId);
+                  : failProviderDelivery(stopped, transferSwitchId, { beforeSubmission: true });
               } else if (providerAccepted) {
                 stopped = settleProviderBinding(stopped, current.harness, workCwd, providerAccountId);
               }
@@ -7431,7 +7431,7 @@ function Workspace({
                     : recovered;
                   if (transferSwitchId) recovered = providerDispatched
                     ? recoverSubmittedProviderDelivery(recovered, transferSwitchId)
-                    : failProviderDelivery(recovered, transferSwitchId);
+                    : failProviderDelivery(recovered, transferSwitchId, { beforeSubmission: true });
                   const user = [...recovered.blocks].reverse().find((block) => block.role === "user");
                   if (user && !providerDispatched) recovered = { ...recovered, blocks: recovered.blocks.map((block) => block.id === user.id ? { ...block, draft: true } : block) };
                 }

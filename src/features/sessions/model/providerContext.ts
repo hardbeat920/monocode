@@ -32,6 +32,8 @@ export type ProviderContextDelivery = {
   targetProviderSessionId?: string;
   /** Saved before dispatch, so a missing acknowledgment can mean execution occurred. */
   requestSubmitted?: true;
+  /** The caller confirmed that this failure happened before provider dispatch. */
+  failedBeforeSubmission?: true;
   needsInspection?: true;
 };
 
@@ -172,6 +174,7 @@ export function sanitizeProviderContext(
         ? { targetProviderSessionId: delivery.targetProviderSessionId }
         : {}),
       ...(delivery.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(delivery.failedBeforeSubmission === true ? { failedBeforeSubmission: true } : {}),
       ...(delivery.needsInspection === true ? { needsInspection: true } : {}),
     };
   }
@@ -484,9 +487,9 @@ export function markProviderRequestSubmitted(
     ...session,
     providerContext: {
       ...state!,
-      delivery: { ...delivery, requestSubmitted: true },
+      delivery: { ...delivery, requestSubmitted: true, failedBeforeSubmission: undefined },
     },
-  }, switchId, { requestSubmitted: true });
+  }, switchId, { requestSubmitted: true, failedBeforeSubmission: undefined });
 }
 
 /** A saved dispatch marker cannot prove whether the provider executed the request. */
@@ -510,9 +513,9 @@ export function recoverSubmittedProviderDelivery(
     ...(session.queuedMessages?.length ? { queueStatus: "paused" } : {}),
     providerContext: {
       ...state!,
-      delivery: { ...delivery, status: "uncertain", needsInspection: true },
+      delivery: { ...delivery, status: "uncertain", needsInspection: true, failedBeforeSubmission: undefined },
     },
-  }, switchId, { status: "uncertain", needsInspection: true });
+  }, switchId, { status: "uncertain", needsInspection: true, failedBeforeSubmission: undefined });
 }
 
 /** Confirm inspection without replaying the original request or claiming acceptance. */
@@ -546,6 +549,7 @@ export function confirmProviderDeliveryInspection(
 export function failProviderDelivery(
   session: Session,
   switchId: string,
+  options: { beforeSubmission?: boolean } = {},
 ): Session {
   const state = session.providerContext;
   const delivery = state?.delivery;
@@ -555,6 +559,7 @@ export function failProviderDelivery(
     delivery.status === "accepted"
   )
     return session;
+  const provenUnsubmitted = options.beforeSubmission === true && !delivery.needsInspection;
   return updateProviderHandoff(
     {
       ...session,
@@ -576,11 +581,15 @@ export function failProviderDelivery(
               delivery.providerAccountId,
             ),
         ),
-        delivery: { ...delivery, status: "uncertain" },
+        delivery: {
+          ...delivery,
+          status: "uncertain",
+          ...(provenUnsubmitted ? { requestSubmitted: undefined, failedBeforeSubmission: true as const } : {}),
+        },
       },
     },
     switchId,
-    { status: "uncertain" },
+    { status: "uncertain", ...(provenUnsubmitted ? { requestSubmitted: undefined, failedBeforeSubmission: true } : {}) },
   );
 }
 
