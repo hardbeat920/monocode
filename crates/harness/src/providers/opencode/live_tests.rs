@@ -502,9 +502,10 @@ fn streams_child_reasoning_and_tools_including_nested_tasks_without_user_or_hidd
                 "grandchild:nested_text"
             ]
         );
-        // TODO(port): the TypeScript also expects the tool step texts "Read
-        // auth.ts" and "Subagent". composeToolTitle is still a stand-in in
-        // deps.rs, so only the prose steps are checked by text.
+        assert_eq!(
+            steps.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+            ["Trace imports", "Read auth.ts", "Subagent", "Nested answer"]
+        );
         assert_eq!(steps[0].text, "Trace imports");
         assert_eq!(steps[0].kind, AgentStepKind::Reasoning);
         assert_eq!(steps[3].text, "Nested answer");

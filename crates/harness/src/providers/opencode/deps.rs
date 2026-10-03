@@ -1,43 +1,37 @@
-//! Helpers this provider takes from code that other agents are still porting
-//! (`monocode_core::reducer`'s preview.ts and streamText.ts). Every call goes
-//! through this file, so switching to the real functions touches one place.
+//! The preview and stream helpers this provider takes from
+//! `monocode_core::reducer` (ports of preview.ts and streamText.ts). Every
+//! call goes through this file, which adapts the provider's call shapes to
+//! the reducer's.
 
 use monocode_core::block::{ToolPreview, ToolPreviewKind};
+use monocode_core::reducer::{preview, stream_text};
 use serde_json::{Map, Value};
 
 /// `streamTextDelta`: body text from a stream. Whitespace is real content,
 /// not a missing field.
 pub fn stream_text_delta(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => text.clone(),
-        _ => String::new(),
-    }
+    stream_text::stream_text_delta(value).to_string()
 }
 
 /// `extractToolPreview(update, tool)`.
-// TODO(port): call monocode_core::reducer's extract_tool_preview once it lands.
 pub fn extract_tool_preview(
-    _update: &Map<String, Value>,
-    _tool: &Map<String, Value>,
+    update: &Map<String, Value>,
+    tool: &Map<String, Value>,
 ) -> Option<ToolPreview> {
-    None
+    preview::extract_tool_preview(update, tool)
 }
 
 /// `extractShellCommand(...values)`.
-// TODO(port): call monocode_core::reducer's extract_shell_command once it lands.
-pub fn extract_shell_command(_value: Option<&Value>) -> Option<String> {
-    None
+pub fn extract_shell_command(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| preview::extract_shell_command(&[value]))
 }
 
 /// `extractSkillName(...values)`.
-// TODO(port): call monocode_core::reducer's extract_skill_name once it lands.
-pub fn extract_skill_name(_value: Option<&Value>) -> Option<String> {
-    None
+pub fn extract_skill_name(value: Option<&Value>) -> Option<String> {
+    value.and_then(|value| preview::extract_skill_name(&[value]))
 }
 
-/// The options object `composeToolTitle` takes. The stand-in reads only the
-/// title; the real function reads every field.
-#[allow(dead_code)]
+/// The options object `composeToolTitle` takes.
 #[derive(Debug, Clone, Default)]
 pub struct ComposeToolTitle<'a> {
     pub kind: Option<&'a str>,
@@ -49,9 +43,16 @@ pub struct ComposeToolTitle<'a> {
     pub preview_kind: Option<ToolPreviewKind>,
 }
 
-/// `composeToolTitle(opts)`. The stand-in returns the trimmed title, which is
-/// what the TypeScript returns for a kind it does not rewrite.
-// TODO(port): call monocode_core::reducer's compose_tool_title once it lands.
+/// `composeToolTitle(opts)`.
 pub fn compose_tool_title(opts: &ComposeToolTitle<'_>) -> String {
-    monocode_core::js::trim(opts.title.unwrap_or_default()).to_string()
+    preview::compose_tool_title(&preview::ToolTitleInput {
+        kind: opts.kind,
+        title: opts.title,
+        path: opts.path,
+        query: opts.query,
+        command: opts.command,
+        skill: opts.skill,
+        preview_kind: opts.preview_kind,
+        cwd: None,
+    })
 }
