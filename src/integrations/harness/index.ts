@@ -150,7 +150,10 @@ export { warmupGrokText } from "./providers/grok/grokText";
 export { refreshCursorCatalog } from "./providers/cursor/cursorCatalog";
 export { refreshCodexCatalog } from "./providers/codex/codexCatalog";
 export { refreshOpenCodeCatalog } from "./providers/opencode/opencodeCatalog";
-export { refreshClaudeCatalog } from "./providers/claude/claudeCatalog";
+export {
+  refreshClaudeCatalog,
+  selectClaudeCatalogAccount,
+} from "./providers/claude/claudeCatalog";
 export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";
