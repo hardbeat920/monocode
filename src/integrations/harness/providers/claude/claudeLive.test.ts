@@ -72,6 +72,7 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     providerAccountId?: string;
+    providerSessionId?: string;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -96,7 +97,7 @@ async function startTurn(
       }),
     "initialize",
   );
-  emit({ type: "system", subtype: "init", session_id: "sess_1" });
+  emit({ type: "system", subtype: "init", session_id: options.providerSessionId ?? "sess_1" });
   emit({
     type: "control_response",
     response: { subtype: "success", request_id: "monocode_1" },
@@ -913,6 +914,7 @@ describe("claude legacy account resume", () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
     const { turn } = await startTurn("s1", {
       providerAccountId: "default",
+      providerSessionId: "legacy-session",
     });
     expect(spawned[0]).toEqual(
       expect.arrayContaining(["--resume", "legacy-session"]),
@@ -920,6 +922,17 @@ describe("claude legacy account resume", () => {
     expect(spawned[0]).not.toContain("--session-id");
     emit({ type: "result", subtype: "success", session_id: "legacy-session" });
     await turn;
+  });
+
+  it("rejects a mismatched resumed identity before sending a current request", async () => {
+    bindClaudeSession("s1", "expected-native", "/repo");
+    const turn = sendClaudeTurn({ sessionId: "s1", cwd: "/repo", model: "claude:sonnet-5", runtimeMode: "supervised", text: "Current request", onEvent: () => {} });
+    void turn.catch(() => undefined);
+    await waitFor(() => parse().some((message) => (message.request as Record<string, unknown>)?.subtype === "initialize"), "initialize");
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    emit({ type: "control_response", response: { subtype: "success", request_id: "monocode_1" } });
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(parse().some((message) => message.type === "user")).toBe(false);
   });
 
   it("does not resume a legacy default thread under a named account", async () => {

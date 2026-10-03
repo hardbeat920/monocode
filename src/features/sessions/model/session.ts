@@ -1,6 +1,7 @@
 import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
+import type { ProviderContextState } from "./providerContext";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
 import type { InboxAskContext } from "../../inbox/model/inboxAsk";
 import type { NoteCardMeta, NoteComposerCard } from "../../notes";
@@ -115,6 +116,15 @@ export type HandoffMeta = {
   status: HandoffStatus;
   /** Inject this brief into prompts to `to` until that harness accepts a turn. */
   pending?: boolean;
+  transfer?: {
+    switchId: string;
+    status: "preparing" | "imported" | "accepted" | "uncertain";
+    mode: "pending" | "native" | "inline";
+    included: number;
+    omitted: number;
+    historicalAttachments: number;
+    retrievalPath?: string;
+  };
 };
 
 /** One persisted question/answer in a completed turn's side conversation. */
@@ -251,6 +261,8 @@ export type Attachment = {
 };
 
 export type QueuedMessage = {
+  /** Provider choice captured when this request entered the queue. */
+  selection?: ModelTarget;
   id: string;
   text: string;
   attachments: Attachment[];
@@ -433,6 +445,8 @@ export type Session = {
    * Handoff runs on the next send, not on picker change.
    */
   pendingSwitch?: PendingHarnessSwitch;
+  /** Native provider bindings and receipts for shared conversation history. */
+  providerContext?: ProviderContextState;
   /** Last known branch in the session's working copy. */
   branch?: string;
   /** Selected working copy; cwd remains the project identity. */

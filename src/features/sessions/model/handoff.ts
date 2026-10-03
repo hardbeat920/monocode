@@ -150,6 +150,7 @@ export function pendingHandoff(session: Session): {
 } | null {
   const last = lastHandoffBlock(session.blocks);
   if (!last?.handoff?.pending || last.handoff.status !== "ready") return null;
+  if (last.handoff.transfer && last.handoff.to !== session.harness) return null;
   const text = last.text.trim() || buildDeterministicHandoff(session);
   if (!text.trim()) return null;
   return { from: last.handoff.from, to: last.handoff.to, text };

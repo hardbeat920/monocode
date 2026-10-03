@@ -25,6 +25,24 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("shows provider handoff fidelity and a retry state", () => {
+    const transfer = {
+      switchId: "switch-1", status: "uncertain" as const, mode: "native" as const,
+      included: 12, omitted: 3, historicalAttachments: 2,
+      retrievalPath: "/data/history/switch-1.md",
+    };
+    const markup = render([
+      { id: "u", role: "user", text: "Continue" },
+      { id: "switch", role: "handoff", text: "Shared history", handoff: { from: "claude", to: "codex", status: "ready", pending: true, transfer } },
+    ]);
+    expect(markup).toContain("Handoff needs retry");
+    expect(markup).toContain("12 conversation items selected");
+    expect(markup).toContain("3 items omitted");
+    expect(markup).toContain("2 historical attachments are file references");
+    expect(markup).toContain("historical user and assistant messages");
+    expect(markup).toContain("Retry the unsent message");
+    expect(markup).toContain("/data/history/switch-1.md");
+  });
   it("keeps the completed time beside actions when a turn has no BTW control", () => {
     const markup = render([
       {

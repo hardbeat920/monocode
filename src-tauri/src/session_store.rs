@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -107,6 +108,8 @@ pub struct SessionUpsert {
     pub provider_session_id: Option<String>,
     #[serde(default)]
     pub provider_account_id: Option<String>,
+    #[serde(default)]
+    pub provider_context: Option<Value>,
     pub blocks: Value,
     /// Last context-window reading reported by the harness, if any.
     #[serde(default)]
@@ -180,6 +183,8 @@ pub struct SessionRecord {
     pub provider_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_context: Option<Value>,
     pub blocks: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_used: Option<i64>,
@@ -298,6 +303,64 @@ pub fn session_get(
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     get_session(&conn, &session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn session_context_snapshot(
+    app: AppHandle,
+    session_id: String,
+    switch_id: String,
+    content: String,
+) -> Result<String, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    write_context_snapshot(&root, &session_id, &switch_id, &content)
+}
+
+fn write_context_snapshot(
+    data_dir: &Path,
+    session_id: &str,
+    switch_id: &str,
+    content: &str,
+) -> Result<String, String> {
+    validate_id(session_id, "session")?;
+    validate_id(switch_id, "switch")?;
+    if content.len() > 64 * 1024 * 1024 {
+        return Err("Shared conversation history exceeds 64 MB".into());
+    }
+    let directory = data_dir.join("context-history").join(session_id);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let destination = directory.join(format!("{switch_id}.md"));
+    if destination.exists() {
+        if std::fs::read_to_string(&destination).map_err(|error| error.to_string())? != content {
+            return Err("The saved switch history differs from this request".into());
+        }
+        return Ok(destination.to_string_lossy().into_owned());
+    }
+    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(content.as_bytes())
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+        Ok(destination.to_string_lossy().into_owned())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 const MAX_SEARCH_SCAN: usize = 400;
@@ -500,6 +563,14 @@ pub fn session_delete(
     image_paths.extend(persisted_paths);
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
     drop(conn);
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let directory = data_dir.join("context-history").join(&session_id);
+        if let Err(error) = std::fs::remove_dir_all(directory) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("Shared context cleanup will need a retry: {error}");
+            }
+        }
+    }
     if !image_paths.is_empty() {
         if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {
             eprintln!("Generated image cleanup will need a retry: {error}");
@@ -759,6 +830,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("pinned", "INTEGER NOT NULL DEFAULT 0"),
         ("linked_work_item_json", "TEXT"),
         ("provider_account_id", "TEXT"),
+        ("provider_context_json", "TEXT"),
         ("worktree_removed", "INTEGER NOT NULL DEFAULT 0"),
         ("is_draft", "INTEGER NOT NULL DEFAULT 0"),
         ("automation_id", "TEXT"),
@@ -906,6 +978,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)",
+            params![now_millis()],
+        )?;
+    }
+    if current < 19 {
+        ensure_session_column(conn, "provider_context_json", "TEXT")?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)",
             params![now_millis()],
         )?;
     }
@@ -1087,6 +1166,13 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
         .map(serde_json::to_string)
         .transpose()
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let provider_context_json = session
+        .provider_context
+        .as_ref()
+        .filter(|value| value.is_object())
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let automation_id = session
         .automation_id
         .as_deref()
@@ -1164,8 +1250,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            provider_session_id, blocks_json, created_at, updated_at, branch,
            context_used, context_window, worktree_cwd, has_user_message,
            linked_work_item_json, provider_account_id, worktree_removed, is_draft,
-           automation_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+           automation_id, provider_context_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -1185,7 +1271,8 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
            provider_account_id = excluded.provider_account_id,
            worktree_removed = excluded.worktree_removed,
            is_draft = excluded.is_draft,
-           automation_id = excluded.automation_id",
+           automation_id = excluded.automation_id,
+           provider_context_json = excluded.provider_context_json",
         params![
             session.id,
             session.cwd,
@@ -1208,6 +1295,7 @@ fn upsert_session(conn: &Connection, session: &SessionUpsert) -> rusqlite::Resul
             i64::from(session.worktree_removed),
             i64::from(is_draft),
             automation_id,
+            provider_context_json,
         ],
     )?;
 
@@ -1841,7 +1929,7 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
                 provider_session_id, blocks_json, created_at, updated_at,
                 context_used, context_window, branch, worktree_cwd,
                 linked_work_item_json, provider_account_id, worktree_removed,
-                automation_id
+                automation_id, provider_context_json
          FROM sessions
          WHERE id = ?1 AND inbox_ask IS NULL",
         params![session_id],
@@ -1881,6 +1969,7 @@ fn get_session(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<S
                 linked_work_item: optional_json(row.get(15)?),
                 provider_account_id: row.get(16)?,
                 automation_id: nonempty(row.get(18)?),
+                provider_context: optional_json(row.get(19)?),
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })
@@ -2053,6 +2142,7 @@ mod tests {
             title: title.into(),
             provider_session_id: Some("acp-session-1".into()),
             provider_account_id: None,
+            provider_context: None,
             blocks: json!([{ "id": "b1", "role": "user", "text": "hello" }]),
             context_used: None,
             context_window: None,
@@ -2062,6 +2152,74 @@ mod tests {
             linked_work_item: None,
             automation_id: None,
         }
+    }
+
+    #[test]
+    fn context_snapshot_is_scoped_immutable_and_readable() {
+        let root = std::env::temp_dir().join(format!("monocode-context-{}", uuid::Uuid::new_v4()));
+        let snapshot = write_context_snapshot(
+            &root,
+            "session-1",
+            "switch-1",
+            "User said café\nAssistant replied\n",
+        )
+        .unwrap();
+        assert!(Path::new(&snapshot).starts_with(root.join("context-history/session-1")));
+        assert_eq!(
+            std::fs::read_to_string(&snapshot).unwrap(),
+            "User said café\nAssistant replied\n"
+        );
+        assert_eq!(
+            write_context_snapshot(
+                &root,
+                "session-1",
+                "switch-1",
+                "User said café\nAssistant replied\n"
+            )
+            .unwrap(),
+            snapshot
+        );
+        assert!(
+            write_context_snapshot(&root, "session-1", "switch-1", "Different history").is_err()
+        );
+        assert!(write_context_snapshot(&root, "../escape", "switch-2", "History").is_err());
+        assert!(write_context_snapshot(&root, "session-1", "../escape", "History").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_context_survives_reopen_and_can_be_cleared() {
+        let path = std::env::temp_dir().join(format!(
+            "monocode-provider-context-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let expected = json!({
+            "version": 1,
+            "state": {"version": 1, "bindings": [], "delivery": {"switchId": "switch-1", "status": "imported"}},
+            "pendingSwitch": {"from": "cursor", "fromModel": "gpt-5", "fromSettings": {}}
+        });
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            let mut session = sample("s1", "/tmp/a", "Continue");
+            session.provider_context = Some(expected.clone());
+            upsert_session(&conn, &session).unwrap();
+        }
+        {
+            let store = SessionStore::open(path.clone()).unwrap();
+            let conn = store.lock_conn().unwrap();
+            assert_eq!(
+                get_session(&conn, "s1").unwrap().unwrap().provider_context,
+                Some(expected)
+            );
+            let session = sample("s1", "/tmp/a", "Continue");
+            upsert_session(&conn, &session).unwrap();
+            assert_eq!(
+                get_session(&conn, "s1").unwrap().unwrap().provider_context,
+                None
+            );
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -2197,7 +2355,7 @@ mod tests {
                        ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
                                     model, runtime_mode, title, provider_session_id,
                                     created_at, branch, archived, pinned, linked_work_item_json);
-                     DELETE FROM schema_migrations WHERE version IN (16, 17, 18);",
+                     DELETE FROM schema_migrations WHERE version >= 16;",
                 )
                 .unwrap();
                 migrate(&conn).unwrap();
@@ -2781,11 +2939,20 @@ mod tests {
         let conn = store.conn.lock().unwrap();
         let mut session = sample("s1", "/tmp/a", "First");
         session.provider_account_id = Some("account-work".into());
+        session.provider_context = Some(json!({
+            "version": 1,
+            "state": {
+                "version": 1,
+                "bindings": [{"harness": "cursor", "providerSessionId": "acp-session-1", "cwd": "/tmp/a"}]
+            },
+            "pendingSwitch": {"from": "cursor", "fromModel": "gpt-5", "fromSettings": {}}
+        }));
         upsert_session(&conn, &session).unwrap();
         let record = get_session(&conn, "s1").unwrap().unwrap();
         assert_eq!(record.id, "s1");
         assert_eq!(record.provider_session_id.as_deref(), Some("acp-session-1"));
         assert_eq!(record.provider_account_id.as_deref(), Some("account-work"));
+        assert_eq!(record.provider_context, session.provider_context);
         assert_eq!(record.model_settings["thinking"], "high");
         assert_eq!(record.blocks.as_array().unwrap().len(), 1);
         assert_eq!(record.blocks[0]["text"], "hello");

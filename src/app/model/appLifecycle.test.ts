@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { forgetHarnessSession } from "../../integrations/harness/core/registry";
+import { bindHarnessSession, forgetHarnessSession, isLiveHarness } from "../../integrations/harness/core/registry";
 import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
 import { newTab } from "../../features/workspace/model/layout";
 import {
   askQuitConfirmation,
+  bindResumedSessions,
   closeBusyWindow,
   commitQuit,
   confirmReload,
@@ -49,6 +50,27 @@ vi.mock("../../integrations/harness/core/registry", () => ({
 vi.mock("../../integrations/harness/core/child", () => ({
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
+
+describe("pending provider switch restore", () => {
+  it("rebinds the retained source after restart before the selected target starts", () => {
+    vi.mocked(bindHarnessSession).mockClear();
+    vi.mocked(isLiveHarness).mockReturnValue(true);
+    const session = {
+      ...newSession("codex", "/project"),
+      worktreeCwd: "/project-worktree",
+      pendingSwitch: {
+        from: "claude" as const,
+        fromModel: "claude:sonnet",
+        fromSettings: {},
+        fromProviderSessionId: "retained-source-native",
+        fromProviderAccountId: "work-account",
+      },
+    };
+    bindResumedSessions([session]);
+    expect(bindHarnessSession).toHaveBeenCalledWith("claude", session.id, "retained-source-native", "/project-worktree", "work-account", session.blocks);
+    expect(bindHarnessSession).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("project choices through lifecycle saves", () => {
   beforeEach(() => {

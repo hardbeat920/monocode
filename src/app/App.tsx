@@ -270,11 +270,11 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { canResumeHarnessWithContext } from "../integrations/harness/core/registry";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
   buildHandoffComposerCard,
-  chooseHandoffBrief,
   completeHandoff,
   consumeHandoff,
   HANDOFF_TITLE,
@@ -284,12 +284,30 @@ import {
   planComposerSwitch,
   sessionChildHarnesses,
   sessionThroughTurn,
-  shouldAskOutgoingAgent,
   type HandoffComposerCard,
   userMessagesAfterHandoff,
   wrapHandoffPrompt,
 } from "../features/sessions/model/handoff";
-import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
+import {
+  acceptProviderDelivery,
+  beginProviderDelivery,
+  canApplyRunningConfiguration,
+  failProviderDelivery,
+  failUnstartedProviderRequest,
+  markProviderContextDelivered,
+  providerBinding,
+  recordProviderBound,
+  recordProviderContextUsage,
+  rememberProviderBinding,
+  requiresFreshProviderBinding,
+  runningProviderSelection,
+  settleProviderBinding,
+  updateProviderHandoff,
+} from "../features/sessions/model/providerContext";
+import { buildPortableContext, buildPortableContextSnapshot } from "../features/sessions/model/portableContext";
+import { saveProviderContextSnapshot } from "../features/sessions/data/sessionStore";
+import type { ContextTransferInput } from "../features/sessions/model/contextTransfer";
+import { historicalContextAttachments, snapshotContextAssets } from "../features/sessions/model/contextAssets";
 import {
   applyBtwHarnessEvent,
   btwTurnHarness,
@@ -326,6 +344,7 @@ import {
 } from "../features/search/model/search";
 import {
   mergeModelSettings,
+  modelContextWindow,
   nativeModelId,
   preferredModelSettings,
   resolveModel,
@@ -794,6 +813,13 @@ function withHarnessChoice(
   model: string,
   modelSettings: Record<string, string>,
 ): Session {
+  const binding = providerBinding(
+    session,
+    session.pendingSwitch?.from ?? session.harness,
+    sessionWorkCwd(session),
+    session.pendingSwitch ? session.pendingSwitch.fromProviderAccountId : session.providerAccountId,
+  );
+  if (binding) session = rememberProviderBinding(session, binding);
   return {
     ...session,
     harness,
@@ -1313,6 +1339,8 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const runningSelections = useRef(new Map<string, { harness: HarnessId; model: string; modelSettings: Record<string, string> }>());
+  const selectionRevisions = useRef(new Map<string, number>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -1388,6 +1416,7 @@ function Workspace({
       if (!open?.busy) return open;
 
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      runningSelections.current.delete(sessionId);
       flushHarnessEvents();
       await Promise.all(
         sessionChildHarnesses(open).map((harness) =>
@@ -3950,20 +3979,7 @@ function Workspace({
         (session) => session.id === sessionId,
       );
       if (appeared) return appeared;
-      if (
-        !restored.worktreeRemoved &&
-        restored.providerSessionId &&
-        isLiveHarness(restored.harness)
-      ) {
-        bindHarnessSession(
-          restored.harness,
-          restored.id,
-          restored.providerSessionId,
-          sessionWorkCwd(restored),
-          restored.providerAccountId,
-          restored.blocks,
-        );
-      }
+      bindResumedSessions([restored]);
       lastPersisted.current.set(restored.id, persistFingerprint(restored));
       if (!sessionsRef.current.some((session) => session.id === restored.id)) {
         const next = [...sessionsRef.current, restored];
@@ -5893,6 +5909,9 @@ function Workspace({
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (isPreparingHandoff(current)) return;
+      if (current.busy && current.providerContext?.delivery &&
+          ["preparing", "imported"].includes(current.providerContext.delivery.status)) return;
+      selectionRevisions.current.set(sessionId, (selectionRevisions.current.get(sessionId) ?? 0) + 1);
       const resolved = resolveModel(harness, model);
       saveRecentModelChoice(resolved.harness, resolved.id);
       if (current.modelSettings) {
@@ -5906,8 +5925,7 @@ function Workspace({
       if (plan.kind === "empty") {
         void forgetHarnessSession(plan.forget, sessionId);
       }
-      setSessions((prev) =>
-        prev.map((s) => {
+      const nextSessions = sessionsRef.current.map((s) => {
           if (s.id !== sessionId) return s;
           const next = withHarnessChoice(
             s,
@@ -5934,14 +5952,21 @@ function Workspace({
             return { ...next, pendingSwitch: undefined };
           }
           return next;
-        }),
-      );
+        });
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
+      const selected = nextSessions.find((session) => session.id === sessionId);
+      if (selected && plan.kind === "revert" && selected.providerSessionId) {
+        bindHarnessSession(selected.harness, selected.id, selected.providerSessionId, sessionWorkCwd(selected), selected.providerAccountId, selected.blocks);
+      }
+      if (selected) void upsertSession(selected).catch(() => undefined);
     },
     [],
   );
 
   const onModelSettingsChange = useCallback(
     (sessionId: string, modelSettings: Record<string, string>) => {
+      selectionRevisions.current.set(sessionId, (selectionRevisions.current.get(sessionId) ?? 0) + 1);
       saveLastModelSettings(modelSettings);
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
@@ -6247,7 +6272,13 @@ function Workspace({
           ? current.pendingSwitch
           : null;
 
-      if (current.busy && !pendingSwitch) {
+      if (pendingSwitch && rawCommand) {
+        enqueueHarnessEvent(sessionId, { type: "status", text: "Send a chat request to complete the provider switch before running a provider command." });
+        flushHarnessEvents();
+        return false;
+      }
+
+      if (current.busy) {
         if (
           operatorCommand.matched &&
           options?.queuedMessageId &&
@@ -6261,6 +6292,7 @@ function Workspace({
           return false;
         }
         const followUpBehavior =
+          pendingSwitch ||
           current.worktreePreparing ||
           intent === "plan" ||
           intent === "orchestrate" ||
@@ -6281,7 +6313,7 @@ function Workspace({
                     inboxCard: rawCommand ? s.inboxCard : undefined,
                     noteCard: rawCommand ? s.noteCard : undefined,
                     handoffCard: rawCommand ? s.handoffCard : undefined,
-                    queuedMessages: [
+                    queuedMessages: options?.queuedMessageId ? s.queuedMessages : [
                       ...(s.queuedMessages ?? []),
                       {
                         id: crypto.randomUUID(),
@@ -6290,6 +6322,11 @@ function Workspace({
                         noteCard,
                         handoffCard,
                         intent,
+                        selection: {
+                          harness: current.harness,
+                          model: current.model,
+                          modelSettings: current.modelSettings,
+                        },
                       },
                     ],
                     queueStatus:
@@ -6301,9 +6338,10 @@ function Workspace({
           dismissNoticesForContinuedSession(sessionId);
           return true;
         }
+        const activeSelection = runningProviderSelection(current, runningSelections.current.get(sessionId));
         if (
-          !isLiveHarness(current.harness) ||
-          !canSteerHarness(current.harness)
+          !isLiveHarness(activeSelection.harness) ||
+          !canSteerHarness(activeSelection.harness)
         ) {
           // Harnesses that cannot steer (fx) used to drop the message on the
           // floor here, so a follow-up sent mid-turn just vanished. Say so.
@@ -6328,7 +6366,8 @@ function Workspace({
           if (options?.queuedMessageId) {
             next = dequeueQueuedMessage(next, options.queuedMessageId);
           }
-          return appendSteerUser(next, submittedText, visible, cards);
+          const steered = appendSteerUser({ ...next, ...activeSelection }, submittedText, visible, cards);
+          return { ...next, blocks: steered.blocks };
         });
         sessionsRef.current = nextSessions;
         setSessions(nextSessions);
@@ -6336,16 +6375,16 @@ function Workspace({
           try {
             const prepared = await prepareAttachments(attachments);
             const prompt = await preparePrompt(harnessText, {
-              harness: current.harness,
+              harness: activeSelection.harness,
               sessionId,
               cwd: initialWorkCwd,
             });
             await steerHarnessTurn({
-              harness: current.harness,
+              harness: activeSelection.harness,
               sessionId,
               cwd: initialWorkCwd,
-              model: current.model,
-              modelSettings: current.modelSettings,
+              model: activeSelection.model,
+              modelSettings: activeSelection.modelSettings,
               text: inboxAskPrompt(
                 rawCommand ? undefined : current.inboxAsk,
                 prompt,
@@ -6426,6 +6465,8 @@ function Workspace({
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
+      runningSelections.current.set(sessionId, { harness: current.harness, model: current.model, modelSettings: current.modelSettings });
+      const selectionRevision = selectionRevisions.current.get(sessionId) ?? 0;
       const proposalId =
         intent === "orchestrate" ? crypto.randomUUID() : undefined;
       let proposalDraft: OrchestrationProposal | undefined = proposalId
@@ -6489,10 +6530,6 @@ function Workspace({
       const queuedHandoff =
         live && !pendingSwitch ? pendingHandoff(current) : null;
 
-      if (pendingSwitch && current.busy) {
-        void cancelHarnessTurn(pendingSwitch.from, sessionId);
-      }
-
       dismissNoticesForContinuedSession(sessionId);
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
@@ -6551,7 +6588,7 @@ function Workspace({
               return {
                 ...next,
                 title: titled,
-                pendingSwitch: undefined,
+                pendingSwitch: next.pendingSwitch,
                 busy: false,
                 blocks: [
                   ...next.blocks,
@@ -6575,7 +6612,7 @@ function Workspace({
               const sealed = stopStreaming({
                 ...next,
                 title: titled,
-                pendingSwitch: undefined,
+                pendingSwitch: next.pendingSwitch,
               });
               return appendUser(
                 appendPreparingHandoff(
@@ -6659,9 +6696,6 @@ function Workspace({
       };
 
       if (!live) {
-        if (pendingSwitch) {
-          void forgetHarnessSession(pendingSwitch.from, sessionId);
-        }
         editedResend?.reject();
         options?.onSettled?.({
           status: "failed",
@@ -6700,6 +6734,8 @@ function Workspace({
         error: "Turn did not complete",
       };
       let controlText = "";
+      let providerAccepted = false;
+      let transferSwitchId: string | undefined;
       let proposalText = "";
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
@@ -6783,32 +6819,87 @@ function Workspace({
               text: handoffCard.brief,
             }
           : queuedHandoff;
-        if (pendingSwitch) {
-          let agentText = "";
-          if (
-            shouldAskOutgoingAgent(current) &&
-            isLiveHarness(pendingSwitch.from)
-          ) {
-            try {
-              agentText = await requestOutgoingHandoff({
-                harness: pendingSwitch.from,
-                sessionId,
-                cwd: workCwd,
-                model: pendingSwitch.fromModel,
-                modelSettings: pendingSwitch.fromSettings,
-                providerAccountId: pendingSwitch.fromProviderAccountId,
-                userRequest: text,
-              });
-            } catch {
-              agentText = "";
-            }
+        let contextTransfer: ContextTransferInput | undefined;
+        if (pendingSwitch && !rawCommand) {
+          const target = canResumeHarnessWithContext(current.harness) &&
+            !requiresFreshProviderBinding(current, current.harness, workCwd, providerAccountId)
+            ? providerBinding(current, current.harness, workCwd, providerAccountId)
+            : undefined;
+          const fresh = !target;
+          const sourceThroughBlockId = current.blocks[current.blocks.length - 1]?.id;
+          const assetSnapshots = await snapshotContextAssets(sessionId, historicalContextAttachments(current, sourceThroughBlockId));
+          if (turnGen.current.get(sessionId) !== gen) return;
+          const budget = {
+            throughBlockId: sourceThroughBlockId,
+            currentRequest: harnessText,
+            windowTokens: modelContextWindow(current.model) ?? target?.contextWindow,
+            attachmentTokens: attachments.reduce((total, attachment) => total + (attachment.kind === "image" ? 4_000 : Math.min(16_000, Math.ceil(attachment.size / 2))), 0),
+            assetSnapshots,
+          };
+          const fallbackContext = buildPortableContext(current, budget);
+          const context = target
+            ? buildPortableContext(current, { ...budget, afterBlockId: target.deliveredThroughBlockId, occupiedTokens: target.contextUsed })
+            : fallbackContext;
+          const switchId = crypto.randomUUID();
+          transferSwitchId = switchId;
+          if (fallbackContext.omitted.some((item) => item.reason === "budget") || context.omitted.some((item) => item.reason === "budget")) {
+            const path = await saveProviderContextSnapshot(sessionId, switchId, buildPortableContextSnapshot(current, sourceThroughBlockId, assetSnapshots));
+            context.retrievalPath = path;
+            fallbackContext.retrievalPath = path;
           }
           if (turnGen.current.get(sessionId) !== gen) return;
-          const latest = sessionsRef.current.find((s) => s.id === sessionId);
-          const brief = chooseHandoffBrief(agentText, latest ?? current, text);
-          await forgetHarnessSession(pendingSwitch.from, sessionId);
+          flushHarnessEvents();
+          flushSync(() => setSessions((prev) => prev.map((session) => {
+            if (session.id !== sessionId) return session;
+            const user = [...session.blocks].reverse().find((block) => block.role === "user");
+            if (!user) return session;
+            const source = providerBinding(current, pendingSwitch.from, workCwd, pendingSwitch.fromProviderAccountId);
+            const saved = source ? rememberProviderBinding(session, source) : session;
+            return updateProviderHandoff(beginProviderDelivery(saved, {
+              switchId,
+              from: pendingSwitch.from,
+              to: current.harness,
+              cwd: workCwd,
+              providerAccountId,
+              currentUserBlockId: user.id,
+              sourceThroughBlockId,
+              includedBlockIds: context.items.map((item) => item.sourceBlockId),
+              omittedBlockIds: context.omitted.map((item) => item.id),
+              targetProviderSessionId: target?.providerSessionId,
+            }), switchId, {
+              historicalAttachments: context.items.reduce((count, item) => count + (item.attachments?.length ?? 0), 0),
+              retrievalPath: context.retrievalPath,
+            });
+          })));
+          const preparedSession = sessionsRef.current.find((session) => session.id === sessionId);
+          if (preparedSession) await upsertSession(preparedSession);
           if (turnGen.current.get(sessionId) !== gen) return;
-          wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
+          await stopHarnessSession(pendingSwitch.from, sessionId);
+          if (fresh) await forgetHarnessSession(current.harness, sessionId);
+          if (turnGen.current.get(sessionId) !== gen) return;
+          if (target) bindHarnessSession(current.harness, sessionId, target.providerSessionId, workCwd, providerAccountId, current.blocks);
+          contextTransfer = {
+            context,
+            fallbackContext,
+            onDelivered: async (receipt) => {
+              if (turnGen.current.get(sessionId) !== gen) return;
+              flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+                ? markProviderContextDelivered(session, switchId, receipt.mode, receipt.providerSessionId, {
+                    ...(receipt.includedIds ? { includedBlockIds: receipt.includedIds.map((id) => id.startsWith(`${sessionId}:`) ? id.slice(sessionId.length + 1) : id) } : {}),
+                    ...(receipt.omittedIds ? { omittedBlockIds: receipt.omittedIds } : {}),
+                    ...(receipt.throughBlockId ? { sourceThroughBlockId: receipt.throughBlockId } : {}),
+                  })
+                : session)));
+              const latest = sessionsRef.current.find((session) => session.id === sessionId);
+              if (latest) await upsertSession(latest);
+            },
+          };
+          const historicalFiles = context.items.reduce((count, item) => count + (item.attachments?.length ?? 0), 0);
+          const brief = `Continue with shared history. ${context.items.length} saved items are prepared. ${context.omitted.length} items are omitted.${context.retrievalPath ? ` Saved history is available at ${context.retrievalPath}.` : ""}${historicalFiles ? ` ${historicalFiles} historical attachments are file references.` : ""}`;
+          flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+            ? { ...completeHandoff(session, brief), busy: true }
+            : session)));
+          wrap = null;
         }
 
         const revealHandoff = (brief: string) => {
@@ -6854,6 +6945,26 @@ function Workspace({
 
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
+          if (event.type === "session.providerBound") {
+            flushHarnessEvents();
+            flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+              ? recordProviderBound(session, current.harness, workCwd, event.providerSessionId, providerAccountId)
+              : session)));
+            return;
+          }
+          if (event.type === "context") {
+            flushHarnessEvents();
+            flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+              ? recordProviderContextUsage(session, current.harness, workCwd, event, providerAccountId)
+              : session)));
+          }
+          const selected = sessionsRef.current.find((session) => session.id === sessionId);
+          if (selected && !canApplyRunningConfiguration(selected, { harness: current.harness, model: current.model, modelSettings: current.modelSettings }, { running: selectionRevision, selected: selectionRevisions.current.get(sessionId) ?? 0 }) &&
+              (event.type === "session.configChanged" || event.type === "context")) return;
+          if (event.type === "session.configChanged") {
+            const running = runningSelections.current.get(sessionId);
+            if (running) runningSelections.current.set(sessionId, { ...running, model: event.model ?? running.model, modelSettings: { ...running.modelSettings, ...event.modelSettings } });
+          }
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
             controlText = (controlText + event.text).slice(-20_000);
@@ -6863,8 +6974,7 @@ function Workspace({
             controlOutcome.error = event.message;
           if (
             wrap &&
-            (event.type === "session.started" ||
-              event.type === "session.providerBound")
+            event.type === "session.started"
           ) {
             revealHandoff(wrap.text);
           }
@@ -7007,7 +7117,22 @@ function Workspace({
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
-              ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
+              ...(contextTransfer ? { contextTransfer } : {}),
+              onAccepted: () => {
+                if (turnGen.current.get(sessionId) !== gen) return;
+                if (providerAccepted) return;
+                providerAccepted = true;
+                acceptEditedResend();
+                if (transferSwitchId) {
+                  flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+                    ? consumeHandoff(acceptProviderDelivery(session, transferSwitchId!))
+                    : session)));
+                  const latest = sessionsRef.current.find((session) => session.id === sessionId);
+                  if (latest) void upsertSession(latest).catch(() => undefined);
+                  // Later repair prompts belong to this accepted native turn.
+                  contextTransfer = undefined;
+                }
+              },
               onEvent: routeTurnEvent,
             });
           let sendText = orchestrator.prompt(
@@ -7097,7 +7222,9 @@ function Workspace({
           // stream or poisoned turn state. Park it now; the next prompt will
           // reconnect and resume through a fresh transport.
           if (providerFailureSeen) {
-            await stopHarnessSession(current.harness, sessionId).catch(
+            await (transferSwitchId && !providerAccepted
+              ? forgetHarnessSession(current.harness, sessionId)
+              : stopHarnessSession(current.harness, sessionId)).catch(
               () => undefined,
             );
           }
@@ -7105,7 +7232,12 @@ function Workspace({
           setSessions((prev) =>
             prev.map((s) => {
               if (s.id !== sessionId) return s;
-              const stopped = stopStreaming(s);
+              let stopped = stopStreaming(s);
+              if (transferSwitchId && !providerAccepted) {
+                stopped = failProviderDelivery(stopped, transferSwitchId);
+              } else if (providerAccepted) {
+                stopped = settleProviderBinding(stopped, current.harness, workCwd, providerAccountId);
+              }
               const providerFailed =
                 providerFailureSeen ||
                 isProviderFailureText(lastAssistantTextInTurn(stopped));
@@ -7168,8 +7300,17 @@ function Workspace({
             setSessions((prev) =>
               prev.map((session) => {
                 if (session.id !== sessionId) return session;
+                let recovered = stopStreaming(session);
+                if (pendingSwitch && !providerAccepted) {
+                  recovered = isPreparingHandoff(recovered)
+                    ? completeHandoff(recovered, "The context transfer failed. Retry the request or select the previous provider.")
+                    : recovered;
+                  if (transferSwitchId) recovered = failProviderDelivery(recovered, transferSwitchId);
+                  const user = [...recovered.blocks].reverse().find((block) => block.role === "user");
+                  if (user) recovered = { ...recovered, blocks: recovered.blocks.map((block) => block.id === user.id ? { ...block, draft: true } : block) };
+                }
                 const stopped = {
-                  ...stopStreaming(session),
+                  ...recovered,
                   worktreePreparing: undefined,
                 };
                 return proposalId && proposalDraft
@@ -7188,6 +7329,7 @@ function Workspace({
           }
         })
         .finally(() => {
+          if (turnGen.current.get(sessionId) === gen) runningSelections.current.delete(sessionId);
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
           options?.onSettled?.(
@@ -7645,6 +7787,7 @@ function Workspace({
             noteCard: head.noteCard,
             handoffCard: head.handoffCard,
             intent: head.intent,
+            buildTarget: head.selection,
           });
         }, 0),
       );
@@ -7723,6 +7866,7 @@ function Workspace({
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
         intent: message.intent,
+        buildTarget: message.selection,
       });
     },
     [onSubmit, enqueueHarnessEvent, flushHarnessEvents],
@@ -8599,7 +8743,7 @@ function Workspace({
       );
       if (current && remoteProjectFor(current.cwd))
         return remoteSessionActions(sessionId)?.compact() ?? false;
-      if (!current || current.busy || current.worktreeRemoved) return false;
+      if (!current || current.busy || current.pendingSwitch || current.worktreeRemoved) return false;
       if (!canCompactHarnessContext(current.harness)) {
         const unsupported = sessionsRef.current.map((session) =>
           session.id === sessionId
@@ -8617,7 +8761,12 @@ function Workspace({
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
+      runningSelections.current.set(sessionId, { harness: current.harness, model: current.model, modelSettings: current.modelSettings });
       const workCwd = sessionWorkCwd(current);
+      const selectionRevision = selectionRevisions.current.get(sessionId) ?? 0;
+      const compactAccountId = supportsProviderAccounts(current.harness)
+        ? current.providerAccountId ?? selectedProviderAccountId(current.harness, current.cwd)
+        : undefined;
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -8638,13 +8787,20 @@ function Workspace({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
-            providerAccountId: supportsProviderAccounts(current.harness)
-              ? (current.providerAccountId ??
-                selectedProviderAccountId(current.harness, current.cwd))
-              : undefined,
+            providerAccountId: compactAccountId,
             runtimeMode: current.runtimeMode,
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
+              if (event.type === "session.providerBound" || event.type === "context") {
+                flushHarnessEvents();
+                flushSync(() => setSessions((prev) => prev.map((session) => session.id !== sessionId ? session
+                  : event.type === "session.providerBound"
+                    ? recordProviderBound(session, current.harness, workCwd, event.providerSessionId, compactAccountId)
+                    : recordProviderContextUsage(session, current.harness, workCwd, event, compactAccountId))));
+                if (event.type === "session.providerBound") return;
+              }
+              if ((event.type === "session.configChanged" || event.type === "context") &&
+                  (selectionRevisions.current.get(sessionId) ?? 0) !== selectionRevision) return;
               enqueueHarnessEvent(sessionId, event);
             },
           });
@@ -8664,6 +8820,7 @@ function Workspace({
           });
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;
+          runningSelections.current.delete(sessionId);
           flushHarnessEvents();
           const finished = sessionsRef.current.map((session) =>
             session.id === sessionId ? { ...session, busy: false } : session,
@@ -8693,17 +8850,24 @@ function Workspace({
         }
       }
       const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const interruptedDelivery = session?.providerContext?.delivery;
+      const unacceptedSwitch = interruptedDelivery && interruptedDelivery.to === session?.harness &&
+        ["preparing", "imported"].includes(interruptedDelivery.status) ? interruptedDelivery : undefined;
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      runningSelections.current.delete(sessionId);
       flushHarnessEvents();
       if (session) {
         for (const id of sessionChildHarnesses(session)) {
           void cancelHarnessTurn(id, sessionId);
         }
+        if (unacceptedSwitch) void forgetHarnessSession(unacceptedSwitch.to, sessionId).catch(() => undefined);
       }
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
-          const stopped = stopStreaming(s);
+          const stopped = unacceptedSwitch
+            ? failProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
+            : failUnstartedProviderRequest(stopStreaming(s));
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
@@ -8778,7 +8942,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.approve(requestId, decision);
         return;
       }
-      respondHarnessApproval(session.harness, sessionId, requestId, decision);
+      respondHarnessApproval(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId, decision);
     },
     [],
   );
@@ -8791,7 +8955,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.answer(requestId, reply);
         return;
       }
-      respondHarnessQuestion(session.harness, sessionId, requestId, reply);
+      respondHarnessQuestion(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId, reply);
     },
     [],
   );
@@ -8801,7 +8965,7 @@ function Workspace({
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       if (session && remoteProjectFor(session.cwd)) return;
       if (session && !session.worktreeRemoved)
-        keepHarnessQuestionOpen(session.harness, sessionId, requestId);
+        keepHarnessQuestionOpen(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId);
     },
     [],
   );
@@ -9148,38 +9312,39 @@ function Workspace({
           throw new Error(
             "This agent is not running a turn; send it a fresh one with message.",
           );
+        const selection = runningProviderSelection(session, runningSelections.current.get(id));
         if (
-          !isLiveHarness(session.harness) ||
-          !canSteerHarness(session.harness)
+          !isLiveHarness(selection.harness) ||
+          !canSteerHarness(selection.harness)
         )
           throw new Error(
-            `${session.harness} cannot take guidance mid-turn. Wait for the turn to finish, then use message.`,
+            `${selection.harness} cannot take guidance mid-turn. Wait for the turn to finish, then use message.`,
           );
         // Record it on the worker before dispatch, so its own transcript shows
         // why it changed course even if the harness call then fails.
         const next = sessionsRef.current.map((entry) =>
-          entry.id === id ? appendSteerUser(entry, text) : entry,
+          entry.id === id ? { ...entry, blocks: appendSteerUser({ ...entry, ...selection }, text).blocks } : entry,
         );
         sessionsRef.current = next;
         setSessions(next);
         await steerHarnessTurn({
-          harness: session.harness,
+          harness: selection.harness,
           sessionId: id,
           cwd: sessionWorkCwd(session),
-          model: session.model,
-          modelSettings: session.modelSettings,
+          model: selection.model,
+          modelSettings: selection.modelSettings,
           text,
         });
       },
       respondApproval: (id, requestId, decision) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (session)
-          respondHarnessApproval(session.harness, id, requestId, decision);
+          respondHarnessApproval(runningProviderSelection(session, runningSelections.current.get(id)).harness, id, requestId, decision);
       },
       answerQuestion: (id, requestId, reply) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (session)
-          respondHarnessQuestion(session.harness, id, requestId, reply);
+          respondHarnessQuestion(runningProviderSelection(session, runningSelections.current.get(id)).harness, id, requestId, reply);
       },
       stop: async (id) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);

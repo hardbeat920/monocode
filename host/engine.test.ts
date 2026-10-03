@@ -60,6 +60,243 @@ function setup(harness: "codex" | "claude" = "codex") {
   };
 }
 
+function switchCommand(s: ReturnType<typeof setup>, harness: "codex" | "claude", commandId: string) {
+  return {
+    type: "switchProvider" as const, commandId, sessionId: s.id,
+    expectedRevision: s.store.session(s.id).revision,
+    harness, model: `${harness}:test`, modelSettings: {}, runtimeMode: "supervised" as const,
+  };
+}
+
+async function finishTurn(s: ReturnType<typeof setup>, index: number, providerId: string, reply: string) {
+  const turn = s.turns[index];
+  turn.input.onEvent({ type: "session.providerBound", providerSessionId: providerId });
+  turn.input.onEvent({ type: "message.delta", text: reply });
+  turn.finish();
+  await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
+}
+
+describe("host-owned provider switching", () => {
+  it("transfers exact visible history once and restores the source with only its missing interval", async () => {
+    const s = setup();
+    const original = `Keep this requirement ${"long visible text ".repeat(180)} end`;
+    s.engine.command({ type: "send", commandId: "source-turn", sessionId: s.id, text: original });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Original answer");
+    const selected = switchCommand(s, "claude", "choose-claude");
+    const receipt = s.engine.command(selected);
+    expect(s.engine.command(selected)).toEqual(receipt);
+    expect(s.store.session(s.id).session.pendingSwitch?.fromProviderSessionId).toBe("source-native");
+    expect(s.turns).toHaveLength(1);
+    s.engine.command({ type: "send", commandId: "target-turn", sessionId: s.id, text: "Continue here" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    expect(s.turns[1].input.text).toContain(original);
+    expect(s.turns[1].input.text).toContain("Original answer");
+    expect(s.turns[1].input.text.match(/Continue here/g)).toHaveLength(1);
+    expect(s.store.session(s.id).session.blocks.filter((block) => block.role === "user").map((block) => block.text))
+      .toEqual([original, "Continue here"]);
+    await finishTurn(s, 1, "target-native", "Target answer");
+    expect(s.store.session(s.id).session.providerContext?.delivery).toMatchObject({ status: "accepted", mode: "inline" });
+    expect(s.store.session(s.id).session.pendingSwitch).toBeUndefined();
+    expect(s.store.session(s.id).session.blocks.filter((block) => block.role === "user").map((block) => block.turnModel?.harness))
+      .toEqual(["codex", "claude"]);
+
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.engine.command(switchCommand(s, "codex", "return-codex"));
+    s.engine.command({ type: "send", commandId: "return-turn", sessionId: s.id, text: "Now compare" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(3));
+    const returning = s.turns[2].input;
+    expect(returning.text).toBe("Now compare");
+    expect(returning.contextTransfer?.context.items.map((item) => item.text)).toEqual(["Continue here", "Target answer"]);
+    expect(returning.contextTransfer?.fallbackContext?.items.some((item) => item.text === original)).toBe(true);
+    expect(s.provider.bind).toHaveBeenCalledWith(s.id, "source-native", s.directory);
+    await returning.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "source-native" });
+    returning.onAccepted?.();
+    await finishTurn(s, 2, "source-native", "Comparison");
+    expect(s.store.session(s.id).session.providerContext?.delivery).toMatchObject({ status: "accepted", mode: "native" });
+    s.turns[0].input.onEvent({ type: "session.providerBound", providerSessionId: "late-source" });
+    expect(s.store.session(s.id).session.providerSessionId).toBe("source-native");
+  });
+
+  it("rejects stale selection and running-turn switches before changing durable state", async () => {
+    const s = setup();
+    const stale = switchCommand(s, "claude", "stale");
+    s.engine.command({ type: "configure", commandId: "config", sessionId: s.id, model: "codex:other", modelSettings: {}, runtimeMode: "supervised" });
+    expect(() => s.engine.command(stale)).toThrow("Session changed on the host");
+    expect(s.store.session(s.id).session.harness).toBe("codex");
+    s.engine.command({ type: "send", commandId: "running", sessionId: s.id, text: "Work" });
+    expect(() => s.engine.command(switchCommand(s, "claude", "running-switch"))).toThrow("Wait for the current turn");
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    s.turns[0].finish();
+  });
+
+  it("retains the source after failed startup and can return before retrying", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.engine.command(switchCommand(s, "claude", "choose-failing"));
+    vi.mocked(s.provider.send).mockRejectedValueOnce(new Error("Login required"));
+    s.engine.command({ type: "send", commandId: "failed", sessionId: s.id, text: "Next request" });
+    await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
+    expect(s.store.session(s.id).session.providerContext?.delivery?.status).toBe("uncertain");
+    expect(s.store.session(s.id).session.pendingSwitch?.fromProviderSessionId).toBe("source-native");
+    s.engine.command(switchCommand(s, "codex", "return-after-failure"));
+    expect(s.store.session(s.id).session.providerSessionId).toBe("source-native");
+    expect(s.store.session(s.id).session.pendingSwitch).toBeUndefined();
+  });
+
+  it("abandons an imported target whose current request was not acknowledged", async () => {
+    const s = setup();
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.provider.forget = vi.fn(async () => {});
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.engine.command(switchCommand(s, "claude", "choose-import"));
+    vi.mocked(s.provider.send).mockImplementationOnce(async (input) => {
+      input.onEvent({ type: "session.providerBound", providerSessionId: "ambiguous-target" });
+      await input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "ambiguous-target" });
+      throw new Error("Acknowledgement lost");
+    });
+    s.engine.command({ type: "send", commandId: "uncertain", sessionId: s.id, text: "Uncertain request" });
+    await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
+    const failed = s.store.session(s.id).session;
+    expect(failed.providerSessionId).toBeUndefined();
+    expect(failed.providerContext?.delivery?.status).toBe("uncertain");
+    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native"]);
+    s.engine.command({ type: "send", commandId: "retry", sessionId: s.id, text: "Inspect and continue" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    expect(s.turns[1].input.contextTransfer?.context.items.some((item) => item.text === "Original")).toBe(true);
+    expect(s.provider.forget).toHaveBeenCalledTimes(3);
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "fresh-target" });
+    s.turns[1].input.onAccepted?.();
+    await finishTurn(s, 1, "fresh-target", "Recovered");
+  });
+
+  it("stores omitted visible history on the owning host and excludes private reasoning", async () => {
+    const s = setup();
+    const original = "Oversized complete message ".repeat(2_000);
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: original });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    s.turns[0].input.onEvent({ type: "reasoning.delta", text: "Private reasoning must stay excluded" });
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.engine.command(switchCommand(s, "claude", "choose-budget"));
+    s.engine.command({ type: "send", commandId: "budget", sessionId: s.id, text: "Continue" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    const rendered = s.turns[1].input.text;
+    expect(rendered).not.toContain(original);
+    const manifest = JSON.parse(rendered.split("\n\n")[1]) as { retrievalPath: string };
+    expect(manifest.retrievalPath).toContain(join(s.directory, "context-history", s.id));
+    const { readFileSync } = await import("node:fs");
+    const snapshot = readFileSync(manifest.retrievalPath, "utf8");
+    expect(snapshot).toContain(original);
+    expect(snapshot).not.toContain("Private reasoning must stay excluded");
+    expect(s.store.session(s.id).session.blocks.find((block) => block.id === "source")?.text).toBe(original);
+    await finishTurn(s, 1, "target-native", "Done");
+  });
+
+  it("keeps picker intent and command receipts after host restart without resending", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+    const selection = switchCommand(s, "claude", "durable-selection");
+    const receipt = s.engine.command(selection);
+    const restarted = new HostEngine(s.store, { codex: s.provider, claude: s.provider });
+    cleanups.push(() => restarted.close());
+    expect(restarted.command(selection)).toEqual(receipt);
+    expect(s.store.session(s.id).session).toMatchObject({ harness: "claude", pendingSwitch: { from: "codex", fromProviderSessionId: "source-native" } });
+    expect(s.turns).toHaveLength(1);
+    restarted.command({ type: "send", commandId: "after-restart", sessionId: s.id, text: "Continue" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    expect(s.turns[1].input.text).toContain("Original");
+    await finishTurn(s, 1, "target-native", "Continued");
+  });
+
+  it("recovers an imported receipt as uncertain and retains a retryable request", async () => {
+    const s = setup();
+    const before = s.store.session(s.id);
+    s.store.transaction(() => s.store.save({
+      ...before, revision: before.revision + 1, status: "running", runId: "lost-run",
+      session: {
+        ...before.session, harness: "claude", model: "claude:test", providerSessionId: "uncertain-native", busy: true,
+        pendingSwitch: { from: "codex", fromModel: "codex:test", fromSettings: {}, fromProviderSessionId: "retained-source" },
+        blocks: [
+          { id: "source", role: "user", text: "Original" },
+          { id: "lost-context", role: "handoff", text: "Imported history", handoff: { from: "codex", to: "claude", status: "preparing", pending: true, transfer: { switchId: "lost", status: "imported", mode: "native", included: 1, omitted: 0, historicalAttachments: 0 } } },
+          { id: "lost-user", role: "user", text: "Unacknowledged request" },
+        ],
+        providerContext: {
+          version: 1,
+          bindings: [{ harness: "codex", cwd: s.directory, providerSessionId: "retained-source", deliveredThroughBlockId: "source" }, { harness: "claude", cwd: s.directory, providerSessionId: "uncertain-native" }],
+          delivery: { switchId: "lost", status: "imported", mode: "native", from: "codex", to: "claude", cwd: s.directory, currentUserBlockId: "lost-user", sourceThroughBlockId: "source", includedBlockIds: ["source"], omittedBlockIds: [], targetProviderSessionId: "uncertain-native" },
+        },
+      },
+    }, { type: "fixture" }));
+    const restarted = new HostEngine(s.store, { codex: s.provider, claude: s.provider });
+    cleanups.push(() => restarted.close());
+    const recovered = s.store.session(s.id);
+    expect(recovered.status).toBe("interrupted");
+    expect(recovered.session.providerSessionId).toBeUndefined();
+    expect(recovered.session.providerContext?.delivery?.status).toBe("uncertain");
+    expect(recovered.session.blocks.find((block) => block.id === "lost-user")).toMatchObject({ draft: true, text: "Unacknowledged request" });
+    expect(recovered.session.blocks.find((block) => block.id === "lost-context")?.handoff?.transfer?.status).toBe("uncertain");
+    expect(s.provider.send).not.toHaveBeenCalled();
+    expect(s.provider.bind).not.toHaveBeenCalledWith(s.id, "uncertain-native", s.directory);
+    restarted.command(switchCommand(s, "codex", "return-source"));
+    expect(s.store.session(s.id).session.providerSessionId).toBe("retained-source");
+  });
+
+  it("delivers historical attachments through immutable host references", async () => {
+    const s = setup();
+    const fileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    writeAttachmentChunk(s.store, { id: fileId, offset: 0, size: 5, data: Buffer.from("notes").toString("base64") });
+    s.engine.command({ type: "send", commandId: "source-file", sessionId: s.id, text: "Read the attached notes", attachments: [{ id: fileId, name: "notes.txt", mimeType: "text/plain", kind: "file", size: 5 }] });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Read notes");
+    const originalPath = s.store.session(s.id).session.blocks[0].attachments?.[0].path;
+    s.engine.command(switchCommand(s, "claude", "choose-files"));
+    s.engine.command({ type: "send", commandId: "target-files", sessionId: s.id, text: "Continue" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    const history = JSON.parse(s.turns[1].input.text.split("\n\n")[3]) as Array<{ attachments?: Array<{ path?: string; sha256?: string; delivery: string }> }>;
+    const reference = history[0].attachments![0];
+    expect(reference.path).toContain(join(s.directory, "context-history", s.id, "assets"));
+    expect(reference.sha256).toHaveLength(64);
+    expect(reference.delivery).toBe("reference-only");
+    expect(s.turns[1].input.attachments).toEqual([]);
+    expect(s.store.session(s.id).session.blocks[0].attachments?.[0].path).toBe(originalPath);
+    expect(s.store.session(s.id).session.blocks.find((block) => block.id === "target-files-context")?.handoff?.transfer?.historicalAttachments).toBe(1);
+    await finishTurn(s, 1, "target-native", "Continued");
+  });
+
+  it("reserves current attachment capacity before accepting a target turn", async () => {
+    const s = setup();
+    s.provider.contextTransferCapabilities = { nativeMessages: true, resumedAppend: true };
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    s.turns[0].input.onEvent({ type: "session.providerBound", providerSessionId: "source-native" });
+    s.turns[0].input.onEvent({ type: "context", used: 36_000, window: 40_000 });
+    await finishTurn(s, 0, "source-native", "Source answer");
+    s.engine.command(switchCommand(s, "claude", "choose-other"));
+    s.engine.command({ type: "send", commandId: "other", sessionId: s.id, text: "Other provider" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    await s.turns[1].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "target-native" });
+    s.turns[1].input.onAccepted?.();
+    await finishTurn(s, 1, "target-native", "Target answer");
+    s.engine.command(switchCommand(s, "codex", "return-full"));
+    const fileId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    writeAttachmentChunk(s.store, { id: fileId, offset: 0, size: 5, data: Buffer.from("image").toString("base64") });
+    const stops = vi.mocked(s.provider.stop).mock.calls.length;
+    expect(() => s.engine.command({ type: "send", commandId: "capacity", sessionId: s.id, text: "Continue", attachments: [{ id: fileId, name: "image.png", mimeType: "image/png", kind: "image", size: 5 }] }))
+      .toThrow("enough remaining context");
+    expect(s.store.session(s.id).status).toBe("idle");
+    expect(s.store.session(s.id).session.blocks.some((block) => block.id === "capacity")).toBe(false);
+    expect(s.turns).toHaveLength(2);
+    expect(vi.mocked(s.provider.stop).mock.calls).toHaveLength(stops);
+  });
+});
+
 describe("headless session ownership", () => {
   it.each(["send", "compact"] as const)("clears the old draft when a normal %s starts", async (type) => {
     const { engine, store, turns, provider, id } = setup();
@@ -870,6 +1107,13 @@ describe("headless session ownership", () => {
   });
 
   it("validates untrusted commands before execution", () => {
+    for (const expectedRevision of [-1, 1.5, "1", undefined]) {
+      expect(() => parseCommand({
+        type: "switchProvider", commandId: "switch", sessionId: "session",
+        expectedRevision, harness: "claude", model: "claude:test",
+        modelSettings: {}, runtimeMode: "supervised",
+      })).toThrow("Invalid expected session revision");
+    }
     expect(() =>
       parseCommand({ type: "send", commandId: "x", sessionId: "y", text: "" }),
     ).toThrow();

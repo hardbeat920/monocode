@@ -4,6 +4,7 @@ import type { AgentModel } from "../../sessions/model/models";
 import type { LinkedWorkItem } from "../../sessions/model/session";
 
 export const HOST_PROTOCOL_VERSION = 1;
+export const SESSION_PROVIDER_SWITCH_CAPABILITY = "sessionProviderSwitchV1";
 export const REMOTE_PROVIDERS = [
   "codex",
   "claude",
@@ -160,6 +161,16 @@ export type HostCommand =
       modelSettings: Record<string, string>;
       runtimeMode: RuntimeMode;
     }
+  | {
+      type: "switchProvider";
+      commandId: string;
+      sessionId: string;
+      expectedRevision: number;
+      harness: RemoteProvider;
+      model: string;
+      modelSettings: Record<string, string>;
+      runtimeMode: RuntimeMode;
+    }
   | { type: "compact"; commandId: string; sessionId: string }
   | {
       type: "send";
@@ -230,6 +241,10 @@ export function isRemoteProvider(value: unknown): value is RemoteProvider {
     typeof value === "string" &&
     REMOTE_PROVIDERS.some((provider) => provider === value)
   );
+}
+
+export function hostSupportsProviderSwitch(host?: HostDescriptor): boolean {
+  return !!host?.capabilities?.includes(SESSION_PROVIDER_SWITCH_CAPABILITY);
 }
 
 export function requireHostDescriptor(value: HostDescriptor): HostDescriptor {

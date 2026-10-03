@@ -3633,8 +3633,18 @@ function HandoffDivider({ block }: { block: Block }) {
   const meta = block.handoff;
   if (!meta) return null;
 
+  const transfer = meta.transfer;
   const preparing = meta.status === "preparing";
-  const label = preparing ? "Preparing a handoff" : HARNESS_TITLE[meta.to];
+  const uncertain = transfer?.status === "uncertain";
+  const label = preparing
+    ? "Preparing shared history"
+    : uncertain
+      ? "Handoff needs retry"
+      : transfer?.status === "accepted"
+        ? `Continued with ${HARNESS_TITLE[meta.to]}`
+        : transfer
+          ? `Starting ${HARNESS_TITLE[meta.to]}`
+          : HARNESS_TITLE[meta.to];
 
   return (
     <div className="px-4 py-5">
@@ -3645,7 +3655,7 @@ function HandoffDivider({ block }: { block: Block }) {
           aria-label={
             preparing
               ? `Preparing a handoff to ${HARNESS_TITLE[meta.to]}`
-              : `Continued with ${label}`
+              : transfer ? label : `Continued with ${label}`
           }
           className="flex max-w-[min(100%,20rem)] items-center gap-1.5 px-1.5 font-sans text-[12px] text-content/55"
         >
@@ -3657,11 +3667,32 @@ function HandoffDivider({ block }: { block: Block }) {
           ) : (
             <>
               <HarnessIcon harness={meta.to} className="size-3.5 shrink-0" />
+              <span>{label}</span>
             </>
           )}
         </div>
         <div className="h-px min-w-4 flex-1 bg-content/12" />
       </div>
+      {transfer && (
+        <details className="mx-auto mt-2 max-w-xl text-[12px] text-content/55">
+          <summary className="cursor-pointer text-center">Transfer details</summary>
+          <div className="mt-2 space-y-1 break-words">
+            <p>{transfer.included} conversation items selected. {transfer.omitted} items omitted.</p>
+            <p>{transfer.mode === "native"
+              ? "The provider received historical user and assistant messages."
+              : transfer.mode === "inline"
+                ? "The provider received attributed history with the current request."
+                : "History delivery is pending."}</p>
+            {transfer.historicalAttachments > 0 && (
+              <p>{transfer.historicalAttachments} historical attachments are file references.</p>
+            )}
+            {transfer.retrievalPath && (
+              <p>The saved history is available at <code>{transfer.retrievalPath}</code>.</p>
+            )}
+            {uncertain && <p>The request was not confirmed. Retry the unsent message to continue.</p>}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -559,6 +559,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    if (canResume && resume && live.claudeSessionId !== resume.sessionId) {
+      throw new Error("Claude resumed a different provider conversation. Retry with a fresh conversation and shared history.");
+    }
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,

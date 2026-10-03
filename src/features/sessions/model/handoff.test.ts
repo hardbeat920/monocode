@@ -211,6 +211,13 @@ describe("deterministic handoff", () => {
 });
 
 describe("handoff block lifecycle", () => {
+  it("does not deliver a failed target handoff to the restored source", () => {
+    const session = sessionWith([{ id: "handoff", role: "handoff", text: "Prepared shared history", handoff: {
+      from: "cursor", to: "claude", status: "ready", pending: true,
+      transfer: { switchId: "failed-target", status: "uncertain", mode: "native", included: 1, omitted: 0, historicalAttachments: 0 },
+    } }]);
+    expect(pendingHandoff(session)).toBeNull();
+  });
   it("keeps the inject pending until the incoming harness accepts a turn", () => {
     let session = appendPreparingHandoff(
       sessionWith([{ id: "u1", role: "user", text: "go" }]),

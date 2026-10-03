@@ -299,6 +299,8 @@ describe("remote host API", () => {
   });
   it("advertises newer providers only to desktops that request them", async () => {
     const s = await setup(["codex", "cursor"]);
+    expect((await s.call("environment.describe")).value.result.capabilities)
+      .toContain("sessionProviderSwitchV1");
     expect((await s.call("environment.describe")).value.result.providers)
       .toEqual(["codex"]);
     expect((await s.call("environment.describe", {

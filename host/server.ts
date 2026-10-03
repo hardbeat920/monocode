@@ -5,7 +5,8 @@ import {
 } from "node:http";
 import { hostname, homedir } from "node:os";
 import { execFile } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, rm, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   HOST_PROTOCOL_VERSION,
@@ -288,6 +289,7 @@ export function createHostServer(
                 "attachments.read",
                 "sessions.draft",
                 "sessions.plan",
+                "sessionProviderSwitchV1",
               ],
             };
             break;
@@ -366,6 +368,7 @@ export function createHostServer(
             if (current.projectId !== params.projectId)
               throw new Error("Session does not belong to this project");
             engine.store.deleteSession(sessionId);
+            await rm(join(dirname(engine.store.attachmentDir), "context-history", current.session.id), { recursive: true, force: true });
             result = { deleted: true };
             break;
           }

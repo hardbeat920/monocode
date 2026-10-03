@@ -112,6 +112,7 @@ let container: HTMLDivElement;
 let host: HostSession | undefined;
 let catalog: HostModelCatalog | Error;
 let providers: HostDescriptor["providers"];
+let capabilities: string[];
 let commands: HostCommand[];
 let projectKey: string;
 let syncDelay: Promise<void> | undefined;
@@ -139,6 +140,7 @@ beforeEach(() => {
   deletedSessions = [];
   catalog = { models: { codex: [gpt] }, errors: {} };
   providers = ["codex"];
+  capabilities = ["attachments.upload", "sessions.plan", "sessions.draft"];
   projectKey = rememberRemoteProject("env", {
     id: "project",
     name: "repo",
@@ -163,7 +165,7 @@ beforeEach(() => {
         environmentId: "env",
         name: "home",
         providers,
-        capabilities: ["attachments.upload", "sessions.plan", "sessions.draft"],
+        capabilities,
       };
     if (method === "models.list") {
       if (catalog instanceof Error) throw catalog.message;
@@ -284,12 +286,13 @@ function dispatch(command: HostCommand) {
         blocks: [],
       },
     };
-  } else if (host && command.type === "configure") {
+  } else if (host && (command.type === "configure" || command.type === "switchProvider")) {
     host = {
       ...host,
       revision: host.revision + 1,
       session: {
         ...host.session,
+        ...(command.type === "switchProvider" ? { harness: command.harness } : {}),
         model: command.model,
         modelSettings: command.modelSettings,
         runtimeMode: command.runtimeMode,
@@ -408,6 +411,14 @@ async function chooseEffort(label: string) {
   ].find((item) => item.textContent?.includes(label))!;
   await act(async () => option.click());
   await settle();
+}
+
+async function openProviderModels(provider: string) {
+  await act(async () => byLabel("Codex GPT Test")!.click());
+  const tab = document.body.querySelector<HTMLButtonElement>(`[role="tab"][aria-label="${provider}"]`);
+  if (tab) await act(async () => tab.click());
+  await settle();
+  return tab;
 }
 
 it("uses the normal composer with the host branch in its top row", async () => {
@@ -961,6 +972,98 @@ it("applies effort changes directly and uses them on the next turn", async () =>
   expect(byLabel("Reasoning:")?.getAttribute("aria-label")).toBe(
     "Reasoning: Low",
   );
+});
+
+it("continues a started remote session with another provider when the host supports it", async () => {
+  capabilities.push("sessionProviderSwitchV1");
+  providers = ["codex", "cursor"];
+  catalog = { models: { codex: [gpt], cursor: [cursor] }, errors: {} };
+  await render();
+  await send("First");
+  await vi.waitFor(() => expect(host?.session.blocks).toHaveLength(2));
+  const revision = host!.revision;
+  expect(await openProviderModels("Cursor")).not.toBeNull();
+  const option = document.body.querySelector<HTMLElement>('[role="option"][aria-label^="Composer Test"]');
+  expect(option).not.toBeNull();
+  await act(async () => option!.click());
+  await settle();
+  expect(commands.at(-1)).toMatchObject({
+    type: "switchProvider", sessionId: "host-session", expectedRevision: revision,
+    harness: "cursor", model: cursor.id,
+  });
+  await vi.waitFor(() => expect(byLabel("Cursor Composer Test")).not.toBeNull(), { timeout: 4_000 });
+  await send("Second");
+  expect(commands.at(-1)).toMatchObject({ type: "send", sessionId: "host-session", text: "Second" });
+  expect(commands.filter((command) => command.type === "create")).toHaveLength(1);
+  expect(host?.session.blocks.map((block) => block.text)).toEqual(["First", "Done", "Second", "Done"]);
+});
+
+it("keeps started sessions on their provider when the host lacks switch support", async () => {
+  providers = ["codex", "cursor"];
+  catalog = { models: { codex: [gpt], cursor: [cursor] }, errors: {} };
+  await render();
+  await send("First");
+  await vi.waitFor(() => expect(host?.session.blocks).toHaveLength(2));
+  expect(await openProviderModels("Cursor")).toBeNull();
+  expect(commands.some((command) => command.type === "switchProvider")).toBe(false);
+});
+
+it("waits for a running turn before applying the remote provider selection", async () => {
+  capabilities.push("sessionProviderSwitchV1");
+  providers = ["codex", "cursor"];
+  catalog = { models: { codex: [gpt], cursor: [cursor] }, errors: {} };
+  host = {
+    projectId: "project", revision: 4, status: "running", runId: "active-run", updatedAt: 0,
+    session: { id: "host-session", cwd: "/home/me/repo", harness: "codex", model: gpt.id, modelSettings: {}, runtimeMode: "supervised", title: "Existing", busy: true, blocks: [{ id: "first", role: "user", text: "First" }] },
+  };
+  rememberRemoteSession("shell", "host-session");
+  await render();
+  expect(byLabel("Stop")).not.toBeNull();
+  await openProviderModels("Cursor");
+  const option = document.body.querySelector<HTMLElement>('[role="option"][aria-label^="Composer Test"]')!;
+  await act(async () => option.click());
+  await settle();
+  expect(commands.some((command) => command.type === "switchProvider" || command.type === "cancel")).toBe(false);
+  host = { ...host!, revision: host!.revision + 1, status: "idle", runId: undefined, session: { ...host!.session, busy: false } };
+  const revision = host.revision;
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 850)); });
+  await settle();
+  expect(commands.at(-1)).toMatchObject({ type: "switchProvider", harness: "cursor", expectedRevision: revision });
+});
+
+it("retries a lost provider selection receipt after remount with its original command ID", async () => {
+  capabilities.push("sessionProviderSwitchV1");
+  providers = ["codex", "cursor"];
+  catalog = { models: { codex: [gpt], cursor: [cursor] }, errors: {} };
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let receipt: ReturnType<typeof dispatch> | undefined;
+  const attempts: HostCommand[] = [];
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "switchProvider") {
+      attempts.push(request.params);
+      if (receipt) return receipt;
+      receipt = dispatch(request.params);
+      throw new Error("Selection receipt lost");
+    }
+    return original(command, input);
+  });
+  await render();
+  await send("First");
+  await openProviderModels("Cursor");
+  const option = document.body.querySelector<HTMLElement>('[role="option"][aria-label^="Composer Test"]')!;
+  await act(async () => option.click());
+  await settle();
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render();
+  const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+  expect(retry).toBeTruthy();
+  await act(async () => retry.click());
+  await settle();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(commands.filter((command) => command.type === "switchProvider")).toHaveLength(1);
 });
 
 it("keeps a saved model's effort editable when the host catalog fails", async () => {

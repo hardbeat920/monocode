@@ -45,6 +45,7 @@ import {
   sameModelSettings,
 } from "../model/remoteModels";
 import {
+  hostSupportsProviderSwitch,
   isRemoteProvider,
   REMOTE_PROVIDERS,
   requireHostDescriptor,
@@ -216,6 +217,7 @@ function ConnectedRemoteSession({
         setUnseenSend(undefined);
         setChanges(undefined);
         applied.current = undefined;
+        rejectedConfiguration.current = undefined;
         setError("");
         setRemovingDraft(undefined);
         preparingRef.current = false;
@@ -497,6 +499,7 @@ function ConnectedRemoteSession({
     settings: hostSession.modelSettings ?? {},
     mode: hostSession.runtimeMode,
   };
+  const canSwitchProvider = hostSupportsProviderSwitch(descriptor);
   const configuration = saved ? (changes ?? saved) : draft;
   const updateConfiguration = (
     update: (current: Configuration) => Configuration,
@@ -677,12 +680,13 @@ function ConnectedRemoteSession({
   // Model, effort and permission changes apply directly, as locally. A
   // running turn keeps its settings; the change is sent once it finishes.
   const applying = useRef(false);
+  const rejectedConfiguration = useRef<{ value: Configuration; revision: number } | undefined>(undefined);
   // The last change the host accepted, until a sync reflects it.
   const applied = useRef<Configuration>(undefined);
   useEffect(() => {
     if (!changes || !saved || !hostSession) return;
     const same = (a: Configuration, b: Configuration) =>
-      a.model === b.model &&
+      a.harness === b.harness && a.model === b.model &&
       a.mode === b.mode &&
       sameModelSettings(a.settings, b.settings);
     if (same(changes, saved)) {
@@ -691,11 +695,18 @@ function ConnectedRemoteSession({
       return;
     }
     if (applied.current && same(changes, applied.current)) return;
+    if (rejectedConfiguration.current &&
+      rejectedConfiguration.current.revision === snapshot?.revision &&
+      same(changes, rejectedConfiguration.current.value)) return;
     if (busy || !online || pending || applying.current) return;
+    if (changes.harness !== saved.harness && !canSwitchProvider) return;
     applying.current = true;
     const sent = changes;
+    const revision = snapshot!.revision;
     void run({
-      type: "configure",
+      ...(changes.harness !== saved.harness
+        ? { type: "switchProvider" as const, harness: changes.harness, expectedRevision: revision }
+        : { type: "configure" as const }),
       commandId: crypto.randomUUID(),
       sessionId: hostSession.id,
       model: changes.model,
@@ -704,6 +715,7 @@ function ConnectedRemoteSession({
     })
       .then((receipt) => {
         if (receipt) applied.current = sent;
+        else rejectedConfiguration.current = { value: sent, revision };
       })
       .finally(() => {
         applying.current = false;
@@ -939,7 +951,7 @@ function ConnectedRemoteSession({
           .find((m) => m.id === id),
       available: (harness) =>
         providers.includes(harness as RemoteProvider) &&
-        (!hostSession || hostSession.harness === harness),
+        (!hostSession || canSwitchProvider || hostSession.harness === harness),
       probed: () => !!descriptor,
       // The host re-probes when a provider CLI changes or its catalog ages,
       // so each picker opening asks again.
@@ -949,6 +961,7 @@ function ConnectedRemoteSession({
     catalog,
     catalogError,
     descriptor,
+    canSwitchProvider,
     providers,
     machine.environmentId,
     hostSession?.harness,
@@ -1185,7 +1198,7 @@ function ConnectedRemoteSession({
     },
     remoteSessionLoading: !!sessionId && !hostSession && !session.blocks.length,
     remoteSessionStarted: !!sessionId,
-    allowedModelHarnesses: hostSession
+    allowedModelHarnesses: hostSession && !canSwitchProvider
       ? [hostSession.harness]
       : providers.length
         ? providers
@@ -1198,6 +1211,7 @@ function ConnectedRemoteSession({
     onCompactContext: compact,
     onModelChange: (_, harness, model) => {
       if (!isRemoteProvider(harness)) return;
+      if (hostSession && harness !== hostSession.harness && !canSwitchProvider) return;
       updateConfiguration((current) => ({
         ...current,
         harness,
