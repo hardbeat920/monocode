@@ -24,6 +24,7 @@ import {
 // through the existing production adapters without contacting a paid model.
 const fixture = `#!/usr/bin/env node
 const readline = require('node:readline');
+let codexClient;
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // Records what each turn actually received, so tests can prove that settings
 // applied between turns reach the provider.
@@ -41,12 +42,15 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     }
     return;
   }
-  if (request.method === 'initialize') send({id: request.id, result: {}});
+  if (request.method === 'initialize') {
+    codexClient = request.params.clientInfo.name;
+    send({id: request.id, result: {}});
+  }
   if (request.method === 'account/read') send({id: request.id, result: {account: {type: 'fixture'}, requiresOpenaiAuth: false}});
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
-    record({codexEffort: request.params.effort ?? null});
+    record({codexEffort: request.params.effort ?? null, codexClient});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
@@ -269,9 +273,11 @@ describe("existing providers over headless process I/O", () => {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        if (harness === "codex")
-          efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
-        else {
+        if (harness === "codex") {
+          const mainTurns = calls.filter((call) => call.codexClient === "monocode");
+          expect(mainTurns).toHaveLength(1);
+          efforts.push(mainTurns[0].codexEffort);
+        } else {
           const args: string[] = calls.find(
             (call) => call.claudeArgs,
           ).claudeArgs;
