@@ -4419,6 +4419,7 @@ dependencies = [
  "monocode-process",
  "monocode-settings",
  "monocode-store",
+ "monocode-terminal",
  "monocode-terminal-view",
  "monocode-ui",
  "monocode-view-composer",
@@ -9001,6 +9002,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

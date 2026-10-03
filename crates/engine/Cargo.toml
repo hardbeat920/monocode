@@ -35,7 +35,9 @@ automations = ["package-deps", "submit", "attention", "history", "projects", "de
 # inbox: tracker clients (integrations), ISO timestamps and local midnight
 # (chrono), and URL parsing (url).
 inbox = ["package-deps", "dep:monocode-integrations", "dep:chrono", "dep:url"]
-remote = ["package-deps"]
+# remote: the desktop client for paired hosts (monocode-remote) and
+# attachment bytes (base64).
+remote = ["package-deps", "dep:monocode-remote", "dep:base64"]
 # `runtime::testing`: the fake store backend and workspace hooks, for other
 # crates' tests.
 test-support = ["gpui/test-support"]
@@ -70,6 +72,8 @@ chrono = { version = "0.4.45", optional = true, default-features = false, featur
 url = { workspace = true, optional = true }
 # submit: pasted attachment bytes.
 base64 = { workspace = true, optional = true }
+# remote: pairing, pinned TLS requests, and SSH setup for connected hosts.
+monocode-remote = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
