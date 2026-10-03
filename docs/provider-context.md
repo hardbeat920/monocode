@@ -34,4 +34,4 @@ A remote provider choice made during an active turn waits in the open client unt
 
 `providerContext.ts` defines bindings and delivery state. `portableContext.ts` exports and budgets history. `contextTransfer.ts` shares native and attributed-text delivery rules between the desktop registry and the Node host. `contextAssets.ts` and the owning storage implementation preserve historical asset references. The existing composer and handoff row display transfer state.
 
-The SQLite session record stores a versioned provider-context envelope. Old records remain readable without it. Context snapshots and assets live under the owning application's data directory and are removed when the session is deleted.
+The SQLite session record stores a versioned provider-context envelope. Old records remain readable without it. Context snapshots and assets live under the owning application's data directory. Session deletion removes them. The host logs a filesystem cleanup failure while preserving the successful record deletion.

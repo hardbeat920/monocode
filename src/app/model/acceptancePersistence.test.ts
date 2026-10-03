@@ -56,6 +56,59 @@ it("waits for an accepted save before allowing a follow-up", async () => {
   expect(persistence.hasPending("session")).toBe(false);
 });
 
+it("queues busy follow-ups during a healthy save and waits without treating it as failure", async () => {
+  const persistence = createAcceptancePersistence();
+  let complete!: () => void;
+  const save = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const paused = vi.fn();
+  const accepted = persistence.start("session", "switch", () => save, paused);
+  expect(persistence.hasPending("session")).toBe(true);
+  expect(persistence.hasFailed("session")).toBe(false);
+  expect(persistence.submissionMode("session", true)).toBe("queue");
+  expect(persistence.submissionMode("session", false)).toBe("wait");
+  expect(paused).not.toHaveBeenCalled();
+  complete();
+  await accepted;
+  expect(persistence.submissionMode("session", false)).toBe("submit");
+  expect(paused).not.toHaveBeenCalled();
+});
+
+it("requests storage-only reconciliation after a rejected save", async () => {
+  const persistence = createAcceptancePersistence();
+  await expect(
+    persistence.start(
+      "session",
+      "switch",
+      async () => {
+        throw new Error("disk full");
+      },
+      vi.fn(),
+    ),
+  ).rejects.toBeInstanceOf(AcceptancePersistenceError);
+  expect(persistence.hasFailed("session")).toBe(true);
+  expect(persistence.submissionMode("session", true)).toBe("reconcile");
+  expect(persistence.submissionMode("session", false)).toBe("reconcile");
+});
+
+it("notifies the queue after a successful save has removed its dispatch guard", async () => {
+  const persistence = createAcceptancePersistence();
+  const modes: string[] = [];
+  const onSaved = vi.fn(() => {
+    modes.push(persistence.submissionMode("session", false));
+  });
+  await persistence.start(
+    "session",
+    "switch",
+    async () => undefined,
+    vi.fn(),
+    onSaved,
+  );
+  expect(onSaved).toHaveBeenCalledOnce();
+  expect(modes).toEqual(["submit"]);
+});
+
 it("does not dispatch provider input before its submission marker is saved", async () => {
   let finish!: () => void;
   const save = new Promise<void>((resolve) => {

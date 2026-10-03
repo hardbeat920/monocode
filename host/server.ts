@@ -369,7 +369,11 @@ export function createHostServer(
             if (current.projectId !== params.projectId)
               throw new Error("Session does not belong to this project");
             engine.store.deleteSession(sessionId);
-            await rm(join(dirname(engine.store.attachmentDir), "context-history", current.session.id), { recursive: true, force: true });
+            try {
+              await rm(join(dirname(engine.store.attachmentDir), "context-history", current.session.id), { recursive: true, force: true });
+            } catch (error) {
+              console.error("Context history cleanup failed after session deletion", sessionId, error);
+            }
             result = { deleted: true };
             break;
           }

@@ -6097,7 +6097,11 @@ function Workspace({
       const remote = sessionsRef.current.find((session) => session.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd))
         return !!remoteSessionActions(sessionId)?.submit(text, attachments, options);
-      if (acceptancePersistence.current.hasPending(sessionId)) {
+      const acceptanceSubmission = acceptancePersistence.current.submissionMode(
+        sessionId,
+        remote?.busy ?? false,
+      );
+      if (acceptanceSubmission === "reconcile") {
         flushSync(() => setSessions((prev) => prev.map((session) =>
           session.id === sessionId ? { ...session, queueStatus: "paused" } : session,
         )));
@@ -6117,6 +6121,7 @@ function Workspace({
         });
         return false;
       }
+      if (acceptanceSubmission === "wait") return false;
       if (remote?.providerContext?.delivery?.needsInspection) {
         if (
           remote.busy || options?.queuedMessageId || options?.managed ||
@@ -6205,6 +6210,15 @@ function Workspace({
         )
       )
         return false;
+      const currentAcceptanceSubmission = acceptancePersistence.current.submissionMode(
+        sessionId,
+        storedCurrent.busy ?? false,
+      );
+      if (
+        currentAcceptanceSubmission === "wait" ||
+        currentAcceptanceSubmission === "reconcile"
+      ) return false;
+      const acceptanceSavePending = currentAcceptanceSubmission === "queue";
       const draftBlock = options?.draftBlockId
         ? storedCurrent.blocks.find(
             (block) =>
@@ -6359,6 +6373,7 @@ function Workspace({
         }
         const followUpBehavior =
           pendingSwitch ||
+          acceptanceSavePending ||
           current.worktreePreparing ||
           intent === "plan" ||
           intent === "orchestrate" ||
@@ -7208,6 +7223,10 @@ function Workspace({
                     flushSync(() => setSessions((prev) => prev.map((session) =>
                       session.id === sessionId ? withAcceptancePersistenceError(session, error) : session,
                     )));
+                  }, () => {
+                    setSessions((prev) => prev.map((session) =>
+                      session.id === sessionId ? { ...session } : session,
+                    ));
                   });
                   // Later repair prompts belong to this accepted native turn.
                   contextTransfer = undefined;
@@ -7866,6 +7885,7 @@ function Workspace({
         continue;
       }
       if (
+        acceptancePersistence.current.hasPending(session.id) ||
         !canDispatchQueuedHead(session) ||
         queueDispatchingRef.current.has(session.id)
       ) {
@@ -7887,6 +7907,7 @@ function Workspace({
             !latest ||
             !head ||
             head.id !== next.id ||
+            acceptancePersistence.current.hasPending(session.id) ||
             !canDispatchQueuedHead(latest)
           ) {
             return;

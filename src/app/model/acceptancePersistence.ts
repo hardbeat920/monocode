@@ -4,6 +4,7 @@ type Entry = {
   promise: Promise<void>;
   failed: boolean;
   onFailure: (error: AcceptancePersistenceError) => void;
+  onSaved?: () => void;
 };
 
 export class AcceptancePersistenceError extends Error {
@@ -60,18 +61,23 @@ export function createAcceptancePersistence() {
     switchId: string,
     save: Save,
     onFailure: Entry["onFailure"],
+    onSaved?: Entry["onSaved"],
   ): Promise<void> => {
     const entry: Entry = {
       switchId,
       promise: Promise.resolve(),
       failed: false,
       onFailure,
+      onSaved,
     };
     entries.set(sessionId, entry);
     entry.promise = Promise.resolve()
       .then(save)
       .then(() => {
-        if (entries.get(sessionId) === entry) entries.delete(sessionId);
+        if (entries.get(sessionId) === entry) {
+          entries.delete(sessionId);
+          entry.onSaved?.();
+        }
       })
       .catch((cause: unknown) => {
         const error = new AcceptancePersistenceError(cause);
@@ -87,6 +93,16 @@ export function createAcceptancePersistence() {
   return {
     start,
     hasPending: (sessionId: string) => entries.has(sessionId),
+    hasFailed: (sessionId: string) => entries.get(sessionId)?.failed === true,
+    submissionMode: (
+      sessionId: string,
+      busy: boolean,
+    ): "submit" | "queue" | "wait" | "reconcile" => {
+      const entry = entries.get(sessionId);
+      if (!entry) return "submit";
+      if (entry.failed) return "reconcile";
+      return busy ? "queue" : "wait";
+    },
     wait: (sessionId: string, switchId?: string) => {
       const entry = entries.get(sessionId);
       return entry && (!switchId || entry.switchId === switchId)
@@ -97,7 +113,7 @@ export function createAcceptancePersistence() {
       const entry = entries.get(sessionId);
       if (!entry) return Promise.resolve();
       return entry.failed
-        ? start(sessionId, entry.switchId, save, entry.onFailure)
+        ? start(sessionId, entry.switchId, save, entry.onFailure, entry.onSaved)
         : entry.promise;
     },
   };

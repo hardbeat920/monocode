@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +22,10 @@ import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
 const modelProbe = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const filesystem = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...filesystem, rm: vi.fn(filesystem.rm) };
+});
 vi.mock("../src/integrations/harness/providers/codex/codexCatalog", () => ({
   discoverCodexModels: modelProbe,
 }));
@@ -184,6 +190,33 @@ describe("remote host API", () => {
       projectId: s.project.id, sessionId,
     })).status).toBe(200);
     expect((await s.call("sessions.list", { projectId: s.project.id })).value.result).toEqual([]);
+  });
+
+  it("reports a committed session deletion as successful when context cleanup fails", async () => {
+    const s = await setup();
+    const created = await s.call("commands.dispatch", {
+      type: "create", commandId: "cleanup-session", projectId: s.project.id,
+      harness: "codex", model: "codex:test", runtimeMode: "supervised",
+    });
+    const sessionId = created.value.result.sessionId as string;
+    const history = join(s.directory, "context-history", sessionId);
+    mkdirSync(history, { recursive: true });
+    writeFileSync(join(history, "history.md"), "Retained context");
+    const failure = new Error("EBUSY: context history is locked");
+    const remove = vi.mocked(rm).mockRejectedValueOnce(failure);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const deleted = await s.call("sessions.delete", { projectId: s.project.id, sessionId });
+      expect(s.store.summaries(s.project.id)).toEqual([]);
+      expect(() => s.store.session(sessionId)).toThrow("Session not found");
+      expect(deleted).toEqual({ status: 200, value: { result: { deleted: true } } });
+      expect(existsSync(history)).toBe(true);
+      expect(remove).toHaveBeenCalledWith(history, { recursive: true, force: true });
+      expect(log).toHaveBeenCalledWith("Context history cleanup failed after session deletion", sessionId, failure);
+    } finally {
+      remove.mockReset();
+      log.mockRestore();
+    }
   });
 
   it("lists, creates, and selects registered remote worktrees through RPC", async () => {
