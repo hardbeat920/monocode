@@ -41,8 +41,11 @@ const {
   sendCodexTurn,
   stopCodexSession,
   __codexTestReset,
+  __codexTestResumeMap,
 } = await import("./codex");
 import type { HarnessEvent } from "../../core/types";
+import type { ContextTransferInput } from "../../../../features/sessions/model/contextTransfer";
+import { buildPortableContext } from "../../../../features/sessions/model/portableContext";
 import { newSession, type RuntimeMode, type TurnIntent } from "../../../../features/sessions/model/session";
 import { applyHarnessEvent } from "../../core/apply";
 
@@ -160,6 +163,146 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  async function contextTurn(options: {
+    resume?: boolean;
+    staleResume?: boolean;
+    onDelivered?: ContextTransferInput["onDelivered"];
+  } = {}) {
+    const source = { ...newSession("claude", "/repo"), id: "portable-thread", blocks: [
+      { id: "u1", role: "user" as const, text: "Early unique instruction" },
+      { id: "a1", role: "assistant" as const, text: "First exact reply" },
+      { id: "u2", role: "user" as const, text: "The later question" },
+      { id: "a2", role: "assistant" as const, text: "The later answer" },
+    ] };
+    const full = buildPortableContext(source);
+    const delta = buildPortableContext(source, { afterBlockId: "a1" });
+    const onDelivered = options.onDelivered ?? vi.fn();
+    const onAccepted = vi.fn();
+    const events: HarnessEvent[] = [];
+    if (options.resume) bindCodexSession("codex-live", "native-prior", "/repo");
+    const turn = sendCodexTurn({
+      sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+      text: "Current unique request", onEvent: (event) => events.push(event), onAccepted,
+      contextTransfer: { context: options.resume ? delta : full, fallbackContext: full, onDelivered },
+    });
+    // A rejected import can settle while this helper still drives the pipe.
+    void turn.catch(() => undefined);
+    await waitFor(() => parse().some((message) => message.method === "initialize"), "initialize");
+    reply(parse().find((message) => message.method === "initialize")!.id as number, {});
+    const method = options.resume ? "thread/resume" : "thread/start";
+    await waitFor(() => parse().some((message) => message.method === method), method);
+    const opening = parse().find((message) => message.method === method)!;
+    if (options.staleResume) {
+      onLine!(JSON.stringify({ id: opening.id, error: { code: -32000, message: "thread not found" } }));
+      await waitFor(() => parse().some((message) => message.method === "thread/start"), "fresh thread/start");
+      reply(parse().find((message) => message.method === "thread/start")!.id as number, { thread: { id: "native-fresh" } });
+    } else {
+      reply(opening.id as number, { thread: { id: options.resume ? "native-prior" : "native-new" } });
+    }
+    await waitFor(() => parse().some((message) => message.method === "thread/inject_items"), "history import");
+    return { turn, events, onAccepted, onDelivered, full, delta };
+  }
+
+  async function acceptContextTurn() {
+    await waitFor(() => parse().some((message) => message.method === "turn/start"), "turn/start");
+    const starting = parse().find((message) => message.method === "turn/start")!;
+    reply(starting.id as number, { turn: { id: "context-turn", status: "inProgress" } });
+    notify("turn/completed", { turn: { id: "context-turn", status: "completed" } });
+    return starting;
+  }
+
+  it("imports native role history before sending the untouched current request", async () => {
+    const run = await contextTurn();
+    const importing = parse().find((message) => message.method === "thread/inject_items")!;
+    const params = importing.params as { items: Array<{ role: string; content: Array<{ text: string }> }> };
+    expect(params.items.map((item) => item.role)).toEqual(["user", "user", "assistant", "user", "assistant"]);
+    expect(JSON.parse(params.items[1].content[0].text).text).toBe("Early unique instruction");
+    expect(JSON.stringify(params)).not.toContain("Current unique request");
+    notify("item/agentMessage/delta", { itemId: "historical-event", delta: "Old imported assistant text" });
+    expect(run.events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(parse().some((message) => message.method === "turn/start")).toBe(false);
+    reply(importing.id as number, {});
+    const starting = await acceptContextTurn();
+    await run.turn;
+    expect(starting.params).toMatchObject({ input: [{ type: "text", text: "Current unique request" }] });
+    expect(run.onDelivered).toHaveBeenCalledWith({ mode: "native", providerSessionId: "native-new", includedIds: run.full.items.map((item) => item.id), omittedIds: [], throughBlockId: "a2" });
+    expect(run.onAccepted).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the durable imported receipt before starting the current turn", async () => {
+    let release!: () => void;
+    const onDelivered = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const run = await contextTurn({ onDelivered });
+    reply(parse().find((message) => message.method === "thread/inject_items")!.id as number, {});
+    await waitFor(() => onDelivered.mock.calls.length === 1, "receipt persistence");
+    expect(parse().some((message) => message.method === "turn/start")).toBe(false);
+    release();
+    await acceptContextTurn();
+    await run.turn;
+  });
+
+  it("falls back inline only for method-not-found and caches the unsupported protocol", async () => {
+    const run = await contextTurn();
+    onLine!(JSON.stringify({ id: parse().find((message) => message.method === "thread/inject_items")!.id, error: { code: -32601, message: "Unknown method" } }));
+    await waitFor(() => parse().some((message) => message.method === "turn/start"), "inline turn");
+    expect(run.onDelivered).not.toHaveBeenCalled();
+    const starting = await acceptContextTurn();
+    await run.turn;
+    const text = ((starting.params as { input: Array<{ text: string }> }).input[0]).text;
+    expect(text).toContain("Early unique instruction");
+    expect(text.match(/Current unique request/g)).toHaveLength(1);
+    expect(run.onDelivered).toHaveBeenCalledWith(expect.objectContaining({ mode: "inline" }));
+
+    const previousImports = parse().filter((message) => message.method === "thread/inject_items").length;
+    sent.length = 0;
+    const next = sendCodexTurn({ sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised", text: "Second request", onEvent: () => {}, contextTransfer: { context: run.delta } });
+    await acceptContextTurn();
+    await next;
+    expect(previousImports).toBe(1);
+    expect(parse().some((message) => message.method === "thread/inject_items")).toBe(false);
+  });
+
+  it("abandons an uncertain native identity without inline delivery or a current turn", async () => {
+    const run = await contextTurn();
+    onLine!(JSON.stringify({ id: parse().find((message) => message.method === "thread/inject_items")!.id, error: { code: -32000, message: "History mutation may have failed" } }));
+    await expect(run.turn).rejects.toMatchObject({ name: "ContextTransferError", uncertain: true });
+    expect(parse().some((message) => message.method === "turn/start")).toBe(false);
+    expect(run.onDelivered).not.toHaveBeenCalled();
+    expect(run.onAccepted).not.toHaveBeenCalled();
+    expect(__codexTestResumeMap().has("codex-live")).toBe(false);
+  });
+
+  it("reconstructs full portable history after a stale native resume", async () => {
+    const run = await contextTurn({ resume: true, staleResume: true });
+    const importing = parse().find((message) => message.method === "thread/inject_items")!;
+    expect(JSON.stringify(importing.params)).toContain("Early unique instruction");
+    reply(importing.id as number, {});
+    await acceptContextTurn();
+    await run.turn;
+    expect(run.onDelivered).toHaveBeenCalledWith(expect.objectContaining({ providerSessionId: "native-fresh", includedIds: run.full.items.map((item) => item.id) }));
+  });
+
+  it("imports only the missing interval when the previous native thread resumes", async () => {
+    const run = await contextTurn({ resume: true });
+    const importing = parse().find((message) => message.method === "thread/inject_items")!;
+    expect(JSON.stringify(importing.params)).not.toContain("Early unique instruction");
+    expect(JSON.stringify(importing.params)).toContain("The later question");
+    reply(importing.id as number, {});
+    await acceptContextTurn();
+    await run.turn;
+    expect(run.onDelivered).toHaveBeenCalledWith(expect.objectContaining({ providerSessionId: "native-prior", includedIds: run.delta.items.map((item) => item.id) }));
+  });
+
+  it("keeps successful import separate from a failed current turn acceptance", async () => {
+    const run = await contextTurn();
+    reply(parse().find((message) => message.method === "thread/inject_items")!.id as number, {});
+    await waitFor(() => parse().some((message) => message.method === "turn/start"), "turn/start");
+    onLine!(JSON.stringify({ id: parse().find((message) => message.method === "turn/start")!.id, error: { code: -32000, message: "Current turn refused" } }));
+    await expect(run.turn).rejects.toThrow("Current turn refused");
+    expect(run.onDelivered).toHaveBeenCalledWith(expect.objectContaining({ mode: "native" }));
+    expect(run.onAccepted).not.toHaveBeenCalled();
   });
 
   it("reopens a thread when app access changes its network policy", async () => {

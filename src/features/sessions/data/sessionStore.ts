@@ -6,6 +6,13 @@ import {
 import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
+import {
+  failProviderDelivery,
+  failUnstartedProviderRequest,
+  recoverSubmittedProviderDelivery,
+  sanitizeProviderContext,
+  type ProviderContextState,
+} from "../model/providerContext";
 import type { ContextUsage } from "../model/contextUsage";
 import { isRemoteProjectPath, normalizeProjectPath } from "../../projects/model/recents";
 import {
@@ -34,6 +41,7 @@ import type {
   Session,
   TaskListMeta,
   PlanBlockMeta,
+  PendingHarnessSwitch,
   TurnModel,
   TurnMetrics,
 } from "../model/session";
@@ -80,6 +88,7 @@ type SessionRecord = {
   title: string;
   providerSessionId?: string | null;
   providerAccountId?: string | null;
+  providerContext?: unknown;
   blocks: Block[];
   contextUsed?: number | null;
   contextWindow?: number | null;
@@ -102,6 +111,7 @@ type SessionUpsertPayload = {
   title: string;
   providerSessionId?: string;
   providerAccountId?: string;
+  providerContext?: StoredProviderContext;
   blocks: Block[];
   contextUsed?: number;
   contextWindow?: number;
@@ -111,6 +121,52 @@ type SessionUpsertPayload = {
   linkedWorkItem?: LinkedWorkItem;
   automationId?: string;
 };
+
+type StoredProviderContext = {
+  version: 1;
+  state?: ProviderContextState;
+  pendingSwitch?: PendingHarnessSwitch;
+};
+
+function sanitizePendingSwitch(value: unknown): PendingHarnessSwitch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const candidate = value as Partial<PendingHarnessSwitch>;
+  if (
+    !HARNESSES.includes(candidate.from as HarnessId) ||
+    typeof candidate.fromModel !== "string" ||
+    !candidate.fromSettings ||
+    typeof candidate.fromSettings !== "object" ||
+    Array.isArray(candidate.fromSettings)
+  ) return;
+  const fromSettings = Object.fromEntries(
+    Object.entries(candidate.fromSettings).filter(([, setting]) => typeof setting === "string"),
+  );
+  return {
+    from: candidate.from as HarnessId,
+    fromModel: candidate.fromModel,
+    fromSettings,
+    ...(typeof candidate.fromProviderSessionId === "string" && isPersistableId(candidate.fromProviderSessionId)
+      ? { fromProviderSessionId: candidate.fromProviderSessionId } : {}),
+    ...(typeof candidate.fromProviderAccountId === "string" && isPersistableId(candidate.fromProviderAccountId)
+      ? { fromProviderAccountId: candidate.fromProviderAccountId } : {}),
+  };
+}
+
+function storedProviderContext(session: Session): StoredProviderContext | undefined {
+  const state = sanitizeProviderContext(session.providerContext);
+  const pendingSwitch = sanitizePendingSwitch(session.pendingSwitch);
+  if (!state && !pendingSwitch) return;
+  return { version: 1, ...(state ? { state } : {}), ...(pendingSwitch ? { pendingSwitch } : {}) };
+}
+
+function restoreProviderContext(value: unknown): Pick<Session, "providerContext" | "pendingSwitch"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const stored = value as Partial<StoredProviderContext>;
+  if (stored.version !== 1) return {};
+  const state = sanitizeProviderContext(stored.state);
+  const pendingSwitch = sanitizePendingSwitch(stored.pendingSwitch);
+  return { ...(state ? { providerContext: state } : {}), ...(pendingSwitch ? { pendingSwitch } : {}) };
+}
 
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
@@ -131,12 +187,14 @@ function persistableMeta(
   session: Session,
 ): Omit<SessionUpsertPayload, "blocks"> {
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
+  const providerContext = storedProviderContext(session);
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
     harness: session.harness,
     model: session.model,
     modelSettings: session.modelSettings,
+    ...(providerContext ? { providerContext } : {}),
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.providerSessionId && isPersistableId(session.providerSessionId)
@@ -198,6 +256,7 @@ export function sanitizeSessionForPersist(
           index === firstUser && session.orchestrationLeadId
             ? { ...block, orchestrationLeadId: session.orchestrationLeadId }
             : block,
+          { preserveHandoffPreparing: !!session.pendingSwitch },
         ),
       )
       .filter((block): block is Block => block != null),
@@ -418,6 +477,14 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   return session;
 }
 
+export function saveProviderContextSnapshot(
+  sessionId: string,
+  switchId: string,
+  content: string,
+): Promise<string> {
+  return invoke<string>("session_context_snapshot", { sessionId, switchId, content });
+}
+
 export function backfillClaudeShellCommands(
   blocks: Block[],
   commands: Record<string, string>,
@@ -527,7 +594,7 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
+    invoke<void>("session_discard_draft", { sessionId }),
   );
 }
 
@@ -629,7 +696,7 @@ export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
 
 function sanitizeBlock(
   block: Block,
-  options?: { hydrate?: boolean },
+  options?: { hydrate?: boolean; preserveHandoffPreparing?: boolean },
 ): Block | null {
   const next: Block = {
     id: block.id,
@@ -698,7 +765,7 @@ function sanitizeBlock(
   else if (block.role === "plan") {
     next.plan = { status: "ready", originalText: block.text };
   }
-  const handoff = sanitizeHandoff(block.handoff);
+  const handoff = sanitizeHandoff(block.handoff, options?.preserveHandoffPreparing);
   if (handoff) next.handoff = handoff;
   else if (block.role === "handoff") return null;
   const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
@@ -1107,13 +1174,16 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
+  const preparingHandoffId = Array.isArray(record.blocks)
+    ? [...record.blocks].reverse().find((block) => block.role === "handoff" && block.handoff?.status === "preparing")?.id
+    : undefined;
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
-  return {
+  const session: Session = {
     id: record.id,
     cwd: record.cwd,
     harness: asHarness(record.harness),
@@ -1126,6 +1196,7 @@ function recordToSession(record: SessionRecord): Session {
     title: record.title,
     blocks,
     busy: false,
+    ...restoreProviderContext(record.providerContext),
     orchestrationLeadId:
       record.orchestrationLeadId ??
       blocks.find(
@@ -1147,6 +1218,13 @@ function recordToSession(record: SessionRecord): Session {
       : {}),
     ...(contextFromRecord(record) ?? {}),
   };
+  const delivery = session.providerContext?.delivery;
+  if (delivery?.needsInspection) return session;
+  return delivery && (delivery.status === "preparing" || delivery.status === "imported")
+    ? delivery.requestSubmitted
+      ? recoverSubmittedProviderDelivery(session, delivery.switchId)
+      : failProviderDelivery(session, delivery.switchId)
+    : failUnstartedProviderRequest(session, preparingHandoffId);
 }
 
 /**
@@ -1177,17 +1255,39 @@ function asHarness(value: string): HarnessId {
 
 const HANDOFF_STATUSES: HandoffStatus[] = ["preparing", "ready"];
 
-function sanitizeHandoff(value: Block["handoff"]): HandoffMeta | undefined {
+function sanitizeHandoff(value: Block["handoff"], preservePreparing = false): HandoffMeta | undefined {
   if (!value) return undefined;
   if (!(HARNESSES as string[]).includes(value.from)) return undefined;
   if (!(HARNESSES as string[]).includes(value.to)) return undefined;
   if (!HANDOFF_STATUSES.includes(value.status)) return undefined;
   const interrupted = value.status === "preparing";
+  const transfer = value.transfer;
+  const validTransfer = transfer &&
+    typeof transfer.switchId === "string" && isPersistableId(transfer.switchId) &&
+    ["preparing", "imported", "accepted", "uncertain"].includes(transfer.status) &&
+    ["pending", "native", "inline"].includes(transfer.mode) &&
+    [transfer.included, transfer.omitted, transfer.historicalAttachments].every(
+      (count) => Number.isSafeInteger(count) && count >= 0,
+    );
   return {
     from: value.from,
     to: value.to,
-    status: "ready",
+    status: preservePreparing ? value.status : "ready",
     pending: interrupted || !!value.pending,
+    ...(validTransfer ? { transfer: {
+      switchId: transfer.switchId,
+      status: transfer.status,
+      mode: transfer.mode,
+      included: transfer.included,
+      omitted: transfer.omitted,
+      historicalAttachments: transfer.historicalAttachments,
+      ...(typeof transfer.retrievalPath === "string" && !transfer.retrievalPath.includes("\0")
+        ? { retrievalPath: transfer.retrievalPath } : {}),
+      ...(transfer.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(transfer.failedBeforeSubmission === true ? { failedBeforeSubmission: true } : {}),
+      ...(transfer.needsInspection === true ? { needsInspection: true } : {}),
+      ...(transfer.inspectionConfirmed === true ? { inspectionConfirmed: true } : {}),
+    } } : {}),
   };
 }
 

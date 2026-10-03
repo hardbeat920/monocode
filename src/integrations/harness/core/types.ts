@@ -176,6 +176,7 @@ export type HarnessSessionInput = {
 export type SendTurnInput = HarnessSessionInput & {
   text: string;
   attachments?: Attachment[];
+  contextTransfer?: import("../../../features/sessions/model/contextTransfer").ContextTransferInput;
   /** Called once the provider has accepted the user turn. */
   onAccepted?: () => void;
 };

@@ -288,6 +288,8 @@ export function createHostServer(
                 "attachments.read",
                 "sessions.draft",
                 "sessions.plan",
+                "sessionProviderSwitchV1",
+                "sessionProviderInspectionV1",
               ],
             };
             break;
@@ -362,10 +364,15 @@ export function createHostServer(
           }
           case "sessions.delete": {
             const sessionId = String(params.sessionId ?? "");
-            const current = engine.store.session(sessionId);
-            if (current.projectId !== params.projectId)
+            const projectId = engine.store.deletedSessionProject(sessionId) ?? engine.store.session(sessionId).projectId;
+            if (projectId !== params.projectId)
               throw new Error("Session does not belong to this project");
             engine.store.deleteSession(sessionId);
+            try {
+              await engine.store.retryContextCleanup();
+            } catch (error) {
+              console.error("Context history cleanup failed after session deletion", sessionId, error);
+            }
             result = { deleted: true };
             break;
           }

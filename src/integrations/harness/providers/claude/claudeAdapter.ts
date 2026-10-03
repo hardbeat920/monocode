@@ -27,6 +27,11 @@ import { registerHarness, type HarnessAdapter } from "../../core/registry";
 export const claudeAdapter: HarnessAdapter = {
   id: "claude",
   live: true,
+  contextTransferCapabilities: {
+    nativeMessages: false,
+    resumedAppend: true,
+    explicitAcceptance: true,
+  },
   sendTurn: sendClaudeTurn,
   compactContext: compactClaudeContext,
   steerTurn: steerClaudeTurn,

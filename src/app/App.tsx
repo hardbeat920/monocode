@@ -12,10 +12,19 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
+import { firstProviderRequest, firstProviderRequestBudget } from "./model/firstProviderRequest";
 import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
+import {
+  AcceptancePersistenceError,
+  createAcceptancePersistence,
+  dispatchAfterContextSave,
+  persistNativeContextDelivery,
+  withAcceptancePersistenceError,
+} from "./model/acceptancePersistence";
+import { saveProviderContextSession } from "./model/providerContextPersistence";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -36,8 +45,6 @@ import { isHarnessAvailable } from "../integrations/harness/core/availability";
 import {
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
-  orchestrationPlanningPrompt,
-  orchestrationRepairPrompt,
   proposalBlock,
   validateOrchestrationSettings,
   withOrchestrationProposal,
@@ -270,11 +277,11 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { canResumeHarnessWithContext } from "../integrations/harness/core/registry";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
   buildHandoffComposerCard,
-  chooseHandoffBrief,
   completeHandoff,
   consumeHandoff,
   HANDOFF_TITLE,
@@ -284,12 +291,33 @@ import {
   planComposerSwitch,
   sessionChildHarnesses,
   sessionThroughTurn,
-  shouldAskOutgoingAgent,
   type HandoffComposerCard,
   userMessagesAfterHandoff,
-  wrapHandoffPrompt,
 } from "../features/sessions/model/handoff";
-import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
+import {
+  acceptProviderDelivery,
+  beginProviderDelivery,
+  canApplyRunningConfiguration,
+  canResumeProviderBinding,
+  confirmProviderDeliveryInspection,
+  failProviderDelivery,
+  failUnstartedProviderRequest,
+  markProviderContextDelivered,
+  markProviderRequestSubmitted,
+  providerBinding,
+  recordProviderBound,
+  recordProviderContextUsage,
+  recoverSubmittedProviderDelivery,
+  rememberProviderBinding,
+  requiresFreshProviderBinding,
+  runningProviderSelection,
+  settleProviderBinding,
+  updateProviderHandoff,
+} from "../features/sessions/model/providerContext";
+import { buildPortableContext, buildPortableContextSnapshot } from "../features/sessions/model/portableContext";
+import { saveProviderContextSnapshot } from "../features/sessions/data/sessionStore";
+import type { ContextTransferInput } from "../features/sessions/model/contextTransfer";
+import { historicalContextAttachments, snapshotContextAssets } from "../features/sessions/model/contextAssets";
 import {
   applyBtwHarnessEvent,
   btwTurnHarness,
@@ -326,6 +354,7 @@ import {
 } from "../features/search/model/search";
 import {
   mergeModelSettings,
+  modelContextWindow,
   nativeModelId,
   preferredModelSettings,
   resolveModel,
@@ -334,11 +363,9 @@ import {
 } from "../features/sessions/model/models";
 
 import {
-  buildPlanPrompt,
   isProviderFailureText,
   planTitle,
   planTurnKey,
-  planTurnPrompt,
 } from "../features/sessions/model/plan";
 import {
   displayPath,
@@ -794,6 +821,13 @@ function withHarnessChoice(
   model: string,
   modelSettings: Record<string, string>,
 ): Session {
+  const binding = providerBinding(
+    session,
+    session.pendingSwitch?.from ?? session.harness,
+    sessionWorkCwd(session),
+    session.pendingSwitch ? session.pendingSwitch.fromProviderAccountId : session.providerAccountId,
+  );
+  if (binding) session = rememberProviderBinding(session, binding);
   return {
     ...session,
     harness,
@@ -806,9 +840,11 @@ function withHarnessChoice(
             harness,
             sessionDisplayTitle(session.title, session.harness),
           ),
-    ...(session.model === model
-      ? {}
-      : { context: dropContextWindow(session.context) }),
+    ...(session.harness !== harness
+      ? { context: undefined }
+      : session.model === model
+        ? {}
+        : { context: dropContextWindow(session.context) }),
     ...(session.harness === harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
@@ -1134,6 +1170,9 @@ function Workspace({
   >(new Map());
   const linkedWorkItemActivityFetches = useRef(new Map<string, number>());
   const queueDispatchingRef = useRef(new Set<string>());
+  const acceptancePersistence = useRef(createAcceptancePersistence());
+  const deliveryInspectionPending = useRef(new Set<string>());
+  const submittedTransfers = useRef(new Map<string, string>());
   const usageResumingRef = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
   const tabsRef = useRef(tabs);
@@ -1313,6 +1352,8 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const runningSelections = useRef(new Map<string, { harness: HarnessId; model: string; modelSettings: Record<string, string> }>());
+  const selectionRevisions = useRef(new Map<string, number>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -1388,6 +1429,7 @@ function Workspace({
       if (!open?.busy) return open;
 
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      runningSelections.current.delete(sessionId);
       flushHarnessEvents();
       await Promise.all(
         sessionChildHarnesses(open).map((harness) =>
@@ -3950,20 +3992,7 @@ function Workspace({
         (session) => session.id === sessionId,
       );
       if (appeared) return appeared;
-      if (
-        !restored.worktreeRemoved &&
-        restored.providerSessionId &&
-        isLiveHarness(restored.harness)
-      ) {
-        bindHarnessSession(
-          restored.harness,
-          restored.id,
-          restored.providerSessionId,
-          sessionWorkCwd(restored),
-          restored.providerAccountId,
-          restored.blocks,
-        );
-      }
+      bindResumedSessions([restored]);
       lastPersisted.current.set(restored.id, persistFingerprint(restored));
       if (!sessionsRef.current.some((session) => session.id === restored.id)) {
         const next = [...sessionsRef.current, restored];
@@ -5893,6 +5922,9 @@ function Workspace({
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (isPreparingHandoff(current)) return;
+      if (current.busy && current.providerContext?.delivery &&
+          ["preparing", "imported"].includes(current.providerContext.delivery.status)) return;
+      selectionRevisions.current.set(sessionId, (selectionRevisions.current.get(sessionId) ?? 0) + 1);
       const resolved = resolveModel(harness, model);
       saveRecentModelChoice(resolved.harness, resolved.id);
       if (current.modelSettings) {
@@ -5906,8 +5938,7 @@ function Workspace({
       if (plan.kind === "empty") {
         void forgetHarnessSession(plan.forget, sessionId);
       }
-      setSessions((prev) =>
-        prev.map((s) => {
+      const nextSessions = sessionsRef.current.map((s) => {
           if (s.id !== sessionId) return s;
           const next = withHarnessChoice(
             s,
@@ -5934,14 +5965,21 @@ function Workspace({
             return { ...next, pendingSwitch: undefined };
           }
           return next;
-        }),
-      );
+        });
+      sessionsRef.current = nextSessions;
+      setSessions(nextSessions);
+      const selected = nextSessions.find((session) => session.id === sessionId);
+      if (selected && plan.kind === "revert" && selected.providerSessionId) {
+        bindHarnessSession(selected.harness, selected.id, selected.providerSessionId, sessionWorkCwd(selected), selected.providerAccountId, selected.blocks);
+      }
+      persistSession(selected);
     },
-    [],
+    [persistSession],
   );
 
   const onModelSettingsChange = useCallback(
     (sessionId: string, modelSettings: Record<string, string>) => {
+      selectionRevisions.current.set(sessionId, (selectionRevisions.current.get(sessionId) ?? 0) + 1);
       saveLastModelSettings(modelSettings);
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
@@ -6060,6 +6098,63 @@ function Workspace({
       const remote = sessionsRef.current.find((session) => session.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd))
         return !!remoteSessionActions(sessionId)?.submit(text, attachments, options);
+      const acceptanceSubmission = acceptancePersistence.current.submissionMode(
+        sessionId,
+        remote?.busy ?? false,
+      );
+      if (acceptanceSubmission === "reconcile") {
+        flushSync(() => setSessions((prev) => prev.map((session) =>
+          session.id === sessionId ? { ...session, queueStatus: "paused" } : session,
+        )));
+        void acceptancePersistence.current.reconcile(sessionId, async () => {
+          const latest = sessionsRef.current.find((session) => session.id === sessionId);
+          await saveProviderContextSession(latest, "The accepted session could not be saved.");
+        }).then(() => {
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "The accepted request is saved. Submit again to send a new request.",
+          });
+          flushHarnessEvents();
+        }, () => {
+          // The tracked save reports its storage error and keeps the queue paused.
+        });
+        return false;
+      }
+      if (acceptanceSubmission === "wait") return false;
+      if (remote?.providerContext?.delivery?.needsInspection) {
+        if (
+          remote.busy || options?.queuedMessageId || options?.managed ||
+          options?.ciRepair || options?.appRequestId ||
+          deliveryInspectionPending.current.has(sessionId)
+        ) return false;
+        const switchId = remote.providerContext.delivery.switchId;
+        if (!window.confirm(
+          "MonoCode could not confirm whether the previous request reached the provider. Check the working copy and any external effects. Inspect the previous native conversation if it is available.\n\nConfirm that you checked those results. This action saves your acknowledgment and sends no request. Submit a new request afterward to continue.",
+        )) return false;
+        deliveryInspectionPending.current.add(sessionId);
+        void (async () => {
+          const latest = sessionsRef.current.find((session) => session.id === sessionId);
+          if (!latest || latest.providerContext?.delivery?.switchId !== switchId) return;
+          const confirmed = confirmProviderDeliveryInspection(latest);
+          await saveProviderContextSession(confirmed, "The inspection acknowledgment could not be saved.");
+          flushSync(() => setSessions((prev) => prev.map((session) =>
+            session.id === sessionId && session.providerContext?.delivery?.switchId === switchId
+              ? confirmProviderDeliveryInspection(session)
+              : session,
+          )));
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Inspection acknowledgment saved. The previous request was not resent. Submit a new request to continue.",
+          });
+          flushHarnessEvents();
+        })().catch((error: unknown) => {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          flushSync(() => setSessions((prev) => prev.map((session) =>
+            session.id === sessionId ? withAcceptancePersistenceError(session, failure) : session,
+          )));
+        }).finally(() => deliveryInspectionPending.current.delete(sessionId));
+        return false;
+      }
       if (editedResends.isActive(sessionId)) return false;
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
@@ -6114,6 +6209,24 @@ function Workspace({
         )
       )
         return false;
+      const currentAcceptanceSubmission = acceptancePersistence.current.submissionMode(
+        sessionId,
+        storedCurrent.busy ?? false,
+      );
+      if (
+        currentAcceptanceSubmission === "wait" ||
+        currentAcceptanceSubmission === "reconcile"
+      ) return false;
+      const acceptanceSavePending = currentAcceptanceSubmission === "queue";
+      if (options?.queuedMessageId) {
+        const mode = options.followUpBehavior === "steer" ? "steer" : "dispatch";
+        if (!queuedMessageForSubmit(
+          storedCurrent,
+          options.queuedMessageId,
+          mode,
+          runningProviderSelection(storedCurrent, runningSelections.current.get(sessionId)),
+        )) return false;
+      }
       const draftBlock = options?.draftBlockId
         ? storedCurrent.blocks.find(
             (block) =>
@@ -6166,13 +6279,6 @@ function Workspace({
           )
         : undefined;
       if (intent === "build" && !approvedPlan?.text.trim()) return false;
-      if (options?.queuedMessageId) {
-        const mode =
-          options.followUpBehavior === "steer" ? "steer" : "dispatch";
-        if (!queuedMessageForSubmit(current, options.queuedMessageId, mode)) {
-          return false;
-        }
-      }
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -6247,7 +6353,13 @@ function Workspace({
           ? current.pendingSwitch
           : null;
 
-      if (current.busy && !pendingSwitch) {
+      if (pendingSwitch && rawCommand) {
+        enqueueHarnessEvent(sessionId, { type: "status", text: "Send a chat request to complete the provider switch before running a provider command." });
+        flushHarnessEvents();
+        return false;
+      }
+
+      if (current.busy) {
         if (
           operatorCommand.matched &&
           options?.queuedMessageId &&
@@ -6261,6 +6373,8 @@ function Workspace({
           return false;
         }
         const followUpBehavior =
+          pendingSwitch ||
+          acceptanceSavePending ||
           current.worktreePreparing ||
           intent === "plan" ||
           intent === "orchestrate" ||
@@ -6281,7 +6395,7 @@ function Workspace({
                     inboxCard: rawCommand ? s.inboxCard : undefined,
                     noteCard: rawCommand ? s.noteCard : undefined,
                     handoffCard: rawCommand ? s.handoffCard : undefined,
-                    queuedMessages: [
+                    queuedMessages: options?.queuedMessageId ? s.queuedMessages : [
                       ...(s.queuedMessages ?? []),
                       {
                         id: crypto.randomUUID(),
@@ -6290,6 +6404,11 @@ function Workspace({
                         noteCard,
                         handoffCard,
                         intent,
+                        selection: {
+                          harness: current.harness,
+                          model: current.model,
+                          modelSettings: current.modelSettings,
+                        },
                       },
                     ],
                     queueStatus:
@@ -6301,9 +6420,10 @@ function Workspace({
           dismissNoticesForContinuedSession(sessionId);
           return true;
         }
+        const activeSelection = runningProviderSelection(current, runningSelections.current.get(sessionId));
         if (
-          !isLiveHarness(current.harness) ||
-          !canSteerHarness(current.harness)
+          !isLiveHarness(activeSelection.harness) ||
+          !canSteerHarness(activeSelection.harness)
         ) {
           // Harnesses that cannot steer (fx) used to drop the message on the
           // floor here, so a follow-up sent mid-turn just vanished. Say so.
@@ -6328,7 +6448,8 @@ function Workspace({
           if (options?.queuedMessageId) {
             next = dequeueQueuedMessage(next, options.queuedMessageId);
           }
-          return appendSteerUser(next, submittedText, visible, cards);
+          const steered = appendSteerUser({ ...next, ...activeSelection }, submittedText, visible, cards);
+          return { ...next, blocks: steered.blocks };
         });
         sessionsRef.current = nextSessions;
         setSessions(nextSessions);
@@ -6336,16 +6457,16 @@ function Workspace({
           try {
             const prepared = await prepareAttachments(attachments);
             const prompt = await preparePrompt(harnessText, {
-              harness: current.harness,
+              harness: activeSelection.harness,
               sessionId,
               cwd: initialWorkCwd,
             });
             await steerHarnessTurn({
-              harness: current.harness,
+              harness: activeSelection.harness,
               sessionId,
               cwd: initialWorkCwd,
-              model: current.model,
-              modelSettings: current.modelSettings,
+              model: activeSelection.model,
+              modelSettings: activeSelection.modelSettings,
               text: inboxAskPrompt(
                 rawCommand ? undefined : current.inboxAsk,
                 prompt,
@@ -6426,6 +6547,8 @@ function Workspace({
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
+      runningSelections.current.set(sessionId, { harness: current.harness, model: current.model, modelSettings: current.modelSettings });
+      const selectionRevision = selectionRevisions.current.get(sessionId) ?? 0;
       const proposalId =
         intent === "orchestrate" ? crypto.randomUUID() : undefined;
       let proposalDraft: OrchestrationProposal | undefined = proposalId
@@ -6489,10 +6612,6 @@ function Workspace({
       const queuedHandoff =
         live && !pendingSwitch ? pendingHandoff(current) : null;
 
-      if (pendingSwitch && current.busy) {
-        void cancelHarnessTurn(pendingSwitch.from, sessionId);
-      }
-
       dismissNoticesForContinuedSession(sessionId);
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
@@ -6551,7 +6670,7 @@ function Workspace({
               return {
                 ...next,
                 title: titled,
-                pendingSwitch: undefined,
+                pendingSwitch: next.pendingSwitch,
                 busy: false,
                 blocks: [
                   ...next.blocks,
@@ -6575,7 +6694,7 @@ function Workspace({
               const sealed = stopStreaming({
                 ...next,
                 title: titled,
-                pendingSwitch: undefined,
+                pendingSwitch: next.pendingSwitch,
               });
               return appendUser(
                 appendPreparingHandoff(
@@ -6659,9 +6778,6 @@ function Workspace({
       };
 
       if (!live) {
-        if (pendingSwitch) {
-          void forgetHarnessSession(pendingSwitch.from, sessionId);
-        }
         editedResend?.reject();
         options?.onSettled?.({
           status: "failed",
@@ -6700,6 +6816,9 @@ function Workspace({
         error: "Turn did not complete",
       };
       let controlText = "";
+      let providerAccepted = false;
+      let transferSwitchId: string | undefined;
+      let providerDispatched = false;
       let proposalText = "";
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
@@ -6783,32 +6902,115 @@ function Workspace({
               text: handoffCard.brief,
             }
           : queuedHandoff;
-        if (pendingSwitch) {
-          let agentText = "";
-          if (
-            shouldAskOutgoingAgent(current) &&
-            isLiveHarness(pendingSwitch.from)
-          ) {
-            try {
-              agentText = await requestOutgoingHandoff({
-                harness: pendingSwitch.from,
-                sessionId,
-                cwd: workCwd,
-                model: pendingSwitch.fromModel,
-                modelSettings: pendingSwitch.fromSettings,
-                providerAccountId: pendingSwitch.fromProviderAccountId,
-                userRequest: text,
-              });
-            } catch {
-              agentText = "";
-            }
+        const prepared = await prepareAttachments(attachments);
+        const prompt = intent === "build" && approvedPlan
+          ? harnessText
+          : await preparePrompt(harnessText, {
+              harness: current.harness,
+              sessionId,
+              cwd: workCwd,
+            });
+        const operatorCli = operatorCommand.matched
+          ? `${shellPath(await invoke<string>("app_cli_path"))} app`
+          : undefined;
+        const sendText = firstProviderRequest({
+          prompt,
+          intent,
+          approvedPlan: intent === "build" ? approvedPlan?.text : undefined,
+          proposal: proposalDraft,
+          orchestrationRetry: options?.orchestrationRetry,
+          rawCommand,
+          handoff: pendingSwitch ? null : wrap,
+          earlierRequests: queuedHandoff ? userMessagesAfterHandoff(current) : [],
+          inboxAsk: current.inboxAsk,
+          orchestratorPrompt: (text) => orchestrator.prompt(sessionId, text),
+          operatorCli,
+        });
+        if (turnGen.current.get(sessionId) !== gen) return;
+        let contextTransfer: ContextTransferInput | undefined;
+        if (pendingSwitch && !rawCommand) {
+          const savedTarget = providerBinding(current, current.harness, workCwd, providerAccountId);
+          const target = canResumeHarnessWithContext(current.harness) &&
+            !requiresFreshProviderBinding(current, current.harness, workCwd, providerAccountId) &&
+            canResumeProviderBinding(current, savedTarget)
+            ? savedTarget
+            : undefined;
+          const fresh = !target;
+          const sourceThroughBlockId = current.blocks[current.blocks.length - 1]?.id;
+          const assetSnapshots = await snapshotContextAssets(sessionId, historicalContextAttachments(current, sourceThroughBlockId));
+          if (turnGen.current.get(sessionId) !== gen) return;
+          const budget = {
+            throughBlockId: sourceThroughBlockId,
+            ...firstProviderRequestBudget({ text: sendText, attachments: prepared }),
+            windowTokens: modelContextWindow(current.model) ?? target?.contextWindow,
+            assetSnapshots,
+          };
+          const fallbackContext = buildPortableContext(current, budget);
+          const context = target
+            ? buildPortableContext(current, { ...budget, afterBlockId: target.deliveredThroughBlockId, occupiedTokens: target.contextUsed })
+            : fallbackContext;
+          const switchId = crypto.randomUUID();
+          transferSwitchId = switchId;
+          if (fallbackContext.omitted.some((item) => item.reason === "budget") || context.omitted.some((item) => item.reason === "budget")) {
+            const path = await saveProviderContextSnapshot(sessionId, switchId, buildPortableContextSnapshot(current, sourceThroughBlockId, assetSnapshots));
+            context.retrievalPath = path;
+            fallbackContext.retrievalPath = path;
           }
           if (turnGen.current.get(sessionId) !== gen) return;
-          const latest = sessionsRef.current.find((s) => s.id === sessionId);
-          const brief = chooseHandoffBrief(agentText, latest ?? current, text);
-          await forgetHarnessSession(pendingSwitch.from, sessionId);
+          flushHarnessEvents();
+          flushSync(() => setSessions((prev) => prev.map((session) => {
+            if (session.id !== sessionId) return session;
+            const user = [...session.blocks].reverse().find((block) => block.role === "user");
+            if (!user) return session;
+            const source = providerBinding(current, pendingSwitch.from, workCwd, pendingSwitch.fromProviderAccountId);
+            const saved = source ? rememberProviderBinding(session, source) : session;
+            return updateProviderHandoff(beginProviderDelivery(saved, {
+              switchId,
+              from: pendingSwitch.from,
+              to: current.harness,
+              cwd: workCwd,
+              providerAccountId,
+              currentUserBlockId: user.id,
+              sourceThroughBlockId,
+              includedBlockIds: context.items.map((item) => item.sourceBlockId),
+              omittedBlockIds: context.omitted.map((item) => item.id),
+              targetProviderSessionId: target?.providerSessionId,
+            }), switchId, {
+              historicalAttachments: context.items.reduce((count, item) => count + (item.attachments?.length ?? 0), 0),
+              retrievalPath: context.retrievalPath,
+            });
+          })));
+          const preparedSession = sessionsRef.current.find((session) => session.id === sessionId);
+          if (preparedSession) await upsertSession(preparedSession);
           if (turnGen.current.get(sessionId) !== gen) return;
-          wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
+          await stopHarnessSession(pendingSwitch.from, sessionId);
+          if (fresh) await forgetHarnessSession(current.harness, sessionId);
+          if (turnGen.current.get(sessionId) !== gen) return;
+          if (target) bindHarnessSession(current.harness, sessionId, target.providerSessionId, workCwd, providerAccountId, current.blocks);
+          contextTransfer = {
+            context,
+            fallbackContext,
+            onDelivered: async (receipt) => {
+              if (turnGen.current.get(sessionId) !== gen) return;
+              flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+                ? markProviderContextDelivered(session, switchId, receipt.mode, receipt.providerSessionId, {
+                    ...(receipt.includedIds ? { includedBlockIds: receipt.includedIds.map((id) => id.startsWith(`${sessionId}:`) ? id.slice(sessionId.length + 1) : id) } : {}),
+                    ...(receipt.omittedIds ? { omittedBlockIds: receipt.omittedIds } : {}),
+                    ...(receipt.throughBlockId ? { sourceThroughBlockId: receipt.throughBlockId } : {}),
+                  })
+                : session)));
+              await persistNativeContextDelivery(receipt.mode, async () => {
+                const latest = sessionsRef.current.find((session) => session.id === sessionId);
+                await saveProviderContextSession(latest, "The native context import could not be saved.");
+              });
+            },
+          };
+          const historicalFiles = context.items.reduce((count, item) => count + (item.attachments?.length ?? 0), 0);
+          const brief = `Continue with shared history. ${context.items.length} saved items are prepared. ${context.omitted.length} items are omitted.${context.retrievalPath ? ` Saved history is available at ${context.retrievalPath}.` : ""}${historicalFiles ? ` ${historicalFiles} historical attachments are file references.` : ""}`;
+          flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+            ? { ...completeHandoff(session, brief), busy: true }
+            : session)));
+          wrap = null;
         }
 
         const revealHandoff = (brief: string) => {
@@ -6854,6 +7056,26 @@ function Workspace({
 
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
+          if (event.type === "session.providerBound") {
+            flushHarnessEvents();
+            flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+              ? recordProviderBound(session, current.harness, workCwd, event.providerSessionId, providerAccountId)
+              : session)));
+            return;
+          }
+          if (event.type === "context") {
+            flushHarnessEvents();
+            flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+              ? recordProviderContextUsage(session, current.harness, workCwd, event, providerAccountId)
+              : session)));
+          }
+          const selected = sessionsRef.current.find((session) => session.id === sessionId);
+          if (selected && !canApplyRunningConfiguration(selected, { harness: current.harness, model: current.model, modelSettings: current.modelSettings }, { running: selectionRevision, selected: selectionRevisions.current.get(sessionId) ?? 0 }) &&
+              (event.type === "session.configChanged" || event.type === "context")) return;
+          if (event.type === "session.configChanged") {
+            const running = runningSelections.current.get(sessionId);
+            if (running) runningSelections.current.set(sessionId, { ...running, model: event.model ?? running.model, modelSettings: { ...running.modelSettings, ...event.modelSettings } });
+          }
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
             controlText = (controlText + event.text).slice(-20_000);
@@ -6863,8 +7085,7 @@ function Workspace({
             controlOutcome.error = event.message;
           if (
             wrap &&
-            (event.type === "session.started" ||
-              event.type === "session.providerBound")
+            event.type === "session.started"
           ) {
             revealHandoff(wrap.text);
           }
@@ -6912,34 +7133,9 @@ function Workspace({
         }
         if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
+        let providerTurnCompleted = false;
+        let acceptancePersistenceFailed = false;
         try {
-          const prepared = await prepareAttachments(attachments);
-          const prompt =
-            intent === "build" && approvedPlan
-              ? buildPlanPrompt(approvedPlan.text)
-              : await preparePrompt(harnessText, {
-                  harness: current.harness,
-                  sessionId,
-                  cwd: workCwd,
-                });
-          const turnPrompt = proposalDraft
-            ? options?.orchestrationRetry?.response
-              ? orchestrationRepairPrompt({
-                  ...proposalDraft,
-                  error: options.orchestrationRetry.error,
-                  response: options.orchestrationRetry.response,
-                })
-              : orchestrationPlanningPrompt(
-                  prompt,
-                  proposalDraft.settings,
-                  proposalDraft.checkoutCwd ?? proposalDraft.cwd,
-                )
-            : intent === "plan" && !rawCommand
-              ? planTurnPrompt(prompt)
-              : prompt;
-          const earlier = queuedHandoff
-            ? userMessagesAfterHandoff(current)
-            : [];
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
               await rewindHarnessLastTurn({
@@ -7007,28 +7203,66 @@ function Workspace({
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
-              ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
+              ...(contextTransfer ? { contextTransfer } : {}),
+              onAccepted: () => {
+                if (turnGen.current.get(sessionId) !== gen) return;
+                if (providerAccepted) return;
+                providerAccepted = true;
+                acceptEditedResend();
+                if (transferSwitchId) {
+                  flushSync(() => setSessions((prev) => prev.map((session) => session.id === sessionId
+                    ? consumeHandoff(acceptProviderDelivery(session, transferSwitchId!))
+                    : session)));
+                  void acceptancePersistence.current.start(sessionId, transferSwitchId, async () => {
+                    const accepted = sessionsRef.current.find((session) => session.id === sessionId);
+                    await saveProviderContextSession(accepted, "The accepted session could not be saved.");
+                  }, (error) => {
+                    flushSync(() => setSessions((prev) => prev.map((session) =>
+                      session.id === sessionId ? withAcceptancePersistenceError(session, error) : session,
+                    )));
+                  }, () => {
+                    setSessions((prev) => prev.map((session) =>
+                      session.id === sessionId ? { ...session } : session,
+                    ));
+                  });
+                  // Later repair prompts belong to this accepted native turn.
+                  contextTransfer = undefined;
+                }
+              },
               onEvent: routeTurnEvent,
             });
-          let sendText = orchestrator.prompt(
-            sessionId,
-            inboxAskPrompt(
-              rawCommand ? undefined : current.inboxAsk,
-              wrap && !rawCommand
-                ? wrapHandoffPrompt(
-                    wrap.text,
-                    wrap.from,
-                    turnPrompt.trim() || CONTINUE_PROMPT,
-                    earlier,
-                  )
-                : turnPrompt,
-            ),
-          );
-          if (operatorCommand.matched) {
-            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            sendText += `\n\n<monocode_app>\nThe user's Operator command enables app access in this thread, including later turns without the command. You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read and continue other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` for exact commands and JSON fields, then use it as needed for the user's request. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`;
+          let sendFailure: unknown;
+          try {
+            if (transferSwitchId) {
+              flushSync(() => setSessions((prev) => prev.map((session) =>
+                session.id === sessionId
+                  ? markProviderRequestSubmitted(session, transferSwitchId!)
+                  : session,
+              )));
+              await dispatchAfterContextSave(async () => {
+                const submitted = sessionsRef.current.find((session) => session.id === sessionId);
+                await saveProviderContextSession(submitted, "The provider submission marker could not be saved. The request was not sent.");
+              }, () => turnGen.current.get(sessionId) === gen, async () => {
+                providerDispatched = true;
+                submittedTransfers.current.set(sessionId, transferSwitchId!);
+                await sendTurn(sendText);
+              });
+            } else {
+              await sendTurn(sendText);
+            }
+            providerTurnCompleted = true;
+          } catch (error: unknown) {
+            sendFailure = error;
           }
-          await sendTurn(sendText);
+          let acceptanceFailure: unknown;
+          try {
+            await acceptancePersistence.current.wait(sessionId, transferSwitchId);
+          } catch (error: unknown) {
+            acceptanceFailure = error;
+          }
+          if (sendFailure) throw sendFailure;
+          if (acceptanceFailure) throw acceptanceFailure;
+          if (turnGen.current.get(sessionId) !== gen) return;
           acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(
@@ -7073,6 +7307,11 @@ function Workspace({
               ? error.message
               : String(error) || `${current.harness} adapter failed`;
           controlOutcome.error = message;
+          if (error instanceof AcceptancePersistenceError) {
+            acceptancePersistenceFailed = true;
+            buildSucceeded = providerTurnCompleted && !providerFailureSeen;
+            return;
+          }
           if (!providerFailureSeen) {
             enqueueHarnessEvent(sessionId, {
               type: "session.error",
@@ -7086,18 +7325,21 @@ function Workspace({
           controlOutcome = {
             status:
               providerFailureSeen ||
+              acceptancePersistenceFailed ||
               isProviderFailureText(controlText) ||
               !buildSucceeded
                 ? "failed"
                 : "completed",
             text: controlText.trim(),
-            ...(providerFailureSeen ? { error: controlOutcome.error } : {}),
+            ...(providerFailureSeen || acceptancePersistenceFailed ? { error: controlOutcome.error } : {}),
           };
           // A failed provider can leave its process alive with a dead event
           // stream or poisoned turn state. Park it now; the next prompt will
           // reconnect and resume through a fresh transport.
           if (providerFailureSeen) {
-            await stopHarnessSession(current.harness, sessionId).catch(
+            await (transferSwitchId && !providerAccepted && !providerDispatched
+              ? forgetHarnessSession(current.harness, sessionId)
+              : stopHarnessSession(current.harness, sessionId)).catch(
               () => undefined,
             );
           }
@@ -7105,7 +7347,14 @@ function Workspace({
           setSessions((prev) =>
             prev.map((s) => {
               if (s.id !== sessionId) return s;
-              const stopped = stopStreaming(s);
+              let stopped = stopStreaming(s);
+              if (transferSwitchId && !providerAccepted) {
+                stopped = providerDispatched
+                  ? recoverSubmittedProviderDelivery(stopped, transferSwitchId)
+                  : failProviderDelivery(stopped, transferSwitchId, { beforeSubmission: true });
+              } else if (providerAccepted) {
+                stopped = settleProviderBinding(stopped, current.harness, workCwd, providerAccountId);
+              }
               const providerFailed =
                 providerFailureSeen ||
                 isProviderFailureText(lastAssistantTextInTurn(stopped));
@@ -7119,7 +7368,7 @@ function Workspace({
                         : completeOrchestrationProposal(
                             proposalDraft,
                             nativeProposalText || proposalText,
-                            providerFailed || !buildSucceeded
+                            providerFailed || !buildSucceeded || acceptancePersistenceFailed
                               ? (controlOutcome.error ??
                                   "The lead could not finish planning.")
                               : undefined,
@@ -7168,11 +7417,22 @@ function Workspace({
             setSessions((prev) =>
               prev.map((session) => {
                 if (session.id !== sessionId) return session;
+                let recovered = stopStreaming(session);
+                if (pendingSwitch && !providerAccepted) {
+                  recovered = isPreparingHandoff(recovered)
+                    ? completeHandoff(recovered, "The context transfer failed. Retry the request or select the previous provider.")
+                    : recovered;
+                  if (transferSwitchId) recovered = providerDispatched
+                    ? recoverSubmittedProviderDelivery(recovered, transferSwitchId)
+                    : failProviderDelivery(recovered, transferSwitchId, { beforeSubmission: true });
+                  const user = [...recovered.blocks].reverse().find((block) => block.role === "user");
+                  if (user && !providerDispatched) recovered = { ...recovered, blocks: recovered.blocks.map((block) => block.id === user.id ? { ...block, draft: true } : block) };
+                }
                 const stopped = {
-                  ...stopStreaming(session),
+                  ...recovered,
                   worktreePreparing: undefined,
                 };
-                return proposalId && proposalDraft
+                const finalized = proposalId && proposalDraft
                   ? withOrchestrationProposal(
                       stopped,
                       proposalId,
@@ -7183,11 +7443,16 @@ function Workspace({
                       ),
                     )
                   : stopped;
+                return approvedPlan && intent === "build" && !providerAccepted
+                  ? withPlanStatus(finalized, approvedPlan.id, "ready")
+                  : finalized;
               }),
             );
           }
         })
         .finally(() => {
+          if (submittedTransfers.current.get(sessionId) === transferSwitchId) submittedTransfers.current.delete(sessionId);
+          if (turnGen.current.get(sessionId) === gen) runningSelections.current.delete(sessionId);
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
           options?.onSettled?.(
@@ -7615,6 +7880,7 @@ function Workspace({
         continue;
       }
       if (
+        acceptancePersistence.current.hasPending(session.id) ||
         !canDispatchQueuedHead(session) ||
         queueDispatchingRef.current.has(session.id)
       ) {
@@ -7636,6 +7902,7 @@ function Workspace({
             !latest ||
             !head ||
             head.id !== next.id ||
+            acceptancePersistence.current.hasPending(session.id) ||
             !canDispatchQueuedHead(latest)
           ) {
             return;
@@ -7645,6 +7912,7 @@ function Workspace({
             noteCard: head.noteCard,
             handoffCard: head.handoffCard,
             intent: head.intent,
+            buildTarget: head.selection,
           });
         }, 0),
       );
@@ -7706,7 +7974,12 @@ function Workspace({
         (entry) => entry.id === sessionId,
       );
       const message = session
-        ? queuedMessageForSubmit(session, messageId, "steer")
+        ? queuedMessageForSubmit(
+            session,
+            messageId,
+            "steer",
+            runningProviderSelection(session, runningSelections.current.get(sessionId)),
+          )
         : undefined;
       if (!session || !message) return;
       if (message.intent === "orchestrate" && session.busy) {
@@ -7723,6 +7996,7 @@ function Workspace({
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
         intent: message.intent,
+        buildTarget: message.selection,
       });
     },
     [onSubmit, enqueueHarnessEvent, flushHarnessEvents],
@@ -8599,7 +8873,11 @@ function Workspace({
       );
       if (current && remoteProjectFor(current.cwd))
         return remoteSessionActions(sessionId)?.compact() ?? false;
-      if (!current || current.busy || current.worktreeRemoved) return false;
+      if (!current || current.busy || current.pendingSwitch || current.worktreeRemoved) return false;
+      if (
+        acceptancePersistence.current.hasPending(sessionId) ||
+        current.providerContext?.delivery?.needsInspection
+      ) return false;
       if (!canCompactHarnessContext(current.harness)) {
         const unsupported = sessionsRef.current.map((session) =>
           session.id === sessionId
@@ -8617,7 +8895,12 @@ function Workspace({
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
+      runningSelections.current.set(sessionId, { harness: current.harness, model: current.model, modelSettings: current.modelSettings });
       const workCwd = sessionWorkCwd(current);
+      const selectionRevision = selectionRevisions.current.get(sessionId) ?? 0;
+      const compactAccountId = supportsProviderAccounts(current.harness)
+        ? current.providerAccountId ?? selectedProviderAccountId(current.harness, current.cwd)
+        : undefined;
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -8638,13 +8921,20 @@ function Workspace({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
-            providerAccountId: supportsProviderAccounts(current.harness)
-              ? (current.providerAccountId ??
-                selectedProviderAccountId(current.harness, current.cwd))
-              : undefined,
+            providerAccountId: compactAccountId,
             runtimeMode: current.runtimeMode,
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
+              if (event.type === "session.providerBound" || event.type === "context") {
+                flushHarnessEvents();
+                flushSync(() => setSessions((prev) => prev.map((session) => session.id !== sessionId ? session
+                  : event.type === "session.providerBound"
+                    ? recordProviderBound(session, current.harness, workCwd, event.providerSessionId, compactAccountId)
+                    : recordProviderContextUsage(session, current.harness, workCwd, event, compactAccountId))));
+                if (event.type === "session.providerBound") return;
+              }
+              if ((event.type === "session.configChanged" || event.type === "context") &&
+                  (selectionRevisions.current.get(sessionId) ?? 0) !== selectionRevision) return;
               enqueueHarnessEvent(sessionId, event);
             },
           });
@@ -8664,6 +8954,7 @@ function Workspace({
           });
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;
+          runningSelections.current.delete(sessionId);
           flushHarnessEvents();
           const finished = sessionsRef.current.map((session) =>
             session.id === sessionId ? { ...session, busy: false } : session,
@@ -8693,17 +8984,27 @@ function Workspace({
         }
       }
       const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const interruptedDelivery = session?.providerContext?.delivery;
+      const unacceptedSwitch = interruptedDelivery && interruptedDelivery.to === session?.harness &&
+        ["preparing", "imported"].includes(interruptedDelivery.status) ? interruptedDelivery : undefined;
+      const requestDispatched = !!unacceptedSwitch && submittedTransfers.current.get(sessionId) === unacceptedSwitch.switchId;
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      runningSelections.current.delete(sessionId);
       flushHarnessEvents();
       if (session) {
         for (const id of sessionChildHarnesses(session)) {
           void cancelHarnessTurn(id, sessionId);
         }
+        if (unacceptedSwitch && !requestDispatched) void forgetHarnessSession(unacceptedSwitch.to, sessionId).catch(() => undefined);
       }
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
-          const stopped = stopStreaming(s);
+          const stopped = unacceptedSwitch
+            ? requestDispatched
+              ? recoverSubmittedProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
+              : failProviderDelivery(stopStreaming(s), unacceptedSwitch.switchId)
+            : failUnstartedProviderRequest(stopStreaming(s));
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
@@ -8778,7 +9079,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.approve(requestId, decision);
         return;
       }
-      respondHarnessApproval(session.harness, sessionId, requestId, decision);
+      respondHarnessApproval(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId, decision);
     },
     [],
   );
@@ -8791,7 +9092,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.answer(requestId, reply);
         return;
       }
-      respondHarnessQuestion(session.harness, sessionId, requestId, reply);
+      respondHarnessQuestion(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId, reply);
     },
     [],
   );
@@ -8801,7 +9102,7 @@ function Workspace({
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       if (session && remoteProjectFor(session.cwd)) return;
       if (session && !session.worktreeRemoved)
-        keepHarnessQuestionOpen(session.harness, sessionId, requestId);
+        keepHarnessQuestionOpen(runningProviderSelection(session, runningSelections.current.get(sessionId)).harness, sessionId, requestId);
     },
     [],
   );
@@ -9144,42 +9445,47 @@ function Workspace({
         flushHarnessEvents();
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (!session) throw new Error("This agent is no longer available");
+        if (
+          acceptancePersistence.current.hasPending(id) ||
+          session.providerContext?.delivery?.needsInspection
+        ) throw new Error("Save or inspect the previous provider request before sending a follow-up.");
         if (!session.busy)
           throw new Error(
             "This agent is not running a turn; send it a fresh one with message.",
           );
+        const selection = runningProviderSelection(session, runningSelections.current.get(id));
         if (
-          !isLiveHarness(session.harness) ||
-          !canSteerHarness(session.harness)
+          !isLiveHarness(selection.harness) ||
+          !canSteerHarness(selection.harness)
         )
           throw new Error(
-            `${session.harness} cannot take guidance mid-turn. Wait for the turn to finish, then use message.`,
+            `${selection.harness} cannot take guidance mid-turn. Wait for the turn to finish, then use message.`,
           );
         // Record it on the worker before dispatch, so its own transcript shows
         // why it changed course even if the harness call then fails.
         const next = sessionsRef.current.map((entry) =>
-          entry.id === id ? appendSteerUser(entry, text) : entry,
+          entry.id === id ? { ...entry, blocks: appendSteerUser({ ...entry, ...selection }, text).blocks } : entry,
         );
         sessionsRef.current = next;
         setSessions(next);
         await steerHarnessTurn({
-          harness: session.harness,
+          harness: selection.harness,
           sessionId: id,
           cwd: sessionWorkCwd(session),
-          model: session.model,
-          modelSettings: session.modelSettings,
+          model: selection.model,
+          modelSettings: selection.modelSettings,
           text,
         });
       },
       respondApproval: (id, requestId, decision) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (session)
-          respondHarnessApproval(session.harness, id, requestId, decision);
+          respondHarnessApproval(runningProviderSelection(session, runningSelections.current.get(id)).harness, id, requestId, decision);
       },
       answerQuestion: (id, requestId, reply) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         if (session)
-          respondHarnessQuestion(session.harness, id, requestId, reply);
+          respondHarnessQuestion(runningProviderSelection(session, runningSelections.current.get(id)).harness, id, requestId, reply);
       },
       stop: async (id) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
