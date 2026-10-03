@@ -16,6 +16,7 @@ import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
+import { SavePromptDialogHost } from "../features/prompts/ui/SavePromptDialog";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -10770,6 +10771,7 @@ function Workspace({
           }`}
         >
           {compactTitleBar ? workspaceTitleBar : null}
+          <SavePromptDialogHost />
           <div className="flex min-h-0 min-w-0 flex-1">
             <Sidebar
               cwd={sidebarCwd}
