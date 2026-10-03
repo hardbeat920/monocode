@@ -16,6 +16,23 @@ import {
 
 let now = 0;
 
+it("updates the exact provider part after tools and later text without retaining corrected text", () => {
+  let session = newSession("opencode", "/tmp");
+  const part = (partId: string, text: string, streaming = true) => ({
+    type: "message.part" as const, partId, text, reasoning: false, streaming,
+  });
+  session = applyHarnessEvent(session, part("first", "Hello worle"));
+  session = applyHarnessEvent(session, { type: "tool.started", callId: "read", title: "Read file" });
+  session = applyHarnessEvent(session, part("second", "Next message"));
+  const firstId = session.blocks[0].id;
+  session = applyHarnessEvent(session, part("first", "Hello world", false));
+  expect(session.blocks[0]).toMatchObject({ id: firstId, text: "Hello world", streaming: false });
+  expect(session.blocks[2].text).toBe("Next message");
+  session = applyHarnessEvent(session, part("first", "Hi", false));
+  expect(session.blocks[0].text).toBe("Hi");
+  expect(session.blocks).toHaveLength(3);
+});
+
 beforeEach(() => {
   now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now);

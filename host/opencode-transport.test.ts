@@ -14,10 +14,20 @@ import {
 const fixture = `const http = require('node:http');
 const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('1.20.0'); process.exit(0); }
+if (args.join(' ') === 'debug paths') { console.log('data       ' + process.cwd() + '/fixture-data'); process.exit(0); }
+if (args.join(' ') === 'agent list') { console.log('build (primary)\\n' + JSON.stringify([{permission:'*',pattern:'*',action:'allow'}])); process.exit(0); }
+if (args[0] === 'models') { console.log('openai/fixture-model\\n' + JSON.stringify({id:'fixture-model',name:'Fixture model'})); process.exit(0); }
 const port = Number(args.find(arg => arg.startsWith('--port='))?.slice(7));
 const subscribers = new Set();
 const session = {id: 'fixture_open', directory: process.cwd()};
-const server = http.createServer((req, res) => {
+const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}');
+const agentPermissions = permission => Object.entries(permission).flatMap(([key, value]) =>
+  typeof value === 'string'
+    ? [{permission:key,pattern:'*',action:value}]
+    : Object.entries(value).map(([pattern, action]) => ({permission:key,pattern,action})));
+let messages = [];
+let status = 'idle';
+const server = http.createServer(async (req, res) => {
   if (req.url?.startsWith('/event')) {
     res.writeHead(200, {'Content-Type': 'text/event-stream'});
     res.flushHeaders();
@@ -26,6 +36,17 @@ const server = http.createServer((req, res) => {
     return;
   }
   const path = new URL(req.url, 'http://127.0.0.1').pathname;
+  if (path === '/config' || path === '/agent') {
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify(path === '/config' ? config : Object.entries(config.agent || {}).map(([name, agent]) =>
+      ({name,mode:'primary',permission:agentPermissions(agent.permission)}))));
+    return;
+  }
+  if (path === '/session/status') {
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({fixture_open: {type: status}}));
+    return;
+  }
   if (path === '/session' || path === '/session/fixture_open') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify(session));
@@ -33,15 +54,26 @@ const server = http.createServer((req, res) => {
   }
   if (path === '/session/fixture_open/message') {
     res.writeHead(200, {'Content-Type': 'application/json'});
-    res.end('[]');
+    res.end(JSON.stringify(req.method === 'POST'
+      ? {info: {id:'title',role:'assistant',finish:'stop'},parts:[{id:'title-text',type:'text',text:'Fixture title'}]}
+      : messages));
     return;
   }
   if (path === '/session/fixture_open/prompt_async') {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const input = JSON.parse(body);
+    const user = {sessionID: 'fixture_open', id: input.messageID, role: 'user',time:{created:Date.now()}};
+    const assistant = {sessionID: 'fixture_open', id: 'msg', parentID: input.messageID, role: 'assistant', finish: 'stop',time:{created:Date.now(),completed:Date.now()+1}};
+    const part = {sessionID:'fixture_open',id:'part',messageID:'msg',type:'text',text:'Headless OpenCode completed',time:{end:Date.now()+1}};
+    messages = [{info: user, parts: input.parts}, {info: assistant, parts: [part]}];
+    status = 'busy';
     res.writeHead(204); res.end();
     setTimeout(() => {
+      status = 'idle';
       const events = [
-        {type: 'message.updated', properties: {info: {sessionID: 'fixture_open', id: 'msg', role: 'assistant'}}},
-        {type: 'message.part.updated', properties: {part: {sessionID: 'fixture_open', id: 'part', messageID: 'msg', type: 'text', text: 'Headless OpenCode completed'}}},
+        {type: 'message.updated', properties: {info: user}},
+        {type: 'message.updated', properties: {info: assistant}},
+        {type: 'message.part.updated', properties: {part}},
         {type: 'session.status', properties: {sessionID: 'fixture_open', status: {type: 'idle'}}},
       ];
       for (const subscriber of subscribers) for (const event of events)

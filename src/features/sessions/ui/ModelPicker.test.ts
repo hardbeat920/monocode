@@ -15,6 +15,18 @@ vi.mock("../../../integrations/harness/core/registry", () => ({
   refreshHarnessCatalogs: () => Promise.resolve(),
 }));
 
+vi.mock(
+  "../../../integrations/harness/providers/opencode/opencodeCatalog",
+  async () => {
+    const { projectHarnessModels } = await import("../model/models");
+    return {
+      projectOpenCodeModels: (cwd: string) =>
+        projectHarnessModels("opencode", cwd),
+      refreshProjectOpenCodeCatalog: async () => undefined,
+    };
+  },
+);
+
 vi.mock("../../../shared/ui/Popover", () => ({
   Popover: ({
     children,
@@ -68,6 +80,7 @@ import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
   setHarnessModels,
+  setProjectHarnessModels,
 } from "../model/models";
 
 let container: HTMLDivElement;
@@ -254,6 +267,46 @@ describe("model picker", () => {
     expect(options.indexOf("Claude Opus 5.5")).toBe(
       options.indexOf("Claude Opus 5") + 1,
     );
+  });
+
+  it("uses the worktree inventory for a session outside its project root", () => {
+    setProjectHarnessModels("opencode", "/project", [
+      { id: "opencode:fixture/base", harness: "opencode", name: "Base model" },
+    ]);
+    setProjectHarnessModels("opencode", "/worktree", [
+      {
+        id: "opencode:fixture/worktree",
+        harness: "opencode",
+        name: "Worktree model",
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "opencode",
+          model: "opencode:fixture/worktree",
+          values: {},
+          project: "/project",
+          catalogCwd: "/worktree",
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.textContent).toContain("Worktree model");
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+    const options = [...container.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent,
+    );
+    expect(options).toContain("Worktree model");
+    expect(options).not.toContain("Base model");
   });
 
   it("groups OpenCode models by provider and searches provider names", () => {

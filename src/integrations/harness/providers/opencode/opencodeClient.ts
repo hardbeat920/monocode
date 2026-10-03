@@ -44,11 +44,29 @@ export class OpenCodeClient {
     return this.request<OpenCodeSession>("GET", `/session/${enc(sessionID)}`);
   }
 
+  async getAgents(): Promise<unknown> {
+    return this.request("GET", "/agent");
+  }
+
+  async getConfig(): Promise<unknown> {
+    return this.request("GET", "/config");
+  }
+
   async getMessages(sessionID: string): Promise<OpenCodeMessage[]> {
     return this.request<OpenCodeMessage[]>(
       "GET",
       `/session/${enc(sessionID)}/message`,
     );
+  }
+
+  async sessionStatus(sessionID: string): Promise<string> {
+    const statuses = await this.request<Record<string, unknown>>(
+      "GET",
+      "/session/status",
+    );
+    return typeof asRecord(statuses?.[sessionID])?.type === "string"
+      ? (asRecord(statuses[sessionID])!.type as string)
+      : "idle";
   }
 
   async createSession(input: {
@@ -93,7 +111,7 @@ export class OpenCodeClient {
   async abortSession(sessionID: string): Promise<void> {
     await this.request<unknown>("POST", `/session/${enc(sessionID)}/abort`, {
       body: {},
-    }).catch(() => undefined);
+    });
   }
 
   async revertSession(sessionID: string, messageID: string): Promise<void> {
@@ -118,6 +136,7 @@ export class OpenCodeClient {
 
   async promptAsync(input: {
     sessionID: string;
+    messageID?: string;
     model: { providerID: string; modelID: string };
     agent?: string;
     variant?: string;
@@ -128,6 +147,7 @@ export class OpenCodeClient {
       `/session/${enc(input.sessionID)}/prompt_async`,
       {
         body: {
+          ...(input.messageID ? { messageID: input.messageID } : {}),
           model: input.model,
           ...(input.agent ? { agent: input.agent } : {}),
           ...(input.variant ? { variant: input.variant } : {}),

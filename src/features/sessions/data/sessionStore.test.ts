@@ -285,6 +285,11 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("preserves authoritative provider part identity for transcript corrections after reload", () => {
+    const session = newSession("opencode", "/tmp");
+    session.blocks = [{ id: "block", role: "assistant", text: "Hello", providerPartId: "prt_fixed" }];
+    expect(sanitizeSessionForPersist(session).blocks[0].providerPartId).toBe("prt_fixed");
+  });
   it("keeps the stripped /operator turn marker for later turns", () => {
     const submitted = appendUser(newSession("codex", "/repo"), "list notes", [], {
       monocode: true,
