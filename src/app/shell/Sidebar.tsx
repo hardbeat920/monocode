@@ -3719,12 +3719,12 @@ function DiffStat({
       className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
-        <span className="text-emerald-400">
+        <span className="text-diff-add-fg">
           +<TightDiffNumber value={additions} />
         </span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">
+        <span className="text-diff-del-fg">
           -<TightDiffNumber value={deletions} />
         </span>
       ) : null}

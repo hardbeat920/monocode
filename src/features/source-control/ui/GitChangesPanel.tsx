@@ -1559,8 +1559,8 @@ function statusLetter(status: string): string {
 
 function statusColor(status: string): string {
   if (status === "untracked") return "text-sky-400";
-  if (status === "added") return "text-emerald-400";
-  if (status === "deleted") return "text-red-400";
+  if (status === "added") return "text-diff-add-fg";
+  if (status === "deleted") return "text-diff-del-fg";
   return "text-amber-400";
 }
 

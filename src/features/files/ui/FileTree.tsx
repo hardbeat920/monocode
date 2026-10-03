@@ -73,9 +73,9 @@ import { FileTypeIcon } from "./FileTypeIcon";
 
 const GIT_STATUS_COLOR: Record<string, string> = {
   modified: "text-amber-400",
-  added: "text-emerald-400",
-  untracked: "text-emerald-400",
-  deleted: "text-red-400",
+  added: "text-diff-add-fg",
+  untracked: "text-diff-add-fg",
+  deleted: "text-diff-del-fg",
 };
 
 type Props = {

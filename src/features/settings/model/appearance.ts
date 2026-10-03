@@ -30,6 +30,7 @@ const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
 const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const CHANGES_VIEW_KEY = "monocode.changesView";
+const DIFF_PALETTE_KEY = "monocode.diffPalette";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
@@ -46,6 +47,7 @@ export type ChatBackgroundScope = "empty" | "all";
 export type NewThreadBackgroundEffect =
   "none" | "dither" | "ascii" | "halftone" | "scanlines" | "gradient-blur";
 export type ChangesView = "list" | "tree";
+export type DiffPalette = "default" | "colorblind" | "high-contrast";
 
 export const NEW_THREAD_BACKGROUND_EFFECTS: readonly NewThreadBackgroundEffect[] =
   ["none", "dither", "ascii", "halftone", "scanlines", "gradient-blur"];
@@ -87,6 +89,8 @@ export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "chat";
 
 export const CHANGES_VIEW_DEFAULT: ChangesView = "list";
+
+export const DIFF_PALETTE_DEFAULT: DiffPalette = "default";
 
 export const TRANSCRIPT_ANCHOR_DEFAULT = true;
 
@@ -312,6 +316,7 @@ export function initAppearance() {
   applyChatBackgroundEmptyOpacity(loadChatBackgroundEmptyOpacity());
   applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
   applyChatBackgroundScope(loadChatBackgroundScope());
+  applyDiffPalette(loadDiffPalette());
   void applyUiScale(loadUiScale());
 }
 
@@ -713,6 +718,37 @@ export function applyChatBackgroundScope(value: ChatBackgroundScope) {
     "chat-background-empty-only",
     value === "empty",
   );
+  return value;
+}
+
+function isDiffPalette(value: unknown): value is DiffPalette {
+  return (
+    value === "default" || value === "colorblind" || value === "high-contrast"
+  );
+}
+
+export function loadDiffPalette(): DiffPalette {
+  try {
+    const raw = localStorage.getItem(DIFF_PALETTE_KEY);
+    return isDiffPalette(raw) ? raw : DIFF_PALETTE_DEFAULT;
+  } catch {
+    return DIFF_PALETTE_DEFAULT;
+  }
+}
+
+export function saveDiffPalette(value: DiffPalette) {
+  try {
+    localStorage.setItem(DIFF_PALETTE_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
+/** Swaps the diff color tokens in index.css via an html class. */
+export function applyDiffPalette(value: DiffPalette) {
+  const root = document.documentElement.classList;
+  root.toggle("diff-palette-colorblind", value === "colorblind");
+  root.toggle("diff-palette-high-contrast", value === "high-contrast");
   return value;
 }
 
