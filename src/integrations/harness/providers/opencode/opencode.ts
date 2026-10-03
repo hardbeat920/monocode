@@ -994,7 +994,9 @@ async function handleEvent(
           kind === "read" ||
           kind === "search" ||
           (permission === "task" &&
-            patterns.every((pattern) => pattern === "explore"))
+            Array.isArray(properties.patterns) &&
+            properties.patterns.length > 0 &&
+            properties.patterns.every((pattern) => pattern === "explore"))
             ? "allow"
             : "deny";
         await live.client.replyPermission(

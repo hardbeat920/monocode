@@ -1308,6 +1308,82 @@ describe("OpenCode review regressions", () => {
     expect(spawnChild).not.toHaveBeenCalled();
   });
 
+  const planTaskScopes = [
+    { label: "missing", patterns: undefined, reply: "reject" },
+    { label: "null", patterns: null, reply: "reject" },
+    { label: "empty", patterns: [], reply: "reject" },
+    { label: "a scalar", patterns: "explore", reply: "reject" },
+    { label: "an object", patterns: { agent: "explore" }, reply: "reject" },
+    { label: "a non-string", patterns: [42], reply: "reject" },
+    { label: "an empty string", patterns: [""], reply: "reject" },
+    { label: "padded explore", patterns: [" explore "], reply: "reject" },
+    { label: "mixed types", patterns: ["explore", 42], reply: "reject" },
+    { label: "mixed null", patterns: ["explore", null], reply: "reject" },
+    { label: "another agent", patterns: ["general"], reply: "reject" },
+    {
+      label: "mixed agents",
+      patterns: ["explore", "general"],
+      reply: "reject",
+    },
+    { label: "explore", patterns: ["explore"], reply: "once" },
+    {
+      label: "repeated explore",
+      patterns: ["explore", "explore"],
+      reply: "once",
+    },
+  ];
+  it.each(
+    planTaskScopes.flatMap((scope) =>
+      ["session_1", "session_child"].map((sessionID) => ({
+        ...scope,
+        sessionID,
+      })),
+    ),
+  )(
+    "replies $reply to a Plan task with $label scope in $sessionID",
+    async ({ patterns, reply, sessionID }) => {
+      const events: HarnessEvent[] = [];
+      const done = sendOpenCodeTurn({
+        ...sessionInput((event) => events.push(event)),
+        intent: "plan",
+        runtimeMode: "full-access",
+        text: "Explore the change",
+      });
+      await waitFor(() => promptMessageID !== undefined, "Plan prompt");
+      if (sessionID !== "session_1") sessionCreated(sessionID, "session_1");
+      onSseEvent?.({
+        type: "permission.asked",
+        properties: {
+          id: "plan_task_request",
+          sessionID,
+          permission: "task",
+          ...(patterns !== undefined ? { patterns } : {}),
+          metadata: { subagent_type: "explore" },
+        },
+      });
+      await waitFor(
+        () =>
+          harnessHttp.mock.calls.some(([input]) =>
+            input.url.includes("/permission/plan_task_request/reply"),
+          ),
+        "Plan task reply",
+      );
+      const request = harnessHttp.mock.calls.find(([input]) =>
+        input.url.includes("/permission/plan_task_request/reply"),
+      )![0];
+      expect(request.method).toBe("POST");
+      expect(request.url).toBe(
+        "http://127.0.0.1:4096/permission/plan_task_request/reply?directory=%2Frepo",
+      );
+      expect(JSON.parse(request.body!)).toEqual({ reply });
+      expect(events.some((event) => event.type === "approval.requested")).toBe(
+        false,
+      );
+      idle();
+      await done;
+    },
+  );
+
   it("keeps the Plan agent on a steered follow-up", async () => {
     const done = sendOpenCodeTurn({
       ...sessionInput(),

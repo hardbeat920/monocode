@@ -64,6 +64,8 @@ export class OpenCodeClient {
       "GET",
       "/session/status",
     );
+    // OpenCode v1 removes idle entries, so /session/status omits them.
+    // https://github.com/anomalyco/opencode/blob/v1.14.19/packages/opencode/src/session/status.ts#L74-L77
     return typeof asRecord(statuses?.[sessionID])?.type === "string"
       ? (asRecord(statuses[sessionID])!.type as string)
       : "idle";

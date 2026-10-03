@@ -266,10 +266,15 @@ impl HarnessHost {
     }
 
     fn insert_sse(&self, session_id: String, live: Arc<LiveSse>) -> Option<Arc<LiveSse>> {
-        self.sse
+        let previous = self
+            .sse
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id, live)
+            .insert(session_id, live);
+        if let Some(previous) = &previous {
+            previous.cancel();
+        }
+        previous
     }
 
     fn stop_sse(&self, session_id: &str) {
@@ -1303,21 +1308,27 @@ fn request_http(
     }
 }
 
-#[tauri::command(async)]
-pub fn harness_sse_open(
+#[tauri::command]
+pub async fn harness_sse_open(
     app: AppHandle,
-    host: State<'_, HarnessHost>,
     session_id: String,
     url: String,
     headers: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
-    open_sse_stream(
-        &host,
-        Arc::new(TauriOpenCodeEvents(app)),
-        session_id,
-        url,
-        headers,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        let host = app
+            .try_state::<HarnessHost>()
+            .ok_or_else(|| "Harness host is unavailable".to_string())?;
+        open_sse_stream(
+            &host,
+            Arc::new(TauriOpenCodeEvents(app.clone())),
+            session_id,
+            url,
+            headers,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn open_sse_stream(
@@ -1328,7 +1339,6 @@ fn open_sse_stream(
     headers: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     assert_loopback(&url)?;
-    host.stop_sse(&session_id);
     let live = Arc::new(LiveSse {
         stop: Arc::new(AtomicBool::new(false)),
         socket: Mutex::new(None),

@@ -122,6 +122,54 @@ fn obsolete_sse_cannot_deliver_data_or_end_to_replacement() {
 }
 
 #[test]
+fn replacing_registered_sse_cancels_its_blocked_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut socket, _) = listener.accept().unwrap();
+    let host = HarnessHost::new();
+    let old = Arc::new(LiveSse {
+        stop: Arc::new(AtomicBool::new(false)),
+        socket: Mutex::new(Some(socket.try_clone().unwrap())),
+    });
+    let new = Arc::new(LiveSse {
+        stop: Arc::new(AtomicBool::new(false)),
+        socket: Mutex::new(None),
+    });
+    let (started_tx, started_rx) = mpsc::channel();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        closed_tx.send(socket.read(&mut [0])).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // Two opens can both remove the previous stream before either inserts.
+    host.stop_sse("same");
+    host.stop_sse("same");
+    host.insert_sse("same".into(), old.clone());
+    host.insert_sse("same".into(), new.clone());
+
+    assert!(old.stop.load(Ordering::SeqCst));
+    assert!(old.socket.lock().unwrap().is_none());
+    match closed_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+        Ok(read) => assert_eq!(read, 0),
+        Err(error) => assert!(!matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        )),
+    }
+    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    assert!(!new.stop.load(Ordering::SeqCst));
+    assert!(Arc::ptr_eq(
+        host.sse.lock().unwrap().get("same").unwrap(),
+        &new
+    ));
+    reader.join().unwrap();
+    drop(peer);
+}
+
+#[test]
 fn rejects_non_sse_and_redirected_handshakes() {
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n",
