@@ -4744,14 +4744,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "monocode-view-remote"
+name = "monocode-view-quick"
 version = "0.6.0"
 dependencies = [
  "gpui",
  "gpui-component",
  "monocode-core",
+ "monocode-ui",
+ "monocode-view-composer",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-remote"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-base",
+ "gpui-component",
+ "gpui_platform",
+ "image",
+ "monocode-core",
+ "monocode-layout",
  "monocode-remote",
  "monocode-ui",
+ "monocode-view-composer",
+ "monocode-view-transcript",
  "serde",
  "serde_json",
 ]
@@ -4802,6 +4821,7 @@ dependencies = [
 name = "monocode-view-transcript"
 version = "0.6.0"
 dependencies = [
+ "base64 0.22.1",
  "gpui",
  "gpui-base",
  "gpui-component",

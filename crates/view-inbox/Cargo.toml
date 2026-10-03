@@ -1,0 +1,36 @@
+[package]
+name = "monocode-view-inbox"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-markdown.workspace = true
+monocode-editor.workspace = true
+# project_name, project_key, and same_project_path for cards and pickers.
+monocode-layout.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+regex.workspace = true
+# The job id in a GitHub Actions URL, and http(s) checks for check links.
+url.workspace = true
+# ISO timestamps for relative times and check durations. The same line the
+# engine's inbox package uses.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "inbox_gallery"
+path = "examples/inbox_gallery.rs"
