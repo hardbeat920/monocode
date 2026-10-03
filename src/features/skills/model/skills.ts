@@ -120,6 +120,8 @@ export type SkillCatalogContext = {
   harness: HarnessId;
   cwd: string;
   sessionId?: string;
+  /** Provider account; its config can carry its own commands and skills. */
+  accountId?: string;
 };
 
 type CatalogRequest = {
@@ -140,7 +142,7 @@ const catalogEntries = new Map<string, CatalogEntry>();
 
 export function skillCatalogKey(context: SkillCatalogContext): string {
   const sessionScoped = !!getHarness(context.harness)?.commands?.subscribe;
-  return `${context.harness}\0${normalizeProjectPath(context.cwd)}${sessionScoped && context.sessionId ? `\0${context.sessionId}` : ""}`;
+  return `${context.harness}\0${normalizeProjectPath(context.cwd)}${context.accountId ? `\0account:${context.accountId}` : ""}${sessionScoped && context.sessionId ? `\0${context.sessionId}` : ""}`;
 }
 
 export function hasNativeCommands(harness: HarnessId): boolean {
@@ -210,6 +212,7 @@ export function loadSkills(
     harness: context.harness,
     cwd: normalizeProjectPath(context.cwd),
     ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+    ...(context.accountId ? { accountId: context.accountId } : {}),
   } satisfies SkillCatalogContext;
   const key = skillCatalogKey(normalized);
   let entry = catalogEntries.get(key);
@@ -306,15 +309,54 @@ async function loadCatalog(context: SkillCatalogContext): Promise<Skill[]> {
   const provider = getHarness(context.harness)?.commands;
   if (provider) {
     const commands = await provider.discover(context);
-    return commands.map((command): NativeSkill => ({
+    const native = commands.map((command): NativeSkill => ({
       kind: "native",
       ...command,
     }));
+    return provider.monocodeSkills
+      ? withMonocodeSkills(native, context.cwd, context.harness)
+      : native;
   }
   const disabledPaths = loadDisabledSkillPaths();
   const discovered = await listSkills(context.cwd, disabledPaths);
   const disabled = disabledSkillPathSet();
   return mergeCatalog(discovered.filter((skill) => !disabled.has(skill.path)));
+}
+
+/** Apply Skills-page settings to a harness that reads the same skill files. */
+async function withMonocodeSkills(
+  native: NativeSkill[],
+  cwd: string,
+  source: HarnessId,
+): Promise<Skill[]> {
+  const disabledPaths = loadDisabledSkillPaths();
+  const hidden = new Set<string>();
+  if (disabledPaths.length > 0) {
+    // Only files the harness reads count: disabling a Codex `deploy` must
+    // not hide Claude's own.
+    const [all, enabled] = await Promise.all([
+      listSkills(cwd, []),
+      listSkills(cwd, disabledPaths),
+    ]);
+    const enabledNames = new Set(
+      enabled
+        .filter((skill) => skill.source === source)
+        .map((skill) => skill.name),
+    );
+    for (const skill of all) {
+      if (skill.source === source && !enabledNames.has(skill.name)) {
+        hidden.add(skill.name);
+      }
+    }
+  }
+  return [
+    BUILTIN_CREATE_SKILL,
+    ...native.filter(
+      (skill) =>
+        skill.name !== BUILTIN_CREATE_SKILL.name &&
+        (skill.origin === "builtin" || !hidden.has(skill.name)),
+    ),
+  ];
 }
 
 export function mergeCatalog(discovered: DiscoveredSkill[]): Skill[] {
@@ -439,9 +481,21 @@ export async function applySkillsToTurn(
   text: string,
   context: SkillCatalogContext,
 ): Promise<string> {
-  if (hasNativeCommands(context.harness)) return text;
   const names = skillNamesInText(text);
   if (names.length === 0) return text;
+  if (hasNativeCommands(context.harness)) {
+    // The harness runs its own commands; only MonoCode's built-in needs a
+    // body. The body leads the prompt, so a different leading command (which
+    // only runs when it comes first) wins over it.
+    const leading = /^\s*\/([^\s/\\]+)(?=\s|$)/.exec(text)?.[1];
+    return getHarness(context.harness)?.commands?.monocodeSkills &&
+      names.includes(BUILTIN_CREATE_SKILL.name) &&
+      (!leading || leading === BUILTIN_CREATE_SKILL.name)
+      ? injectSkillPrompt(text, [BUILTIN_CREATE_SKILL], {
+          [BUILTIN_CREATE_SKILL.name]: CREATE_SKILL_BODY,
+        })
+      : text;
+  }
   const catalog = await loadSkills(context);
   const picked: Array<FileSkill | BuiltinSkill> = [];
   for (const name of names) {
@@ -458,6 +512,29 @@ export async function applySkillsToTurn(
     }),
   );
   return injectSkillPrompt(text, picked, bodies);
+}
+
+/** Let the harness refresh what a send needs before the turn starts. */
+export async function prepareNativeCommand(
+  text: string,
+  context: SkillCatalogContext,
+  effort?: string,
+): Promise<void> {
+  const commands = getHarness(context.harness)?.commands;
+  // MonoCode expands its own built-in; the harness never sees it lead.
+  if (
+    commands?.monocodeSkills &&
+    new RegExp(`^\\s*/${BUILTIN_CREATE_SKILL.name}(?=\\s|$)`).test(text)
+  )
+    return;
+  await commands
+    ?.beforeSend?.(text, {
+      cwd: normalizeProjectPath(context.cwd),
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(context.accountId ? { accountId: context.accountId } : {}),
+      ...(effort ? { effort } : {}),
+    })
+    .catch(() => undefined);
 }
 
 type SkillLoader = typeof loadSkills;
