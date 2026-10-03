@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatLiveElapsed,
   liveAgentsFromSessions,
+  shouldShowLiveAgents,
 } from "./liveAgents";
 import { newSession, type Block, type Session } from "./session";
 
@@ -180,6 +181,45 @@ describe("liveAgentsFromSessions", () => {
         new Set([finished.id]),
       ).map((row) => row.cwd),
     ).toEqual(["/tmp/a", "/tmp/b"]);
+  });
+});
+
+describe("shouldShowLiveAgents", () => {
+  const working = {
+    id: "working",
+    cwd: "/tmp/a",
+    title: "Working",
+    harness: "claude" as const,
+    activity: "Editing",
+    needsApproval: false,
+    done: false,
+  };
+  const finished = {
+    id: "finished",
+    cwd: "/tmp/b",
+    title: "Done",
+    harness: "claude" as const,
+    activity: "Done",
+    needsApproval: false,
+    done: true,
+  };
+
+  it("hides the card when the only live agent is the open session", () => {
+    expect(shouldShowLiveAgents([working], "working")).toBe(false);
+  });
+
+  it("keeps an unfocused working session after the other turn finishes", () => {
+    expect(shouldShowLiveAgents([working], "finished")).toBe(true);
+    expect(shouldShowLiveAgents([working], undefined)).toBe(true);
+  });
+
+  it("keeps an unfocused finished session until it is opened", () => {
+    expect(shouldShowLiveAgents([finished], "working")).toBe(true);
+    expect(shouldShowLiveAgents([finished], "finished")).toBe(false);
+  });
+
+  it("keeps the card when two sessions are live even if one is open", () => {
+    expect(shouldShowLiveAgents([working, finished], "working")).toBe(true);
   });
 });
 
