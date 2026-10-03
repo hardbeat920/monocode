@@ -18,7 +18,7 @@ Codex imports historical user and assistant messages through `thread/inject_item
 
 Picker intent, provider bindings, and transfer receipts persist separately from the transcript. A provider startup ID does not prove that it accepted a user request. MonoCode saves native import completion before submitting the current turn. It commits the accepted transfer only after the provider acknowledges that turn or supplies delivery evidence.
 
-Claude confirms the resumed native ID before sending input. Startup output does not accept a transfer. Claude records acceptance only after the current input write succeeds and the provider supplies response evidence. Manual compaction does not accept a user request.
+Claude confirms the resumed native ID before sending input. It gives each user request a unique input ID and records acceptance after the input write succeeds and Claude echoes that ID. Startup output and manual compaction do not accept a user request. The [CLI replay flag](https://code.claude.com/docs/en/cli-reference) provides this acknowledgment.
 
 An unconfirmed import or acceptance can leave the target native conversation ambiguous. MonoCode retains the source, discards the uncertain target identity, and keeps the unaccepted request as a draft. Retry that draft to send its original request once into a fresh target conversation. A failed native resume uses eligible full portable history rather than an empty conversation.
 

@@ -193,6 +193,7 @@ export function buildClaudeUserMessage(input: {
   text: string;
   attachments?: Attachment[];
   effort?: string | null;
+  uuid?: string;
 }): Record<string, unknown> {
   const text = applyClaudePromptEffortPrefix(
     promptText(input.text, input.attachments ?? []),
@@ -210,6 +211,7 @@ export function buildClaudeUserMessage(input: {
   }
   return {
     type: "user",
+    ...(input.uuid ? { uuid: input.uuid } : {}),
     session_id: "",
     parent_tool_use_id: null,
     message: {
@@ -259,6 +261,7 @@ export function buildClaudeSpawnArgs(input: {
     "stream-json",
   ];
   if (!input.isolated) {
+    args.push("--replay-user-messages");
     args.push("--permission-prompt-tool", "stdio");
   }
   if (input.includePartialMessages !== false) {

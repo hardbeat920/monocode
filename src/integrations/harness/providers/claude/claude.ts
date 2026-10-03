@@ -126,7 +126,9 @@ type BackgroundTask = {
 };
 
 type TurnSubmission = {
+  uuid: string;
   written: boolean;
+  acknowledged: boolean;
   accepted: boolean;
   onAccepted?: () => void;
   pendingEvents: HarnessEvent[];
@@ -600,10 +602,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     );
   }
   const effort = input.modelSettings?.effort;
+  const uuid = crypto.randomUUID();
   const message = buildClaudeUserMessage({
     text: input.text,
     attachments: input.attachments,
     effort,
+    uuid,
   });
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
@@ -630,7 +634,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   settlePendingTurn(live);
 
   const submission: TurnSubmission = {
+    uuid,
     written: false,
+    acknowledged: false,
     accepted: false,
     onAccepted: input.onAccepted,
     pendingEvents: [],
@@ -643,6 +649,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       return;
     submission.written = true;
     live.hasSubmittedInput = true;
+    acceptSubmittedInput(live, submission);
     for (const event of submission.pendingEvents.splice(0))
       forwardTurnEvent(live, event);
     settlePendingTurn(live);
@@ -680,19 +687,23 @@ function forwardTurnEvent(live: Live, event: HarnessEvent): void {
     submission.pendingEvents.push(event);
     return;
   }
-  if (
-    !submission.accepted &&
-    !live.manualCompaction &&
-    (event.type === "turn.started" ||
-      event.type === "message.delta" ||
-      event.type === "tool.started" ||
-      event.type === "plan" ||
-      event.type === "image.generated")
-  ) {
-    submission.accepted = true;
-    submission.onAccepted?.();
-  }
   live.eventTarget(event);
+}
+
+function acceptSubmittedInput(live: Live, submission: TurnSubmission): void {
+  if (
+    live.submission !== submission ||
+    !submission.written ||
+    !submission.acknowledged ||
+    submission.accepted ||
+    live.manualCompaction ||
+    live.cancelled ||
+    live.muteUpdates
+  ) {
+    return;
+  }
+  submission.accepted = true;
+  submission.onAccepted?.();
 }
 
 function handleLine(sessionId: string, live: Live, line: string): void {
@@ -995,6 +1006,16 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) {
     noteSubagentResults(live, rec);
     return;
+  }
+  const submission = live.submission;
+  if (
+    submission &&
+    rec.isReplay === true &&
+    rec.parent_tool_use_id === null &&
+    stringField(rec, "uuid") === submission.uuid
+  ) {
+    submission.acknowledged = true;
+    acceptSubmittedInput(live, submission);
   }
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);

@@ -62,6 +62,17 @@ function emit(rec: Record<string, unknown>) {
   onLine!(JSON.stringify(rec));
 }
 
+function replayUser(uuid: unknown, sessionId = "sess_1") {
+  emit({
+    type: "user",
+    uuid,
+    isReplay: true,
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "text", text: "echoed input" }] },
+  });
+}
+
 const waitFor = async (pred: () => boolean, label: string) => {
   for (let i = 0; i < 200; i++) {
     if (pred()) return;
@@ -115,6 +126,10 @@ async function startTurn(
     response: { subtype: "success", request_id: "monocode_1" },
   });
   await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
+  replayUser(
+    parse().find((message) => message.type === "user")?.uuid,
+    options.providerSessionId ?? "sess_1",
+  );
   return { events, turn };
 }
 
@@ -1070,11 +1085,12 @@ describe("claude current request acceptance", () => {
     expect(delivered).not.toHaveBeenCalled();
   });
 
-  it("replays response evidence after a pending user write succeeds and accepts once", async () => {
+  it("defers a matching replay until the pending user write succeeds and accepts once", async () => {
     const { events, accepted, delivered, turn } = await initializingTransfer();
     let finishWrite: (() => void) | undefined;
     writeChild.mockImplementationOnce((_id, line) => {
       sent.push(line);
+      replayUser(JSON.parse(line).uuid, "expected-native");
       response();
       return new Promise<void>((resolve) => {
         finishWrite = resolve;
@@ -1091,6 +1107,10 @@ describe("claude current request acceptance", () => {
       "accepted current request",
     );
     response("Follow-up response");
+    replayUser(
+      parse().find((message) => message.type === "user")?.uuid,
+      "expected-native",
+    );
     emit({ type: "result", subtype: "success", session_id: "expected-native" });
     await turn;
     response("Background response after the completed input");
@@ -1111,11 +1131,107 @@ describe("claude current request acceptance", () => {
     expect(delivered).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores unrelated and child echoes until the matching parent replay", async () => {
+    const { accepted, delivered, turn } = await initializingTransfer();
+    confirmIdentity();
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    const uuid = parse().find((message) => message.type === "user")?.uuid;
+    for (const fields of [
+      { uuid: crypto.randomUUID(), isReplay: true, parent_tool_use_id: null },
+      { uuid, isReplay: true, parent_tool_use_id: "child-tool" },
+      { uuid, isReplay: false, parent_tool_use_id: null },
+      { uuid, isReplay: true },
+    ]) {
+      emit({
+        type: "user",
+        session_id: "expected-native",
+        message: { role: "user", content: [] },
+        ...fields,
+      });
+    }
+    response("Output without a current acknowledgment");
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    replayUser(uuid, "expected-native");
+    replayUser(uuid, "expected-native");
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await turn;
+  });
+
+  it("does not reuse a previous request acknowledgment for the next turn", async () => {
+    const first = await startTurn("s1");
+    const oldUuid = parse().find((message) => message.type === "user")?.uuid;
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    const accepted = vi.fn();
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "Next request",
+      onAccepted: accepted,
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().filter((message) => message.type === "user").length === 2,
+      "next user prompt",
+    );
+    const uuid = parse()
+      .filter((message) => message.type === "user")
+      .at(-1)?.uuid;
+    expect(uuid).not.toBe(oldUuid);
+    replayUser(oldUuid);
+    expect(accepted).not.toHaveBeenCalled();
+    replayUser(uuid);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("does not accept unrelated output buffered during the current write", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    let finishWrite: (() => void) | undefined;
+    writeChild.mockImplementationOnce((_id, line) => {
+      sent.push(line);
+      response("Unrelated startup output");
+      return new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+    });
+    confirmIdentity();
+    await waitFor(() => finishWrite != null, "pending user write");
+    finishWrite!();
+    await waitFor(
+      () => events.some((event) => event.type === "message.delta"),
+      "buffered output delivery",
+    );
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Current request failed"],
+      session_id: "expected-native",
+    });
+    await turn;
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
   it("discards buffered response evidence when the user write fails", async () => {
     const { events, accepted, delivered, turn } = await initializingTransfer();
     let failWrite: ((error: Error) => void) | undefined;
     writeChild.mockImplementationOnce((_id, line) => {
       sent.push(line);
+      replayUser(JSON.parse(line).uuid, "expected-native");
       response();
       return new Promise<void>((_resolve, reject) => {
         failWrite = reject;
@@ -2478,7 +2594,8 @@ describe("claude plan permissions", () => {
 
 describe("claude manual compaction", () => {
   it("runs the built-in command and requires a compact boundary", async () => {
-    const { turn } = await startTurn("s1");
+    const accepted = vi.fn();
+    const { turn } = await startTurn("s1", { onAccepted: accepted });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
     sent.length = 0;
@@ -2498,6 +2615,7 @@ describe("claude manual compaction", () => {
     expect(parse().find((message) => message.type === "user")).toMatchObject({
       message: { content: [{ type: "text", text: "/compact" }] },
     });
+    replayUser(parse().find((message) => message.type === "user")?.uuid);
 
     emit({
       type: "assistant",
@@ -2517,5 +2635,6 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(accepted).toHaveBeenCalledTimes(1);
   });
 });
