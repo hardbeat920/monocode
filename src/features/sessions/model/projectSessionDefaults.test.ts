@@ -90,6 +90,17 @@ describe("retargetSessionToProject", () => {
     expect(retargeted.model).toBe("cursor:composer-2.5");
   });
 
+  it("keeps an explicitly named blank tab when choosing a project", () => {
+    setProjectDefaultProvider("/repo/a", "cursor", "cursor:composer-2.5");
+    const blank = newSession("claude", "~");
+    blank.title = "claude · #646 — Operator session titles";
+    blank.titleIsExplicit = true;
+    expect(retargetSessionToProject(blank, "/repo/a")).toMatchObject({
+      title: "cursor · #646 — Operator session titles",
+      titleIsExplicit: true,
+    });
+  });
+
   it("keeps the session's provider when the project has no defaults", () => {
     const blank = newSession("claude", "~", "claude:opus-5");
     const retargeted = retargetSessionToProject(blank, "/repo/a");
