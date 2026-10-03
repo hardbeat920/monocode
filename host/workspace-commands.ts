@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
+import { GitWatchHost } from "./git-watch";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -35,6 +36,9 @@ const exec = promisify(execFile);
  * works on either machine. Paths are absolute host paths and must lie inside
  * a registered project or one of its worktrees. */
 export const WORKSPACE_COMMANDS = [
+  "watch_git_changes",
+  "wait_git_changes",
+  "unwatch_git_changes",
   "list_dir",
   "list_project_files",
   "read_text_file",
@@ -95,12 +99,17 @@ const alreadyExists = (name: string) =>
 type Located = { root: string; relative: string };
 
 export class WorkspaceCommands {
+  private watches = new GitWatchHost();
   private roots = new Map<string, { at: number; roots: string[] }>();
   private rootsGeneration = 0;
 
   invalidateRoots(): void {
     this.rootsGeneration++;
     this.roots.clear();
+  }
+
+  close(): void {
+    this.watches.close();
   }
 
   constructor(
@@ -116,6 +125,15 @@ export class WorkspaceCommands {
         ? (args as Record<string, unknown>)
         : {};
     switch (command as WorkspaceCommand) {
+      case "watch_git_changes":
+        return this.gitRoot(input.cwd).then((cwd) =>
+          this.watches.start(input.id, input.cwd, cwd),
+        );
+      case "wait_git_changes":
+        return this.watches.wait(input.id, input.cwd);
+      case "unwatch_git_changes":
+        this.watches.stop(input.id, input.cwd);
+        return Promise.resolve(null);
       case "list_dir":
         return this.listDir(input.path);
       case "list_project_files":

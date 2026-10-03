@@ -71,7 +71,7 @@ function start(entry: Entry) {
   };
   const unsubscribe = subscribeGitChanged(() => {
     if (!document.hidden) void load(entry, true);
-  });
+  }, entry.cwd);
   window.addEventListener("focus", resume);
   document.addEventListener("visibilitychange", resume);
   entry.stop = () => {

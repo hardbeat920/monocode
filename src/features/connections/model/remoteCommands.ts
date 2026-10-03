@@ -5,6 +5,9 @@ import { parseRemotePath, remotePath } from "./remoteProjects";
 /** File commands a connected machine answers exactly as this computer does
  * (see host/workspace-commands.ts). */
 const HOST_COMMANDS = new Set([
+  "watch_git_changes",
+  "wait_git_changes",
+  "unwatch_git_changes",
   "list_dir",
   "list_project_files",
   "read_text_file",

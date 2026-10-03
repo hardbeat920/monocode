@@ -10,6 +10,7 @@ pub mod control_cli;
 mod cursor_store;
 mod external_editor;
 mod fs;
+mod git_watch;
 mod gitlab;
 mod harness;
 mod harness_updates;
@@ -226,6 +227,7 @@ pub fn run() {
         )
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
+        .manage(git_watch::GitWatchHost::default())
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
@@ -258,6 +260,8 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            git_watch::watch_git_changes,
+            git_watch::unwatch_git_changes,
             remote::remote_machines,
             remote::remote_connect,
             remote::remote_disconnect,
@@ -571,6 +575,9 @@ pub fn run() {
                 .iter()
                 .any(|window| window.label() != label);
             control::window_closed(handle, &label);
+            handle
+                .state::<git_watch::GitWatchHost>()
+                .close_window(&label);
             if !other_window {
                 reap_harness_children(handle);
             }
@@ -589,6 +596,7 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
+            handle.state::<git_watch::GitWatchHost>().close_all();
             handle.state::<remote::RemoteConnections>().shutdown();
             reap_harness_children(handle);
         }

@@ -7,9 +7,17 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
 }));
 
-const { invalidateWatchedFiles } = vi.hoisted(() => ({
+const { invalidateWatchedFiles, gitListeners } = vi.hoisted(() => ({
   invalidateWatchedFiles: vi.fn(),
+  gitListeners: new Set<() => void>(),
 }));
+
+const { watchGitChanges, unwatch } = vi.hoisted(() => ({
+  watchGitChanges: vi.fn(),
+  unwatch: vi.fn(),
+}));
+
+vi.mock("../../../platform/tauri/gitWatch", () => ({ watchGitChanges }));
 
 vi.mock("../../../platform/tauri/fs", () => ({
   gitDiffIndex: vi.fn(),
@@ -28,8 +36,13 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitDiscardFile: vi.fn(async () => {}),
   gitPrCreate: vi.fn(async () => ""),
   gitRangeContext: vi.fn(),
-  notifyGitChanged: vi.fn(),
-  subscribeGitChanged: () => () => {},
+  notifyGitChanged: vi.fn(() => {
+    for (const listener of gitListeners) listener();
+  }),
+  subscribeGitChanged: (listener: () => void) => {
+    gitListeners.add(listener);
+    return () => gitListeners.delete(listener);
+  },
   basename: (path: string) => path.split("/").pop() ?? path,
 }));
 
@@ -84,6 +97,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  watchGitChanges.mockReset().mockReturnValue(unwatch);
+  unwatch.mockReset();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -175,14 +190,15 @@ afterEach(() => {
     .querySelectorAll("[data-popover-side]")
     .forEach((element) => element.remove());
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
-async function renderPanel(cwd = "/repo") {
+async function renderPanel(cwd = "/repo", enabled = true) {
   act(() =>
     root.render(
       createElement(GitChangesPanel, {
         cwd,
-        enabled: true,
+        enabled,
         onOpenFile: vi.fn(),
         onOpenAllChanges: vi.fn(),
         onOpenCommit: vi.fn(),
@@ -191,6 +207,67 @@ async function renderPanel(cwd = "/repo") {
   );
   await act(async () => {});
 }
+
+describe("GitChangesPanel filesystem updates", () => {
+  it("does no recurring Git reads while idle, then displays an agent edit", async () => {
+    vi.useFakeTimers();
+    vi.mocked(gitDiffIndex).mockResolvedValue(index());
+    await renderPanel("/event-repo");
+    expect(gitDiffIndex).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(gitDiffIndex).toHaveBeenCalledTimes(1);
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          {
+            path: "/event-repo/agent.ts",
+            relative: "agent.ts",
+            status: "untracked",
+            additions: 1,
+            deletions: 0,
+            staged: false,
+            unstaged: true,
+          },
+        ],
+      }),
+    );
+    await act(async () => watchGitChanges.mock.calls[0][1]());
+    expect(gitDiffIndex).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("agent.ts");
+  });
+
+  it("queues one reread when several edits arrive during a Git read", async () => {
+    let finish!: (value: GitDiffIndex) => void;
+    vi.mocked(gitDiffIndex)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue(index());
+    await renderPanel("/queued-repo");
+    const change = watchGitChanges.mock.calls[0][1];
+    act(() => {
+      change();
+      change();
+      change();
+    });
+    expect(gitDiffIndex).toHaveBeenCalledTimes(1);
+    await act(async () => finish(index()));
+    expect(gitDiffIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops watching and loading when the Changes panel is closed", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(index());
+    await renderPanel("/closed-repo");
+    await renderPanel("/closed-repo", false);
+    expect(unwatch).toHaveBeenCalledTimes(1);
+    expect(gitDiffIndex).toHaveBeenCalledTimes(1);
+  });
+});
 
 async function openBranchMenu() {
   const toggle = container.querySelector<HTMLButtonElement>(
