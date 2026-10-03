@@ -1,3 +1,7 @@
+import {
+  projectOpenCodeModels,
+  refreshProjectOpenCodeCatalog,
+} from "./opencodeCatalog";
 import { modelsFor } from "../../../../features/sessions/model/models";
 import type { TurnIntent } from "../../../../features/sessions/model/session";
 import {
@@ -13,16 +17,15 @@ import { OpenCodeClient } from "./opencodeClient";
 import {
   appendOpenCodeAssistantTextDelta,
   asRecord,
-  compareSemver,
+  isSupportedOpenCodeVersion,
   eventSessionId,
   KNOWN_HIDDEN_AGENTS,
   mergeOpenCodeAssistantText,
-  MINIMUM_OPENCODE_VERSION,
+  unsupportedOpenCodeVersionMessage,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
   stringField,
-  textDeltaEvent,
   type OpenCodePart,
 } from "./opencodeProtocol";
 import { abortTextPromptRace } from "../../core/abortTextPrompt";
@@ -43,6 +46,7 @@ type LiveText = {
   messageRoleById: Map<string, "assistant" | "user" | "hidden">;
   partById: Map<string, OpenCodePart>;
   emittedTextByPartId: Map<string, string>;
+  emittedEndedPartIds: Set<string>;
   pendingTextDeltaByPartId: Map<string, string>;
   onEvent?: (event: HarnessEvent) => void;
 };
@@ -99,7 +103,10 @@ async function promptOnLive(input: {
 }): Promise<string> {
   input.signal?.throwIfAborted();
   const session = await ensureLive(input.cwd, input.model, input.modelSettings);
-  input.signal?.throwIfAborted();
+  if (input.signal?.aborted) {
+    await dropLive();
+    input.signal.throwIfAborted();
+  }
   session.onEvent = input.onEvent;
   const abort = abortTextPromptRace(input.signal, () =>
     session.client.abortSession(session.sessionId),
@@ -124,6 +131,22 @@ async function promptOnLive(input: {
           : "OpenCode text generation failed",
       );
     }
+    if (result.info) {
+      handleTextEvent(session, {
+        type: "message.updated",
+        properties: { info: result.info },
+      });
+    }
+    for (const value of result.parts ?? []) {
+      const part = parseTextPart(value);
+      if (!part) continue;
+      // The HTTP response can arrive before the completed SSE snapshot.
+      part.time = { ...part.time, end: part.time?.end ?? 0 };
+      session.partById.set(part.id, part);
+      session.pendingTextDeltaByPartId.delete(part.id);
+      if (textPartRole(session, part) === "assistant")
+        emitTextPart(session, part);
+    }
     const text = getOpenCodeTextResponse(result.parts);
     if (!text) throw new Error("OpenCode returned empty output.");
     return text;
@@ -139,7 +162,10 @@ async function ensureLive(
   requestedModel?: string,
   modelSettings?: Record<string, string>,
 ): Promise<LiveText> {
-  const model = pickTextModel(requestedModel);
+  if (!requestedModel && projectOpenCodeModels(cwd) === undefined) {
+    await refreshProjectOpenCodeCatalog(cwd);
+  }
+  const model = pickTextModel(requestedModel, cwd);
   const settingsKey = modelSettingsKey(modelSettings);
   if (
     live &&
@@ -165,10 +191,8 @@ async function startLive(
     "opencode",
   ).catch(() => "");
   const version = parseOpenCodeVersion(versionOut);
-  if (!version || compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version ?? "unknown"} is too old for text generation.`,
-    );
+  if (!version || !isSupportedOpenCodeVersion(version)) {
+    throw new Error(unsupportedOpenCodeVersionMessage(version ?? undefined));
   }
 
   serverUrl = "";
@@ -187,17 +211,16 @@ async function startLive(
     },
   );
 
-  const port = await freeHarnessPort();
-  await spawnChild(
-    TEXT_CHILD_ID,
-    path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
-    cwd,
-    undefined,
-    "opencode",
-  );
-
   try {
+    const port = await freeHarnessPort();
+    await spawnChild(
+      TEXT_CHILD_ID,
+      path,
+      ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+      cwd,
+      undefined,
+      "opencode",
+    );
     const url = await waitForUrl(() => serverUrl, SERVER_TIMEOUT_MS);
     const client = new OpenCodeClient(url, cwd);
     const created = await client.createSession({
@@ -213,6 +236,7 @@ async function startLive(
       messageRoleById: new Map(),
       partById: new Map(),
       emittedTextByPartId: new Map(),
+      emittedEndedPartIds: new Set(),
       pendingTextDeltaByPartId: new Map(),
       onEvent: undefined,
     };
@@ -298,19 +322,29 @@ function handleTextEvent(
   };
   session.partById.set(existing.id, nextPart);
   if (textPartRole(session, nextPart) !== "assistant") return;
-  session.emittedTextByPartId.set(existing.id, next.nextText);
-  const mapped = textDeltaEvent(nextPart, next.deltaToEmit);
-  if (mapped) session.onEvent?.(mapped);
+  emitTextPart(session, nextPart);
 }
 
 function emitTextPart(session: LiveText, part: OpenCodePart): void {
   if (part.type !== "text" && part.type !== "reasoning") return;
   if (part.text === undefined) return;
   const previous = session.emittedTextByPartId.get(part.id);
-  const next = mergeOpenCodeAssistantText(previous, part.text);
-  session.emittedTextByPartId.set(part.id, next.latestText);
-  const mapped = textDeltaEvent(part, next.deltaToEmit);
-  if (mapped) session.onEvent?.(mapped);
+  const ended = part.time?.end !== undefined;
+  if (
+    previous === part.text &&
+    session.emittedEndedPartIds.has(part.id) === ended
+  )
+    return;
+  if (previous === undefined && !part.text && !ended) return;
+  session.emittedTextByPartId.set(part.id, part.text);
+  if (ended) session.emittedEndedPartIds.add(part.id);
+  session.onEvent?.({
+    type: "message.part",
+    partId: part.id,
+    text: part.text,
+    reasoning: part.type === "reasoning",
+    streaming: !ended,
+  });
 }
 
 function textPartRole(
@@ -346,6 +380,7 @@ function mergeTextPart(
   next: OpenCodePart,
 ): OpenCodePart {
   if (!previous) return next;
+  if (next.time?.end !== undefined) return next;
   if (previous.time?.end !== undefined && next.time?.end === undefined) {
     return previous;
   }
@@ -360,14 +395,17 @@ async function dropLive(): Promise<void> {
   const current = live;
   live = null;
   if (current) {
-    await current.client.abortSession(current.sessionId);
+    await current.client.abortSession(current.sessionId).catch(() => undefined);
     await current.client.closeEvents(TEXT_CHILD_ID);
   }
   unwatchChild(TEXT_CHILD_ID);
   await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 
-function pickTextModel(requested?: string): {
+function pickTextModel(
+  requested?: string,
+  cwd?: string,
+): {
   providerID: string;
   modelID: string;
 } {
@@ -380,7 +418,8 @@ function pickTextModel(requested?: string): {
     if (parsedSelected) return parsedSelected;
     if (modelSlug) return { providerID: "opencode", modelID: modelSlug };
   }
-  const models = modelsFor("opencode");
+  const models =
+    (cwd ? projectOpenCodeModels(cwd) : undefined) ?? modelsFor("opencode");
   for (const model of models) {
     const parsed = parseOpenCodeModelSlug(model.nativeId ?? model.id);
     if (parsed) return parsed;

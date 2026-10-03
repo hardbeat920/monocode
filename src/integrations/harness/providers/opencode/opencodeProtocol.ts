@@ -15,8 +15,31 @@ import { extractToolPreview } from "../../core/preview";
 import type { HarnessEvent } from "../../core/types";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
+export const MAXIMUM_OPENCODE_MAJOR_VERSION = 1;
 export const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 export const KNOWN_HIDDEN_AGENTS = new Set(["compaction", "summary", "title"]);
+let lastMessageTimestamp = 0;
+let messageCounter = 0;
+
+/** Revert boundaries compare IDs, so use OpenCode's ascending timestamp encoding. */
+export function nextOpenCodeMessageId(timestamp = Date.now()): string {
+  if (timestamp !== lastMessageTimestamp) {
+    lastMessageTimestamp = timestamp;
+    messageCounter = 0;
+  }
+  const time = (
+    (BigInt(timestamp) * 0x1000n + BigInt(++messageCounter)) &
+    0xffffffffffffn
+  )
+    .toString(16)
+    .padStart(12, "0");
+  const chars =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  const suffix = [...crypto.getRandomValues(new Uint8Array(14))]
+    .map((byte) => chars[byte % chars.length])
+    .join("");
+  return `msg_${time}${suffix}`;
+}
 
 const OPENCODE_DEFAULT_TITLE_PATTERN =
   /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -101,6 +124,20 @@ export function compareSemver(left: string, right: string): number {
   return 0;
 }
 
+export function isSupportedOpenCodeVersion(version: string): boolean {
+  return (
+    Number.parseInt(version.split(".")[0] ?? "", 10) ===
+      MAXIMUM_OPENCODE_MAJOR_VERSION &&
+    compareSemver(version, MINIMUM_OPENCODE_VERSION) >= 0
+  );
+}
+
+export function unsupportedOpenCodeVersionMessage(version?: string): string {
+  return version
+    ? `OpenCode v${version} is unsupported. MonoCode requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer within major version 1. OpenCode 2 uses a different API.`
+    : `Unable to determine OpenCode version. MonoCode requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer within major version 1.`;
+}
+
 export function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
@@ -134,15 +171,75 @@ export function isOpenCodeNotFound(cause: unknown): boolean {
   return false;
 }
 
+export function parseOpenCodeToolOutputGlob(output: string): string {
+  const paths = output.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^data[ \t]+(.+)$/);
+    return match ? [match[1]] : [];
+  });
+  const path = paths[0];
+  const windows =
+    path != null &&
+    (/^[A-Za-z]:[\\/]/.test(path) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(path));
+  if (
+    paths.length !== 1 ||
+    !path ||
+    path.trim() !== path ||
+    /[\x00-\x1f*?\[\]{}]/.test(path) ||
+    !(path.startsWith("/") || windows) ||
+    path
+      .split(windows ? /[\\/]/ : /\//)
+      .some((part) => part === "." || part === "..")
+  )
+    throw new Error(
+      "OpenCode did not expose a safe data directory for its tool output.",
+    );
+  const separator = windows && path.includes("\\") ? "\\" : "/";
+  const directory =
+    separator === "\\" ? path.replace(/\\+$/, "") : path.replace(/\/+$/, "");
+  return `${directory}${separator}tool-output${separator}*`;
+}
+
 export function buildOpenCodePermissionRules(
   runtimeMode: RuntimeMode,
+  planning = false,
+  toolOutputGlob?: string,
 ): OpenCodePermissionRule[] {
+  const outputRules: OpenCodePermissionRule[] = toolOutputGlob
+    ? [
+        {
+          permission: "external_directory",
+          pattern: toolOutputGlob,
+          action: "allow",
+        },
+      ]
+    : [];
+  if (planning) {
+    return [
+      { permission: "*", pattern: "*", action: "deny" },
+      ...[
+        "read",
+        "grep",
+        "glob",
+        "list",
+        "websearch",
+        "codesearch",
+        "question",
+      ].map((permission): OpenCodePermissionRule => ({
+        permission,
+        pattern: "*",
+        action: "allow",
+      })),
+      ...outputRules,
+      { permission: "task", pattern: "explore", action: "allow" },
+    ];
+  }
   if (runtimeMode === "full-access") {
     return [{ permission: "*", pattern: "*", action: "allow" }];
   }
   const rules: OpenCodePermissionRule[] = [
     { permission: "*", pattern: "*", action: "ask" },
     { permission: "question", pattern: "*", action: "allow" },
+    ...outputRules,
   ];
   if (runtimeMode === "auto-accept-edits" || runtimeMode === "auto") {
     rules.push({ permission: "edit", pattern: "*", action: "allow" });
@@ -151,6 +248,252 @@ export function buildOpenCodePermissionRules(
     rules.push({ permission: "read", pattern: "*", action: "allow" });
   }
   return rules;
+}
+
+/** Effective agent rules expose custom permission keys that must also be overridden. */
+export function managedOpenCodeConfig(
+  agentListOutput: string,
+  runtimeMode: RuntimeMode,
+  planning: boolean,
+  toolOutputGlob?: string,
+): Record<string, unknown> {
+  const agents = new Map<string, Set<string>>();
+  const externalPatterns = new Map<string, Set<string>>();
+  const primaryAgents = new Set<string>();
+  let name: string | undefined;
+  let mode: string | undefined;
+  let lines: string[] = [];
+  const flush = () => {
+    if (!name) return;
+    let rules: unknown;
+    try {
+      rules = JSON.parse(lines.join("\n"));
+    } catch {
+      throw new Error(`Could not read OpenCode permissions for agent ${name}`);
+    }
+    if (!Array.isArray(rules))
+      throw new Error(`OpenCode did not expose permissions for agent ${name}`);
+    agents.set(
+      name,
+      new Set(
+        rules.flatMap((rule) => {
+          const permission = stringField(asRecord(rule), "permission");
+          return permission ? [permission] : [];
+        }),
+      ),
+    );
+    externalPatterns.set(
+      name,
+      new Set(
+        rules.flatMap((rule) => {
+          const record = asRecord(rule);
+          const pattern = stringField(record, "pattern");
+          return record?.permission === "external_directory" &&
+            pattern &&
+            pattern !== "*"
+            ? [pattern]
+            : [];
+        }),
+      ),
+    );
+    if (mode === "primary") primaryAgents.add(name);
+  };
+  for (const line of agentListOutput.split("\n")) {
+    const header = line.match(/^(.+)\s+\((primary|subagent|all)\)\s*$/);
+    if (header) {
+      flush();
+      name = header[1];
+      mode = header[2];
+      lines = [];
+    } else if (name) lines.push(line);
+  }
+  flush();
+  if (agents.size === 0)
+    throw new Error("OpenCode did not expose its agent permission rules");
+  const actionFor = (permission: string): "allow" | "ask" | "deny" => {
+    if (permission === "question") return "allow";
+    if (planning)
+      return [
+        "read",
+        "grep",
+        "glob",
+        "list",
+        "websearch",
+        "codesearch",
+      ].includes(permission)
+        ? "allow"
+        : "deny";
+    if (runtimeMode === "full-access") return "allow";
+    if (
+      permission === "edit" &&
+      ["auto", "auto-accept-edits"].includes(runtimeMode)
+    )
+      return "allow";
+    if (permission === "read" && runtimeMode === "auto") return "allow";
+    return "ask";
+  };
+  const permissions = (
+    keys: Iterable<string>,
+    patterns: Iterable<string>,
+    allowExploreTask = false,
+  ): Record<string, unknown> => {
+    const policy: Record<string, unknown> = Object.fromEntries(
+      [...keys].map((key) => [key, actionFor(key)]),
+    );
+    for (const rule of buildOpenCodePermissionRules(runtimeMode, planning)) {
+      if (rule.pattern === "*") policy[rule.permission] = rule.action;
+    }
+    // TaskTool uses the target agent's own rules for child sessions. A scalar
+    // deny replaces inherited scoped grants instead of leaving Explore enabled.
+    if (planning)
+      policy.task = allowExploreTask
+        ? { "*": "deny", explore: "allow" }
+        : "deny";
+    if (planning || runtimeMode !== "full-access") {
+      policy.external_directory = Object.fromEntries([
+        ["*", actionFor("external_directory")],
+        ...[...patterns].map((pattern) => [
+          pattern,
+          actionFor("external_directory"),
+        ]),
+        // Only the host's data directory can bypass the external-path baseline.
+        ...(toolOutputGlob ? [[toolOutputGlob, "allow"]] : []),
+      ]);
+    }
+    return policy;
+  };
+  return {
+    permission: permissions(
+      new Set([...agents.values()].flatMap((keys) => [...keys])),
+      new Set(
+        [...externalPatterns.values()].flatMap((patterns) => [...patterns]),
+      ),
+    ),
+    agent: Object.fromEntries(
+      [...agents].map(([agent, keys]) => [
+        agent,
+        {
+          permission: permissions(
+            keys,
+            externalPatterns.get(agent)!,
+            primaryAgents.has(agent) && agent !== "explore",
+          ),
+        },
+      ]),
+    ),
+    mode: Object.fromEntries(
+      [...primaryAgents].map((agent) => [
+        agent,
+        {
+          permission: permissions(
+            agents.get(agent)!,
+            externalPatterns.get(agent)!,
+            agent !== "explore",
+          ),
+        },
+      ]),
+    ),
+    ...(planning || runtimeMode !== "full-access"
+      ? { experimental: { primary_tools: [] } }
+      : {}),
+  };
+}
+
+export function verifyManagedOpenCodePolicy(
+  agentsValue: unknown,
+  configValue: unknown,
+  runtimeMode: RuntimeMode,
+  planning: boolean,
+  toolOutputGlob?: string,
+): void {
+  if (!planning && runtimeMode === "full-access") return;
+  const conflict = (): never => {
+    throw new Error(
+      "OpenCode configuration grants tools beyond the selected access mode. Remove conflicting agent permissions or experimental.primary_tools settings.",
+    );
+  };
+  if (!asRecord(configValue)) conflict();
+  const primaryTools = asRecord(
+    asRecord(configValue)?.experimental,
+  )?.primary_tools;
+  if (
+    primaryTools !== undefined &&
+    (!Array.isArray(primaryTools) || primaryTools.length > 0)
+  )
+    conflict();
+  if (!Array.isArray(agentsValue) || agentsValue.length === 0) conflict();
+  for (const value of agentsValue as unknown[]) {
+    const agent = asRecord(value);
+    const permissions = agent?.permission;
+    // TaskTool can select Explore by name even if config changes its mode.
+    const allowExploreTask =
+      agent?.mode === "primary" && agent?.name !== "explore";
+    if (!Array.isArray(permissions)) conflict();
+    const rules = (permissions as unknown[]).map(
+      (value): OpenCodePermissionRule => {
+        const rule = asRecord(value);
+        const permission = stringField(rule, "permission");
+        const pattern = stringField(rule, "pattern");
+        const action = stringField(rule, "action");
+        if (
+          !permission ||
+          !pattern ||
+          !["allow", "ask", "deny"].includes(action ?? "")
+        )
+          conflict();
+        return {
+          permission: permission!,
+          pattern: pattern!,
+          action: action as OpenCodePermissionRule["action"],
+        };
+      },
+    );
+    const baseline = rules.reduce(
+      (index, rule, current) =>
+        rule.permission === "*" && rule.pattern === "*" ? current : index,
+      -1,
+    );
+    if (
+      baseline < 0 ||
+      rules[baseline].action === "allow" ||
+      (planning && rules[baseline].action !== "deny")
+    )
+      conflict();
+    const later: OpenCodePermissionRule[] = [];
+    for (const rule of rules.slice(baseline + 1).reverse()) {
+      const covered = later.some(
+        (override) =>
+          (override.permission === "*" ||
+            override.permission === rule.permission) &&
+          (override.pattern === "*" || override.pattern === rule.pattern),
+      );
+      if (!covered && rule.action !== "deny") {
+        const allowed =
+          rule.permission === "question" ||
+          (rule.permission === "external_directory" &&
+            toolOutputGlob !== undefined &&
+            rule.pattern === toolOutputGlob) ||
+          (planning &&
+            ([
+              "read",
+              "grep",
+              "glob",
+              "list",
+              "websearch",
+              "codesearch",
+            ].includes(rule.permission) ||
+              (allowExploreTask &&
+                rule.permission === "task" &&
+                rule.pattern === "explore"))) ||
+          (!planning &&
+            ((rule.permission === "edit" &&
+              ["auto", "auto-accept-edits"].includes(runtimeMode)) ||
+              (rule.permission === "read" && runtimeMode === "auto")));
+        if (!allowed && (planning || rule.action === "allow")) conflict();
+      }
+      later.push(rule);
+    }
+  }
 }
 
 export function toOpenCodePermissionReply(
@@ -214,8 +557,10 @@ export function toOpenCodePromptParts(
 export function mergeOpenCodeAssistantText(
   previousText: string | undefined,
   nextText: string,
+  final = false,
 ): { latestText: string; deltaToEmit: string } {
   const latestText =
+    !final &&
     previousText &&
     previousText.length > nextText.length &&
     previousText.startsWith(nextText)
@@ -223,7 +568,9 @@ export function mergeOpenCodeAssistantText(
       : nextText;
   return {
     latestText,
-    deltaToEmit: latestText.slice(commonPrefixLength(previousText ?? "", latestText)),
+    deltaToEmit: latestText.slice(
+      commonPrefixLength(previousText ?? "", latestText),
+    ),
   };
 }
 
@@ -236,7 +583,11 @@ export function appendOpenCodeAssistantTextDelta(
 
 function commonPrefixLength(left: string, right: string): number {
   let index = 0;
-  while (index < left.length && index < right.length && left[index] === right[index]) {
+  while (
+    index < left.length &&
+    index < right.length &&
+    left[index] === right[index]
+  ) {
     index += 1;
   }
   return index;
@@ -312,14 +663,22 @@ export function sortOpenCodeVariants(values: string[]): string[] {
   });
 }
 
-export function inferDefaultAgent(agents: Array<{ name: string }>): string | undefined {
-  return agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name;
+export function inferDefaultAgent(
+  agents: Array<{ name: string }>,
+): string | undefined {
+  return (
+    agents.find((agent) => agent.name === "build")?.name ?? agents[0]?.name
+  );
 }
 
 export function toolKindFromName(toolName: string): string {
   const normalized = toolName.toLowerCase();
   if (isTaskListToolName(toolName)) return "tasks";
-  if (normalized.includes("bash") || normalized.includes("command") || normalized.includes("shell")) {
+  if (
+    normalized.includes("bash") ||
+    normalized.includes("command") ||
+    normalized.includes("shell")
+  ) {
     return "shell";
   }
   if (
@@ -335,7 +694,8 @@ export function toolKindFromName(toolName: string): string {
     normalized.includes("grep") ||
     normalized.includes("glob") ||
     normalized.includes("search") ||
-    normalized.includes("find")
+    normalized.includes("find") ||
+    normalized === "list"
   ) {
     return "search";
   }
@@ -350,7 +710,9 @@ export function toolKindFromName(toolName: string): string {
   return toolName;
 }
 
-export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined {
+export function previewFromToolPart(
+  part: OpenCodePart,
+): ToolPreview | undefined {
   const tool = part.tool ?? "tool";
   const state = part.state ?? {};
   const kind = toolKindFromName(tool);
@@ -375,7 +737,8 @@ export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined
 export function detailFromToolPart(part: OpenCodePart): string | undefined {
   const state = part.state ?? {};
   const status = typeof state.status === "string" ? state.status : "";
-  if (status === "completed" && typeof state.output === "string") return state.output;
+  if (status === "completed" && typeof state.output === "string")
+    return state.output;
   if (status === "error") {
     if (typeof state.error === "string") return state.error;
     const error = asRecord(state.error);
@@ -386,11 +749,15 @@ export function detailFromToolPart(part: OpenCodePart): string | undefined {
       stringField(asRecord(error?.error), "message")
     );
   }
-  if (status === "running" && typeof state.title === "string") return state.title;
+  if (status === "running" && typeof state.title === "string")
+    return state.title;
   return undefined;
 }
 
-export function permissionTitle(permission: string, patterns: string[]): string {
+export function permissionTitle(
+  permission: string,
+  patterns: string[],
+): string {
   const detail = patterns.length > 0 ? patterns.join("\n") : permission;
   switch (permission) {
     case "bash":
@@ -473,9 +840,7 @@ export function turnMetricsFromMessageInfo(
  * subagent runs as its own session, so this is what ties the child's stream
  * back to the row that started it.
  */
-export function openCodeChildSessionId(
-  part: OpenCodePart,
-): string | undefined {
+export function openCodeChildSessionId(part: OpenCodePart): string | undefined {
   const state = part.state ?? {};
   const metadata = asRecord(state.metadata);
   const input = asRecord(state.input);
@@ -491,7 +856,9 @@ export function openCodeChildSessionId(
   return undefined;
 }
 
-export function eventSessionId(event: Record<string, unknown>): string | undefined {
+export function eventSessionId(
+  event: Record<string, unknown>,
+): string | undefined {
   const properties = asRecord(event.properties);
   if (!properties) return undefined;
   const sessionID = stringField(properties, "sessionID");

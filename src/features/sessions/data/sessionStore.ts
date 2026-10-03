@@ -636,6 +636,8 @@ function sanitizeBlock(
     role: block.role,
     text: block.text,
   };
+  if ((block.role === "assistant" || block.role === "reasoning") && typeof block.providerPartId === "string" && isPersistableId(block.providerPartId))
+    next.providerPartId = block.providerPartId;
   if (block.attachments?.length) {
     next.attachments = block.attachments.map(persistableAttachment);
   }

@@ -16,15 +16,245 @@ import {
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
   isOpenCodeNotFound,
+  isSupportedOpenCodeVersion,
+  managedOpenCodeConfig,
+  verifyManagedOpenCodePolicy,
+  nextOpenCodeMessageId,
   mergeOpenCodeAssistantText,
   openCodeVariantLabel,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
+  parseOpenCodeToolOutputGlob,
   parseServerUrlFromOutput,
   sortOpenCodeVariants,
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
+
+describe("effective managed permissions", () => {
+  const rules = (permission: string, pattern: string, action: string) => ({
+    permission,
+    pattern,
+    action,
+  });
+  const verify = (
+    permission: unknown,
+    planning = false,
+    config: unknown = {},
+  ) =>
+    verifyManagedOpenCodePolicy(
+      [{ name: "custom", mode: "primary", permission }],
+      config,
+      "supervised",
+      planning,
+    );
+  it("rejects a higher-priority custom allow after the managed ask rule", () => {
+    expect(() =>
+      verify([rules("*", "*", "ask"), rules("mcp_write", "*", "allow")]),
+    ).toThrow("grants tools beyond");
+  });
+  it("accepts stricter rules that cover the whole earlier allow", () => {
+    expect(() =>
+      verify([
+        rules("*", "*", "ask"),
+        rules("mcp_write", "*", "allow"),
+        rules("mcp_write", "*", "deny"),
+      ]),
+    ).not.toThrow();
+  });
+  it("rejects narrow wildcard denies that do not cover an earlier broad allow", () => {
+    expect(() =>
+      verify([
+        rules("*", "*", "ask"),
+        rules("mcp_write", "foo*", "allow"),
+        rules("mcp_write", "foo?", "deny"),
+      ]),
+    ).toThrow("grants tools beyond");
+  });
+  it("allows only exact readonly Plan exceptions and the explore task", () => {
+    expect(() =>
+      verify(
+        [
+          rules("*", "*", "deny"),
+          rules("read", "*", "allow"),
+          rules("task", "explore", "allow"),
+        ],
+        true,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      verify(
+        [rules("*", "*", "deny"), rules("task", "explore*", "allow")],
+        true,
+      ),
+    ).toThrow("grants tools beyond");
+    expect(() =>
+      verify(
+        [rules("*", "*", "deny"), rules("search_and_delete", "*", "allow")],
+        true,
+      ),
+    ).toThrow("grants tools beyond");
+  });
+  it("requires a safe broad baseline and the ordered rule array", () => {
+    expect(() => verify([rules("read", "*", "deny")])).toThrow(
+      "grants tools beyond",
+    );
+    expect(() => verify({ "*": "ask" })).toThrow("grants tools beyond");
+    expect(() => verify([rules("*", "*", "ask")], true)).toThrow(
+      "grants tools beyond",
+    );
+  });
+  it.each([
+    ["build", "primary", true],
+    ["plan", "primary", true],
+    ["custom", "primary", true],
+    ["general", "subagent", false],
+    ["explore", "subagent", false],
+    ["custom", "all", false],
+    ["custom", undefined, false],
+    ["explore", "primary", false],
+  ] as const)(
+    "allows a Plan Explore grant for %s in mode %s only when safe",
+    (name, mode, allowed) => {
+      const check = () =>
+        verifyManagedOpenCodePolicy(
+          [
+            {
+              name,
+              mode,
+              permission: [
+                rules("*", "*", "deny"),
+                rules("task", "explore", "allow"),
+              ],
+            },
+          ],
+          {},
+          "full-access",
+          true,
+        );
+      if (allowed) expect(check).not.toThrow();
+      else expect(check).toThrow("grants tools beyond");
+    },
+  );
+  it("accepts a later deny that removes a subagent's Explore grant", () => {
+    expect(() =>
+      verifyManagedOpenCodePolicy(
+        [
+          {
+            name: "explore",
+            mode: "subagent",
+            permission: [
+              rules("*", "*", "deny"),
+              rules("task", "explore", "allow"),
+              rules("task", "*", "deny"),
+            ],
+          },
+        ],
+        {},
+        "full-access",
+        true,
+      ),
+    ).not.toThrow();
+  });
+  it("allows only the exact host-probed tool-output directory", () => {
+    const output = "/isolated/data/opencode/tool-output/*";
+    const check = (pattern: string) =>
+      verifyManagedOpenCodePolicy(
+        [
+          {
+            name: "build",
+            permission: [
+              rules("*", "*", "deny"),
+              rules("external_directory", pattern, "allow"),
+            ],
+          },
+        ],
+        {},
+        "supervised",
+        true,
+        output,
+      );
+    expect(() => check(output)).not.toThrow();
+    expect(() => check("/isolated/data/opencode/*")).toThrow(
+      "grants tools beyond",
+    );
+    expect(() => check("/other/opencode/tool-output/*")).toThrow(
+      "grants tools beyond",
+    );
+    expect(
+      buildOpenCodePermissionRules("supervised", true, output),
+    ).toContainEqual(rules("external_directory", output, "allow"));
+  });
+  it("rejects a restored child-tool grant and skips restrictions in full access", () => {
+    expect(() =>
+      verify([rules("*", "*", "ask")], false, {
+        experimental: { primary_tools: ["bash"] },
+      }),
+    ).toThrow("grants tools beyond");
+    expect(() =>
+      verifyManagedOpenCodePolicy([], {}, "full-access", false),
+    ).not.toThrow();
+  });
+  it("patches legacy mode only for agents observed as primary", () => {
+    const config = managedOpenCodeConfig(
+      "build (primary)\n[]\ngeneral (subagent)\n[]\nexplore (subagent)\n[]",
+      "supervised",
+      false,
+    );
+    expect(Object.keys(config.mode as Record<string, unknown>)).toEqual([
+      "build",
+    ]);
+    expect(Object.keys(config.agent as Record<string, unknown>)).toEqual([
+      "build",
+      "general",
+      "explore",
+    ]);
+  });
+});
+
+it("generates ordered message IDs with the provider timestamp encoding", () => {
+  const timestamp = 1791034039388;
+  const first = nextOpenCodeMessageId(timestamp);
+  const second = nextOpenCodeMessageId(timestamp);
+  expect(first).toMatch(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+  expect(first.slice(4, 16)).toBe(
+    ((BigInt(timestamp) * 4096n + 1n) & 0xffffffffffffn)
+      .toString(16)
+      .padStart(12, "0"),
+  );
+  expect(first < second).toBe(true);
+});
+
+describe("owned OpenCode tool-output directory", () => {
+  it.each([
+    [
+      "data       /isolated/data/opencode",
+      "/isolated/data/opencode/tool-output/*",
+    ],
+    [
+      "data       C:\\Users\\fixture\\opencode",
+      "C:\\Users\\fixture\\opencode\\tool-output\\*",
+    ],
+    [
+      "data       \\\\server\\share\\opencode",
+      "\\\\server\\share\\opencode\\tool-output\\*",
+    ],
+  ])("derives the exact output glob from %s", (output, expected) => {
+    expect(parseOpenCodeToolOutputGlob(output)).toBe(expected);
+  });
+  it.each([
+    "cache      /cache",
+    "data       relative/opencode",
+    "data       /safe/../other",
+    "data       /safe/*/opencode",
+    "data       /safe/opencode?",
+    "data       /one\ndata       /two",
+  ])("rejects an ambiguous data directory %s", (output) => {
+    expect(() => parseOpenCodeToolOutputGlob(output)).toThrow(
+      "safe data directory",
+    );
+  });
+});
 
 describe("eventSessionId", () => {
   it.each([
@@ -196,7 +426,9 @@ describe("OpenCode CLI inventory parsers", () => {
       ].join("\n"),
     );
     const [model] = flattenOpenCodeModels(parsed, []);
-    const variant = model?.settings?.find((setting) => setting.id === "variant");
+    const variant = model?.settings?.find(
+      (setting) => setting.id === "variant",
+    );
     expect(variant?.options.map((option) => option.value)).toEqual([
       "minimal",
       "low",
@@ -279,13 +511,9 @@ describe("OpenCode helpers", () => {
   });
 
   it("sorts variants from lowest to highest effort", () => {
-    expect(sortOpenCodeVariants(["high", "minimal", "xhigh", "low", "medium"])).toEqual([
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-    ]);
+    expect(
+      sortOpenCodeVariants(["high", "minimal", "xhigh", "low", "medium"]),
+    ).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
   });
 });
 
@@ -369,5 +597,154 @@ describe("flattenOpenCodeModels context window", () => {
       [],
     );
     expect(models[0]?.contextWindow).toBe(200_000);
+  });
+});
+
+describe("managed OpenCode permissions", () => {
+  const agents = `build (primary)\n[{"permission":"bash","pattern":"*","action":"allow"}]\ncustom (subagent)\n[{"permission":"mcp_write","pattern":"*","action":"allow"},{"permission":"read","pattern":"*.env","action":"allow"}]`;
+
+  it("overrides custom subagent permissions before the server starts", () => {
+    const config = managedOpenCodeConfig(agents, "supervised", false);
+    expect(config).toMatchObject({
+      permission: { "*": "ask", bash: "ask", mcp_write: "ask", read: "ask" },
+      agent: {
+        custom: { permission: { "*": "ask", mcp_write: "ask", read: "ask" } },
+      },
+      experimental: { primary_tools: [] },
+    });
+  });
+
+  it.each([
+    ["full-access", true, "deny"],
+    ["supervised", false, "ask"],
+  ] as const)(
+    "preserves only the trusted output-directory grant for %s with Plan %s",
+    (mode, planning, baseline) => {
+      const pattern = "/isolated/data/opencode/tool-output/*";
+      const output = `build (primary)\n${JSON.stringify([
+        { permission: "external_directory", pattern, action: "allow" },
+      ])}\ngeneral (subagent)\n${JSON.stringify([
+        { permission: "external_directory", pattern, action: "allow" },
+      ])}`;
+      const trusted = "/host/data/opencode/tool-output/*";
+      const config = managedOpenCodeConfig(output, mode, planning, trusted);
+      const permission = {
+        external_directory: {
+          "*": baseline,
+          [pattern]: baseline,
+          [trusted]: "allow",
+        },
+      };
+      expect(config).toMatchObject({
+        permission,
+        agent: { build: { permission }, general: { permission } },
+        mode: { build: { permission } },
+      });
+    },
+  );
+
+  it.each(["full-access", "auto", "auto-accept-edits"] as const)(
+    "preserves Plan restrictions under %s",
+    (mode) => {
+      const rules = buildOpenCodePermissionRules(mode, true);
+      expect(rules[0]).toEqual({
+        permission: "*",
+        pattern: "*",
+        action: "deny",
+      });
+      expect(rules).not.toContainEqual({
+        permission: "edit",
+        pattern: "*",
+        action: "allow",
+      });
+      expect(managedOpenCodeConfig(agents, mode, true)).toMatchObject({
+        permission: {
+          "*": "deny",
+          bash: "deny",
+          task: "deny",
+        },
+        agent: {
+          build: { permission: { task: { "*": "deny", explore: "allow" } } },
+          custom: {
+            permission: { task: "deny", mcp_write: "deny", read: "allow" },
+          },
+        },
+      });
+    },
+  );
+
+  it("grants Plan Explore tasks only to primary agents that cannot be the Explore child", () => {
+    const config = managedOpenCodeConfig(
+      "build (primary)\n[]\nplan (primary)\n[]\ngeneral (subagent)\n[]\nexplore (primary)\n[]\ncustom (all)\n[]",
+      "full-access",
+      true,
+    );
+    const taskAllowed = { task: { "*": "deny", explore: "allow" } };
+    const taskDenied = { task: "deny" };
+    expect(config).toMatchObject({
+      permission: taskDenied,
+      agent: {
+        build: { permission: taskAllowed },
+        plan: { permission: taskAllowed },
+        general: { permission: taskDenied },
+        explore: { permission: taskDenied },
+        custom: { permission: taskDenied },
+      },
+      mode: {
+        build: { permission: taskAllowed },
+        plan: { permission: taskAllowed },
+        explore: { permission: taskDenied },
+      },
+    });
+    expect(config.mode).not.toHaveProperty("general");
+    expect(config.mode).not.toHaveProperty("custom");
+    expect(buildOpenCodePermissionRules("full-access", true)).toContainEqual({
+      permission: "task",
+      pattern: "explore",
+      action: "allow",
+    });
+  });
+
+  it("fails closed when the CLI omits effective agent permissions", () => {
+    expect(() =>
+      managedOpenCodeConfig("custom (subagent)\nnot JSON", "supervised", false),
+    ).toThrow("Could not read OpenCode permissions");
+    expect(() => managedOpenCodeConfig("", "supervised", false)).toThrow(
+      "did not expose",
+    );
+  });
+
+  it("denies custom mutating permissions whose names contain read or search", () => {
+    const config = managedOpenCodeConfig(
+      'custom (primary)\n[{"permission":"spreadsheet_delete","pattern":"*","action":"allow"},{"permission":"search_and_delete","pattern":"*","action":"allow"}]',
+      "full-access",
+      true,
+    );
+    expect(config).toMatchObject({
+      agent: {
+        custom: {
+          permission: { spreadsheet_delete: "deny", search_and_delete: "deny" },
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["1.14.18", false],
+    ["1.14.19", true],
+    ["1.15.0", true],
+    ["2.0.20", false],
+  ])("checks the v1 API version %s", (version, supported) => {
+    expect(isSupportedOpenCodeVersion(version as string)).toBe(supported);
+  });
+
+  it("accepts final text corrections and shortening", () => {
+    expect(
+      mergeOpenCodeAssistantText("Hello worle", "Hello world", true).latestText,
+    ).toBe("Hello world");
+    expect(
+      mergeOpenCodeAssistantText("Hello world", "Hello", true).latestText,
+    ).toBe("Hello");
+    expect(mergeOpenCodeAssistantText("Hello", "", true).latestText).toBe("");
   });
 });

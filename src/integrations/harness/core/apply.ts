@@ -58,6 +58,23 @@ export function applyHarnessEvent(
   switch (event.type) {
     case "message.delta":
       return patchStreaming(session, "assistant", event.text, true);
+    case "message.part": {
+      const role = event.reasoning ? "reasoning" : "assistant";
+      const index = session.blocks.findIndex((block) =>
+        block.providerPartId === event.partId && block.role === role);
+      if (index < 0) {
+        if (!event.text) return session;
+        return appendBlock(session, {
+          id: crypto.randomUUID(), role, text: event.text,
+          providerPartId: event.partId, streaming: event.streaming,
+        });
+      }
+      const block = session.blocks[index];
+      if (block.text === event.text && block.streaming === event.streaming) return session;
+      const blocks = session.blocks.slice();
+      blocks[index] = { ...block, text: event.text, streaming: event.streaming };
+      return { ...session, blocks };
+    }
     case "message.completed":
       return finishRole(session, "assistant");
     case "image.generated":

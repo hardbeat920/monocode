@@ -1,17 +1,19 @@
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
+  projectHarnessModels,
+  setProjectHarnessModels,
   type AgentModel,
   type ModelSetting,
   type ModelSettingChoice,
 } from "../../../../features/sessions/model/models";
 import { execChild, resolveOpenCodeBinary } from "../../core/child";
 import {
-  compareSemver,
+  isSupportedOpenCodeVersion,
   inferDefaultAgent,
   inferDefaultVariant,
   KNOWN_HIDDEN_AGENTS,
-  MINIMUM_OPENCODE_VERSION,
+  unsupportedOpenCodeVersionMessage,
   openCodeVariantLabel,
   parseOpenCodeVersion,
   sortOpenCodeVariants,
@@ -65,6 +67,28 @@ export function refreshOpenCodeCatalog(): Promise<void> {
   return inflight;
 }
 
+const projectInflight = new Map<string, Promise<void>>();
+
+export function projectOpenCodeModels(cwd: string): AgentModel[] | undefined {
+  return projectHarnessModels("opencode", cwd);
+}
+
+/** Project lists stay separate from the home catalog and other projects. */
+export function refreshProjectOpenCodeCatalog(cwd: string): Promise<void> {
+  const running = projectInflight.get(cwd);
+  if (running) return running;
+  const refresh = discoverOpenCodeModels(cwd)
+    .then((models) => {
+      setProjectHarnessModels("opencode", cwd, models);
+    })
+    .catch((error: unknown) =>
+      console.debug("[monocode] opencode project catalog", error),
+    )
+    .finally(() => projectInflight.delete(cwd));
+  projectInflight.set(cwd, refresh);
+  return refresh;
+}
+
 export async function discoverOpenCodeModels(
   workingDirectory?: string,
 ): Promise<AgentModel[]> {
@@ -73,14 +97,10 @@ export async function discoverOpenCodeModels(
   const versionOut = await execChild(path, ["--version"], cwd, "opencode");
   const version = parseOpenCodeVersion(versionOut);
   if (!version) {
-    throw new Error(
-      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
+    throw new Error(unsupportedOpenCodeVersionMessage());
   }
-  if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-    throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
-    );
+  if (!isSupportedOpenCodeVersion(version)) {
+    throw new Error(unsupportedOpenCodeVersionMessage(version));
   }
 
   const modelsOut = await execChild(

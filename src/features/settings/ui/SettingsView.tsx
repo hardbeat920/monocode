@@ -2740,6 +2740,7 @@ function binaryInspectionError(
   if (provider === "opencode") {
     const version = parseOpenCodeVersion(inspection.version ?? "");
     if (!version) return "OpenCode CLI returned an invalid version.";
+    if (!version.startsWith("1.")) return `OpenCode v${version} is not supported. Use OpenCode v1.${MINIMUM_OPENCODE_VERSION.slice(2)} or a newer v1 release.`;
     if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
       return `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`;
     }
