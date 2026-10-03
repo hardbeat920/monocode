@@ -1,4 +1,5 @@
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
+import "./SessionTitleRename.css";
 import {
   type WorktreeFocus,
   inWorktreeFocus,
@@ -2950,6 +2951,52 @@ function FolderRenameRow({
 
 const SESSION_PREFETCH_DELAY_MS = 120;
 
+type IntlSegmenterCtor = new (
+  locale?: string,
+  options?: { granularity?: "grapheme" | "word" | "sentence" },
+) => { segment(input: string): Iterable<{ segment: string }> };
+
+/** Splits by visible character, not UTF-16 code point, so a joined emoji or a
+ * letter with a combining mark reveals (and animates) as one character. */
+function splitGraphemes(text: string): string[] {
+  const segmenterCtor = (Intl as typeof Intl & { Segmenter?: IntlSegmenterCtor })
+    .Segmenter;
+  if (typeof segmenterCtor === "function") {
+    const segmenter = new segmenterCtor(undefined, { granularity: "grapheme" });
+    return [...segmenter.segment(text)].map((entry) => entry.segment);
+  }
+  return [...text];
+}
+
+function RevealedTitle({ text }: { text: string }) {
+  const chars = splitGraphemes(text);
+  const lastIndex = Math.max(chars.length - 1, 1);
+  return (
+    <>
+      <span aria-hidden="true">
+        {chars.map((char, index) => {
+          const distance = index / lastIndex;
+          return (
+            <span
+              // Index is stable here: this list is only ever rendered once,
+              // for the duration of one reveal, from one fixed string.
+              // eslint-disable-next-line react/no-array-index-key
+              key={index}
+              className="session-title-char"
+              style={{ "--char-distance": distance } as React.CSSProperties}
+            >
+              {char}
+            </span>
+          );
+        })}
+      </span>
+      {/* The real text, for selection/copy/screen readers; the animated
+          characters above are decorative and hidden from assistive tech. */}
+      <span className="sr-only">{text}</span>
+    </>
+  );
+}
+
 const SessionCard = memo(function SessionCard({
   session,
   isActive,
@@ -3014,6 +3061,20 @@ const SessionCard = memo(function SessionCard({
     orchestration?.tasks.filter((task) => task.status === "completed").length ??
     0;
   const title = sessionDisplayTitle(session.title, session.harness);
+  const previousTitleRef = useRef(title);
+  const [justRenamed, setJustRenamed] = useState(false);
+  const [revealGeneration, setRevealGeneration] = useState(0);
+  useEffect(() => {
+    if (previousTitleRef.current === title) return;
+    previousTitleRef.current = title;
+    setJustRenamed(true);
+    setRevealGeneration((generation) => generation + 1);
+    // Longest of the char-emerge (up to 640ms) and ripple (760ms) animations,
+    // plus a little slack. Time-based (not animationend) so it also clears
+    // the reveal when prefers-reduced-motion skips the animations outright.
+    const timeout = window.setTimeout(() => setJustRenamed(false), 1000);
+    return () => window.clearTimeout(timeout);
+  }, [title]);
   const gitLabel = session.worktreeRemoved
     ? NO_BRANCH_LABEL
     : formatGitLabel(session.repo, session.branch);
@@ -3354,8 +3415,13 @@ const SessionCard = memo(function SessionCard({
                 strokeWidth={1.75}
               />
             ) : null}
-            <span className="min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-              {title}
+            <span
+              key={justRenamed ? revealGeneration : "settled"}
+              className={`min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content${
+                justRenamed ? " session-title-renamed" : ""
+              }`}
+            >
+              {justRenamed ? <RevealedTitle text={title} /> : title}
             </span>
             {compact && !orchestrationExpanded ? (
               <span className="flex shrink-0 items-center gap-1.5">

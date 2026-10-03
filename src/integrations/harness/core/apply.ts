@@ -8,6 +8,7 @@ import type {
   ToolPreview,
 } from "../../../features/sessions/model/session";
 import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import { formatSessionTitle } from "../../../features/sessions/model/session";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -160,6 +161,13 @@ export function applyHarnessEvent(
       });
     case "session.providerBound":
       return { ...session, providerSessionId: event.providerSessionId };
+    case "session.renamed":
+      return event.title.trim()
+        ? {
+            ...session,
+            title: formatSessionTitle(session.harness, event.title),
+          }
+        : session;
     case "turn.started": {
       const index = lastMatchingBlock(
         session.blocks,

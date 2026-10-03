@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   newSession,
+  sessionDisplayTitle,
   type Session,
 } from "../../../features/sessions/model/session";
 import { planTurnKey } from "../../../features/sessions/model/plan";
@@ -23,6 +24,74 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("session.renamed", () => {
+  it("applies the CLI's own rename to the session title, formatted like every other title", () => {
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "session.renamed",
+      title: "new_name",
+    });
+    expect(session.title).toBe("claude · new_name");
+  });
+
+  it("trims the title and ignores a blank rename", () => {
+    const original = newSession("claude", "/tmp");
+    let session = applyHarnessEvent(original, {
+      type: "session.renamed",
+      title: "  padded  ",
+    });
+    expect(session.title).toBe("claude · padded");
+
+    session = applyHarnessEvent(session, {
+      type: "session.renamed",
+      title: "   ",
+    });
+    expect(session.title).toBe("claude · padded");
+  });
+
+  it("does not collide with the untitled-session placeholder when renamed to the harness's own name", () => {
+    // formatSessionTitle/sessionDisplayTitle treat a title that's exactly
+    // the harness label or title as "no real title yet" and show "New
+    // session" for it. A raw, unformatted rename to "claude" or "Claude
+    // Code" would hit that placeholder check by coincidence; the "claude · "
+    // prefix is what keeps a real rename out of it.
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "session.renamed",
+      title: "claude",
+    });
+    expect(session.title).toBe("claude · claude");
+    expect(sessionDisplayTitle(session.title, session.harness)).toBe("claude");
+
+    session = applyHarnessEvent(session, {
+      type: "session.renamed",
+      title: "Claude Code",
+    });
+    expect(session.title).toBe("claude · Claude Code");
+    expect(sessionDisplayTitle(session.title, session.harness)).toBe(
+      "Claude Code",
+    );
+  });
+
+  it("re-prefixes a title that already reads like one, rather than treating it as already formatted", () => {
+    // formatSessionTitle doesn't check whether its input is already
+    // prefixed — a rename whose own text happens to start with "claude · "
+    // (an unusual but not impossible name to type) gets prefixed again.
+    // sessionDisplayTitle only strips one layer, so the inner prefix stays
+    // visible. Documented here as the function's actual behavior, not
+    // something this event handler adds on top.
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "session.renamed",
+      title: "claude · already prefixed",
+    });
+    expect(session.title).toBe("claude · claude · already prefixed");
+    expect(sessionDisplayTitle(session.title, session.harness)).toBe(
+      "claude · already prefixed",
+    );
+  });
 });
 
 describe("background work", () => {

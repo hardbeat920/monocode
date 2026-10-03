@@ -16,6 +16,8 @@ export type HarnessEvent =
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "turn.started"; providerTurnId: string }
+  /** The CLI renamed its own conversation (e.g. `/rename`), not MonoCode. */
+  | { type: "session.renamed"; title: string }
   | {
       type: "session.configChanged";
       model?: string;

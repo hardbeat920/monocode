@@ -102,6 +102,7 @@ import {
   hasNativeCommands,
   isNativeCommandPrompt,
   replaceSlashToken,
+  skillMatchesByNameOrInvocation,
   skillTextParts,
   slashTokenAt,
   type Skill,
@@ -643,6 +644,7 @@ export function Composer({
   const [draftSelected, setDraftSelected] = useState(false);
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [skillActive, setSkillActive] = useState(0);
+  const [skillNavigated, setSkillNavigated] = useState(false);
   const [creatingSkill, setCreatingSkill] = useState(false);
   const [sessionFolderOpen, setSessionFolderOpen] = useState(false);
   const [sessionFolders, setSessionFolders] = useState<SessionFolder[]>([]);
@@ -943,6 +945,7 @@ export function Composer({
 
   useEffect(() => {
     setSkillActive(0);
+    setSkillNavigated(false);
   }, [slash?.query, cwd]);
 
   useEffect(() => {
@@ -1793,6 +1796,7 @@ export function Composer({
         e.preventDefault();
         if (rankedSkills.length === 0) return;
         setSkillActive((index) => (index + 1) % rankedSkills.length);
+        setSkillNavigated(true);
         return;
       }
       if (e.key === "ArrowUp") {
@@ -1801,6 +1805,7 @@ export function Composer({
         setSkillActive(
           (index) => (index - 1 + rankedSkills.length) % rankedSkills.length,
         );
+        setSkillNavigated(true);
         return;
       }
       if (e.key === "Escape") {
@@ -1816,7 +1821,16 @@ export function Composer({
       }
       if (e.key === "Enter" && !e.shiftKey) {
         const skill = rankedSkills[skillActive];
-        if (skill) {
+        // A description-only fuzzy hit (e.g. "rename" is a valid subsequence
+        // of create-skill's description) should not silently swallow a
+        // literal command the user is clearly typing to send as-is — only
+        // auto-pick on Enter when the match is strong (name/invocation), or
+        // when the user explicitly arrowed to this item themselves: that's
+        // a deliberate choice and should always commit, weak match or not.
+        if (
+          skill &&
+          (skillNavigated || skillMatchesByNameOrInvocation(skill, slash.query))
+        ) {
           e.preventDefault();
           pickSkill(skill);
           return;

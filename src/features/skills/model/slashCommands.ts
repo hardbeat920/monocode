@@ -53,6 +53,30 @@ export function rankSkills(
   return scored.slice(0, limit).map((row) => row.skill);
 }
 
+/**
+ * True when `skill` matches `query` by name or invocation, not only by a
+ * word buried somewhere in its description. `rankSkills` ranks description
+ * hits too (for browsing/discovery), but Enter should only auto-pick a
+ * command the user is clearly typing toward: a short query can coincidentally
+ * be a valid subsequence of an unrelated skill's long description (e.g.
+ * "rename" inside "...the useR wants to authoR, writE, savE..."), which
+ * would otherwise silently swallow a literal command the user meant to send
+ * as a chat message.
+ */
+export function skillMatchesByNameOrInvocation(
+  skill: Skill,
+  query: string,
+): boolean {
+  const needle = query.trim();
+  if (!needle) return false;
+  if (fuzzyMatch(needle, skill.name)) return true;
+  const invocationText = [
+    skill.invocation,
+    ...(skill.kind === "native" ? (skill.aliases ?? []) : []),
+  ].join(" ");
+  return !!fuzzyMatch(needle, invocationText);
+}
+
 function scopeRank(skill: Skill): number {
   if (skill.kind === "builtin") return 0;
   if (skill.kind === "native" || skill.scope === "project") return 1;

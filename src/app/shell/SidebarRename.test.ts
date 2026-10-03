@@ -1877,3 +1877,122 @@ it("labels preserved sessions as having no branch selected", () => {
   expect(card().textContent).not.toContain("No branch selected");
   expect(card().textContent).toContain("project/main");
 });
+
+describe("session title rename reveal", () => {
+  function titleEl(): HTMLElement {
+    return card().querySelector(".line-clamp-1")!;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it("reveals the new title character by character left to right, then settles to plain text", () => {
+    act(render);
+    expect(titleEl().className).not.toContain("session-title-renamed");
+
+    const next = "A whole new title";
+    props.sessions = [
+      { ...props.sessions[0], title: formatSessionTitle("codex", next) },
+    ];
+    act(render);
+    expect(titleEl().className).toContain("session-title-renamed");
+
+    const chars = titleEl().querySelectorAll(".session-title-char");
+    expect(chars).toHaveLength(next.length);
+    expect([...chars].map((el) => el.textContent).join("")).toBe(next);
+    // The first character starts its animation immediately (no delay); each
+    // one after it is delayed a little further, ending with the last
+    // character — the reveal sweeps left to right.
+    const first = chars[0] as HTMLElement;
+    const last = chars[chars.length - 1] as HTMLElement;
+    expect(first.style.getPropertyValue("--char-distance")).toBe("0");
+    expect(Number(last.style.getPropertyValue("--char-distance"))).toBe(1);
+    const distances = [...chars].map((el) =>
+      Number((el as HTMLElement).style.getPropertyValue("--char-distance")),
+    );
+    expect(distances).toEqual([...distances].sort((a, b) => a - b));
+    // Hidden from assistive tech per-character; the real string is exposed
+    // once, separately, for screen readers and for copy/selection.
+    expect(titleEl().querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(titleEl().querySelector(".sr-only")?.textContent).toBe(next);
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(titleEl().className).not.toContain("session-title-renamed");
+    expect(titleEl().querySelectorAll(".session-title-char")).toHaveLength(0);
+    expect(titleEl().textContent).toBe(next);
+  });
+
+  it("replays the reveal on a second, successive rename", () => {
+    act(render);
+
+    const first = "A whole new title";
+    props.sessions = [
+      { ...props.sessions[0], title: formatSessionTitle("codex", first) },
+    ];
+    act(render);
+    // Advance partway through the reveal — enough to observe the animating
+    // characters, but before the 1000ms clear timeout settles them back to
+    // plain text, so the second rename below still has something to replace.
+    act(() => vi.advanceTimersByTime(500));
+    const firstTitleEl = titleEl();
+    const firstCharEl = titleEl().querySelectorAll(".session-title-char")[0];
+    expect(firstCharEl.textContent).toBe("A");
+
+    // Same length as `first`, so the per-character spans share every index
+    // with the previous reveal — the exact case a plain index `key` would
+    // have reused rather than remounted, leaving the second reveal's
+    // animation never actually applied.
+    const second = "B whole new title";
+    props.sessions = [
+      { ...props.sessions[0], title: formatSessionTitle("codex", second) },
+    ];
+    act(render);
+    expect(titleEl().className).toContain("session-title-renamed");
+    // The element hosting the ripple (::after on this same span) must
+    // itself be a fresh node too, not just its character children — a
+    // CSS animation only replays on an element that was actually
+    // (re)mounted, and this span is what the ripple lives on.
+    expect(titleEl()).not.toBe(firstTitleEl);
+    const secondCharEl = titleEl().querySelectorAll(".session-title-char")[0];
+    expect(secondCharEl.textContent).toBe("B");
+    // A genuinely new element, not the same node with its text swapped —
+    // only a fresh mount makes the browser replay the CSS animation.
+    expect(secondCharEl).not.toBe(firstCharEl);
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(titleEl().className).not.toContain("session-title-renamed");
+    expect(titleEl().querySelectorAll(".session-title-char")).toHaveLength(0);
+    expect(titleEl().textContent).toBe(second);
+  });
+
+  it("does not reveal on mount or on an unrelated re-render", () => {
+    act(render);
+    expect(titleEl().className).not.toContain("session-title-renamed");
+
+    // Same title, different unrelated field — re-renders the card without
+    // the title itself changing.
+    props.sessions = [{ ...props.sessions[0], updatedAt: Date.now() + 1 }];
+    act(render);
+    expect(titleEl().className).not.toContain("session-title-renamed");
+  });
+
+  it("reveals a joined emoji as one character, not split across code points", () => {
+    act(render);
+
+    // A family emoji ("\u{1F469}‍\u{1F467}") is several UTF-16 code
+    // points joined by zero-width joiners — `[...text]` would split it into
+    // multiple spans, each animating (and rendering) independently.
+    const next = "\u{1F469}‍\u{1F467} Family trip";
+    props.sessions = [
+      { ...props.sessions[0], title: formatSessionTitle("codex", next) },
+    ];
+    act(render);
+
+    const chars = titleEl().querySelectorAll(".session-title-char");
+    expect([...chars].map((el) => el.textContent)[0]).toBe(
+      "\u{1F469}‍\u{1F467}",
+    );
+    expect([...chars].map((el) => el.textContent).join("")).toBe(next);
+  });
+});
