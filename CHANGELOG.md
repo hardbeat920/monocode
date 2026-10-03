@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sessions.wait` in the `/operator` app CLI waits up to 25 seconds for the turn `sessions.send` submitted to finish and returns its reply, so an agent can hold a conversation with another session, including one on a different provider, without polling `sessions.read`. `sessions.send` and `sessions.start` now return the `requestId` that identifies the submitted turn. In #610.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

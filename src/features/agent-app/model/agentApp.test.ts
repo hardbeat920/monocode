@@ -141,7 +141,11 @@ describe("agent app commands", () => {
         { sessionId: "other", prompt: "Continue the review" },
         host,
       ),
-    ).toMatchObject({ sessionId: "other", submitted: true });
+    ).toMatchObject({
+      sessionId: "other",
+      submitted: true,
+      requestId: "send-1",
+    });
     expect(host.send).toHaveBeenCalledWith(
       "other",
       "Continue the review",
@@ -166,6 +170,268 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the turn a send submitted and returns its reply", async () => {
+    vi.useFakeTimers();
+    try {
+      const { source, host } = fixture();
+      const other = { ...newSession("codex", source.cwd), id: "other" };
+      other.blocks = [
+        { id: "u1", role: "user", text: "Earlier question" },
+        { id: "a1", role: "assistant", text: "Earlier answer" },
+      ];
+      host.session = vi.fn(async (id) => (id === "other" ? other : null));
+      const waiting = handleAgentApp(
+        source,
+        "wait-1",
+        "sessions.wait",
+        { sessionId: "other", sentRequestId: "send-1", timeoutSeconds: 5 },
+        host,
+      );
+      await vi.advanceTimersByTimeAsync(600);
+      other.busy = true;
+      other.blocks = [
+        ...other.blocks,
+        {
+          id: "u2",
+          role: "user",
+          text: "What are you doing?",
+          startedAt: 2,
+          appRequestId: "app-lead-send-1",
+        },
+      ];
+      await vi.advanceTimersByTimeAsync(600);
+      other.busy = false;
+      other.blocks = [
+        ...other.blocks,
+        { id: "a2", role: "assistant", text: "Waiting for a task." },
+      ];
+      await vi.advanceTimersByTimeAsync(600);
+      expect(await waiting).toMatchObject({
+        sessionId: "other",
+        settled: true,
+        busy: false,
+        turn: {
+          turnId: "u2",
+          user: { text: "What are you doing?" },
+          assistant: { text: "Waiting for a task." },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a sent turn once a later queued turn keeps the session busy", async () => {
+    const { source, host } = fixture();
+    const other = {
+      ...newSession("codex", source.cwd),
+      id: "other",
+      busy: true,
+    };
+    other.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "First question",
+        startedAt: 1,
+        appRequestId: "app-lead-send-1",
+      },
+      { id: "a1", role: "assistant", text: "First answer" },
+      { id: "u2", role: "user", text: "Queued follow-up", startedAt: 2 },
+    ];
+    host.session = vi.fn(async (id) => (id === "other" ? other : null));
+    expect(
+      await handleAgentApp(
+        source,
+        "wait-queued",
+        "sessions.wait",
+        { sessionId: "other", sentRequestId: "send-1", timeoutSeconds: 1 },
+        host,
+      ),
+    ).toMatchObject({
+      settled: true,
+      busy: true,
+      turn: { turnId: "u1", assistant: { text: "First answer" } },
+    });
+  });
+
+  it("settles a sent turn once a later internal turn keeps the session busy", async () => {
+    const { source, host } = fixture();
+    const other = {
+      ...newSession("codex", source.cwd),
+      id: "other",
+      busy: true,
+    };
+    other.blocks = [
+      {
+        id: "u1",
+        role: "user",
+        text: "First question",
+        startedAt: 1,
+        appRequestId: "app-lead-send-1",
+      },
+      { id: "a1", role: "assistant", text: "First answer" },
+      {
+        id: "u2",
+        role: "user",
+        text: "Background check",
+        startedAt: 2,
+        internal: true,
+      },
+    ];
+    host.session = vi.fn(async (id) => (id === "other" ? other : null));
+    expect(
+      await handleAgentApp(
+        source,
+        "wait-internal",
+        "sessions.wait",
+        { sessionId: "other", sentRequestId: "send-1", timeoutSeconds: 1 },
+        host,
+      ),
+    ).toMatchObject({
+      settled: true,
+      busy: true,
+      turn: { turnId: "u1", assistant: { text: "First answer" } },
+    });
+  });
+
+  it("follows a sent turn through a mid-turn follow-up to its final answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const { source, host } = fixture();
+      const other = {
+        ...newSession("codex", source.cwd),
+        id: "other",
+        busy: true,
+      };
+      other.blocks = [
+        {
+          id: "u1",
+          role: "user",
+          text: "Review the branch",
+          startedAt: 1,
+          appRequestId: "app-lead-send-1",
+        },
+        { id: "a1", role: "assistant", text: "Reading the diff." },
+        { id: "u2", role: "user", text: "Also check the tests" },
+      ];
+      host.session = vi.fn(async (id) => (id === "other" ? other : null));
+      let result: unknown;
+      const waiting = handleAgentApp(
+        source,
+        "wait-steer",
+        "sessions.wait",
+        { sessionId: "other", sentRequestId: "send-1", timeoutSeconds: 5 },
+        host,
+      ).then((value) => (result = value));
+      await vi.advanceTimersByTimeAsync(600);
+      expect(result).toBeUndefined();
+      other.busy = false;
+      other.blocks = [
+        ...other.blocks,
+        { id: "a2", role: "assistant", text: "Branch and tests look good." },
+      ];
+      await vi.advanceTimersByTimeAsync(600);
+      await waiting;
+      expect(result).toMatchObject({
+        settled: true,
+        turn: {
+          turnId: "u1",
+          user: { text: "Review the branch" },
+          assistant: { text: "Branch and tests look good." },
+          earlierAssistantMessages: 1,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a session run only one wait at a time", async () => {
+    vi.useFakeTimers();
+    try {
+      const { source, host } = fixture();
+      const other = {
+        ...newSession("codex", source.cwd),
+        id: "other",
+        busy: true,
+      };
+      host.session = vi.fn(async (id) => (id === "other" ? other : null));
+      const first = handleAgentApp(
+        source,
+        "wait-a",
+        "sessions.wait",
+        { sessionId: "other", timeoutSeconds: 1 },
+        host,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(
+        handleAgentApp(
+          source,
+          "wait-b",
+          "sessions.wait",
+          { sessionId: "other", timeoutSeconds: 1 },
+          host,
+        ),
+      ).rejects.toThrow("already waiting");
+      await vi.advanceTimersByTimeAsync(1_500);
+      await first;
+      other.busy = false;
+      await expect(
+        handleAgentApp(
+          source,
+          "wait-c",
+          "sessions.wait",
+          { sessionId: "other", timeoutSeconds: 1 },
+          host,
+        ),
+      ).resolves.toMatchObject({ settled: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns unsettled when the waited turn outlasts the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { source, host } = fixture();
+      const other = {
+        ...newSession("codex", source.cwd),
+        id: "other",
+        busy: true,
+      };
+      host.session = vi.fn(async (id) => (id === "other" ? other : null));
+      const waiting = handleAgentApp(
+        source,
+        "wait-2",
+        "sessions.wait",
+        { sessionId: "other", timeoutSeconds: 1 },
+        host,
+      );
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await waiting).toMatchObject({
+        settled: false,
+        busy: true,
+        turn: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects waits on itself, outside the project or past the cap", async () => {
+    const { source, host } = fixture();
+    for (const [input, message] of [
+      [{ sessionId: "lead" }, "its own turn"],
+      [{ sessionId: "missing" }, "not found in this project"],
+      [{ sessionId: "other", timeoutSeconds: 26 }, "from 1 to 25"],
+      [{ sessionId: "other", sentRequestId: "bad id" }, "sentRequestId"],
+    ] as const)
+      await expect(
+        handleAgentApp(source, "wait-x", "sessions.wait", input, host),
+      ).rejects.toThrow(message);
   });
 
   it("saves an unsent draft in another listed project session", async () => {

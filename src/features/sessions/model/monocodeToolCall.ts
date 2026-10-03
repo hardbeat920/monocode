@@ -11,6 +11,7 @@ const ACTION_LABELS: Record<string, string> = {
   "sessions.list": "List sessions",
   "sessions.read": "Read a session",
   "sessions.send": "Continue a session",
+  "sessions.wait": "Wait for a session",
   "sessions.draft": "Save a draft",
   "sessions.start": "Start a session",
   "folders.list": "List folders",
