@@ -121,3 +121,48 @@ it("shows authentication errors without claiming a successful connection", async
   expect(container.querySelector("form")).not.toBeNull();
   expect(container.textContent).not.toContain("Projects");
 });
+
+it("connects Jira Data Center with a personal access token and no email", async () => {
+  await act(async () => root.render(createElement(JiraSettings)));
+  await input("Jira site", "jira.example.com");
+  await input("Jira API token", "pat");
+  await submit();
+  expect(invoke).toHaveBeenCalledWith("jira_set_config", {
+    site: "jira.example.com",
+    email: "",
+    token: "pat",
+  });
+  expect(container.textContent).toContain("Personal access token");
+  expect(container.textContent).toContain("Projects");
+});
+
+it("filters projects and selects or unselects every matching project", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "jira_status")
+      return { connected: true, site: "https://jira.example.com", email: "" };
+    if (command === "jira_list_projects")
+      return [
+        { id: "1", key: "ENG", name: "Engineering" },
+        { id: "2", key: "OPS", name: "Operations" },
+        { id: "3", key: "ENGX", name: "Engineering Extras" },
+      ];
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  await act(async () => root.render(createElement(JiraSettings)));
+  const button = (text: string) =>
+    [...container.querySelectorAll("button")].find(
+      (item) => item.textContent === text,
+    )!;
+  await input("Search Jira projects", "eng");
+  expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+  await act(async () => button("Unselect all").click());
+  expect(loadHiddenJiraProjectIds().sort()).toEqual(["1", "3"]);
+  expect(container.textContent).toContain("1 of 3 selected");
+  await input("Search Jira projects", "");
+  await act(async () => button("Unselect all").click());
+  expect(loadHiddenJiraProjectIds().sort()).toEqual(["1", "2", "3"]);
+  await act(async () => button("Select all").click());
+  expect(loadHiddenJiraProjectIds()).toEqual([]);
+  await input("Search Jira projects", "nothing");
+  expect(container.textContent).toContain("No projects match");
+});

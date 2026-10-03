@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { githubOrigin } from "../../inbox/model/githubHost";
 import {
   isWeakToolTitle,
   titleFromToolInput,
@@ -182,7 +183,7 @@ export function sanitizeLinkedWorkItem(
     kind,
     repo,
     number,
-    url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
+    url: `${githubOrigin()}/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
   };
 }
 

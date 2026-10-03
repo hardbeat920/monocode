@@ -1,4 +1,5 @@
 import { gitPrStatus } from "../../../platform/tauri/fs";
+import { githubHost, githubOrigin } from "../../inbox/model/githubHost";
 import {
   githubRepo,
   inboxIdentityKey,
@@ -8,19 +9,24 @@ import {
 import type { LinkedWorkItem } from "./session";
 import type { GeneratedWorkItemHint } from "./sessionTitle";
 
-const GITHUB_URL_RE =
-  /https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/(\d+)\b/i;
+function githubUrlPattern(): RegExp {
+  const host = githubHost().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `https?:\\/\\/${host}\\/([A-Za-z0-9_.-]+)\\/([A-Za-z0-9_.-]+)\\/(pull|issues)\\/(\\d+)\\b`,
+    "i",
+  );
+}
 
 function validNumber(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
 }
 
 function githubUrl(repo: string, kind: GithubTaskKind, number: number): string {
-  return `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`;
+  return `${githubOrigin()}/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`;
 }
 
 export function parseGithubWorkItemUrl(message: string): LinkedWorkItem | null {
-  const match = GITHUB_URL_RE.exec(message);
+  const match = githubUrlPattern().exec(message);
   if (!match) return null;
   const number = Number(match[4]);
   if (!validNumber(number)) return null;
@@ -47,7 +53,7 @@ function validRepo(repo: string): boolean {
 }
 
 function repoFromGithubUrl(url: string): string | null {
-  const match = GITHUB_URL_RE.exec(url);
+  const match = githubUrlPattern().exec(url);
   return match ? `${match[1]}/${match[2]}` : null;
 }
 

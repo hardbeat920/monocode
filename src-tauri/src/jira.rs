@@ -25,8 +25,16 @@ pub struct JiraStatus {
 #[derive(Serialize, Deserialize, Clone)]
 struct JiraConfig {
     site: String,
+    /// Empty for Jira Server / Data Center personal access tokens.
     email: String,
     token: String,
+    /// Jira Cloud speaks REST v3 and ADF; Server / Data Center speaks v2 and plain text.
+    #[serde(default = "default_cloud")]
+    cloud: bool,
+}
+
+fn default_cloud() -> bool {
+    true
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -128,17 +136,22 @@ pub async fn jira_set_config(
             delete_config(&app)?;
             return Ok(status_for(None));
         }
+        let site = normalize_jira_site(&site)?;
         let email = email.trim().to_string();
-        if email.is_empty() || !email.contains('@') {
+        if email.is_empty() && is_atlassian_cloud_site(&site) {
             return Err("Enter the email address of your Atlassian account".into());
         }
-        let config = JiraConfig {
-            site: normalize_jira_site(&site)?,
+        let mut config = JiraConfig {
+            site,
             email,
             token,
+            cloud: true,
         };
-        let myself = jira_get(&config, "/rest/api/3/myself")?;
-        if string_field(&myself, "accountId")
+        let info = jira_get(&config, "/rest/api/2/serverInfo")?;
+        config.cloud = server_info_is_cloud(&info);
+        let myself = jira_get(&config, &api_path(&config, "/myself"))?;
+        let user_field = if config.cloud { "accountId" } else { "name" };
+        if string_field(&myself, user_field)
             .unwrap_or_default()
             .is_empty()
         {
@@ -155,6 +168,11 @@ pub async fn jira_set_config(
 pub async fn jira_list_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = require_config(&app)?;
+        if !config.cloud {
+            // Server / Data Center has no paged project search; this lists every visible project.
+            let data = jira_get(&config, "/rest/api/2/project")?;
+            return parse_jira_projects(&json!({ "values": data }));
+        }
         fetch_jira_projects(|start| {
             jira_get(
                 &config,
@@ -180,9 +198,14 @@ pub async fn jira_list_issues(
         };
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
         let jql = issue_jql(assigned_to_me, &state, &project_ids);
+        let path = if config.cloud {
+            "/rest/api/3/search/jql"
+        } else {
+            "/rest/api/2/search"
+        };
         let data = jira_post(
             &config,
-            "/rest/api/3/search/jql",
+            path,
             &json!({ "jql": jql, "maxResults": limit, "fields": ISSUE_FIELDS }),
         )?;
         parse_jira_issues(&data, &config.site)
@@ -198,7 +221,10 @@ pub async fn jira_issue_details(app: AppHandle, key: String) -> Result<JiraIssue
         let key = require_issue_key(&key)?;
         let data = jira_get(
             &config,
-            &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
+            &api_path(
+                &config,
+                &format!("/issue/{key}?fields=description,reporter,creator,assignee"),
+            ),
         )?;
         parse_jira_issue_details(&data)
     })
@@ -214,7 +240,10 @@ pub async fn jira_issue_thread(app: AppHandle, key: String) -> Result<JiraIssueT
         // Newest first so a long thread keeps its latest comments; re-sorted below.
         let data = jira_get(
             &config,
-            &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
+            &api_path(
+                &config,
+                &format!("/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
+            ),
         )?;
         parse_jira_issue_thread(&data, &config.site, key)
     })
@@ -235,10 +264,15 @@ pub async fn jira_issue_comment(
         if body.is_empty() {
             return Err("Comment cannot be empty".into());
         }
+        let body = if config.cloud {
+            text_to_adf(body)
+        } else {
+            Value::String(body.to_string())
+        };
         let data = jira_post(
             &config,
-            &format!("/rest/api/3/issue/{key}/comment"),
-            &json!({ "body": text_to_adf(body) }),
+            &api_path(&config, &format!("/issue/{key}/comment")),
+            &json!({ "body": body }),
         )?;
         let id = string_field(&data, "id").unwrap_or_default();
         if id.is_empty() {
@@ -284,7 +318,27 @@ fn issue_jql(assigned_to_me: bool, state: &str, project_ids: &[String]) -> Strin
     format!("{} ORDER BY updated DESC", clauses.join(" AND "))
 }
 
+fn api_path(config: &JiraConfig, path: &str) -> String {
+    let version = if config.cloud { 3 } else { 2 };
+    format!("/rest/api/{version}{path}")
+}
+
+fn server_info_is_cloud(info: &Value) -> bool {
+    string_field(info, "deploymentType").is_some_and(|kind| kind.eq_ignore_ascii_case("cloud"))
+}
+
+fn is_atlassian_cloud_site(site: &str) -> bool {
+    url::Url::parse(site)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.ends_with(".atlassian.net")))
+        .unwrap_or(false)
+}
+
 fn jira_authorization(config: &JiraConfig) -> String {
+    // Server / Data Center personal access tokens are sent without an account email.
+    if config.email.trim().is_empty() {
+        return format!("Bearer {}", config.token.trim());
+    }
     let encoded = base64::engine::general_purpose::STANDARD.encode(format!(
         "{}:{}",
         config.email.trim(),
@@ -319,7 +373,7 @@ fn read_jira_response(result: Result<ureq::Response, ureq::Error>) -> Result<Val
     let response = match result {
         Ok(response) => response,
         Err(ureq::Error::Status(401, _)) => {
-            return Err("Jira email or API token is invalid".into());
+            return Err("Jira credentials are invalid".into());
         }
         Err(ureq::Error::Status(status, response)) => {
             let body = response.into_string().unwrap_or_default();
@@ -342,7 +396,7 @@ fn jira_http_error(status: u16, body: &str) -> String {
         return message;
     }
     match status {
-        403 => "Jira denied access. Check the API token's permissions".into(),
+        403 => "Jira denied access. Check the token's permissions".into(),
         404 => "Jira could not find that issue".into(),
         _ => format!("Jira request failed ({status})"),
     }
@@ -875,11 +929,32 @@ fn normalize_jira_site(raw: &str) -> Result<String, String> {
     let host = url
         .host_str()
         .filter(|host| !host.is_empty())
-        .ok_or_else(|| "Jira site is invalid".to_string())?;
-    Ok(match url.port() {
-        Some(port) => format!("https://{}:{port}", host.to_ascii_lowercase()),
-        None => format!("https://{}", host.to_ascii_lowercase()),
-    })
+        .ok_or_else(|| "Jira site is invalid".to_string())?
+        .to_ascii_lowercase();
+    let origin = match url.port() {
+        Some(port) => format!("https://{host}:{port}"),
+        None => format!("https://{host}"),
+    };
+    // Cloud sites live at the root; self-hosted Jira may sit under a context path
+    // such as `/jira`, which ends where a pasted browser URL's page path begins.
+    if host.ends_with(".atlassian.net") {
+        return Ok(origin);
+    }
+    let mut context = String::new();
+    for segment in url.path_segments().into_iter().flatten() {
+        if segment.is_empty() {
+            continue;
+        }
+        if matches!(
+            segment,
+            "browse" | "secure" | "projects" | "issues" | "software" | "plugins" | "rest"
+        ) {
+            break;
+        }
+        context.push('/');
+        context.push_str(segment);
+    }
+    Ok(format!("{origin}{context}"))
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -899,7 +974,7 @@ fn read_config(app: &AppHandle) -> Result<Option<JiraConfig>, String> {
             config.site = normalize_jira_site(&config.site)?;
             config.email = config.email.trim().to_string();
             config.token = config.token.trim().to_string();
-            if config.token.is_empty() || config.email.is_empty() {
+            if config.token.is_empty() {
                 Ok(None)
             } else {
                 Ok(Some(config))
@@ -1001,6 +1076,14 @@ mod tests {
             normalize_jira_site("jira.example.com:8443").unwrap(),
             "https://jira.example.com:8443"
         );
+        assert_eq!(
+            normalize_jira_site("https://jira.example.com/jira/browse/ENG-1").unwrap(),
+            "https://jira.example.com/jira"
+        );
+        assert_eq!(
+            normalize_jira_site("https://jira.example.com/secure/Dashboard.jspa").unwrap(),
+            "https://jira.example.com"
+        );
         assert!(normalize_jira_site("http://acme.atlassian.net").is_err());
         assert!(normalize_jira_site("https://user@acme.atlassian.net").is_err());
         assert!(normalize_jira_site("").is_err());
@@ -1012,11 +1095,45 @@ mod tests {
             site: SITE.into(),
             email: "ada@acme.com".into(),
             token: "secret".into(),
+            cloud: true,
         };
         assert_eq!(
             jira_authorization(&config),
             "Basic YWRhQGFjbWUuY29tOnNlY3JldA=="
         );
+    }
+
+    #[test]
+    fn server_personal_access_token_is_bearer_on_v2() {
+        let config = JiraConfig {
+            site: "https://jira.example.com".into(),
+            email: String::new(),
+            token: " pat ".into(),
+            cloud: false,
+        };
+        assert_eq!(jira_authorization(&config), "Bearer pat");
+        assert_eq!(api_path(&config, "/myself"), "/rest/api/2/myself");
+    }
+
+    #[test]
+    fn server_info_detects_cloud_deployments() {
+        assert!(server_info_is_cloud(&json!({ "deploymentType": "Cloud" })));
+        assert!(!server_info_is_cloud(
+            &json!({ "deploymentType": "Server" })
+        ));
+        assert!(!server_info_is_cloud(
+            &json!({ "deploymentType": "DataCenter" })
+        ));
+        assert!(!server_info_is_cloud(&json!({})));
+        assert!(is_atlassian_cloud_site(SITE));
+        assert!(!is_atlassian_cloud_site("https://jira.example.com"));
+    }
+
+    #[test]
+    fn config_without_deployment_defaults_to_cloud() {
+        let raw = r#"{"site":"https://acme.atlassian.net","email":"a@b.c","token":"t"}"#;
+        let config: JiraConfig = serde_json::from_str(raw).unwrap();
+        assert!(config.cloud);
     }
 
     #[test]

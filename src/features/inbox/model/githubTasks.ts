@@ -40,6 +40,7 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import { setGithubHost } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -165,6 +166,8 @@ export type GithubStatus = {
   connected: boolean;
   installed: boolean;
   authenticated: boolean;
+  /** `github.com` or the GitHub Enterprise Server host `gh` is pointed at. */
+  host?: string;
 };
 
 export type GithubStarStatus = "starred" | "notStarred" | "unavailable";
@@ -271,8 +274,10 @@ export function inboxListIsFresh(
   );
 }
 
-export function githubStatus(): Promise<GithubStatus> {
-  return invoke<GithubStatus>("git_github_status");
+export async function githubStatus(): Promise<GithubStatus> {
+  const status = await invoke<GithubStatus>("git_github_status");
+  if (status?.host) setGithubHost(status.host);
+  return status;
 }
 
 /** Whether the active GitHub CLI account has starred MonoCode. */
