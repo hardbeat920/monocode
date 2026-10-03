@@ -31,7 +31,11 @@ function editorThemeStyles(dark: boolean) {
     },
     ".cm-content": {
       minHeight: "100%",
-      padding: "8px 0 32px",
+      // Longhands, not the `padding` shorthand: the scrollbar reserves the
+      // right-hand strip with `padding-right`, and a shorthand here would
+      // reset it to 0 depending on which style module mounts last.
+      paddingTop: "8px",
+      paddingBottom: "32px",
       caretColor: "var(--color-content)",
     },
     ".cm-line": {
