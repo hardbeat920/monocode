@@ -1043,7 +1043,6 @@ export function ModelControlPills({
             values={values}
             onSettingsChange={onSettingsChange}
             onClose={onClose}
-            harness={harness}
             additionalSettings={
               setting.id === effort?.id ? groupedSettings : undefined
             }
@@ -1091,14 +1090,12 @@ function SelectPill({
   values,
   onSettingsChange,
   onClose,
-  harness,
   additionalSettings,
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
-  harness: HarnessId;
   additionalSettings?: ModelSetting[];
 }) {
   const [open, setOpen] = useState(false);
