@@ -350,7 +350,14 @@ fn checkout_state_matches(source: &Path, target: &Path) -> bool {
     })
 }
 
-fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
+#[derive(Serialize)]
+pub struct SeededWorktree {
+    #[serde(flatten)]
+    worktree: Worktree,
+    created: bool,
+}
+
+fn create_seeded(root: &Path, branch: &str) -> Result<SeededWorktree, String> {
     if let Some(tree) = list(root)?
         .into_iter()
         .find(|tree| tree.branch.as_deref() == Some(branch))
@@ -361,7 +368,10 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
                 "The recovered orchestration worktree for {branch} is incomplete or has unexpected changes. It was kept for manual review."
             ));
         }
-        return Ok(tree);
+        return Ok(SeededWorktree {
+            worktree: tree,
+            created: false,
+        });
     }
     let branch_ref = format!("refs/heads/{branch}");
     let branch_exists = git(root, &["rev-parse", "--verify", &branch_ref]).is_ok();
@@ -382,7 +392,10 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
         }
         return Err(error);
     }
-    Ok(tree)
+    Ok(SeededWorktree {
+        worktree: tree,
+        created: true,
+    })
 }
 
 /// Create an isolated worker checkout with the lead checkout's current file
@@ -392,7 +405,7 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
 pub async fn git_orchestration_worktree_create(
     cwd: String,
     branch: String,
-) -> Result<Worktree, String> {
+) -> Result<SeededWorktree, String> {
     tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
         .await
         .map_err(|error| error.to_string())?
@@ -888,7 +901,8 @@ mod tests {
         std::fs::remove_file(root.join("deleted.txt")).unwrap();
 
         let tree = create_seeded(&root, "mc/orch-testworker").unwrap();
-        let worker = Path::new(&tree.path);
+        assert!(tree.created);
+        let worker = Path::new(&tree.worktree.path);
         assert_eq!(
             std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
             "lead dirty\n"
@@ -898,10 +912,9 @@ mod tests {
             "lead new\n"
         );
         assert!(!worker.join("deleted.txt").exists());
-        assert_eq!(
-            create_seeded(&root, "mc/orch-testworker").unwrap().path,
-            tree.path
-        );
+        let recovered = create_seeded(&root, "mc/orch-testworker").unwrap();
+        assert!(!recovered.created);
+        assert_eq!(recovered.worktree.path, tree.worktree.path);
 
         std::fs::write(root.join("tracked.txt"), "later lead edit\n").unwrap();
         assert!(create_seeded(&root, "mc/orch-testworker").is_err());

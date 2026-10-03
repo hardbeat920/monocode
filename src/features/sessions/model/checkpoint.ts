@@ -83,6 +83,25 @@ export function ensureSessionCheckpoint(
   );
 }
 
+export function ensureWorkerCheckpoint(
+  sessionId: string,
+  cwd: string,
+): Promise<void> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<void>("worker_checkpoint_ensure", { sessionId, cwd }),
+  );
+}
+
+export function captureWorkerCheckpoint(
+  sessionId: string,
+  cwd: string,
+  scopes: string[],
+): Promise<void> {
+  return enqueueCheckpoint(sessionId, () =>
+    invoke<void>("worker_checkpoint_capture", { sessionId, cwd, scopes }),
+  );
+}
+
 /** Snapshot the worktree before a live turn so Keep/Undo can target this session. */
 export async function beginSessionTurn(
   sessionId: string,

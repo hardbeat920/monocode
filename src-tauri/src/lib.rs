@@ -481,6 +481,8 @@ pub fn run() {
             notes::notes_save_image,
             notes::notes_image_path,
             checkpoint::session_checkpoint_ensure,
+            checkpoint::worker::worker_checkpoint_ensure,
+            checkpoint::worker::worker_checkpoint_capture,
             checkpoint::session_checkpoint_prepare,
             checkpoint::session_checkpoint_capture,
             checkpoint::session_checkpoint_status,
