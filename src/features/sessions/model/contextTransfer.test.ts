@@ -44,4 +44,28 @@ describe("shared context delivery", () => {
     expect(source.onAccepted).toHaveBeenCalledOnce();
     expect(source.contextTransfer?.onDelivered).not.toHaveBeenCalled();
   });
+
+  it("waits for explicit request acceptance when an adapter emits startup activity", () => {
+    const source = input();
+    const prepared = prepareContextTransferInput(source, {
+      nativeMessages: false,
+      resumedAppend: true,
+      explicitAcceptance: true,
+    });
+    prepared.onEvent({ type: "session.providerBound", providerSessionId: "native-1" });
+    prepared.onEvent({ type: "plan", text: "A plan restored during initialization" });
+    prepared.onEvent({ type: "message.delta", text: "Startup output" });
+    prepared.onEvent({ type: "turn.started" });
+    expect(source.onAccepted).not.toHaveBeenCalled();
+    expect(source.contextTransfer?.onDelivered).not.toHaveBeenCalled();
+    expect(source.onEvent).toHaveBeenCalledTimes(4);
+
+    prepared.onAccepted?.();
+    prepared.onAccepted?.();
+    expect(source.onAccepted).toHaveBeenCalledOnce();
+    expect(source.contextTransfer?.onDelivered).toHaveBeenCalledOnce();
+    expect(source.contextTransfer?.onDelivered).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "inline", providerSessionId: "native-1",
+    }));
+  });
 });

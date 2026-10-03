@@ -18,6 +18,8 @@ Codex imports historical user and assistant messages through `thread/inject_item
 
 Picker intent, provider bindings, and transfer receipts persist separately from the transcript. A provider startup ID does not prove that it accepted a user request. MonoCode saves native import completion before submitting the current turn. It commits the accepted transfer only after the provider acknowledges that turn or supplies delivery evidence.
 
+Claude confirms the resumed native ID before sending input. Startup output does not accept a transfer. Claude records acceptance only after the current input write succeeds and the provider supplies response evidence. Manual compaction does not accept a user request.
+
 An unconfirmed import or acceptance can leave the target native conversation ambiguous. MonoCode retains the source, discards the uncertain target identity, and keeps the unaccepted request as a draft. Retry that draft to send its original request once into a fresh target conversation. A failed native resume uses eligible full portable history rather than an empty conversation.
 
 The remote host owns history export, attachment snapshots, provider processes, and delivery receipts. Provider-switch commands include an expected session revision and use the existing command deduplication and persistent outbox. Older hosts retain their model-only configuration behavior. Switching providers does not move a session to another host.

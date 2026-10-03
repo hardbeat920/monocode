@@ -125,6 +125,13 @@ type BackgroundTask = {
   toolUseId?: string;
 };
 
+type TurnSubmission = {
+  written: boolean;
+  accepted: boolean;
+  onAccepted?: () => void;
+  pendingEvents: HarnessEvent[];
+};
+
 type Live = {
   cwd: string;
   claudeSessionId: string;
@@ -133,6 +140,9 @@ type Live = {
   planning: boolean;
   settingsKey: string;
   onEvent: (event: HarnessEvent) => void;
+  eventTarget: (event: HarnessEvent) => void;
+  hasSubmittedInput: boolean;
+  submission?: TurnSubmission;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
   visibleQuestionId: number | null;
@@ -227,7 +237,7 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
-  live.onEvent = input.onEvent;
+  live.eventTarget = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -254,7 +264,7 @@ export async function compactClaudeContext(
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
-  live.onEvent = input.onEvent;
+  live.eventTarget = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -366,6 +376,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
       pending.resolve({ kind: "skipped" });
     live.questions.clear();
     live.activeTurn = false;
+    live.submission = undefined;
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
@@ -433,7 +444,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     existing.settingsKey === settingsKey &&
     existing.planning === planning
   ) {
-    existing.onEvent = input.onEvent;
+    existing.eventTarget = input.onEvent;
     existing.runtimeMode = input.runtimeMode;
     return existing;
   }
@@ -483,7 +494,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     runtimeMode: input.runtimeMode,
     planning,
     settingsKey,
-    onEvent: input.onEvent,
+    onEvent: (event) => forwardTurnEvent(live, event),
+    eventTarget: input.onEvent,
+    hasSubmittedInput: false,
     approvals: new Map(),
     questions: new Map(),
     visibleQuestionId: null,
@@ -612,11 +625,26 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
+  void turnPromise.catch(() => undefined);
   live.activeTurn = true;
   settlePendingTurn(live);
 
+  const submission: TurnSubmission = {
+    written: false,
+    accepted: false,
+    onAccepted: input.onAccepted,
+    pendingEvents: [],
+  };
+  live.submission = submission;
   try {
     await writeJson(input.sessionId, message);
+    if (live.initError) throw live.initError;
+    if (live.submission !== submission || live.cancelled || live.muteUpdates)
+      return;
+    submission.written = true;
+    live.hasSubmittedInput = true;
+    for (const event of submission.pendingEvents.splice(0))
+      forwardTurnEvent(live, event);
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -627,9 +655,44 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    if (live.submission === submission) live.submission = undefined;
     live.turnDone = null;
     live.turnFailed = null;
   }
+}
+
+function forwardTurnEvent(live: Live, event: HarnessEvent): void {
+  if (
+    event.type.startsWith("session.") ||
+    event.type === "status" ||
+    event.type === "context" ||
+    event.type === "usage.limited"
+  ) {
+    live.eventTarget(event);
+    return;
+  }
+  const submission = live.submission;
+  if (!submission) {
+    if (live.hasSubmittedInput && !live.muteUpdates) live.eventTarget(event);
+    return;
+  }
+  if (!submission.written) {
+    submission.pendingEvents.push(event);
+    return;
+  }
+  if (
+    !submission.accepted &&
+    !live.manualCompaction &&
+    (event.type === "turn.started" ||
+      event.type === "message.delta" ||
+      event.type === "tool.started" ||
+      event.type === "plan" ||
+      event.type === "image.generated")
+  ) {
+    submission.accepted = true;
+    submission.onAccepted?.();
+  }
+  live.eventTarget(event);
 }
 
 function handleLine(sessionId: string, live: Live, line: string): void {
@@ -1041,7 +1104,11 @@ async function handleControlRequest(
   const toolName = control.toolName ?? "tool";
   const input = control.input ?? {};
 
-  if (live.cancelled || live.muteUpdates) {
+  if (
+    live.cancelled ||
+    live.muteUpdates ||
+    (!live.submission && !live.hasSubmittedInput)
+  ) {
     await writeJson(
       sessionId,
       buildControlResponse(

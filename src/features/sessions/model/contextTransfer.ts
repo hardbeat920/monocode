@@ -5,6 +5,8 @@ import type { SendTurnInput } from "../../../integrations/harness/core/types";
 export type ContextTransferCapabilities = {
   nativeMessages: boolean;
   resumedAppend: boolean;
+  /** The adapter correlates acceptance evidence with the submitted request. */
+  explicitAcceptance?: boolean;
 };
 
 export type ContextTransferReceipt = {
@@ -60,7 +62,7 @@ export function prepareContextTransferInput(
     onAccepted,
     onEvent: (event) => {
       if (event.type === "session.providerBound") boundId = event.providerSessionId;
-      if (!capabilities?.nativeMessages &&
+      if (!capabilities?.nativeMessages && !capabilities?.explicitAcceptance &&
           (event.type === "turn.started" || event.type === "message.delta" ||
            event.type === "tool.started" || event.type === "plan" || event.type === "image.generated")) {
         onAccepted();

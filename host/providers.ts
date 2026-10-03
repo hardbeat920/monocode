@@ -67,7 +67,7 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     generateBranchName: generateCodexBranchName,
   },
   claude: {
-    contextTransferCapabilities: { nativeMessages: false, resumedAppend: true },
+    contextTransferCapabilities: { nativeMessages: false, resumedAppend: true, explicitAcceptance: true },
     send: claude.sendClaudeTurn,
     compact: claude.compactClaudeContext,
     cancel: claude.cancelClaudeTurn,

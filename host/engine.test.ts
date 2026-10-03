@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { HostProvider } from "./providers";
+import { hostProviders } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
@@ -182,6 +183,60 @@ describe("host-owned provider switching", () => {
     s.engine.command(switchCommand(s, "codex", "return-after-failure"));
     expect(s.store.session(s.id).session.providerSessionId).toBe("source-native");
     expect(s.store.session(s.id).session.pendingSwitch).toBeUndefined();
+  });
+
+  it("does not accept a resumed Claude request from a startup plan before initialization fails", async () => {
+    const s = setup();
+    s.engine.command({ type: "send", commandId: "source", sessionId: s.id, text: "Original" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(1));
+    await finishTurn(s, 0, "source-native", "Source answer");
+
+    s.provider.contextTransferCapabilities = hostProviders.claude.contextTransferCapabilities;
+    s.engine.command(switchCommand(s, "claude", "choose-claude"));
+    s.engine.command({ type: "send", commandId: "claude-turn", sessionId: s.id, text: "First Claude request" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(2));
+    s.turns[1].input.onEvent({ type: "session.providerBound", providerSessionId: "target-native" });
+    s.turns[1].input.onAccepted?.();
+    await finishTurn(s, 1, "target-native", "Claude answer");
+
+    s.provider.contextTransferCapabilities = hostProviders.codex.contextTransferCapabilities;
+    s.engine.command(switchCommand(s, "codex", "return-source"));
+    s.engine.command({ type: "send", commandId: "returned-source", sessionId: s.id, text: "Back on source" });
+    await vi.waitFor(() => expect(s.turns).toHaveLength(3));
+    await s.turns[2].input.contextTransfer?.onDelivered?.({ mode: "native", providerSessionId: "source-native" });
+    s.turns[2].input.onAccepted?.();
+    await finishTurn(s, 2, "source-native", "Returned source answer");
+
+    s.provider.contextTransferCapabilities = hostProviders.claude.contextTransferCapabilities;
+    s.provider.forget = vi.fn(async () => {});
+    s.engine.command(switchCommand(s, "claude", "resume-claude"));
+    vi.mocked(s.provider.bind).mockClear();
+    const beforeFailure = s.store.session(s.id).revision;
+    vi.mocked(s.provider.send).mockImplementationOnce(async (input) => {
+      input.onEvent({ type: "plan", text: "# Startup plan" });
+      throw new Error("Claude resumed conversation differs from the requested session");
+    });
+    s.engine.command({ type: "send", commandId: "failed-resume", sessionId: s.id, text: "Submit this exactly once" });
+    await vi.waitFor(() => expect(s.store.session(s.id).status).toBe("idle"));
+
+    const failed = s.store.session(s.id).session;
+    expect(s.provider.bind).toHaveBeenCalledWith(s.id, "target-native", s.directory);
+    expect(failed.providerContext?.delivery?.status).toBe("uncertain");
+    expect(failed.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["source-native"]);
+    expect(failed.pendingSwitch?.fromProviderSessionId).toBe("source-native");
+    expect(failed.providerSessionId).toBeUndefined();
+    const requests = failed.blocks.filter((block) => block.role === "user" && block.text === "Submit this exactly once");
+    expect(requests).toHaveLength(1);
+    expect(requests[0].draft).toBe(true);
+    const failedEvents = s.store.events(s.id, beforeFailure).events;
+    expect(failedEvents).toBeDefined();
+    expect(failedEvents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: expect.objectContaining({ type: "providerContext.accepted" }) }),
+    ]));
+    expect(failedEvents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: expect.objectContaining({ type: "providerContext.delivered" }) }),
+    ]));
+    expect(s.provider.forget).toHaveBeenCalledWith(s.id);
   });
 
   it("abandons an imported target whose current request was not acknowledged", async () => {
