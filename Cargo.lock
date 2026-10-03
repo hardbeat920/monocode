@@ -4540,6 +4540,7 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]
@@ -4611,6 +4612,7 @@ version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_platform",
  "image",
