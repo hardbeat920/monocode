@@ -125,7 +125,7 @@ fn obsolete_sse_cannot_deliver_data_or_end_to_replacement() {
 fn replacing_registered_sse_cancels_its_blocked_socket() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut socket, _) = listener.accept().unwrap();
+    let (socket, _) = listener.accept().unwrap();
     let host = HarnessHost::new();
     let old = Arc::new(LiveSse {
         stop: Arc::new(AtomicBool::new(false)),
@@ -135,6 +135,7 @@ fn replacing_registered_sse_cancels_its_blocked_socket() {
         stop: Arc::new(AtomicBool::new(false)),
         socket: Mutex::new(None),
     });
+    let mut socket = SseSocket::new(BufReader::new(socket), old.stop.clone()).unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (closed_tx, closed_rx) = mpsc::channel();
     let reader = thread::spawn(move || {
@@ -167,6 +168,66 @@ fn replacing_registered_sse_cancels_its_blocked_socket() {
     ));
     reader.join().unwrap();
     drop(peer);
+}
+
+#[test]
+fn sse_socket_cancel_finishes_without_a_peer_disconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut socket = SseSocket::new(BufReader::new(socket), stop.clone()).unwrap();
+    socket.reader.get_ref().set_nonblocking(true).unwrap();
+    assert_eq!(socket.read(&mut []).unwrap(), 0);
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        closed_tx.send(socket.read(&mut [0])).unwrap();
+        socket
+    });
+    assert!(closed_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    stop.store(true, Ordering::SeqCst);
+    assert_eq!(
+        closed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let socket = reader.join().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(25)))
+        .unwrap();
+    assert!(matches!(
+        peer.read(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ));
+    drop(socket);
+}
+
+#[test]
+fn sse_socket_idle_polls_preserve_partial_chunk_headers_and_data() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    let reader = SseSocket::new(BufReader::new(socket), Arc::new(AtomicBool::new(false))).unwrap();
+    reader.reader.get_ref().set_nonblocking(true).unwrap();
+    let mut body = SseBody {
+        reader: BufReader::new(reader),
+        chunked: true,
+        remaining: 0,
+        chunk_end: false,
+        finished: false,
+    };
+    let sender = thread::spawn(move || {
+        peer.write_all(b"7\r").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        peer.write_all(b"\nhe").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        peer.write_all(b"llo\n\n\r\n0\r\n\r\n").unwrap();
+    });
+    let mut text = String::new();
+    body.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "hello\n\n");
+    sender.join().unwrap();
 }
 
 #[test]

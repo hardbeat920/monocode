@@ -994,6 +994,7 @@ async function handleEvent(
           kind === "read" ||
           kind === "search" ||
           (permission === "task" &&
+            payloadSessionId === live.openCodeSessionId &&
             Array.isArray(properties.patterns) &&
             properties.patterns.length > 0 &&
             properties.patterns.every((pattern) => pattern === "explore"))

@@ -39,7 +39,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/config' || path === '/agent') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify(path === '/config' ? config : Object.entries(config.agent || {}).map(([name, agent]) =>
-      ({name,mode:'primary',permission:agentPermissions(agent.permission)}))));
+      ({name,mode:['build','plan'].includes(name)?'primary':'subagent',permission:agentPermissions(agent.permission)}))));
     return;
   }
   if (path === '/session/status') {

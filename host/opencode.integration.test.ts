@@ -110,6 +110,34 @@ it.runIf(Boolean(BINARY))(
             arguments: JSON.stringify({ filePath: toolOutputFile }),
           },
         };
+      } else if (!hasTools && text.includes("PLAN_GRANDCHILD_EXPLORE_CASE")) {
+        content = "Nested delegation reached the grandchild.";
+      } else if (!hasTools && text.includes("PLAN_CHILD_EXPLORE_CASE")) {
+        call = {
+          id: "call_review_nested_explore",
+          type: "function",
+          function: {
+            name: "task",
+            arguments: JSON.stringify({
+              description: "review nested Explore",
+              prompt: "PLAN_GRANDCHILD_EXPLORE_CASE",
+              subagent_type: "explore",
+            }),
+          },
+        };
+      } else if (!hasTools && text.includes("PLAN_PARENT_EXPLORE_CASE")) {
+        call = {
+          id: "call_review_primary_explore",
+          type: "function",
+          function: {
+            name: "task",
+            arguments: JSON.stringify({
+              description: "review primary Explore",
+              prompt: "PLAN_CHILD_EXPLORE_CASE",
+              subagent_type: "explore",
+            }),
+          },
+        };
       } else if (!hasTools && text.includes("CHILD_BASH_CASE")) {
         call = {
           id: "call_review_bash",
@@ -374,6 +402,69 @@ it.runIf(Boolean(BINARY))(
             `Plan can read the owned truncated tool output. ${JSON.stringify(toolParts)}`,
           );
         }
+        if (name === "plan-task") {
+          assert.equal(approvals.length, 0);
+          const childResponse = await backend.invoke<any>("harness_http", {
+            method: "GET",
+            url: messagesUrl.replace("/message", "/children"),
+          });
+          const children = JSON.parse(childResponse.body);
+          assert.equal(
+            children.length,
+            1,
+            "Primary Plan task creates an Explore child",
+          );
+          const nestedResponse = await backend.invoke<any>("harness_http", {
+            method: "GET",
+            url: messagesUrl.replace(
+              /\/session\/[^/]+\/message/,
+              `/session/${children[0].id}/children`,
+            ),
+          });
+          assert.deepEqual(
+            JSON.parse(nestedResponse.body),
+            [],
+            "The Explore child cannot create another Explore session",
+          );
+          const childRequests = requests.filter(
+            (request) =>
+              request.case === name &&
+              request.input.messages?.some((message: any) => {
+                if (message.role !== "user") return false;
+                const content =
+                  typeof message.content === "string"
+                    ? message.content
+                    : (message.content ?? [])
+                        .map((part: any) => part.text ?? "")
+                        .join(" ");
+                return content.includes("PLAN_CHILD_EXPLORE_CASE");
+              }),
+          );
+          assert(
+            childRequests.length > 0,
+            "The real Explore child reached the local provider",
+          );
+          assert(
+            childRequests.every(
+              (request) =>
+                !request.input.tools?.some(
+                  (tool: any) => tool.function.name === "task",
+                ),
+            ),
+            "Explore children never receive the Task tool",
+          );
+          assert(
+            messages.some((message: any) =>
+              message.parts?.some(
+                (part: any) =>
+                  part.type === "tool" &&
+                  part.tool === "task" &&
+                  part.state?.status === "completed",
+              ),
+            ),
+            "The legitimate primary Explore task completes",
+          );
+        }
         if (name === "plan") {
           assert.equal(readFileSync(marker, "utf8"), "before\n");
           assert(
@@ -535,6 +626,12 @@ it.runIf(Boolean(BINARY))(
         "plan",
         "full-access",
         "PLAN_TOOL_OUTPUT_READ_CASE",
+      );
+      await runCase(
+        "plan-task",
+        "plan",
+        "full-access",
+        "PLAN_PARENT_EXPLORE_CASE",
       );
       await runCase("supervised", "build", "supervised", "PARENT_TASK_CASE");
       await runCase(

@@ -335,6 +335,7 @@ export function managedOpenCodeConfig(
   const permissions = (
     keys: Iterable<string>,
     patterns: Iterable<string>,
+    allowExploreTask = false,
   ): Record<string, unknown> => {
     const policy: Record<string, unknown> = Object.fromEntries(
       [...keys].map((key) => [key, actionFor(key)]),
@@ -342,7 +343,12 @@ export function managedOpenCodeConfig(
     for (const rule of buildOpenCodePermissionRules(runtimeMode, planning)) {
       if (rule.pattern === "*") policy[rule.permission] = rule.action;
     }
-    if (planning) policy.task = { "*": "deny", explore: "allow" };
+    // TaskTool uses the target agent's own rules for child sessions. A scalar
+    // deny replaces inherited scoped grants instead of leaving Explore enabled.
+    if (planning)
+      policy.task = allowExploreTask
+        ? { "*": "deny", explore: "allow" }
+        : "deny";
     if (planning || runtimeMode !== "full-access") {
       policy.external_directory = Object.fromEntries([
         ["*", actionFor("external_directory")],
@@ -366,7 +372,13 @@ export function managedOpenCodeConfig(
     agent: Object.fromEntries(
       [...agents].map(([agent, keys]) => [
         agent,
-        { permission: permissions(keys, externalPatterns.get(agent)!) },
+        {
+          permission: permissions(
+            keys,
+            externalPatterns.get(agent)!,
+            primaryAgents.has(agent) && agent !== "explore",
+          ),
+        },
       ]),
     ),
     mode: Object.fromEntries(
@@ -376,6 +388,7 @@ export function managedOpenCodeConfig(
           permission: permissions(
             agents.get(agent)!,
             externalPatterns.get(agent)!,
+            agent !== "explore",
           ),
         },
       ]),
@@ -410,7 +423,11 @@ export function verifyManagedOpenCodePolicy(
     conflict();
   if (!Array.isArray(agentsValue) || agentsValue.length === 0) conflict();
   for (const value of agentsValue as unknown[]) {
-    const permissions = asRecord(value)?.permission;
+    const agent = asRecord(value);
+    const permissions = agent?.permission;
+    // TaskTool can select Explore by name even if config changes its mode.
+    const allowExploreTask =
+      agent?.mode === "primary" && agent?.name !== "explore";
     if (!Array.isArray(permissions)) conflict();
     const rules = (permissions as unknown[]).map(
       (value): OpenCodePermissionRule => {
@@ -465,7 +482,9 @@ export function verifyManagedOpenCodePolicy(
               "websearch",
               "codesearch",
             ].includes(rule.permission) ||
-              (rule.permission === "task" && rule.pattern === "explore"))) ||
+              (allowExploreTask &&
+                rule.permission === "task" &&
+                rule.pattern === "explore"))) ||
           (!planning &&
             ((rule.permission === "edit" &&
               ["auto", "auto-accept-edits"].includes(runtimeMode)) ||

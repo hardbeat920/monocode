@@ -1470,8 +1470,41 @@ fn http_line<R: BufRead>(reader: &mut R) -> std::io::Result<String> {
     Ok(line)
 }
 
-struct SseBody {
+struct SseSocket {
     reader: BufReader<TcpStream>,
+    stop: Arc<AtomicBool>,
+}
+
+impl SseSocket {
+    fn new(reader: BufReader<TcpStream>, stop: Arc<AtomicBool>) -> std::io::Result<Self> {
+        // Winsock shutdown on a duplicate need not interrupt an existing recv.
+        // Nonblocking reads let this thread observe cancellation itself.
+        reader.get_ref().set_read_timeout(None)?;
+        if cfg!(windows) {
+            reader.get_ref().set_nonblocking(true)?;
+        }
+        Ok(Self { reader, stop })
+    }
+}
+
+impl Read for SseSocket {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            if buf.is_empty() || self.stop.load(Ordering::SeqCst) {
+                return Ok(0);
+            }
+            match self.reader.read(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+struct SseBody {
+    reader: BufReader<SseSocket>,
     chunked: bool,
     remaining: usize,
     chunk_end: bool,
@@ -1623,12 +1656,10 @@ fn open_sse_body(
         if !sse {
             return Err("OpenCode server did not return an event stream".into());
         }
-        reader
-            .get_mut()
-            .set_read_timeout(None)
-            .map_err(|error| error.to_string())?;
         Ok(SseBody {
-            reader,
+            reader: BufReader::new(
+                SseSocket::new(reader, live.stop.clone()).map_err(|error| error.to_string())?,
+            ),
             chunked,
             remaining: 0,
             chunk_end: false,

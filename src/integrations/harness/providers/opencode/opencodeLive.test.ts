@@ -26,7 +26,10 @@ const execChild = vi.fn(async (_path: string, args: string[]) =>
     : args[0] === "debug" && args[1] === "paths"
       ? "data       /isolated/data/opencode"
       : ["build", "plan", "general", "explore"]
-          .map((name) => `${name} (primary)\n[]`)
+          .map(
+            (name) =>
+              `${name} (${["build", "plan"].includes(name) ? "primary" : "subagent"})\n[]`,
+          )
           .join("\n"),
 );
 const spawnChild = vi.fn(async (..._args: unknown[]) => {
@@ -47,6 +50,7 @@ const defaultHarnessHttp = async (input: {
     const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
     const agents = Object.entries(config.agent).map(([name, value]) => ({
       name,
+      mode: ["build", "plan"].includes(name) ? "primary" : "subagent",
       permission: Object.entries(
         (value as { permission: Record<string, unknown> }).permission,
       ).flatMap(([permission, action]) =>
@@ -1270,6 +1274,40 @@ describe("OpenCode review regressions", () => {
     ).toBe(false);
   });
 
+  it("rejects an effective subagent Explore grant before creating a prompt", async () => {
+    harnessHttp.mockImplementation(async (input) =>
+      new URL(input.url).pathname === "/agent"
+        ? {
+            status: 200,
+            body: JSON.stringify([
+              {
+                name: "explore",
+                mode: "subagent",
+                permission: [
+                  { permission: "*", pattern: "*", action: "deny" },
+                  { permission: "task", pattern: "*", action: "deny" },
+                  { permission: "task", pattern: "explore", action: "allow" },
+                ],
+              },
+            ]),
+          }
+        : defaultHarnessHttp(input),
+    );
+    await expect(
+      sendOpenCodeTurn({
+        ...sessionInput(),
+        intent: "plan",
+        text: "Plan safely",
+      }),
+    ).rejects.toThrow("grants tools beyond");
+    expect(
+      harnessHttp.mock.calls.some(([input]) =>
+        input.url.includes("/prompt_async"),
+      ),
+    ).toBe(false);
+    expect(killChild).toHaveBeenCalledWith("opencode-live");
+  });
+
   it("starts Plan and its subagents with the managed permission policy", async () => {
     const done = sendOpenCodeTurn({
       ...sessionInput(),
@@ -1281,6 +1319,13 @@ describe("OpenCode review regressions", () => {
     const env = spawnChild.mock.calls[0]?.[6] as Record<string, string>;
     const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
     expect(config.permission["*"]).toBe("deny");
+    expect(config.permission.task).toBe("deny");
+    expect(config.agent.plan.permission.task).toEqual({
+      "*": "deny",
+      explore: "allow",
+    });
+    expect(config.agent.general.permission.task).toBe("deny");
+    expect(config.agent.explore.permission.task).toBe("deny");
     expect(config.agent.general.permission["*"]).toBe("deny");
     expect(config.permission.external_directory).toEqual({
       "*": "deny",
@@ -1334,9 +1379,10 @@ describe("OpenCode review regressions", () => {
   ];
   it.each(
     planTaskScopes.flatMap((scope) =>
-      ["session_1", "session_child"].map((sessionID) => ({
+      ["session_1", "session_child", "session_grandchild"].map((sessionID) => ({
         ...scope,
         sessionID,
+        reply: sessionID === "session_1" ? scope.reply : "reject",
       })),
     ),
   )(
@@ -1350,7 +1396,10 @@ describe("OpenCode review regressions", () => {
         text: "Explore the change",
       });
       await waitFor(() => promptMessageID !== undefined, "Plan prompt");
-      if (sessionID !== "session_1") sessionCreated(sessionID, "session_1");
+      if (sessionID !== "session_1")
+        sessionCreated("session_child", "session_1");
+      if (sessionID === "session_grandchild")
+        sessionCreated(sessionID, "session_child");
       onSseEvent?.({
         type: "permission.asked",
         properties: {

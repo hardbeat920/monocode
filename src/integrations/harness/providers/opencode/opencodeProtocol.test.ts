@@ -43,7 +43,7 @@ describe("effective managed permissions", () => {
     config: unknown = {},
   ) =>
     verifyManagedOpenCodePolicy(
-      [{ name: "custom", permission }],
+      [{ name: "custom", mode: "primary", permission }],
       config,
       "supervised",
       planning,
@@ -103,6 +103,58 @@ describe("effective managed permissions", () => {
     expect(() => verify([rules("*", "*", "ask")], true)).toThrow(
       "grants tools beyond",
     );
+  });
+  it.each([
+    ["build", "primary", true],
+    ["plan", "primary", true],
+    ["custom", "primary", true],
+    ["general", "subagent", false],
+    ["explore", "subagent", false],
+    ["custom", "all", false],
+    ["custom", undefined, false],
+    ["explore", "primary", false],
+  ] as const)(
+    "allows a Plan Explore grant for %s in mode %s only when safe",
+    (name, mode, allowed) => {
+      const check = () =>
+        verifyManagedOpenCodePolicy(
+          [
+            {
+              name,
+              mode,
+              permission: [
+                rules("*", "*", "deny"),
+                rules("task", "explore", "allow"),
+              ],
+            },
+          ],
+          {},
+          "full-access",
+          true,
+        );
+      if (allowed) expect(check).not.toThrow();
+      else expect(check).toThrow("grants tools beyond");
+    },
+  );
+  it("accepts a later deny that removes a subagent's Explore grant", () => {
+    expect(() =>
+      verifyManagedOpenCodePolicy(
+        [
+          {
+            name: "explore",
+            mode: "subagent",
+            permission: [
+              rules("*", "*", "deny"),
+              rules("task", "explore", "allow"),
+              rules("task", "*", "deny"),
+            ],
+          },
+        ],
+        {},
+        "full-access",
+        true,
+      ),
+    ).not.toThrow();
   });
   it("allows only the exact host-probed tool-output directory", () => {
     const output = "/isolated/data/opencode/tool-output/*";
@@ -609,12 +661,49 @@ describe("managed OpenCode permissions", () => {
         permission: {
           "*": "deny",
           bash: "deny",
-          task: { "*": "deny", explore: "allow" },
+          task: "deny",
         },
-        agent: { custom: { permission: { mcp_write: "deny", read: "allow" } } },
+        agent: {
+          build: { permission: { task: { "*": "deny", explore: "allow" } } },
+          custom: {
+            permission: { task: "deny", mcp_write: "deny", read: "allow" },
+          },
+        },
       });
     },
   );
+
+  it("grants Plan Explore tasks only to primary agents that cannot be the Explore child", () => {
+    const config = managedOpenCodeConfig(
+      "build (primary)\n[]\nplan (primary)\n[]\ngeneral (subagent)\n[]\nexplore (primary)\n[]\ncustom (all)\n[]",
+      "full-access",
+      true,
+    );
+    const taskAllowed = { task: { "*": "deny", explore: "allow" } };
+    const taskDenied = { task: "deny" };
+    expect(config).toMatchObject({
+      permission: taskDenied,
+      agent: {
+        build: { permission: taskAllowed },
+        plan: { permission: taskAllowed },
+        general: { permission: taskDenied },
+        explore: { permission: taskDenied },
+        custom: { permission: taskDenied },
+      },
+      mode: {
+        build: { permission: taskAllowed },
+        plan: { permission: taskAllowed },
+        explore: { permission: taskDenied },
+      },
+    });
+    expect(config.mode).not.toHaveProperty("general");
+    expect(config.mode).not.toHaveProperty("custom");
+    expect(buildOpenCodePermissionRules("full-access", true)).toContainEqual({
+      permission: "task",
+      pattern: "explore",
+      action: "allow",
+    });
+  });
 
   it("fails closed when the CLI omits effective agent permissions", () => {
     expect(() =>
