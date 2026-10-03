@@ -4802,6 +4802,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-view-workbench"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-layout",
+ "monocode-terminal-view",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

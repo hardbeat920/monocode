@@ -21,7 +21,10 @@ attention = ["package-deps", "dep:monocode-integrations", "dep:monocode-platform
 # side_threads: reuses submit's handoff and second-opinion models and its
 # submit action, and attention's live agents port.
 side_threads = ["package-deps", "submit", "attention"]
-orchestration = ["package-deps"]
+# orchestration: managed turns and Stop go through submit; pending worker
+# input reads attention's approval toast; the app API reads history's
+# folders and notes and projects' worktrees.
+orchestration = ["package-deps", "submit", "attention", "history", "projects"]
 workspace = ["package-deps", "dep:monocode-terminal", "dep:monocode-terminal-view"]
 projects = ["package-deps"]
 history = ["package-deps", "dep:chrono"]
