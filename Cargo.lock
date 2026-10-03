@@ -4408,6 +4408,7 @@ dependencies = [
  "monocode-layout",
  "monocode-platform",
  "monocode-process",
+ "monocode-remote",
  "monocode-settings",
  "monocode-store",
  "monocode-terminal",
@@ -4724,6 +4725,7 @@ name = "monocode-view-pages"
 version = "0.6.0"
 dependencies = [
  "chrono",
+ "futures",
  "gpui",
  "gpui-base",
  "gpui-component",
