@@ -37,8 +37,13 @@ export function ContextMeter({
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const ratio = contextRatio(usage);
-  if (!usage || ratio === null) return null;
+  const measured = contextRatio(usage);
+  // A compaction boundary leaves the ring drawn but empty. Returning null here
+  // would take the Compact now action with it, and the level behind the old
+  // ring is the one the compaction just replaced.
+  const compacted = usage?.compacted === true;
+  if (!usage || (measured === null && !compacted)) return null;
+  const ratio = measured ?? 0;
 
   const { headline, detail } = contextTooltip(usage);
   const actionsOpen = open && onCompact != null;

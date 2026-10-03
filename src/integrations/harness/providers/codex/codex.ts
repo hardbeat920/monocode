@@ -715,6 +715,12 @@ async function runCompaction(live: Live): Promise<void> {
     await live.rpc.request("thread/compact/start", {
       threadId: live.threadId,
     });
+    // Marked here, once the compaction is confirmed under way but before the
+    // turn is awaited: the reading we hold describes the thread as it was
+    // before the summary, and a token-usage update that arrives during the turn
+    // may already describe the rebuilt history. Emitting after the turn would
+    // overwrite exactly that, so a later reading has to be able to clear this.
+    live.onEvent({ type: "context", compacted: true });
     settlePendingTurn(live);
     await turnPromise;
   } finally {

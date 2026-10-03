@@ -7,7 +7,11 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../../../features/sessions/model/session";
-import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import {
+  dropContextWindow,
+  markCompacted,
+  mergeContextUsage,
+} from "../../../features/sessions/model/contextUsage";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -133,10 +137,19 @@ export function applyHarnessEvent(
     case "context":
       return {
         ...session,
-        context: mergeContextUsage(session.context, {
-          used: event.used,
-          window: event.window,
-        }),
+        // A boundary carries no level, so take any window it reports and mark
+        // the held level stale rather than publish a number nobody sent. A reset
+        // drops the window instead: the model changed.
+        context: event.reset
+          ? dropContextWindow(session.context)
+          : event.compacted
+            ? markCompacted(
+                mergeContextUsage(session.context, { window: event.window }),
+              )
+            : mergeContextUsage(session.context, {
+                used: event.used,
+                window: event.window,
+              }),
       };
     case "turn.metrics":
       return mergeTurnMetrics(session, event);

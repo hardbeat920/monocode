@@ -852,7 +852,8 @@ function handleFrame(
     if (type === "agent_end" && rec.isTerminal === false) return;
   }
   if (type === "compaction_start") live.compacting = true;
-  if (type === "compaction_end") live.compacting = false;
+  const compactionEnded = type === "compaction_end";
+  if (compactionEnded) live.compacting = false;
   if (type === "auto_retry_start") live.retrying = true;
   if (type === "auto_retry_end") live.retrying = false;
 
@@ -862,8 +863,21 @@ function handleFrame(
   const turnError = turnErrorFromEvent(rec);
   if (turnError !== null) live.turnError = turnError;
 
-  const context = contextFromUsage(rec, live.contextWindow);
-  if (context) live.onEvent({ type: "context", ...context });
+  // Pi's summarizer is its own model call, so usage reported while it runs
+  // describes that call, not the conversation being rebuilt.
+  const context = live.compacting
+    ? null
+    : contextFromUsage(rec, live.contextWindow);
+  // A bare window sizes nothing, so at a boundary it rides the marker instead.
+  const retiring = compactionEnded && context?.used == null;
+  if (context && !retiring) live.onEvent({ type: "context", ...context });
+  if (retiring) {
+    live.onEvent({
+      type: "context",
+      ...(context?.window ? { window: context.window } : {}),
+      compacted: true,
+    });
+  }
   const metrics = turnMetricsFromUsage(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
 

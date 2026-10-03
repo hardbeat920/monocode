@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   askQuestionResponse,
+  contextWindowFromSetup,
   askQuestionsFromAcp,
   eventsFromAcpUpdate,
   fallbackGrokModels,
@@ -359,5 +360,76 @@ describe("grok protocol", () => {
 
   it("extracts plan text from exit_plan_mode", () => {
     expect(planFromExitPlan({ planContent: "Ship it" })).toBe("Ship it");
+  });
+});
+
+describe("contextWindowFromSetup", () => {
+  const withModels = (
+    currentModelId: string | undefined,
+    windows: Array<[string, number]>,
+  ) => ({
+    _meta: {
+      modelState: {
+        ...(currentModelId ? { currentModelId } : {}),
+        availableModels: windows.map(([modelId, totalContextTokens]) => ({
+          modelId,
+          name: modelId,
+          _meta: { totalContextTokens },
+        })),
+      },
+    },
+  });
+
+  it("reads the window of the model the session is on", () => {
+    expect(
+      contextWindowFromSetup(
+        withModels("grok-4.6", [["grok-4.6", 500_000]]),
+      ),
+    ).toBe(500_000);
+  });
+
+  it("picks the right entry out of a catalog with differing windows", () => {
+    expect(
+      contextWindowFromSetup(
+        withModels("grok-mini", [
+          ["grok-4.6", 500_000],
+          ["grok-mini", 128_000],
+        ]),
+      ),
+    ).toBe(128_000);
+  });
+
+  it("trusts a lone model even when the session does not name it", () => {
+    expect(
+      contextWindowFromSetup(withModels(undefined, [["grok-4.6", 500_000]])),
+    ).toBe(500_000);
+  });
+
+  it("reports nothing rather than guessing between models", () => {
+    // Listing `grok-4.6` first and defaulting to it would hand the session a
+    // window belonging to a model it is not running — the same mismatched
+    // denominator as reading the widest entry out of a usage ledger.
+    expect(
+      contextWindowFromSetup(
+        withModels(undefined, [
+          ["grok-4.6", 500_000],
+          ["grok-mini", 128_000],
+        ]),
+      ),
+    ).toBeUndefined();
+    // Including when the session names a model the catalog does not carry.
+    expect(
+      contextWindowFromSetup(
+        withModels("grok-unknown", [
+          ["grok-4.6", 500_000],
+          ["grok-mini", 128_000],
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("has no window without a catalog", () => {
+    expect(contextWindowFromSetup({})).toBeUndefined();
+    expect(contextWindowFromSetup(undefined)).toBeUndefined();
   });
 });

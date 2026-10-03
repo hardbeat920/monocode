@@ -2154,3 +2154,96 @@ describe("codex subagents", () => {
     ).toBe(false);
   });
 });
+
+describe("codex context window", () => {
+  beforeEach(() => {
+    sent.length = 0;
+  });
+
+  const readings = (events: HarnessEvent[]) =>
+    events.filter((event) => event.type === "context");
+
+  /** Compaction, replying to the request but holding the turn open. */
+  async function compactHoldingTurn(events: HarnessEvent[]) {
+    await waitFor(
+      () =>
+        parse().some((message) => message.method === "thread/compact/start"),
+      "thread/compact/start",
+    );
+    reply(
+      parse().find((message) => message.method === "thread/compact/start")!
+        .id as number,
+      {},
+    );
+    notify("turn/started", { turn: { id: "compact_1", status: "inProgress" } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  it("lets a reading that arrives mid-compaction clear the stale marker", async () => {
+    const { turn } = await startTurn("codex-ctx");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactCodexContext({
+      sessionId: "codex-ctx",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await compactHoldingTurn(events);
+
+    // Codex may recompute usage once the history is replaced, reporting the
+    // rebuilt level mid-turn. The marker must not land on top of it, or the
+    // ring hides a reading that is already correct.
+    notify("thread/tokenUsage/updated", {
+      threadId: "thr_1",
+      turnId: "compact_1",
+      tokenUsage: {
+        last: { totalTokens: 41_000 },
+        total: { totalTokens: 900_000 },
+        modelContextWindow: 272_000,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    notify("turn/completed", {
+      turn: { id: "compact_1", status: "completed" },
+    });
+    await compact;
+
+    // The marker is emitted before the turn is awaited, so this reading is the
+    // last word and the session is not left marked stale.
+    expect(readings(events)).toEqual([
+      { type: "context", compacted: true },
+      { type: "context", used: 41_000, window: 272_000 },
+    ]);
+  });
+
+  it("still marks the level stale when nothing reports during the turn", async () => {
+    const { turn } = await startTurn("codex-ctx2");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactCodexContext({
+      sessionId: "codex-ctx2",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await compactHoldingTurn(events);
+    notify("turn/completed", {
+      turn: { id: "compact_1", status: "completed" },
+    });
+    await compact;
+
+    // No usage update arrived, so the level we hold is still the one the
+    // summary replaced and the ring must stop claiming it.
+    expect(readings(events)).toEqual([{ type: "context", compacted: true }]);
+  });
+});

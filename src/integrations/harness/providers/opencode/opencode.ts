@@ -610,6 +610,11 @@ async function runCompaction(
   // Keep this outside the normal turn latch: its eventual session.status=idle
   // must not become a pending completion for the next user turn.
   await live.client.summarizeSession(live.openCodeSessionId, model);
+  // The compaction runs as a hidden agent whose usage describes the
+  // summarization call, and nothing reports the rebuilt level until the next
+  // real turn. Retire the reading we are holding rather than leave the ring at
+  // its pre-compaction height.
+  live.onEvent({ type: "context", compacted: true });
 }
 
 async function handleEvent(
@@ -659,8 +664,8 @@ async function handleEvent(
         live.messageRoleById.set(id, hidden ? "hidden" : role);
       }
       // A compaction assistant's usage describes the summarization call, not
-      // the rebuilt context. Keep the previous meter value until a real turn
-      // reports the post-compaction window level.
+      // the rebuilt context. Skip it here so the level survives until a real
+      // turn reports; runCompaction marks the ring stale in the meantime.
       if (role === "assistant" && !hidden) emitContext(live, info);
       break;
     }
