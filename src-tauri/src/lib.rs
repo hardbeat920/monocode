@@ -367,6 +367,7 @@ pub fn run() {
             linear::linear_list_teams,
             linear::linear_list_issues,
             linear::linear_issue_details,
+            linear::linear_issue_lookup,
             linear::linear_issue_thread,
             linear::linear_issue_comment,
             jira::jira_status,

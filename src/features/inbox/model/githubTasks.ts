@@ -1,11 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
+  clearLinearIssueCache,
   linearConnected,
   linearTeamIdsForFetch,
   listLinearIssues,
   listLinearTeams,
   loadHiddenLinearTeamIds,
+  lookupLinearIssue,
+  peekLinearIssue,
   type LinearIssue,
 } from "./linear";
 import {
@@ -219,6 +222,7 @@ export function clearInboxCache() {
   repositoriesByPath.clear();
   workItemByKey.clear();
   workItemInflight.clear();
+  clearLinearIssueCache();
   detailsByKey.clear();
   detailsInflight.clear();
   fetchedAt.clear();
@@ -926,6 +930,16 @@ async function fetchLinearInboxItems(query: InboxQuery): Promise<InboxItem[]> {
   return issues
     .filter((issue) => hidden.size === 0 || !hidden.has(issue.teamId))
     .map(linearIssueToInboxItem);
+}
+
+/** Cached Linear issue by UUID or `TEAM-123` identifier, as an Inbox row. */
+export function peekLinearWorkItem(key: string): InboxItem | null {
+  const issue = peekLinearIssue(key);
+  return issue ? linearIssueToInboxItem(issue) : null;
+}
+
+export async function linearWorkItem(key: string): Promise<InboxItem> {
+  return linearIssueToInboxItem(await lookupLinearIssue(key));
 }
 
 function linearIssueToInboxItem(issue: LinearIssue): InboxItem {

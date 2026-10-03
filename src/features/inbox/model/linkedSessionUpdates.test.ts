@@ -46,6 +46,24 @@ function session(
   };
 }
 
+describe("linear links", () => {
+  it("are never polled for GitHub updates", () => {
+    const sessions = [
+      session("linear", 1_000, {
+        linkedWorkItem: {
+          kind: "linear",
+          identifier: "SW-29",
+          repo: "SW",
+          number: 29,
+          url: "https://linear.app/acme/issue/SW-29",
+        },
+      }),
+    ];
+    expect(linkedWorkItemTargets(sessions)).toEqual([]);
+    expect(linkedSessionUpdateIds(sessions, new Map())).toEqual(new Set());
+  });
+});
+
 describe("linked session updates", () => {
   it("marks a session when its linked item changed after the local session", () => {
     const snapshots = new Map([[linkedWorkItemUpdateKey(linked), remote(200)]]);

@@ -157,7 +157,10 @@ import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { LiveAgentsPreview } from "../../features/sessions/ui/LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
 import { InboxNotificationMenu } from "../../features/inbox/ui/InboxNotificationMenu";
-import { prefetchGithubWorkItem } from "../../features/inbox/model/githubTasks";
+import {
+  linearWorkItem,
+  prefetchGithubWorkItem,
+} from "../../features/inbox/model/githubTasks";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
@@ -167,6 +170,7 @@ import { SearchableProjectPicker } from "../../features/projects/ui/SearchablePr
 import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
 import { LinkSessionWorkItemDialog } from "../../features/sessions/ui/LinkSessionWorkItemDialog";
+import { InboxProviderMark } from "../../features/inbox/ui/InboxProviderMark";
 import { sessionReminderPresets } from "../../features/sessions/ui/sessionReminderPresets";
 import {
   formatReminderTime,
@@ -1125,8 +1129,8 @@ function SidebarComponent({
             kind: "item" as const,
             id: "link-work-item",
             label: menuSessions[0]?.linkedWorkItem
-              ? "Edit GitHub issue or PR link…"
-              : "Link GitHub issue or PR…",
+              ? "Edit linked issue or PR…"
+              : "Link issue or PR…",
           },
         ]
       : []),
@@ -3167,6 +3171,12 @@ const SessionCard = memo(function SessionCard({
   );
 
   const linkedWorkItem = session.linkedWorkItem;
+  const linkedLabel = !linkedWorkItem
+    ? ""
+    : linkedWorkItem.kind === "linear"
+      ? linkedWorkItem.identifier
+      : `${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`;
+  const linkedSite = linkedWorkItem?.kind === "linear" ? "Linear" : "GitHub";
   const linkedUpdateDot = linkedUpdate ? (
     <span
       title={`Linked ${linkedWorkItem?.kind === "pr" ? "PR" : "issue"} updated since this session`}
@@ -3179,12 +3189,19 @@ const SessionCard = memo(function SessionCard({
       type="button"
       data-no-drag
       data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
-      aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
+      title={`Open ${linkedLabel} beside this session (${MOD}-click for ${linkedSite})`}
+      aria-label={`Open ${linkedLabel}`}
       onPointerEnter={() => {
         // Hover usually precedes the click by a few hundred ms, which is
-        // most of what the panel would otherwise spend waiting on GitHub.
-        if (onOpenWorkItem) prefetchGithubWorkItem(session.cwd, linkedWorkItem);
+        // most of what the panel would otherwise spend waiting on the API.
+        if (!onOpenWorkItem) return;
+        if (linkedWorkItem.kind === "linear") {
+          void linearWorkItem(
+            linkedWorkItem.id ?? linkedWorkItem.identifier,
+          ).catch(() => undefined);
+          return;
+        }
+        prefetchGithubWorkItem(session.cwd, linkedWorkItem);
       }}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -3207,10 +3224,16 @@ const SessionCard = memo(function SessionCard({
     >
       {linkedWorkItem.kind === "pr" ? (
         <GitPullRequest className="size-3" strokeWidth={1.75} />
+      ) : linkedWorkItem.kind === "linear" ? (
+        <InboxProviderMark provider="linear" className="size-2.5" />
       ) : (
         <CircleDot className="size-3" strokeWidth={1.75} />
       )}
-      <span>#{linkedWorkItem.number}</span>
+      <span>
+        {linkedWorkItem.kind === "linear"
+          ? linkedWorkItem.identifier
+          : `#${linkedWorkItem.number}`}
+      </span>
     </button>
   ) : null;
 
