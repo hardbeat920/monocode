@@ -53,12 +53,24 @@ impl HarnessContext {
 pub fn register_builtin_harnesses(ctx: &HarnessContext) {
     #[cfg(feature = "claude")]
     crate::providers::claude::register(ctx);
+    #[cfg(feature = "cursor")]
+    crate::providers::cursor::register(ctx);
     #[cfg(feature = "codex")]
     crate::providers::codex::register(ctx);
+    #[cfg(feature = "grok")]
+    crate::providers::grok::register(ctx);
+    #[cfg(feature = "opencode")]
+    crate::providers::opencode::register(ctx);
     #[cfg(feature = "pi")]
     crate::providers::pi::register(ctx);
-    // Providers without a `register` function yet: cursor, grok, opencode,
-    // fx, hermes, droid, antigravity.
+    #[cfg(feature = "fx")]
+    crate::providers::fx::register(ctx);
+    #[cfg(feature = "hermes")]
+    crate::providers::hermes::register(ctx);
+    #[cfg(feature = "droid")]
+    crate::providers::droid::register(ctx);
+    #[cfg(feature = "antigravity")]
+    crate::providers::antigravity::register(ctx);
     let _ = ctx;
 }
 

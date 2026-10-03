@@ -4300,6 +4300,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "gpui",
@@ -4527,11 +4528,16 @@ version = "0.6.0"
 dependencies = [
  "gpui",
  "gpui-component",
+ "gpui_platform",
+ "image",
  "monocode-core",
  "monocode-markdown",
+ "monocode-platform",
  "monocode-ui",
+ "regex",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -4548,13 +4554,58 @@ dependencies = [
 ]
 
 [[package]]
-name = "monocode-view-scm"
+name = "monocode-view-inbox"
 version = "0.6.0"
 dependencies = [
  "gpui",
  "gpui-component",
  "monocode-core",
  "monocode-editor",
+ "monocode-markdown",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-pages"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-markdown",
+ "monocode-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-scm"
+version = "0.6.0"
+dependencies = [
+ "futures",
+ "gpui",
+ "gpui-component",
+ "gpui_platform",
+ "image",
+ "monocode-core",
+ "monocode-editor",
+ "monocode-git",
+ "monocode-ui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "monocode-view-settings"
+version = "0.6.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "monocode-core",
+ "monocode-markdown",
  "monocode-ui",
  "serde",
  "serde_json",
