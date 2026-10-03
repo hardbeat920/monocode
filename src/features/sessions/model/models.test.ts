@@ -420,6 +420,24 @@ describe("live catalog overlays", () => {
     expect(hasLiveCatalog("omp")).toBe(false);
   });
 
+  it("defaults opencode to the GLM flagship when v2 drops the legacy id", () => {
+    setHarnessModels("opencode", [
+      {
+        id: "opencode:openai/gpt-image-2",
+        harness: "opencode",
+        name: "Gpt Image 2",
+        nativeId: "openai/gpt-image-2",
+      },
+      {
+        id: "opencode:opencode-go/glm-5.3",
+        harness: "opencode",
+        name: "Glm 5.3",
+        nativeId: "opencode-go/glm-5.3",
+      },
+    ]);
+    expect(defaultModelId("opencode")).toBe("opencode:opencode-go/glm-5.3");
+  });
+
   it("keeps saved Claude versions distinct from a live alias", () => {
     const live = [
       {

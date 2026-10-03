@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   flattenOpenCodeModels,
   openCodeProviderName,
+  parseAgentDebugOutput,
   parseAgentListCliOutput,
   parseModelsCliOutput,
 } from "./opencodeCatalog";
@@ -177,6 +178,37 @@ describe("OpenCode CLI inventory parsers", () => {
     ).toBe("build");
   });
 
+  it("parses v2 bare-slug models output with no metadata", () => {
+    const stdout = [
+      "opencode-go/deepseek-v4-pro",
+      "opencode-go/glm-5.3",
+      "opencode/goose",
+      "",
+    ].join("\n");
+    const parsed = parseModelsCliOutput(stdout);
+    const models = flattenOpenCodeModels(parsed, []);
+    expect(models.map((model) => model.id)).toEqual([
+      "opencode:opencode-go/deepseek-v4-pro",
+      "opencode:opencode-go/glm-5.3",
+      "opencode:opencode/goose",
+    ]);
+    expect(models.map((model) => model.provider)).toEqual([
+      { id: "opencode-go", name: "OpenCode Go" },
+      { id: "opencode-go", name: "OpenCode Go" },
+      { id: "opencode", name: "OpenCode" },
+    ]);
+    expect(models[0].name).toBe("Deepseek V4 Pro");
+    expect(models[0].settings).toBeUndefined();
+  });
+
+  it("keeps a model with unparseable metadata instead of dropping it", () => {
+    const stdout = ["opencode-go/glm-5.3", "not json", ""].join("\n");
+    const models = flattenOpenCodeModels(parseModelsCliOutput(stdout), []);
+    expect(models.map((model) => model.nativeId)).toEqual([
+      "opencode-go/glm-5.3",
+    ]);
+  });
+
   it("parses agent list headers", () => {
     const agents = parseAgentListCliOutput(
       ["build (primary)", "{}", "compaction (primary)", "{}"].join("\n"),
@@ -185,6 +217,26 @@ describe("OpenCode CLI inventory parsers", () => {
       { name: "build", mode: "primary", hidden: false },
       { name: "compaction", mode: "primary", hidden: true },
     ]);
+  });
+
+  it("parses v2 debug agents JSON", () => {
+    const stdout = JSON.stringify([
+      { id: "build", mode: "primary", hidden: false },
+      { id: "explore", mode: "subagent", hidden: false },
+      { id: "title", mode: "primary", hidden: true },
+      { id: "compaction", mode: "primary", hidden: false },
+    ]);
+    expect(parseAgentDebugOutput(stdout)).toEqual([
+      { name: "build", mode: "primary", hidden: false },
+      { name: "explore", mode: "subagent", hidden: false },
+      { name: "title", mode: "primary", hidden: true },
+      { name: "compaction", mode: "primary", hidden: true },
+    ]);
+  });
+
+  it("returns no agents for unparseable debug output", () => {
+    expect(parseAgentDebugOutput("not json")).toEqual([]);
+    expect(parseAgentDebugOutput('{"id":"build"}')).toEqual([]);
   });
 
   it("sorts variant options and labels xhigh as Extra High", () => {
