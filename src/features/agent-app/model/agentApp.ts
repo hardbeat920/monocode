@@ -32,6 +32,7 @@ import { pathKey } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage } from "./sessionConversation";
+import type { LinkedPeer } from "../../sessions/model/sessionLinks";
 
 export type AppSessionListing = {
   id: string;
@@ -75,7 +76,64 @@ export type AgentAppHost = {
   notes(): Promise<Note[]>;
   note(id: string): Promise<Note | null>;
   saveNote(note: NoteUpsert): Promise<Note>;
+  /** Sessions the user linked to this one. */
+  links?(id: string): Promise<LinkedPeer[]>;
+  /** A linked session, from any project. */
+  linkedSession?(id: string): Promise<Session | null>;
+  /** Deliver a message now, or after the peer's current turn ends. */
+  sendLinked?(
+    from: Session,
+    to: string,
+    message: string,
+    requestId: string,
+  ): Promise<{ queued: boolean; alreadySent: boolean }>;
 };
+
+/**
+ * What the calling turn may do. "full" comes from /operator. "limited" is
+ * every other thread: listing and starting sessions when the setting allows
+ * it, and talking to linked sessions.
+ */
+export type AgentAppAccess = {
+  scope: "full" | "limited";
+  openSessions: boolean;
+  /** Limited scope only: started sessions wait as drafts for the user. */
+  reviewOpenedSessions?: boolean;
+};
+
+const FULL_ACCESS: AgentAppAccess = { scope: "full", openSessions: true };
+
+const OPEN_SESSION_ACTIONS = new Set(["sessions.list", "sessions.start"]);
+const LINK_ACTIONS = new Set(["links.read", "links.send"]);
+
+function checkAccess(action: string, access: AgentAppAccess) {
+  if (access.scope === "full" || LINK_ACTIONS.has(action)) return;
+  if (OPEN_SESSION_ACTIONS.has(action)) {
+    if (access.openSessions) return;
+    throw new Error(
+      "Opening sessions from agents is turned off in MonoCode settings. Ask the user to turn on Let agents open sessions, or to use /operator.",
+    );
+  }
+  throw new Error(
+    `${action} needs full app access. Ask the user to use /operator in this thread.`,
+  );
+}
+
+async function linkedPeer(
+  source: Session,
+  id: string,
+  host: AgentAppHost,
+): Promise<LinkedPeer> {
+  if (id === source.id)
+    throw new Error("Use the current conversation to continue this session");
+  const peers = (await host.links?.(source.id)) ?? [];
+  const peer = peers.find((entry) => entry.id === id);
+  if (!peer)
+    throw new Error(
+      "That session is not linked to this one. Only the user can link sessions.",
+    );
+  return peer;
+}
 
 const FIELDS = new Map<string, readonly string[]>([
   ["models.list", []],
@@ -108,6 +166,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["notes.list", ["limit", "offset"]],
   ["notes.read", ["id"]],
   ["notes.write", ["id", "title", "body", "tags"]],
+  ["links.read", ["sessionId", "before", "limit", "maxChars"]],
+  ["links.send", ["sessionId", "message"]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -287,8 +347,10 @@ export async function handleAgentApp(
   action: string,
   input: Record<string, unknown>,
   host: AgentAppHost,
+  access: AgentAppAccess = FULL_ACCESS,
 ): Promise<unknown> {
   fields(action, input);
+  checkAccess(action, access);
   switch (action) {
     case "models.list":
       return {
@@ -359,6 +421,12 @@ export async function handleAgentApp(
           "request ID must use letters, digits, underscores or hyphens",
         );
       const launch = startLaunch(source, input);
+      // With review on, a session opened without /operator waits for the
+      // user to send it.
+      const forcedDraft =
+        access.scope !== "full" && !!access.reviewOpenedSessions;
+      const forcedDraftChanged = forcedDraft && !launch.draft;
+      if (forcedDraft) launch.draft = true;
       if (input.worktreeCwd !== undefined) {
         const chosen = (await host.worktrees(launch.cwd)).worktrees.find(
           (tree) =>
@@ -398,7 +466,41 @@ export async function handleAgentApp(
         model: launch.model,
         submitted: !launch.draft,
         draft: !!launch.draft,
+        ...(forcedDraftChanged
+          ? {
+              note: "Saved as an unsent draft. The user reviews it and sends it from MonoCode.",
+            }
+          : {}),
       };
+    }
+    case "links.read": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      await linkedPeer(source, id, host);
+      const target = await host.linkedSession?.(id);
+      if (!target) throw new Error("The linked session is no longer available");
+      return sessionConversationPage(target, {
+        before: optionalString(input.before, "before", 256),
+        limit: input.limit as number | undefined,
+        maxChars: input.maxChars as number | undefined,
+      });
+    }
+    case "links.send": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const message = requiredString(input.message, "message", 60_000);
+      if (consumeOperatorCommand(message).matched)
+        throw new Error("App calls cannot enable /operator in another session");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      await linkedPeer(source, id, host);
+      if (!host.sendLinked)
+        throw new Error("Linked sessions are unavailable in this window");
+      const result = await host.sendLinked(
+        source,
+        id,
+        message,
+        `link-${source.id}-${requestId}`,
+      );
+      return { sessionId: id, ...result };
     }
     case "worktrees.list":
       return host.worktrees(requireProject(source));
@@ -532,4 +634,32 @@ export async function handleAgentApp(
       });
     }
   }
+}
+
+/** Instructions for a thread without /operator, added to each of its turns. */
+export function limitedAppPrompt(input: {
+  cli: string;
+  openSessions: boolean;
+  reviewOpenedSessions?: boolean;
+  peers: readonly LinkedPeer[];
+}): string {
+  const lines: string[] = [];
+  if (input.openSessions) {
+    const outcome = input.reviewOpenedSessions
+      ? "A started session opens with its prompt saved as an unsent draft for the user to review."
+      : 'A started session submits its prompt and starts working right away. Pass "draft":true to save the prompt unsent instead.';
+    lines.push(
+      `You can open MonoCode sessions for the user with \`${input.cli} sessions.list\` and \`${input.cli} sessions.start --json '{"prompt":"..."}'\`. ${outcome} Start one only when the user asks for it or clearly wants work split into a separate session.`,
+    );
+  }
+  if (input.peers.length) {
+    const peers = input.peers
+      .map((peer) => `- ${peer.title.trim() || "Untitled session"} (${peer.id})`)
+      .join("\n");
+    lines.push(
+      `The user linked this session to:\n${peers}\nRead one with \`${input.cli} links.read --json '{"sessionId":"..."}'\` and message it with \`${input.cli} links.send --json '{"sessionId":"...","message":"..."}'\`. A busy session gets the message after its current turn. Linked agents can send each other 5 messages before the user has to write again; if a send fails for that reason, tell the user.`,
+    );
+  }
+  if (!lines.length) return "";
+  return `<monocode_app>\n${lines.join("\n\n")}\nRun \`${input.cli} --help\` for the JSON fields. The CLI uses a credential already in your environment; never print it. Other app actions need the user to use /operator.\n</monocode_app>`;
 }

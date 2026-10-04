@@ -8,9 +8,27 @@ import {
 } from "./model/harnessFlush";
 import {
   handleAgentApp,
+  limitedAppPrompt,
   type AppSessionListing,
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
+import {
+  SESSION_COMPOSER_DROP_EVENT,
+  expandSessionContext,
+  withSessionContextCard,
+  withoutSessionContextCard,
+  type SessionComposerDrop,
+  type SessionContextCard,
+} from "../features/sessions/model/sessionContext";
+import {
+  linkSessions,
+  linkedMessagePrompt,
+  loadSessionLinks,
+  peersOf,
+  recordLinkedMessage,
+  resetLinkBudget,
+  type LinkedPeer,
+} from "../features/sessions/model/sessionLinks";
 import { submitWithSettlement } from "./model/managedSubmission";
 import { firstProviderRequest, firstProviderRequestBudget } from "./model/firstProviderRequest";
 import {
@@ -635,6 +653,8 @@ import {
   loadNotesEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
+  loadAgentsOpenSessions,
+  loadReviewAgentSessions,
   loadKeybindingOverrides,
   loadSettingsSection,
   keybindingPressed,
@@ -749,6 +769,9 @@ type SubmitOptions = ComposerTurnOptions & {
   followUpBehavior?: FollowUpBehavior;
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
+  sessionContext?: SessionContextCard[];
+  /** The agent in this linked session sent the turn. */
+  linkedFrom?: LinkedPeer;
   queuedMessageId?: string;
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
@@ -807,11 +830,16 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
 function userTurnCards(
   noteCard: NoteComposerCard | undefined,
   secondOpinion?: SecondOpinionMeta,
+  sessionContext?: SessionContextCard[],
+  linkedFrom?: LinkedPeer,
 ) {
-  if (!noteCard && !secondOpinion) return undefined;
+  if (!noteCard && !secondOpinion && !sessionContext?.length && !linkedFrom)
+    return undefined;
   return {
     ...(secondOpinion ? { secondOpinion } : {}),
     ...(noteCard ? { noteCard: noteCardMeta(noteCard) } : {}),
+    ...(sessionContext?.length ? { sessionContext } : {}),
+    ...(linkedFrom ? { linkedFrom } : {}),
   };
 }
 
@@ -2562,6 +2590,65 @@ function Workspace({
       ),
     );
   }, []);
+
+  const onSessionContextRemove = useCallback(
+    (sessionId: string, contextId: string) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId && session.sessionContext
+            ? {
+                ...session,
+                sessionContext: withoutSessionContextCard(
+                  session.sessionContext,
+                  contextId,
+                ),
+              }
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
+  // A sidebar session dropped on another session's composer.
+  useEffect(() => {
+    const onDrop = (event: Event) => {
+      const drop = (event as CustomEvent<SessionComposerDrop>).detail;
+      if (!drop?.fromId || !drop.targetId || drop.fromId === drop.targetId)
+        return;
+      void (async () => {
+        const source =
+          sessionsRef.current.find((entry) => entry.id === drop.fromId) ??
+          (await getSession(drop.fromId));
+        if (!source) throw new Error("That session is no longer available.");
+        if (drop.choice === "link") {
+          await linkSessions(drop.fromId, drop.targetId);
+          return;
+        }
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== drop.targetId) return session;
+            const sessionContext = withSessionContextCard(
+              session.sessionContext,
+              { id: source.id, title: source.title },
+              session.id,
+            );
+            return sessionContext === session.sessionContext
+              ? session
+              : { ...session, sessionContext };
+          }),
+        );
+      })().catch((error: unknown) => {
+        enqueueHarnessEvent(drop.targetId, {
+          type: "status",
+          text: `Could not ${drop.choice === "link" ? "link the sessions" : "add the session to context"}: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        flushHarnessEvents();
+      });
+    };
+    window.addEventListener(SESSION_COMPOSER_DROP_EVENT, onDrop);
+    return () => window.removeEventListener(SESSION_COMPOSER_DROP_EVENT, onDrop);
+  }, [enqueueHarnessEvent, flushHarnessEvents]);
 
   const onHandoffCardDismiss = useCallback((sessionId: string) => {
     setSessions((prev) =>
@@ -6285,11 +6372,18 @@ function Workspace({
         options && "handoffCard" in options
           ? options.handoffCard
           : current.handoffCard;
+      const linkedFrom = options?.linkedFrom;
+      const sessionContext =
+        options && "sessionContext" in options
+          ? options.sessionContext
+          : current.sessionContext;
+
       if (
         !text.trim() &&
         attachments.length === 0 &&
         !noteCard &&
-        !handoffCard
+        !handoffCard &&
+        !sessionContext?.length
       ) {
         return false;
       }
@@ -6343,10 +6437,26 @@ function Workspace({
       const rawCommand =
         !operatorCommand.matched &&
         isNativeCommandPrompt(submittedText, current.harness);
+      // A linked agent's message leaves the user's composer chips alone.
+      const keepComposerCards = rawCommand || !!linkedFrom;
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
-      const harnessText =
+      const noteText =
         options?.ciRepair?.prompt ??
         (rawCommand ? submittedText : composeNoteMessage(noteCard, promptText));
+      const harnessText =
+        linkedFrom && !rawCommand
+          ? linkedMessagePrompt(linkedFrom, noteText)
+          : noteText;
+      // Attached sessions are read when the turn goes out, not when dropped.
+      const turnContext = rawCommand ? undefined : sessionContext;
+      const withSessionContext = (prompt: string) =>
+        expandSessionContext(prompt, turnContext, async (id) => {
+          flushHarnessEvents();
+          return (
+            sessionsRef.current.find((entry) => entry.id === id) ??
+            (await getSession(id))
+          );
+        });
 
       const pendingSwitch =
         current.pendingSwitch && current.pendingSwitch.from !== current.harness
@@ -6378,7 +6488,9 @@ function Workspace({
           current.worktreePreparing ||
           intent === "plan" ||
           intent === "orchestrate" ||
-          operatorCommand.matched
+          operatorCommand.matched ||
+          // A linked agent's message waits for the current turn to end.
+          (linkedFrom && !options?.queuedMessageId)
             ? "queue"
             : // The agent has yielded and only background work is left, which
               // may never end (a dev server). Queuing would park the message
@@ -6392,9 +6504,11 @@ function Workspace({
               s.id === sessionId
                 ? {
                     ...s,
-                    inboxCard: rawCommand ? s.inboxCard : undefined,
-                    noteCard: rawCommand ? s.noteCard : undefined,
-                    handoffCard: rawCommand ? s.handoffCard : undefined,
+                    inboxCard: keepComposerCards ? s.inboxCard : undefined,
+                    noteCard: keepComposerCards ? s.noteCard : undefined,
+                    handoffCard: keepComposerCards ? s.handoffCard : undefined,
+                    sessionContext:
+                      keepComposerCards ? s.sessionContext : undefined,
                     queuedMessages: options?.queuedMessageId ? s.queuedMessages : [
                       ...(s.queuedMessages ?? []),
                       {
@@ -6403,6 +6517,8 @@ function Workspace({
                         attachments,
                         noteCard,
                         handoffCard,
+                        ...(sessionContext?.length ? { sessionContext } : {}),
+                        ...(linkedFrom ? { linkedFrom } : {}),
                         intent,
                         selection: {
                           harness: current.harness,
@@ -6436,14 +6552,20 @@ function Workspace({
         }
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
-        const cards = userTurnCards(noteCard);
+        const cards = userTurnCards(
+          noteCard,
+          undefined,
+          turnContext,
+          linkedFrom,
+        );
         const nextSessions = sessionsRef.current.map((s) => {
           if (s.id !== sessionId) return s;
           let next: Session = {
             ...s,
-            inboxCard: rawCommand ? s.inboxCard : undefined,
-            noteCard: rawCommand ? s.noteCard : undefined,
-            handoffCard: rawCommand ? s.handoffCard : undefined,
+            inboxCard: keepComposerCards ? s.inboxCard : undefined,
+            noteCard: keepComposerCards ? s.noteCard : undefined,
+            handoffCard: keepComposerCards ? s.handoffCard : undefined,
+            sessionContext: keepComposerCards ? s.sessionContext : undefined,
           };
           if (options?.queuedMessageId) {
             next = dequeueQueuedMessage(next, options.queuedMessageId);
@@ -6456,11 +6578,14 @@ function Workspace({
         void (async () => {
           try {
             const prepared = await prepareAttachments(attachments);
-            const prompt = await preparePrompt(harnessText, {
-              harness: activeSelection.harness,
-              sessionId,
-              cwd: initialWorkCwd,
-            });
+            const prompt = await preparePrompt(
+              await withSessionContext(harnessText),
+              {
+                harness: activeSelection.harness,
+                sessionId,
+                cwd: initialWorkCwd,
+              },
+            );
             await steerHarnessTurn({
               harness: activeSelection.harness,
               sessionId,
@@ -6600,7 +6725,9 @@ function Workspace({
             ? SECOND_OPINION_TITLE
             : submittedText;
       const cards = {
-        ...(rawCommand ? undefined : userTurnCards(noteCard, card)),
+        ...(rawCommand
+          ? undefined
+          : userTurnCards(noteCard, card, turnContext, linkedFrom)),
         ...(ciContext ? { ciContext } : {}),
         ...(operatorCommand.matched ? { monocode: true } : {}),
         ...(intent === "plan" || intent === "orchestrate" ? { intent } : {}),
@@ -6637,11 +6764,15 @@ function Workspace({
                 ? true
                 : selected.worktreePreparing,
               inboxCard:
-                rawCommand || options?.ciRepair ? s.inboxCard : undefined,
+                keepComposerCards || options?.ciRepair ? s.inboxCard : undefined,
               noteCard:
-                rawCommand || options?.ciRepair ? s.noteCard : undefined,
+                keepComposerCards || options?.ciRepair ? s.noteCard : undefined,
               handoffCard:
-                rawCommand || options?.ciRepair ? s.handoffCard : undefined,
+                keepComposerCards || options?.ciRepair ? s.handoffCard : undefined,
+              sessionContext:
+                keepComposerCards || options?.ciRepair
+                  ? s.sessionContext
+                  : undefined,
             };
             if (editedResend) {
               next = editedResend.replace(next);
@@ -6905,15 +7036,28 @@ function Workspace({
         const prepared = await prepareAttachments(attachments);
         const prompt = intent === "build" && approvedPlan
           ? harnessText
-          : await preparePrompt(harnessText, {
+          : await preparePrompt(await withSessionContext(harnessText), {
               harness: current.harness,
               sessionId,
               cwd: workCwd,
             });
+        // Without /operator a thread may still open sessions and talk to
+        // linked sessions. The app CLI handler enforces the same.
+        const openSessions = loadAgentsOpenSessions();
+        const linkedPeers = peersOf(await loadSessionLinks(), sessionId);
+        const appEligible =
+          !current.inboxAsk &&
+          !current.orchestrationLeadId &&
+          !options?.managed &&
+          !orchestrator.run(sessionId);
+        const limitedAccess =
+          !operatorAccess &&
+          appEligible &&
+          (openSessions || linkedPeers.length > 0);
         const operatorCli = operatorCommand.matched
           ? `${shellPath(await invoke<string>("app_cli_path"))} app`
           : undefined;
-        const sendText = firstProviderRequest({
+        let sendText = firstProviderRequest({
           prompt,
           intent,
           approvedPlan: intent === "build" ? approvedPlan?.text : undefined,
@@ -6926,6 +7070,15 @@ function Workspace({
           orchestratorPrompt: (text) => orchestrator.prompt(sessionId, text),
           operatorCli,
         });
+        if (limitedAccess || (operatorAccess && linkedPeers.length > 0)) {
+          const limitedBlock = limitedAppPrompt({
+            cli: operatorCli ?? `${shellPath(await invoke<string>("app_cli_path"))} app`,
+            openSessions: limitedAccess && openSessions,
+            reviewOpenedSessions: loadReviewAgentSessions(),
+            peers: linkedPeers,
+          });
+          if (limitedBlock) sendText += `\n\n${limitedBlock}`;
+        }
         if (turnGen.current.get(sessionId) !== gen) return;
         let contextTransfer: ContextTransferInput | undefined;
         if (pendingSwitch && !rawCommand) {
@@ -7201,6 +7354,7 @@ function Workspace({
                 operatorAccess ||
                 orchestrator.run(sessionId)?.status === "active",
               appAccess: operatorAccess,
+              ...(limitedAccess ? { appScope: "limited" as const } : {}),
               text,
               attachments: turnAttachments,
               ...(contextTransfer ? { contextTransfer } : {}),
@@ -7911,6 +8065,8 @@ function Workspace({
             queuedMessageId: head.id,
             noteCard: head.noteCard,
             handoffCard: head.handoffCard,
+            sessionContext: head.sessionContext,
+            ...(head.linkedFrom ? { linkedFrom: head.linkedFrom } : {}),
             intent: head.intent,
             buildTarget: head.selection,
           });
@@ -7995,6 +8151,8 @@ function Workspace({
         queuedMessageId: message.id,
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
+        sessionContext: message.sessionContext,
+        ...(message.linkedFrom ? { linkedFrom: message.linkedFrom } : {}),
         intent: message.intent,
         buildTarget: message.selection,
       });
@@ -9519,6 +9677,8 @@ function Workspace({
       requestId: string;
       action: string;
       input: Record<string, unknown>;
+      /** Set by the loopback host from the turn's authorization. */
+      scope?: string;
     }>("monocode-control-request", ({ payload }) => {
       const handle = async () => {
         if (payload.namespace === "control") {
@@ -9700,6 +9860,47 @@ function Workspace({
               window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
               return saved;
             },
+            links: async (id) => peersOf(await loadSessionLinks(), id),
+            linkedSession: async (id) => {
+              flushHarnessEvents();
+              const target =
+                sessionsRef.current.find((session) => session.id === id) ??
+                (await getSession(id));
+              return target && !target.orchestrationLeadId ? target : null;
+            },
+            sendLinked: async (from, to, message, requestId) => {
+              const target = await ensureOpenSessionRef.current(to);
+              if (
+                !target ||
+                target.orchestrationLeadId ||
+                target.inboxAsk ||
+                orchestrator.run(to)
+              )
+                throw new Error("The linked session is unavailable");
+              if (target.blocks.some((block) => block.appRequestId === requestId))
+                return { queued: false, alreadySent: true };
+              if (!target.busy && sessionDraftBlock(target))
+                throw new Error(
+                  "The linked session has an unsent draft. Ask the user to send or remove it first.",
+                );
+              // Counts against the loop guard; rejects once the limit is hit.
+              await recordLinkedMessage(from.id, to);
+              const accepted = await submitSessionRef.current(to, message, [], {
+                linkedFrom: { id: from.id, title: from.title },
+                appRequestId: requestId,
+                noteCard: undefined,
+                handoffCard: undefined,
+                sessionContext: undefined,
+              });
+              if (!accepted)
+                throw new Error("The linked session could not accept the message");
+              return { queued: !!target.busy, alreadySent: false };
+            },
+          },
+          {
+            scope: payload.scope === "full" ? "full" : "limited",
+            openSessions: loadAgentsOpenSessions(),
+            reviewOpenedSessions: loadReviewAgentSessions(),
           },
         );
         appReceipts.current.set(key, { signature, promise });
@@ -10969,6 +11170,17 @@ function Workspace({
     [openSettings],
   );
 
+  // A message the user writes lets the agents in its linked sessions send
+  // each other another round of messages.
+  const onComposerSubmit = useCallback(
+    (...args: Parameters<Submit>): boolean => {
+      const accepted = onSubmit(...args);
+      if (accepted) resetLinkBudget(args[0]);
+      return accepted;
+    },
+    [onSubmit],
+  );
+
   const sessionPaneProps = {
     workspaceSwitchingSessionId: workspaceNavigation.pending
       ? active?.id
@@ -10989,7 +11201,7 @@ function Workspace({
     onRuntimeModeChange,
     onSaveDraft,
     onRemoveDraft,
-    onSubmit,
+    onSubmit: onComposerSubmit,
     onStop,
     onCompactContext,
     onPlaceSessionInFolder,
@@ -11005,6 +11217,7 @@ function Workspace({
     onLinkedWorkItemUpdateCardDismiss,
     onNoteCardDismiss,
     onHandoffCardDismiss,
+    onSessionContextRemove,
     onOpenLinkedWorkItem,
     onArchiveSession: onArchiveHistorySession,
     onDeleteSession: onDeleteHistorySession,

@@ -5,6 +5,8 @@ import type { ProviderContextState } from "./providerContext";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
 import type { InboxAskContext } from "../../inbox/model/inboxAsk";
 import type { NoteCardMeta, NoteComposerCard } from "../../notes";
+import type { SessionContextCard } from "./sessionContext";
+import type { LinkedPeer } from "./sessionLinks";
 import type { OrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
@@ -272,6 +274,9 @@ export type QueuedMessage = {
   attachments: Attachment[];
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
+  sessionContext?: SessionContextCard[];
+  /** Sent by the agent in a linked session, not typed by the user. */
+  linkedFrom?: LinkedPeer;
   intent?: TurnIntent;
 };
 
@@ -359,6 +364,10 @@ export type Block = {
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Other sessions attached to this user turn as context. */
+  sessionContext?: SessionContextCard[];
+  /** The agent in this linked session sent the turn. */
+  linkedFrom?: LinkedPeer;
   /** Exact CI repair instructions and evidence supplied with this user turn. */
   ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
@@ -477,6 +486,8 @@ export type Session = {
   noteCard?: NoteComposerCard;
   /** Handoff chip shown above the composer. In-memory, one-shot. */
   handoffCard?: HandoffComposerCard;
+  /** Sessions dropped on the composer as context. In-memory, one-shot. */
+  sessionContext?: SessionContextCard[];
   /**
    * Live clarifying questions from AskUserQuestion / ask_question / etc.
    * In-memory; request ids do not survive restarts.

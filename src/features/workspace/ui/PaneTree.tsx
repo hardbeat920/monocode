@@ -128,6 +128,7 @@ type Shared = {
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
+  onSessionContextRemove?: (sessionId: string, contextId: string) => void;
   onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
   onDeleteSession?: (sessionId: string) => Promise<boolean>;
@@ -252,6 +253,7 @@ function PaneTreeComponent({
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
   onHandoffCardDismiss,
+  onSessionContextRemove,
   onOpenLinkedWorkItem,
   onArchiveSession,
   onDeleteSession,
@@ -544,6 +546,7 @@ function PaneTreeComponent({
                   }
                   onNoteCardDismiss={onNoteCardDismiss}
                   onHandoffCardDismiss={onHandoffCardDismiss}
+                  onSessionContextRemove={onSessionContextRemove}
                   onOpenLinkedWorkItem={onOpenLinkedWorkItem}
                   onArchiveSession={onArchiveSession}
                   onDeleteSession={onDeleteSession}

@@ -302,6 +302,10 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadAgentsOpenSessions,
+  saveAgentsOpenSessions,
+  loadReviewAgentSessions,
+  saveReviewAgentSessions,
   loadKeybindingOverrides,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
@@ -730,6 +734,12 @@ function GeneralPage({
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermission>(cachedNotificationPermission);
   const [notesEnabled, setNotesEnabled] = useState(loadNotesEnabled);
+  const [agentsOpenSessions, setAgentsOpenSessions] = useState(
+    loadAgentsOpenSessions,
+  );
+  const [reviewAgentSessions, setReviewAgentSessions] = useState(
+    loadReviewAgentSessions,
+  );
   const [liveAgentsEnabled, setLiveAgentsEnabled] = useState(
     loadLiveAgentsEnabled,
   );
@@ -783,6 +793,16 @@ function GeneralPage({
       // user put it so the next launch tries again, but say why it is dead.
       setQuickComposerError(String(error));
     });
+  };
+
+  const onAgentsOpenSessions = (next: boolean) => {
+    saveAgentsOpenSessions(next);
+    setAgentsOpenSessions(next);
+  };
+
+  const onReviewAgentSessions = (next: boolean) => {
+    saveReviewAgentSessions(next);
+    setReviewAgentSessions(next);
   };
 
   const onLiveAgentsEnabled = (next: boolean) => {
@@ -898,6 +918,30 @@ function GeneralPage({
             />
           </Row>
         )}
+        <Row
+          id="agents-open-sessions"
+          label="Let agents open sessions"
+          description="Any agent can list this project's sessions and start a new one with a prompt. Use /operator for full app access."
+        >
+          <Toggle
+            label="Let agents open sessions"
+            on={agentsOpenSessions}
+            onChange={onAgentsOpenSessions}
+          />
+        </Row>
+        {agentsOpenSessions ? (
+          <Row
+            id="review-agent-sessions"
+            label="Review agent-opened sessions before they run"
+            description="A session an agent opens keeps its prompt as an unsent draft until you send it. Off, the session starts working right away. /operator threads are not affected."
+          >
+            <Toggle
+              label="Review agent-opened sessions before they run"
+              on={reviewAgentSessions}
+              onChange={onReviewAgentSessions}
+            />
+          </Row>
+        ) : null}
         <Row
           id="working-agents"
           label="Working agents"

@@ -1098,6 +1098,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 21 {
+        // Linked sessions can message each other. Older stores simply have no
+        // links, so nothing else changes.
+        crate::session_links::ensure_table(conn)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?1)",
+            params![now_millis()],
+        )?;
+    }
     // Create even when a version row already exists (another build may have
     // used the same numbers, or a previous run recorded the version without
     // the table). Restore writes into these; missing tables look like a
@@ -1141,6 +1150,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     crate::notes::ensure_notes_table(conn)?;
     crate::reminders::ensure_table(conn)?;
+    crate::session_links::ensure_table(conn)?;
     crate::automations::ensure_tables(conn)?;
     ensure_orchestration_history(conn)?;
     Ok(())
@@ -1923,6 +1933,7 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
             params![blocks.to_string(), id],
         )?;
     }
+    crate::session_links::delete_for_session(&tx, session_id)?;
     tx.execute(
         "DELETE FROM orchestration_runs WHERE lead_id = ?1",
         [session_id],

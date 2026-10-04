@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -10,6 +11,11 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
+import {
+  peersOf,
+  unlinkSessions,
+  useSessionLinks,
+} from "../model/sessionLinks";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
   orchestrationCheckoutCwd,
@@ -160,6 +166,7 @@ export type SessionPaneProps = {
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
+  onSessionContextRemove?: (sessionId: string, contextId: string) => void;
   onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
   onDeleteSession?: (sessionId: string) => Promise<boolean>;
@@ -291,6 +298,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
   onHandoffCardDismiss,
+  onSessionContextRemove,
   onOpenLinkedWorkItem,
   onArchiveSession,
   onDeleteSession,
@@ -545,6 +553,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
     (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk));
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
+  const sessionLinks = useSessionLinks();
+  const linkedPeers = useMemo(
+    () => (remote ? [] : peersOf(sessionLinks, session.id)),
+    [remote, session.id, sessionLinks],
+  );
   const composer = (
     <Composer
       key={session.id}
@@ -576,7 +589,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
       quoteRequest={quoteRequest}
       initialDraft={
         draftRef.current ??
-        (session.inboxCard || session.noteCard || session.handoffCard
+        (session.inboxCard ||
+        session.noteCard ||
+        session.handoffCard ||
+        session.sessionContext?.length
           ? undefined
           : session.composerSeed)
       }
@@ -587,6 +603,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
+      sessionContext={session.sessionContext}
+      onSessionContextRemove={(id) => onSessionContextRemove?.(session.id, id)}
+      sessionDropTarget={!remote && !session.inboxAsk && !managed}
+      linkedPeers={linkedPeers}
+      onUnlinkPeer={(id) => {
+        void unlinkSessions(session.id, id).catch(console.error);
+      }}
       question={session.pendingQuestion}
       onQuoteRequestConsumed={acknowledgeQuote}
       onInboxCardDismiss={() => onInboxCardDismiss?.(session.id)}
@@ -641,7 +664,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
         !session.inboxAsk &&
         !session.inboxCard &&
         !session.noteCard &&
-        !session.handoffCard
+        !session.handoffCard &&
+        !session.sessionContext?.length
       }
       onSaveDraft={(text, attachments) =>
         onSaveDraft(session.id, text, attachments)

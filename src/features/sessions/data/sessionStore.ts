@@ -779,6 +779,14 @@ function sanitizeBlock(
   }
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (block.role === "user") {
+    const sessionContext = sanitizeSessionCards(block.sessionContext);
+    if (sessionContext?.length) next.sessionContext = sessionContext;
+    const linkedFrom = sanitizeSessionCards(
+      block.linkedFrom ? [block.linkedFrom] : undefined,
+    )?.[0];
+    if (linkedFrom) next.linkedFrom = linkedFrom;
+  }
   if (
     block.role === "user" &&
     typeof block.ciContext === "string" &&
@@ -1310,6 +1318,23 @@ function sanitizeSecondOpinion(
     ...(files > 0 ? { files } : {}),
     ...(value.kind === "handoff" ? { kind: "handoff" as const } : {}),
   };
+}
+
+function sanitizeSessionCards(
+  value: unknown,
+): { id: string; title: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cards: { id: string; title: string }[] = [];
+  for (const entry of value.slice(0, 8)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, title } = entry as { id?: unknown; title?: unknown };
+    if (typeof id !== "string" || !isPersistableId(id)) continue;
+    cards.push({
+      id,
+      title: typeof title === "string" ? title.trim().slice(0, 300) : "",
+    });
+  }
+  return cards;
 }
 
 function sanitizeNoteCard(value: Block["noteCard"]): Block["noteCard"] {

@@ -44,6 +44,8 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+import { SessionContextChips } from "./SessionContextChips";
+import { parseAttachedContext } from "../model/sessionContext";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -1613,10 +1615,18 @@ function UserMessageBlock({
   const card = block.secondOpinion;
   const note = block.noteCard;
   const monocode = isOperatorUserTurn(block);
-  const text =
+  // A prompt replayed from provider history may still carry the expanded
+  // block, so read the attached sessions back out of it.
+  const attached = parseAttachedContext(
     card && card.kind !== "handoff"
       ? ""
-      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
+      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text),
+  );
+  const text = attached.text;
+  const sessionCards = block.sessionContext?.length
+    ? block.sessionContext
+    : attached.sessions;
+  const linkedFrom = block.linkedFrom;
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -1628,6 +1638,8 @@ function UserMessageBlock({
     !block.attachments?.length &&
     !card &&
     !note &&
+    !sessionCards.length &&
+    !linkedFrom &&
     !block.ciContext;
 
   // Only the chat layout rounds a single line; the document layout always uses
@@ -1713,10 +1725,27 @@ function UserMessageBlock({
               ))}
             </div>
           ) : null}
+          {linkedFrom ? (
+            <div
+              data-linked-from={linkedFrom.id}
+              className="mb-1 text-[11px] text-content/50"
+            >
+              From linked session{" "}
+              <span className="text-content/75">
+                {linkedFrom.title.trim() || "Untitled session"}
+              </span>
+            </div>
+          ) : null}
           {note ? (
             <div className={text || card ? "mb-2" : ""}>
               <NoteMiniCard card={note} embedded />
             </div>
+          ) : null}
+          {sessionCards.length ? (
+            <SessionContextChips
+              cards={sessionCards}
+              className={text || card ? "mb-2" : ""}
+            />
           ) : null}
           {card ? (
             <div className={text ? "mb-1.5" : undefined}>

@@ -13,6 +13,48 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
+const APP_ACTION_LIMITED: &str = "This thread has limited MonoCode access. It can list sessions, start sessions, and read or message linked sessions. Ask the user to use /operator in this thread for anything else. Retrying this request will not change access.";
+
+/// Actions a thread may call without /operator: opening sessions
+/// and talking to linked sessions. The window checks each one again.
+const LIMITED_APP_ACTIONS: [&str; 4] = [
+    "sessions.list",
+    "sessions.start",
+    "links.read",
+    "links.send",
+];
+
+/// How much of the app CLI the current turn may use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppScope {
+    None,
+    Limited,
+    Full,
+}
+
+impl AppScope {
+    fn from_turn(app_access: bool, app_scope: Option<&str>) -> Self {
+        match (app_access, app_scope) {
+            (true, _) | (false, Some("full")) => Self::Full,
+            (false, Some("limited")) => Self::Limited,
+            _ => Self::None,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Limited => "limited",
+            Self::Full => "full",
+        }
+    }
+    fn allows(self, action: &str) -> bool {
+        match self {
+            Self::None => false,
+            Self::Limited => LIMITED_APP_ACTIONS.contains(&action),
+            Self::Full => true,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Grant {
@@ -28,7 +70,7 @@ struct Pending {
 struct ActiveTurn {
     window: String,
     cwd: String,
-    app_allowed: bool,
+    app_scope: AppScope,
 }
 #[derive(Default)]
 struct Inner {
@@ -156,9 +198,11 @@ struct Event {
     request_id: String,
     action: String,
     input: Value,
+    /// "full" for /operator threads, "limited" otherwise. Empty for control.
+    scope: &'static str,
 }
 
-fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
+fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<(Grant, AppScope), String> {
     let grant = match namespace {
         "control" => host.grants.values().find(|grant| grant.token == token),
         "app" => host.app_grants.values().find(|grant| grant.token == token),
@@ -166,17 +210,21 @@ fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, St
     }
     .cloned()
     .ok_or("Connection revoked or unauthorized")?;
-    if namespace == "app"
-        && (host.grants.contains_key(&grant.session)
-            || host.workers.contains_key(&grant.session)
-            || !host
-                .active
-                .get(&grant.session)
-                .is_some_and(|turn| turn.window == grant.window && turn.app_allowed))
+    if namespace != "app" {
+        return Ok((grant, AppScope::None));
+    }
+    let scope = host
+        .active
+        .get(&grant.session)
+        .filter(|turn| turn.window == grant.window)
+        .map_or(AppScope::None, |turn| turn.app_scope);
+    if host.grants.contains_key(&grant.session)
+        || host.workers.contains_key(&grant.session)
+        || scope == AppScope::None
     {
         return Err(APP_TURN_INACTIVE.into());
     }
-    Ok(grant)
+    Ok((grant, scope))
 }
 
 pub fn init(app: &AppHandle) -> Result<(), String> {
@@ -236,9 +284,12 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
-        let grant = {
+        let (grant, scope) = {
             let mut host = inner.lock().map_err(|_| "Control service unavailable")?;
-            let grant = request_grant(&host, &request.namespace, &request.token)?;
+            let (grant, scope) = request_grant(&host, &request.namespace, &request.token)?;
+            if request.namespace == "app" && !scope.allows(&request.action) {
+                return Err(APP_ACTION_LIMITED.into());
+            }
             if host.pending.len() >= 24 {
                 return Err("Too many pending control requests".into());
             }
@@ -249,7 +300,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
                     reply: tx,
                 },
             );
-            grant
+            (grant, scope)
         };
         let event = Event {
             id: id.clone(),
@@ -258,6 +309,11 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
             request_id: request.request_id,
             action: request.action,
             input: request.input,
+            scope: if scope == AppScope::None {
+                ""
+            } else {
+                scope.name()
+            },
         };
         let delivered = app.emit_to(grant.window.as_str(), "monocode-control-request", event);
         let result = if delivered.is_err() {
@@ -272,7 +328,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         result
     })();
     let response = result.unwrap_or_else(|error| {
-        if error == APP_TURN_INACTIVE {
+        if error == APP_TURN_INACTIVE || error == APP_ACTION_LIMITED {
             json!({"ok": false, "error": error, "retryable": false})
         } else {
             json!({"ok": false, "error": error})
@@ -409,6 +465,7 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
     app_access: bool,
+    app_scope: Option<String>,
 ) -> Result<(), String> {
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
@@ -428,13 +485,17 @@ pub fn control_authorize_turn(
         }
     }
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
-    let app_allowed = app_access && eligible;
+    let app_scope = if eligible {
+        AppScope::from_turn(app_access, app_scope.as_deref())
+    } else {
+        AppScope::None
+    };
     inner.active.insert(
         session_id,
         ActiveTurn {
             window: window.label().to_string(),
             cwd,
-            app_allowed,
+            app_scope,
         },
     );
     Ok(())
@@ -643,12 +704,12 @@ mod tests {
             ActiveTurn {
                 window: "main".into(),
                 cwd: "/repo".into(),
-                app_allowed: true,
+                app_scope: AppScope::Full,
             },
         );
         assert!(request_grant(&inner, "app", "app-token").is_ok());
         assert!(request_grant(&inner, "control", "app-token").is_err());
-        inner.active.get_mut("ordinary").unwrap().app_allowed = false;
+        inner.active.get_mut("ordinary").unwrap().app_scope = AppScope::None;
         assert!(request_grant(&inner, "app", "app-token").is_err());
         inner.active.remove("ordinary");
         assert!(request_grant(&inner, "app", "app-token").is_err());
@@ -663,7 +724,7 @@ mod tests {
             ActiveTurn {
                 window: "main".into(),
                 cwd: "/repo".into(),
-                app_allowed: false,
+                app_scope: AppScope::None,
             },
         );
         assert!(request_grant(&inner, "app", &token).is_err());
@@ -679,15 +740,46 @@ mod tests {
             },
         );
         assert!(!inner.prepare_app_grant("ordinary", "main", "/repo"));
-        inner.active.get_mut("ordinary").unwrap().app_allowed = true;
+        inner.active.get_mut("ordinary").unwrap().app_scope = AppScope::Full;
         assert!(request_grant(&inner, "app", &token).is_err());
         inner.grants.remove("ordinary");
         assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
         assert_eq!(inner.app_grants["ordinary"].token, token);
-        inner.active.get_mut("ordinary").unwrap().app_allowed = true;
+        inner.active.get_mut("ordinary").unwrap().app_scope = AppScope::Full;
         assert!(request_grant(&inner, "app", &token).is_ok());
         inner.active.remove("ordinary");
         assert!(request_grant(&inner, "app", &token).is_err());
+    }
+    #[test]
+    fn limited_turns_reach_only_the_limited_actions() {
+        let mut inner = Inner::default();
+        assert!(inner.prepare_app_grant("ordinary", "main", "/repo"));
+        let token = inner.app_grants["ordinary"].token.clone();
+        inner.active.insert(
+            "ordinary".into(),
+            ActiveTurn {
+                window: "main".into(),
+                cwd: "/repo".into(),
+                app_scope: AppScope::from_turn(false, Some("limited")),
+            },
+        );
+        let (_, scope) = request_grant(&inner, "app", &token).unwrap();
+        assert_eq!(scope, AppScope::Limited);
+        for action in LIMITED_APP_ACTIONS {
+            assert!(scope.allows(action));
+        }
+        for action in [
+            "sessions.send",
+            "sessions.read",
+            "sessions.draft",
+            "notes.write",
+        ] {
+            assert!(!scope.allows(action), "{action} leaked into limited access");
+        }
+        assert_eq!(AppScope::from_turn(true, Some("limited")), AppScope::Full);
+        assert_eq!(AppScope::from_turn(false, None), AppScope::None);
+        assert_eq!(AppScope::from_turn(false, Some("other")), AppScope::None);
+        assert!(AppScope::Full.allows("notes.write"));
     }
     #[cfg(not(windows))]
     #[test]
@@ -763,7 +855,7 @@ mod tests {
                 ActiveTurn {
                     window: window.into(),
                     cwd: format!("/{id}"),
-                    app_allowed: false,
+                    app_scope: AppScope::None,
                 },
             );
         }

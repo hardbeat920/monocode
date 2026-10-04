@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 15] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -96,8 +96,12 @@ const APP_ACTIONS: [&str; 13] = [
     "notes.list",
     "notes.read",
     "notes.write",
+    "links.read",
+    "links.send",
 ];
 const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
+Without /operator, a thread may only list sessions, start sessions,
+and read or message the sessions the user linked to it.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
@@ -153,6 +157,14 @@ Actions:
                   to derive it from the body. Use {"id":"...","body":"..."}
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
+  links.read     {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
+                  Read a session the user linked to this one. Same fields and
+                  output as sessions.read.
+  links.send     {"sessionId":"...","message":"..."}
+                  Send a message to a linked session. A busy session gets it
+                  when its current turn ends. Linked agents may send each
+                  other 5 messages before the user has to write in either
+                  session again; after that the call fails.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
@@ -539,6 +551,13 @@ mod tests {
             parse_args_for(&args(&["sessions.start", "--request-id", "bad/id"]), true).is_err()
         );
         assert!(app_help().contains("notes.read"));
+        for action in ["links.read", "links.send"] {
+            assert!(matches!(
+                parse_args_for(&args(&[action, "--json", r#"{"sessionId":"peer"}"#]), true),
+                Ok(Parsed::Call(_, _, _))
+            ));
+            assert!(app_help().contains(action));
+        }
         assert!(app_help().contains("notes.write"));
         for action in ["worktrees.list", "worktrees.create"] {
             assert!(matches!(

@@ -125,6 +125,14 @@ import { McpServerPicker } from "./McpServerPicker";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { InboxMiniCard } from "../../inbox/ui/InboxMiniCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+import {
+  LinkedSessionsBar,
+  SessionContextChips,
+  SessionDropOverlay,
+} from "./SessionContextChips";
+import type { SessionContextCard } from "../model/sessionContext";
+import type { LinkedPeer } from "../model/sessionLinks";
+import { useSessionComposerHover } from "../model/sessionComposerDrop";
 import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
@@ -242,6 +250,13 @@ type Props = {
   inboxCard?: InboxComposerCard;
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
+  /** Sessions dropped here as context, expanded into the prompt on send. */
+  sessionContext?: SessionContextCard[];
+  onSessionContextRemove?: (id: string) => void;
+  /** Accept sessions dragged from the sidebar. */
+  sessionDropTarget?: boolean;
+  linkedPeers?: readonly LinkedPeer[];
+  onUnlinkPeer?: (id: string) => void;
   question?: UserQuestionPrompt;
   busy?: boolean;
   /** Allow typed text to replace Stop with Send while a turn is running. */
@@ -533,6 +548,11 @@ export function Composer({
   inboxCard,
   noteCard,
   handoffCard,
+  sessionContext,
+  onSessionContextRemove,
+  sessionDropTarget = false,
+  linkedPeers,
+  onUnlinkPeer,
   question,
   busy = false,
   allowBusySubmit = true,
@@ -626,12 +646,17 @@ export function Composer({
     workspaceMode,
     worktreeBase,
   ]);
+  const hasSessionContext = !!sessionContext?.length;
+  const sessionHover = useSessionComposerHover(
+    sessionDropTarget ? sessionId : undefined,
+  );
   const [hasValue, setHasValue] = useState(
     () =>
       (initialDraft ?? "").trim().length > 0 ||
       !!inboxCard ||
       !!noteCard ||
-      !!handoffCard,
+      !!handoffCard ||
+      !!sessionContext?.length,
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -698,7 +723,8 @@ export function Composer({
     attachments.length === 0 &&
     !inboxCard &&
     !noteCard &&
-    !handoffCard;
+    !handoffCard &&
+    !hasSessionContext;
   const skillPickerOpen = creatingSkill || slash !== null;
   const pickerOpen = skillPickerOpen || sessionFolderOpen || mcpPickerOpen;
   const skillCatalog = useComposerSkills({
@@ -796,10 +822,11 @@ export function Composer({
           files.length > 0 ||
           !!inboxCard ||
           !!noteCard ||
-          !!handoffCard,
+          !!handoffCard ||
+          hasSessionContext,
       );
     },
-    [inboxCard, noteCard, handoffCard],
+    [inboxCard, noteCard, handoffCard, hasSessionContext],
   );
 
   // A leading mode command in the text shows the same pill as picking the mode.
@@ -864,7 +891,7 @@ export function Composer({
 
   useEffect(() => {
     syncHasValue(ref.current?.value ?? "", attachmentsRef.current);
-  }, [inboxCard, noteCard, handoffCard, syncHasValue]);
+  }, [inboxCard, noteCard, handoffCard, hasSessionContext, syncHasValue]);
 
   const addAttachments = useCallback(
     (incoming: Attachment[]) => {
@@ -1121,7 +1148,14 @@ export function Composer({
   // text after it over as the unsent side question.
   const enterBtwFromPrefix = useCallback(
     (el: HTMLTextAreaElement) => {
-      if (!onBtwCommand || inboxCard || noteCard || handoffCard) return false;
+      if (
+        !onBtwCommand ||
+        inboxCard ||
+        noteCard ||
+        handoffCard ||
+        hasSessionContext
+      )
+        return false;
       if (attachmentsRef.current.length > 0) return false;
       const rest = consumeBtwPrefix(el.value);
       if (rest == null || onBtwCommand(rest, { draft: true }) === false) {
@@ -1139,6 +1173,7 @@ export function Composer({
     },
     [
       handoffCard,
+      hasSessionContext,
       inboxCard,
       noteCard,
       onBtwCommand,
@@ -1580,7 +1615,8 @@ export function Composer({
       attachmentsRef.current.length === 0 &&
       !inboxCard &&
       !noteCard &&
-      !handoffCard
+      !handoffCard &&
+      !hasSessionContext
     ) {
       const accepted = onBtwCommand(btwCommand.text);
       if (accepted === false) return;
@@ -1638,7 +1674,14 @@ export function Composer({
         ? `/operator ${text}`
         : text;
     const files = attachmentsRef.current;
-    if (!text && files.length === 0 && !noteCard && !handoffCard) return;
+    if (
+      !text &&
+      files.length === 0 &&
+      !noteCard &&
+      !handoffCard &&
+      !hasSessionContext
+    )
+      return;
     // Clear the parent draft before onSubmit. The app can synchronously remount
     // the composer when the first message leaves an empty session (EmptySession →
     // docked layout). If draftRef still holds the sent text, the new instance
@@ -2152,13 +2195,16 @@ export function Composer({
         <div
           ref={boxRef}
           data-composer-box
+          data-session-context-drop={
+            sessionDropTarget && sessionId ? sessionId : undefined
+          }
           data-composer-editing={resendEdited ? "" : undefined}
           className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
             resendEdited
               ? "edit-last-turn-composer rounded-lg"
               : "rounded-lg border-content/10 has-focus:border-content/20"
           } ${
-            fileDrag
+            fileDrag || sessionHover
               ? "border-accent/60"
               : resendEdited
                 ? ""
@@ -2169,6 +2215,9 @@ export function Composer({
             <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
               Drop files to attach
             </div>
+          ) : null}
+          {sessionHover ? (
+            <SessionDropOverlay choice={sessionHover.choice} />
           ) : null}
           {hideTopBar ? null : (
             <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
@@ -2261,6 +2310,18 @@ export function Composer({
             </div>
           ) : null}
 
+          {sessionContext?.length ? (
+            <SessionContextChips
+              cards={sessionContext}
+              onRemove={onSessionContextRemove}
+              className="px-3 pt-2"
+            />
+          ) : null}
+
+          {linkedPeers?.length && onUnlinkPeer ? (
+            <LinkedSessionsBar peers={linkedPeers} onUnlink={onUnlinkPeer} />
+          ) : null}
+
           {pasteError ? (
             <p role="alert" className="px-3 pt-2 text-xs text-red-400">
               {pasteError}
@@ -2311,7 +2372,7 @@ export function Composer({
                   ? "Select a branch or worktree to continue…"
                   : inboxCard
                     ? "Add a note, or send to start…"
-                    : noteCard
+                    : noteCard || hasSessionContext
                       ? "Add a message, or send…"
                       : handoffCard
                         ? "Add context, or send to continue…"

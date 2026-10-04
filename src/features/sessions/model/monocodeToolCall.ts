@@ -18,6 +18,8 @@ const ACTION_LABELS: Record<string, string> = {
   "notes.list": "List notes",
   "notes.read": "Read a note",
   "notes.write": "Write a note",
+  "links.read": "Read a linked session",
+  "links.send": "Message a linked session",
 };
 
 /** Conservatively parse one shell invocation; compound commands use the shell row. */

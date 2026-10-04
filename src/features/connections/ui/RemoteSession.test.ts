@@ -22,7 +22,7 @@ import type {
   RemoteMachine,
 } from "../model/protocol";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => false }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }),
 }));

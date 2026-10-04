@@ -170,6 +170,11 @@ export type HarnessSessionInput = {
   controlsAgents?: boolean;
   /** Grants this normal turn access to MonoCode's scoped app CLI. */
   appAccess?: boolean;
+  /**
+   * Without appAccess, "limited" still allows the app CLI actions that open
+   * sessions as drafts and message linked sessions.
+   */
+  appScope?: "limited";
   onEvent: (event: HarnessEvent) => void;
 };
 
