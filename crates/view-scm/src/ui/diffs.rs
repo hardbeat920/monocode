@@ -12,7 +12,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, Task, Window, div,
 };
-use monocode_editor::git_diff::stage_chunk_text;
+use monocode_editor::git_diff::{LINE_DIFF_CONFIG, stage_chunk_text_with};
 use monocode_editor::unified_diff::{
     DiffCommentTarget, PatchStatus, UNIFIED_CONTEXT_DEFAULT, UnifiedFileDiff, build_unified_file,
     file_hunks,
@@ -382,6 +382,8 @@ pub struct WorkingTreeDiff {
     diffs: HashMap<String, LoadedDiff>,
     error: Option<String>,
     busy_id: Option<String>,
+    /// The count passed to the view's `fileCount`.
+    file_count: Option<usize>,
     state: DiffState,
     generation: u64,
     load: Option<Task<()>>,
@@ -441,6 +443,7 @@ impl WorkingTreeDiff {
             diffs: HashMap::new(),
             error: None,
             busy_id: None,
+            file_count: None,
             state,
             generation: 0,
             load: None,
@@ -500,7 +503,9 @@ impl WorkingTreeDiff {
                 }
                 match result {
                     Ok(index) => {
-                        this.entries = working_tree_diff_entries(&index.files);
+                        // A review opened from the Changes or Staged
+                        // Changes section shows only that side.
+                        this.entries = working_tree_diff_entries(&index.files, this.focus_kind);
                         this.files = Some(index.files);
                         this.diffs.clear();
                         this.error = None;
@@ -600,6 +605,17 @@ impl WorkingTreeDiff {
             })
             .collect();
         self.state.publish(models, cx);
+        // A partially staged file counts once, unless the review shows one side.
+        let file_count = match (&self.files, self.focus_kind) {
+            (Some(files), None) => files.len(),
+            _ => self.entries.len(),
+        };
+        if self.file_count != Some(file_count) {
+            self.file_count = Some(file_count);
+            self.state.view.update(cx, |view, cx| {
+                view.set_truncated(false, Some(file_count), cx)
+            });
+        }
         cx.notify();
     }
 
@@ -650,7 +666,14 @@ impl WorkingTreeDiff {
         let Some(pos) = request.hunk.pos else {
             return;
         };
-        let Some(next) = stage_chunk_text(&loaded.original, &loaded.current, pos, None) else {
+        // The same diff the view used to produce `pos`, so the same hunk is staged.
+        let Some(next) = stage_chunk_text_with(
+            &loaded.original,
+            &loaded.current,
+            pos,
+            None,
+            LINE_DIFF_CONFIG,
+        ) else {
             return;
         };
         let (cwd, relative) = (self.cwd.clone(), entry.file.relative.clone());

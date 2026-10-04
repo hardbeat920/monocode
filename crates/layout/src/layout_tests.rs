@@ -125,6 +125,30 @@ fn keeps_remote_file_and_review_tabs_distinct_and_retargets_one_unified_review()
 }
 
 #[test]
+fn switches_the_reused_changes_tab_to_the_section_it_was_opened_from() {
+    let cwd = "/repo";
+    let staged = open_changes_tab(
+        &new_tab("session-a"),
+        cwd,
+        None,
+        Some(GitFileDiffKind::Staged),
+        None,
+    );
+    let unstaged = open_changes_tab(&staged, cwd, None, Some(GitFileDiffKind::Unstaged), None);
+    let all = open_changes_tab(&unstaged, cwd, None, None, None);
+    let kind_of = |tab: &WorkspaceTab| {
+        tab.editor_panes[0]
+            .files
+            .iter()
+            .find(|file| is_changes_tab(file))
+            .and_then(|file| file.change_kind)
+    };
+    assert_eq!(kind_of(&staged), Some(GitFileDiffKind::Staged));
+    assert_eq!(kind_of(&unstaged), Some(GitFileDiffKind::Unstaged));
+    assert_eq!(kind_of(&all), None);
+}
+
+#[test]
 fn replaces_the_panes_preview_in_place_and_keeps_permanent_tabs() {
     let tab = open_editor_tab(&new_tab("s"), &file("/r/a.ts", "/r"), &pin());
     let tab = open_editor_tab(&tab, &file("/r/b.ts", "/r"), &plain());

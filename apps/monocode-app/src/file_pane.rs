@@ -417,13 +417,16 @@ pub fn terminal_theme(cx: &App) -> monocode_terminal_view::TerminalTheme {
 struct NativeTabActions;
 impl SurfaceTabActions for NativeTabActions {
     fn open_with_default_app(&self, path: &str, cx: &mut App) -> Task<Result<(), String>> {
-        native_path_action(path, false, cx)
+        native_open(path, cx)
     }
     fn reveal(&self, path: &str, cx: &mut App) -> Task<Result<(), String>> {
-        native_path_action(path, true, cx)
+        // The shared reveal selects the file in Finder or File Explorer, and
+        // quotes only the path on Windows so a path with spaces still works.
+        let path = path.to_string();
+        cx.background_spawn(async move { monocode_git::fs::reveal_path(path) })
     }
 }
-fn native_path_action(path: &str, reveal: bool, cx: &App) -> Task<Result<(), String>> {
+fn native_open(path: &str, cx: &App) -> Task<Result<(), String>> {
     let path = path.to_string();
     cx.background_spawn(async move {
         let mut command = if cfg!(target_os = "macos") {
@@ -433,9 +436,6 @@ fn native_path_action(path: &str, reveal: bool, cx: &App) -> Task<Result<(), Str
         } else {
             std::process::Command::new("xdg-open")
         };
-        if reveal && cfg!(target_os = "macos") {
-            command.arg("-R");
-        }
         let status = command
             .arg(path)
             .status()

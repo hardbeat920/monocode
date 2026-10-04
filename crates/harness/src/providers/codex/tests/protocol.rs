@@ -416,6 +416,127 @@ fn maps_command_execution_item_lifecycle() {
 }
 
 #[test]
+fn recovers_the_command_from_the_argv_a_shell_launcher_sends() {
+    let event = first_event(
+        "item/started",
+        json!({ "item": {
+            "id": "cmd_arr",
+            "type": "commandExecution",
+            "command": ["/usr/bin/zsh", "-lc", "rg --files -g AGENTS.md"],
+            "status": "inProgress",
+        } }),
+    );
+    assert_match(
+        &event,
+        &json!({ "type": "tool.started", "callId": "cmd_arr", "kind": "execute" }),
+    );
+    assert_ne!(event["title"], "Shell");
+    assert_eq!(event["preview"]["title"], "rg --files -g AGENTS.md");
+}
+
+#[test]
+fn finds_the_command_flag_past_an_intervening_option() {
+    let event = first_event(
+        "item/started",
+        json!({ "item": {
+            "id": "cmd_pwsh",
+            "type": "commandExecution",
+            "command": ["pwsh.exe", "-NoProfile", "-Command", "Get-Content package.json"],
+            "status": "inProgress",
+        } }),
+    );
+    assert_eq!(event["preview"]["title"], "Get-Content package.json");
+}
+
+#[test]
+fn matches_command_flags_for_the_launcher_not_unrelated_options() {
+    let text = |item: Value| codex_command_text(item.as_object());
+    let cases = [
+        (
+            json!([
+                "pwsh.exe",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Get-Content package.json"
+            ]),
+            "Get-Content package.json",
+        ),
+        (
+            json!(["pwsh.exe", "-File", "build.ps1", "-Command", "ignored"]),
+            "pwsh.exe -File build.ps1 -Command ignored",
+        ),
+        (
+            json!(["git", "-c", "core.editor=vim", "status"]),
+            "git -c core.editor=vim status",
+        ),
+        (json!(["cmd.exe", "/c", "dir /b"]), "dir /b"),
+        (json!(["bash", "-aEc", "echo x"]), "echo x"),
+        (json!(["bash", "--command", "echo x"]), "echo x"),
+        (json!(["bash", "-C", "script.sh"]), "bash -C script.sh"),
+        (
+            json!([
+                "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\"",
+                "-Command",
+                "Get-Date"
+            ]),
+            "Get-Date",
+        ),
+    ];
+    for (command, expected) in cases {
+        assert_eq!(
+            text(json!({ "command": command })).as_deref(),
+            Some(expected),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn falls_back_to_command_actions_when_the_command_field_is_missing() {
+    let event = first_event(
+        "item/started",
+        json!({ "item": {
+            "id": "cmd_actions",
+            "type": "commandExecution",
+            "status": "inProgress",
+            "commandActions": [{ "type": "unknown", "command": "gh auth status" }],
+        } }),
+    );
+    assert_eq!(event["title"], "gh auth status");
+}
+
+#[test]
+fn falls_back_to_the_older_snake_case_spelling_of_the_parsed_actions() {
+    let item = json!({ "parsed_cmd": [{ "type": "unknown", "cmd": "gh auth status" }] });
+    assert_eq!(
+        codex_command_text(item.as_object()).as_deref(),
+        Some("gh auth status")
+    );
+}
+
+/// The reported "Shell" row. Codex labels `rg --files` a path-less
+/// `listFiles`, which used to derive a bare "List" that the transcript then
+/// collapsed to "Shell" because no path was left to show.
+#[test]
+fn keeps_the_command_when_a_path_less_listing_would_hide_the_row() {
+    let event = first_event(
+        "item/started",
+        json!({ "item": {
+            "id": "cmd_rg",
+            "type": "commandExecution",
+            "command": "/usr/bin/zsh -lc \"rg --files -g AGENTS.md\"",
+            "cwd": "/home/me/proj",
+            "status": "inProgress",
+            "commandActions": [
+                { "type": "listFiles", "command": "rg --files -g AGENTS.md", "path": null },
+            ],
+        } }),
+    );
+    assert_eq!(event["title"], "Find files");
+}
+
+#[test]
 fn uses_codex_command_actions_for_readable_command_rows() {
     assert_match(
         &first_event(

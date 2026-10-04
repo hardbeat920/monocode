@@ -268,6 +268,14 @@ impl AppearanceState {
         cx.notify();
     }
 
+    /// `onDiffPalette`: the theme swaps the diff color tokens.
+    pub fn on_diff_palette(&mut self, next: DiffPalette, cx: &mut Context<Self>) {
+        store::save_diff_palette(&self.kv, next);
+        self.settings.diff_palette = next;
+        self.apply_theme(cx);
+        cx.notify();
+    }
+
     pub fn on_chat_background_scope(&mut self, next: ChatBackgroundScope, cx: &mut Context<Self>) {
         store::save_chat_background_scope(&self.kv, next);
         self.settings.chat_background_scope = next;
@@ -331,6 +339,7 @@ impl AppearanceState {
             cx,
         );
         self.on_chat_background_scope(CHAT_BACKGROUND_SCOPE_DEFAULT, cx);
+        self.on_diff_palette(DIFF_PALETTE_DEFAULT, cx);
         self.on_chat_background_blur(CHAT_BACKGROUND_BLUR_DEFAULT, cx);
         self.on_new_thread_background_effect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT, cx);
         if self.settings.chat_background_path.is_some() {

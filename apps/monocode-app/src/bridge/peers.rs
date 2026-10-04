@@ -224,6 +224,28 @@ impl WorkspaceDelegate for AppWorkspaceDelegate {
         monocode_engine::projects::actions::remember_project(path, cx);
     }
 
+    fn move_session_to_worktree(
+        &self,
+        session_id: &str,
+        target: monocode_engine::workspace::WorktreeTarget,
+        is_current: monocode_engine::workspace::IsCurrent,
+        cx: &mut App,
+    ) -> Task<Result<(), String>> {
+        let tree = monocode_engine::projects::backend::Worktree {
+            is_main: target.is_main,
+            ..monocode_engine::projects::backend::Worktree::new(
+                target.path,
+                target.branch.as_deref(),
+            )
+        };
+        monocode_engine::projects::actions::on_worktree_change_with(
+            session_id,
+            tree,
+            Some(is_current),
+            cx,
+        )
+    }
+
     fn remember_remote_session(&self, shell_id: &str, cx: &mut App) {
         RemoteGlobal::forget_tab(shell_id, cx);
     }
@@ -410,6 +432,14 @@ impl ProjectsHooks for AppProjectsHooks {
         with_workspace(cx, |workspace, cx| {
             workspace.set_composer_focused(focused, cx)
         });
+    }
+
+    fn select_project_workspace(&self, path: &str, cx: &mut App) {
+        with_workspace(cx, |workspace, cx| workspace.select_project(path, cx));
+    }
+
+    fn cancel_workspace_navigation(&self, cx: &mut App) {
+        with_workspace(cx, |workspace, cx| workspace.cancel_navigation(cx));
     }
 
     fn close_pages(&self, cx: &mut App) {

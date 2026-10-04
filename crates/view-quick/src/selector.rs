@@ -1,18 +1,18 @@
 //! Port of src/features/quick-composer/ui/QuickModelSelector.tsx: an inline
 //! model browser. Providers share the full width above the search box and
-//! results; reasoning effort and fast mode sit under the list, permissions
-//! beside it.
+//! results; reasoning effort and fast mode sit under the list. Permissions
+//! have their own picker ([`crate::QuickPermissions`]).
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div, prelude::*,
-    px, relative, svg,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div, px, relative,
+    svg,
 };
+use monocode_core::HarnessId;
 use monocode_core::block::ModelSettings;
 use monocode_core::models::{AgentModel, ModelCatalog, ModelPickerTab, ModelPrefs, ModelSetting};
-use monocode_core::{HarnessId, RuntimeMode};
 use monocode_ui::{IconName, ProviderLogo, Theme, UiStyled as _, icon, provider_logo, u};
 use monocode_view_composer::composer::prompt_input::{self, PromptInput, PromptInputEvent};
 
@@ -23,7 +23,6 @@ use crate::model::selector::{
     filter_quick_models, model_enabled, reset_settings, selector_pool, selector_providers,
     selector_tabs, toggle_favorite, visible_tab,
 };
-use crate::permissions::{QuickPermissions, QuickPermissionsEvent};
 
 /// The data `QuickModelSelector` shows. The owner pushes a new value with
 /// [`QuickModelSelector::set_props`] when its state changes.
@@ -31,7 +30,6 @@ use crate::permissions::{QuickPermissions, QuickPermissionsEvent};
 pub struct SelectorProps {
     pub model: AgentModel,
     pub values: ModelSettings,
-    pub runtime_mode: RuntimeMode,
     pub available: Option<Vec<HarnessId>>,
     pub catalog: ModelCatalog,
     pub prefs: ModelPrefs,
@@ -44,8 +42,6 @@ pub enum QuickModelSelectorEvent {
     Change(AgentModel),
     /// `onSettingsChange`.
     Settings(ModelSettings),
-    /// `onRuntimeModeChange`.
-    RuntimeMode(RuntimeMode),
     /// `onClose`.
     Close,
     /// `saveFavoriteModels`.
@@ -87,7 +83,6 @@ pub struct QuickModelSelector {
     tabs_focus: FocusHandle,
     slider_focus: FocusHandle,
     search: Entity<PromptInput>,
-    permissions: Entity<QuickPermissions>,
     props: SelectorProps,
     tab: ModelPickerTab,
     query: String,
@@ -112,33 +107,23 @@ impl QuickModelSelector {
     /// live list.
     pub fn new(props: SelectorProps, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = search_field("Search models\u{2026}", window, cx);
-        let permissions = cx.new(|cx| QuickPermissions::new(props.runtime_mode, true, window, cx));
-        let subscriptions = vec![
-            cx.subscribe(&search, |this, search, event: &PromptInputEvent, cx| {
-                if *event == PromptInputEvent::Changed {
-                    this.query = search.read(cx).text().to_string();
-                    this.active = 0;
-                    this.sync_active(cx);
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(
-                &permissions,
-                |_, _, event: &QuickPermissionsEvent, cx| match event {
-                    QuickPermissionsEvent::Change(mode) => {
-                        cx.emit(QuickModelSelectorEvent::RuntimeMode(*mode))
+        let subscriptions =
+            vec![
+                cx.subscribe(&search, |this, search, event: &PromptInputEvent, cx| {
+                    if *event == PromptInputEvent::Changed {
+                        this.query = search.read(cx).text().to_string();
+                        this.active = 0;
+                        this.sync_active(cx);
+                        cx.notify();
                     }
-                    QuickPermissionsEvent::Close => cx.emit(QuickModelSelectorEvent::Close),
-                },
-            ),
-        ];
+                }),
+            ];
         let favorites = props.prefs.favorite_models.clone();
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             tabs_focus: cx.focus_handle(),
             slider_focus: cx.focus_handle(),
             search,
-            permissions,
             tab: ModelPickerTab::Harness(props.model.harness),
             props,
             query: String::new(),
@@ -159,10 +144,7 @@ impl QuickModelSelector {
     /// New data from the owner (the `useLayoutEffect` on the catalog and
     /// the model).
     pub fn set_props(&mut self, props: SelectorProps, cx: &mut Context<Self>) {
-        let mode = props.runtime_mode;
         self.props = props;
-        self.permissions
-            .update(cx, |permissions, cx| permissions.set_value(mode, cx));
         self.sync_active(cx);
     }
 
@@ -172,10 +154,6 @@ impl QuickModelSelector {
 
     pub fn search(&self) -> &Entity<PromptInput> {
         &self.search
-    }
-
-    pub fn permissions(&self) -> &Entity<QuickPermissions> {
-        &self.permissions
     }
 
     fn providers(&self) -> Vec<HarnessId> {
@@ -790,7 +768,7 @@ impl Render for QuickModelSelector {
                     }))
                     .child(self.search.clone()),
             );
-        let mut left = div()
+        let mut body = div()
             .flex()
             .flex_col()
             .min_h_0()
@@ -799,35 +777,7 @@ impl Render for QuickModelSelector {
             .child(search_row)
             .child(list);
         if let Some(effort) = effort {
-            left = left.child(effort);
-        }
-        let mut body = div().flex().min_h_0().child(left);
-        if self.props.model.harness != HarnessId::Fx {
-            body = body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_h_0()
-                    .w(relative(0.5))
-                    .flex_none()
-                    .border_l_1()
-                    .border_color(theme.colors.stroke)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .h(u(40.))
-                            .items_center()
-                            .border_b_1()
-                            .border_color(theme.colors.stroke)
-                            .px(u(16.))
-                            .text_px(12.)
-                            .medium()
-                            .text_color(theme.content(0.55))
-                            .child("Permissions"),
-                    )
-                    .child(self.permissions.clone()),
-            );
+            body = body.child(effort);
         }
         div()
             .id("quick-model-selector")

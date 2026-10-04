@@ -18,8 +18,19 @@ impl SessionList {
                 if let Some(card) = data.sessions.iter().find(|card| card.id == row.id) {
                     let selected = data.active_session_id.as_deref() == Some(&card.id)
                         || data.selected_ids.contains(&card.id);
-                    body = body
-                        .child(self.render_session_card(*index, card, selected, now, theme, cx));
+                    let element = self
+                        .render_session_card(*index, card, selected, now, theme, cx)
+                        .into_any_element();
+                    body = body.child(match self.insert_motion.entering(&card.id) {
+                        Some(run) => super::insert_motion::grow_in(
+                            &card.id,
+                            run,
+                            element,
+                            self.card_height.get(),
+                            2.0,
+                        ),
+                        None => element,
+                    });
                     *index += 1;
                 }
             }

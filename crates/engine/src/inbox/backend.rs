@@ -313,6 +313,7 @@ pub(crate) mod fake {
     use super::InboxBackend;
 
     type Handler = Box<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
+    type MediaHandler = Box<dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync>;
 
     /// A held answer: `release` (or drop) lets the call finish with the
     /// handler's value, `resolve` and `reject` choose the answer.
@@ -352,6 +353,7 @@ pub(crate) mod fake {
         calls: Mutex<Vec<(String, Value)>>,
         holds: Mutex<VecDeque<Hold>>,
         media: Mutex<Vec<String>>,
+        media_handler: Mutex<Option<MediaHandler>>,
     }
 
     impl FakeBackend {
@@ -363,7 +365,17 @@ pub(crate) mod fake {
                 calls: Mutex::new(Vec::new()),
                 holds: Mutex::new(VecDeque::new()),
                 media: Mutex::new(Vec::new()),
+                media_handler: Mutex::new(None),
             })
+        }
+
+        /// Answer media fetches with raw bytes instead of the handler's
+        /// JSON, for files too large to script as JSON arrays.
+        pub fn set_media(
+            &self,
+            handler: impl Fn(&str) -> Result<Vec<u8>, String> + Send + Sync + 'static,
+        ) {
+            *self.media_handler.lock() = Some(Box::new(handler));
         }
 
         /// Hold the next call to `command` until the returned answer settles.
@@ -427,6 +439,10 @@ pub(crate) mod fake {
 
         fn fetch_media(&self, url: &str) -> BoxFuture<'static, Result<Vec<u8>, String>> {
             self.media.lock().push(url.to_string());
+            if let Some(handler) = self.media_handler.lock().as_ref() {
+                let answer = handler(url);
+                return Box::pin(async move { answer });
+            }
             let answer =
                 (self.handler.lock())("fetch_inbox_media", &serde_json::json!({ "url": url }));
             Box::pin(async move {

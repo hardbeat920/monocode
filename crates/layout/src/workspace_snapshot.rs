@@ -179,14 +179,49 @@ pub fn collect_workspace_snapshot(
     project_terminals: &[ProjectTerminalDock],
     last_dock_side: Option<DockSide>,
 ) -> WorkspaceSnapshot {
+    collect_workspace_snapshot_keeping(
+        tabs,
+        sessions,
+        active_tab_id,
+        project_cwd,
+        memory,
+        project_terminals,
+        last_dock_side,
+        &|_| true,
+    )
+}
+
+/// `collectWorkspaceSnapshot` with `keepTab`. Tabs `keep_tab` leaves out
+/// (another worktree's, say) do not reopen, and neither do sessions that
+/// only they showed.
+#[allow(clippy::too_many_arguments)]
+pub fn collect_workspace_snapshot_keeping(
+    tabs: &[WorkspaceTab],
+    sessions: &[Session],
+    active_tab_id: &str,
+    project_cwd: &str,
+    memory: &ProjectReturnMemory,
+    project_terminals: &[ProjectTerminalDock],
+    last_dock_side: Option<DockSide>,
+    keep_tab: &dyn Fn(&WorkspaceTab) -> bool,
+) -> WorkspaceSnapshot {
+    let (kept, left_out): (Vec<WorkspaceTab>, Vec<WorkspaceTab>) =
+        tabs.iter().cloned().partition(|tab| keep_tab(tab));
+    let kept_ids: HashSet<String> = kept.iter().flat_map(|tab| leaf_ids(&tab.layout)).collect();
+    let dropped_ids: HashSet<String> = left_out
+        .iter()
+        .flat_map(|tab| leaf_ids(&tab.layout))
+        .filter(|id| !kept_ids.contains(id))
+        .collect();
     let project_cwd = core_js::trim(project_cwd);
     let draft = without_inbox_sessions(Draft {
-        tabs: without_agent_tabs(tabs)
+        tabs: without_agent_tabs(&kept)
             .iter()
             .filter_map(|tab| sanitize_tab(&to_value(tab)))
             .collect(),
         sessions: sessions
             .iter()
+            .filter(|session| !dropped_ids.contains(&session.id))
             .filter_map(session_stub)
             .map(|stub| Stub {
                 inbox: stub.inbox_ask.is_some(),

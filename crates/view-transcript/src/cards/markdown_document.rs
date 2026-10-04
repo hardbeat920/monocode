@@ -91,6 +91,8 @@ impl MarkdownDocumentPreview {
         let body = cx.new(|cx| {
             let mut view = MarkdownView::with_text(body_text, cx);
             view.set_style(style, cx);
+            // A document's lines stay on their own lines.
+            view.set_hard_breaks(true, cx);
             view.on_link_click(move |link, _, cx| {
                 let url = link.url.to_string();
                 weak.update(cx, |_, cx| cx.emit(MarkdownDocumentEvent::OpenLink { url }))

@@ -9,6 +9,7 @@
 
 pub mod access_picker;
 pub mod anchor;
+pub mod effort_tiles;
 mod field;
 pub mod file_mention_picker;
 pub mod match_text;

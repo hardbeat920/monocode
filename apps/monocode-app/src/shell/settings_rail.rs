@@ -102,7 +102,7 @@ pub fn view(shell: WeakEntity<Shell>, width: f32, _: &mut Window, cx: &mut App) 
                     &theme,
                 )
                 .on_click(move |_, _, cx| {
-                    shell.update(cx, |shell, cx| shell.close_page(cx)).ok();
+                    shell.update(cx, |shell, cx| shell.close_settings(cx)).ok();
                 }),
             ),
         )

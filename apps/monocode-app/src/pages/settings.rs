@@ -145,10 +145,17 @@ impl SettingsWindow {
             on_close: Some(Rc::new(|_, window, cx| {
                 window.dispatch_action(Box::new(crate::shell::keymap::OpenSettings), cx)
             })),
-            on_open_session: Some(Rc::new(move |id, window, cx| {
+            // `onOpenArchivedSession`: Settings closes to the session, not to
+            // the page it replaced.
+            on_open_session: Some(Rc::new(move |id, _, cx| {
                 open.update(cx, |workspace, cx| workspace.open_session(&id, cx))
                     .detach();
-                window.dispatch_action(Box::new(crate::shell::keymap::OpenSettings), cx);
+                monocode_app::bridge::shell::ShellRequests::send(
+                    monocode_app::bridge::shell::ShellRequest::ClosePage(
+                        monocode_app::bridge::shell::ShellPage::Settings,
+                    ),
+                    cx,
+                );
             })),
             on_archive_session: Some(Rc::new(move |(id, archived), _, cx| {
                 h_archive

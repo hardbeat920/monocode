@@ -5,12 +5,16 @@
 
 mod actions;
 mod groups;
+mod insert_motion;
 mod model;
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, Pixels, Point, Render,
-    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, canvas, div,
 };
 use gpui_component::input::{InputEvent, InputState};
 use monocode_core::HarnessId;
@@ -46,6 +50,8 @@ pub struct SessionCard {
     pub additions: i64,
     pub deletions: i64,
     pub updated_at: i64,
+    /// `createdAt`, for the insertion motion.
+    pub created_at: i64,
     pub status: SessionStatus,
     pub pinned: bool,
 }
@@ -94,6 +100,9 @@ pub struct SessionList {
     link_subscription: Option<Subscription>,
     history_observation: Option<(gpui::EntityId, Subscription)>,
     remote_watch: Option<(String, Subscription)>,
+    insert_motion: insert_motion::SessionInsertMotion,
+    /// A drawn card's height, which a new row grows to.
+    card_height: Rc<Cell<Option<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -159,6 +168,8 @@ impl SessionList {
             link_subscription: None,
             history_observation: None,
             remote_watch: None,
+            insert_motion: Default::default(),
+            card_height: Rc::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -173,6 +184,7 @@ impl Render for SessionList {
         self.sync_observations(window, cx);
         let theme = Theme::of(cx).clone();
         let data = self.data(cx);
+        self.track_new_sessions(&data, cx);
         div()
             .flex()
             .flex_col()
@@ -187,6 +199,38 @@ impl Render for SessionList {
 }
 
 impl SessionList {
+    /// Start the grow-in for sessions that arrived since the last frame,
+    /// and end each one after its push.
+    fn track_new_sessions(&mut self, data: &ListData, cx: &mut Context<Self>) {
+        let cwd = self
+            .shell
+            .upgrade()
+            .map(|shell| shell.read(cx).sidebar_cwd(cx))
+            .unwrap_or_default();
+        let started = self.insert_motion.sync(
+            &cwd,
+            data.sessions
+                .iter()
+                .map(|card| (card.id.as_str(), card.created_at)),
+            data.listed.iter().map(|row| row.id.as_str()),
+            now_ms(),
+            cx.reduce_motion(),
+        );
+        for (id, run) in started {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(insert_motion::PUSH_DURATION)
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.insert_motion.finish(&id, run);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
     fn render_session_list(
         &self,
         data: &ListData,
@@ -362,16 +406,18 @@ impl SessionList {
                 {
                     text_field(&self.rename_input).into_any_element()
                 } else {
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_px(theme.text.body)
-                        .semibold()
-                        .leading(theme.leading.snug)
-                        .text_color(c.content)
-                        .child(session.title.clone())
-                        .into_any_element()
+                    // A new title sweeps in over the old one's particles.
+                    monocode_view_transcript::cards::particle_text(
+                        gpui::SharedString::from(format!("session-title:{}", session.id)),
+                        session.title.clone(),
+                    )
+                    .flex_1()
+                    .min_w_0()
+                    .text_px(theme.text.body)
+                    .semibold()
+                    .leading(theme.leading.snug)
+                    .text_color(c.content)
+                    .into_any_element()
                 },
             );
         let branch = session.git.clone();
@@ -412,6 +458,15 @@ impl SessionList {
             .child(header)
             .child(title)
             .child(footer)
+            .child({
+                let height = self.card_height.clone();
+                canvas(
+                    move |bounds, _, _| height.set(Some(bounds.size.height)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
             .on_drag(
                 monocode_view_workbench::panes::pane_tree::PaneDragSource::Session(
                     session.id.clone(),

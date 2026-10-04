@@ -1094,14 +1094,15 @@ pub fn open_changes_tab(
         });
 
     if let Some((pane_index, existing_file)) = existing {
-        let updated = match focus_path.filter(|path| !path.is_empty()) {
-            Some(path) => FilePaneTab {
-                path: path.to_string(),
-                change_kind: focus_kind,
-                ..existing_file
-            },
-            None => existing_file,
+        // The reused tab takes the section it was opened from; no kind
+        // shows every change.
+        let mut updated = FilePaneTab {
+            change_kind: focus_kind,
+            ..existing_file
         };
+        if let Some(path) = focus_path.filter(|path| !path.is_empty()) {
+            updated.path = path.to_string();
+        }
         let mut next = tab.clone();
         next.focused_id = tab.editor_panes[pane_index].id.clone();
         next.diff_focused = Some(false);

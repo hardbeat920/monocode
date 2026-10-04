@@ -216,6 +216,28 @@ fn draws_review_tabs_with_the_pane_wide_diffs(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn rebuilds_the_changes_review_when_it_switches_section(cx: &mut TestAppContext) {
+    let changes = new_changes_tab("/repo", None, Some(GitFileDiffKind::Unstaged), None);
+    let (view, requests, _, cx) = mount(new_editor_pane(changes.clone()), FakeFiles::new(), cx);
+    assert_eq!(requests.borrow().len(), 1);
+
+    // Same side: the review stays.
+    let next = view.read_with(cx, |view, _| view.pane().clone());
+    view.update_in(cx, |view, window, cx| view.set_pane(next, window, cx));
+    assert_eq!(requests.borrow().len(), 1);
+
+    // Open All Changes from Staged Changes reuses the tab with the other side.
+    let mut next = view.read_with(cx, |view, _| view.pane().clone());
+    next.files[0].change_kind = Some(GitFileDiffKind::Staged);
+    view.update_in(cx, |view, window, cx| view.set_pane(next, window, cx));
+    assert_eq!(requests.borrow().len(), 2);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.review()),
+        Some(ExternalSurface::WorkingTreeDiff)
+    );
+}
+
+#[gpui::test]
 fn reports_focus_and_dirty_changes(cx: &mut TestAppContext) {
     let fs = FakeFiles::new();
     fs.set_file("/repo/a.ts", "a\n");

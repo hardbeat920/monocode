@@ -7,9 +7,11 @@ use gpui::{
     App, ElementId, Image, ImageFormat, InteractiveElement as _, IntoElement, ParentElement as _,
     RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, img,
 };
+use monocode_ui::widgets::tooltip;
 use monocode_ui::{IconName, Theme, icon, u};
 
-/// Keeps an account email private in screenshots until it is revealed.
+/// With email masking on, keeps an account email private in screenshots
+/// until it is revealed; otherwise shows it as plain text.
 ///
 /// CSS blurred the hidden text. GPUI cannot blur text, so a hidden email
 /// shows one dot per character instead.
@@ -21,12 +23,19 @@ pub struct PrivateEmailState {
 pub struct PrivateEmail {
     id: ElementId,
     email: SharedString,
+    masked: bool,
 }
 
-pub fn private_email(id: impl Into<ElementId>, email: impl Into<SharedString>) -> PrivateEmail {
+/// `PrivateEmail`. `masked` is the `useMaskEmails` value the caller read.
+pub fn private_email(
+    id: impl Into<ElementId>,
+    email: impl Into<SharedString>,
+    masked: bool,
+) -> PrivateEmail {
     PrivateEmail {
         id: id.into(),
         email: email.into(),
+        masked,
     }
 }
 
@@ -41,6 +50,23 @@ impl RenderOnce for PrivateEmail {
         // A new email starts hidden (`key={status.email}` remounted it).
         let key = ElementId::from(SharedString::from(format!("{:?}-{}", self.id, self.email)));
         let state = window.use_keyed_state(key, cx, |_, _| PrivateEmailState { revealed: false });
+        if !self.masked {
+            // Turning masking back on hides an email revealed before it was
+            // turned off.
+            if state.read(cx).revealed {
+                state.update(cx, |state, _| state.revealed = false);
+            }
+            let email = self.email.clone();
+            let selector = format!("email-text:{email}");
+            return div()
+                .id(self.id)
+                .min_w_0()
+                .truncate()
+                .tooltip(tooltip(email))
+                .debug_selector(move || selector)
+                .child(self.email)
+                .into_any_element();
+        }
         let revealed = state.read(cx).revealed;
         let action = if revealed {
             "Hide email"
@@ -71,6 +97,7 @@ impl RenderOnce for PrivateEmail {
                 });
             })
             .child(text)
+            .into_any_element()
     }
 }
 

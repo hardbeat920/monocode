@@ -85,23 +85,16 @@ const KEYWORDS: &[&str] = &[
     "func",
 ];
 
-/// Tailwind colors the card names directly (`bg-teal-800/20`,
-/// `text-amber-200/90`). monocode-ui has no tokens for these shades.
+/// Tailwind colors the card names directly (`text-teal-300`,
+/// `text-amber-200/90`). monocode-ui has no tokens for these shades. The
+/// added and removed rows use the diff palette's tokens.
 struct Palette {
-    add_row: Hsla,
-    del_row: Hsla,
-    add_mark: Hsla,
-    del_mark: Hsla,
     keyword: Hsla,
     type_name: Hsla,
 }
 
 fn palette() -> Palette {
     Palette {
-        add_row: with_alpha(hex(0x115e59), 0.20),
-        del_row: with_alpha(hex(0x9f1239), 0.20),
-        add_mark: hex(0x2dd4bf),
-        del_mark: hex(0xfb7185),
         keyword: hex(0x5eead4),
         type_name: with_alpha(hex(0xfde68a), 0.90),
     }
@@ -222,9 +215,10 @@ impl FilePreview {
 
 fn render_line(line: &ToolPreviewLine, scrollable: bool, theme: &Theme) -> impl IntoElement {
     let colors = palette();
+    let c = &theme.colors;
     let (bg, bar, mark, mark_color) = match line.kind {
-        ToolPreviewLineKind::Add => (Some(colors.add_row), colors.add_mark, "+", colors.add_mark),
-        ToolPreviewLineKind::Del => (Some(colors.del_row), colors.del_mark, "−", colors.del_mark),
+        ToolPreviewLineKind::Add => (Some(c.diff_add_bg), c.diff_add, "+", c.diff_add_fg),
+        ToolPreviewLineKind::Del => (Some(c.diff_del_bg), c.diff_del, "−", c.diff_del_fg),
         ToolPreviewLineKind::Context => (
             None,
             gpui::transparent_black(),
@@ -383,14 +377,14 @@ impl RenderOnce for FilePreview {
                 .when(added > 0, |stats| {
                     stats.child(
                         div()
-                            .text_color(theme.colors.success)
+                            .text_color(theme.colors.diff_add_fg)
                             .child(format!("+{}", format_integer(added))),
                     )
                 })
                 .when(deleted > 0, |stats| {
                     stats.child(
                         div()
-                            .text_color(theme.colors.danger)
+                            .text_color(theme.colors.diff_del_fg)
                             .child(format!("-{}", format_integer(deleted))),
                     )
                 })

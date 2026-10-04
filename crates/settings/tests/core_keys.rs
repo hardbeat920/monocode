@@ -11,7 +11,7 @@ use monocode_core::{AppSettings, Platform, appearance, models, project_providers
 use monocode_settings::{APP_SETTINGS_KEYS, KV_FILE_NAME, Kv, load_app_settings};
 
 /// A valid stored string for every key, each different from the default.
-const SAMPLES: [(&str, &str); 52] = [
+const SAMPLES: [(&str, &str); 53] = [
     (SECTION_KEY, "mcp"),
     (FOLLOW_UP_BEHAVIOR_KEY, "queue"),
     (FILE_TAB_MODE_KEY, "workspace"),
@@ -63,6 +63,7 @@ const SAMPLES: [(&str, &str); 52] = [
     (appearance::CHAT_BACKGROUND_BLUR_KEY, "12"),
     (appearance::NEW_THREAD_BACKGROUND_EFFECT_KEY, "halftone"),
     (appearance::CHANGES_VIEW_KEY, "tree"),
+    (appearance::DIFF_PALETTE_KEY, "colorblind"),
     (appearance::SHOW_EXCLUDED_FILES_KEY, "1"),
     (appearance::UI_SCALE_KEY, "1.2"),
     (models::FAVORITES_KEY, r#"["claude:opus","codex:gpt-5"]"#),
@@ -157,7 +158,7 @@ fn the_key_list_covers_every_core_key_constant() {
     let in_core: BTreeSet<&str> = constants.values().map(String::as_str).collect();
     let listed: BTreeSet<&str> = APP_SETTINGS_KEYS.iter().copied().collect();
     let sampled: BTreeSet<&str> = SAMPLES.iter().map(|(key, _)| *key).collect();
-    assert_eq!(in_core.len(), 52, "{constants:?}");
+    assert_eq!(in_core.len(), 53, "{constants:?}");
     assert_eq!(listed, in_core, "APP_SETTINGS_KEYS is out of date");
     assert_eq!(sampled, in_core, "SAMPLES is out of date");
     assert!(in_core.iter().all(|key| key.starts_with("monocode.")));

@@ -9,6 +9,7 @@ use futures::future::{BoxFuture, Shared};
 use parking_lot::Mutex;
 use serde_json::json;
 
+use monocode_core::HarnessId;
 use monocode_core::models::AgentModel;
 
 use crate::core::catalog::SharedCatalog;
@@ -109,7 +110,9 @@ pub async fn discover_models(
             flavor,
             &PiSpawnOptions {
                 no_session: true,
-                no_extensions: true,
+                // Pi packages can register models, so the Pi probe loads
+                // extensions. omp keeps its probe isolated.
+                no_extensions: flavor.id != HarnessId::Pi,
                 ..PiSpawnOptions::default()
             },
         );
@@ -140,7 +143,6 @@ mod tests {
     use super::super::flavor::{OMP_FLAVOR, PI_FLAVOR};
     use super::super::testing::{Fake, WriteReply};
     use super::*;
-    use monocode_core::HarnessId;
 
     #[test]
     fn stops_the_probe_after_a_successful_discovery() {
@@ -163,12 +165,31 @@ mod tests {
         });
         let spawn = fake.spawns().remove(0);
         assert!(spawn.session_id.starts_with("monocode-pi-probe-"));
-        assert_eq!(
-            spawn.args,
-            ["--mode", "rpc", "--no-session", "--no-extensions"]
-        );
+        // piCatalog.test.ts: "loads Pi extensions when discovering
+        // package-provided models".
+        assert_eq!(spawn.args, ["--mode", "rpc", "--no-session"]);
         assert_eq!(spawn.cwd, "/workspace");
         assert_eq!(fake.kills(), [spawn.session_id]);
+    }
+
+    /// piCatalog.test.ts: "preserves extension isolation for omp catalog
+    /// probes".
+    #[test]
+    fn preserves_extension_isolation_for_omp_catalog_probes() {
+        let fake = Fake::new();
+        fake.on_write(|responder, session_id, line| {
+            let rec: Rec = serde_json::from_str(line).unwrap();
+            responder.respond(session_id, &rec, Some(json!({ "models": [] })));
+            WriteReply::Ok
+        });
+        smol::block_on(async {
+            discover_models(&fake.children, &OMP_FLAVOR, Some("/workspace"))
+                .await
+                .unwrap();
+        });
+        let spawn = fake.spawns().remove(0);
+        assert!(spawn.args.iter().any(|arg| arg == "--no-extensions"));
+        assert_eq!(spawn.cwd, "/workspace");
     }
 
     #[test]

@@ -209,6 +209,65 @@ fn a_question_with_a_deadline_reports_interaction(cx: &mut TestAppContext) {
     );
 }
 
+/// `QuestionForm steps`: Back returns to the previous question with its
+/// answer, and the changed answer is the one sent.
+#[gpui::test]
+fn returns_to_the_previous_question_with_its_answer(cx: &mut TestAppContext) {
+    init(cx);
+    let mut prompt = colour_prompt(false);
+    prompt.request_id = 9;
+    let mut size = prompt.questions[0].clone();
+    size.id = "size".into();
+    size.prompt = "Pick a size".into();
+    size.options = ["small", "large"]
+        .iter()
+        .map(|id| UserQuestionOption {
+            id: id.to_string(),
+            label: id[..1].to_uppercase() + &id[1..],
+            description: None,
+        })
+        .collect();
+    prompt.questions.push(size);
+    let (form, cx) = cx.add_window_view(|window, cx| QuestionForm::new(prompt, window, cx));
+    let events = record::<_, QuestionFormEvent>(&form, cx);
+    draw(cx);
+    assert!(cx.debug_bounds("question-back").is_none());
+
+    form.update_in(cx, |form, window, cx| {
+        form.select("red", cx);
+        form.continue_current(window, cx);
+    });
+    draw(cx);
+    assert_eq!(form.read_with(cx, |form, _| form.index()), 1);
+    let back = cx.debug_bounds("question-back").expect("Back shows");
+    cx.simulate_click(back.center(), gpui::Modifiers::default());
+    draw(cx);
+    assert_eq!(form.read_with(cx, |form, _| form.index()), 0);
+    assert_eq!(selected(&form, cx), ["red"]);
+    assert_eq!(form.read_with(cx, |form, _| form.highlighted()), 0);
+    assert!(cx.debug_bounds("question-back").is_none());
+
+    form.update_in(cx, |form, window, cx| {
+        form.select("green", cx);
+        form.continue_current(window, cx);
+        form.select("large", cx);
+        form.continue_current(window, cx);
+    });
+    let mut answers = QuestionAnswers::new();
+    answers.insert("colour".into(), vec!["green".into()]);
+    answers.insert("size".into(), vec!["large".into()]);
+    assert_eq!(
+        events.borrow().as_slice(),
+        [QuestionFormEvent::Reply {
+            request_id: 9,
+            reply: UserQuestionReply::Answered {
+                answers,
+                custom: None
+            }
+        }]
+    );
+}
+
 // ToolDiffPreview.test.ts
 
 fn edit_preview() -> ToolPreview {
@@ -997,6 +1056,27 @@ fn folds_frontmatter_into_a_disclosure(cx: &mut TestAppContext) {
     assert!(preview.read_with(cx, |preview, _| preview.is_metadata_open()));
     preview.update(cx, |preview, cx| preview.set_text("# Plain", cx));
     assert!(!preview.read_with(cx, |preview, _| preview.has_metadata()));
+}
+
+/// https://github.com/hardbeat920/monocode/issues/591
+#[gpui::test]
+fn keeps_a_documents_consecutive_lines_on_their_own_lines(cx: &mut TestAppContext) {
+    init(cx);
+    let (preview, cx) = cx.add_window_view(|_, cx| {
+        MarkdownDocumentPreview::new(
+            "> first line\n> second line\n> third line",
+            "Properties",
+            cx,
+        )
+    });
+    draw(cx);
+    let document = preview.read_with(cx, |preview, cx| preview.body().read(cx).document().clone());
+    let text: String = document
+        .blocks
+        .iter()
+        .map(|top| monocode_markdown::parse::block_text(&top.block))
+        .collect();
+    assert_eq!(text, "first line\nsecond line\nthird line");
 }
 
 // TranscriptSelectionMenu inside the transcript

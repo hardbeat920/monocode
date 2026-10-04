@@ -32,6 +32,7 @@ use monocode_ui::{IconName, ProviderLogo, Theme, UiStyled as _, icon, provider_l
 use super::anchor::{
     BoundsCell, Side, anchored_popover, popover_layer, popover_surface, submenu_layer,
 };
+use super::effort_tiles::{effort_glow, effort_tile_tone, effort_tiles};
 use super::model_flyout::render_flyout;
 use super::model_logic::{
     self, MENU_WIDTH, SETTING_MENU_WIDTH, SUBMENU_OVERLAP, setting_label, setting_value,
@@ -107,6 +108,9 @@ pub struct ModelPicker {
     pub(crate) favorites: Vec<String>,
     pub(crate) search: Entity<InputState>,
     focus: FocusHandle,
+    /// Whether the last frame showed the model flyout, to focus its search
+    /// once the frame that shows it is drawn.
+    models_shown: bool,
     last_hotkey: Option<Instant>,
 
     trigger_bounds: BoundsCell,
@@ -160,6 +164,7 @@ impl ModelPicker {
             favorites,
             search,
             focus: cx.focus_handle(),
+            models_shown: false,
             last_hotkey: None,
             trigger_bounds: BoundsCell::default(),
             flyout_bounds: BoundsCell::default(),
@@ -737,12 +742,20 @@ impl ModelPicker {
         let title = model_logic::trigger_title(&current, effort.as_deref());
         let tooltip = format!("{title} · Recent models: right-click or {}.", mod_key());
         let open = self.open;
+        // The pill keeps its natural width so the model name stays whole on
+        // one line.
         toolbar_pill("model-picker-trigger", open, theme)
-            .max_w(u(160.))
             .debug_selector(|| "model-picker-trigger".into())
             .child(self.trigger_bounds.probe())
             .child(provider_logo(harness_logo(current.harness)).size(16.))
-            .child(pill_label(current.name.clone(), None, theme))
+            .child(
+                div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_px(theme.text.caption)
+                    .leading(theme.leading.normal)
+                    .child(current.name.clone()),
+            )
             .when_some(effort, |el, effort| {
                 el.child(pill_label(effort, Some(theme.content(0.50)), theme).flex_none())
             })
@@ -894,6 +907,8 @@ impl ModelPicker {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let value = setting_value(setting, &self.props.values).to_string();
+        let harness = self.current().harness;
+        let reduced = cx.reduce_motion();
         let mut list = div().relative().flex().flex_col().p(u(4.));
         for (index, option) in setting.options.iter().enumerate() {
             let selected = option.value == value;
@@ -901,9 +916,19 @@ impl ModelPicker {
             let picked = setting.clone();
             let option_value = option.value.clone();
             let selector = format!("model-setting-option-{}", option.label);
+            let tone = effort_tile_tone(harness, setting, &option.value).filter(|_| highlighted);
+            let shimmer_id = format!("model-effort-{}-{}", setting.id, option.value);
             list = list.child(
                 menu_row(("model-setting-option", index), 32., highlighted, theme)
+                    .relative()
                     .debug_selector(move || selector)
+                    .when_some(tone, |row, tone| {
+                        row.child(effort_tiles(
+                            SharedString::from(format!("{shimmer_id}-tiles")),
+                            tone,
+                            reduced,
+                        ))
+                    })
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered && this.active_setting != index {
                             this.active_setting = index;
@@ -920,7 +945,15 @@ impl ModelPicker {
                             .truncate()
                             .child(option.label.clone()),
                     )
-                    .when(selected, |row| row.child(check_mark(0.50, theme))),
+                    .when(selected, |row| row.child(check_mark(0.50, theme)))
+                    .when_some(tone, |row, tone| {
+                        row.child(effort_glow(
+                            SharedString::from(format!("{shimmer_id}-glow")),
+                            tone,
+                            u(theme.radius.lg),
+                            reduced,
+                        ))
+                    }),
             );
         }
         let id: SharedString = format!("model-setting-menu-{}", setting.id).into();
@@ -1056,9 +1089,36 @@ pub(crate) fn mod_key() -> &'static str {
     }
 }
 
+impl ModelPicker {
+    /// `autoFocusSearch`: the search takes focus once the frame that first
+    /// shows the model flyout is drawn, from the Model row as well as beside
+    /// the picker. When the flyout goes while the menu stays open, focus
+    /// returns to the menu so its keys keep working. Upstream waits one
+    /// animation frame because browsers drop focus on a hidden element. GPUI
+    /// keeps focus on an unpainted handle, so deferring past this draw is
+    /// enough.
+    fn sync_search_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.open && matches!(self.submenu, Some(Submenu::Models));
+        if shown == self.models_shown {
+            return;
+        }
+        self.models_shown = shown;
+        cx.defer_in(window, move |this, window, cx| {
+            let showing = this.open && matches!(this.submenu, Some(Submenu::Models));
+            if showing && shown {
+                this.search
+                    .update(cx, |search, cx| search.focus(window, cx));
+            } else if this.open && !showing && this.search.focus_handle(cx).is_focused(window) {
+                this.focus.focus(window, cx);
+            }
+        });
+    }
+}
+
 impl Render for ModelPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        self.sync_search_focus(window, cx);
         let mut root = div()
             .id("model-picker")
             .relative()

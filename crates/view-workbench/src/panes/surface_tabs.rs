@@ -23,8 +23,8 @@ use gpui::{
 use monocode_core::paths::{basename, display_path};
 use monocode_layout::terminal_tab::terminal_tab_label;
 use monocode_layout::{
-    FilePaneTab, is_agent_tab, is_changes_tab, is_commit_tab, is_filesystem_tab, is_plan_tab,
-    is_release_notes_tab, is_review_tab, is_session_changes_tab, is_terminal_tab,
+    FilePaneTab, GitFileDiffKind, is_agent_tab, is_changes_tab, is_commit_tab, is_filesystem_tab,
+    is_plan_tab, is_release_notes_tab, is_review_tab, is_session_changes_tab, is_terminal_tab,
 };
 use monocode_ui::widgets::{MenuEntry, MenuItem, context_menu, menu, tooltip};
 use monocode_ui::{
@@ -123,11 +123,17 @@ pub fn surface_tab_presentation(file: &FilePaneTab) -> SurfaceTabPresentation {
         };
     }
     if is_changes_tab(file) {
+        let staged = file.change_kind == Some(GitFileDiffKind::Staged);
+        let title = if staged { "Staged Changes" } else { "Changes" };
         return SurfaceTabPresentation {
-            name: "Changes".into(),
-            label: "Changes".into(),
+            name: title.into(),
+            label: title.into(),
             icon_name: "CHANGES".into(),
-            tooltip: "Working tree changes".into(),
+            tooltip: if staged {
+                "Staged changes".into()
+            } else {
+                "Working tree changes".into()
+            },
         };
     }
     if is_session_changes_tab(file) {

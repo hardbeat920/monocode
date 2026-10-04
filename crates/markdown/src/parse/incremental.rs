@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use super::{Block, Document, TopBlock, fence, mend, parse, parse_at};
+use super::{Block, Document, ParseOptions, TopBlock, fence, mend, parse_at, parse_with};
 
 #[derive(Debug, Default)]
 pub struct IncrementalParser {
@@ -28,11 +28,32 @@ pub struct IncrementalParser {
     full_only: bool,
     last_parse_bytes: usize,
     stable_prefix: usize,
+    options: ParseOptions,
 }
 
 impl IncrementalParser {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_options(options: ParseOptions) -> Self {
+        Self {
+            options,
+            ..Self::default()
+        }
+    }
+
+    pub fn options(&self) -> ParseOptions {
+        self.options
+    }
+
+    /// Change how the source reads, and reparse it if that changed anything.
+    pub fn set_options(&mut self, options: ParseOptions) {
+        if self.options != options {
+            self.options = options;
+            let source = std::mem::take(&mut self.source);
+            self.reset(&source);
+        }
     }
 
     pub fn source(&self) -> &str {
@@ -83,7 +104,7 @@ impl IncrementalParser {
         self.source.clear();
         self.source.push_str(text);
         self.full_only = has_link_definitions(text);
-        self.tree = parse(text);
+        self.tree = parse_with(text, self.options);
         self.last_parse_bytes = text.len();
         self.stable_prefix = 0;
         self.remend();
@@ -102,7 +123,7 @@ impl IncrementalParser {
             self.full_only = true;
         }
         if self.full_only {
-            self.tree = parse(&self.source);
+            self.tree = parse_with(&self.source, self.options);
             self.last_parse_bytes = self.source.len();
             self.stable_prefix = 0;
             self.remend();
@@ -115,7 +136,7 @@ impl IncrementalParser {
         };
         // Snap back to a line start so indentation context survives.
         let boundary = self.source[..boundary].rfind('\n').map_or(0, |ix| ix + 1);
-        let tail = parse_at(&self.source[boundary..], boundary);
+        let tail = parse_at(&self.source[boundary..], boundary, self.options);
         self.last_parse_bytes = self.source.len() - boundary;
         self.tree
             .blocks
@@ -142,7 +163,7 @@ impl IncrementalParser {
                     return;
                 };
                 self.last_parse_bytes += mended.len();
-                let mut tail = parse_at(&mended, start).blocks;
+                let mut tail = parse_at(&mended, start, self.options).blocks;
                 for top in &mut tail {
                     let top = Arc::make_mut(top);
                     top.range.end = top.range.end.min(self.source.len());

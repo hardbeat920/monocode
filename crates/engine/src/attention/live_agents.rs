@@ -24,6 +24,12 @@ pub struct LiveAgent {
     pub done: bool,
 }
 
+/// `isLiveAgentSession`: inbox discussions and orchestration workers have
+/// their own panels and never appear as live agents.
+pub fn is_live_agent_session(session: &Session) -> bool {
+    session.inbox_ask.is_none() && session.orchestration_lead_id.is_none()
+}
+
 /// `liveAgentsFromSessions`. Internal workers stay in their lead's panel.
 pub fn live_agents_from_sessions(
     sessions: &[Session],
@@ -32,8 +38,7 @@ pub fn live_agents_from_sessions(
     let mut agents: Vec<LiveAgent> = sessions
         .iter()
         .filter(|session| {
-            session.inbox_ask.is_none()
-                && session.orchestration_lead_id.is_none()
+            is_live_agent_session(session)
                 && (is_in_flight_session(session) || unseen_finished_ids.contains(&session.id))
         })
         .map(|session| to_live_agent(session, unseen_finished_ids.contains(&session.id)))

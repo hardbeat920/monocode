@@ -27,6 +27,7 @@ const FADE_EASING: CubicBezier = CubicBezier(0.0, 0.0, 0.58, 1.0);
 pub enum Picker {
     Project,
     Model,
+    Permissions,
     Attachments,
     Commands,
 }
@@ -71,6 +72,10 @@ impl PickerMotion {
 
     pub fn set_reduced_motion(&mut self, reduced: bool) {
         self.reduced_motion = reduced;
+        if reduced {
+            self.resize = None;
+            self.fade = None;
+        }
     }
 
     pub fn picker(&self) -> Option<Picker> {

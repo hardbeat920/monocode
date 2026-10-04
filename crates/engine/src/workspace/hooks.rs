@@ -17,8 +17,8 @@ use monocode_core::Session;
 use monocode_layout::project_return::{ProjectReturnMemory, reconcile_project_return};
 use monocode_layout::project_terminal::{DockSide, ProjectTerminalDock};
 use monocode_layout::workspace_snapshot::{
-    WorkspaceSnapshot, collect_workspace_snapshot, hydrate_workspace_snapshot_value,
-    parse_project_return_targets, parse_workspace_snapshot,
+    WorkspaceSnapshot, collect_workspace_snapshot, collect_workspace_snapshot_keeping,
+    hydrate_workspace_snapshot_value, parse_project_return_targets, parse_workspace_snapshot,
 };
 use monocode_layout::{WorkspaceTab, leaf_ids, new_tab};
 use serde_json::{Value, json};
@@ -40,6 +40,9 @@ pub struct Mirror {
     pub docks: Vec<ProjectTerminalDock>,
     pub last_dock_side: Option<DockSide>,
     pub project_return: ProjectReturnMemory,
+    /// Tabs the saved workspace leaves out: tabs of a worktree workspace,
+    /// since the app reopens on each project's default workspace.
+    pub dropped_tab_ids: HashSet<String>,
     /// This window saves the workspace snapshot. A window opened by a
     /// window transfer does not.
     pub autosave: bool,
@@ -146,7 +149,7 @@ pub(crate) fn snapshot_value(mirror: &Mirror, sessions: &[Session]) -> Value {
         sessions,
         &mirror.active_tab_id,
     );
-    let snapshot = collect_workspace_snapshot(
+    let snapshot = collect_workspace_snapshot_keeping(
         &mirror.tabs,
         sessions,
         &mirror.active_tab_id,
@@ -154,6 +157,7 @@ pub(crate) fn snapshot_value(mirror: &Mirror, sessions: &[Session]) -> Value {
         &memory,
         &mirror.docks,
         mirror.last_dock_side,
+        &|tab| !mirror.dropped_tab_ids.contains(&tab.id),
     );
     serde_json::to_value(snapshot).unwrap_or(Value::Null)
 }
@@ -173,6 +177,7 @@ pub fn mirror_from_layout(layout: &Value, project_cwd: &str) -> Option<Mirror> {
         },
         docks: snapshot.project_terminals,
         last_dock_side: snapshot.last_dock_side,
+        dropped_tab_ids: HashSet::new(),
         autosave: true,
         hidden: false,
         covered: false,

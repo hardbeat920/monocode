@@ -5,7 +5,8 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px, relative,
+    ParentElement as _, Pixels, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    relative,
 };
 use monocode_core::AttachmentKind;
 use monocode_core::appearance::TranscriptLayout;
@@ -107,8 +108,9 @@ impl TranscriptView {
         // Measure against the room the bubble's text has.
         let rem = window.rem_size();
         let column = self.column_width(window);
+        let bubble_max = chat_bubble_max_width(column, rem);
         let text_width = if chat {
-            column.min(u(BUBBLE_MAX_WIDTH).to_pixels(rem)) - u(56. + 16. + 24.).to_pixels(rem)
+            bubble_max - u(24.).to_pixels(rem)
         } else {
             column - u(12. + 24.).to_pixels(rem)
         };
@@ -118,6 +120,8 @@ impl TranscriptView {
             !display_text.is_empty() && text_overflows(&display_text, 4, 14., text_width, window);
         let single_line =
             chat && text_only && !text_overflows(&display_text, 1, 14., text_width, window);
+        self.single_line_prompts
+            .insert(block.id.clone(), single_line);
 
         let accent = theme.colors.user_accent;
         let (fill, border) = match (draft, accent) {
@@ -159,7 +163,7 @@ impl TranscriptView {
             })
             .map(|el| {
                 if chat {
-                    el.max_w(u(BUBBLE_MAX_WIDTH))
+                    el.max_w(bubble_max)
                 } else {
                     el.w_full()
                 }
@@ -788,6 +792,14 @@ fn with(color: Hsla, alpha: f32) -> Hsla {
     monocode_ui::color::with_alpha(color, alpha)
 }
 
+/// The chat bubble's width cap, `max-w-[min(100%,36rem)]`: the room the row
+/// leaves after its 56px left and 16px right gutters, and never more than
+/// 36rem.
+fn chat_bubble_max_width(column: Pixels, rem: Pixels) -> Pixels {
+    let room = (column - u(56. + 16.).to_pixels(rem)).max(px(0.));
+    room.min(u(BUBBLE_MAX_WIDTH).to_pixels(rem))
+}
+
 impl TranscriptView {
     /// `AttachmentChip` as sent: an image thumbnail, or the file's icon and name.
     fn render_attachment_chip(
@@ -870,5 +882,25 @@ impl TranscriptView {
                     .child(file.name.clone()),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REM: Pixels = px(16.);
+
+    #[test]
+    fn a_narrow_pane_caps_the_bubble_at_its_room() {
+        // 22rem of room after the gutters stays 22rem.
+        assert_eq!(chat_bubble_max_width(px(352. + 72.), REM), px(352.));
+        assert_eq!(chat_bubble_max_width(px(40.), REM), px(0.));
+    }
+
+    #[test]
+    fn a_wide_pane_caps_the_bubble_at_36rem() {
+        assert_eq!(chat_bubble_max_width(px(896.), REM), px(576.));
+        assert_eq!(chat_bubble_max_width(px(576. + 72.), REM), px(576.));
     }
 }

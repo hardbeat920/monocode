@@ -846,7 +846,9 @@ impl Sessions {
         *self.load_epochs.entry(session_id.to_string()).or_insert(0) += 1;
     }
 
-    /// Reject in-flight reads that may still contain deleted ownership.
+    /// Reject in-flight reads that may still contain deleted ownership. Only
+    /// the history package calls this.
+    #[cfg(feature = "history")]
     pub(crate) fn invalidate_pending_loads(&mut self) {
         let pending: Vec<String> = self.loads.keys().cloned().collect();
         for id in pending {
@@ -1046,9 +1048,10 @@ pub fn bind_resumed_sessions(
 }
 
 /// `getSession`: a stored session with its load-time repairs. Old Claude
-/// rows get their Bash commands back from Claude's transcript, and the
-/// provider hooks repair Cursor subagents and OMP interjections. Repairs
-/// that change the transcript are saved before the session is shown.
+/// rows get their Bash commands back from Claude's transcript, old Codex rows
+/// are relabelled from the command saved on the row, and the provider hooks
+/// repair Cursor subagents and OMP interjections. Repairs that change the
+/// transcript are saved before the session is shown.
 pub fn get_stored_session(session_id: &str, cx: &App) -> Task<Option<Session>> {
     let writer = Engine::writer(cx);
     let record = writer.get_record(session_id);
@@ -1077,6 +1080,20 @@ pub fn get_stored_session(session_id: &str, cx: &App) -> Task<Option<Session>> {
                     session.blocks = blocks;
                     let _ = writer.upsert_session(&session).await;
                 }
+            }
+        }
+        // The Codex protocol mapping lives in the harness crate, which the
+        // runtime-only build leaves out.
+        #[cfg(feature = "package-deps")]
+        {
+            use monocode_harness::providers::codex::protocol::backfill_codex_shell_commands;
+            if session.harness == HarnessId::Codex
+                && let Some(blocks) = backfill_codex_shell_commands(&session.blocks)
+            {
+                session.blocks = blocks;
+                // A failed write must not cost the reader the session. The
+                // repair stays in memory and the next load retries it.
+                let _ = writer.upsert_session(&session).await;
             }
         }
         let recover = cx.update(|cx| {

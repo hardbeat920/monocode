@@ -21,6 +21,7 @@ mod live_agents;
 mod main_pane;
 mod menu_bar;
 mod packages;
+mod preload;
 mod project_menu;
 mod project_picker;
 mod project_rail;
@@ -224,6 +225,9 @@ pub struct ShellLayout {
     /// The full page over the workspace (`searchViewOpen`, `inboxViewOpen`,
     /// `notesViewOpen`, `automationsViewOpen`, `settingsOpen`).
     pub page: Option<Page>,
+    /// `settingsReturnViewRef`: the page Settings replaced, shown again when
+    /// Settings closes.
+    pub settings_return: Option<Page>,
 }
 
 impl ShellLayout {
@@ -315,6 +319,7 @@ impl Shell {
                     .unwrap_or(SESSION_SIDEBAR_WIDTH_DEFAULT),
                 sidebar_tab: SidebarTab::Sessions,
                 page: None,
+                settings_return: None,
             },
             resize: None,
             drag_armed: false,
@@ -559,6 +564,7 @@ impl Shell {
                 .detach();
         }
         self.workspace_changed(window, cx);
+        preload::after_paint(window, cx, Self::preload_navigation);
     }
 
     /// The workspace moved: show its project in the sidebar, tell attention
@@ -766,6 +772,9 @@ impl Shell {
     /// Open a full page over the workspace, closing any other.
     pub fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
         if self.layout.page != Some(page) {
+            if page == Page::Settings {
+                self.layout.settings_return = self.layout.page;
+            }
             self.close_page(cx);
             self.layout.page = Some(page);
             if let Some(package) = HistoryPackage::try_global(cx) {
@@ -804,9 +813,30 @@ impl Shell {
 
     /// Open `page`, or close it when it is already open.
     pub fn toggle_page(&mut self, page: Page, cx: &mut Context<Self>) {
-        if self.layout.page == Some(page) {
-            self.close_page(cx);
+        if self.layout.page != Some(page) {
+            self.open_page(page, cx);
+        } else if page == Page::Settings {
+            self.close_settings(cx);
         } else {
+            self.close_page(cx);
+        }
+    }
+
+    /// `onCloseSettings`: leave Settings for the page it replaced, or for
+    /// the workspace. Notes stays closed once Settings turned it off.
+    pub fn close_settings(&mut self, cx: &mut Context<Self>) {
+        if self.layout.page != Some(Page::Settings) {
+            return;
+        }
+        let back = self.layout.settings_return.take();
+        self.close_page(cx);
+        let back = back.filter(|page| {
+            *page != Page::Notes
+                || self
+                    .settings_kv(cx)
+                    .is_none_or(|kv| monocode_settings::settings_store::load_notes_enabled(&kv))
+        });
+        if let Some(page) = back {
             self.open_page(page, cx);
         }
     }

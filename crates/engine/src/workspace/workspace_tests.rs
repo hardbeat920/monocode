@@ -14,9 +14,9 @@ use monocode_core::block::{Block, BlockRole};
 use monocode_core::{HarnessId, Session};
 use monocode_layout::terminal_tab::TerminalMetaPatch;
 use monocode_layout::{
-    AgentTabSource, OpenEditorTabOptions, PaneEdge, SplitDir, WorkspaceTab, editor_tab_key,
-    is_agent_tab, is_filesystem_tab, leaf_ids, new_agent_tab, new_file_tab, new_tab,
-    open_editor_tab,
+    AgentTabSource, GitFileDiffKind, OpenEditorTabOptions, PaneEdge, SplitDir, WorkspaceTab,
+    editor_tab_key, is_agent_tab, is_changes_tab, is_filesystem_tab, leaf_ids, new_agent_tab,
+    new_file_tab, new_tab, open_editor_tab,
 };
 use serde_json::Value;
 
@@ -406,6 +406,40 @@ fn opens_files_beside_the_chat_and_moves_the_editor(cx: &mut TestAppContext) {
     let tab = active(&h, cx);
     assert!(tab.editor_panes.is_empty());
     assert_eq!(leaf_ids(&tab.layout).len(), 1);
+}
+
+#[gpui::test]
+fn scopes_open_all_changes_to_the_section_it_came_from(cx: &mut TestAppContext) {
+    let h = setup(cx);
+    let changes = |h: &Harness, cx: &mut TestAppContext| {
+        let tab = active(h, cx);
+        let found: Vec<_> = tab
+            .editor_panes
+            .iter()
+            .flat_map(|pane| pane.files.iter())
+            .filter(|file| is_changes_tab(file))
+            .cloned()
+            .collect();
+        assert_eq!(found.len(), 1, "one Changes tab per working copy");
+        found[0].change_kind
+    };
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.open_all_changes(Some(GitFileDiffKind::Staged), cx)
+    });
+    assert_eq!(changes(&h, cx), Some(GitFileDiffKind::Staged));
+    // Opening from the other section switches the reused tab.
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.open_all_changes(Some(GitFileDiffKind::Unstaged), cx)
+    });
+    assert_eq!(changes(&h, cx), Some(GitFileDiffKind::Unstaged));
+    // Opening without a side shows every change.
+    h.workspace
+        .update(cx, |workspace, cx| workspace.open_all_changes(None, cx));
+    assert_eq!(changes(&h, cx), None);
+    assert!(
+        !h.workspace
+            .read_with(cx, |workspace, _| workspace.composer_focused())
+    );
 }
 
 #[gpui::test]

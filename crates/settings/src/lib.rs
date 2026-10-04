@@ -4,10 +4,12 @@
 //! keys and the same stored strings in one JSON file in the app data
 //! directory, so each ported module keeps its own load and save code.
 //! `import_webkit_local_storage` copies the Tauri app's localStorage into it
-//! once. `settings_store`, `app_shortcuts`, `zoom_keybinding`, and
-//! `storage_flags` port the storage side of the settings model.
+//! once. `settings_store`, `display_prefs`, `app_shortcuts`,
+//! `zoom_keybinding`, and `storage_flags` port the storage side of the
+//! settings model.
 
 pub mod app_shortcuts;
+pub mod display_prefs;
 pub mod import;
 pub mod kv;
 pub mod settings_store;

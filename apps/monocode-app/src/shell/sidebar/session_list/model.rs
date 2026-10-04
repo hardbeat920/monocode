@@ -78,7 +78,7 @@ impl SessionList {
                 )
             })
             .unwrap_or_default();
-        if let Some(workspace) = workspace {
+        if let Some(workspace) = &workspace {
             data.active_session_id = workspace.read(cx).active_session(cx).map(|s| s.id);
         }
         let local_active_session_id = data.active_session_id.clone();
@@ -149,6 +149,24 @@ impl SessionList {
                 history.open_project_sessions(&open, branch.as_deref()),
             )
         };
+        // The sidebar shows only the focused worktree's sessions.
+        let focus = if remote_project {
+            None
+        } else {
+            workspace
+                .as_ref()
+                .and_then(|workspace| workspace.read(cx).worktree_focus(&cwd).cloned())
+        };
+        let in_focus = |row: &SessionSummary| {
+            monocode_engine::workspace::in_worktree_focus(
+                &row.cwd,
+                row.worktree_cwd.as_deref(),
+                focus.as_ref(),
+            )
+        };
+        let rows: Vec<SessionSummary> = rows.into_iter().filter(|row| in_focus(row)).collect();
+        let open_rows: Vec<SessionSummary> =
+            open_rows.into_iter().filter(|row| in_focus(row)).collect();
         let reminders = monocode_engine::automations::AutomationsPackage::try_global(cx)
             .map(|package| {
                 package
@@ -227,6 +245,7 @@ impl SessionList {
                     additions: row.additions.unwrap_or(0),
                     deletions: row.deletions.unwrap_or(0),
                     updated_at: row.updated_at,
+                    created_at: row.created_at,
                     status,
                     pinned: row.pinned == Some(true),
                     id: row.id.clone(),

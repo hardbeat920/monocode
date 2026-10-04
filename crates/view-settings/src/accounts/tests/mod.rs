@@ -180,6 +180,9 @@ pub(super) struct FakeUsage {
     pub pi_fetches: RefCell<Vec<PiUsageProvider>>,
     pub pi_answers: RefCell<VecDeque<PiAnswer>>,
     pub pi_default: Cell<f64>,
+    /// `useShowRemainingUsage` and `useMaskEmails`.
+    pub show_remaining: Cell<bool>,
+    pub mask_emails: Cell<bool>,
     observers: RefCell<Vec<Rc<OnChange>>>,
     next_account: Cell<usize>,
 }
@@ -215,6 +218,8 @@ impl Default for FakeUsage {
             pi_fetches: RefCell::default(),
             pi_answers: RefCell::default(),
             pi_default: Cell::new(24.0),
+            show_remaining: Cell::new(false),
+            mask_emails: Cell::new(false),
             observers: RefCell::default(),
             next_account: Cell::new(1),
         }
@@ -233,6 +238,20 @@ impl FakeUsage {
                 observer(cx);
             }
         });
+    }
+
+    /// Saves `useShowRemainingUsage` the way any window would, telling the
+    /// observers.
+    pub fn set_show_remaining(&self, value: bool, cx: &mut App) {
+        self.show_remaining.set(value);
+        self.changed(cx);
+    }
+
+    /// Saves `useMaskEmails` the way any window would, telling the
+    /// observers.
+    pub fn set_mask_emails(&self, value: bool, cx: &mut App) {
+        self.mask_emails.set(value);
+        self.changed(cx);
     }
 
     /// Resolves the oldest pending login for `harness`.
@@ -368,6 +387,14 @@ impl UsageHost for FakeUsage {
 
     fn window_visible(&self, _: &App) -> bool {
         self.visible.get()
+    }
+
+    fn show_remaining_usage(&self, _: &App) -> bool {
+        self.show_remaining.get()
+    }
+
+    fn mask_emails(&self, _: &App) -> bool {
+        self.mask_emails.get()
     }
 
     fn supports_harness_login(&self, harness: HarnessId) -> bool {

@@ -10,7 +10,7 @@
 //! channels. [`Children`] is the handle providers use, with the same
 //! functions `child.ts` exported.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -245,6 +245,12 @@ struct RouterState {
     line_buffer: HashMap<String, VecDeque<String>>,
     sse_watchers: HashMap<String, async_channel::Sender<SseEvent>>,
     sse_buffer: HashMap<String, VecDeque<String>>,
+    /// Ids this router spawned or opened and has not stopped. Only these may
+    /// buffer while unwatched. Output for any other id, such as a killed
+    /// generation's late lines, would sit in a buffer until the router clears
+    /// and then replay into the next child that reuses the id.
+    owned_children: HashSet<String>,
+    owned_sse: HashSet<String>,
     live_pid: HashMap<String, u32>,
     pending_exit: HashMap<String, Vec<(Option<i32>, u32)>>,
 }
@@ -265,7 +271,8 @@ fn push_bounded(map: &mut HashMap<String, VecDeque<String>>, session_id: &str, i
 }
 
 /// The bridge: routes harness events to the session that owns them. Lines
-/// for a session with no watcher wait in a buffer of [`MAX_BUFFERED`].
+/// for an owned session with no watcher wait in a buffer of
+/// [`MAX_BUFFERED`]. Lines for any other session are dropped.
 #[derive(Default)]
 pub struct ChildRouter {
     state: Mutex<RouterState>,
@@ -293,7 +300,9 @@ impl ChildRouter {
             let _ = watcher.try_send(ChildEvent::Stdout(line));
             return;
         }
-        push_bounded(&mut state.line_buffer, session_id, line);
+        if state.owned_children.contains(session_id) {
+            push_bounded(&mut state.line_buffer, session_id, line);
+        }
     }
 
     /// `harness-stderr`. Dropped when nobody watches the session.
@@ -338,7 +347,9 @@ impl ChildRouter {
             let _ = watcher.try_send(SseEvent::Data(data));
             return;
         }
-        push_bounded(&mut state.sse_buffer, session_id, data);
+        if state.owned_sse.contains(session_id) {
+            push_bounded(&mut state.sse_buffer, session_id, data);
+        }
     }
 
     /// `harness-sse-end`.
@@ -364,6 +375,7 @@ impl ChildRouter {
         let mut state = self.state.lock();
         state.watchers.remove(session_id);
         state.line_buffer.remove(session_id);
+        state.owned_children.remove(session_id);
         state.pending_exit.remove(session_id);
     }
 
@@ -383,6 +395,20 @@ impl ChildRouter {
         let mut state = self.state.lock();
         state.sse_watchers.remove(session_id);
         state.sse_buffer.remove(session_id);
+        state.owned_sse.remove(session_id);
+    }
+
+    /// `ownedChildren.add`: a child this router is about to spawn.
+    fn own_child(&self, session_id: &str) {
+        self.state
+            .lock()
+            .owned_children
+            .insert(session_id.to_string());
+    }
+
+    /// `ownedSse.add`: a stream this router is about to open.
+    fn own_sse(&self, session_id: &str) {
+        self.state.lock().owned_sse.insert(session_id.to_string());
     }
 
     fn clear_pid(&self, session_id: &str) {
@@ -638,6 +664,7 @@ impl Children {
 
     pub async fn spawn_request(&self, mut request: SpawnRequest) -> Result<()> {
         self.inner.router.clear_pid(&request.session_id);
+        self.inner.router.own_child(&request.session_id);
         if request.binary_path.is_none() {
             request.binary_path = request
                 .binary_provider
@@ -776,6 +803,7 @@ impl Children {
         url: &str,
         headers: Option<HashMap<String, String>>,
     ) -> Result<()> {
+        self.inner.router.own_sse(session_id);
         self.inner
             .backend
             .sse_open(session_id.to_string(), url.to_string(), headers)

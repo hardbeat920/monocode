@@ -22,7 +22,7 @@ use monocode_core::inbox::LinkedWorkItemUpdateCard;
 use monocode_core::session::{Session, session_needs_input};
 use monocode_settings::Kv;
 
-use super::live_agents::{LiveAgent, live_agents_from_sessions};
+use super::live_agents::{LiveAgent, is_live_agent_session, live_agents_from_sessions};
 use super::notification_preferences::{
     NotificationCategory, NotificationSubject, PROJECT_NOTIFICATIONS_KEY,
     allows_project_notification, load_notification_preferences, next_mute_deadline,
@@ -286,11 +286,19 @@ impl Notifier {
         if busy == self.busy_for_done && focused == self.focused_for_done {
             return;
         }
+        let untracked: HashSet<String> = Engine::sessions(cx)
+            .read(cx)
+            .all()
+            .iter()
+            .filter(|session| !is_live_agent_session(session))
+            .map(|session| session.id.clone())
+            .collect();
         let next = next_unseen_finished_sessions(
             &self.busy_for_done,
             &busy,
             &self.unseen_finished,
             focused.as_deref(),
+            &untracked,
         );
         self.busy_for_done = busy;
         self.focused_for_done = focused;

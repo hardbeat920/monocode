@@ -3,7 +3,8 @@
 //! CodeMirror builds its chunks with `@codemirror/merge`, which diffs
 //! characters and then widens each change to whole lines. This port diffs
 //! whole lines (each line keeps its `\n`) with `similar`, which gives the same
-//! line-aligned chunks for ordinary edits.
+//! line-aligned chunks for ordinary edits, and stays precise on large files
+//! with scattered edits where the character diff gives up (lineDiff.ts).
 //!
 //! All offsets are byte offsets into UTF-8 text, the unit gpui-base's editor
 //! uses. CodeMirror used UTF-16 offsets.
@@ -13,8 +14,24 @@ use std::time::{Duration, Instant};
 
 use similar::{Algorithm, DiffOp};
 
-/// `DIFF_CONFIG.timeout` in editorGit.ts.
-const DIFF_TIMEOUT: Duration = Duration::from_millis(100);
+/// The time budget of one diff. Past it `similar` returns a coarser but
+/// still valid diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffConfig {
+    pub timeout: Duration,
+}
+
+/// `DIFF_CONFIG` in editorGit.ts: the editor's git gutter.
+pub const DIFF_CONFIG: DiffConfig = DiffConfig {
+    timeout: Duration::from_millis(100),
+};
+
+/// `LINE_DIFF_CONFIG` in lineDiff.ts: whole-file diffs in the changes view.
+/// Staging a hunk from that view must use it too, so the staged hunk is the
+/// one the view showed.
+pub const LINE_DIFF_CONFIG: DiffConfig = DiffConfig {
+    timeout: Duration::from_millis(200),
+};
 
 /// A line-aligned change between the original text (A) and the buffer (B).
 ///
@@ -213,6 +230,11 @@ fn tokens(text: &str) -> Vec<&str> {
 
 /// `chunksFor` / `Chunk.build`: the chunks that turn `original` into `current`.
 pub fn chunks_for(original: &str, current: &str) -> Vec<Chunk> {
+    chunks_with(original, current, DIFF_CONFIG)
+}
+
+/// [`chunks_for`] under `config`.
+pub fn chunks_with(original: &str, current: &str, config: DiffConfig) -> Vec<Chunk> {
     if original == current {
         return Vec::new();
     }
@@ -220,7 +242,7 @@ pub fn chunks_for(original: &str, current: &str) -> Vec<Chunk> {
     let new_doc = Doc::new(current);
     let old_tokens = tokens(original);
     let new_tokens = tokens(current);
-    let deadline = Instant::now() + DIFF_TIMEOUT;
+    let deadline = Instant::now() + config.timeout;
     let ops = similar::capture_diff_slices_deadline(
         Algorithm::Myers,
         &old_tokens,
@@ -445,7 +467,30 @@ pub fn stage_chunk_text(
     pos: usize,
     selection: Option<TextRange>,
 ) -> Option<String> {
-    let change = stage_chunk_change(original, current, pos, selection)?;
+    stage_chunk_text_with(original, current, pos, selection, DIFF_CONFIG)
+}
+
+/// [`stage_chunk_text`] under `config`, which must match the config that
+/// produced `pos` so the same hunk is found.
+pub fn stage_chunk_text_with(
+    original: &str,
+    current: &str,
+    pos: usize,
+    selection: Option<TextRange>,
+    config: DiffConfig,
+) -> Option<String> {
+    let orig = Doc::new(original);
+    let doc = Doc::new(current);
+    let range = action_chunk_range(&orig, &doc, pos, selection, config)?;
+    let change = apply_side(
+        &doc,
+        &orig,
+        range.from_b,
+        range.to_b,
+        range.from_a,
+        range.to_a,
+        "\n",
+    );
     Some(change.apply(original))
 }
 
@@ -458,7 +503,7 @@ pub fn revert_chunk_change(
 ) -> Option<TextChange> {
     let orig = Doc::new(original);
     let doc = Doc::new(current);
-    let range = action_chunk_range(&orig, &doc, pos, selection)?;
+    let range = action_chunk_range(&orig, &doc, pos, selection, DIFF_CONFIG)?;
     Some(apply_side(
         &orig,
         &doc,
@@ -479,7 +524,7 @@ pub fn stage_chunk_change(
 ) -> Option<TextChange> {
     let orig = Doc::new(original);
     let doc = Doc::new(current);
-    let range = action_chunk_range(&orig, &doc, pos, selection)?;
+    let range = action_chunk_range(&orig, &doc, pos, selection, DIFF_CONFIG)?;
     Some(apply_side(
         &doc,
         &orig,
@@ -518,8 +563,9 @@ fn action_chunk_range(
     doc: &Doc,
     pos: usize,
     selection: Option<TextRange>,
+    config: DiffConfig,
 ) -> Option<Chunk> {
-    let chunks = chunks_for(original.text(), doc.text());
+    let chunks = chunks_with(original.text(), doc.text(), config);
     let chunk = find_chunk(doc, &chunks, pos)?;
     Some(narrow_chunk(original, doc, chunk, selection))
 }
@@ -842,6 +888,39 @@ mod tests {
         assert_eq!(
             revert_chunk_text("a\nb", "a\nb\nc", 2, None).as_deref(),
             Some("a\nb")
+        );
+    }
+
+    // lineDiff.test.ts
+    #[test]
+    fn maps_line_changes_back_to_byte_offsets() {
+        let a = "one\ntwo\nthree\n";
+        let b = "one\nTWO\nthree\nfour\n";
+        let changes: Vec<(&str, &str)> = chunks_with(a, b, LINE_DIFF_CONFIG)
+            .iter()
+            .map(|chunk| (&a[chunk.from_a..chunk.to_a], &b[chunk.from_b..chunk.to_b]))
+            .collect();
+        assert_eq!(changes, vec![("two\n", "TWO\n"), ("", "four\n")]);
+    }
+
+    #[test]
+    fn treats_a_missing_final_newline_as_a_change_to_the_last_line() {
+        let chunks = chunks_with("a\nb", "a\nb\n", LINE_DIFF_CONFIG);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!((chunks[0].from_a, chunks[0].from_b), (2, 2));
+        assert_eq!(chunks[0].kind(), ChangeKind::Modified);
+    }
+
+    #[test]
+    fn stays_precise_on_a_large_file_with_scattered_edits() {
+        let original = crate::unified_diff::test_support::big_file(12_000);
+        let (next, changed) = crate::unified_diff::test_support::scatter_edits(&original);
+        let chunks = chunks_with(&original, &next, LINE_DIFF_CONFIG);
+        assert_eq!(chunks.len(), changed);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.kind() == ChangeKind::Modified)
         );
     }
 

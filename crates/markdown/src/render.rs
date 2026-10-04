@@ -1682,6 +1682,73 @@ mod tests {
         assert!(state.diagram_jobs.is_empty());
     }
 
+    /// codeHighlightPlugin.test.ts: the Shiki plugin cached every partial
+    /// version of a streaming fence in a global map. Here each block keeps
+    /// only its latest highlight, keyed by its place in the message and
+    /// checked against its exact code.
+    #[test]
+    fn a_streaming_fence_keeps_one_highlight_per_block() {
+        highlight::syntaxes_blocking();
+        let style = MarkdownStyle::default();
+        let mut state = CodeState::default();
+        let source = (0..40)
+            .map(|i| format!("const value{i} = {i};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut code = PreparedCode {
+            key: ElementKey(0),
+            fence: crate::parse::CodeFence::parse("ts"),
+            code: SharedString::default(),
+            line_count: 0,
+        };
+        let mut end = 20;
+        while end <= source.len() {
+            state.budget = usize::MAX;
+            code.code = source[..end].to_string().into();
+            let runs = state.runs(&code, &style);
+            assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), end);
+            end += 20;
+        }
+        assert_eq!(state.entries.len(), 1);
+
+        // Two blocks of the same length, head, and tail keep their own runs.
+        let head = "const a = 1;\n".repeat(10);
+        let tail = "\nconst z = 26;".repeat(10);
+        let first: SharedString = format!("{head}let middle = \"one\";{tail}").into();
+        let second: SharedString = format!("{head}let middle = 2.000;{tail}").into();
+        assert_eq!(first.len(), second.len());
+        for (ix, text) in [(1, &first), (2, &second)] {
+            state.budget = usize::MAX;
+            let block = PreparedCode {
+                key: ElementKey(ix),
+                fence: crate::parse::CodeFence::parse("ts"),
+                code: text.clone(),
+                line_count: 21,
+            };
+            // 21 lines is past the frame's sync limit, so the block goes to a
+            // background job. Finish it the way the view does, then cache.
+            state.runs(&block, &style);
+            let jobs = std::mem::take(&mut state.jobs);
+            assert_eq!(jobs.len(), 1);
+            for job in jobs {
+                state.finish(job.run());
+            }
+            state.runs(&block, &style);
+        }
+        let cached = |ix| {
+            state.entries[&ElementKey(ix)]
+                .runs
+                .as_ref()
+                .map(|(text, runs)| (text.clone(), runs.clone()))
+                .unwrap()
+        };
+        let (first_text, first_runs) = cached(1);
+        let (second_text, second_runs) = cached(2);
+        assert_eq!(first_text, first);
+        assert_eq!(second_text, second);
+        assert_ne!(first_runs, second_runs);
+    }
+
     #[test]
     fn base64_decodes() {
         assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");

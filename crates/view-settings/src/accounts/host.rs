@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use gpui::{App, Subscription, Task};
 use monocode_core::HarnessId;
 use monocode_layout::tab_groups::tab_group_color;
+use monocode_settings::display_prefs::{MASK_EMAILS_DEFAULT, SHOW_REMAINING_USAGE_DEFAULT};
 
 use super::model::{
     CodexRateLimitResetOutcome, DEFAULT_PROVIDER_ACCOUNT_ID, HarnessUpdate, PiUsageProvider,
@@ -123,6 +124,20 @@ pub trait UsageHost {
     /// `document.visibilityState === "visible"`.
     fn window_visible(&self, _cx: &App) -> bool {
         true
+    }
+
+    // Display preferences (displayPrefs.ts). `observe` reports their
+    // changes, including saves from another window.
+
+    /// `useShowRemainingUsage`: meters fill with what is left instead of
+    /// what is used.
+    fn show_remaining_usage(&self, _cx: &App) -> bool {
+        SHOW_REMAINING_USAGE_DEFAULT
+    }
+
+    /// `useMaskEmails`: account emails stay hidden until clicked.
+    fn mask_emails(&self, _cx: &App) -> bool {
+        MASK_EMAILS_DEFAULT
     }
 
     // Sign-in (core/auth.ts).

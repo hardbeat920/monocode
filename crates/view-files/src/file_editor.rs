@@ -35,7 +35,7 @@ use monocode_view_transcript::transcript::view::style::{MarkdownVariant, markdow
 
 use crate::data::{EditorNavigation, FilesData};
 use crate::markdown_shell::{
-    MarkdownViewMode, markdown_view_shell, remember_mode, remembered_mode,
+    MarkdownViewMode, markdown_view_shell, remember_mode, remembered_mode_or,
     split_markdown_frontmatter,
 };
 use crate::paths::{basename, display_path};
@@ -235,7 +235,7 @@ impl FileEditorSurface {
             cx.notify();
         });
         let mut this = Self {
-            mode: remembered_mode(&path, cx),
+            mode: remembered_mode_or(&path, MarkdownViewMode::Preview, cx),
             data,
             path,
             cwd: cwd.into(),
@@ -347,6 +347,9 @@ impl FileEditorSurface {
             return;
         }
         self.show_diff = show;
+        self.mode = self.remembered_mode(cx);
+        self.sync_search_active(cx);
+        cx.notify();
         if show {
             let weak = cx.entity().downgrade();
             self._git = Some(self.data.subscribe_git_changed(
@@ -389,12 +392,33 @@ impl FileEditorSurface {
             return;
         }
         self.path = path;
-        self.mode = remembered_mode(&self.path, cx);
+        self.mode = self.remembered_mode(cx);
         self.git_base = None;
         self.load(window, cx);
         if self.show_diff {
             self.load_git_base(cx);
         }
+    }
+
+    /// Where this tab's mode is remembered. A diff tab keeps its own, so
+    /// opening a review does not change how the plain tab shows the file.
+    fn mode_key(&self) -> String {
+        if self.show_diff {
+            format!("review:{}", self.path)
+        } else {
+            self.path.clone()
+        }
+    }
+
+    /// Diff tabs open as source, because the git gutter only draws in the
+    /// editor. Other tabs open as preview.
+    fn remembered_mode(&self, cx: &App) -> MarkdownViewMode {
+        let fallback = if self.show_diff {
+            MarkdownViewMode::Source
+        } else {
+            MarkdownViewMode::Preview
+        };
+        remembered_mode_or(&self.mode_key(), fallback, cx)
     }
 
     /// Switch a Markdown or SVG file between Preview and Source.
@@ -404,7 +428,7 @@ impl FileEditorSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        remember_mode(&self.path, mode, cx);
+        remember_mode(&self.mode_key(), mode, cx);
         self.mode = mode;
         self.sync_search_active(cx);
         if mode == MarkdownViewMode::Source
@@ -626,6 +650,8 @@ impl FileEditorSurface {
         let preview = cx.new(|cx| {
             let mut preview = MarkdownView::with_text(parts.body, cx);
             preview.set_style(style, cx);
+            // A document's lines stay on their own lines.
+            preview.set_hard_breaks(true, cx);
             preview
         });
         let weak = cx.entity().downgrade();

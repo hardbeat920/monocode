@@ -128,6 +128,25 @@ fn uses_a_worktree_branch_as_the_explorer_root_identity(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn keeps_room_for_descenders_in_truncated_file_names(cx: &mut TestAppContext) {
+    let h = mount(setup(vec![file("first.ts")]), cx);
+    let name = h.cx.debug_bounds("tree-name:/project/first.ts").unwrap();
+    let (font, leading) = h.cx.update(|_, cx| {
+        let theme = monocode_ui::Theme::of(cx);
+        (
+            theme.rem_size() * (theme.text.ui / 16.),
+            theme.leading.label,
+        )
+    });
+    assert!(
+        name.size.height >= font * (leading - 0.05),
+        "{:?} clips below {:?}",
+        name.size.height,
+        font * leading
+    );
+}
+
+#[gpui::test]
 fn shows_git_decorations_and_opens_a_clicked_file(cx: &mut TestAppContext) {
     let mut h = mount(setup(vec![file("first.ts")]), cx);
     let statuses = GitStatusMap {

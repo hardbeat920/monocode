@@ -353,6 +353,37 @@ fn the_detail_pane_loads_details_thread_and_diff(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_side_panel_reuses_a_hover_prefetch_while_the_inbox_refetches(cx: &mut TestAppContext) {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (client, backend) = client_with(cx, detail_handler(log));
+    client.prefetch_github_work_item("/tmp/web", "acme/web", WorkItemKind::Pr, 7);
+    cx.run_until_parked();
+    assert_eq!(backend.count("git_github_work_item_details"), 1);
+    assert_eq!(backend.count("git_github_pr_diff"), 1);
+
+    let fresh = Some(super::github_tasks::GITHUB_WORK_ITEM_FRESH_MS);
+    let panel_client = client.clone();
+    let panel = cx.new(|cx| InboxItemDetail::with_max_age(panel_client, pr_item(), fresh, cx));
+    panel.update(cx, |detail, cx| detail.show_diff(false, cx));
+    cx.run_until_parked();
+    panel.read_with(cx, |detail, _| {
+        assert_eq!(detail.details().value.as_ref().unwrap().body, "Body");
+        assert_eq!(detail.diff().value.as_ref().unwrap().patch, "hunks");
+        assert!(!detail.thread().loading);
+    });
+    assert_eq!(backend.count("git_github_work_item_details"), 1);
+    assert_eq!(backend.count("git_github_work_item_thread"), 1);
+    assert_eq!(backend.count("git_github_pr_diff"), 1);
+
+    // The Inbox page shows the cache at once but still fetches.
+    let inbox = open_detail(cx, &client, pr_item());
+    cx.run_until_parked();
+    inbox.read_with(cx, |detail, _| assert!(detail.details().value.is_some()));
+    assert_eq!(backend.count("git_github_work_item_details"), 2);
+    assert_eq!(backend.count("git_github_work_item_thread"), 2);
+}
+
+#[gpui::test]
 fn the_detail_pane_posts_a_reply_and_reloads_the_thread(cx: &mut TestAppContext) {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (client, backend) = client_with(cx, detail_handler(log));

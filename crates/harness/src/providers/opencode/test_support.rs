@@ -41,6 +41,9 @@ struct State {
     spawns: Vec<SpawnRequest>,
     kills: Vec<String>,
     sse_opens: Vec<(String, String)>,
+    sse_closes: Vec<String>,
+    /// Fail the next `sse_close` with this error.
+    sse_close_error: Option<String>,
     exec_output: String,
     exec_calls: Vec<ExecRequest>,
     logs: VecDeque<Result<Vec<Value>, String>>,
@@ -108,6 +111,8 @@ impl FakeHost {
                 spawns: Vec::new(),
                 kills: Vec::new(),
                 sse_opens: Vec::new(),
+                sse_closes: Vec::new(),
+                sse_close_error: None,
                 exec_output: if v2 {
                     "opencode 2.0.20"
                 } else {
@@ -230,6 +235,21 @@ impl FakeHost {
 
     pub fn sse_opens(&self) -> Vec<(String, String)> {
         self.inner.state.lock().sse_opens.clone()
+    }
+
+    pub fn sse_closes(&self) -> Vec<String> {
+        self.inner.state.lock().sse_closes.clone()
+    }
+
+    pub fn clear_sse_closes_and_kills(&self) {
+        let mut state = self.inner.state.lock();
+        state.sse_closes.clear();
+        state.kills.clear();
+    }
+
+    /// Make the next `sse_close` fail with `error`.
+    pub fn fail_next_sse_close(&self, error: &str) {
+        self.inner.state.lock().sse_close_error = Some(error.into());
     }
 
     /// One SSE frame on `stream_id`.
@@ -396,8 +416,10 @@ impl ChildBackend for FakeBackend {
         ready(Ok(()))
     }
 
-    fn sse_close(&self, _session_id: String) -> ChildFuture<()> {
-        ready(Ok(()))
+    fn sse_close(&self, session_id: String) -> ChildFuture<()> {
+        let mut state = self.inner.state.lock();
+        state.sse_closes.push(session_id);
+        ready(state.sse_close_error.take().map_or(Ok(()), Err))
     }
 
     fn read_text_file(&self, _path: String) -> ChildFuture<String> {

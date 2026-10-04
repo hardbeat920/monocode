@@ -11,6 +11,7 @@ use super::*;
 use crate::settings::jira::JiraSettings;
 use crate::settings::project_background_dialog::ProjectBackgroundDialog;
 use crate::settings::store::{JIRA_HIDDEN_PROJECTS_KEY, load_hidden_ids};
+use monocode_settings::display_prefs::{MASK_EMAILS_KEY, save_mask_emails};
 
 fn jira(page: &Entity<SettingsPage>, cx: &mut VisualTestContext) -> Entity<JiraSettings> {
     let SectionBody::Inbox(inbox) = body(page, cx) else {
@@ -46,6 +47,7 @@ fn jira_setup() -> Setup {
 #[gpui::test]
 fn connects_jira_synchronizes_project_filters_and_disconnects(cx: &mut TestAppContext) {
     let setup = jira_setup();
+    save_mask_emails(&setup.kv, true);
     let (page, cx) = mount(cx, SettingsSectionId::Inbox, &setup);
     let jira = jira(&page, cx);
     let [site, email, token] = jira.read_with(cx, |jira, _| jira.fields().map(Clone::clone));
@@ -67,6 +69,12 @@ fn connects_jira_synchronizes_project_filters_and_disconnects(cx: &mut TestAppCo
     assert!(exists(cx, "email:Hide email"));
     click(cx, "email:Hide email");
     assert!(exists(cx, "email:Reveal email"));
+    // Turning masking off in any window shows the email as plain text.
+    setup.kv.set_item(MASK_EMAILS_KEY, "0");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(!exists(cx, "email:Reveal email"));
+    assert!(exists(cx, "email-text:ada@example.com"));
     // The form is gone once connected.
     assert!(!exists(cx, "jira-form"));
     assert!(exists(cx, "jira-project:Engineering"));

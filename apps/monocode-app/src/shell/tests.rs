@@ -87,6 +87,57 @@ fn pages_and_sidebar_changes_follow_workspace_and_saved_preferences(cx: &mut Tes
     cx.run_until_parked();
 }
 
+/// Port of 8fae5666 (`settingsReturnViewRef` in App.tsx).
+#[gpui::test]
+fn closing_settings_returns_to_the_page_it_replaced(cx: &mut TestAppContext) {
+    cx.skip_drawing();
+    init_test_engine(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        monocode_ui::init(monocode_ui::AppearanceSettings::default(), cx);
+    });
+    let shell_window = cx.add_window(|window, cx| {
+        let mut shell = Shell::new(ShellOptions::full(), window, cx);
+        let history = cx.new(|cx| History::new(Kv::in_memory(), cx));
+        shell.attach(WorkspaceConfig::fresh(Some("/repo")), history, window, cx);
+        shell
+    });
+    shell_window
+        .update(cx, |shell, _, cx| {
+            let workspace = shell.workspace().unwrap().clone();
+            shell.open_page(Page::Inbox, cx);
+            shell.toggle_page(Page::Settings, cx);
+            assert_eq!(shell.layout().page, Some(Page::Settings));
+            shell.toggle_page(Page::Settings, cx);
+            assert_eq!(shell.layout().page, Some(Page::Inbox));
+            assert!(workspace.read(cx).full_page_open());
+
+            // Settings opened over the workspace closes to the workspace.
+            shell.close_page(cx);
+            shell.open_page(Page::Settings, cx);
+            shell.close_settings(cx);
+            assert_eq!(shell.layout().page, None);
+            assert!(!workspace.read(cx).full_page_open());
+
+            // Opening Settings again while it shows keeps the first return page.
+            shell.open_page(Page::Automations, cx);
+            shell.open_page(Page::Settings, cx);
+            shell.open_page(Page::Settings, cx);
+            shell.close_settings(cx);
+            assert_eq!(shell.layout().page, Some(Page::Automations));
+
+            // Notes stays closed when Settings turned it off.
+            shell.open_page(Page::Notes, cx);
+            shell.open_page(Page::Settings, cx);
+            let kv = shell.history().unwrap().read(cx).kv().clone();
+            monocode_settings::settings_store::save_notes_enabled(&kv, false);
+            shell.close_settings(cx);
+            assert_eq!(shell.layout().page, None);
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
 struct MenuFocusChild {
     focus: FocusHandle,
 }

@@ -91,10 +91,10 @@ pub fn plan_step_count(width: f32) -> usize {
 
 /// A small deterministic generator, seeded from the block id so redraws
 /// keep the same particles (`useState(makeSparkles)`).
-struct Random(u64);
+pub(crate) struct Random(u64);
 
 impl Random {
-    fn new(seed: &str) -> Self {
+    pub(crate) fn new(seed: &str) -> Self {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for byte in seed.bytes() {
             hash ^= byte as u64;
@@ -104,7 +104,7 @@ impl Random {
     }
 
     /// `Math.random()`: uniform in 0..1.
-    fn next(&mut self) -> f32 {
+    pub(crate) fn next(&mut self) -> f32 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;

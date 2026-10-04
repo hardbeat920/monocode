@@ -13,7 +13,7 @@ use gpui::{
     px,
 };
 
-use crate::appearance::{AppearanceSettings, ColorScheme};
+use crate::appearance::{AppearanceSettings, ColorScheme, DiffPalette};
 use crate::color::{hex, hsl_to_rgb, mix, parse_hex, with_alpha};
 
 /// Every color token. Alpha variants that the React code writes inline
@@ -56,6 +56,23 @@ pub struct ThemeColors {
     pub done: Hsla,
     /// Orchestration marks (fuchsia-300).
     pub orchestration: Hsla,
+
+    /// `--color-diff-add`: the solid hue of added-line markers and bars.
+    pub diff_add: Hsla,
+    /// `--color-diff-add-fg`: added text and counts, readable on the background.
+    pub diff_add_fg: Hsla,
+    /// `--color-diff-add-bg`: the added row tint.
+    pub diff_add_bg: Hsla,
+    /// `--color-diff-add-gutter`: the added gutter tint.
+    pub diff_add_gutter: Hsla,
+    /// `--color-diff-del`: the solid hue of removed-line markers and bars.
+    pub diff_del: Hsla,
+    /// `--color-diff-del-fg`: removed text and counts.
+    pub diff_del_fg: Hsla,
+    /// `--color-diff-del-bg`: the removed row tint.
+    pub diff_del_bg: Hsla,
+    /// `--color-diff-del-gutter`: the removed gutter tint.
+    pub diff_del_gutter: Hsla,
 
     /// The app root: `bg-background-base/40` over native glass, else opaque.
     pub root_background: Hsla,
@@ -399,6 +416,44 @@ fn scheme_tokens(scheme: ColorScheme, dark_lightness: f64) -> SchemeTokens {
     }
 }
 
+/// The `--color-diff-*` tokens for one palette and scheme.
+struct DiffTokens {
+    add: Hsla,
+    add_fg: Hsla,
+    del: Hsla,
+    del_fg: Hsla,
+    /// The row tint's alpha; the gutter tint's is `gutter`.
+    row: f32,
+    gutter: f32,
+}
+
+/// `:root`, `html.theme-light`, and the `html.diff-palette-*` overrides.
+/// Colorblind and high contrast pair blue with orange, which stays
+/// distinguishable for protanopia, deuteranopia, and tritanopia.
+fn diff_tokens(palette: DiffPalette, scheme: ColorScheme) -> DiffTokens {
+    let dark = scheme == ColorScheme::Dark;
+    let (add, add_fg, del, del_fg) = match (palette, dark) {
+        (DiffPalette::Default, true) => (0x10b981, 0x6ee7b7, 0xf43f5e, 0xfda4af),
+        (DiffPalette::Default, false) => (0x10b981, 0x047857, 0xf43f5e, 0xbe123c),
+        (DiffPalette::Colorblind, true) => (0x388bfd, 0x79c0ff, 0xdb6d28, 0xffa657),
+        (DiffPalette::Colorblind, false) => (0x0969da, 0x0550ae, 0xbc4c00, 0x953800),
+        (DiffPalette::HighContrast, true) => (0x58a6ff, 0xcae8ff, 0xf0883e, 0xffdfb6),
+        (DiffPalette::HighContrast, false) => (0x0550ae, 0x032563, 0x953800, 0x471700),
+    };
+    let (row, gutter) = match palette {
+        DiffPalette::HighContrast => (0.28, 0.45),
+        _ => (0.15, 0.25),
+    };
+    DiffTokens {
+        add: hex(add),
+        add_fg: hex(add_fg),
+        del: hex(del),
+        del_fg: hex(del_fg),
+        row,
+        gutter,
+    }
+}
+
 /// `hsl(h s% l%)`, rounded to 8-bit channels the way the browser paints it.
 fn hsl(hue: f64, saturation: f64, lightness: f64) -> Hsla {
     hsl_to_rgb(hue, saturation, lightness).to_hsla()
@@ -435,6 +490,7 @@ impl Theme {
         let scheme = appearance.color_scheme(system_scheme);
         let native_glass = appearance.native_glass(scheme);
         let tokens = scheme_tokens(scheme, appearance.theme_dark_lightness);
+        let diff = diff_tokens(appearance.diff_palette, scheme);
         let hue = appearance.theme_hue;
         let sat = appearance.theme_saturation;
         let base = hsl(hue, sat, tokens.background_lightness);
@@ -516,6 +572,14 @@ impl Theme {
             warning: hex(0xffb900),
             done: hex(0x00d5be),
             orchestration: hex(0xf4a8ff),
+            diff_add: diff.add,
+            diff_add_fg: diff.add_fg,
+            diff_add_bg: with_alpha(diff.add, diff.row),
+            diff_add_gutter: with_alpha(diff.add, diff.gutter),
+            diff_del: diff.del,
+            diff_del_fg: diff.del_fg,
+            diff_del_bg: with_alpha(diff.del, diff.row),
+            diff_del_gutter: with_alpha(diff.del, diff.gutter),
             root_background: if native_glass {
                 with_alpha(base, 0.4)
             } else {
@@ -883,6 +947,45 @@ mod tests {
         let theme = Theme::new(appearance, ColorScheme::Dark, fonts());
         let (r, g, b, _) = rgb8(theme.colors.background_base);
         assert!(r > g && g == b);
+    }
+
+    #[test]
+    fn diff_tokens_follow_the_palette_and_scheme() {
+        let theme = |diff_palette, theme_preference| {
+            let appearance = AppearanceSettings {
+                diff_palette,
+                theme_preference,
+                ..Default::default()
+            };
+            Theme::new(appearance, ColorScheme::Dark, fonts()).colors
+        };
+        use crate::appearance::ThemePreference::{Dark, Light};
+
+        let default = theme(DiffPalette::Default, Dark);
+        assert_eq!(rgb8(default.diff_add), (0x10, 0xb9, 0x81, 255));
+        assert_eq!(rgb8(default.diff_add_fg), (0x6e, 0xe7, 0xb7, 255));
+        assert_eq!(rgb8(default.diff_del_fg), (0xfd, 0xa4, 0xaf, 255));
+        assert_eq!(rgb8(default.diff_add_bg), (0x10, 0xb9, 0x81, 38));
+        assert_eq!(rgb8(default.diff_del_gutter), (0xf4, 0x3f, 0x5e, 64));
+        let light = theme(DiffPalette::Default, Light);
+        assert_eq!(rgb8(light.diff_add_fg), (0x04, 0x78, 0x57, 255));
+        assert_eq!(rgb8(light.diff_del_fg), (0xbe, 0x12, 0x3c, 255));
+
+        let colorblind = theme(DiffPalette::Colorblind, Dark);
+        assert_eq!(rgb8(colorblind.diff_add), (0x38, 0x8b, 0xfd, 255));
+        assert_eq!(rgb8(colorblind.diff_del), (0xdb, 0x6d, 0x28, 255));
+        assert_eq!(rgb8(colorblind.diff_add_bg).3, 38);
+        let colorblind_light = theme(DiffPalette::Colorblind, Light);
+        assert_eq!(rgb8(colorblind_light.diff_add_fg), (0x05, 0x50, 0xae, 255));
+        assert_eq!(rgb8(colorblind_light.diff_del_fg), (0x95, 0x38, 0x00, 255));
+
+        let high = theme(DiffPalette::HighContrast, Dark);
+        assert_eq!(rgb8(high.diff_add_fg), (0xca, 0xe8, 0xff, 255));
+        assert_eq!(rgb8(high.diff_del_bg), (0xf0, 0x88, 0x3e, 71));
+        assert_eq!(rgb8(high.diff_add_gutter).3, 115);
+        let high_light = theme(DiffPalette::HighContrast, Light);
+        assert_eq!(rgb8(high_light.diff_add), (0x05, 0x50, 0xae, 255));
+        assert_eq!(rgb8(high_light.diff_del_fg), (0x47, 0x17, 0x00, 255));
     }
 
     #[test]

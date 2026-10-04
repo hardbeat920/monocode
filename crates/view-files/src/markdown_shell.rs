@@ -32,9 +32,14 @@ impl Global for RememberedModes {}
 
 /// `useMarkdownMode`'s initial value: the remembered mode, else Preview.
 pub fn remembered_mode(key: &str, cx: &App) -> MarkdownViewMode {
+    remembered_mode_or(key, MarkdownViewMode::Preview, cx)
+}
+
+/// `useMarkdownMode(key, fallback)`: the remembered mode, else `fallback`.
+pub fn remembered_mode_or(key: &str, fallback: MarkdownViewMode, cx: &App) -> MarkdownViewMode {
     cx.try_global::<RememberedModes>()
         .and_then(|modes| modes.0.get(key).copied())
-        .unwrap_or_default()
+        .unwrap_or(fallback)
 }
 
 /// `useMarkdownMode`'s setter.

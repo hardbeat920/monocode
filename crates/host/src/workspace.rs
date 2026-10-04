@@ -841,6 +841,135 @@ mod tests {
         assert!(host_git_index(&root).unwrap().files.is_empty());
     }
 
+    /// workspace.test.ts: "stages and unstages a folder subtree without
+    /// affecting other changes".
+    #[test]
+    fn stages_and_unstages_a_folder_subtree_without_affecting_other_changes() {
+        let (_directory, root) = real_tempdir();
+        let git = |args: &[&str]| run_git(&root, args);
+        let action = |name: &str, path: &str| {
+            host_git_action(&root, Some(&json!(name)), Some(&json!(path)), None, None).unwrap();
+        };
+        let file = |relative: &str| {
+            host_git_index(&root)
+                .unwrap()
+                .files
+                .into_iter()
+                .find(|file| file.relative == relative)
+                .unwrap()
+        };
+        init(&root);
+        std::fs::create_dir_all(root.join("src/nested")).unwrap();
+        std::fs::create_dir(root.join("src-other")).unwrap();
+        std::fs::write(root.join("src/app.ts"), "before\n").unwrap();
+        std::fs::write(root.join("src/nested/deleted.ts"), "delete me\n").unwrap();
+        std::fs::write(root.join("src-other/app.ts"), "before\n").unwrap();
+        std::fs::write(root.join("ready.txt"), "before\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "src/ignored.txt\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "initial"]);
+        std::fs::write(root.join("src/app.ts"), "after\n").unwrap();
+        std::fs::remove_dir_all(root.join("src/nested")).unwrap();
+        std::fs::create_dir(root.join("src/added")).unwrap();
+        std::fs::write(root.join("src/added/new.ts"), "new\n").unwrap();
+        std::fs::write(root.join("src/ignored.txt"), "ignored\n").unwrap();
+        std::fs::write(root.join("src-other/app.ts"), "outside\n").unwrap();
+        std::fs::write(root.join("ready.txt"), "ready\n").unwrap();
+        action("stage", "ready.txt");
+
+        action("stage", "src");
+        let files = host_git_index(&root).unwrap().files;
+        assert_eq!(files.len(), 5);
+        for file in &files {
+            assert_eq!(
+                file.staged,
+                file.relative.starts_with("src/") || file.relative == "ready.txt"
+            );
+            assert_eq!(file.unstaged, file.relative == "src-other/app.ts");
+        }
+
+        action("unstage", "src");
+        let files = host_git_index(&root).unwrap().files;
+        assert_eq!(files.len(), 5);
+        for file in &files {
+            assert_eq!(file.staged, file.relative == "ready.txt");
+            assert_eq!(file.unstaged, file.relative != "ready.txt");
+        }
+        assert_eq!(
+            read_host_file(&root, Some(&json!("src/app.ts"))).unwrap(),
+            "after\n"
+        );
+
+        // A folder can still appear in the Changes tree after it was deleted on disk.
+        action("stage", "src/nested");
+        let deleted = file("src/nested/deleted.ts");
+        assert!(deleted.staged && !deleted.unstaged);
+        action("unstage", "src/nested");
+        let deleted = file("src/nested/deleted.ts");
+        assert!(!deleted.staged && deleted.unstaged);
+    }
+
+    /// workspace.test.ts: "stages and unstages the literal folder %s without
+    /// touching siblings".
+    #[cfg(unix)]
+    #[test]
+    fn stages_and_unstages_literal_folders_without_touching_siblings() {
+        for folder in ["*", "folder?", "[ab]", ":(glob)*"] {
+            let (_directory, root) = real_tempdir();
+            let git = |args: &[&str]| run_git(&root, args);
+            let action = |name: &str, path: &str| {
+                host_git_action(&root, Some(&json!(name)), Some(&json!(path)), None, None).unwrap();
+            };
+            let staged_paths = || {
+                let output = std::process::Command::new("git")
+                    .args(["diff", "--cached", "--name-only", "-z"])
+                    .current_dir(&root)
+                    .output()
+                    .unwrap();
+                let mut paths: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                    .split('\0')
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                paths.sort();
+                paths
+            };
+            init(&root);
+            let inside = format!("{folder}/inside.txt");
+            for directory in [folder, "a", "folderx"] {
+                std::fs::create_dir(root.join(directory)).unwrap();
+            }
+            let tracked = [
+                inside.as_str(),
+                "a/other.txt",
+                "folderx/other.txt",
+                "ready.txt",
+            ];
+            for path in tracked {
+                std::fs::write(root.join(path), "before\n").unwrap();
+            }
+            git(&["add", "."]);
+            git(&["commit", "-qm", "initial"]);
+            for path in tracked {
+                std::fs::write(root.join(path), "after\n").unwrap();
+            }
+            std::fs::write(root.join("private.txt"), "unrelated untracked data\n").unwrap();
+
+            action("stage", "ready.txt");
+            action("stage", folder);
+            let mut expected = vec![inside.clone(), "ready.txt".to_string()];
+            expected.sort();
+            assert_eq!(staged_paths(), expected, "stage folder {folder}");
+
+            action("unstage", folder);
+            assert_eq!(staged_paths(), ["ready.txt"], "unstage folder {folder}");
+            assert_eq!(
+                read_host_file(&root, Some(&json!(inside))).unwrap(),
+                "after\n"
+            );
+        }
+    }
+
     /// workspace.test.ts: "stages selected host diff content without
     /// replacing the working file".
     #[test]

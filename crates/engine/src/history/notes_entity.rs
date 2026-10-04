@@ -421,9 +421,25 @@ impl Notes {
             .or_else(|| self.notes.iter().find(|note| note.id == id).cloned())
     }
 
-    /// Show the notes page and list the notes.
+    /// Show the notes page and list the notes. A listing that is already
+    /// cached (preloaded while the app was idle) shows at once while the
+    /// refresh runs, as NotesView's `peekNotes` start did.
     pub fn open_page(&mut self, cx: &mut Context<Self>) {
         self.open = true;
+        if self.loading
+            && let Some(cached) = self.cache.clone()
+        {
+            let remembered = self.selected_id.take();
+            self.selected_id = remembered
+                .clone()
+                .filter(|preferred| cached.iter().any(|note| note.id == *preferred))
+                .or_else(|| cached.first().map(|note| note.id.clone()))
+                .or(remembered);
+            self.notes = cached;
+            self.loading = false;
+            self.sync_editor(cx);
+            cx.notify();
+        }
         self.refresh(cx).detach();
     }
 

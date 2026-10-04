@@ -13,30 +13,63 @@
 //! The session pane's split header (grip, focus dot, title, close) lived in
 //! SessionPane.tsx; the tree draws it here for [`PaneLeafKind::Session`]
 //! leaves, because the tree owns the drag that the header starts.
+//!
+//! A pane split into an existing layout slides in from the edge it was added
+//! on (`data-pane-enter` in index.css). Panes present when the tree is built,
+//! or swapped in place, just appear.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyView, App, Bounds, Context, CursorStyle, DispatchPhase, ElementId, EventEmitter,
-    FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Window,
-    canvas, div, px, relative,
+    Animation, AnimationExt as _, AnyElement, AnyView, App, Bounds, Context, CursorStyle,
+    DispatchPhase, ElementId, EventEmitter, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
+    Render, SharedString, Styled as _, Window, canvas, div, px, relative,
 };
 use monocode_layout::pane_drop::{
     PaneDrop, PaneHit, TitleTabDrop, TitleTabDropPosition, pane_drop_from_point,
 };
 use monocode_layout::{
-    LayoutNode, LayoutSash, PaneEdge, PaneRect, SplitDir, layout_leaves, layout_sashes,
-    set_split_ratio,
+    Axis, LayoutLeaf, LayoutNode, LayoutSash, PaneEdge, PaneRect, SplitDir, layout_leaves,
+    layout_sashes, set_split_ratio,
 };
 use monocode_ui::widgets::icon_button;
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
 
 /// `DRAG_THRESHOLD`: how far a pane drag travels before it starts, in px.
 const DRAG_THRESHOLD: f32 = 5.0;
+
+/// `pane-enter`'s 260ms, the linked work item panel's slide.
+pub const PANE_ENTER_DURATION: Duration = Duration::from_millis(260);
+
+/// `PaneEnterFrom`: where a new split pane enters from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneEnterFrom {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// Not on an outer edge of its split: it fades in where it is.
+    Fade,
+}
+
+/// `paneEnterFrom`: the outer edge of the split the leaf sits on, along the
+/// axis its parent split runs.
+pub fn pane_enter_from(leaf: &LayoutLeaf) -> PaneEnterFrom {
+    const EDGE: f64 = 0.001;
+    let rect = leaf.rect;
+    match leaf.axis {
+        Axis::X if rect.x + rect.w >= 1.0 - EDGE => PaneEnterFrom::Right,
+        Axis::X if rect.x <= EDGE => PaneEnterFrom::Left,
+        Axis::Y if rect.y + rect.h >= 1.0 - EDGE => PaneEnterFrom::Bottom,
+        Axis::Y if rect.y <= EDGE => PaneEnterFrom::Top,
+        _ => PaneEnterFrom::Fade,
+    }
+}
 
 /// What a leaf shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +198,11 @@ pub struct PaneTree {
     focus: FocusHandle,
     /// The focus to give back when a drag ends.
     restore_focus: Option<FocusHandle>,
+    /// The leaf ids of the last layout (`knownLeafIds`).
+    known_leaf_ids: HashSet<String>,
+    /// Panes sliding in, with a count that keys each run's animation.
+    entering: HashMap<String, (PaneEnterFrom, u64)>,
+    enter_runs: u64,
 }
 
 impl EventEmitter<PaneTreeEvent> for PaneTree {}
@@ -172,7 +210,6 @@ impl EventEmitter<PaneTreeEvent> for PaneTree {}
 impl PaneTree {
     pub fn new(layout: LayoutNode, focused_id: impl Into<String>, cx: &mut App) -> Self {
         Self {
-            layout,
             focused_id: focused_id.into(),
             visible: true,
             leaves: HashMap::new(),
@@ -187,6 +224,13 @@ impl PaneTree {
             title_tab_drop: None,
             focus: cx.focus_handle(),
             restore_focus: None,
+            known_leaf_ids: layout_leaves(&layout)
+                .into_iter()
+                .map(|leaf| leaf.id)
+                .collect(),
+            entering: HashMap::new(),
+            enter_runs: 0,
+            layout,
         }
     }
 
@@ -222,9 +266,53 @@ impl PaneTree {
             self.layout = layout;
             self.draft = None;
             self.sash = None;
+            self.track_entering_panes(cx);
         }
         self.focused_id = focused_id;
         cx.notify();
+    }
+
+    /// Start the slide for leaves a split added. The app reuses one tree
+    /// for every workspace tab, so a layout that keeps none of the known
+    /// leaves is a tab switch and does not animate.
+    fn track_entering_panes(&mut self, cx: &mut Context<Self>) {
+        let leaves = layout_leaves(&self.layout);
+        let grew = leaves.len() > self.known_leaf_ids.len()
+            && leaves
+                .iter()
+                .any(|leaf| self.known_leaf_ids.contains(&leaf.id));
+        self.entering
+            .retain(|id, _| leaves.iter().any(|leaf| &leaf.id == id));
+        if grew && !cx.reduce_motion() {
+            for leaf in &leaves {
+                if self.known_leaf_ids.contains(&leaf.id) {
+                    continue;
+                }
+                self.enter_runs += 1;
+                let run = self.enter_runs;
+                self.entering
+                    .insert(leaf.id.clone(), (pane_enter_from(leaf), run));
+                // `onAnimationEnd`: drop the wrapper's motion once it ends.
+                let id = leaf.id.clone();
+                cx.spawn(async move |tree, cx| {
+                    cx.background_executor().timer(PANE_ENTER_DURATION).await;
+                    tree.update(cx, |tree, cx| {
+                        if tree.entering.get(&id).is_some_and(|(_, at)| *at == run) {
+                            tree.entering.remove(&id);
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+        }
+        self.known_leaf_ids = leaves.into_iter().map(|leaf| leaf.id).collect();
+    }
+
+    /// The edge a pane is sliding in from, while it does.
+    pub fn entering_from(&self, pane_id: &str) -> Option<PaneEnterFrom> {
+        self.entering.get(pane_id).map(|(from, _)| *from)
     }
 
     /// The leaves' content. Leaves without an entry draw empty.
@@ -668,10 +756,19 @@ impl PaneTree {
             pane = pane.opacity(0.4);
         }
         if let Some(leaf) = leaf {
+            // The neighbours reflow at once; only the new pane's content
+            // moves, so nothing rewraps mid-slide.
+            let mut content = div()
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0();
             if let (PaneLeafKind::Session { title }, true) = (&leaf.kind, in_split) {
-                pane = pane.child(self.render_split_header(id, title.clone(), theme, cx));
+                content = content.child(self.render_split_header(id, title.clone(), theme, cx));
             }
-            pane = pane.child(
+            content = content.child(
                 div()
                     .relative()
                     .flex()
@@ -681,6 +778,10 @@ impl PaneTree {
                     .min_w_0()
                     .child(leaf.view),
             );
+            pane = pane.child(match self.entering.get(id) {
+                Some((from, run)) => pane_enter(content, id, *from, *run, theme),
+                None => content.into_any_element(),
+            });
         }
         if let Some(edge) = show_hint {
             pane = pane.child(pane_drop_hint(edge, theme));
@@ -817,6 +918,33 @@ impl PaneTree {
             }),
         ))
     }
+}
+
+/// `[data-pane-enter]`: the content starts a full pane away on its edge, or
+/// transparent for `Fade`, and eases into place.
+fn pane_enter(
+    content: gpui::Div,
+    id: &str,
+    from: PaneEnterFrom,
+    run: u64,
+    theme: &Theme,
+) -> AnyElement {
+    content
+        .with_animation(
+            ElementId::Name(format!("pane-enter:{id}:{run}").into()),
+            Animation::new(PANE_ENTER_DURATION).with_easing(theme.motion.ease_out.easing()),
+            move |el, t| {
+                let rest = 1.0 - t;
+                match from {
+                    PaneEnterFrom::Right => el.left(relative(rest)),
+                    PaneEnterFrom::Left => el.left(relative(-rest)),
+                    PaneEnterFrom::Bottom => el.top(relative(rest)),
+                    PaneEnterFrom::Top => el.top(relative(-rest)),
+                    PaneEnterFrom::Fade => el.opacity(t),
+                }
+            },
+        )
+        .into_any_element()
 }
 
 /// The share of the split before the sash.

@@ -383,7 +383,12 @@ impl FilePane {
         }
 
         let review = review_surface(self.active_file(), self.unified_diffs);
-        let key = self.pane.active_file_id.clone();
+        // A reused Changes tab that switches section shows a different set
+        // of diffs, so the side is part of the key.
+        let key = match self.active_file().and_then(|file| file.change_kind) {
+            Some(kind) => format!("{}:{kind:?}", self.pane.active_file_id),
+            None => self.pane.active_file_id.clone(),
+        };
         self.review = match (review, self.review.take()) {
             (None, _) => None,
             (Some(kind), Some((id, current, view))) if id == key && current == kind => {

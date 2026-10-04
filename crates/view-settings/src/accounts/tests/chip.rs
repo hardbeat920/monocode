@@ -121,6 +121,7 @@ fn offers_the_provider_owned_login_flow_for_an_expired_claude_session(cx: &mut T
 #[gpui::test]
 fn opens_a_column_of_detailed_progress_bars(cx: &mut TestAppContext) {
     let host = Rc::new(FakeUsage::default());
+    host.show_remaining.set(true);
     let (chip, cx) = mount_chip(
         cx,
         host,
@@ -128,6 +129,8 @@ fn opens_a_column_of_detailed_progress_bars(cx: &mut TestAppContext) {
         ChipActions::default(),
     );
     assert!(!chip.read_with(cx, |chip, _| chip.is_open()));
+    assert!(exists(cx, "text:58% 2h"));
+    assert!(exists(cx, "text:19% 2d 23h"));
     assert!(exists(cx, "minibar=19"));
     click(cx, "button:Codex usage details");
     assert!(chip.read_with(cx, |chip, _| chip.is_open()));
@@ -137,6 +140,8 @@ fn opens_a_column_of_detailed_progress_bars(cx: &mut TestAppContext) {
         "text:Weekly limit",
         "text:58% remaining",
         "text:19% remaining",
+        "text:42% used",
+        "text:81% used",
         "progressbar:5-hour limit remaining=58",
         "fill:5-hour limit remaining=58",
         "progressbar:Weekly limit remaining=19",
@@ -148,11 +153,66 @@ fn opens_a_column_of_detailed_progress_bars(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn fills_bars_with_used_capacity_by_default(cx: &mut TestAppContext) {
+    let host = Rc::new(FakeUsage::default());
+    let (_, cx) = mount_chip(
+        cx,
+        host,
+        ChipProps::new(codex_limits(), NOW),
+        ChipActions::default(),
+    );
+    assert!(exists(cx, "text:42% 2h"));
+    assert!(exists(cx, "text:81% 2d 23h"));
+    assert!(exists(cx, "minibar=81"));
+    click(cx, "button:Codex usage details");
+    for label in [
+        "text:42% used",
+        "text:58% remaining",
+        "progressbar:Weekly limit used=81",
+        "fill:Weekly limit used=81",
+    ] {
+        assert!(exists(cx, label), "{label}");
+    }
+}
+
+#[gpui::test]
+fn updates_the_chip_and_open_popover_when_the_preference_changes(cx: &mut TestAppContext) {
+    let host = Rc::new(FakeUsage::default());
+    let (_, cx) = mount_chip(
+        cx,
+        host.clone(),
+        ChipProps::new(codex_limits(), NOW),
+        ChipActions::default(),
+    );
+    click(cx, "button:Codex usage details");
+    // The host reports a save from this window or another one the same way.
+    let change = |remaining: bool, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| host.set_show_remaining(remaining, cx));
+        draw(cx);
+    };
+
+    change(true, cx);
+    assert!(exists(cx, "text:58% 2h"));
+    assert!(exists(cx, "text:19% 2d 23h"));
+    assert!(exists(cx, "minibar=19"));
+    assert!(exists(cx, "progressbar:Weekly limit remaining=19"));
+    assert!(exists(cx, "text:19% remaining"));
+
+    change(false, cx);
+    assert!(exists(cx, "text:42% 2h"));
+    assert!(exists(cx, "text:81% 2d 23h"));
+    assert!(exists(cx, "minibar=81"));
+    assert!(exists(cx, "progressbar:Weekly limit used=81"));
+    assert!(exists(cx, "text:81% used"));
+}
+
+#[gpui::test]
 fn shows_a_full_bar_before_usage_and_an_empty_bar_when_exhausted(cx: &mut TestAppContext) {
     let mut limits = codex_limits();
     limits.session.as_mut().unwrap().used_percent = 0.0;
     limits.weekly.as_mut().unwrap().used_percent = 100.0;
     let host = Rc::new(FakeUsage::default());
+    host.show_remaining.set(true);
     let (_, cx) = mount_chip(
         cx,
         host,
@@ -179,6 +239,7 @@ fn switches_between_named_accounts_from_the_usage_popover(cx: &mut TestAppContex
         ..ChipProps::new(codex_limits(), NOW)
     };
     let host = Rc::new(FakeUsage::default());
+    host.show_remaining.set(true);
     let (chip, cx) = mount_chip(cx, host, props, selections.actions());
     click(cx, "button:Codex usage details");
     click(cx, "button:Switch Codex account");
@@ -194,7 +255,7 @@ fn switches_between_named_accounts_from_the_usage_popover(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn reveals_emails_independently_of_account_switching_and_hides_them_on_reopening(
+fn applies_email_masking_live_reveals_independently_of_account_switching_and_hides_on_reopening(
     cx: &mut TestAppContext,
 ) {
     let host = Rc::new(FakeUsage::default());
@@ -212,9 +273,14 @@ fn reveals_emails_independently_of_account_switching_and_hides_them_on_reopening
         accounts: vec![account("default", "Main", true)],
         ..ChipProps::new(codex_limits(), NOW)
     };
-    let (chip, cx) = mount_chip(cx, host, props, selections.actions());
+    let (chip, cx) = mount_chip(cx, host.clone(), props, selections.actions());
     let chip_open = |cx: &mut VisualTestContext| chip.read_with(cx, |chip, _| chip.is_open());
     click(cx, "button:Codex usage details");
+    // Emails show as plain text until masking is turned on.
+    assert!(!exists(cx, "email:Reveal email"));
+    assert!(exists(cx, "email-text:user@example.com"));
+    cx.update(|_, cx| host.set_mask_emails(true, cx));
+    draw(cx);
     // Hidden emails stay masked until revealed.
     assert!(exists(cx, "email:Reveal email"));
     assert!(exists(cx, "text:Pro"));

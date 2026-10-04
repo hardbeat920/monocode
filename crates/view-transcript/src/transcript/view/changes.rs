@@ -111,12 +111,12 @@ impl TranscriptView {
                             .tabular()
                             .child(
                                 div()
-                                    .text_color(theme.colors.success)
+                                    .text_color(theme.colors.diff_add_fg)
                                     .child(format!("+{}", format_integer(additions))),
                             )
                             .child(
                                 div()
-                                    .text_color(theme.colors.danger)
+                                    .text_color(theme.colors.diff_del_fg)
                                     .child(format!("-{}", format_integer(deletions))),
                             ),
                     ),
@@ -193,12 +193,12 @@ impl TranscriptView {
                     .tabular()
                     .child(
                         div()
-                            .text_color(theme.colors.success)
+                            .text_color(theme.colors.diff_add_fg)
                             .child(format!("+{}", format_integer(file.additions))),
                     )
                     .child(
                         div()
-                            .text_color(theme.colors.danger)
+                            .text_color(theme.colors.diff_del_fg)
                             .child(format!("-{}", format_integer(file.deletions))),
                     )
                     .into_any_element()

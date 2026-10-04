@@ -509,6 +509,39 @@ fn appearance_changes_update_the_theme_live(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn diff_colors_save_the_palette_and_swap_the_theme_tokens(cx: &mut TestAppContext) {
+    use monocode_core::appearance::DIFF_PALETTE_KEY;
+    use monocode_ui::DiffPalette;
+    let setup = Setup::new(LINUX);
+    let (_, cx) = mount(cx, SettingsSectionId::Appearance, &setup);
+    let palette = |cx: &mut gpui::VisualTestContext| {
+        cx.read(|cx| monocode_ui::Theme::of(cx).appearance.diff_palette)
+    };
+    assert_eq!(palette(cx), DiffPalette::Default);
+
+    click(cx, "radio:Diff colors:colorblind");
+    assert_eq!(
+        setup.kv.get_item(DIFF_PALETTE_KEY).as_deref(),
+        Some("colorblind")
+    );
+    assert_eq!(palette(cx), DiffPalette::Colorblind);
+
+    click(cx, "radio:Diff colors:high-contrast");
+    assert_eq!(
+        setup.kv.get_item(DIFF_PALETTE_KEY).as_deref(),
+        Some("high-contrast")
+    );
+    assert_eq!(palette(cx), DiffPalette::HighContrast);
+
+    click(cx, "button:restore-defaults");
+    assert_eq!(
+        setup.kv.get_item(DIFF_PALETTE_KEY).as_deref(),
+        Some("default")
+    );
+    assert_eq!(palette(cx), DiffPalette::Default);
+}
+
+#[gpui::test]
 fn sliders_save_the_value_under_the_pointer(cx: &mut TestAppContext) {
     let setup = Setup::new(LINUX);
     let (_, cx) = mount(cx, SettingsSectionId::Appearance, &setup);

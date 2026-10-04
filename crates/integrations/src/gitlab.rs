@@ -337,8 +337,28 @@ fn gitlab_mr_diff_for(
         "/projects/{}/merge_requests/{number}/diffs?per_page=100",
         encode_path_component(repo)
     );
-    let response = gitlab_get(config, &path)?;
-    parse_mr_diff(&response.value, response.has_next_page)
+    match gitlab_get_request(config, &path).call() {
+        // Older self-hosted GitLab versions expose /changes but not /diffs.
+        // Match the HTTP status so permission and transport errors still surface.
+        Err(ureq::Error::Status(404, _)) => {
+            let path = format!("{}/changes", item_path(repo, "pr", number));
+            let response = gitlab_get(config, &path)?;
+            let changes = response
+                .value
+                .get("changes")
+                .ok_or_else(|| "GitLab did not return merge request diffs".to_string())?;
+            let overflow = response
+                .value
+                .get("overflow")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            parse_mr_diff(changes, response.has_next_page || overflow)
+        }
+        result => {
+            let response = read_gitlab_response(result)?;
+            parse_mr_diff(&response.value, response.has_next_page)
+        }
+    }
 }
 
 fn validate_kind(kind: &str) -> Result<(), String> {
@@ -752,16 +772,17 @@ struct GitlabResponse {
 }
 
 fn gitlab_get(config: &GitlabConfig, path: &str) -> Result<GitlabResponse, String> {
+    read_gitlab_response(gitlab_get_request(config, path).call())
+}
+
+fn gitlab_get_request(config: &GitlabConfig, path: &str) -> ureq::Request {
     let url = format!("{}/api/v4{}", config.url.trim_end_matches('/'), path);
     let agent = gitlab_agent();
-    read_gitlab_response(
-        agent
-            .get(&url)
-            .set("PRIVATE-TOKEN", &config.token)
-            .set("Accept", "application/json")
-            .set("User-Agent", USER_AGENT)
-            .call(),
-    )
+    agent
+        .get(&url)
+        .set("PRIVATE-TOKEN", &config.token)
+        .set("Accept", "application/json")
+        .set("User-Agent", USER_AGENT)
 }
 
 fn gitlab_post_form(
@@ -1076,6 +1097,119 @@ fn expand_home(input: &str) -> PathBuf {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Instant;
+
+    fn serve_gitlab(
+        responses: Vec<(u16, Value)>,
+    ) -> (GitlabConfig, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let config = GitlabConfig {
+            url: format!("http://{}/gitlab", listener.local_addr().unwrap()),
+            token: "test-token".into(),
+        };
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return requests;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                requests.push(request.trim().to_string());
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap() == 0 || header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = body.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        (config, server)
+    }
+
+    fn mr_diff_rows() -> Value {
+        json!([{
+            "old_path": "src/old.ts",
+            "new_path": "src/new.ts",
+            "renamed_file": true,
+            "diff": "@@ -1 +1 @@\n-old\n+new\n"
+        }])
+    }
+
+    #[test]
+    fn mr_diff_falls_back_to_changes_on_older_gitlab() {
+        let (config, server) = serve_gitlab(vec![
+            (404, json!({"error": "404 Not Found"})),
+            (200, json!({"changes": mr_diff_rows(), "overflow": true})),
+        ]);
+        let result = gitlab_mr_diff_for(&config, "acme/platform/web", 9);
+        let requests = server.join().unwrap();
+        let diff = result.expect("Code tab should load diffs from older GitLab instances");
+        assert_eq!(diff.files.len(), 1);
+        assert_eq!(diff.files[0].path, "src/new.ts");
+        assert_eq!((diff.additions, diff.deletions), (1, 1));
+        assert!(diff.patch.contains("rename from src/old.ts"));
+        assert!(diff.truncated);
+        assert_eq!(
+            requests,
+            [
+                "GET /gitlab/api/v4/projects/acme%2Fplatform%2Fweb/merge_requests/9/diffs?per_page=100 HTTP/1.1",
+                "GET /gitlab/api/v4/projects/acme%2Fplatform%2Fweb/merge_requests/9/changes HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn mr_diff_prefers_modern_endpoint() {
+        let (config, server) = serve_gitlab(vec![(200, mr_diff_rows())]);
+        let diff = gitlab_mr_diff_for(&config, "acme/web", 9).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        assert!(!diff.truncated);
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mr_diff_does_not_fall_back_on_other_http_errors() {
+        for status in [401, 403, 429, 500] {
+            let (config, server) =
+                serve_gitlab(vec![(status, json!({"message": "Upstream error"}))]);
+            let error = gitlab_mr_diff_for(&config, "acme/web", 9).unwrap_err();
+            let expected = if status == 401 || status == 403 {
+                "GitLab access token is invalid or lacks permission"
+            } else {
+                "Upstream error"
+            };
+            assert_eq!(error, expected);
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
 
     #[test]
     fn normalizes_host_and_api_suffix() {

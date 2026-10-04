@@ -6,6 +6,9 @@
 //! a marker is clicked, and `gitOverview` becomes the ruler on the right.
 //! The ruler also marks search matches and the cursor line.
 //!
+//! Added lines carry a `+` in the gutter and removed lines a `−` in the
+//! panel, so they do not rely on red and green alone.
+//!
 //! Everything paints in one canvas laid over the editor. The canvas paints
 //! after gpui-base's text element, so it reads that frame's line geometry
 //! through `EditorState::range_to_bounds`.
@@ -31,6 +34,45 @@ const RULER_WIDTH: f32 = 18.;
 /// Removed lines shown before the panel says how many more there are.
 const PEEK_MAX_LINES: usize = 12;
 const PEEK_BAR_HEIGHT: f32 = 26.;
+
+/// The glyph beside a changed line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineMark {
+    Added,
+    Removed,
+}
+
+impl LineMark {
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Self::Added => "+",
+            // U+2212 minus, matching the removed-line mark in the diff view.
+            Self::Removed => "\u{2212}",
+        }
+    }
+}
+
+/// The buffer rows that get a `+` in the gutter: every line an inserted
+/// chunk marks.
+pub(crate) fn added_rows(git: &GitSnapshot) -> Vec<usize> {
+    git.marked
+        .iter()
+        .zip(&git.chunks)
+        .filter(|(_, chunk)| chunk.is_insertion())
+        .flat_map(|(marked, _)| marked.clone())
+        .collect()
+}
+
+/// The removed lines of chunk `index` as `(old line number, text)`, each
+/// shown with a `−` in the panel.
+pub(crate) fn removed_rows(git: &GitSnapshot, index: usize) -> Vec<(usize, &str)> {
+    let first = git.first_old_line[index];
+    git.deleted[index]
+        .iter()
+        .enumerate()
+        .map(|(offset, text)| (first + offset, text.as_str()))
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PeekAction {
@@ -160,6 +202,13 @@ fn paint_overlay(
     let marker_x = gutter_left + px(GIT_GUTTER_WIDTH - 3. - 4.);
     let content_left = text_left - px(4.);
 
+    let mono = gpui::font(theme.mono_font.clone());
+    let mark_font = gpui::Font {
+        weight: gpui::FontWeight::SEMIBOLD,
+        ..mono
+    };
+    let added_rows = added_rows(git);
+
     let mut markers: Vec<(Bounds<Pixels>, usize)> = Vec::new();
     // `.cm-gutters` border-right.
     window.paint_quad(fill(
@@ -231,6 +280,24 @@ fn paint_overlay(
             }
         }
     });
+
+    // A `+` left of the bar on every visible added line.
+    for line in added_rows
+        .iter()
+        .filter(|line| visible.contains(*line))
+        .filter_map(|line| row(*line))
+    {
+        let glyph = shape_mark(LineMark::Added, &mark_font, theme.diff_added_number, window);
+        let _ = glyph.paint(
+            // On the first row of a wrapped line, like the CodeMirror marker.
+            point(marker_x - px(1.) - glyph.width, line.top),
+            theme.line_height_px(),
+            TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
 
     paint_ruler(
         theme,
@@ -331,6 +398,25 @@ fn paint_overlay(
     });
 }
 
+/// A `+` or `−` at the 11px semibold size of `.cm-gitMarker`.
+fn shape_mark(
+    mark: LineMark,
+    font: &gpui::Font,
+    color: Hsla,
+    window: &mut Window,
+) -> gpui::ShapedLine {
+    let text = SharedString::from(mark.glyph());
+    let run = TextRun {
+        len: text.len(),
+        font: font.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window.text_system().shape_line(text, px(11.), &[run], None)
+}
+
 /// `gitOverview` plus search and cursor marks.
 fn paint_ruler(
     theme: &EditorTheme,
@@ -411,8 +497,7 @@ fn paint_peek(
 ) -> Vec<(Bounds<Pixels>, PeekAction)> {
     let theme = &inputs.theme;
     let git = &inputs.git;
-    let deleted = &git.deleted[index];
-    let first_old_line = git.first_old_line[index];
+    let deleted = removed_rows(git, index);
 
     window.paint_quad(quad(
         panel,
@@ -445,11 +530,17 @@ fn paint_peek(
         panel.origin + point(px(1.), px(1.)),
         panel.bottom_right() - point(px(1.), px(1.)),
     );
+    let mark_font = gpui::Font {
+        weight: gpui::FontWeight::SEMIBOLD,
+        ..mono.clone()
+    };
     window.with_content_mask(Some(ContentMask { bounds: inner }), |window| {
         let number_width = px(44.);
+        // The `−` column between the old line number and the text.
+        let mark_width = px(14.);
         let mut y = inner.top();
         let shown = deleted.len().min(PEEK_MAX_LINES);
-        for (offset, line) in deleted.iter().take(shown).enumerate() {
+        for (old_line, line) in deleted.iter().take(shown) {
             let row = Bounds::new(point(inner.left(), y), size(inner.size.width, line_height));
             window.paint_quad(fill(row, theme.deleted_line));
             window.paint_quad(fill(
@@ -457,7 +548,7 @@ fn paint_peek(
                 theme.git_deleted,
             ));
             let number = shape(
-                (first_old_line + offset).to_string(),
+                old_line.to_string(),
                 &mono,
                 theme.line_number,
                 theme.font_size,
@@ -465,6 +556,20 @@ fn paint_peek(
             );
             let _ = number.paint(
                 point(inner.left() + number_width - number.width - px(8.), y),
+                line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+            let mark = shape_mark(
+                LineMark::Removed,
+                &mark_font,
+                theme.diff_deleted_number,
+                window,
+            );
+            let _ = mark.paint(
+                point(inner.left() + number_width, y),
                 line_height,
                 TextAlign::Left,
                 None,
@@ -479,7 +584,7 @@ fn paint_peek(
                 window,
             );
             let _ = shaped.paint(
-                point(inner.left() + number_width, y),
+                point(inner.left() + number_width + mark_width, y),
                 line_height,
                 TextAlign::Left,
                 None,
@@ -497,7 +602,7 @@ fn paint_peek(
                 window,
             );
             let _ = more.paint(
-                point(inner.left() + number_width, y),
+                point(inner.left() + number_width + mark_width, y),
                 line_height,
                 TextAlign::Left,
                 None,
@@ -582,4 +687,26 @@ fn paint_peek(
     );
     buttons.push((close, PeekAction::Close));
     buttons
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // describe("git decorations")
+    #[test]
+    fn marks_every_removed_and_added_line_with_a_glyph_not_only_color() {
+        let git = GitSnapshot::compute(
+            "alpha\nbeta\ngamma\ndelta\nepsilon\n",
+            "alpha\nBETA\nepsilon\n",
+        );
+        assert_eq!(git.chunks.len(), 1);
+        assert_eq!(
+            removed_rows(&git, 0),
+            vec![(2, "beta"), (3, "gamma"), (4, "delta")]
+        );
+        assert_eq!(LineMark::Removed.glyph(), "\u{2212}");
+        assert_eq!(added_rows(&git), vec![1]);
+        assert_eq!(LineMark::Added.glyph(), "+");
+    }
 }

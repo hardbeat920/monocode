@@ -32,6 +32,7 @@ pub fn appearance_from_settings(stored: &StoredAppearance) -> AppearanceSettings
         chat_background_session_opacity: stored.chat_background_session_opacity as f32,
         chat_background_blur: stored.chat_background_blur as f32,
         ui_scale: stored.ui_scale as f32,
+        diff_palette: monocode_ui::DiffPalette::parse(Some(stored.diff_palette.as_str())),
     }
     .normalized()
 }

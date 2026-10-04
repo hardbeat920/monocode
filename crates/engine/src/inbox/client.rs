@@ -115,10 +115,27 @@ pub(crate) struct GithubCache {
     work_item_by_key: HashMap<String, GithubWorkItem>,
     work_item_inflight: Flights<GithubWorkItem>,
     details_by_key: HashMap<String, WorkItemDetails>,
+    details_inflight: Flights<WorkItemDetails>,
     thread_by_key: HashMap<String, WorkItemThread>,
     thread_inflight: Flights<WorkItemThread>,
     pr_diff_by_key: HashMap<String, PrDiff>,
     pr_diff_inflight: Flights<PrDiff>,
+    /// When each details, thread, and diff entry last arrived, by
+    /// `details:`, `thread:`, or `diff:` plus the cache key.
+    fetched_at: HashMap<String, i64>,
+}
+
+impl GithubCache {
+    /// `freshEnough`: whether the entry at `key` arrived less than
+    /// `max_age_ms` before `now`. No age means the caller wants a fetch.
+    fn fresh_enough(&self, key: &str, max_age_ms: Option<i64>, now: i64) -> bool {
+        let Some(max_age_ms) = max_age_ms else {
+            return false;
+        };
+        self.fetched_at
+            .get(key)
+            .is_some_and(|at| now - at < max_age_ms)
+    }
 }
 
 /// `InboxListCache`.
@@ -138,7 +155,7 @@ pub(crate) struct ClientState {
     pub(crate) linear: LinearCache,
     pub(crate) self_activity: InboxSelfActivity,
     pub(crate) known: KnownInboxItems,
-    pub(crate) media: HashMap<String, Pending<Arc<Vec<u8>>>>,
+    pub(crate) media: super::inbox_media::MediaCache,
     list_cache: Option<InboxListCache>,
     list_inflight: Flights<InboxListResult>,
     generation: u64,
@@ -896,29 +913,56 @@ impl InboxClient {
             .cloned()
     }
 
-    /// `githubWorkItemDetails`.
+    /// `githubWorkItemDetails`: one shared request per item. With
+    /// `max_age_ms`, a description fetched that recently answers instead.
     pub fn github_work_item_details(
         &self,
         cwd: &str,
         repo: &str,
         kind: WorkItemKind,
         number: i64,
+        max_age_ms: Option<i64>,
     ) -> Pending<WorkItemDetails> {
+        let key = details_cache_key(repo, kind, number);
+        let mut state = self.state();
+        if let Some(cached) = state.github.details_by_key.get(&key)
+            && state
+                .github
+                .fresh_enough(&format!("details:{key}"), max_age_ms, self.now())
+        {
+            return ready(Ok(cached.clone()));
+        }
+        if let Some(pending) = state.github.details_inflight.get(&key) {
+            return pending;
+        }
+        let id = state.next_id();
         let call = self.call::<WorkItemDetails>(
             "git_github_work_item_details",
             json!({ "cwd": cwd, "repo": repo, "kind": work_kind_str(kind), "number": number }),
         );
-        let key = details_cache_key(repo, kind, number);
         let client = self.clone();
-        self.spawn_pending(async move {
-            let details = call.await?;
-            client
-                .state()
-                .github
-                .details_by_key
-                .insert(key, details.clone());
-            Ok(details)
-        })
+        let cache_key = key.clone();
+        let pending = self.spawn_pending(async move {
+            let result = call.await;
+            let mut state = client.state();
+            if let Ok(details) = &result {
+                state
+                    .github
+                    .details_by_key
+                    .insert(cache_key.clone(), details.clone());
+                state
+                    .github
+                    .fetched_at
+                    .insert(format!("details:{cache_key}"), client.now());
+            }
+            state.github.details_inflight.finish(&cache_key, id);
+            result
+        });
+        state
+            .github
+            .details_inflight
+            .insert(key, id, pending.clone());
+        pending
     }
 
     /// `peekGithubWorkItemThread`.
@@ -935,7 +979,8 @@ impl InboxClient {
             .cloned()
     }
 
-    /// `githubWorkItemThread`.
+    /// `githubWorkItemThread`. With `max_age_ms`, a thread fetched that
+    /// recently answers instead.
     pub fn github_work_item_thread(
         &self,
         cwd: &str,
@@ -943,12 +988,20 @@ impl InboxClient {
         kind: WorkItemKind,
         number: i64,
         force: bool,
+        max_age_ms: Option<i64>,
     ) -> Pending<WorkItemThread> {
         let key = details_cache_key(repo, kind, number);
         let mut state = self.state();
         if force {
             state.github.thread_by_key.remove(&key);
             state.github.thread_inflight.remove(&key);
+        }
+        if let Some(cached) = state.github.thread_by_key.get(&key)
+            && state
+                .github
+                .fresh_enough(&format!("thread:{key}"), max_age_ms, self.now())
+        {
+            return ready(Ok(cached.clone()));
         }
         if let Some(pending) = state.github.thread_inflight.get(&key) {
             return pending;
@@ -968,6 +1021,10 @@ impl InboxClient {
                     .github
                     .thread_by_key
                     .insert(cache_key.clone(), thread.clone());
+                state
+                    .github
+                    .fetched_at
+                    .insert(format!("thread:{cache_key}"), client.now());
             }
             state.github.thread_inflight.finish(&cache_key, id);
             result
@@ -1077,16 +1134,25 @@ impl InboxClient {
             .cloned()
     }
 
-    /// `githubPrDiff`.
+    /// `githubPrDiff`. With `max_age_ms`, a diff fetched that recently
+    /// answers instead.
     pub fn github_pr_diff(
         &self,
         cwd: &str,
         repo: &str,
         number: i64,
         full_context: bool,
+        max_age_ms: Option<i64>,
     ) -> Pending<PrDiff> {
         let key = pr_diff_cache_key(repo, number, full_context);
         let mut state = self.state();
+        if let Some(cached) = state.github.pr_diff_by_key.get(&key)
+            && state
+                .github
+                .fresh_enough(&format!("diff:{key}"), max_age_ms, self.now())
+        {
+            return ready(Ok(cached.clone()));
+        }
         if let Some(pending) = state.github.pr_diff_inflight.get(&key) {
             return pending;
         }
@@ -1105,6 +1171,10 @@ impl InboxClient {
                     .github
                     .pr_diff_by_key
                     .insert(cache_key.clone(), diff.clone());
+                state
+                    .github
+                    .fetched_at
+                    .insert(format!("diff:{cache_key}"), client.now());
             }
             state.github.pr_diff_inflight.finish(&cache_key, id);
             result
@@ -1114,6 +1184,38 @@ impl InboxClient {
             .pr_diff_inflight
             .insert(key, id, pending.clone());
         pending
+    }
+
+    /// `prefetchGithubWorkItem`: start a fetch of everything the linked side
+    /// panel reads that is not cached yet, so opening the panel from a
+    /// session card can render from cache instead of waiting on `gh`.
+    /// Requests settle on their own, so dropping the results is fine, and
+    /// errors stay quiet.
+    pub fn prefetch_github_work_item(
+        &self,
+        cwd: &str,
+        repo: &str,
+        kind: WorkItemKind,
+        number: i64,
+    ) {
+        if self.peek_github_work_item(repo, kind, number).is_none() {
+            drop(self.github_work_item(cwd, repo, kind, number, false));
+        }
+        if self
+            .peek_github_work_item_details(repo, kind, number)
+            .is_none()
+        {
+            drop(self.github_work_item_details(cwd, repo, kind, number, None));
+        }
+        if self
+            .peek_github_work_item_thread(repo, kind, number)
+            .is_none()
+        {
+            drop(self.github_work_item_thread(cwd, repo, kind, number, false, None));
+        }
+        if kind == WorkItemKind::Pr && self.peek_github_pr_diff(repo, number, false).is_none() {
+            drop(self.github_pr_diff(cwd, repo, number, false, None));
+        }
     }
 }
 

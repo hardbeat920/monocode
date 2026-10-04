@@ -1,5 +1,6 @@
 //! Port of src/features/quick-composer/ui/QuickPermissions.tsx: the four
-//! runtime modes as a keyboard-driven list.
+//! runtime modes as a keyboard-driven list. The composer opens it as its own
+//! picker from the toolbar's permissions button.
 
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
@@ -53,9 +54,6 @@ pub struct QuickPermissions {
     focus_handle: FocusHandle,
     value: RuntimeMode,
     active: usize,
-    /// Inside the model selector: picking does not close, and the row for
-    /// the current value is the highlighted one.
-    embedded: bool,
 }
 
 impl EventEmitter<QuickPermissionsEvent> for QuickPermissions {}
@@ -67,23 +65,14 @@ impl Focusable for QuickPermissions {
 }
 
 impl QuickPermissions {
-    /// A standalone list takes focus at once; an embedded one waits for a
-    /// click or Tab.
-    pub fn new(
-        value: RuntimeMode,
-        embedded: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    /// Mounting focuses the list, so the arrows and Enter work at once.
+    pub fn new(value: RuntimeMode, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        if !embedded {
-            window.focus(&focus_handle, cx);
-        }
+        window.focus(&focus_handle, cx);
         Self {
             focus_handle,
             value,
             active: index_of(value),
-            embedded,
         }
     }
 
@@ -95,20 +84,11 @@ impl QuickPermissions {
         self.active
     }
 
-    pub fn set_value(&mut self, value: RuntimeMode, cx: &mut Context<Self>) {
-        if self.value != value {
-            self.value = value;
-            cx.notify();
-        }
-    }
-
-    /// `pick`.
+    /// `pick`: report the mode, then close the list.
     pub fn pick(&mut self, mode: RuntimeMode, cx: &mut Context<Self>) {
         self.value = mode;
         cx.emit(QuickPermissionsEvent::Change(mode));
-        if !self.embedded {
-            cx.emit(QuickPermissionsEvent::Close);
-        }
+        cx.emit(QuickPermissionsEvent::Close);
         cx.notify();
     }
 
@@ -157,16 +137,11 @@ impl Render for QuickPermissions {
             .flex_col()
             .min_h_0()
             .overflow_y_scroll()
+            .border_t_1()
+            .border_color(theme.colors.stroke)
             .p(u(8.));
-        if !self.embedded {
-            root = root.border_t_1().border_color(theme.colors.stroke);
-        }
         for (index, mode) in RUNTIME_MODES.into_iter().enumerate() {
-            let highlighted = if self.embedded {
-                self.value == mode
-            } else {
-                self.active == index
-            };
+            let highlighted = self.active == index;
             let ink = if highlighted {
                 theme.colors.content
             } else {

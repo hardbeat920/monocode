@@ -199,7 +199,7 @@ fn never_routes_a_retired_generations_stdout_or_exit_to_its_replacement() {
     let new = children.watch_child("thread#1");
 
     // Late output from the killed process arrives under its own key and is
-    // buffered there. It can never reach the replacement.
+    // dropped. It can never reach the replacement.
     router.on_stdout("thread#0", "gen0-late".into());
     router.on_exit("thread#0", Some(1), 42);
     assert!(drain(&old).is_empty());
@@ -215,6 +215,7 @@ fn never_routes_a_retired_generations_stdout_or_exit_to_its_replacement() {
 fn buffers_lines_until_a_watcher_attaches_and_caps_the_buffer() {
     let (children, _fake) = children(Fake::default());
     let router = children.router().clone();
+    smol::block_on(children.spawn_child("early", "x", vec![], "/", None, None)).unwrap();
     for index in 0..(MAX_BUFFERED + 5) {
         router.on_stdout("early", format!("line {index}"));
     }
@@ -225,6 +226,96 @@ fn buffers_lines_until_a_watcher_attaches_and_caps_the_buffer() {
     assert_eq!(lines[0], ChildEvent::Stdout("line 5".into()));
     router.on_stderr("early", "kept".into());
     assert_eq!(drain(&events), vec![ChildEvent::Stderr("kept".into())]);
+}
+
+/// child.test.ts: "does not hold output for children another window owns".
+/// The native router has one process host, so the ids it never spawned or
+/// opened come from processes started outside [`Children`].
+#[test]
+fn does_not_hold_output_for_children_it_does_not_own() {
+    let (children, _fake) = children(Fake::default());
+    let router = children.router().clone();
+    for index in 0..5 {
+        router.on_stdout("other", format!("line {index}"));
+        router.on_sse("other", format!("event {index}"));
+    }
+    let lines = children.watch_child("other");
+    let events = children.watch_sse("other");
+    assert!(drain(&lines).is_empty());
+    assert!(events.try_recv().is_err());
+}
+
+/// child.test.ts: "still replays output a spawned child printed before it
+/// was watched".
+#[test]
+fn still_replays_output_a_spawned_child_printed_before_it_was_watched() {
+    let (children, _fake) = children(Fake::default());
+    let router = children.router().clone();
+    smol::block_on(async {
+        children
+            .spawn_child("mine", "agent", vec![], "/tmp", None, None)
+            .await
+            .unwrap();
+        router.on_stdout("mine", "early".into());
+        children
+            .open_harness_sse("mine", "http://127.0.0.1:1/event", None)
+            .await
+            .unwrap();
+        router.on_sse("mine", "early-event".into());
+    });
+    let lines = children.watch_child("mine");
+    let events = children.watch_sse("mine");
+    assert_eq!(drain(&lines), vec![ChildEvent::Stdout("early".into())]);
+    assert_eq!(events.try_recv(), Ok(SseEvent::Data("early-event".into())));
+    assert!(events.try_recv().is_err());
+}
+
+/// Native ordering: the host's reader thread can deliver stdout while
+/// `spawn_child` still waits for the pid. The id is owned before the backend
+/// spawns, so that output waits for the watcher instead of being dropped.
+#[test]
+fn keeps_output_that_arrives_while_the_spawn_is_still_pending() {
+    let (pid_tx, pid_rx) = async_channel::bounded(1);
+    let (children, _fake) = children(Fake {
+        pids: Mutex::new(Some(pid_rx)),
+        ..Default::default()
+    });
+    let router = children.router().clone();
+    smol::block_on(async {
+        let spawning = {
+            let children = children.clone();
+            smol::spawn(async move {
+                children
+                    .spawn_child("racing", "agent", vec![], "/tmp", None, None)
+                    .await
+            })
+        };
+        // Let the spawn reach the backend, then print before it returns.
+        smol::Timer::after(Duration::from_millis(10)).await;
+        router.on_stdout("racing", "early".into());
+        pid_tx.send(42).await.unwrap();
+        spawning.await.unwrap();
+    });
+    let lines = children.watch_child("racing");
+    assert_eq!(drain(&lines), vec![ChildEvent::Stdout("early".into())]);
+}
+
+/// child.test.ts: "drops output a killed child prints after it was stopped".
+#[test]
+fn drops_output_a_killed_child_prints_after_it_was_stopped() {
+    let (children, _fake) = children(Fake::default());
+    let router = children.router().clone();
+    let _first = children.watch_child("probe");
+    smol::block_on(async {
+        children
+            .spawn_child("probe", "agent", vec![], "/tmp", None, None)
+            .await
+            .unwrap();
+        children.kill_child("probe").await.unwrap();
+    });
+    router.on_stdout("probe", "late".into());
+    let lines = children.watch_child("probe");
+    assert!(drain(&lines).is_empty());
 }
 
 #[test]
@@ -319,6 +410,7 @@ fn watch_child_with_calls_the_handlers_in_order() {
 fn routes_sse_frames_and_closes_the_stream() {
     let (children, fake) = children(Fake::default());
     let router = children.router().clone();
+    smol::block_on(children.open_harness_sse("oc", "http://127.0.0.1:1/event", None)).unwrap();
     router.on_sse("oc", "early".into());
     let events = children.watch_sse("oc");
     router.on_sse("oc", "next".into());

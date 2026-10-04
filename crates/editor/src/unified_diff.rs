@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use crate::git_diff::{Doc, chunks_for};
+use crate::git_diff::{Doc, LINE_DIFF_CONFIG, chunks_with};
 
 pub const UNIFIED_CONTEXT_DEFAULT: usize = 3;
 pub const UNIFIED_FOLD_STEP: usize = 20;
@@ -227,7 +227,7 @@ fn unified_lines_from_texts(original: &str, current: &str) -> Vec<UnifiedLine> {
     if original == current {
         return context_lines(&new_doc, &old_doc, 0, new_doc.len(), 0);
     }
-    let chunks = chunks_for(original, current);
+    let chunks = chunks_with(original, current, LINE_DIFF_CONFIG);
     if chunks.is_empty() {
         return context_lines(&new_doc, &old_doc, 0, new_doc.len(), 0);
     }
@@ -792,9 +792,47 @@ impl DiffCommentTarget {
     }
 }
 
+/// Large inputs for the line diff tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// A large file: many distinct lines, like real source.
+    pub fn big_file(lines: usize) -> String {
+        let mut out = (0..lines)
+            .map(|index| {
+                format!(
+                    "  const value{index} = compute({index}, \"{}\");",
+                    index * 7
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push('\n');
+        out
+    }
+
+    /// Edits spread through the whole file: every 50th line, starting at 10.
+    pub fn scatter_edits(text: &str) -> (String, usize) {
+        let mut changed = 0;
+        let next = text
+            .split('\n')
+            .enumerate()
+            .map(|(index, line)| {
+                if index % 50 != 10 {
+                    return line.to_string();
+                }
+                changed += 1;
+                format!("{line} // edited")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (next, changed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_diff::stage_chunk_text_with;
 
     fn texts(diff: &UnifiedFileDiff, range: Range<usize>) -> Vec<&str> {
         diff.lines[range]
@@ -1175,6 +1213,46 @@ Binary files a/photo.png and b/photo.png differ
         assert_eq!(
             parse_git_paths("diff --git \"a/q\\\"x\" \"b/q\\\"x\""),
             Some(("q\"x".into(), "q\"x".into()))
+        );
+    }
+
+    // describe("buildUnifiedFile on large files")
+    #[test]
+    fn reports_only_the_edited_lines_instead_of_replacing_the_file() {
+        let original = test_support::big_file(12_000);
+        let (next, changed) = test_support::scatter_edits(&original);
+        let diff = build_unified_file(&original, &next, UNIFIED_CONTEXT_DEFAULT);
+        assert_eq!(diff.additions, changed);
+        assert_eq!(diff.deletions, changed);
+    }
+
+    #[test]
+    fn stages_exactly_the_hunk_the_view_showed() {
+        let original = test_support::big_file(12_000);
+        let (next, _) = test_support::scatter_edits(&original);
+        let diff = build_unified_file(&original, &next, UNIFIED_CONTEXT_DEFAULT);
+        let first_add = diff
+            .lines
+            .iter()
+            .find(|line| line.kind == UnifiedLineKind::Add)
+            .unwrap();
+        let staged = stage_chunk_text_with(
+            &original,
+            &next,
+            first_add.pos.unwrap(),
+            None,
+            LINE_DIFF_CONFIG,
+        )
+        .unwrap();
+        let staged_diff = build_unified_file(&original, &staged, UNIFIED_CONTEXT_DEFAULT);
+        assert_eq!(staged_diff.additions, 1);
+        assert_eq!(
+            staged_diff
+                .lines
+                .iter()
+                .find(|line| line.kind == UnifiedLineKind::Add)
+                .map(|line| line.text.as_str()),
+            Some(first_add.text.as_str())
         );
     }
 }

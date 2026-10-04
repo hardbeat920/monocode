@@ -495,3 +495,194 @@ fn every_prefix_of_a_mixed_document_parses() {
     }
     assert_eq!(parser.tree(), &parse(&corpus[..corpus.len() - 1]));
 }
+
+/// hardBreaks.test.ts: a document's lines stay on their own lines (#591).
+mod hard_breaks {
+    use super::*;
+
+    const HARD: ParseOptions = ParseOptions { hard_breaks: true };
+
+    /// The prose of every paragraph and heading, in order.
+    fn prose(text: &str) -> Vec<String> {
+        fn walk(block: &Block, out: &mut Vec<String>) {
+            match block {
+                Block::Paragraph(inline)
+                | Block::Heading {
+                    content: inline, ..
+                } => out.push(inline.text.clone()),
+                Block::Quote(children) => children.iter().for_each(|child| walk(child, out)),
+                Block::List(list) => list
+                    .items
+                    .iter()
+                    .flat_map(|item| &item.blocks)
+                    .for_each(|child| walk(child, out)),
+                Block::Table(table) => out.extend(
+                    table
+                        .header
+                        .iter()
+                        .chain(table.rows.iter().flatten())
+                        .map(|cell| cell.text.clone()),
+                ),
+                Block::Code(_) | Block::Rule => {}
+            }
+        }
+        let doc = parse_with(text, HARD);
+        let mut out = Vec::new();
+        for top in &doc.blocks {
+            check_all_spans(&top.block);
+            walk(&top.block, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn keeps_consecutive_quote_lines_on_their_own_lines() {
+        assert_eq!(
+            prose("> first line\n> second line\n> third line"),
+            ["first line\nsecond line\nthird line"]
+        );
+    }
+
+    #[test]
+    fn keeps_consecutive_paragraph_lines_on_their_own_lines() {
+        assert_eq!(
+            prose("first line\nsecond line"),
+            ["first line\nsecond line"]
+        );
+    }
+
+    #[test]
+    fn breaks_inside_emphasis_and_links() {
+        let doc = parse_with("**bold\ntext** and [link\ntext](https://example.com)", HARD);
+        let inline = paragraph(&doc, 0);
+        assert_eq!(inline.text, "bold\ntext and link\ntext");
+        let strong = inline.spans.iter().find(|span| span.style.strong).unwrap();
+        assert_eq!(&inline.text[strong.range.clone()], "bold\ntext");
+        let link = inline
+            .spans
+            .iter()
+            .find(|span| span.style.link.is_some())
+            .unwrap();
+        assert_eq!(&inline.text[link.range.clone()], "link\ntext");
+    }
+
+    #[test]
+    fn breaks_between_lines_that_are_each_one_inline_element() {
+        assert_eq!(prose("*a*\n*b*"), ["a\nb"]);
+        assert_eq!(prose("`a`\n`b`"), ["a\nb"]);
+        assert_eq!(prose("[a](https://x.com)\n[b](https://y.com)"), ["a\nb"]);
+    }
+
+    #[test]
+    fn keeps_the_line_an_inline_element_opens() {
+        for line in ["*second*", "`second`", "[second](https://x.com)"] {
+            assert_eq!(
+                prose(&format!("first\n{line}")),
+                ["first\nsecond"],
+                "{line}"
+            );
+        }
+        assert_eq!(prose("> first\n> *second*"), ["first\nsecond"]);
+    }
+
+    #[test]
+    fn keeps_the_line_after_a_raw_br() {
+        assert_eq!(prose("first<br>second\nthird"), ["first\nsecond\nthird"]);
+    }
+
+    #[test]
+    fn breaks_the_wrapped_lines_of_a_list_item() {
+        assert_eq!(
+            prose("- first item\n  continued"),
+            ["first item\ncontinued"]
+        );
+    }
+
+    #[test]
+    fn adds_no_breaks_between_blocks() {
+        for text in [
+            "- a\n  - b\n- c",
+            "- a\n\n- b",
+            "- a\n\n  second para\n- b",
+            "- a\n\n  ```txt\n  code line\n  ```\n- b",
+            "1. first\n2. second\n\n   more of second",
+        ] {
+            for line in prose(text) {
+                assert!(!line.contains('\n'), "{text:?} broke {line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn leaves_a_markdown_hard_break_as_one_break() {
+        for text in ["two spaces  \nnext line", "backslash\\\nnext line"] {
+            let lines = prose(text);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].ends_with("\nnext line"), "{lines:?}");
+            assert_eq!(lines[0].matches('\n').count(), 1, "{lines:?}");
+        }
+    }
+
+    #[test]
+    fn drops_the_space_a_soft_break_left_behind() {
+        assert_eq!(
+            prose("trailing space \nnext line"),
+            ["trailing space\nnext line"]
+        );
+    }
+
+    #[test]
+    fn does_not_end_a_paragraph_with_a_break() {
+        assert_eq!(prose("one line\n"), ["one line"]);
+    }
+
+    #[test]
+    fn leaves_code_alone() {
+        let doc = parse_with("```txt\nline one\nline two\n```", HARD);
+        match &doc.blocks[0].block {
+            Block::Code(code) => assert_eq!(code.code, "line one\nline two"),
+            other => panic!("expected code, got {other:?}"),
+        }
+        assert!(
+            prose("a `code\nspan` b")
+                .iter()
+                .all(|line| line == "a code span b")
+        );
+    }
+
+    #[test]
+    fn leaves_a_reply_reflowing_by_default() {
+        let doc = parse("first line\nsecond line");
+        assert_eq!(paragraph(&doc, 0).text, "first line second line");
+    }
+
+    #[test]
+    fn streams_the_same_as_a_full_parse() {
+        for (ix, corpus) in CORPORA.iter().enumerate() {
+            let full = parse_with(corpus, HARD);
+            for chunk in [1usize, 3, 16] {
+                let mut parser = IncrementalParser::with_options(HARD);
+                let mut start = 0;
+                while start < corpus.len() {
+                    let mut end = (start + chunk).min(corpus.len());
+                    while end < corpus.len() && !corpus.is_char_boundary(end) {
+                        end += 1;
+                    }
+                    parser.append(&corpus[start..end]);
+                    start = end;
+                }
+                assert_eq!(parser.tree(), &full, "corpus {ix} at chunk size {chunk}");
+            }
+        }
+    }
+
+    #[test]
+    fn changing_the_option_reparses() {
+        let mut parser = IncrementalParser::new();
+        parser.set_text("first\nsecond");
+        assert_eq!(paragraph(parser.tree(), 0).text, "first second");
+        parser.set_options(HARD);
+        assert_eq!(paragraph(parser.tree(), 0).text, "first\nsecond");
+        assert_eq!(parser.source(), "first\nsecond");
+    }
+}

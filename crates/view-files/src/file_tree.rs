@@ -178,8 +178,8 @@ pub enum TreeRow {
 fn git_status_color(status: &str, theme: &Theme) -> Option<Hsla> {
     match status {
         "modified" => Some(theme.colors.warning),
-        "added" | "untracked" => Some(theme.colors.success),
-        "deleted" => Some(theme.colors.danger),
+        "added" | "untracked" => Some(theme.colors.diff_add_fg),
+        "deleted" => Some(theme.colors.diff_del_fg),
         _ => None,
     }
 }
@@ -1848,9 +1848,16 @@ impl FileTree {
         } else {
             file_type_icon(entry.name.clone()).into_any_element()
         };
+        // `leading-label`: a truncated label clips its box, so a line height
+        // of 1 would cut off descenders like the tail of `g`.
         let name = div()
+            .debug_selector({
+                let path = entry.path.clone();
+                move || format!("tree-name:{path}")
+            })
             .min_w_0()
             .truncate()
+            .leading(theme.leading.label)
             .map(|label| {
                 if entry.ignored {
                     label.italic().text_color(theme.content(0.50))

@@ -278,7 +278,7 @@ fn scenes() -> Vec<Scene> {
                 extra: Default::default(),
             };
             let panel = cx.new(|cx| {
-                LinkedWorkItemPanel::new(
+                let mut panel = LinkedWorkItemPanel::new(
                     services_dyn,
                     target,
                     LinkedPanelProps {
@@ -289,7 +289,9 @@ fn scenes() -> Vec<Scene> {
                     },
                     window,
                     cx,
-                )
+                );
+                panel.set_animate(false, cx);
+                panel
             });
             let body = cx.new(|_| PanelStage { panel }).into();
             Stage {

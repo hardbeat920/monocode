@@ -17,7 +17,7 @@ use gpui::{
 
 use crate::fade::{FadeGate, Pacer, RevealTimeline};
 use crate::highlight;
-use crate::parse::{Document, IncrementalParser};
+use crate::parse::{Document, IncrementalParser, ParseOptions};
 use crate::prepare::{PreparedBlock, prepare_block};
 use crate::render::{CodeState, Frame, ImageResolver, LayoutCache, Registry, render_blocks};
 use crate::selection::{self, ElementKey, Point, Selection};
@@ -210,6 +210,19 @@ impl MarkdownView {
     /// Whether the reveal or a fade is still running.
     pub fn is_animating(&self) -> bool {
         self.pacer.is_revealing(self.received.len()) || self.timeline.is_fading(Instant::now())
+    }
+
+    /// Show each newline inside a block as a line break, as a document does,
+    /// instead of reflowing it into a space. Notes and Markdown files turn
+    /// this on; agent replies leave it off (`hardBreaks` on `AgentMarkdown`).
+    pub fn set_hard_breaks(&mut self, hard_breaks: bool, cx: &mut Context<Self>) {
+        let options = ParseOptions { hard_breaks };
+        if self.parser.options() != options {
+            // An empty parser reads as a changed source, so the next frame
+            // parses the shown text again with the new options.
+            self.parser = IncrementalParser::with_options(options);
+            cx.notify();
+        }
     }
 
     /// Turn off fades for this view, on top of [`App::reduce_motion`].

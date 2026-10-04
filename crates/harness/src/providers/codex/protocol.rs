@@ -12,8 +12,8 @@ use monocode_core::attachment::{
     prompt_text,
 };
 use monocode_core::block::{
-    AgentStepKind, TaskListItem, TaskListItemStatus, ToolPreview, ToolPreviewKind, TurnIntent,
-    TurnMetrics,
+    AgentStepKind, Block, BlockRole, TaskListItem, TaskListItemStatus, ToolPreview,
+    ToolPreviewKind, TurnIntent, TurnMetrics,
 };
 use monocode_core::harness::RuntimeMode;
 use monocode_core::harness_event::{ApprovalDecision, GeneratedImage, HarnessEvent};
@@ -21,7 +21,7 @@ use monocode_core::js;
 use monocode_core::paths::display_path;
 use monocode_core::reducer::{
     ToolTitleInput, compose_tool_title, extract_tool_preview, format_agent_type,
-    format_shell_intent, infer_shell_intent,
+    format_shell_intent, infer_shell_intent, is_weak_tool_title,
 };
 use monocode_core::task_list::normalize_task_list_status_str;
 
@@ -327,6 +327,96 @@ pub fn is_recoverable_thread_resume_error(message: &str) -> bool {
     ]
     .iter()
     .any(|snippet| message.contains(snippet))
+}
+
+/// `PARSED_COMMAND_KEYS`: where a Codex item records the commands it parsed
+/// out of a script. The live app-server protocol spells it `commandActions`.
+/// Older rollout files used `parsed_cmd` or `parsedCmd`, and an item replayed
+/// from one still carries those, so every spelling is read.
+const PARSED_COMMAND_KEYS: [&str; 3] = ["commandActions", "parsed_cmd", "parsedCmd"];
+
+/// `PARSED_COMMAND_FIELDS`: the action's own text. `command` is the
+/// protocol's spelling, `cmd` the rollout files'.
+const PARSED_COMMAND_FIELDS: [&str; 2] = ["command", "cmd"];
+
+/// `codexCommandText`: the command a Codex `commandExecution` item ran. The
+/// app-server sends a plain string, but a shell launcher can also arrive as
+/// argv (`["/bin/zsh","-lc","rg --files"]`), which [`string_field`] drops, so
+/// the argv shape is unwrapped too. The parsed actions are the last fallback.
+pub fn codex_command_text(item: Option<&Record>) -> Option<String> {
+    let item = item?;
+    match item.get("command") {
+        Some(Value::String(command)) if !js::trim(command).is_empty() => {
+            return Some(js::trim(command).to_string());
+        }
+        Some(Value::Array(command)) => {
+            let parts: Vec<&str> = command
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|part| !js::trim(part).is_empty())
+                .collect();
+            if let Some(script) = shell_script_argument(&parts) {
+                return Some(js::trim(script).to_string());
+            }
+            if !parts.is_empty() {
+                return Some(js::trim(&parts.join(" ")).to_string());
+            }
+        }
+        _ => {}
+    }
+    for key in PARSED_COMMAND_KEYS {
+        let Some(Value::Array(actions)) = item.get(key) else {
+            continue;
+        };
+        for raw in actions {
+            let action = as_record(Some(raw));
+            for field in PARSED_COMMAND_FIELDS {
+                if let Some(found) = string_field(action, field) {
+                    return Some(found.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The script argument of a shell launcher's argv. The script is one argv
+/// element that keeps its own spaces. Command flags are matched for the
+/// launcher, since other options may also contain "c".
+fn shell_script_argument<'a>(parts: &[&'a str]) -> Option<&'a str> {
+    let first = *parts.first()?;
+    let unquoted = match first.as_bytes() {
+        [quote @ (b'"' | b'\''), .., last] if last == quote => &first[1..first.len() - 1],
+        _ => first,
+    };
+    let launcher = unquoted
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    let posix_shell = ["sh", "bash", "zsh", "dash", "ksh"].contains(&launcher.as_str());
+    let power_shell =
+        ["pwsh", "pwsh.exe", "powershell", "powershell.exe"].contains(&launcher.as_str());
+    let cmd = launcher == "cmd" || launcher == "cmd.exe";
+    let last = parts.len().saturating_sub(1);
+    for (index, part) in parts.iter().enumerate().take(last).skip(1) {
+        let lower = part.to_lowercase();
+        if power_shell && (lower == "-file" || lower == "-f") {
+            return None;
+        }
+        let posix_flag = lower == "--command"
+            || part.strip_prefix('-').is_some_and(|flags| {
+                flags.contains('c') && flags.chars().all(|c| c.is_ascii_alphabetic())
+            });
+        if (posix_shell && posix_flag)
+            || (power_shell && (lower == "-command" || lower == "-c"))
+            || (cmd && lower == "/c")
+        {
+            return Some(parts[index + 1]);
+        }
+    }
+    None
 }
 
 /// `numberField`: a finite number, or 0.
@@ -802,7 +892,8 @@ pub fn map_tool_item(item: &Record, item_type: &str, completed: bool) -> Option<
 
     match item_type {
         "commandExecution" => {
-            let command = string_field(Some(item), "command").unwrap_or("Shell");
+            let command = codex_command_text(Some(item));
+            let command = command.as_deref().unwrap_or("Shell");
             let status = map_item_status(string_field(Some(item), "status"), completed);
             let output = string_field(Some(item), "aggregatedOutput")
                 .or_else(|| string_field(Some(item), "output"));
@@ -899,14 +990,15 @@ pub fn map_tool_item(item: &Record, item_type: &str, completed: bool) -> Option<
     }
 }
 
-struct CommandPresentation {
-    title: String,
-    preview: Option<ToolPreview>,
+/// The title and preview [`codex_command_presentation`] derives.
+pub struct CommandPresentation {
+    pub title: String,
+    pub preview: Option<ToolPreview>,
 }
 
 /// `codexCommandPresentation`: prefer Codex's own best-effort command
 /// parsing, then the shared shell intent fallback.
-fn codex_command_presentation(item: &Record, command: &str) -> CommandPresentation {
+pub fn codex_command_presentation(item: &Record, command: &str) -> CommandPresentation {
     let cwd = string_field(Some(item), "cwd");
     let actions: Vec<&Record> = match item.get("commandActions") {
         Some(Value::Array(values)) => values
@@ -940,11 +1032,16 @@ fn codex_command_presentation(item: &Record, command: &str) -> CommandPresentati
                 };
             }
             Some("listFiles") => {
+                // A path-less listing (`rg --files -g AGENTS.md`) used to
+                // derive a bare "List", and `composeToolTitle` collapses that
+                // weak title to "Shell" because no path is left to show. Fall
+                // through so the command, or the intent inferred from it,
+                // becomes the label.
+                let Some(shown) = shown_path.filter(|shown| !shown.is_empty()) else {
+                    continue;
+                };
                 return CommandPresentation {
-                    title: match shown_path {
-                        Some(shown) => format!("List {shown}"),
-                        None => "List".into(),
-                    },
+                    title: format!("List {shown}"),
                     preview: Some(shell_command_preview(command, path, None, None)),
                 };
             }
@@ -952,24 +1049,77 @@ fn codex_command_presentation(item: &Record, command: &str) -> CommandPresentati
         }
     }
 
-    let Some(inferred) = infer_shell_intent(command) else {
-        return CommandPresentation {
-            title: command.to_string(),
-            preview: None,
-        };
-    };
-    let path = inferred.path.as_deref().filter(|path| !path.is_empty());
-    let shown_path = path.map(|path| display_path(path, cwd));
-    CommandPresentation {
-        title: format_shell_intent(&inferred, shown_path.as_deref(), inferred.query.as_deref())
-            .unwrap_or_else(|| command.to_string()),
-        preview: Some(shell_command_preview(
-            command,
-            path,
-            inferred.query.as_deref(),
-            inferred.start_line,
-        )),
+    if let Some(inferred) = infer_shell_intent(command) {
+        let path = inferred.path.as_deref().filter(|path| !path.is_empty());
+        let shown_path = path.map(|path| display_path(path, cwd));
+        if let Some(title) =
+            format_shell_intent(&inferred, shown_path.as_deref(), inferred.query.as_deref())
+        {
+            return CommandPresentation {
+                title,
+                preview: Some(shell_command_preview(
+                    command,
+                    path,
+                    inferred.query.as_deref(),
+                    inferred.start_line,
+                )),
+            };
+        }
     }
+    // `ls` with no path derives a bare "List", which the activity stack treats
+    // as an empty placeholder. The command itself is the honest label.
+    CommandPresentation {
+        title: command.to_string(),
+        preview: Some(shell_command_preview(command, None, None, None)),
+    }
+}
+
+/// `backfillCodexShellCommands` from sessionStore.ts: relabel exec rows that
+/// were saved as a bare "Shell" placeholder. `None` when nothing changed.
+///
+/// The command is already on the row. Codex sends it with the item, and
+/// `shellCommandPreview` stores it as the preview title. Reading it back from
+/// there keeps whatever Codex chose to show the user, including anything it
+/// redacted, and never reads a secret off disk into the transcript store. A
+/// row saved without a usable preview has no command left to recover, so it
+/// keeps its placeholder.
+pub fn backfill_codex_shell_commands(blocks: &[Block]) -> Option<Vec<Block>> {
+    let mut changed = false;
+    let repaired = blocks
+        .iter()
+        .map(|block| {
+            let Some(tool) = block.tool.as_ref() else {
+                return block.clone();
+            };
+            if block.role != BlockRole::Tool
+                || tool.kind.as_deref() != Some("execute")
+                || js::trim(&block.text) != "Shell"
+            {
+                return block.clone();
+            }
+            let saved = tool
+                .preview
+                .as_ref()
+                .and_then(|preview| preview.title.as_deref())
+                .map(js::trim)
+                .unwrap_or_default();
+            if saved.is_empty() || is_weak_tool_title(saved) {
+                return block.clone();
+            }
+            changed = true;
+            let presentation = codex_command_presentation(&Record::new(), saved);
+            let mut next = block.clone();
+            next.text = presentation.title.clone();
+            if let Some(tool) = next.tool.as_mut() {
+                tool.title = Some(presentation.title);
+                if presentation.preview.is_some() {
+                    tool.preview = presentation.preview;
+                }
+            }
+            next
+        })
+        .collect();
+    changed.then_some(repaired)
 }
 
 /// `shellCommandPreview`.
@@ -1544,7 +1694,8 @@ pub fn map_approval_request(
 
     match method {
         "item/commandExecution/requestApproval" => {
-            let command = string_field(Some(rec), "command").unwrap_or("Shell");
+            let command = codex_command_text(Some(rec));
+            let command = command.as_deref().unwrap_or("Shell");
             let reason = string_field(Some(rec), "reason");
             let presentation = codex_command_presentation(rec, command);
             let readable = presentation.title != command;

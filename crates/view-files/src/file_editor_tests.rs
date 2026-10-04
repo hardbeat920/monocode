@@ -341,6 +341,72 @@ fn shows_markdown_source_and_navigates_to_its_referenced_line(cx: &mut TestAppCo
     );
 }
 
+/// https://github.com/hardbeat920/monocode/issues/591
+#[gpui::test]
+fn keeps_a_markdown_files_consecutive_lines_on_their_own_lines(cx: &mut TestAppContext) {
+    let h = mount(
+        with_file(
+            "/repo/quote.md",
+            "> first line\n> second line\n> third line",
+        ),
+        "/repo/quote.md",
+        EditorSettings::default(),
+        cx,
+    );
+    h.cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+    h.cx.run_until_parked();
+    let preview = h
+        .surface
+        .read_with(h.cx, |surface, _| surface.preview.clone())
+        .expect("the Markdown preview is built");
+    let text = preview.read_with(h.cx, |preview, _| {
+        preview
+            .document()
+            .blocks
+            .iter()
+            .map(|top| monocode_markdown::parse::block_text(&top.block))
+            .collect::<String>()
+    });
+    assert_eq!(text, "first line\nsecond line\nthird line");
+}
+
+#[gpui::test]
+fn opens_markdown_diffs_as_source_and_remembers_their_mode_apart(cx: &mut TestAppContext) {
+    let mut h = mount(
+        with_file("/repo/notes.md", THREE_LINES),
+        "/repo/notes.md",
+        EditorSettings::default(),
+        cx,
+    );
+    let mode = |h: &mut Harness| h.surface.read_with(h.cx, |surface, _| surface.mode());
+    assert_eq!(mode(&mut h), MarkdownViewMode::Preview);
+
+    // The git gutter only draws in the editor, so the diff opens as source.
+    h.surface
+        .update(h.cx, |surface, cx| surface.set_show_diff(true, cx));
+    assert_eq!(mode(&mut h), MarkdownViewMode::Source);
+    h.surface.update_in(h.cx, |surface, window, cx| {
+        surface.set_mode(MarkdownViewMode::Preview, window, cx)
+    });
+
+    // The plain tab keeps its own mode, and the review's choice comes back.
+    h.surface
+        .update(h.cx, |surface, cx| surface.set_show_diff(false, cx));
+    assert_eq!(mode(&mut h), MarkdownViewMode::Preview);
+    h.surface.update_in(h.cx, |surface, window, cx| {
+        surface.set_mode(MarkdownViewMode::Source, window, cx)
+    });
+    h.surface
+        .update(h.cx, |surface, cx| surface.set_show_diff(true, cx));
+    assert_eq!(mode(&mut h), MarkdownViewMode::Preview);
+    h.surface
+        .update(h.cx, |surface, cx| surface.set_show_diff(false, cx));
+    assert_eq!(mode(&mut h), MarkdownViewMode::Source);
+}
+
 #[gpui::test]
 fn clamps_a_stale_source_location_to_the_last_line(cx: &mut TestAppContext) {
     let mut h = mount(

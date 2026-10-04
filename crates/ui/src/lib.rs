@@ -15,7 +15,7 @@ pub mod theme;
 pub mod units;
 pub mod widgets;
 
-pub use appearance::{AppearanceSettings, ColorScheme, ThemePreference};
+pub use appearance::{AppearanceSettings, ColorScheme, DiffPalette, ThemePreference};
 pub use assets::Assets;
 pub use file_icons::{FileTypeIcon, file_type_icon, folder_type_icon};
 pub use icons::{IconName, ProviderLogo, icon, provider_logo};

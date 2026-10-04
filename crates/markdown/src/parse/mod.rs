@@ -226,14 +226,29 @@ pub(crate) fn options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
 }
 
+/// How a source reads, beyond the Markdown itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParseOptions {
+    /// Show a newline inside a block as a line break, the way a document
+    /// written with hard-wrapped lines means it (Obsidian's "Strict line
+    /// breaks"), instead of reflowing it into a space. Notes and Markdown
+    /// files turn it on; agent replies leave it off. Port of `hardBreaks.ts`.
+    pub hard_breaks: bool,
+}
+
 /// Parse a whole source.
 pub fn parse(source: &str) -> Document {
-    parse_at(source, 0)
+    parse_with(source, ParseOptions::default())
+}
+
+/// Parse a whole source with `options`.
+pub fn parse_with(source: &str, options: ParseOptions) -> Document {
+    parse_at(source, 0, options)
 }
 
 /// Parse `text` as if it started at byte `offset` of a larger source. Ranges
 /// and source offsets in the result include the offset.
-pub(crate) fn parse_at(text: &str, offset: usize) -> Document {
+pub(crate) fn parse_at(text: &str, offset: usize, read: ParseOptions) -> Document {
     let events: Vec<(Event, Range<usize>)> = Parser::new_ext(text, options())
         .into_offset_iter()
         .map(|(event, range)| (event, range.start + offset..range.end + offset))
@@ -243,6 +258,7 @@ pub(crate) fn parse_at(text: &str, offset: usize) -> Document {
         ix: 0,
         text,
         offset,
+        hard_breaks: read.hard_breaks,
     };
     let mut blocks = Vec::new();
     while let Some((event, range)) = cursor.peek() {
@@ -276,6 +292,8 @@ struct Cursor<'a, 'e> {
     text: &'a str,
     /// Offset of `text` in the full source.
     offset: usize,
+    /// [`ParseOptions::hard_breaks`].
+    hard_breaks: bool,
 }
 
 impl<'a, 'e> Cursor<'a, 'e> {
@@ -603,6 +621,10 @@ fn parse_inline_event(cursor: &mut Cursor, inline: &mut Inline, style: &InlineSt
                 .count();
             inline.push(&text, code, range.start + ticks);
         }
+        // A soft break only comes between two lines of prose, never in code or
+        // between blocks, and the parser has already dropped the spaces around
+        // it and the newline after a hard break.
+        Event::SoftBreak if cursor.hard_breaks => inline.push("\n", style.clone(), range.start),
         Event::SoftBreak => inline.push(" ", style.clone(), range.start),
         Event::HardBreak => inline.push("\n", style.clone(), range.start),
         Event::InlineHtml(html) if is_br(&html) => inline.push("\n", style.clone(), range.start),

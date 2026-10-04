@@ -327,15 +327,25 @@ pub fn format_rate_limit_window_chip_label(window: &RateLimitWindow, now: i64) -
     }
 }
 
-/// `rateLimitWindowTooltip`.
-pub fn rate_limit_window_tooltip(window: &RateLimitWindow, now: i64) -> String {
-    let used = format!("{} used", format_usage_percent(window.used_percent));
+/// `rateLimitWindowTooltip`: the used percent, or the remaining percent
+/// when `show_remaining` is on, then the reset or the window size.
+pub fn rate_limit_window_tooltip(
+    window: &RateLimitWindow,
+    now: i64,
+    show_remaining: bool,
+) -> String {
+    let pct = clamp_used_percent(window.used_percent);
+    let usage = if show_remaining {
+        format!("{} remaining", format_usage_percent(100.0 - pct))
+    } else {
+        format!("{} used", format_usage_percent(pct))
+    };
     match window.resets_at {
         None => format!(
-            "{used} · {} window",
+            "{usage} · {} window",
             format_window_label(window.window_minutes)
         ),
-        Some(resets_at) => format!("{used} · {}", format_reset_countdown(resets_at - now)),
+        Some(resets_at) => format!("{usage} · {}", format_reset_countdown(resets_at - now)),
     }
 }
 
@@ -736,13 +746,37 @@ mod tests {
         assert_eq!(format_reset_duration(12 * 24 * HOUR), "12d");
         assert_eq!(format_reset_countdown(0), "Resets now");
         assert_eq!(
-            rate_limit_window_tooltip(&window(42.0, Some(NOW + 2 * HOUR)), NOW),
+            rate_limit_window_tooltip(&window(42.0, Some(NOW + 2 * HOUR)), NOW, false),
             "42% used · Resets in 2h"
         );
         assert_eq!(
-            rate_limit_window_tooltip(&window(42.0, None), NOW),
+            rate_limit_window_tooltip(&window(42.0, None), NOW, false),
             "42% used · 5h window"
         );
+    }
+
+    #[test]
+    fn shows_remaining_percent_with_a_reset_countdown() {
+        assert_eq!(
+            rate_limit_window_tooltip(&window(42.4, Some(NOW + 2 * HOUR)), NOW, true),
+            "58% remaining · Resets in 2h"
+        );
+    }
+
+    #[test]
+    fn clamps_used_percent_before_showing_remaining_usage() {
+        for (used, remaining) in [(0.0, "100%"), (100.0, "0%"), (-10.0, "100%"), (110.0, "0%")] {
+            let weekly = RateLimitWindow {
+                used_percent: used,
+                window_minutes: 10_080,
+                resets_at: None,
+            };
+            assert_eq!(
+                rate_limit_window_tooltip(&weekly, 0, true),
+                format!("{remaining} remaining · wk window"),
+                "{used}"
+            );
+        }
     }
 
     #[test]

@@ -565,6 +565,9 @@ impl OrchestrationHost for Rc<EngineHost> {
     }
 
     fn steer(&self, id: &str, text: &str, cx: &mut App) -> Task<Result<(), String>> {
+        // Output that already arrived belongs before the guidance, and a
+        // pending error can end the turn this checks for.
+        Engine::sessions(cx).update(cx, |sessions, cx| sessions.flush(cx));
         let Some(session) = open_session(id, cx) else {
             return Task::ready(Err("This agent is no longer available".into()));
         };

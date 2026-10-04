@@ -197,3 +197,102 @@ fn showing_after_dismiss_keeps_the_draft_and_refreshes_the_workspace(cx: &mut Te
     });
     assert!(host.launches.borrow().is_empty());
 }
+
+#[gpui::test]
+fn permissions_open_as_their_own_picker_and_close_after_a_pick(cx: &mut TestAppContext) {
+    let host = Rc::new(Host::default());
+    let (view, cx) = mount(cx, host.clone());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_picker(Picker::Permissions, window, cx)
+        })
+    });
+    let permissions = view.read_with(cx, |view, _| {
+        assert_eq!(view.picker(), Some(Picker::Permissions));
+        view.permissions().cloned().expect("the permissions list")
+    });
+    cx.update(|window, cx| {
+        assert!(permissions.focus_handle(cx).is_focused(window));
+    });
+    // Full access is the fourth mode.
+    cx.update(|_, cx| {
+        permissions.update(cx, |permissions, cx| {
+            for _ in 0..3 {
+                permissions.key("down", cx);
+            }
+            permissions.key("enter", cx);
+        })
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.runtime_mode(), RuntimeMode::FullAccess);
+        assert_eq!(view.picker(), None);
+        assert!(view.permissions().is_none());
+    });
+    cx.update(|window, cx| {
+        view.read_with(cx, |view, cx| {
+            assert!(view.prompt.focus_handle(cx).is_focused(window));
+        });
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.prompt
+                .update(cx, |prompt, cx| prompt.set_text("Fix the tests", 13, cx));
+            view.submit(false, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        host.launches.borrow()[0].runtime_mode,
+        Some(RuntimeMode::FullAccess)
+    );
+}
+
+#[gpui::test]
+fn escape_closes_permissions_without_changing_the_mode(cx: &mut TestAppContext) {
+    let host = Rc::new(Host::default());
+    let (view, cx) = mount(cx, host);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_picker(Picker::Permissions, window, cx)
+        })
+    });
+    let permissions = view.read_with(cx, |view, _| view.permissions().cloned().unwrap());
+    cx.update(|_, cx| {
+        permissions.update(cx, |permissions, cx| {
+            permissions.key("down", cx);
+            permissions.key("escape", cx);
+        })
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.runtime_mode(), DEFAULT_RUNTIME_MODE);
+        assert_eq!(view.picker(), None);
+    });
+}
+
+#[gpui::test]
+fn a_second_press_closes_permissions_and_the_model_picker_replaces_them(cx: &mut TestAppContext) {
+    let host = Rc::new(Host::default());
+    let (view, cx) = mount(cx, host);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_picker(Picker::Permissions, window, cx);
+            view.open_picker(Picker::Permissions, window, cx);
+        })
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.picker(), None);
+        assert!(view.permissions().is_none());
+    });
+    // Switching from permissions to the model selector drops the list.
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_picker(Picker::Permissions, window, cx);
+            view.open_picker(Picker::Model, window, cx);
+        })
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.picker(), Some(Picker::Model));
+        assert!(view.permissions().is_none());
+        assert!(view.selector().is_some());
+    });
+}

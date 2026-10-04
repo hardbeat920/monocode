@@ -415,6 +415,28 @@ impl Render for AppearanceSection {
                     .id("accent-color")
                     .description("Used for the composer send button and your message bubbles.")
                     .child(self.accent.clone()),
+            )
+            .child(
+                row(&reveal, "Diff colors")
+                    .id("diff-colors")
+                    .description(
+                        "Colors for added and removed lines. Colorblind and High contrast use blue and orange instead of green and red; High contrast adds stronger tints and text.",
+                    )
+                    .child(
+                        segmented(
+                            "Diff colors",
+                            settings.diff_palette.as_str(),
+                            [
+                                ("default", "Default"),
+                                ("colorblind", "Colorblind"),
+                                ("high-contrast", "High contrast"),
+                            ],
+                        )
+                        .on_change(cx.listener(|this, value: &str, _, cx| {
+                            let next = DiffPalette::parse(Some(value));
+                            this.update(cx, |state, cx| state.on_diff_palette(next, cx))
+                        })),
+                    ),
             );
 
         let hue = settings.theme_hue;

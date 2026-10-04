@@ -9,6 +9,7 @@ use gpui::{
 };
 use gpui_component::input::{InputEvent, InputState};
 use monocode_settings::Subscription as KvSubscription;
+use monocode_settings::display_prefs::{MASK_EMAILS_KEY, load_mask_emails};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
 
 use super::controls::{plain_input, secondary_button, watch_keys};
@@ -62,9 +63,10 @@ impl JiraSettings {
             );
         }
         // `JIRA_CHANGE_EVENT`: the inbox filter menu edits the same list.
+        // The email follows the masking setting from any window.
         let watch = watch_keys(
             &ctx.kv,
-            &[JIRA_HIDDEN_PROJECTS_KEY],
+            &[JIRA_HIDDEN_PROJECTS_KEY, MASK_EMAILS_KEY],
             |this: &mut Self, cx| {
                 this.hidden_ids = store::load_hidden_ids(&this.ctx.kv, JIRA_HIDDEN_PROJECTS_KEY);
                 cx.notify();
@@ -324,12 +326,11 @@ impl Render for JiraSettings {
                             .text_px(theme.text.label)
                             .text_color(theme.content(0.65))
                             .child(div().child(status.site.clone()))
-                            .child(
-                                div()
-                                    .flex()
-                                    .min_w_0()
-                                    .child(private_email("jira-email", status.email.clone())),
-                            ),
+                            .child(div().flex().min_w_0().child(private_email(
+                                "jira-email",
+                                status.email.clone(),
+                                load_mask_emails(&self.ctx.kv),
+                            ))),
                     )
                     .child(
                         secondary_button(

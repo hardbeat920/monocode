@@ -65,8 +65,8 @@ pub mod palette {
 pub fn status_color(tone: StatusTone, theme: &Theme) -> Hsla {
     match tone {
         StatusTone::Untracked => palette::sky_400(),
-        StatusTone::Added => theme.colors.success,
-        StatusTone::Deleted => theme.colors.danger,
+        StatusTone::Added => theme.colors.diff_add_fg,
+        StatusTone::Deleted => theme.colors.diff_del_fg,
         StatusTone::Modified => theme.colors.warning,
     }
 }
@@ -410,7 +410,19 @@ pub fn editor_theme(cx: &App) -> EditorTheme {
         ColorScheme::Dark => EditorScheme::Dark,
         ColorScheme::Light => EditorScheme::Light,
     };
-    let mut editor = EditorTheme::new(scheme, theme.colors.background_base, theme.colors.content);
+    let c = &theme.colors;
+    let mut editor = EditorTheme::new(scheme, c.background_base, c.content).with_diff_colors(
+        monocode_editor::DiffColors {
+            add: c.diff_add,
+            add_fg: c.diff_add_fg,
+            add_bg: c.diff_add_bg,
+            add_gutter: c.diff_add_gutter,
+            del: c.diff_del,
+            del_fg: c.diff_del_fg,
+            del_bg: c.diff_del_bg,
+            del_gutter: c.diff_del_gutter,
+        },
+    );
     editor.ui_font = theme.fonts.sans.clone();
     editor.mono_font = theme.fonts.mono.clone();
     editor

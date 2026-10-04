@@ -1,10 +1,26 @@
 //! Calls the workspace makes into code it does not own: dialogs and the
-//! window (the app), session history (the `history` package), and remote
-//! shells (the `remote` package). Every method has a default that does
-//! nothing, so the workspace runs in tests and in the headless host.
+//! window (the app), session history (the `history` package), remote
+//! shells (the `remote` package), and working copies (the `projects`
+//! package). Every method has a default that does nothing, so the workspace
+//! runs in tests and in the headless host.
+
+use std::rc::Rc;
 
 use gpui::{App, Task};
 use monocode_core::{HarnessId, Session};
+
+/// Whether a workspace switch still applies. A move started for it reads
+/// this between its steps and stops without an error once it is false.
+pub type IsCurrent = Rc<dyn Fn(&App) -> bool>;
+
+/// The working copy a workspace switch moves a blank session to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeTarget {
+    pub path: String,
+    pub branch: Option<String>,
+    /// The project folder itself rather than a linked worktree.
+    pub is_main: bool,
+}
 
 /// The cached summary of a remote session, for tab titles
 /// (`cachedRemoteSessionSummary`).
@@ -58,6 +74,18 @@ pub trait WorkspaceDelegate {
 
     /// `setRecents(rememberProject(path))`: the user moved to a project.
     fn remember_project(&self, _path: &str, _cx: &mut App) {}
+
+    /// `onWorktreeChange(id, tree, false, isCurrent)`: move a blank session
+    /// into another working copy for a workspace switch.
+    fn move_session_to_worktree(
+        &self,
+        _session_id: &str,
+        _target: WorktreeTarget,
+        _is_current: IsCurrent,
+        _cx: &mut App,
+    ) -> Task<Result<(), String>> {
+        Task::ready(Err("Working copies are not available.".into()))
+    }
 }
 
 /// The default delegate.

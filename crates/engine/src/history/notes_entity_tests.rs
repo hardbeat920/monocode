@@ -391,6 +391,34 @@ fn caches_the_listing_and_shares_one_in_flight(cx: &mut TestAppContext) {
     );
 }
 
+/// "shows a preloaded note immediately while refreshing in the background".
+#[gpui::test]
+fn shows_a_preloaded_note_at_once_while_refreshing(cx: &mut TestAppContext) {
+    init_test_engine(cx);
+    let fake = FakeNotes::with(vec![stored()]);
+    let backend: Arc<dyn NotesBackend> = fake.clone();
+    let notes = cx.new(|cx| Notes::new(backend, cx));
+    drop(notes.update(cx, |notes, cx| notes.load_notes(false, cx)));
+    cx.run_until_parked();
+    let hold = fake.hold_next("notes_list");
+    fake.set_note(Note {
+        title: "Updated plan".into(),
+        ..stored()
+    });
+    notes.update(cx, |notes, cx| notes.open_page(cx));
+    cx.run_until_parked();
+    notes.read_with(cx, |notes, _| {
+        assert!(!notes.is_loading());
+        assert_eq!(notes.selected_id(), Some("note-project-test"));
+        assert_eq!(notes.selected().unwrap().title, "Plan");
+    });
+    hold.release();
+    cx.run_until_parked();
+    notes.read_with(cx, |notes, _| {
+        assert_eq!(notes.selected().unwrap().title, "Updated plan")
+    });
+}
+
 #[gpui::test]
 fn creates_an_untitled_note_in_the_active_project_and_selects_it(cx: &mut TestAppContext) {
     let t = setup(cx, vec![stored()]);

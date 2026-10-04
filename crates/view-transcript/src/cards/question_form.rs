@@ -336,6 +336,17 @@ impl QuestionForm {
         cx.notify();
     }
 
+    /// `goBack`: return to the previous question, which keeps its answer.
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let index = self.index();
+        if index == 0 {
+            return;
+        }
+        self.step = index - 1;
+        self.sync_fields(window, cx);
+        cx.notify();
+    }
+
     /// `onSelect(optionId)` for the question on screen.
     pub fn select(&mut self, option_id: &str, cx: &mut Context<Self>) {
         let Some(question) = self.question().cloned() else {
@@ -752,6 +763,28 @@ impl Render for QuestionForm {
                             "Interact to keep this question open.",
                         ))
                         .child(label),
+                )
+            })
+            .when(index > 0, |el| {
+                el.child(
+                    div()
+                        .id("question-back")
+                        .debug_selector(|| "question-back".into())
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .h(u(24.))
+                        .px(u(6.))
+                        .rounded(u(6.))
+                        .text_px(11.)
+                        .text_color(theme.content(0.55))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.content(0.1)).text_color(theme.colors.content))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.interact(cx);
+                            this.go_back(window, cx);
+                        }))
+                        .child("Back"),
                 )
             })
             .child(

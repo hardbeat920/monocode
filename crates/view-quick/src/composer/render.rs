@@ -10,7 +10,7 @@ use gpui::{
     MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Window, canvas, div, img, prelude::*, px,
 };
-use monocode_core::{Attachment, AttachmentKind};
+use monocode_core::{Attachment, AttachmentKind, HarnessId};
 use monocode_layout::paths::project_name;
 use monocode_ui::widgets::kbd;
 use monocode_ui::{IconName, Theme, UiStyled as _, file_type_icon, icon, u};
@@ -23,6 +23,7 @@ use crate::colors;
 use crate::model::motion::Picker;
 use crate::model::prompt::command_label;
 use crate::model::selector::pretty_parent;
+use crate::permissions::permission_icon_element;
 use crate::project_icon::quick_project_icon;
 use crate::selector::harness_icon;
 
@@ -333,6 +334,17 @@ impl QuickComposer {
         active: bool,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
+        self.picker_button(id, active, 0.70, theme)
+    }
+
+    /// A button that opens a picker. `rest` is its ink while closed.
+    fn picker_button(
+        &self,
+        id: &'static str,
+        active: bool,
+        rest: f32,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
         let hover_bg = theme.colors.selection_hover;
         let hover_ink = theme.colors.content;
         let button = div()
@@ -348,9 +360,53 @@ impl QuickComposer {
                 .text_color(theme.colors.content)
         } else {
             button
-                .text_color(theme.content(0.70))
+                .text_color(theme.content(rest))
                 .hover(move |style| style.bg(hover_bg).text_color(hover_ink))
         }
+    }
+
+    /// The project picker's button, at the right end of the header.
+    fn render_project_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.picker == Some(Picker::Project);
+        let mut project = self
+            .picker_button("quick-project", active, 0.55, theme)
+            .ml_auto()
+            .max_w(gpui::relative(0.4))
+            .h(u(24.))
+            .gap(u(6.))
+            .px(u(6.))
+            .tooltip(monocode_ui::widgets::tooltip("Project (\u{2318}P)"));
+        if let Some(cwd) = &self.cwd {
+            project = project.child(quick_project_icon(
+                cwd,
+                &self.appearance,
+                12.,
+                theme.colors.content,
+            ));
+        }
+        let alpha = if active { 1.0 } else { 0.55 };
+        project = project
+            .child(
+                div().min_w_0().truncate().child(
+                    self.cwd
+                        .as_deref()
+                        .map(project_name)
+                        .unwrap_or_else(|| "No project".into()),
+                ),
+            )
+            .child(
+                icon(IconName::ChevronDown)
+                    .size(u(12.))
+                    .text_color(theme.content(0.60 * alpha)),
+            );
+        if self.projects.is_empty() {
+            project = project.opacity(0.5);
+        } else {
+            project = project.on_click(
+                cx.listener(|this, _, window, cx| this.open_picker(Picker::Project, window, cx)),
+            );
+        }
+        project.into_any_element()
     }
 
     fn render_toolbar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -387,43 +443,6 @@ impl QuickComposer {
                 }));
         }
 
-        let mut project = self
-            .toolbar_button("quick-project", picker == Some(Picker::Project), theme)
-            .max_w(gpui::relative(0.4))
-            .gap(u(6.))
-            .px(u(8.))
-            .py(u(4.))
-            .tooltip(monocode_ui::widgets::tooltip("Project (\u{2318}P)"));
-        if let Some(cwd) = &self.cwd {
-            project = project.child(quick_project_icon(
-                cwd,
-                &self.appearance,
-                12.,
-                theme.colors.content,
-            ));
-        }
-        project = project
-            .child(
-                div().min_w_0().truncate().child(
-                    self.cwd
-                        .as_deref()
-                        .map(project_name)
-                        .unwrap_or_else(|| "No project".into()),
-                ),
-            )
-            .child(
-                icon(IconName::ChevronDown)
-                    .size(u(12.))
-                    .text_color(theme.content(0.60 * 0.70)),
-            );
-        if self.projects.is_empty() {
-            project = project.opacity(0.5);
-        } else {
-            project = project.on_click(
-                cx.listener(|this, _, window, cx| this.open_picker(Picker::Project, window, cx)),
-            );
-        }
-
         let model = self.model();
         let model_button = self
             .toolbar_button("quick-model", picker == Some(Picker::Model), theme)
@@ -442,6 +461,32 @@ impl QuickComposer {
                     .size(u(12.))
                     .text_color(theme.content(0.60 * 0.70)),
             );
+
+        // Fx sessions run without the permission modes.
+        let permissions = (model.harness != HarnessId::Fx).then(|| {
+            let active = picker == Some(Picker::Permissions);
+            let ink = if active {
+                theme.colors.content
+            } else {
+                theme.content(0.70)
+            };
+            let mode = self.runtime_mode;
+            self.toolbar_button("quick-permissions", active, theme)
+                .gap(u(6.))
+                .px(u(8.))
+                .py(u(4.))
+                .tooltip(monocode_ui::widgets::tooltip("Permissions"))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_picker(Picker::Permissions, window, cx)
+                }))
+                .child(permission_icon_element(mode, 14., ink, theme))
+                .child(div().min_w_0().truncate().child(mode.label()))
+                .child(
+                    icon(IconName::ChevronDown)
+                        .size(u(12.))
+                        .text_color(theme.content(0.60 * 0.70)),
+                )
+        });
 
         let status: AnyElement = if loading {
             div().child("Adding attachment\u{2026}").into_any_element()
@@ -506,8 +551,8 @@ impl QuickComposer {
             .px(u(12.))
             .py(u(8.))
             .child(plus)
-            .child(project)
             .child(model_button)
+            .children(permissions)
             .child(
                 div()
                     .ml_auto()
@@ -697,6 +742,8 @@ impl Render for QuickComposer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let now = Instant::now();
+        // `prefers-reduced-motion`: pickers open at their full height at once.
+        self.motion.set_reduced_motion(cx.reduce_motion());
 
         // After a picker change the card holds its last height for one
         // frame, while the probe measures the new layout; the resize then
@@ -823,7 +870,7 @@ impl Render for QuickComposer {
                 .id("quick-close")
                 .absolute()
                 .right(u(8.))
-                .top(u(8.))
+                .top(u(14.))
                 .size(u(20.))
                 .flex()
                 .items_center()
@@ -840,15 +887,18 @@ impl Render for QuickComposer {
                 ),
         );
 
+        let project_button = self.render_project_button(&theme, cx);
         body = body.child(
             div()
                 .flex()
                 .flex_none()
                 .items_center()
+                .gap(u(8.))
                 .px(u(20.))
                 .pt(u(12.))
-                .pr(u(36.))
-                .child(self.render_workspace_controls(cx)),
+                .pr(u(32.))
+                .child(self.render_workspace_controls(cx))
+                .child(project_button),
         );
 
         if !self.attachments.files.is_empty() {
@@ -893,6 +943,10 @@ impl Render for QuickComposer {
                 Picker::Project => self.render_projects(&theme, cx),
                 Picker::Model => match self.selector() {
                     Some(selector) => selector.clone().into_any_element(),
+                    None => div().into_any_element(),
+                },
+                Picker::Permissions => match self.permissions() {
+                    Some(permissions) => permissions.clone().into_any_element(),
                     None => div().into_any_element(),
                 },
                 Picker::Attachments => div().into_any_element(),

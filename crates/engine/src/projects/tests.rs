@@ -1,13 +1,13 @@
 //! Entity tests for the projects package: the `Projects` mirror, git status
 //! loading, and the App.tsx flows in `actions`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use gpui::{Entity, Subscription, TestAppContext};
+use gpui::{App, Entity, Subscription, TestAppContext};
 use monocode_core::appearance::SidebarTabId;
 use monocode_core::block::{Block, BlockRole};
 use monocode_core::session::{MessageQueueStatus, QueuedMessage, WorkspaceMode, new_session};
@@ -20,9 +20,10 @@ use monocode_settings::Kv;
 use serde_json::json;
 
 use super::actions::{
-    apply_project_location_change, on_branch_change, on_cwd_change, on_place_session_in_folder,
-    on_remove_project, on_remove_worktree, on_workspace_mode_change, on_worktree_base_change,
-    on_worktree_change, open_projects,
+    IsCurrent, apply_project_location_change, on_branch_change, on_cwd_change,
+    on_place_session_in_folder, on_remove_project, on_remove_worktree, on_select_project,
+    on_workspace_mode_change, on_worktree_base_change, on_worktree_change, on_worktree_change_with,
+    open_projects,
 };
 use super::backend::{ProjectLocation, Worktree, WorktreeRemoval, Worktrees};
 use super::git_status::{DIFF_STATS_RESUME_TTL_MS, GIT_POLL, WatchKind};
@@ -801,6 +802,44 @@ async fn a_blank_session_selects_a_worktree_in_place(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_superseded_workspace_switch_leaves_the_session_where_it_was(cx: &mut TestAppContext) {
+    let setup = init(cx);
+    setup.backend.set_worktrees(
+        "/repo",
+        Ok(Worktrees {
+            worktrees: vec![Worktree::new("/repo", Some("main")), feature_tree()],
+            default_root: "/repo-worktrees".into(),
+        }),
+    );
+    setup.insert(cx, session("s1", "/repo", HarnessId::Codex));
+    let current = Rc::new(Cell::new(true));
+    let check = current.clone();
+    let is_current: IsCurrent = Rc::new(move |_: &App| check.get());
+    let change =
+        cx.update(|cx| on_worktree_change_with("s1", feature_tree(), Some(is_current), cx));
+    // A newer selection arrives before the worktree list does.
+    current.set(false);
+    cx.run_until_parked();
+    change.await.unwrap();
+    assert_eq!(setup.session(cx, "s1").unwrap().worktree_cwd, None);
+    assert!(
+        !setup
+            .hooks
+            .calls()
+            .contains(&"refresh_history(/repo)".to_string())
+    );
+
+    // A switch that is already stale does nothing at all.
+    let stale: IsCurrent = Rc::new(|_: &App| false);
+    let change = cx.update(|cx| on_worktree_change_with("s1", feature_tree(), Some(stale), cx));
+    change.await.unwrap();
+    let switching = setup.sessions.read_with(cx, |sessions, _| {
+        sessions.switching_worktree("s1").is_some()
+    });
+    assert!(!switching);
+}
+
+#[gpui::test]
 async fn a_conversation_selecting_a_worktree_opens_a_new_session(cx: &mut TestAppContext) {
     let setup = init(cx);
     setup.backend.set_worktrees(
@@ -1030,6 +1069,27 @@ fn opening_folders_creates_tabs_and_remembers_every_project(cx: &mut TestAppCont
     // A dismissed picker changes nothing.
     cx.update(|cx| open_projects(&[], cx));
     assert_eq!(setup.hooks.state.borrow().pages_closed, 1);
+}
+
+#[gpui::test]
+fn selecting_a_project_asks_for_its_workspace_and_drops_the_request_when_nothing_opens(
+    cx: &mut TestAppContext,
+) {
+    let setup = init(cx);
+    cx.update(|cx| on_select_project("/beta", cx));
+    let calls = setup.hooks.calls();
+    assert!(calls.contains(&"select_project_workspace(/beta)".to_string()));
+    assert!(!calls.contains(&"cancel_workspace_navigation".to_string()));
+    assert_eq!(setup.hooks.project_cwd(), "/beta");
+
+    // Home is not a project: nothing opens, so the request is cancelled.
+    cx.update(|cx| on_select_project("~", cx));
+    assert!(
+        setup
+            .hooks
+            .calls()
+            .contains(&"cancel_workspace_navigation".to_string())
+    );
 }
 
 #[gpui::test]

@@ -871,3 +871,40 @@ fn serde_round_trip_keeps_unknown_fields() {
     };
     assert_ne!(workspace_snapshot_key(&moved), key);
 }
+
+// worktree tab cleanup
+
+#[test]
+fn drops_tabs_the_caller_leaves_out_with_sessions_only_they_showed() {
+    let main = chat("main", "/repo");
+    let mut feature = chat("feature", "/repo");
+    feature.worktree_cwd = Some("/trees/a".into());
+    let main_tab = with_id(new_tab("main"), "tab-main");
+    let feature_tab = with_id(new_tab("feature"), "tab-feature");
+    let snapshot = collect_workspace_snapshot_keeping(
+        &[main_tab, feature_tab],
+        &[main, feature],
+        "tab-feature",
+        "/repo",
+        &no_memory(),
+        &[],
+        None,
+        &|tab| tab.id != "tab-feature",
+    );
+    assert_eq!(
+        snapshot
+            .tabs
+            .iter()
+            .map(|tab| tab.id.as_str())
+            .collect::<Vec<_>>(),
+        ["tab-main"]
+    );
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .map(|stub| stub.id.as_str())
+            .collect::<Vec<_>>(),
+        ["main"]
+    );
+}

@@ -366,9 +366,20 @@ impl InboxServices for InboxAdapter {
     fn now_ms(&self) -> i64 {
         self.client.now()
     }
-    fn open_detail(&self, item: &InboxItem, cx: &mut App) -> Rc<dyn InboxDetailData> {
+    fn open_detail(
+        &self,
+        item: &InboxItem,
+        fetch: DetailFetch,
+        cx: &mut App,
+    ) -> Rc<dyn InboxDetailData> {
+        let max_age = match fetch {
+            DetailFetch::Live => None,
+            DetailFetch::ReuseRecent => Some(engine::github_tasks::GITHUB_WORK_ITEM_FRESH_MS),
+        };
         Rc::new(DetailAdapter {
-            detail: cx.new(|cx| InboxItemDetail::new(self.client.clone(), convert(item), cx)),
+            detail: cx.new(|cx| {
+                InboxItemDetail::with_max_age(self.client.clone(), convert(item), max_age, cx)
+            }),
             reply_author: RefCell::default(),
         })
     }

@@ -47,6 +47,22 @@ fn labels_the_unified_working_tree_tab_as_changes() {
 }
 
 #[test]
+fn labels_a_changes_tab_opened_from_staged_changes() {
+    let staged = new_changes_tab("/repo", None, Some(GitFileDiffKind::Staged), None);
+    assert_eq!(
+        surface_tab_presentation(&staged),
+        SurfaceTabPresentation {
+            name: "Staged Changes".into(),
+            label: "Staged Changes".into(),
+            icon_name: "CHANGES".into(),
+            tooltip: "Staged changes".into(),
+        }
+    );
+    let unstaged = new_changes_tab("/repo", None, Some(GitFileDiffKind::Unstaged), None);
+    assert_eq!(surface_tab_presentation(&unstaged).label, "Changes");
+}
+
+#[test]
 fn labels_a_session_scoped_review_distinctly() {
     assert_eq!(
         surface_tab_presentation(&new_session_changes_tab(

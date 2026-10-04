@@ -156,7 +156,7 @@ pub(crate) struct GitSnapshot {
 }
 
 impl GitSnapshot {
-    fn compute(base: &str, text: &str) -> Self {
+    pub(crate) fn compute(base: &str, text: &str) -> Self {
         let chunks = crate::git_diff::chunks_for(base, text);
         let doc = Doc::new(text);
         let original = Doc::new(base);
@@ -1066,14 +1066,14 @@ impl CodeEditor {
                     .when(additions > 0, |this| {
                         this.child(
                             div()
-                                .text_color(theme.git_added)
+                                .text_color(theme.diff_added_number)
                                 .child(format!("+{additions}")),
                         )
                     })
                     .when(deletions > 0, |this| {
                         this.child(
                             div()
-                                .text_color(theme.git_deleted)
+                                .text_color(theme.diff_deleted_number)
                                 .child(format!("-{deletions}")),
                         )
                     }),

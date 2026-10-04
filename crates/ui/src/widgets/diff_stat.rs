@@ -1,5 +1,5 @@
 //! `DiffStat` from Sidebar.tsx and `ProjectDiffStat` from ProjectRail.tsx:
-//! `+478 -2` in the success and danger colors, 11px semibold tabular.
+//! `+478 -2` in the diff palette's text colors, 11px semibold tabular.
 
 use gpui::{App, IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div};
 
@@ -53,14 +53,14 @@ impl RenderOnce for DiffStat {
             .when(self.additions > 0, |el| {
                 el.child(
                     div()
-                        .text_color(c.success)
+                        .text_color(c.diff_add_fg)
                         .child(format!("+{}", format_integer(self.additions))),
                 )
             })
             .when(self.deletions > 0, |el| {
                 el.child(
                     div()
-                        .text_color(c.danger)
+                        .text_color(c.diff_del_fg)
                         .child(format!("-{}", format_integer(self.deletions))),
                 )
             })

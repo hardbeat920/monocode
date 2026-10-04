@@ -487,3 +487,22 @@ fn folds_skill_metadata_into_a_disclosure(cx: &mut TestAppContext) {
     click(cx, "skill-metadata-summary");
     assert!(preview.read_with(cx, |p, _| p.is_metadata_open()));
 }
+
+/// A skill doc reads as a document: its lines stay on their own lines (#591).
+#[gpui::test]
+fn keeps_a_skill_docs_lines_on_their_own_lines(cx: &mut TestAppContext) {
+    let (preview, cx) = mount(cx, |_, cx| {
+        cx.new(|cx| SkillDocumentPreview::new("Run the tests.\nThen ship it.", cx))
+    });
+    draw(cx);
+    let text = preview.read_with(cx, |p, cx| {
+        p.body()
+            .read(cx)
+            .document()
+            .blocks
+            .iter()
+            .map(|top| monocode_markdown::parse::block_text(&top.block))
+            .collect::<String>()
+    });
+    assert_eq!(text, "Run the tests.\nThen ship it.");
+}

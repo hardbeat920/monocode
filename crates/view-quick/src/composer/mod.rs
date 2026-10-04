@@ -52,6 +52,7 @@ use crate::model::prompt::{
     MODE_INDENT, PROMPT_MAX_HEIGHT, mode_commands, mode_names, quick_prompt_mode,
 };
 use crate::model::selector::{filter_quick_projects, loading_model, resolve_quick_model};
+use crate::permissions::{QuickPermissions, QuickPermissionsEvent};
 use crate::selector::{QuickModelSelector, QuickModelSelectorEvent, SelectorProps};
 
 pub use attachments::QuickAttachments;
@@ -127,6 +128,7 @@ pub struct QuickComposer {
     pub(crate) busy: bool,
     pub(crate) attachments: QuickAttachments,
     pub(crate) selector: Option<(Entity<QuickModelSelector>, Subscription)>,
+    pub(crate) permissions: Option<(Entity<QuickPermissions>, Subscription)>,
 
     pub(crate) motion: PickerMotion,
     /// The card's natural height, measured each frame.
@@ -211,6 +213,7 @@ impl QuickComposer {
             busy: false,
             attachments: QuickAttachments::default(),
             selector: None,
+            permissions: None,
             motion: PickerMotion::default(),
             natural_height: Rc::new(Cell::new(0.)),
             motion_pending: false,
@@ -284,6 +287,12 @@ impl QuickComposer {
 
     pub fn selector(&self) -> Option<&Entity<QuickModelSelector>> {
         self.selector.as_ref().map(|(selector, _)| selector)
+    }
+
+    pub fn permissions(&self) -> Option<&Entity<QuickPermissions>> {
+        self.permissions
+            .as_ref()
+            .map(|(permissions, _)| permissions)
     }
 
     /// `resolveQuickModel(choice)`.
@@ -361,7 +370,7 @@ impl QuickComposer {
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot(cx);
         self.apply_snapshot(snapshot, cx);
-        self.close_selector();
+        self.close_lists();
         self.picker = None;
         self.slash = None;
         self.error = None;
@@ -473,8 +482,8 @@ impl QuickComposer {
         if self.picker == picker {
             return;
         }
-        if self.picker == Some(Picker::Model) {
-            self.close_selector();
+        if matches!(self.picker, Some(Picker::Model | Picker::Permissions)) {
+            self.close_lists();
         }
         self.picker = picker;
         self.motion_pending = true;
@@ -485,8 +494,11 @@ impl QuickComposer {
         cx.notify();
     }
 
-    fn close_selector(&mut self) {
+    /// Drops the model selector and the permissions list, which hold their
+    /// own state while open.
+    fn close_lists(&mut self) {
         self.selector = None;
+        self.permissions = None;
     }
 
     /// `openPicker`: a second press on the same control closes it.
@@ -510,6 +522,7 @@ impl QuickComposer {
                 query.update(cx, |query, cx| query.focus(window, cx));
             }
             Picker::Model => self.open_selector(window, cx),
+            Picker::Permissions => self.open_permissions(window, cx),
             _ => {}
         }
         cx.notify();
@@ -612,7 +625,6 @@ impl QuickComposer {
         SelectorProps {
             model: self.model(),
             values: self.settings(),
-            runtime_mode: self.runtime_mode,
             available: self.available.clone(),
             catalog: self.catalog.clone(),
             prefs: self.prefs.clone(),
@@ -652,7 +664,6 @@ impl QuickComposer {
                 self.sync_prompt_props(cx);
             }
             QuickModelSelectorEvent::Settings(values) => self.model_settings = values.clone(),
-            QuickModelSelectorEvent::RuntimeMode(mode) => self.runtime_mode = *mode,
             QuickModelSelectorEvent::Close => {
                 self.close_picker(window, cx);
                 return;
@@ -668,6 +679,31 @@ impl QuickComposer {
         }
         self.sync_selector(cx);
         cx.notify();
+    }
+
+    // The permissions list.
+
+    fn open_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.runtime_mode;
+        let permissions = cx.new(|cx| QuickPermissions::new(value, window, cx));
+        let subscription = cx.subscribe_in(&permissions, window, Self::on_permissions_event);
+        self.permissions = Some((permissions, subscription));
+    }
+
+    fn on_permissions_event(
+        &mut self,
+        _: &Entity<QuickPermissions>,
+        event: &QuickPermissionsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            QuickPermissionsEvent::Change(mode) => {
+                self.runtime_mode = *mode;
+                cx.notify();
+            }
+            QuickPermissionsEvent::Close => self.close_picker(window, cx),
+        }
     }
 
     // Dismiss and submit.

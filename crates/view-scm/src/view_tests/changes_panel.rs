@@ -7,7 +7,7 @@ use gpui::{Entity, TestAppContext, VisualTestContext};
 use super::support::{Recorded, index, pending_generator, setup};
 use crate::git::{GitChangedFile, GitDiffIndex, GitRangeContext};
 use crate::hooks::ScmHooks;
-use crate::model::changes::{Busy, can_pull};
+use crate::model::changes::{Busy, FileAction, can_pull};
 use crate::ui::changes_panel::GitChangesPanel;
 
 fn render_panel<'a>(
@@ -89,6 +89,195 @@ fn cancels_promptly_and_ignores_a_late_result_after_a_retry(cx: &mut TestAppCont
         panel.read_with(cx, |panel, cx| panel.message(cx)),
         "New message"
     );
+}
+
+fn changed_file(cwd: &str, relative: &str, staged: bool, unstaged: bool) -> GitChangedFile {
+    GitChangedFile {
+        path: format!("{cwd}/{relative}"),
+        relative: relative.into(),
+        status: "modified".into(),
+        additions: 1,
+        deletions: 0,
+        staged,
+        unstaged,
+    }
+}
+
+fn with_files(files: Vec<GitChangedFile>) -> GitDiffIndex {
+    GitDiffIndex { files, ..index() }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| value.to_string()).collect()
+}
+
+// describe("GitChangesPanel folder actions")
+
+#[gpui::test]
+fn stages_a_collapsed_folder_in_one_operation(cx: &mut TestAppContext) {
+    stage_collapsed_folder(cx, "/repo");
+}
+
+#[gpui::test]
+fn stages_a_collapsed_remote_folder_in_one_operation(cx: &mut TestAppContext) {
+    stage_collapsed_folder(cx, "remote://machine/home/user/repo");
+}
+
+fn stage_collapsed_folder(cx: &mut TestAppContext, cwd: &str) {
+    let recorded = Recorded::default();
+    let files = vec![
+        changed_file(cwd, "src/app.ts", false, true),
+        GitChangedFile {
+            status: "untracked".into(),
+            ..changed_file(cwd, "src/nested/new.ts", false, true)
+        },
+        changed_file(cwd, "src-other/other.ts", false, true),
+        changed_file(cwd, "docs/ready.md", true, false),
+    ];
+    let (panel, cx, setup) = render_panel(cx, cwd, with_files(files), recorded.hooks());
+    let collapsed = "unstaged:src".to_string();
+    setup.scm.state.update(cx, |state, _| {
+        state.collapsed_dirs.insert(collapsed.clone());
+    });
+    recorded.changed_paths.borrow_mut().clear();
+    let reads = setup.backend.commands().len();
+
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("src".into(), FileAction::Stage, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        setup.git.calls("git_stage_file"),
+        vec![strings(&[cwd, "src"])]
+    );
+    assert!(setup.git.calls("git_unstage_file").is_empty());
+    assert_eq!(
+        recorded.changed_paths.borrow().first().cloned().flatten(),
+        Some(vec![
+            format!("{cwd}/src/app.ts"),
+            format!("{cwd}/src/nested/new.ts"),
+        ])
+    );
+    assert!(setup.backend.commands().len() > reads, "the index reloads");
+    assert!(
+        setup
+            .scm
+            .state
+            .read_with(cx, |state, _| state.collapsed_dirs.contains(&collapsed)),
+        "the folder stays collapsed"
+    );
+}
+
+#[gpui::test]
+fn stages_a_nested_folder_without_toggling_it_or_including_its_siblings(cx: &mut TestAppContext) {
+    let recorded = Recorded::default();
+    let files = vec![
+        changed_file("/repo", "src/app.ts", false, true),
+        changed_file("/repo", "src/nested/one.ts", false, true),
+        changed_file("/repo", "src/nested/deeper/two.ts", false, true),
+        changed_file("/repo", "src/nested-other/three.ts", false, true),
+    ];
+    let (panel, cx, setup) = render_panel(cx, "/repo", with_files(files), recorded.hooks());
+    recorded.changed_paths.borrow_mut().clear();
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("src/nested".into(), FileAction::Stage, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        setup.git.calls("git_stage_file"),
+        vec![strings(&["/repo", "src/nested"])]
+    );
+    assert!(
+        setup
+            .scm
+            .state
+            .read_with(cx, |state, _| state.collapsed_dirs.is_empty()),
+        "the folder stays open"
+    );
+    assert_eq!(
+        recorded.changed_paths.borrow().first().cloned().flatten(),
+        Some(strings(&[
+            "/repo/src/nested/one.ts",
+            "/repo/src/nested/deeper/two.ts"
+        ]))
+    );
+}
+
+#[gpui::test]
+fn unstages_the_staged_folder_including_partially_staged_files(cx: &mut TestAppContext) {
+    let files = vec![
+        changed_file("/repo", "src/app.ts", true, false),
+        changed_file("/repo", "src/nested/partial.ts", true, true),
+        changed_file("/repo", "docs/readme.md", true, false),
+    ];
+    let (panel, cx, setup) =
+        render_panel(cx, "/repo", with_files(files), Recorded::default().hooks());
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("src".into(), FileAction::Unstage, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        setup.git.calls("git_unstage_file"),
+        vec![strings(&["/repo", "src"])]
+    );
+    assert!(setup.git.calls("git_stage_file").is_empty());
+}
+
+#[gpui::test]
+fn disables_folder_and_file_mutations_while_a_folder_action_runs(cx: &mut TestAppContext) {
+    let files = vec![
+        changed_file("/repo", "src/app.ts", false, true),
+        changed_file("/repo", "docs/readme.md", false, true),
+    ];
+    let (panel, cx, setup) = render_panel(
+        cx,
+        "/repo",
+        with_files(files.clone()),
+        Recorded::default().hooks(),
+    );
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("src".into(), FileAction::Stage, window, cx)
+    });
+    assert_eq!(
+        panel.read_with(cx, |panel, _| panel.busy().cloned()),
+        Some(Busy::Folder(FileAction::Stage, "src".into()))
+    );
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("docs".into(), FileAction::Stage, window, cx);
+        panel.run_file(files[1].clone(), FileAction::Stage, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        setup.git.calls("git_stage_file"),
+        vec![strings(&["/repo", "src"])]
+    );
+    assert_eq!(panel.read_with(cx, |panel, _| panel.busy().cloned()), None);
+}
+
+#[gpui::test]
+fn reports_folder_errors_and_enables_folder_actions_again(cx: &mut TestAppContext) {
+    let recorded = Recorded::default();
+    let files = vec![changed_file("/repo", "src/app.ts", false, true)];
+    let (panel, cx, setup) = render_panel(cx, "/repo", with_files(files), recorded.hooks());
+    setup
+        .git
+        .fail("git_stage_file", Some("Git index is locked"));
+    recorded.changed_paths.borrow_mut().clear();
+    panel.update_in(cx, |panel, window, cx| {
+        panel.run_folder("src".into(), FileAction::Stage, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        *recorded.alerts.borrow(),
+        vec!["Git index is locked".to_string()]
+    );
+    assert_eq!(panel.read_with(cx, |panel, _| panel.busy().cloned()), None);
+    assert!(recorded.changed_paths.borrow().is_empty());
 }
 
 // describe("GitChangesPanel pull action")

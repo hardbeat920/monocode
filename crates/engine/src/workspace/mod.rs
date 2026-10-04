@@ -3,8 +3,9 @@
 //! workspace snapshot. Ports the stateful side of src/app/App.tsx for
 //! those, src/features/files/model, src/features/projects/model/
 //! projectTerminal.ts, and src/features/sessions/model/
-//! sessionWorkspaceLifecycle.ts and addChatToWorkspace.ts. The pure layout
-//! model lives in `monocode_layout`.
+//! sessionWorkspaceLifecycle.ts and addChatToWorkspace.ts, and the
+//! worktree-scoped workspaces of useWorkspaceNavigation.ts and
+//! worktreeFocus.ts. The pure layout model lives in `monocode_layout`.
 
 pub mod add_chat;
 pub mod chat_context;
@@ -20,13 +21,17 @@ pub mod title_tab;
 pub mod workspace;
 #[cfg(test)]
 mod workspace_tests;
+pub mod worktree_scope;
+#[cfg(test)]
+mod worktree_scope_tests;
 
-pub use delegate::{NoDelegate, RemoteSummary, WorkspaceDelegate};
+pub use delegate::{IsCurrent, NoDelegate, RemoteSummary, WorkspaceDelegate, WorktreeTarget};
 pub use files::Files;
 pub use hooks::{WorkspaceSetup, init};
 pub use session_factory::{ModelEnvSessions, SessionFactory};
 pub use terminals::{EnginePty, ProjectTerminals, Terminals};
 pub use workspace::{Workspace, WorkspaceConfig, WorkspaceEvent};
+pub use worktree_scope::{WorktreeFocus, WorktreeTabStats, in_worktree_focus};
 
 use monocode_layout::{FilePaneTab, WorkspaceTab};
 

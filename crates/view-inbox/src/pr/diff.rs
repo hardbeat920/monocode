@@ -10,7 +10,7 @@ use monocode_editor::diff_view::{DiffFile, DiffFileActions, DiffView, InitialExp
 use monocode_editor::unified_diff::{
     PatchFile, PatchStatus, UNIFIED_CONTEXT_DEFAULT, blocks_from_lines, file_hunks, parse_patch,
 };
-use monocode_editor::{ColorScheme, EditorTheme};
+use monocode_editor::{ColorScheme, DiffColors, EditorTheme};
 use monocode_ui::Theme;
 
 use crate::data::{PrDiff, PrFile};
@@ -107,7 +107,18 @@ pub fn editor_theme(cx: &App) -> EditorTheme {
     } else {
         ColorScheme::Light
     };
-    let mut editor = EditorTheme::new(scheme, theme.colors.background_base, theme.colors.content);
+    let c = &theme.colors;
+    let mut editor =
+        EditorTheme::new(scheme, c.background_base, c.content).with_diff_colors(DiffColors {
+            add: c.diff_add,
+            add_fg: c.diff_add_fg,
+            add_bg: c.diff_add_bg,
+            add_gutter: c.diff_add_gutter,
+            del: c.diff_del,
+            del_fg: c.diff_del_fg,
+            del_bg: c.diff_del_bg,
+            del_gutter: c.diff_del_gutter,
+        });
     editor.accent = theme.colors.accent;
     editor.mono_font = theme.fonts.mono.clone();
     editor.ui_font = theme.fonts.sans.clone();

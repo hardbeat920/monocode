@@ -93,6 +93,8 @@ impl NotesView {
         let preview = cx.new(|cx| {
             let mut view = MarkdownView::new(cx);
             view.set_style(markdown_style(Theme::of(cx)), cx);
+            // A note's lines stay on their own lines.
+            view.set_hard_breaks(true, cx);
             let images = data.clone();
             view.set_image_resolver(move |url| images.image_source(url), cx);
             view

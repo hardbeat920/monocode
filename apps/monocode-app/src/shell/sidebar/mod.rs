@@ -7,6 +7,7 @@
 
 mod compact_rail;
 mod session_list;
+mod worktree_switcher;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, InteractiveElement as _,
@@ -18,6 +19,7 @@ use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
 
 pub use compact_rail::CompactRail;
 pub use session_list::SessionList;
+pub use worktree_switcher::WorktreeSwitcher;
 
 use super::project_rail::{Project, rail_projects};
 use super::rail_action::{rail_action, shortcut};
@@ -37,6 +39,7 @@ pub struct SidebarData {
 pub struct SessionSidebar {
     shell: WeakEntity<Shell>,
     session_list: Entity<SessionList>,
+    worktree_switcher: Entity<WorktreeSwitcher>,
 }
 
 impl SessionSidebar {
@@ -51,9 +54,11 @@ impl SessionSidebar {
         cx: &mut Context<Self>,
     ) -> Self {
         let session_list = cx.new(|cx| SessionList::new(shell.clone(), demo_menu, window, cx));
+        let worktree_switcher = cx.new(|_| WorktreeSwitcher::new(shell.clone()));
         Self {
             shell,
             session_list,
+            worktree_switcher,
         }
     }
 
@@ -98,6 +103,15 @@ impl SessionSidebar {
         let c = theme.colors;
         let metrics = theme.metrics;
         let compact_title_bar = layout.compact_title_bar();
+        // `SidebarWorktreeSwitcher` titles a local project's sidebar.
+        let sidebar_cwd = self
+            .shell
+            .upgrade()
+            .map(|shell| shell.read(cx).sidebar_cwd(cx))
+            .unwrap_or_default();
+        let worktree_title = !sidebar_cwd.is_empty()
+            && sidebar_cwd != "~"
+            && !monocode_layout::paths::is_remote_project_path(&sidebar_cwd);
 
         let mut pane = div()
             .id("session-sidebar")
@@ -125,16 +139,20 @@ impl SessionSidebar {
                     .pr(u(6.))
                     .border_b_1()
                     .border_color(c.stroke)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_px(theme.text.ui)
-                            .medium()
-                            .leading(theme.leading.tight)
-                            .child("Workspace"),
-                    )
+                    .child(div().flex().flex_1().min_w_0().items_center().child(
+                        if worktree_title {
+                            self.worktree_switcher.clone().into_any_element()
+                        } else {
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_px(theme.text.ui)
+                                .medium()
+                                .leading(theme.leading.tight)
+                                .child("Workspace")
+                                .into_any_element()
+                        },
+                    ))
                     .child(
                         div()
                             .flex()

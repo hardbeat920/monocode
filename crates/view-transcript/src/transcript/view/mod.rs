@@ -252,6 +252,9 @@ pub struct TranscriptView {
     theme_epoch: u64,
     /// The list's width in the last frame, for measuring text.
     width: Rc<Cell<Pixels>>,
+    /// Whether each prompt bubble last drew as a single rounded line, by
+    /// block id.
+    pub(crate) single_line_prompts: HashMap<String, bool>,
     /// Link chips in prompts, by block id.
     pub(crate) link_cards: HashMap<String, Entity<UserLinkPreview>>,
     /// Generated images, by block id.
@@ -341,6 +344,7 @@ impl TranscriptView {
             feedback_timer: None,
             theme_epoch: 0,
             width: Rc::new(Cell::new(px(0.))),
+            single_line_prompts: HashMap::new(),
             link_cards: HashMap::new(),
             image_cards: HashMap::new(),
             attachment_cards: HashMap::new(),
@@ -574,6 +578,12 @@ impl TranscriptView {
                 slot: MarkdownSlot::Prose,
             })
             .map(|entry| entry.view.clone())
+    }
+
+    /// Whether a prompt's chat bubble drew as one rounded line the last time
+    /// it was on screen.
+    pub fn prompt_is_single_line(&self, block_id: &str) -> Option<bool> {
+        self.single_line_prompts.get(block_id).copied()
     }
 
     /// Plan rows, for tests and tools that inspect the layout.
@@ -1122,13 +1132,10 @@ impl Render for TranscriptView {
                     this.offer_selection(event.position, cx)
                 }),
             )
-            .child(
-                list(
-                    self.list.clone(),
-                    cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx)),
-                )
-                .size_full(),
-            )
+            // The width probe prepaints before the list lays its rows out, so
+            // a pooled tab shown again at a new width measures its rows
+            // against that width in the same frame, not the one it was
+            // hidden at.
             .child({
                 let width = self.width.clone();
                 canvas(
@@ -1140,6 +1147,13 @@ impl Render for TranscriptView {
                 .left_0()
                 .size_full()
             })
+            .child(
+                list(
+                    self.list.clone(),
+                    cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx)),
+                )
+                .size_full(),
+            )
             .child(self.selection_menu.clone())
     }
 }

@@ -976,6 +976,7 @@ impl Inbox {
             linked.kind,
             linked.number,
             true,
+            None,
         );
         let id = session_id.to_string();
         cx.spawn(async move |this, cx| {

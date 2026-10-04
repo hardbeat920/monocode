@@ -903,6 +903,30 @@ fn keeps_sessions_that_finish_out_of_view_until_they_are_seen(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn never_marks_a_finished_worker_unseen(cx: &mut TestAppContext) {
+    let _test = notifying(cx);
+    focus(cx, Some("other"));
+    let mut worker = get(cx, "first");
+    worker.id = "worker".into();
+    worker.orchestration_lead_id = Some("first".into());
+    worker.busy = Some(true);
+    upsert(cx, worker.clone());
+    let mut lead = get(cx, "first");
+    lead.busy = Some(true);
+    upsert(cx, lead.clone());
+    worker.busy = None;
+    upsert(cx, worker);
+    lead.busy = None;
+    upsert(cx, lead);
+    // The lead can be looked at; the worker cannot, so it is never kept
+    // loaded waiting to be seen.
+    let (notifier, _, _) = attention(cx);
+    let unseen = notifier.read_with(cx, |notifier, _| notifier.unseen_finished_ids().clone());
+    assert!(unseen.contains("first"));
+    assert!(!unseen.contains("worker"));
+}
+
+#[gpui::test]
 fn tells_listeners_when_a_timed_mute_expires(cx: &mut TestAppContext) {
     let test = notifying(cx);
     let (notifier, _, _) = attention(cx);

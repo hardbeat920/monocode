@@ -7,14 +7,15 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseDownEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
-    Window, div, prelude::FluentBuilder as _,
+    MouseDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 use monocode_core::models::{AgentModel, ModelSetting};
 use monocode_core::{HarnessId, ModelSettings};
 use monocode_ui::{IconName, Theme, icon, u};
 
 use super::anchor::{BoundsCell, Side, anchored_popover, popover_layer, popover_surface};
+use super::effort_tiles::{effort_glow, effort_tile_tone, effort_tiles};
 use super::model_logic::{
     ControlPill, SETTING_MENU_WIDTH, control_pills, is_effort_setting, select_menu_label,
     select_menu_options, setting_label, setting_value, setting_value_label, with_setting,
@@ -256,6 +257,7 @@ impl ModelControlPills {
     ) -> impl IntoElement + use<> {
         let settings = open.menu_settings();
         let grouped = settings.len() > 1;
+        let reduced = cx.reduce_motion();
         let mut list = div()
             .flex()
             .flex_col()
@@ -278,33 +280,48 @@ impl ModelControlPills {
                 let picked = setting.clone();
                 let option_value = option.value.clone();
                 let selector = format!("model-pill-option-{}-{}", setting.id, option.label);
+                let highlighted = row_index == open.active;
+                let tone =
+                    effort_tile_tone(self.harness, setting, &option.value).filter(|_| highlighted);
+                let shimmer_id = format!("model-pill-effort-{}-{}", setting.id, option.value);
                 list = list.child(
-                    menu_row(
-                        ("model-pill-option", row_index),
-                        32.,
-                        row_index == open.active,
-                        theme,
-                    )
-                    .debug_selector(move || selector)
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if let (true, Some(open)) = (*hovered, this.open.as_mut())
-                            && open.active != row_index
-                        {
-                            open.active = row_index;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.pick(&picked, &option_value, window, cx)
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(option.label.clone()),
-                    )
-                    .when(selected, |row| row.child(check_mark(0.50, theme))),
+                    menu_row(("model-pill-option", row_index), 32., highlighted, theme)
+                        .relative()
+                        .debug_selector(move || selector)
+                        .when_some(tone, |row, tone| {
+                            row.child(effort_tiles(
+                                SharedString::from(format!("{shimmer_id}-tiles")),
+                                tone,
+                                reduced,
+                            ))
+                        })
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                            if let (true, Some(open)) = (*hovered, this.open.as_mut())
+                                && open.active != row_index
+                            {
+                                open.active = row_index;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.pick(&picked, &option_value, window, cx)
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(option.label.clone()),
+                        )
+                        .when(selected, |row| row.child(check_mark(0.50, theme)))
+                        .when_some(tone, |row, tone| {
+                            row.child(effort_glow(
+                                SharedString::from(format!("{shimmer_id}-glow")),
+                                tone,
+                                u(theme.radius.lg),
+                                reduced,
+                            ))
+                        }),
                 );
             }
         }

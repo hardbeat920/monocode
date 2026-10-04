@@ -534,6 +534,81 @@ async fn steers_a_follow_up_into_the_running_turn(cx: &mut TestAppContext) {
     assert_eq!(steers[0].text, "also check tests");
 }
 
+/// Queue output from the running turn without letting its flush run.
+fn queue_output(id: &str, text: &str, cx: &mut App) {
+    Engine::sessions(cx).update(cx, |sessions, cx| {
+        sessions.enqueue_event(id, HarnessEvent::MessageDelta { text: text.into() }, cx);
+    });
+}
+
+fn busy_with_a_turn(id: &str, cx: &mut TestAppContext) {
+    let mut session = Session {
+        busy: Some(true),
+        ..chat(id, HarnessId::Codex)
+    };
+    session.blocks = vec![Block::new("u1", BlockRole::User, "start")];
+    insert(session, cx);
+}
+
+#[gpui::test]
+async fn puts_output_that_already_arrived_before_a_submitted_message(cx: &mut TestAppContext) {
+    let fixture = setup(cx);
+    busy_with_a_turn("s", cx);
+    let accepted = cx.update(|cx| {
+        queue_output("s", "partial reply", cx);
+        fixture.submit.update(cx, |submit, cx| {
+            submit.on_submit(
+                "s",
+                "also check tests",
+                Vec::new(),
+                SubmitOptions::default(),
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    assert!(accepted);
+    assert_eq!(
+        texts(&session("s", cx)),
+        [
+            (BlockRole::User, "start".to_string()),
+            (BlockRole::Assistant, "partial reply".to_string()),
+            (BlockRole::User, "also check tests".to_string()),
+        ]
+    );
+}
+
+#[gpui::test]
+async fn puts_output_that_already_arrived_before_orchestrator_guidance(cx: &mut TestAppContext) {
+    use crate::orchestration::engine_host::EngineHost;
+    use crate::orchestration::host::OrchestrationHost;
+    use crate::orchestration::peers::NoPeers;
+
+    let fixture = setup(cx);
+    busy_with_a_turn("s", cx);
+    let host = Rc::new(EngineHost {
+        control: None,
+        harness_host: None,
+        owner: String::new(),
+        peers: Rc::new(NoPeers),
+    });
+    let steer = cx.update(|cx| {
+        queue_output("s", "partial reply", cx);
+        host.steer("s", "also check tests", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(steer.now_or_never(), Some(Ok(())));
+    assert_eq!(
+        texts(&session("s", cx)),
+        [
+            (BlockRole::User, "start".to_string()),
+            (BlockRole::Assistant, "partial reply".to_string()),
+            (BlockRole::User, "also check tests".to_string()),
+        ]
+    );
+    assert_eq!(fixture.codex.calls.lock().steers.len(), 1);
+}
+
 #[gpui::test]
 async fn says_so_when_a_harness_cannot_take_a_follow_up(cx: &mut TestAppContext) {
     let fixture = setup(cx);

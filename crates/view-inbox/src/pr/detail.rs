@@ -5,7 +5,10 @@
 //! (labels, description, comments, diff, or checks).
 //!
 //! In the inbox the header stays put and the body scrolls. In the linked
-//! panel only the identity row is pinned and everything else scrolls.
+//! panel only the identity row is pinned and everything else scrolls. The
+//! panel reuses recent GitHub data, loads the diff on the Summary tab too,
+//! and reveals its overview (description excerpt, changed files, activity)
+//! in one piece once everything settles.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -23,7 +26,7 @@ use monocode_ui::widgets::{popover_frame, tooltip};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
 
 use crate::data::{
-    DataTask, GithubPrAction, InboxDetailData, InboxDetailState, InboxItem, InboxKind,
+    DataTask, DetailFetch, GithubPrAction, InboxDetailData, InboxDetailState, InboxItem, InboxKind,
     InboxProjectOption, InboxProvider, InboxReplyTarget, InboxServices, PrChecksData,
     PrChecksParams, RelatedSession,
 };
@@ -35,10 +38,11 @@ use crate::model::{
 use crate::pr::actions::{PrActionsProps, github_pr_actions};
 use crate::pr::checks::{PrChecksTab, PrChecksView, pr_checks_tab};
 use crate::pr::comments::{
-    CommentForm, CommentsProps, MarkdownCache, ReplyMode, comment_form, comment_placeholder,
-    inbox_comments,
+    BodyClamps, CommentForm, CommentsProps, MarkdownCache, ReplyMode, comment_form,
+    comment_placeholder, inbox_comments,
 };
 use crate::pr::diff::inbox_pr_diff;
+use crate::pr::overview::{inbox_description_summary, inbox_pr_changes_glance};
 use crate::pr::repair_form::CheckRepair;
 use crate::style::{
     ActionKind, PopoverAlign, action_button, centered_loader, closed_ink, inbox_status_mark,
@@ -290,6 +294,11 @@ pub struct InboxDetailView {
     tab: DetailTab,
     diff_mode: DiffMode,
     diff_view: Option<(crate::data::PrDiff, bool, Entity<DiffView>)>,
+    /// `diffFocusPath`: the file the Code tab opens on, picked from the
+    /// Summary's changed files.
+    focus_path: Option<String>,
+    /// The Summary shows the whole description instead of its excerpt.
+    description_expanded: bool,
     checks_data: Option<Rc<dyn PrChecksData>>,
     checks_overall: Option<ChecksOverall>,
     checks_view: Option<Entity<PrChecksView>>,
@@ -305,6 +314,7 @@ pub struct InboxDetailView {
     draft: String,
     placeholder_replying: bool,
     markdown: MarkdownCache,
+    clamps: BodyClamps,
     scroll: ScrollHandle,
     animate: bool,
     tasks: Vec<Task<()>>,
@@ -321,7 +331,14 @@ impl InboxDetailView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let data = services.open_detail(&item, cx);
+        // The side panel often opens right after a hover prefetch, so it
+        // reuses recent GitHub data. The inbox keeps fetching so its refresh
+        // stays live.
+        let fetch = match props.mode {
+            DetailMode::Inbox => DetailFetch::Live,
+            DetailMode::Panel => DetailFetch::ReuseRecent,
+        };
+        let data = services.open_detail(&item, fetch, cx);
         let comment_field = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 7)
@@ -342,6 +359,7 @@ impl InboxDetailView {
             .unwrap_or_else(|| props.cwd.clone());
         let mut view = Self {
             markdown: MarkdownCache::new(services.clone()),
+            clamps: BodyClamps::new(cx.entity_id()),
             services,
             data,
             item,
@@ -350,6 +368,8 @@ impl InboxDetailView {
             tab: DetailTab::Summary,
             diff_mode: DiffMode::Hunks,
             diff_view: None,
+            focus_path: None,
+            description_expanded: false,
             checks_data: None,
             checks_overall: None,
             checks_view: None,
@@ -372,7 +392,34 @@ impl InboxDetailView {
         view.subscribe_data(cx);
         view.open_checks(cx);
         view.sync(cx);
+        view.request_diff(cx);
         view
+    }
+
+    /// `diffWanted`: the Code tab shows the diff, and the panel's Summary
+    /// lists its changed files from the same fetch.
+    fn diff_wanted(&self) -> bool {
+        self.tab == DetailTab::Code
+            || (self.props.mode == DetailMode::Panel && self.tab == DetailTab::Summary)
+    }
+
+    /// Loads the diff of a pull or merge request when a tab wants it.
+    fn request_diff(&mut self, cx: &mut Context<Self>) {
+        let is_pr = !self.item.is_tracker() && self.item.kind == InboxKind::Pr;
+        if is_pr && self.diff_wanted() {
+            self.data.show_diff(self.full_file(), cx);
+        }
+    }
+
+    /// `overviewSettling`: the panel holds one loader until the
+    /// description, the thread, and a pull request's diff have all settled,
+    /// rather than letting each land and reshuffle the overview.
+    pub fn overview_settling(&self) -> bool {
+        let is_pr = !self.item.is_tracker() && self.item.kind == InboxKind::Pr;
+        self.props.mode == DetailMode::Panel
+            && (self.state.details.loading
+                || self.state.thread.loading
+                || (is_pr && self.state.diff.loading))
     }
 
     fn subscribe_data(&mut self, cx: &mut Context<Self>) {
@@ -442,8 +489,41 @@ impl InboxDetailView {
             .is_some_and(|(current, mode, _)| *current == diff && *mode == full_file);
         if !same {
             let view = inbox_pr_diff(&diff, full_file, cx);
+            if let Some(path) = self.focus_path.clone() {
+                focus_diff_file(&view, &path, cx);
+            }
             self.diff_view = Some((diff, full_file, view));
         }
+    }
+
+    /// The Code tab's diff view, once the diff has loaded there.
+    pub fn diff_view(&self) -> Option<&Entity<DiffView>> {
+        self.diff_view.as_ref().map(|(_, _, view)| view)
+    }
+
+    /// The file the Code tab opens on, if one was picked.
+    pub fn focus_path(&self) -> Option<&str> {
+        self.focus_path.as_deref()
+    }
+
+    /// A pick in the Summary's changed files: the Code tab, opened and
+    /// scrolled to `path`, or at the top for "View all".
+    pub fn open_code(&mut self, path: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_path = path;
+        // React mounted a fresh diff for each visit to the Code tab, so the
+        // focused file opens beside the first one.
+        self.diff_view = None;
+        self.set_tab(DetailTab::Code, window, cx);
+        if self.focus_path.is_some() && self.props.mode == DetailMode::Panel {
+            // The panel scrolls as one, so bring the body, where the diff
+            // sits, to the top. The diff list scrolls to the file itself.
+            self.scroll.scroll_to_top_of_item(1);
+        }
+    }
+
+    /// Whether the Summary shows the whole description.
+    pub fn description_expanded(&self) -> bool {
+        self.description_expanded
     }
 
     fn full_file(&self) -> bool {
@@ -488,8 +568,21 @@ impl InboxDetailView {
             return;
         }
         let params_before = pr_checks_params(&self.item, &self.props);
+        let other = (item.provider, item.kind, &item.repo, item.number)
+            != (
+                self.item.provider,
+                self.item.kind,
+                &self.item.repo,
+                self.item.number,
+            );
+        if other {
+            self.description_expanded = false;
+            self.focus_path = None;
+            self.clamps.clear();
+        }
         self.item = item.clone();
         self.data.set_item(item, cx);
+        self.request_diff(cx);
         self.update_checks_params(params_before, cx);
         cx.notify();
     }
@@ -547,7 +640,10 @@ impl InboxDetailView {
                     }));
                 }
             }
-            DetailTab::Summary => self.checks_view = None,
+            DetailTab::Summary => {
+                self.request_diff(cx);
+                self.checks_view = None;
+            }
         }
         cx.notify();
     }
@@ -1244,6 +1340,7 @@ impl InboxDetailView {
         let tab = |id: &'static str,
                    label: &'static str,
                    which: DetailTab,
+                   count: Option<usize>,
                    cx: &mut Context<Self>| {
             let selected = self.tab == which;
             let hover = theme.colors.content;
@@ -1260,8 +1357,27 @@ impl InboxDetailView {
                 } else {
                     theme.content(0.50)
                 })
-                .on_click(cx.listener(move |this, _, window, cx| this.set_tab(which, window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if which == DetailTab::Code {
+                        this.focus_path = None;
+                    }
+                    this.set_tab(which, window, cx)
+                }))
                 .child(label);
+            if let Some(count) = count.filter(|count| *count > 0) {
+                el = el.child(
+                    div()
+                        .ml(u(6.))
+                        .rounded_full()
+                        .bg(theme.content(0.10))
+                        .px(u(6.))
+                        .py(u(2.))
+                        .text_px(theme.text.micro)
+                        .tabular()
+                        .text_color(theme.content(0.60))
+                        .child(count.to_string()),
+                );
+            }
             if selected {
                 el = el.child(
                     div()
@@ -1281,8 +1397,20 @@ impl InboxDetailView {
             .flex()
             .items_stretch()
             .gap(u(16.))
-            .child(tab("detail-tab-summary", "Summary", DetailTab::Summary, cx))
-            .child(tab("detail-tab-code", "Code", DetailTab::Code, cx));
+            .child(tab(
+                "detail-tab-summary",
+                "Summary",
+                DetailTab::Summary,
+                None,
+                cx,
+            ))
+            .child(tab(
+                "detail-tab-code",
+                "Code",
+                DetailTab::Code,
+                self.code_tab_count(),
+                cx,
+            ));
         if let Some(overall) = self.checks_overall.clone() {
             tabs = tabs.child(
                 pr_checks_tab(overall, self.tab == DetailTab::Checks).on_select(
@@ -1333,6 +1461,14 @@ impl InboxDetailView {
             row = row.child(group);
         }
         row.into_any_element()
+    }
+
+    /// The Code tab's file count badge, shown in the panel only.
+    pub fn code_tab_count(&self) -> Option<usize> {
+        if self.props.mode != DetailMode::Panel {
+            return None;
+        }
+        self.state.diff.value.as_ref().map(|diff| diff.files.len())
     }
 
     fn render_header(&self, header: &DetailHeader, cx: &mut Context<Self>) -> AnyElement {
@@ -1391,9 +1527,9 @@ impl InboxDetailView {
             .flex_col()
             .w_full()
             .max_w(u(1024.))
-            .gap(u(if panel { 16. } else { 20. }))
+            .gap(u(if panel { 24. } else { 20. }))
             .px(u(if panel { 16. } else { 32. }))
-            .py(u(if panel { 16. } else { 20. }));
+            .py(u(20.));
         if !self.item.labels.is_empty() {
             body = body.child(
                 div().flex().flex_wrap().gap(u(4.)).children(
@@ -1433,7 +1569,7 @@ impl InboxDetailView {
             }
             return body.into_any_element();
         }
-        if self.state.details.loading {
+        if self.state.details.loading || self.overview_settling() {
             return body
                 .child(centered_loader("detail-loading", cx))
                 .into_any_element();
@@ -1454,19 +1590,50 @@ impl InboxDetailView {
             .value
             .as_ref()
             .map(|details| details.body.clone())
-            .filter(|text| !text.trim().is_empty());
-        body = match description {
-            Some(text) => {
-                let view = self.markdown.view("body", &text, false, cx);
-                body.child(div().min_w_0().child(view))
-            }
-            None => body.child(
+            .unwrap_or_default();
+        if panel {
+            let weak = cx.entity().downgrade();
+            let on_toggle: crate::data::Action = Rc::new(move |_, cx| {
+                if let Some(view) = weak.upgrade() {
+                    view.update(cx, |view, cx| {
+                        view.description_expanded = !view.description_expanded;
+                        cx.notify();
+                    });
+                }
+            });
+            body = body.child(inbox_description_summary(
+                &description,
+                self.description_expanded,
+                on_toggle,
+                &mut self.markdown,
+                cx,
+            ));
+        } else if !description.trim().is_empty() {
+            let view = self.markdown.view("body", &description, false, cx);
+            body = body.child(div().min_w_0().child(view));
+        } else {
+            body = body.child(
                 div()
                     .text_px(theme.text.body)
                     .text_color(theme.content(0.45))
                     .child("No description"),
-            ),
-        };
+            );
+        }
+        if panel && header.is_pr {
+            let weak = cx.entity().downgrade();
+            let diff = &self.state.diff;
+            body = body.child(inbox_pr_changes_glance(
+                diff.value.as_ref(),
+                diff.loading,
+                diff.error.as_deref(),
+                Rc::new(move |path, window, cx| {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(cx, |view, cx| view.open_code(path, window, cx));
+                    }
+                }),
+                cx,
+            ));
+        }
         let reply_mode = match self.item.provider {
             InboxProvider::Linear => Some(ReplyMode::Parent),
             InboxProvider::Github => Some(ReplyMode::Thread),
@@ -1482,6 +1649,7 @@ impl InboxDetailView {
                 }
             })),
             now: self.services.now_ms(),
+            clamps: self.clamps.clone(),
         };
         let thread = self.state.thread.clone();
         if let Some(comments) = inbox_comments(&thread, &props, &mut self.markdown, cx) {
@@ -1583,6 +1751,28 @@ impl Render for InboxDetailView {
             )
             .into_any_element()
     }
+}
+
+/// Opens `path` in a freshly built diff and scrolls its list there. The
+/// view starts with the first file open; the focused file opens beside it.
+// TODO(port): `UnifiedDiffView` brought the file card to the top of the
+// panel's own scroller with `scrollIntoView`. `DiffView` scrolls only its
+// own list, so the panel shows the diff's top edge and the list inside it
+// scrolls to the file.
+fn focus_diff_file(view: &Entity<DiffView>, path: &str, cx: &mut App) {
+    view.update(cx, |view, cx| {
+        let Some(index) = view
+            .files()
+            .iter()
+            .position(|file| file.id.as_ref() == path || file.path.as_ref() == path)
+        else {
+            return;
+        };
+        if index != 0 {
+            view.toggle_file(index, cx);
+        }
+        view.scroll_to_file(path, cx);
+    });
 }
 
 /// The empty detail pane: "Select an inbox item".

@@ -320,3 +320,28 @@ fn reduced_motion_still_reveals_text() {
     let texts = rendered(&mut cx, &markdown);
     assert_eq!(texts[0].text.as_ref(), "one two three");
 }
+
+#[test]
+fn hard_breaks_keep_a_documents_lines_apart() {
+    let _serial = common::serial();
+    let (mut cx, window, markdown) = setup("> first line\n> second line\n> third line");
+    assert_eq!(
+        rendered(&mut cx, &markdown)[0].text.as_ref(),
+        "first line second line third line"
+    );
+    cx.update(|cx| markdown.update(cx, |view, cx| view.set_hard_breaks(true, cx)));
+    draw(&mut cx, window);
+    let texts = rendered(&mut cx, &markdown);
+    assert_eq!(
+        texts[0].text.as_ref(),
+        "first line\nsecond line\nthird line"
+    );
+    // Each line lays out on its own line.
+    let first = texts[0].layout.position_for_index(0).expect("first").y;
+    let third = texts[0]
+        .layout
+        .position_for_index("first line\nsecond line\n".len())
+        .expect("third")
+        .y;
+    assert!(third > first, "{first:?} {third:?}");
+}

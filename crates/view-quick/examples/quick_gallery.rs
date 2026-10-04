@@ -220,6 +220,9 @@ fn main() {
                                 match scene.as_str() {
                                     "projects" => view.open_picker(Picker::Project, window, cx),
                                     "models" => view.open_picker(Picker::Model, window, cx),
+                                    "permissions" => {
+                                        view.open_picker(Picker::Permissions, window, cx)
+                                    }
                                     "attachments" => {
                                         view.open_picker(Picker::Attachments, window, cx)
                                     }

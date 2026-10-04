@@ -274,6 +274,14 @@ impl SessionComposerHost {
 
 impl ComposerHost for SessionComposerHost {
     fn submit(&self, submission: ComposerSubmission, window: &mut Window, cx: &mut App) -> bool {
+        // A workspace switch is moving this session. Reject before async
+        // preparation can make the composer clear its draft.
+        if monocode_app::bridge::ActiveWorkspace::get(cx)
+            .and_then(|workspace| workspace.upgrade())
+            .is_some_and(|workspace| workspace.read(cx).is_switching(&self.session_id, cx))
+        {
+            return false;
+        }
         let Some(submit) = Self::submit_entity(cx) else {
             return false;
         };

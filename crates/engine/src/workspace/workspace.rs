@@ -23,7 +23,9 @@ use monocode_core::session::session_work_cwd;
 use monocode_core::settings::{DiffViewer, FileTabMode};
 use monocode_core::{RuntimeMode, Session};
 use monocode_layout::pane_drop::TitleTabDropPosition;
-use monocode_layout::paths::{normalize_project_path, project_name, same_project_path};
+use monocode_layout::paths::{
+    is_remote_project_path, normalize_project_path, project_name, same_project_path,
+};
 use monocode_layout::project_return::{
     ProjectReturnMemory, is_blank_session, reconcile_project_return,
 };
@@ -39,7 +41,8 @@ use monocode_layout::terminal_tab::{RunningTerminal, TerminalMetaPatch, list_run
 use monocode_layout::workspace_tab_groups::{
     PlaceSessionOnPane, WorkspaceTabClosePlan, WorkspaceTabCloseScope, apply_detach_pane_to_tab,
     apply_place_session_on_pane, apply_place_tab_on_pane, filter_tabs_for_project,
-    find_open_session_tab, focused_workspace_tab_cwd, plan_workspace_tab_close, workspace_tab_cwd,
+    find_open_session_tab, focused_workspace_tab_cwd, plan_workspace_tab_close_in,
+    workspace_tab_cwd,
 };
 use monocode_layout::{
     CommitTabSource, EditorPane, EditorSplitSide, FilePaneTab, FocusDir, GitFileDiffKind,
@@ -57,7 +60,7 @@ use monocode_settings::settings_store::{load_diff_viewer, load_file_tab_mode};
 
 use super::add_chat::{AddToChatRequest, apply_add_to_chat_request};
 use super::chat_context::ChatContextItem;
-use super::delegate::{NoDelegate, WorkspaceDelegate};
+use super::delegate::{IsCurrent, NoDelegate, WorkspaceDelegate, WorktreeTarget};
 use super::files::Files;
 use super::hooks::{Mirror, WorkspacePackage, mirror_from_layout};
 use super::lifecycle::{RemoveSession, SessionWorkspaceRemoval, remove_session_from_workspace};
@@ -68,6 +71,11 @@ use super::session_factory::{ModelEnvSessions, SessionFactory, session_seeded_fr
 use super::terminals::{DockToggle, ProjectTerminals, TerminalMetaChanged, Terminals};
 use super::title_tab::{
     TitleTab, drop_open_files, is_blank_workspace_tab, title_tab_project, to_title_tab,
+};
+use super::worktree_scope::{
+    NavigationError, NavigationKind, NavigationRequest, NavigationStep, WorkspaceNavigation,
+    WorkspacePins, WorktreeFocus, WorktreeFocuses, WorktreeTabStats, plan_navigation,
+    workspace_key, worktree_tab_stats,
 };
 use crate::runtime::in_flight::ResumedWorkspace;
 use crate::runtime::util::reorder::{merge_ordered_subset, order_by_ids};
@@ -217,6 +225,7 @@ impl WorkspaceConfig {
 struct OpenRef {
     id: String,
     cwd: String,
+    worktree: Option<String>,
     created: Option<Box<Session>>,
 }
 
@@ -228,6 +237,10 @@ impl SessionRef for OpenRef {
     fn session_cwd(&self) -> &str {
         &self.cwd
     }
+
+    fn session_worktree_cwd(&self) -> Option<&str> {
+        self.worktree.as_deref()
+    }
 }
 
 impl OpenRef {
@@ -235,6 +248,7 @@ impl OpenRef {
         Self {
             id: session.id.clone(),
             cwd: session.cwd.clone(),
+            worktree: session.worktree_cwd.clone(),
             created: Some(Box::new(session)),
         }
     }
@@ -269,6 +283,7 @@ fn open_refs(cx: &App) -> Vec<OpenRef> {
                 .map(|session| OpenRef {
                     id: session.id.clone(),
                     cwd: session.cwd.clone(),
+                    worktree: session.worktree_cwd.clone(),
                     created: None,
                 })
                 .collect()
@@ -305,6 +320,12 @@ pub struct Workspace {
     editor_navigation: Option<EditorNavigationTarget>,
     editor_navigation_token: i64,
     known_terminals: HashSet<String>,
+    /// The worktree each project's workspace shows.
+    worktree_focus: WorktreeFocuses,
+    /// The workspace each tab or session was opened or moved in.
+    pins: WorkspacePins,
+    navigation: WorkspaceNavigation,
+    navigation_task: Option<Task<()>>,
     mirror: Rc<RefCell<Mirror>>,
     factory: Rc<dyn SessionFactory>,
     delegate: Rc<dyn WorkspaceDelegate>,
@@ -362,6 +383,7 @@ impl Workspace {
             package.register(&mirror);
         }
 
+        let pins = WorkspacePins::restored(&tabs, &open_refs(cx));
         let mut workspace = Self {
             tab_visit: empty_tab_visit_history(&active_tab_id),
             tabs,
@@ -376,6 +398,10 @@ impl Workspace {
             editor_navigation: None,
             editor_navigation_token: 0,
             known_terminals: HashSet::new(),
+            worktree_focus: WorktreeFocuses::default(),
+            pins,
+            navigation: WorkspaceNavigation::default(),
+            navigation_task: None,
             mirror,
             factory,
             delegate,
@@ -383,6 +409,7 @@ impl Workspace {
             _subscriptions: subscriptions,
         };
         workspace.known_terminals = workspace.terminal_ids(cx);
+        workspace.observe_navigation(cx);
         workspace.sync_mirror(cx);
         // The snapshot effect ran on mount too.
         update_sessions(cx, |sessions, cx| {
@@ -490,8 +517,9 @@ impl Workspace {
         Some(title_tab_project(tab, &all_sessions(cx)))
     }
 
-    /// `deckProjectTabs`: the tabs of the current project, or only the
-    /// active tab when it belongs to no project.
+    /// `deckProjectTabs`: the tabs of the current project's workspace, or
+    /// only the active tab when it belongs to no project. Each worktree keeps
+    /// its own tabs; the others stay open, just hidden.
     pub fn deck_project_tabs(&self, cx: &App) -> Vec<WorkspaceTab> {
         let sessions = open_refs(cx);
         if let Some(active) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id)
@@ -499,13 +527,23 @@ impl Workspace {
         {
             return vec![active.clone()];
         }
+        let worktree = self.current_workspace(&self.project_cwd);
         filter_tabs_for_project(&self.tabs, &sessions, &self.project_cwd)
+            .into_iter()
+            .filter(|tab| {
+                tab.id == self.active_tab_id
+                    || self
+                        .pins
+                        .tab_workspace(tab, &sessions)
+                        .is_none_or(|workspace| same_project_path(&workspace, &worktree))
+            })
+            .collect()
     }
 
-    /// The title bar's tabs, for every workspace tab.
+    /// The title bar's tabs: the deck's (`deckProjectTabs.map(toTitleTab)`).
     pub fn title_tabs(&self, unseen_finished_ids: &HashSet<String>, cx: &App) -> Vec<TitleTab> {
         let sessions = all_sessions(cx);
-        self.tabs
+        self.deck_project_tabs(cx)
             .iter()
             .map(|tab| {
                 to_title_tab(
@@ -608,6 +646,13 @@ impl Workspace {
         mirror.docks = terminals.docks().to_vec();
         mirror.last_dock_side = terminals.last_dock_side();
         mirror.project_return = self.project_return.clone();
+        let sessions = open_refs(cx);
+        mirror.dropped_tab_ids = self
+            .tabs
+            .iter()
+            .filter(|tab| !self.pins.keep_saved_tab(tab, &sessions))
+            .map(|tab| tab.id.clone())
+            .collect();
     }
 
     /// The effects App.tsx ran when `tabs`, `activeTabId`, or the docks
@@ -637,6 +682,7 @@ impl Workspace {
         }
         self.known_terminals = current;
 
+        self.observe_navigation(cx);
         self.sync_mirror(cx);
         cx.notify();
         update_sessions(cx, |sessions, cx| {
@@ -644,6 +690,7 @@ impl Workspace {
             sessions.schedule_workspace_snapshot(cx);
             sessions.schedule_detach(cx);
         });
+        self.drain_navigation(cx);
     }
 
     /// Reconcile the current tabs before a project selection reads its return target.
@@ -881,6 +928,10 @@ impl Workspace {
     }
 
     pub fn set_full_page_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        // Search, Inbox, Notes, Automations, and Settings supersede a switch.
+        if open {
+            self.cancel_navigation(cx);
+        }
         if self.mirror.borrow().covered != open {
             self.mirror.borrow_mut().covered = open;
             cx.notify();
@@ -969,9 +1020,10 @@ impl Workspace {
             .map(|session| session.cwd)
             .or_else(|| defaults.as_ref().map(|session| session.cwd.clone()))
             .unwrap_or_else(|| self.project_cwd.clone());
-        let session = self
+        let mut session = self
             .factory
             .new_default_session(&cwd, defaults.map(|session| session.runtime_mode));
+        self.start_in_focused_worktree(&mut session);
         let id = session.id.clone();
         let tab = new_tab(&id);
         let tab_id = tab.id.clone();
@@ -1056,6 +1108,7 @@ impl Workspace {
         let Some(sessions) = sessions_entity(cx) else {
             return Task::ready(());
         };
+        self.cancel_navigation(cx);
         let opening = sessions.update(cx, |sessions, cx| sessions.ensure_open(session_id, cx));
         let session_id = session_id.to_string();
         cx.spawn(async move |this, cx| {
@@ -1077,6 +1130,9 @@ impl Workspace {
                 session = lead;
             }
             this.update(cx, |this, cx| {
+                if looks_like_project(&session.cwd) {
+                    this.project_cwd = normalize_project_path(&session.cwd);
+                }
                 if this.focus_open_session(&session.id, cx) {
                     return;
                 }
@@ -1129,7 +1185,7 @@ impl Workspace {
         let Some(index) = current.iter().position(|tab| tab.id == id) else {
             return Task::ready(());
         };
-        let plan = plan_workspace_tab_close(&current, &open_refs(cx), id, TAB_CLOSE_SCOPE);
+        let plan = self.plan_close(&current, id, cx);
         let WorkspaceTabClosePlan::Close { next_active_tab_id } = plan else {
             return Task::ready(());
         };
@@ -1416,8 +1472,7 @@ impl Workspace {
             let sibling = sibling_leaf_id(&tab.layout, pane_id);
             let Some(without_pane) = remove_pane(&tab.layout, pane_id) else {
                 self.dirty_files.remove(file_id);
-                let plan =
-                    plan_workspace_tab_close(&self.tabs, &open_refs(cx), &tab.id, TAB_CLOSE_SCOPE);
+                let plan = self.plan_close(&self.tabs, &tab.id, cx);
                 if matches!(plan, WorkspaceTabClosePlan::Close { .. }) {
                     let confirmed = if file.terminal == Some(true) {
                         vec![file_id.to_string()]
@@ -1589,13 +1644,34 @@ impl Workspace {
             for shell_id in leaf_ids(&tab.layout) {
                 this.delegate.remember_remote_session(&shell_id, cx);
             }
-            let session = this.factory.new_session(
+            let mut session = this.factory.new_session(
                 old_session.harness,
                 &old_session.cwd,
                 Some(&old_session.model),
                 Some(old_session.runtime_mode),
                 Some(&old_session.model_settings),
             );
+            // The blank replacement stays in the tab's worktree, so clearing
+            // the last tab there does not switch the workspace back to the
+            // project.
+            if let Some(workspace) = this
+                .pins
+                .tab_workspace(&tab, &open_refs(cx))
+                .filter(|workspace| !same_project_path(workspace, &old_session.cwd))
+            {
+                let focus_branch = this
+                    .worktree_focus
+                    .get(&old_session.cwd)
+                    .filter(|focus| same_project_path(&focus.path, &workspace))
+                    .and_then(|focus| focus.branch.clone());
+                let old_branch = old_session
+                    .worktree_cwd
+                    .as_deref()
+                    .filter(|worktree| same_project_path(worktree, &workspace))
+                    .and_then(|_| old_session.branch.clone());
+                session.worktree_cwd = Some(workspace);
+                session.branch = focus_branch.or(old_branch);
+            }
             let session_id = session.id.clone();
             let file_ids: Vec<String> = closing_files.iter().map(|file| file.id.clone()).collect();
             this.forget_dirty(&file_ids);
@@ -1639,7 +1715,7 @@ impl Workspace {
         else {
             return Task::ready(());
         };
-        match plan_workspace_tab_close(&self.tabs, &open_refs(cx), &tab_id, TAB_CLOSE_SCOPE) {
+        match self.plan_close(&self.tabs, &tab_id, cx) {
             WorkspaceTabClosePlan::Keep => self.clear_tab_session(&tab_id, cx),
             WorkspaceTabClosePlan::Close { .. } => self.close_tab(&tab_id, &[], cx),
         }
@@ -1673,7 +1749,7 @@ impl Workspace {
             let remaining = close_surface_panes(&tab, SurfaceKind::Editor);
             if remaining.is_none()
                 && matches!(
-                    plan_workspace_tab_close(&self.tabs, &open_refs(cx), &tab.id, TAB_CLOSE_SCOPE),
+                    self.plan_close(&self.tabs, &tab.id, cx),
                     WorkspaceTabClosePlan::Close { .. }
                 )
             {
@@ -1815,12 +1891,7 @@ impl Workspace {
             return Task::ready(());
         }
         let Some(next_tab) = close_leaf(&active, &closing_id) else {
-            return match plan_workspace_tab_close(
-                &self.tabs,
-                &open_refs(cx),
-                &active.id,
-                TAB_CLOSE_SCOPE,
-            ) {
+            return match self.plan_close(&self.tabs, &active.id, cx) {
                 WorkspaceTabClosePlan::Keep => self.clear_tab_session(&active.id, cx),
                 WorkspaceTabClosePlan::Close { .. } => self.close_tab(&active.id, &[], cx),
             };
@@ -1844,7 +1915,7 @@ impl Workspace {
     /// `onCloseTitleTab`: a title tab's close button. The active tab the
     /// project keeps closes its focused pane instead.
     pub fn close_title_tab(&mut self, id: &str, cx: &mut Context<Self>) -> Task<()> {
-        let plan = plan_workspace_tab_close(&self.tabs, &open_refs(cx), id, TAB_CLOSE_SCOPE);
+        let plan = self.plan_close(&self.tabs, id, cx);
         if plan == WorkspaceTabClosePlan::Keep && id == self.active_tab_id {
             return self.close_pane(None, cx);
         }
@@ -2640,14 +2711,15 @@ impl Workspace {
         self.open_diff(Some(path), None, kind, pin, cx)
     }
 
-    /// `onOpenAllChanges`: every working-tree change in one review,
-    /// whatever the diff viewer setting.
-    pub fn open_all_changes(&mut self, cx: &mut Context<Self>) {
+    /// `onOpenAllChanges`: one section's working-tree changes in one review,
+    /// whatever the diff viewer setting. `kind` keeps the side the review
+    /// was opened from; `None` shows every change.
+    pub fn open_all_changes(&mut self, kind: Option<GitFileDiffKind>, cx: &mut Context<Self>) {
         let git_cwd = self.git_cwd(cx);
         let sidebar_cwd = self.sidebar_cwd(cx);
         let active = self.active_tab_id.clone();
         self.map_tab(&active, cx, |tab| {
-            open_changes_tab(tab, &git_cwd, None, None, Some(&sidebar_cwd))
+            open_changes_tab(tab, &git_cwd, None, kind, Some(&sidebar_cwd))
         });
         self.set_composer_focused(false, cx);
     }
@@ -3129,6 +3201,452 @@ impl Workspace {
     pub fn new_default_session(&self, cwd: &str, runtime_mode: Option<RuntimeMode>) -> Session {
         self.factory.new_default_session(cwd, runtime_mode)
     }
+
+    // Worktree workspaces.
+
+    /// `worktreeFocus(project)`: the worktree the project's workspace shows.
+    /// `None` for its default workspace, the project folder.
+    pub fn worktree_focus(&self, project: &str) -> Option<&WorktreeFocus> {
+        self.worktree_focus.get(project)
+    }
+
+    /// `currentWorkspace`: the focused worktree's path, else the project.
+    pub fn current_workspace(&self, project: &str) -> String {
+        self.worktree_focus.current_workspace(project)
+    }
+
+    fn set_worktree_focus(
+        &mut self,
+        project: &str,
+        focus: Option<WorktreeFocus>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.worktree_focus.set(project, focus) {
+            cx.notify();
+        }
+    }
+
+    /// `tabWorkspace`: the workspace a tab belongs to.
+    pub fn tab_workspace(&self, tab: &WorkspaceTab, cx: &App) -> Option<String> {
+        self.pins.tab_workspace(tab, &open_refs(cx))
+    }
+
+    /// `worktreeTabStats`: open tabs per workspace of the sidebar's project,
+    /// keyed by the worktree's path key.
+    pub fn worktree_tab_stats(&self, cx: &App) -> HashMap<String, WorktreeTabStats> {
+        worktree_tab_stats(
+            &self.tabs,
+            &all_sessions(cx),
+            &self.sidebar_cwd(cx),
+            &self.pins,
+        )
+    }
+
+    /// New sessions in a project start in its focused worktree.
+    fn start_in_focused_worktree(&self, session: &mut Session) {
+        if let Some(focus) = self.worktree_focus.get(&session.cwd)
+            && !same_project_path(&focus.path, &session.cwd)
+        {
+            session.worktree_cwd = Some(focus.path.clone());
+            session.branch = focus.branch.clone();
+        }
+    }
+
+    /// `planWorkspaceTabClose` with `worktreeOf`: the next tab shares the
+    /// closing tab's workspace.
+    fn plan_close(&self, tabs: &[WorkspaceTab], id: &str, cx: &App) -> WorkspaceTabClosePlan {
+        let sessions = open_refs(cx);
+        let worktree_of = |tab: &WorkspaceTab| self.pins.tab_workspace(tab, &sessions);
+        plan_workspace_tab_close_in(tabs, &sessions, id, TAB_CLOSE_SCOPE, Some(&worktree_of))
+    }
+
+    /// `selectWorkspace`: the switcher picked `focus` (the project folder
+    /// when `None`) in `project`. The switch returns to the tab last used
+    /// there, carries a blank session over, or opens a new one. The latest
+    /// pick wins; an older one that finishes later changes nothing.
+    pub fn select_workspace(
+        &mut self,
+        project: &str,
+        focus: Option<WorktreeFocus>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .navigation
+            .select(NavigationKind::Workspace, project, focus)
+            .is_none()
+        {
+            return;
+        }
+        self.navigation.anchor = Some(self.active_anchor());
+        if !same_project_path(&self.project_cwd, project) {
+            self.project_cwd = project.to_string();
+            self.tabs_changed(cx);
+        } else {
+            cx.notify();
+            self.drain_navigation(cx);
+        }
+    }
+
+    /// `selectProject`: the project rail is about to open `project`; once
+    /// its landing tab shows, return to the workspace it showed last.
+    pub fn select_project(&mut self, project: &str, cx: &mut Context<Self>) {
+        let focus = self.worktree_focus.get(project).cloned();
+        if self
+            .navigation
+            .select(NavigationKind::Project, project, focus)
+            .is_some()
+        {
+            // The landing tab is not known yet; the first pass adopts it.
+            self.navigation.anchor = None;
+            cx.notify();
+            self.drain_navigation(cx);
+        }
+    }
+
+    /// `cancel`: an ordinary open or a full page supersedes a pending switch.
+    pub fn cancel_navigation(&mut self, cx: &mut Context<Self>) {
+        if self.navigation.cancel() {
+            cx.notify();
+        }
+    }
+
+    /// `isSwitching`: a switch is moving this session or is about to.
+    pub fn is_switching(&self, session_id: &str, cx: &App) -> bool {
+        if self.navigation.moving.contains(session_id) {
+            return true;
+        }
+        let Some(request) = &self.navigation.request else {
+            return false;
+        };
+        let sessions = open_refs(cx);
+        self.tabs.iter().any(|tab| {
+            tab.id == self.active_tab_id
+                && tab.focused_id == session_id
+                && workspace_tab_cwd(tab, &sessions)
+                    .is_some_and(|cwd| same_project_path(&cwd, &request.project))
+        })
+    }
+
+    /// `workspaceSwitchingSessionId`: the active session while a switch is
+    /// pending. Its composer is disabled until the switch ends.
+    pub fn switching_session_id(&self, cx: &App) -> Option<String> {
+        self.navigation.request.as_ref()?;
+        self.active_session(cx).map(|session| session.id)
+    }
+
+    /// `workspaceSwitchPending` for the switcher of `project`.
+    pub fn navigation_pending(&self, project: &str) -> bool {
+        self.navigation
+            .request
+            .as_ref()
+            .is_some_and(|request| same_project_path(&request.project, project))
+    }
+
+    /// `workspaceSwitchError` for the switcher of `project`.
+    pub fn navigation_error(&self, project: &str) -> Option<&str> {
+        self.navigation
+            .error
+            .as_ref()
+            .filter(|error| same_project_path(&error.project, project))
+            .map(|error| error.message.as_str())
+    }
+
+    /// The active tab and its focused pane.
+    fn active_anchor(&self) -> (String, String) {
+        let focused = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == self.active_tab_id)
+            .map(|tab| tab.focused_id.clone())
+            .unwrap_or_default();
+        (self.active_tab_id.clone(), focused)
+    }
+
+    /// After the tabs change: another active tab or pane cancels a pending
+    /// switch. With none pending, a tab opened directly (session list, inbox,
+    /// search) joins the workspace on screen without changing its session's
+    /// checkout. No navigation reason survives for a later open.
+    fn observe_navigation(&mut self, cx: &App) {
+        let anchor = self.active_anchor();
+        if self.navigation.request.is_some()
+            && self
+                .navigation
+                .anchor
+                .as_ref()
+                .is_some_and(|expected| *expected != anchor)
+        {
+            self.navigation.cancel();
+        }
+        let seen = (self.project_cwd.clone(), anchor.0, anchor.1);
+        if self.navigation.seen.as_ref() == Some(&seen) {
+            return;
+        }
+        self.navigation.seen = Some(seen);
+        if self.navigation.request.is_some() {
+            return;
+        }
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) else {
+            return;
+        };
+        let Some(project) = workspace_tab_cwd(tab, &open_refs(cx)) else {
+            return;
+        };
+        if is_remote_project_path(&project) {
+            return;
+        }
+        let path = self.current_workspace(&project);
+        let tab_id = tab.id.clone();
+        self.pins.set(&tab_id, &path);
+        self.navigation
+            .memory
+            .insert(workspace_key(&project, &path), tab_id);
+    }
+
+    /// `drain`: run the pending request. One loop runs at a time; a request
+    /// made while it awaits a move is picked up when the move ends.
+    fn drain_navigation(&mut self, cx: &mut Context<Self>) {
+        if self.navigation.running || self.navigation.request.is_none() {
+            return;
+        }
+        self.navigation.running = true;
+        self.navigation_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(Some(pending)) = this.update(cx, |this, cx| this.navigation_step(cx)) else {
+                    break;
+                };
+                let Ok(delegate) = this.read_with(cx, |this, _| this.delegate.clone()) else {
+                    break;
+                };
+                let is_current: IsCurrent = {
+                    let this = this.clone();
+                    let pending = pending.clone();
+                    Rc::new(move |cx: &App| {
+                        this.upgrade().is_some_and(|workspace| {
+                            workspace.read(cx).navigation_current(&pending)
+                        })
+                    })
+                };
+                let target = pending.target.clone();
+                let moving = cx.update(|cx| {
+                    delegate.move_session_to_worktree(&pending.session_id, target, is_current, cx)
+                });
+                let result = moving.await;
+                if this
+                    .update(cx, |this, cx| this.navigation_moved(&pending, result, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            this.update(cx, |this, cx| {
+                this.navigation.running = false;
+                this.navigation.moving.clear();
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// One pass of the request loop. Finishes every step that needs no
+    /// waiting and returns the blank-session move that does.
+    fn navigation_step(&mut self, cx: &mut Context<Self>) -> Option<PendingMove> {
+        loop {
+            let request = self.navigation.request.clone()?;
+            let sessions = all_sessions(cx);
+            let step = plan_navigation(
+                &request,
+                &self.project_cwd,
+                &self.tabs,
+                &self.active_tab_id,
+                &sessions,
+                &self.pins,
+                &self.navigation.memory,
+            );
+            if step != NavigationStep::Wait && self.navigation.anchor.is_none() {
+                self.navigation.anchor = Some(self.active_anchor());
+            }
+            match step {
+                NavigationStep::Wait => return None,
+                NavigationStep::FocusOnly => {
+                    self.navigation.finish(&request);
+                    self.set_worktree_focus(&request.project, request.focus.clone(), cx);
+                    cx.notify();
+                }
+                NavigationStep::Show(tab_id) => self.publish_navigation(&request, &tab_id, cx),
+                NavigationStep::Create => {
+                    let tab_id = self.create_workspace_tab(&request, cx);
+                    self.publish_navigation(&request, &tab_id, cx);
+                }
+                NavigationStep::Move { session_id } => {
+                    let (tab_id, focused_id) = self.active_anchor();
+                    let branch = sessions
+                        .iter()
+                        .find(|session| session.id == session_id)
+                        .and_then(|session| session.branch.clone());
+                    self.navigation.moving.insert(session_id.clone());
+                    cx.notify();
+                    return Some(PendingMove {
+                        target: WorktreeTarget {
+                            path: request.path().to_string(),
+                            branch: request
+                                .focus
+                                .as_ref()
+                                .and_then(|focus| focus.branch.clone()),
+                            is_main: request.focus.is_none(),
+                        },
+                        request,
+                        tab_id,
+                        focused_id,
+                        session_id,
+                        branch,
+                    });
+                }
+            }
+        }
+    }
+
+    /// `isCurrent`: the move's request is the latest and its tab is still
+    /// on screen with the same pane in the same project.
+    fn navigation_current(&self, pending: &PendingMove) -> bool {
+        self.navigation.is_latest(&pending.request)
+            && self.active_tab_id == pending.tab_id
+            && self
+                .tabs
+                .iter()
+                .find(|tab| tab.id == pending.tab_id)
+                .is_some_and(|tab| tab.focused_id == pending.focused_id)
+            && same_project_path(&self.project_cwd, &pending.request.project)
+    }
+
+    /// A blank-session move ended. Only a successful, current move shows
+    /// the workspace; a superseded one changes nothing.
+    fn navigation_moved(
+        &mut self,
+        pending: &PendingMove,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.navigation_current(pending);
+        let request = &pending.request;
+        match result {
+            Ok(()) if current => {
+                self.publish_navigation(request, &pending.tab_id, cx);
+                return;
+            }
+            Err(message) if current => {
+                // A project rail landing may still be in its default
+                // workspace. If restoring the remembered one fails, keep the
+                // landing usable and label the workspace it belongs to.
+                if request.kind == NavigationKind::Project {
+                    let landing = self
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.id == pending.tab_id)
+                        .and_then(|tab| self.tab_workspace(tab, cx))
+                        .unwrap_or_else(|| request.project.clone());
+                    let focus =
+                        (!same_project_path(&landing, &request.project)).then(|| WorktreeFocus {
+                            path: landing,
+                            branch: pending.branch.clone(),
+                        });
+                    self.set_worktree_focus(&request.project, focus, cx);
+                }
+                self.navigation.error = Some(NavigationError {
+                    project: request.project.clone(),
+                    message,
+                });
+            }
+            _ => {}
+        }
+        self.navigation.finish(request);
+        cx.notify();
+    }
+
+    /// Show the request's workspace with `tab_id` in front.
+    fn publish_navigation(
+        &mut self,
+        request: &NavigationRequest,
+        tab_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let path = request.path().to_string();
+        self.pins.set(tab_id, &path);
+        self.navigation
+            .memory
+            .insert(workspace_key(&request.project, &path), tab_id.to_string());
+        self.navigation.finish(request);
+        self.set_worktree_focus(&request.project, request.focus.clone(), cx);
+        self.activate_tab(tab_id, None, cx);
+    }
+
+    /// `createWorkspaceTab`: a new chat in the request's workspace, in a tab
+    /// beside the active one. Returns the tab's id.
+    fn create_workspace_tab(
+        &mut self,
+        request: &NavigationRequest,
+        cx: &mut Context<Self>,
+    ) -> String {
+        let defaults = self.session_defaults(cx);
+        let mut session = self.factory.new_default_session(
+            &request.project,
+            defaults.map(|session| session.runtime_mode),
+        );
+        if let Some(focus) = request
+            .focus
+            .as_ref()
+            .filter(|focus| !same_project_path(&focus.path, &request.project))
+        {
+            session.worktree_cwd = Some(focus.path.clone());
+            session.branch = focus.branch.clone();
+        }
+        let tab = new_tab(&session.id);
+        let tab_id = tab.id.clone();
+        Self::insert_session(session, cx);
+        self.append_tab(tab, Some(&request.project), cx);
+        self.tabs_changed(cx);
+        tab_id
+    }
+}
+
+#[cfg(test)]
+impl Workspace {
+    /// The workspace a tab or session is pinned to.
+    pub(crate) fn pin(&self, id: &str) -> Option<&str> {
+        self.pins.get(id)
+    }
+
+    /// Start without the restored pins, as the upstream hook tests do, and
+    /// pin only the tab on screen.
+    pub(crate) fn reset_pins(&mut self, cx: &mut Context<Self>) {
+        self.pins = WorkspacePins::default();
+        self.navigation.seen = None;
+        self.observe_navigation(cx);
+        self.sync_mirror(cx);
+    }
+
+    /// Focus a project's worktree before the pins start, as the upstream
+    /// tests set the focus before they mount.
+    pub(crate) fn set_focus_for_test(
+        &mut self,
+        project: &str,
+        focus: Option<WorktreeFocus>,
+        cx: &mut Context<Self>,
+    ) {
+        self.worktree_focus.set(project, focus);
+        self.reset_pins(cx);
+    }
+}
+
+/// A blank-session move a workspace request is waiting on.
+#[derive(Debug, Clone)]
+struct PendingMove {
+    request: NavigationRequest,
+    tab_id: String,
+    focused_id: String,
+    session_id: String,
+    /// The session's branch before the move, for a failed project restore.
+    branch: Option<String>,
+    target: WorktreeTarget,
 }
 
 /// `confirmCloseTerminals`: ask before closing terminals that still run a

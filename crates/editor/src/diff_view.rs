@@ -35,6 +35,8 @@ use crate::{
 pub const ROW_HEIGHT: f32 = 22.;
 /// Width of the line-number lane (`w-12`).
 const GUTTER_WIDTH: f32 = 48.;
+/// The +/- column before each line's text (`w-7`).
+const MARK_WIDTH: f32 = 28.;
 
 /// Which actions a file offers. `UnifiedDiffFileModel.canStage` and friends.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -985,10 +987,22 @@ impl DiffView {
                 }
             }))
             .child(div().w(px(GUTTER_WIDTH)).flex_none())
+            // The +/- mark, so added and removed lines do not rely on color.
+            .child(
+                div()
+                    .w(px(MARK_WIDTH))
+                    .flex_none()
+                    .pl(px(12.))
+                    .font_family(theme.mono_font.clone())
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(number_color)
+                    .child(line_mark(line.kind)),
+            )
             .child(
                 div()
                     .flex_none()
-                    .px(px(12.))
+                    .pr(px(12.))
                     .whitespace_nowrap()
                     .font_family(theme.mono_font.clone())
                     .text_size(px(12.))
@@ -1003,6 +1017,16 @@ impl DiffView {
     }
 }
 
+/// The mark before a line: `+` added, `−` (U+2212) removed, nothing for
+/// context.
+pub fn line_mark(kind: UnifiedLineKind) -> &'static str {
+    match kind {
+        UnifiedLineKind::Add => "+",
+        UnifiedLineKind::Del => "\u{2212}",
+        _ => "",
+    }
+}
+
 fn diff_counts(theme: &EditorTheme, additions: usize, deletions: usize) -> impl IntoElement {
     div()
         .flex()
@@ -1014,14 +1038,14 @@ fn diff_counts(theme: &EditorTheme, additions: usize, deletions: usize) -> impl 
         .when(additions > 0, |this| {
             this.child(
                 div()
-                    .text_color(theme.git_added)
+                    .text_color(theme.diff_added_number)
                     .child(format!("+{additions}")),
             )
         })
         .when(deletions > 0, |this| {
             this.child(
                 div()
-                    .text_color(theme.git_deleted)
+                    .text_color(theme.diff_deleted_number)
                     .child(format!("-{deletions}")),
             )
         })
@@ -1146,6 +1170,35 @@ index 1..2 100644
 diff --git a/img.png b/img.png
 Binary files a/img.png and b/img.png differ
 ";
+
+    // UnifiedDiffView.markers.test.ts
+    #[gpui::test]
+    fn marks_added_and_removed_lines_with_a_glyph_not_only_color(cx: &mut TestAppContext) {
+        let file = DiffFile::from_texts("a.ts", "alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\n");
+        let view = cx.new(|cx| DiffView::new(vec![file], EditorTheme::dark(), cx));
+        view.read_with(cx, |view, _| {
+            let rows: Vec<(&str, &str)> = view
+                .rows
+                .iter()
+                .filter_map(|row| match row {
+                    Row::Line { file, line } => {
+                        let line = &view.files[*file].diff.lines[*line];
+                        Some((line_mark(line.kind), line.text.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    ("", "alpha"),
+                    ("\u{2212}", "beta"),
+                    ("+", "BETA"),
+                    ("", "gamma")
+                ]
+            );
+        });
+    }
 
     #[gpui::test]
     fn rows_cover_headers_hunks_and_lines(cx: &mut TestAppContext) {

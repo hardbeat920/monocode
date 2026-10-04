@@ -40,6 +40,7 @@ pub const CHAT_BACKGROUND_SCOPE_KEY: &str = "monocode.chatBackgroundScope";
 pub const CHAT_BACKGROUND_BLUR_KEY: &str = "monocode.chatBackgroundBlur";
 pub const NEW_THREAD_BACKGROUND_EFFECT_KEY: &str = "monocode.newThreadBackgroundEffect";
 pub const CHANGES_VIEW_KEY: &str = "monocode.changesView";
+pub const DIFF_PALETTE_KEY: &str = "monocode.diffPalette";
 pub const SHOW_EXCLUDED_FILES_KEY: &str = "monocode.showExcludedFiles";
 /// From uiScale.ts.
 pub const UI_SCALE_KEY: &str = "monocode.uiScale";
@@ -110,6 +111,17 @@ string_enum! {
 }
 
 string_enum! {
+    /// `DiffPalette`: the colors for added and removed lines.
+    DiffPalette {
+        #[default]
+        Default = "default",
+        Colorblind = "colorblind",
+        HighContrast = "high-contrast",
+    }
+    default Default
+}
+
+string_enum! {
     /// `SidebarTabId`.
     SidebarTabId {
         Files = "files",
@@ -152,6 +164,7 @@ pub const THEME_PREFERENCE_DEFAULT: ThemePreference = ThemePreference::Dark;
 pub const ACCENT_COLOR_DEFAULT: Option<&str> = None;
 pub const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = TranscriptLayout::Chat;
 pub const CHANGES_VIEW_DEFAULT: ChangesView = ChangesView::List;
+pub const DIFF_PALETTE_DEFAULT: DiffPalette = DiffPalette::Default;
 pub const TRANSCRIPT_ANCHOR_DEFAULT: bool = true;
 pub const SHOW_EXCLUDED_FILES_DEFAULT: bool = false;
 pub const NEW_THREAD_BACKGROUND_EFFECT_DEFAULT: NewThreadBackgroundEffect =
@@ -449,6 +462,8 @@ pub struct AppearanceSettings {
     pub new_thread_background_effect: NewThreadBackgroundEffect,
     /// `CHANGES_VIEW_KEY`.
     pub changes_view: ChangesView,
+    /// `DIFF_PALETTE_KEY`.
+    pub diff_palette: DiffPalette,
     /// `SHOW_EXCLUDED_FILES_KEY`.
     pub show_excluded_files: bool,
     /// `UI_SCALE_KEY`: the interface scale, 0.5 to 2 in steps of 0.1.
@@ -481,6 +496,7 @@ impl AppearanceSettings {
             chat_background_blur: clamp_chat_background_blur(CHAT_BACKGROUND_BLUR_DEFAULT),
             new_thread_background_effect: NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
             changes_view: CHANGES_VIEW_DEFAULT,
+            diff_palette: DIFF_PALETTE_DEFAULT,
             show_excluded_files: SHOW_EXCLUDED_FILES_DEFAULT,
             ui_scale: UI_SCALE_DEFAULT,
         }
@@ -543,6 +559,7 @@ impl AppearanceSettings {
                 get(NEW_THREAD_BACKGROUND_EFFECT_KEY).as_deref(),
             ),
             changes_view: ChangesView::parse(get(CHANGES_VIEW_KEY).as_deref()),
+            diff_palette: DiffPalette::parse(get(DIFF_PALETTE_KEY).as_deref()),
             show_excluded_files: flag(SHOW_EXCLUDED_FILES_KEY, SHOW_EXCLUDED_FILES_DEFAULT),
             ui_scale: parse_ui_scale(get(UI_SCALE_KEY).as_deref()),
         }
@@ -711,6 +728,25 @@ mod tests {
             NEW_THREAD_BACKGROUND_EFFECT_DEFAULT
         );
         assert_eq!(NewThreadBackgroundEffect::GradientBlur.label(), "Haze");
+    }
+
+    // diff palette setting
+    #[test]
+    fn defaults_persists_and_validates_the_diff_palette() {
+        assert_eq!(DIFF_PALETTE_DEFAULT, DiffPalette::Default);
+        assert_eq!(load(&[]).diff_palette, DiffPalette::Default);
+        for (stored, palette) in [
+            ("colorblind", DiffPalette::Colorblind),
+            ("high-contrast", DiffPalette::HighContrast),
+            ("default", DiffPalette::Default),
+        ] {
+            assert_eq!(load(&[(DIFF_PALETTE_KEY, stored)]).diff_palette, palette);
+            assert_eq!(palette.as_str(), stored);
+        }
+        assert_eq!(
+            load(&[(DIFF_PALETTE_KEY, "rainbow")]).diff_palette,
+            DIFF_PALETTE_DEFAULT
+        );
     }
 
     // theme preference setting

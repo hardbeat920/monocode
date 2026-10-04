@@ -394,3 +394,118 @@ fn shows_and_drops_an_outside_drag_on_a_pane_edge(cx: &mut TestAppContext) {
     });
     assert!(h.events().is_empty());
 }
+
+/// Port of PaneTreeEnter.test.ts.
+mod pane_enter {
+    use super::*;
+
+    fn relayout(h: &mut Harness<'_>, layout: LayoutNode) {
+        let ids = monocode_layout::leaf_ids(&layout);
+        h.tree.update(h.cx, |tree, cx| {
+            let leaves: Vec<PaneLeaf> = ids
+                .iter()
+                .map(|id| PaneLeaf {
+                    id: id.clone(),
+                    kind: PaneLeafKind::Surface,
+                    view: cx.new(|_| Blank).into(),
+                })
+                .collect();
+            tree.set_layout(layout, ids[0].clone(), cx);
+            tree.set_leaves(leaves, cx);
+        });
+        draw(h.cx);
+    }
+
+    fn entering(h: &mut Harness<'_>, id: &str) -> Option<PaneEnterFrom> {
+        h.tree.read_with(h.cx, |tree, _| tree.entering_from(id))
+    }
+
+    #[gpui::test]
+    fn leaves_panes_alone_on_mount(cx: &mut TestAppContext) {
+        let mut h = mount(
+            split(SplitDir::Right, &["a", "b"]),
+            PaneLeafKind::Surface,
+            cx,
+        );
+        assert_eq!(entering(&mut h, "a"), None);
+        assert_eq!(entering(&mut h, "b"), None);
+    }
+
+    #[gpui::test]
+    fn slides_a_new_pane_in_from_the_edge_it_was_split_on(cx: &mut TestAppContext) {
+        let mut h = mount(leaf("a"), PaneLeafKind::Surface, cx);
+        relayout(&mut h, split(SplitDir::Right, &["a", "b"]));
+        assert_eq!(entering(&mut h, "a"), None);
+        assert_eq!(entering(&mut h, "b"), Some(PaneEnterFrom::Right));
+
+        relayout(
+            &mut h,
+            LayoutNode::split(
+                "outer",
+                SplitDir::Right,
+                vec![leaf("a"), split(SplitDir::Down, &["b", "c"])],
+                vec![0.5, 0.5],
+            ),
+        );
+        assert_eq!(entering(&mut h, "c"), Some(PaneEnterFrom::Bottom));
+    }
+
+    #[gpui::test]
+    fn clears_the_animation_once_it_finishes(cx: &mut TestAppContext) {
+        let mut h = mount(leaf("a"), PaneLeafKind::Surface, cx);
+        relayout(&mut h, split(SplitDir::Right, &["b", "a"]));
+        assert_eq!(entering(&mut h, "b"), Some(PaneEnterFrom::Left));
+        h.cx.executor().advance_clock(PANE_ENTER_DURATION);
+        draw(h.cx);
+        assert_eq!(entering(&mut h, "b"), None);
+    }
+
+    #[gpui::test]
+    fn does_not_animate_a_pane_swapped_in_place(cx: &mut TestAppContext) {
+        let mut h = mount(
+            split(SplitDir::Right, &["a", "b"]),
+            PaneLeafKind::Surface,
+            cx,
+        );
+        relayout(&mut h, split(SplitDir::Right, &["a", "c"]));
+        assert_eq!(entering(&mut h, "c"), None);
+    }
+
+    #[gpui::test]
+    fn does_not_animate_a_switch_to_another_tabs_layout(cx: &mut TestAppContext) {
+        let mut h = mount(leaf("a"), PaneLeafKind::Surface, cx);
+        relayout(&mut h, split(SplitDir::Right, &["x", "y"]));
+        assert_eq!(entering(&mut h, "x"), None);
+        assert_eq!(entering(&mut h, "y"), None);
+    }
+
+    #[gpui::test]
+    fn skips_the_slide_under_reduced_motion(cx: &mut TestAppContext) {
+        let mut h = mount(leaf("a"), PaneLeafKind::Surface, cx);
+        h.cx.update(|_, cx| cx.set_reduce_motion(true));
+        relayout(&mut h, split(SplitDir::Right, &["a", "b"]));
+        assert_eq!(entering(&mut h, "b"), None);
+    }
+
+    #[test]
+    fn enters_from_the_outer_edge_or_fades_in_the_middle() {
+        let three = LayoutNode::split(
+            "row",
+            SplitDir::Right,
+            vec![leaf("a"), leaf("b"), leaf("c")],
+            vec![1.0 / 3.0; 3],
+        );
+        let from: Vec<_> = layout_leaves(&three).iter().map(pane_enter_from).collect();
+        assert_eq!(
+            from,
+            vec![
+                PaneEnterFrom::Left,
+                PaneEnterFrom::Fade,
+                PaneEnterFrom::Right
+            ]
+        );
+        let column = split(SplitDir::Down, &["a", "b"]);
+        let from: Vec<_> = layout_leaves(&column).iter().map(pane_enter_from).collect();
+        assert_eq!(from, vec![PaneEnterFrom::Top, PaneEnterFrom::Bottom]);
+    }
+}

@@ -53,6 +53,38 @@ pub fn resolve_color_scheme(value: ThemePreference, system: ColorScheme) -> Colo
 
 pub const THEME_PREFERENCE_DEFAULT: ThemePreference = ThemePreference::Dark;
 
+/// The colors for added and removed lines. Colorblind and high contrast use
+/// blue and orange instead of green and red.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffPalette {
+    #[default]
+    Default,
+    Colorblind,
+    HighContrast,
+}
+
+impl DiffPalette {
+    /// Parses a stored value. Unknown values fall back to the default.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("default") => Self::Default,
+            Some("colorblind") => Self::Colorblind,
+            Some("high-contrast") => Self::HighContrast,
+            _ => DIFF_PALETTE_DEFAULT,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Colorblind => "colorblind",
+            Self::HighContrast => "high-contrast",
+        }
+    }
+}
+
+pub const DIFF_PALETTE_DEFAULT: DiffPalette = DiffPalette::Default;
+
 pub const THEME_HUE_MIN: f64 = 0.0;
 pub const THEME_HUE_MAX: f64 = 360.0;
 pub const THEME_HUE_DEFAULT: f64 = 240.0;
@@ -152,6 +184,8 @@ pub struct AppearanceSettings {
     pub chat_background_session_opacity: f32,
     pub chat_background_blur: f32,
     pub ui_scale: f32,
+    /// The diff color tokens' palette.
+    pub diff_palette: DiffPalette,
 }
 
 impl Default for AppearanceSettings {
@@ -170,6 +204,7 @@ impl Default for AppearanceSettings {
             chat_background_session_opacity: CHAT_BACKGROUND_OPACITY_DEFAULT,
             chat_background_blur: CHAT_BACKGROUND_BLUR_DEFAULT,
             ui_scale: UI_SCALE_DEFAULT,
+            diff_palette: DIFF_PALETTE_DEFAULT,
         }
     }
 }
@@ -287,6 +322,23 @@ mod tests {
             resolve_color_scheme(ThemePreference::Light, ColorScheme::Dark),
             ColorScheme::Light
         );
+    }
+
+    #[test]
+    fn diff_palette_defaults_and_ignores_unknown_stored_values() {
+        assert_eq!(
+            AppearanceSettings::default().diff_palette,
+            DiffPalette::Default
+        );
+        assert_eq!(DiffPalette::parse(None), DiffPalette::Default);
+        assert_eq!(DiffPalette::parse(Some("rainbow")), DiffPalette::Default);
+        for value in [
+            DiffPalette::Default,
+            DiffPalette::Colorblind,
+            DiffPalette::HighContrast,
+        ] {
+            assert_eq!(DiffPalette::parse(Some(value.as_str())), value);
+        }
     }
 
     #[test]

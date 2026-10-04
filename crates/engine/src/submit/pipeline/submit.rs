@@ -142,6 +142,10 @@ impl Submit {
         if self.edited_resends.is_active(session_id) {
             return SubmissionAcceptance::Ready(false);
         }
+        // Output that already arrived belongs before the submitted user
+        // message. Flush before reading the session too, since a pending
+        // error can settle it.
+        sessions.update(cx, |sessions, cx| sessions.flush(cx));
         if let Some(error) = peers
             .orchestration
             .submission_error(session_id, options.managed, cx)

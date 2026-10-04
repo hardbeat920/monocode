@@ -13,10 +13,18 @@ pub fn working_tree_diff_entry_id(kind: GitFileDiffKind, relative: &str) -> Stri
     format!("{}:{relative}", kind.as_str())
 }
 
-/// Staged entries come first, matching the source control sidebar.
-pub fn working_tree_diff_entries(files: &[GitChangedFile]) -> Vec<WorkingTreeDiffEntry> {
+/// Staged entries come first, matching the source control sidebar. `scope`
+/// keeps only that side, for a review opened from one sidebar section.
+pub fn working_tree_diff_entries(
+    files: &[GitChangedFile],
+    scope: Option<GitFileDiffKind>,
+) -> Vec<WorkingTreeDiffEntry> {
     let mut entries = Vec::new();
-    for kind in [GitFileDiffKind::Staged, GitFileDiffKind::Unstaged] {
+    let kinds = match scope {
+        Some(kind) => vec![kind],
+        None => vec![GitFileDiffKind::Staged, GitFileDiffKind::Unstaged],
+    };
+    for kind in kinds {
         for file in files {
             let included = match kind {
                 GitFileDiffKind::Staged => file.staged,
@@ -94,7 +102,7 @@ mod tests {
 
     #[test]
     fn creates_a_staged_entry_for_a_clean_staged_file() {
-        let entries = working_tree_diff_entries(&[file("a.ts", true, false)]);
+        let entries = working_tree_diff_entries(&[file("a.ts", true, false)], None);
         let ids: Vec<(&str, GitFileDiffKind)> = entries
             .iter()
             .map(|entry| (entry.id.as_str(), entry.kind))
@@ -104,7 +112,7 @@ mod tests {
 
     #[test]
     fn creates_both_comparisons_for_a_partially_staged_file() {
-        let entries = working_tree_diff_entries(&[file("a.ts", true, true)]);
+        let entries = working_tree_diff_entries(&[file("a.ts", true, true)], None);
         let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
         assert_eq!(ids, vec!["staged:a.ts", "unstaged:a.ts"]);
         let labels: Vec<String> = entries.iter().map(working_tree_diff_entry_label).collect();
@@ -112,9 +120,32 @@ mod tests {
     }
 
     #[test]
+    fn keeps_only_the_scoped_side() {
+        let files = [
+            file("a.ts", true, true),
+            file("b.ts", true, false),
+            file("c.ts", false, true),
+        ];
+        let ids = |scope| -> Vec<String> {
+            working_tree_diff_entries(&files, Some(scope))
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect()
+        };
+        assert_eq!(
+            ids(GitFileDiffKind::Unstaged),
+            vec!["unstaged:a.ts", "unstaged:c.ts"]
+        );
+        assert_eq!(
+            ids(GitFileDiffKind::Staged),
+            vec!["staged:a.ts", "staged:b.ts"]
+        );
+    }
+
+    #[test]
     fn focuses_and_prioritizes_the_selected_comparison() {
         let entries =
-            working_tree_diff_entries(&[file("a.ts", true, true), file("b.ts", false, true)]);
+            working_tree_diff_entries(&[file("a.ts", true, true), file("b.ts", false, true)], None);
         assert_eq!(
             working_tree_diff_focus_id(
                 &entries,

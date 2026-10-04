@@ -50,6 +50,8 @@ pub enum IconName {
     CornerDownRight,
     /// Hugeicons `ArrowUp01Icon`.
     ChevronUp,
+    /// Hugeicons `UnfoldMoreIcon`.
+    ChevronsUpDown,
     /// Hugeicons `AlertCircleIcon`.
     CircleAlert,
     /// Hugeicons `CircleDashedIcon`.
@@ -247,6 +249,7 @@ impl IconName {
         Self::ChevronRight,
         Self::CornerDownRight,
         Self::ChevronUp,
+        Self::ChevronsUpDown,
         Self::CircleAlert,
         Self::CircleDashed,
         Self::CircleDot,
@@ -357,6 +360,7 @@ impl IconName {
             Self::ChevronRight => "monocode/icons/chevron-right.svg",
             Self::CornerDownRight => "monocode/icons/corner-down-right.svg",
             Self::ChevronUp => "monocode/icons/chevron-up.svg",
+            Self::ChevronsUpDown => "monocode/icons/chevrons-up-down.svg",
             Self::CircleAlert => "monocode/icons/circle-alert.svg",
             Self::CircleDashed => "monocode/icons/circle-dashed.svg",
             Self::CircleDot => "monocode/icons/circle-dot.svg",
@@ -468,6 +472,7 @@ impl IconName {
             Self::ChevronRight => "ChevronRight",
             Self::CornerDownRight => "CornerDownRight",
             Self::ChevronUp => "ChevronUp",
+            Self::ChevronsUpDown => "ChevronsUpDown",
             Self::CircleAlert => "CircleAlert",
             Self::CircleDashed => "CircleDashed",
             Self::CircleDot => "CircleDot",
@@ -724,7 +729,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_asset() {
-        assert_eq!(IconName::ALL.len(), 105);
+        assert_eq!(IconName::ALL.len(), 106);
         for icon in IconName::ALL {
             let data = crate::Assets.load(icon.path()).unwrap();
             assert!(data.is_some(), "missing {}", icon.path());

@@ -16,7 +16,7 @@ use crate::storage_flags::{read_flag, write_flag};
 
 /// Every localStorage key `AppSettings::from_local_storage` reads: each
 /// `*_KEY` constant in `monocode_core`.
-pub const APP_SETTINGS_KEYS: [&str; 52] = [
+pub const APP_SETTINGS_KEYS: [&str; 53] = [
     // settings.rs
     SECTION_KEY,
     FOLLOW_UP_BEHAVIOR_KEY,
@@ -61,6 +61,7 @@ pub const APP_SETTINGS_KEYS: [&str; 52] = [
     appearance::CHAT_BACKGROUND_BLUR_KEY,
     appearance::NEW_THREAD_BACKGROUND_EFFECT_KEY,
     appearance::CHANGES_VIEW_KEY,
+    appearance::DIFF_PALETTE_KEY,
     appearance::SHOW_EXCLUDED_FILES_KEY,
     appearance::UI_SCALE_KEY,
     // models.rs

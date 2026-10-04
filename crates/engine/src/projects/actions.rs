@@ -349,6 +349,9 @@ pub fn on_worktree_base_change(session_id: &str, base: &str, cx: &mut App) {
 const WAIT_TO_SWITCH: &str = "Wait for this session to finish before changing working copies.";
 const SESSION_CHANGED: &str = "The session changed. Try selecting the working copy again.";
 
+/// Whether a workspace switch that started a worktree move still applies.
+pub type IsCurrent = std::rc::Rc<dyn Fn(&App) -> bool>;
+
 /// `onWorktreeChange`: move a session to another working copy. A session
 /// with a conversation keeps its files and opens a new session in the
 /// target instead.
@@ -357,6 +360,22 @@ pub fn on_worktree_change(
     tree: Worktree,
     cx: &mut App,
 ) -> Task<Result<(), String>> {
+    on_worktree_change_with(session_id, tree, None, cx)
+}
+
+/// `onWorktreeChange` with `isCurrent`. The move checks it between its
+/// steps; once it is false the move stops without an error and changes
+/// nothing, so a superseded workspace switch cannot move the session.
+pub fn on_worktree_change_with(
+    session_id: &str,
+    tree: Worktree,
+    is_current: Option<IsCurrent>,
+    cx: &mut App,
+) -> Task<Result<(), String>> {
+    let is_current: IsCurrent = is_current.unwrap_or_else(|| std::rc::Rc::new(|_: &App| true));
+    if !is_current(cx) {
+        return Task::ready(Ok(()));
+    }
     let Some(sessions) = sessions_entity(cx) else {
         return Task::ready(Err(WAIT_TO_SWITCH.into()));
     };
@@ -407,7 +426,7 @@ pub fn on_worktree_change(
     let id = session_id.to_string();
     let list = list_worktrees(&current.cwd, cx);
     cx.spawn(async move |cx| {
-        let result = switch_worktree(&id, &current, &tree, list, cx).await;
+        let result = switch_worktree(&id, &current, &tree, list, &is_current, cx).await;
         cx.update(|cx| {
             update_sessions(cx, |sessions, _| sessions.end_worktree_switch(&id));
         });
@@ -420,9 +439,14 @@ async fn switch_worktree(
     current: &Session,
     tree: &Worktree,
     list: Task<Result<Worktrees, String>>,
+    is_current: &IsCurrent,
     cx: &mut gpui::AsyncApp,
 ) -> Result<(), String> {
+    let still_current = |cx: &mut gpui::AsyncApp| cx.update(|cx| is_current(cx));
     let listed = list.await?;
+    if !still_current(cx) {
+        return Ok(());
+    }
     let target = listed
         .worktrees
         .into_iter()
@@ -462,9 +486,15 @@ async fn switch_worktree(
     if let Some(flush) = flush {
         flush.await;
     }
+    if !still_current(cx) {
+        return Ok(());
+    }
     for harness in forgets.harness.session_child_harnesses(&source) {
         let forget = cx.update(|cx| forgets.harness.forget_session(harness, id, cx));
         forget.await;
+        if !still_current(cx) {
+            return Ok(());
+        }
     }
     let latest = cx
         .update(|cx| find_session(id, cx))
@@ -491,6 +521,9 @@ async fn switch_worktree(
         if let Some(upsert) = upsert {
             upsert.await?;
         }
+    }
+    if !still_current(cx) {
+        return Ok(());
     }
     cx.update(|cx| {
         let cwd = next.cwd.clone();
@@ -770,6 +803,11 @@ async fn remove_worktree_flow(
 /// `openProjects`: open a run of folders from one plan, in selection order.
 /// The folder chosen last ends up focused.
 pub fn open_projects(paths: &[String], cx: &mut App) {
+    open_project_run(paths, cx);
+}
+
+/// `openProjects`. Returns whether any folder opened.
+fn open_project_run(paths: &[String], cx: &mut App) -> bool {
     let hooks = hooks(cx);
     let inputs = ProjectsGlobal::model_inputs(cx);
     let memory = hooks.project_return_memory(cx);
@@ -785,7 +823,7 @@ pub fn open_projects(paths: &[String], cx: &mut App) {
         paths,
     );
     let Some(last) = steps.last().cloned() else {
-        return;
+        return false;
     };
 
     // After the early return: a dismissed picker hands back no folders, and
@@ -852,11 +890,17 @@ pub fn open_projects(paths: &[String], cx: &mut App) {
     for step in &steps {
         remember_project(step.path(), cx);
     }
+    true
 }
 
-/// `onSelectProject`.
+/// `onSelectProject`: open the project, then restore the workspace (the
+/// worktree) it showed last.
 pub fn on_select_project(path: &str, cx: &mut App) {
-    open_projects(&[path.to_string()], cx);
+    let hooks = hooks(cx);
+    hooks.select_project_workspace(path, cx);
+    if !open_project_run(&[path.to_string()], cx) {
+        hooks.cancel_workspace_navigation(cx);
+    }
 }
 
 /// `onRestoreProject`: bring an archived project back to the rail.

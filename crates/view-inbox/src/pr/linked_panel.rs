@@ -1,15 +1,20 @@
 //! Port of `LinkedWorkItemPanel` from src/features/inbox/ui/InboxView.tsx:
 //! a session's linked GitHub issue or pull request as a closable,
 //! resizable side panel. It shows the cached card at once, refreshes it,
-//! and keeps its data while hidden so showing it again reuses it.
+//! and keeps its data while hidden so showing it again reuses it. The sheet
+//! slides in when the panel mounts visible, and each new body (loading,
+//! error, the item) fades in from the right, as the `linked-panel-slide` and
+//! `linked-panel-reveal` rules in src/styles/index.css do.
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
+    Animation, AnimationExt as _, AppContext as _, Context, ElementId, Entity, EventEmitter,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, Window, div,
 };
 use monocode_ui::widgets::icon_button;
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
@@ -22,6 +27,78 @@ use crate::style::{
 
 const MIN_WIDTH: f32 = 360.;
 const DEFAULT_WIDTH: f32 = 520.;
+
+/// `linked-panel-slide`: 260ms in from the panel's right edge.
+const SLIDE: Duration = Duration::from_millis(260);
+/// `linked-panel-reveal`: 240ms from 12px right and transparent, after a
+/// 90ms delay that holds the start frame (`both` fill).
+const REVEAL_DELAY: Duration = Duration::from_millis(90);
+const REVEAL: Duration = Duration::from_millis(240);
+const REVEAL_SHIFT: f32 = 12.;
+
+/// The `opening` and `revealedKey` state from the TypeScript. The panel
+/// takes its full width up front so the sessions reflow once, and the sheet
+/// slides on an offset. Animating the width instead would rewrap the
+/// transcript and resize terminals on every frame.
+#[derive(Debug, Default)]
+struct PanelMotion {
+    /// When the slide started. `None` once it ends, or when the panel
+    /// mounted hidden or under reduced motion.
+    opening: Option<Instant>,
+    /// The body whose reveal runs, and when it started.
+    revealing: Option<(String, Instant)>,
+    /// The last body whose reveal finished. It does not play again.
+    revealed: Option<String>,
+}
+
+impl PanelMotion {
+    fn new(visible: bool, reduce_motion: bool, now: Instant) -> Self {
+        Self {
+            opening: (visible && !reduce_motion).then_some(now),
+            ..Self::default()
+        }
+    }
+
+    /// Whether the slide still runs. A finished slide stops for good, as
+    /// `onAnimationEnd` clearing `opening` does.
+    fn sliding(&mut self, now: Instant) -> bool {
+        if self
+            .opening
+            .is_some_and(|start| now.duration_since(start) >= SLIDE)
+        {
+            self.opening = None;
+        }
+        self.opening.is_some()
+    }
+
+    /// Hiding the panel ends the slide. A reveal that had not finished
+    /// plays again when the panel shows, as a CSS animation restarts.
+    fn hide(&mut self) {
+        self.opening = None;
+        self.revealing = None;
+    }
+
+    /// Whether the body keyed `key` plays its reveal on this frame.
+    fn reveals(&mut self, key: &str, reduce_motion: bool, now: Instant) -> bool {
+        if reduce_motion || self.revealed.as_deref() == Some(key) {
+            return false;
+        }
+        match &self.revealing {
+            Some((current, start)) if current == key => {
+                if now.duration_since(*start) < REVEAL_DELAY + REVEAL {
+                    return true;
+                }
+                self.revealed = Some(key.to_string());
+                self.revealing = None;
+                false
+            }
+            _ => {
+                self.revealing = Some((key.to_string(), now));
+                true
+            }
+        }
+    }
+}
 
 thread_local! {
     /// `rememberedLinkedPanelWidth`.
@@ -53,6 +130,8 @@ pub struct LinkedWorkItemPanel {
     loading: bool,
     detail: Option<(Entity<InboxDetailView>, Subscription)>,
     resize: PaneResize,
+    motion: PanelMotion,
+    animate: bool,
     _load: Option<Task<()>>,
 }
 
@@ -76,6 +155,7 @@ impl LinkedWorkItemPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let width = REMEMBERED_WIDTH.with(Cell::get);
+        let motion = PanelMotion::new(props.visible, cx.reduce_motion(), Instant::now());
         let mut panel = Self {
             services,
             target,
@@ -85,6 +165,8 @@ impl LinkedWorkItemPanel {
             loading: true,
             detail: None,
             resize: PaneResize::new(width, DEFAULT_WIDTH, MIN_WIDTH, ResizeEdge::Left),
+            motion,
+            animate: true,
             _load: None,
         };
         panel.load(window, cx);
@@ -115,6 +197,9 @@ impl LinkedWorkItemPanel {
             return;
         }
         self.props.visible = visible;
+        if !visible {
+            self.motion.hide();
+        }
         self.push_detail_props(cx);
         cx.notify();
     }
@@ -129,6 +214,26 @@ impl LinkedWorkItemPanel {
 
     pub fn visible(&self) -> bool {
         self.props.visible
+    }
+
+    /// Turns the slide and reveal off, for screenshots.
+    pub fn set_animate(&mut self, animate: bool, cx: &mut Context<Self>) {
+        self.animate = animate;
+        if !animate {
+            self.motion.hide();
+        }
+        cx.notify();
+    }
+
+    /// `contentKey`: which body shows, so a new one plays its reveal.
+    fn content_key(&self) -> String {
+        if let Some(item) = &self.item {
+            format!("{:?}:{}:{}", item.kind, item.repo, item.number)
+        } else if self.error.is_some() {
+            "error".into()
+        } else {
+            "loading".into()
+        }
     }
 
     /// The close button.
@@ -226,6 +331,13 @@ impl Render for LinkedWorkItemPanel {
         let narrow = f32::from(window.viewport_size().width) / scale <= 950.;
         let max = Self::max_width(window, scale);
         let width = self.resize.width.min(max);
+        let now = Instant::now();
+        let sliding = self.motion.sliding(now);
+        let content_key = self.content_key();
+        let reveal = self
+            .motion
+            .reveals(&content_key, !self.animate || cx.reduce_motion(), now);
+        let ease = theme.motion.ease_out;
         let body = if let Some((detail, _)) = &self.detail {
             div()
                 .flex_1()
@@ -287,8 +399,6 @@ impl Render for LinkedWorkItemPanel {
             .min_h_0()
             .w(u(width))
             .max_w_full()
-            .border_l_1()
-            .border_color(theme.colors.stroke)
             .text_color(theme.colors.content)
             .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
@@ -323,6 +433,62 @@ impl Render for LinkedWorkItemPanel {
         if narrow {
             aside = aside.absolute().top_0().bottom_0().right_0().shadow_2xl();
         }
+        if sliding {
+            aside = aside.overflow_hidden();
+        }
+        // The animators also run after a motion ends, so the element ids,
+        // and with them the detail's element state, stay put.
+        let content = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .child(body)
+            .with_animations(
+                ElementId::Name(SharedString::from(format!(
+                    "linked-panel-reveal-{content_key}"
+                ))),
+                vec![
+                    Animation::new(REVEAL_DELAY),
+                    Animation::new(REVEAL).with_easing(ease.easing()),
+                ],
+                move |content, step, t| {
+                    if !reveal {
+                        return content;
+                    }
+                    let t = if step == 0 { 0. } else { t };
+                    content.opacity(t).left(u(REVEAL_SHIFT * (1. - t)))
+                },
+            );
+        let sheet = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .border_l_1()
+            .border_color(theme.colors.stroke)
+            .child(content)
+            .child(
+                div().absolute().top(u(5.)).right(u(8.)).child(
+                    icon_button("linked-close", IconName::PanelLeft)
+                        .tooltip(format!("Close {kind} panel"))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(LinkedPanelEvent::Close))),
+                ),
+            )
+            .with_animation(
+                "linked-panel-slide",
+                Animation::new(SLIDE).with_easing(ease.easing()),
+                move |sheet, t| {
+                    if sliding {
+                        sheet.left(u(width * (1. - t)))
+                    } else {
+                        sheet
+                    }
+                },
+            );
         aside
             .child(
                 resize_handle(
@@ -345,14 +511,66 @@ impl Render for LinkedWorkItemPanel {
                     }),
                 ),
             )
-            .child(body)
-            .child(
-                div().absolute().top(u(5.)).right(u(8.)).child(
-                    icon_button("linked-close", IconName::PanelLeft)
-                        .tooltip(format!("Close {kind} panel"))
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(LinkedPanelEvent::Close))),
-                ),
-            )
+            .child(sheet)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn slides_once_when_mounted_visible_with_motion() {
+        let start = Instant::now();
+        let mut motion = PanelMotion::new(true, false, start);
+        assert!(motion.sliding(start));
+        assert!(motion.sliding(start + 259 * MS));
+        assert!(!motion.sliding(start + SLIDE));
+        assert!(!motion.sliding(start));
+        assert!(!PanelMotion::new(false, false, start).sliding(start));
+        assert!(!PanelMotion::new(true, true, start).sliding(start));
+    }
+
+    #[test]
+    fn hiding_ends_the_slide_for_good() {
+        let start = Instant::now();
+        let mut motion = PanelMotion::new(true, false, start);
+        motion.hide();
+        assert!(!motion.sliding(start + MS));
+    }
+
+    #[test]
+    fn reveals_each_new_body_once_after_its_delay() {
+        let start = Instant::now();
+        let mut motion = PanelMotion::default();
+        assert!(motion.reveals("loading", false, start));
+        assert!(motion.reveals("loading", false, start + 329 * MS));
+        assert!(!motion.reveals("loading", false, start + REVEAL_DELAY + REVEAL));
+        assert!(!motion.reveals("loading", false, start + 400 * MS));
+
+        let later = start + 500 * MS;
+        assert!(motion.reveals("Pr:acme/web:157", false, later));
+        assert!(!motion.reveals("Pr:acme/web:157", false, later + 330 * MS));
+        assert!(!motion.reveals("Pr:acme/web:157", false, later + 900 * MS));
+    }
+
+    #[test]
+    fn skips_the_reveal_under_reduced_motion() {
+        let mut motion = PanelMotion::default();
+        assert!(!motion.reveals("loading", true, Instant::now()));
+    }
+
+    #[test]
+    fn replays_an_unfinished_reveal_after_hiding() {
+        let start = Instant::now();
+        let mut motion = PanelMotion::default();
+        assert!(motion.reveals("loading", false, start));
+        motion.hide();
+        let shown = start + 1000 * MS;
+        assert!(motion.reveals("loading", false, shown));
+        assert!(motion.reveals("loading", false, shown + 100 * MS));
     }
 }

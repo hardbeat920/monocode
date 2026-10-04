@@ -566,6 +566,11 @@ impl OpenCodeAdapter {
             });
             live.client.abort_session(&live.open_code_session_id).await;
             live.client.close_events(session_id).await;
+        } else {
+            // A stream or server that ended on its own already dropped
+            // `live`, but the stream's watcher and pump task still hold it
+            // until the stream is closed.
+            let _ = self.inner.children.close_harness_sse(session_id).await;
         }
         self.inner.children.unwatch_child(session_id);
         let _ = self.inner.children.kill_child(session_id).await;

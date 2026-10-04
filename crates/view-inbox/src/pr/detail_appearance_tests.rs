@@ -1,6 +1,6 @@
 use super::*;
 use gpui::TestAppContext;
-use monocode_ui::{AppearanceSettings, ThemePreference, set_appearance};
+use monocode_ui::{AppearanceSettings, DiffPalette, ThemePreference, set_appearance};
 
 use crate::data::{Loadable, PrDiff, PrFile};
 use crate::fixtures::{FakeDetail, FakeServices, NOW};
@@ -110,4 +110,30 @@ fn cached_inbox_pr_diff_follows_appearance_without_reloading_or_resetting_expans
         })
         .unwrap();
     assert_eq!(*data.calls.borrow(), calls);
+}
+
+#[gpui::test]
+fn pr_diff_theme_follows_the_diff_palette(cx: &mut TestAppContext) {
+    let palette_theme = |diff_palette, cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            set_appearance(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Dark,
+                    diff_palette,
+                    ..Default::default()
+                },
+                cx,
+            );
+            let colors = monocode_ui::Theme::of(cx).colors;
+            (editor_theme(cx), colors)
+        })
+    };
+    cx.update(crate::tests::init);
+    let (default, _) = palette_theme(DiffPalette::Default, cx);
+    let (colorblind, colors) = palette_theme(DiffPalette::Colorblind, cx);
+    assert_eq!(colorblind.diff_added_number, colors.diff_add_fg);
+    assert_eq!(colorblind.diff_deleted_number, colors.diff_del_fg);
+    assert_eq!(colorblind.diff_added_row, colors.diff_add_bg);
+    assert_eq!(colorblind.diff_deleted_gutter, colors.diff_del_gutter);
+    assert_ne!(colorblind.diff_added_number, default.diff_added_number);
 }

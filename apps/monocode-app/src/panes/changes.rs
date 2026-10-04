@@ -65,6 +65,14 @@ impl Selection {
     }
 }
 
+/// The layout's copy of the panel's diff side.
+fn layout_kind(kind: monocode_view_scm::GitFileDiffKind) -> GitFileDiffKind {
+    match kind {
+        monocode_view_scm::GitFileDiffKind::Staged => GitFileDiffKind::Staged,
+        monocode_view_scm::GitFileDiffKind::Unstaged => GitFileDiffKind::Unstaged,
+    }
+}
+
 impl Changes {
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.cwd != self.workspace.read(cx).git_cwd(cx) {
@@ -112,15 +120,13 @@ impl Changes {
             };
             workspace.update(cx, |workspace, cx| match event {
                 ChangesPanelEvent::OpenFile { path, kind, pin } => {
-                    let kind = match kind {
-                        monocode_view_scm::GitFileDiffKind::Staged => GitFileDiffKind::Staged,
-                        monocode_view_scm::GitFileDiffKind::Unstaged => GitFileDiffKind::Unstaged,
-                    };
                     workspace
-                        .open_working_tree_diff(path, Some(kind), *pin, cx)
+                        .open_working_tree_diff(path, Some(layout_kind(*kind)), *pin, cx)
                         .detach();
                 }
-                ChangesPanelEvent::OpenAllChanges => workspace.open_all_changes(cx),
+                ChangesPanelEvent::OpenAllChanges { kind } => {
+                    workspace.open_all_changes(Some(layout_kind(*kind)), cx)
+                }
                 ChangesPanelEvent::OpenCommit { commit, pin } => workspace.open_commit(
                     CommitTabSource::new(&commit.sha, &commit.short_sha, &commit.subject),
                     *pin,

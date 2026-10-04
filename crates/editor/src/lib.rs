@@ -34,7 +34,7 @@ pub use diff_view::{
 };
 pub use image_view::ImageView;
 pub use pdf_view::PdfView;
-pub use theme::{ColorScheme, EditorTheme, SyntaxPalette};
+pub use theme::{ColorScheme, DiffColors, EditorTheme, SyntaxPalette};
 
 /// Bind the editor keys.
 pub fn init(cx: &mut gpui::App) {

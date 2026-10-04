@@ -110,6 +110,7 @@ impl TranscriptView {
                     .id(eid(&row.key, "metrics"))
                     .flex()
                     .flex_none()
+                    .ml(u(3.))
                     .rounded(u(6.))
                     .p(u(4.))
                     .hover(|s| s.bg(theme.content(0.08)))

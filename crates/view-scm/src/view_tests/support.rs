@@ -315,6 +315,8 @@ pub struct Recorded {
     pub alerts: Rc<RefCell<Vec<String>>>,
     pub urls: Rc<RefCell<Vec<String>>>,
     pub files_changed: Rc<RefCell<usize>>,
+    /// The paths of each watched-file invalidation, `None` for all files.
+    pub changed_paths: Rc<RefCell<Vec<Option<Vec<String>>>>>,
     pub pr_content_calls: Rc<RefCell<usize>>,
 }
 
@@ -323,6 +325,7 @@ impl Recorded {
         let alerts = self.alerts.clone();
         let urls = self.urls.clone();
         let files = self.files_changed.clone();
+        let changed = self.changed_paths.clone();
         let pr_calls = self.pr_content_calls.clone();
         ScmHooks {
             confirm: Some(Rc::new(|_, _, _| Task::ready(true))),
@@ -332,7 +335,10 @@ impl Recorded {
             open_url: Some(Rc::new(move |url, _| {
                 urls.borrow_mut().push(url.to_string())
             })),
-            files_changed: Some(Rc::new(move |_, _| *files.borrow_mut() += 1)),
+            files_changed: Some(Rc::new(move |paths, _| {
+                *files.borrow_mut() += 1;
+                changed.borrow_mut().push(paths.map(|paths| paths.to_vec()));
+            })),
             generate_pr_content: Some(Rc::new(move |_, _| {
                 *pr_calls.borrow_mut() += 1;
                 Task::ready(Ok(None))

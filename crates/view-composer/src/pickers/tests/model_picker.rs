@@ -2,7 +2,9 @@
 
 use std::rc::Rc;
 
-use gpui::{AnyView, AppContext as _, Entity, TestAppContext, VisualTestContext, px};
+use gpui::{
+    AnyView, AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext, px,
+};
 use monocode_core::models::{
     AgentModel, ModelCatalog, ModelPickerTab, ModelPrefs, ModelProvider, ModelSetting,
     ModelSettingChoice, ModelSettingKind,
@@ -689,6 +691,8 @@ fn opens_the_model_list_directly_when_settings_live_beside_the_picker(cx: &mut T
     click(cx, "model-picker-trigger");
     assert!(!exists(cx, "model-menu"));
     assert!(exists(cx, "model-option-Composer 2.5"));
+    // Search takes focus once the flyout is on screen.
+    assert!(search_focused(&f, cx));
     click(cx, "model-option-Composer 2.5");
     assert_eq!(
         f.changes.all(),
@@ -832,4 +836,117 @@ fn escape_closes_the_menu_and_restores_focus(cx: &mut TestAppContext) {
     );
     keys(cx, "left escape");
     assert!(!f.picker.read_with(cx, |p, _| p.is_open()));
+}
+
+fn search_focused(f: &Fixture, cx: &mut VisualTestContext) -> bool {
+    let search = f.picker.read_with(cx, |picker, _| picker.search.clone());
+    cx.update(|window, cx| search.read(cx).focus_handle(cx).is_focused(window))
+}
+
+#[gpui::test]
+fn focuses_the_model_search_when_the_models_submenu_opens(cx: &mut TestAppContext) {
+    let (f, cx) = mount(
+        cx,
+        props(HarnessId::Cursor, "cursor:composer-2.5", &[]),
+        composer_catalog(),
+        ModelPrefs::default(),
+        false,
+    );
+    click(cx, "model-picker-trigger");
+    assert!(!search_focused(&f, cx));
+    hover(cx, "model-menu-model");
+    assert!(exists(cx, "model-search"));
+    assert!(search_focused(&f, cx));
+}
+
+fn codex_efforts() -> ModelCatalog {
+    let mut catalog = ModelCatalog::new();
+    catalog.set_harness_models(
+        HarnessId::Codex,
+        vec![with_settings(
+            model("codex:gpt-5.6", HarnessId::Codex, "GPT-5.6", "gpt-5.6"),
+            vec![setting(
+                "reasoningEffort",
+                "Reasoning",
+                ModelSettingKind::Select,
+                "high",
+                &[
+                    ("low", "Low"),
+                    ("high", "High"),
+                    ("max", "Max"),
+                    ("ultra", "Ultra"),
+                ],
+            )],
+        )],
+    );
+    catalog
+}
+
+#[gpui::test]
+fn shimmers_only_codex_max_and_ultra_effort_options(cx: &mut TestAppContext) {
+    let (_f, cx) = mount(
+        cx,
+        props(
+            HarnessId::Codex,
+            "codex:gpt-5.6",
+            &[("reasoningEffort", "high")],
+        ),
+        codex_efforts(),
+        ModelPrefs::default(),
+        false,
+    );
+    click(cx, "model-picker-trigger");
+    hover(cx, "model-menu-reasoningEffort");
+    hover(cx, "model-setting-option-High");
+    assert!(!exists(cx, "model-effort-reasoningEffort-high-tiles"));
+    hover(cx, "model-setting-option-Max");
+    assert!(exists(cx, "model-effort-reasoningEffort-max-tiles"));
+    assert!(!exists(cx, "model-effort-reasoningEffort-ultra-tiles"));
+    hover(cx, "model-setting-option-Ultra");
+    assert!(exists(cx, "model-effort-reasoningEffort-ultra-tiles"));
+    assert!(!exists(cx, "model-effort-reasoningEffort-max-tiles"));
+}
+
+#[gpui::test]
+fn shimmers_the_max_effort_in_the_beside_picker_pill(cx: &mut TestAppContext) {
+    let (_f, cx) = mount(
+        cx,
+        beside(props(
+            HarnessId::Codex,
+            "codex:gpt-5.6",
+            &[("reasoningEffort", "high")],
+        )),
+        codex_efforts(),
+        ModelPrefs::default(),
+        true,
+    );
+    click(cx, "model-pill-reasoningEffort");
+    hover(cx, "model-pill-option-reasoningEffort-Max");
+    assert!(exists(cx, "model-pill-effort-reasoningEffort-max-tiles"));
+    hover(cx, "model-pill-option-reasoningEffort-Low");
+    assert!(!exists(cx, "model-pill-effort-reasoningEffort-max-tiles"));
+    assert!(!exists(cx, "model-pill-effort-reasoningEffort-low-tiles"));
+}
+
+#[gpui::test]
+fn keeps_a_long_model_name_whole_on_the_trigger(cx: &mut TestAppContext) {
+    let mut catalog = ModelCatalog::new();
+    catalog.set_harness_models(
+        HarnessId::Cursor,
+        vec![model(
+            "cursor:long",
+            HarnessId::Cursor,
+            "Composer 2.5 Extended Thinking Preview",
+            "long",
+        )],
+    );
+    let (_f, cx) = mount(
+        cx,
+        beside(props(HarnessId::Cursor, "cursor:long", &[])),
+        catalog,
+        ModelPrefs::default(),
+        false,
+    );
+    // The old `max-w-40` cap truncated this name at 160px.
+    assert!(bounds(cx, "model-picker-trigger").size.width > px(200.));
 }

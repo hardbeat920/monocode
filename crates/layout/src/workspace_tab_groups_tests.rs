@@ -875,3 +875,83 @@ fn swaps_a_contiguous_slice_of_ids() {
     assert!(!is_groupable_project(Some("~")));
     assert!(!is_groupable_project(None));
 }
+
+// worktree tab scope
+
+fn worktree_sessions() -> Vec<Session> {
+    let main = session("main", "/repo");
+    let mut feature = session("feature", "/repo");
+    feature.worktree_cwd = Some("/trees/a".into());
+    vec![main, feature]
+}
+
+#[test]
+fn places_a_session_tab_in_its_working_copy() {
+    let sessions = worktree_sessions();
+    assert_eq!(
+        workspace_tab_worktree(&tab("t1", "main"), &sessions).as_deref(),
+        Some("/repo")
+    );
+    assert_eq!(
+        workspace_tab_worktree(&tab("t2", "feature"), &sessions).as_deref(),
+        Some("/trees/a")
+    );
+}
+
+#[test]
+fn shows_a_tab_only_in_its_own_worktree() {
+    let sessions = worktree_sessions();
+    assert!(tab_in_worktree(&tab("t1", "main"), &sessions, "/repo"));
+    assert!(!tab_in_worktree(&tab("t1", "main"), &sessions, "/trees/a"));
+    assert!(!tab_in_worktree(&tab("t2", "feature"), &sessions, "/repo"));
+    assert!(tab_in_worktree(
+        &tab("t2", "feature"),
+        &sessions,
+        "/trees/a"
+    ));
+}
+
+#[test]
+fn shows_tabs_without_a_working_copy_everywhere() {
+    let sessions = worktree_sessions();
+    assert!(tab_in_worktree(
+        &tab("t3", "unknown"),
+        &sessions,
+        "/trees/a"
+    ));
+}
+
+#[test]
+fn closes_to_a_tab_in_the_same_worktree_or_keeps_the_last_one() {
+    let mut sessions = worktree_sessions();
+    let mut other = session("other", "/repo");
+    other.worktree_cwd = Some("/trees/a".into());
+    sessions.push(other);
+    let tabs = vec![tab("t1", "main"), tab("t2", "feature"), tab("t3", "other")];
+    let worktree_of = |entry: &WorkspaceTab| workspace_tab_worktree(entry, &sessions);
+    assert_eq!(
+        plan_workspace_tab_close_in(
+            &tabs,
+            &sessions,
+            "t2",
+            WorkspaceTabCloseScope::Project,
+            Some(&worktree_of)
+        ),
+        close_to("t3")
+    );
+    assert_eq!(
+        plan_workspace_tab_close_in(
+            &tabs,
+            &sessions,
+            "t1",
+            WorkspaceTabCloseScope::Project,
+            Some(&worktree_of)
+        ),
+        WorkspaceTabClosePlan::Keep
+    );
+    // Without `worktree_of` the project is the only scope.
+    assert_eq!(
+        plan_workspace_tab_close(&tabs, &sessions, "t1", WorkspaceTabCloseScope::Project),
+        close_to("t2")
+    );
+}

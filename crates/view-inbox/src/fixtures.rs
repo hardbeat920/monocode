@@ -373,7 +373,12 @@ impl InboxServices for FakeServices {
         self.now
     }
 
-    fn open_detail(&self, item: &InboxItem, _: &mut App) -> Rc<dyn InboxDetailData> {
+    fn open_detail(
+        &self,
+        item: &InboxItem,
+        fetch: DetailFetch,
+        _: &mut App,
+    ) -> Rc<dyn InboxDetailData> {
         let mut state = self.state.borrow_mut();
         let detail = state
             .details
@@ -389,7 +394,10 @@ impl InboxServices for FakeServices {
                 )
             })
             .clone();
-        state.calls.push(format!("open_detail #{}", item.number));
+        state.calls.push(match fetch {
+            DetailFetch::Live => format!("open_detail #{}", item.number),
+            DetailFetch::ReuseRecent => format!("open_detail #{} reusing recent", item.number),
+        });
         Rc::new(detail)
     }
 

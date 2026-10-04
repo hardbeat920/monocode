@@ -645,6 +645,18 @@ pub struct InboxDetailState {
     pub action_notice: Option<String>,
 }
 
+/// How an item's detail pane fetches GitHub data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailFetch {
+    /// Always fetch, so the Inbox page's refresh stays live.
+    #[default]
+    Live,
+    /// Reuse a description, thread, or diff fetched within
+    /// `GITHUB_WORK_ITEM_FRESH_MS`. The linked side panel often opens right
+    /// after a hover prefetch.
+    ReuseRecent,
+}
+
 /// One item's detail data. The engine's `InboxItemDetail` implements it.
 pub trait InboxDetailData {
     fn subscribe(&self, listener: Listener, cx: &mut App) -> Subscription;
@@ -653,7 +665,8 @@ pub trait InboxDetailData {
     fn set_item(&self, item: InboxItem, cx: &mut App);
     /// The pane's `revision`: reload the description, thread, and open diff.
     fn set_revision(&self, revision: u64, cx: &mut App);
-    /// The Code tab is showing: load the diff with full files or hunks.
+    /// The diff is wanted (the Code tab, or the side panel's Summary tab,
+    /// which lists changed files): load it with full files or hunks.
     fn show_diff(&self, full_file: bool, cx: &mut App);
     fn set_reply_to(&self, reply_to: Option<InboxReplyTarget>, cx: &mut App);
     /// `postComment`.
@@ -707,7 +720,12 @@ pub trait InboxServices {
     fn now_ms(&self) -> i64;
 
     /// Data for one item's detail pane.
-    fn open_detail(&self, item: &InboxItem, cx: &mut App) -> Rc<dyn InboxDetailData>;
+    fn open_detail(
+        &self,
+        item: &InboxItem,
+        fetch: DetailFetch,
+        cx: &mut App,
+    ) -> Rc<dyn InboxDetailData>;
 
     /// Data for one pull request's checks.
     fn open_pr_checks(&self, params: PrChecksParams, cx: &mut App) -> Rc<dyn PrChecksData>;

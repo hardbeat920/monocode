@@ -55,7 +55,10 @@ pub enum ChangesPanelEvent {
         kind: GitFileDiffKind,
         pin: bool,
     },
-    OpenAllChanges,
+    /// Open All Changes from one section: a review of only that side.
+    OpenAllChanges {
+        kind: GitFileDiffKind,
+    },
     OpenCommit {
         commit: GitHistoryCommit,
         pin: bool,
@@ -532,6 +535,45 @@ impl GitChangesPanel {
                 cx.notify();
             });
         }));
+    }
+
+    /// `runFolder`: stage or unstage every change under one folder in a
+    /// single git call. `relative` is the folder's path in the repo.
+    pub fn run_folder(
+        &mut self,
+        relative: String,
+        action: FileAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy.is_some() || action == FileAction::Discard {
+            return;
+        }
+        let prefix = format!("{relative}/");
+        let paths: Vec<String> = self
+            .files()
+            .iter()
+            .filter(|file| file.relative.starts_with(&prefix))
+            .map(|file| file.path.clone())
+            .collect();
+        self.busy = Some(Busy::Folder(action, relative.clone()));
+        let cwd = self.cwd.clone();
+        let call = self.scm.run(cx, move |git| match action {
+            FileAction::Unstage => git.git_unstage_file(&cwd, &relative),
+            _ => git.git_stage_file(&cwd, &relative),
+        });
+        self.action = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = call.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) => this.on_mutated(Some(paths), cx),
+                    Err(error) => this.scm.hooks.alert(error, window, cx),
+                }
+                this.busy = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     /// `runAll`: stage, unstage, or discard every file.
@@ -1602,7 +1644,11 @@ impl GitChangesPanel {
                     "staged-open-all",
                     IconName::FileDiff,
                     "Open All Changes",
-                    cx.listener(|_, _, _, cx| cx.emit(ChangesPanelEvent::OpenAllChanges)),
+                    cx.listener(|_, _, _, cx| {
+                        cx.emit(ChangesPanelEvent::OpenAllChanges {
+                            kind: GitFileDiffKind::Staged,
+                        })
+                    }),
                 ),
                 section_action(
                     "staged-unstage-all",
@@ -1640,7 +1686,11 @@ impl GitChangesPanel {
                     "changes-open-all",
                     IconName::FileDiff,
                     "Open All Changes",
-                    cx.listener(|_, _, _, cx| cx.emit(ChangesPanelEvent::OpenAllChanges)),
+                    cx.listener(|_, _, _, cx| {
+                        cx.emit(ChangesPanelEvent::OpenAllChanges {
+                            kind: GitFileDiffKind::Unstaged,
+                        })
+                    }),
                 ),
                 section_action(
                     "changes-discard-all",
@@ -1809,7 +1859,7 @@ impl GitChangesPanel {
             let key = format!("{}:{}", kind.as_str(), child.path);
             let open = !collapsed.contains(&key);
             rows.push(
-                self.render_dir_row(child, depth, key, open, theme, cx)
+                self.render_dir_row(child, depth, kind, key, open, theme, cx)
                     .into_any_element(),
             );
             if open {
@@ -1824,11 +1874,13 @@ impl GitChangesPanel {
         }
     }
 
-    /// `ChangeDirRow`.
+    /// `ChangeDirRow`: the folder toggle, then its stage or unstage action.
+    #[allow(clippy::too_many_arguments)]
     fn render_dir_row(
         &mut self,
         dir: &ChangeDir,
         depth: usize,
+        kind: GitFileDiffKind,
         key: String,
         open: bool,
         theme: &Theme,
@@ -1839,18 +1891,13 @@ impl GitChangesPanel {
             None => theme.content(0.40),
         };
         let id: SharedString = format!("dir-{key}").into();
-        div()
-            .id(id)
+        let toggle = div()
+            .id(SharedString::from(format!("toggle-{key}")))
             .flex()
-            .flex_none()
-            .h(u(28.))
-            .w_full()
+            .min_w_0()
+            .flex_1()
             .items_center()
             .gap(u(6.))
-            .pl(u(8. + depth as f32 * 12.))
-            .pr(u(8.))
-            .text_color(theme.colors.content)
-            .hover(|s| s.bg(theme.content(0.05)))
             .tooltip(tooltip(dir.path.clone()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_dir(key.clone(), cx)))
             .child(
@@ -1879,7 +1926,71 @@ impl GitChangesPanel {
                     .text_px(13.)
                     .medium()
                     .child(dir.name.clone()),
+            );
+
+        // Shown while hovered, from entity state like the file rows.
+        let staged = kind == GitFileDiffKind::Staged;
+        let action = if staged {
+            FileAction::Unstage
+        } else {
+            FileAction::Stage
+        };
+        let title = format!(
+            "{} Changes in {}",
+            if staged { "Unstage" } else { "Stage" },
+            dir.path
+        );
+        let target = dir.path.clone();
+        let mut actions = div().flex_none().items_center();
+        actions = if self.hovered_row.as_ref() == Some(&id) {
+            actions.flex()
+        } else {
+            actions.hidden()
+        };
+        actions = actions.child(
+            icon_action(
+                SharedString::from(format!("folder-action-{id}")),
+                if staged {
+                    IconName::Minus
+                } else {
+                    IconName::Plus
+                },
+                title,
             )
+            .disabled(self.busy.is_some())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_folder(target.clone(), action, window, cx)
+            })),
+        );
+
+        let hover_id = id.clone();
+        div()
+            .id(id)
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                let next = if *hovered {
+                    Some(hover_id.clone())
+                } else if this.hovered_row.as_ref() == Some(&hover_id) {
+                    None
+                } else {
+                    this.hovered_row.clone()
+                };
+                if next != this.hovered_row {
+                    this.hovered_row = next;
+                    cx.notify();
+                }
+            }))
+            .flex()
+            .flex_none()
+            .h(u(28.))
+            .w_full()
+            .items_center()
+            .gap(u(4.))
+            .pl(u(8. + depth as f32 * 12.))
+            .pr(u(8.))
+            .text_color(theme.colors.content)
+            .hover(|s| s.bg(theme.content(0.05)))
+            .child(toggle)
+            .child(actions)
             .child(
                 div()
                     .flex()
@@ -1913,7 +2024,8 @@ impl GitChangesPanel {
             self.selected_kind,
             kind,
         );
-        let busy = self.busy == Some(Busy::File(file.relative.clone()));
+        // No two git mutations run at once, so any action disables the row's.
+        let busy = self.busy.is_some();
         let row_id: SharedString = format!("{}:{}", kind.as_str(), file.relative).into();
         let open_file = file.clone();
         let mut label = div()

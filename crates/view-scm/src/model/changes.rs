@@ -18,6 +18,8 @@ pub enum Busy {
     File(String),
     /// `runAll`.
     All(FileAction),
+    /// `runFolder`: stage or unstage one folder, keyed by its `relative` path.
+    Folder(FileAction, String),
     Generate,
     Commit,
     Pr,

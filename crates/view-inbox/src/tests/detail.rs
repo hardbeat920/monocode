@@ -597,3 +597,132 @@ fn keeps_fetched_data_mounted_while_hidden_and_reuses_it_when_shown_again(cx: &m
     assert_eq!(first, second);
     assert_eq!(lookups(&services), before);
 }
+
+// The linked side panel's overview (InboxView.tsx `panel` mode).
+
+fn two_file_diff() -> PrDiff {
+    PrDiff {
+        additions: 2,
+        deletions: 2,
+        files: vec![
+            PrFile {
+                path: "first.txt".into(),
+                additions: 1,
+                deletions: 1,
+            },
+            PrFile {
+                path: "src/second.txt".into(),
+                additions: 1,
+                deletions: 1,
+            },
+        ],
+        patch: "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before\n+after\ndiff --git a/src/second.txt b/src/second.txt\n--- a/src/second.txt\n+++ b/src/second.txt\n@@ -1 +1 @@\n-old\n+new\n".into(),
+        truncated: false,
+    }
+}
+
+fn panel_data(services: &FakeServices, diff: Loadable<PrDiff>) -> FakeDetail {
+    let data = FakeDetail::new(
+        pr(),
+        InboxDetailState {
+            details: Loadable::ready(WorkItemDetails {
+                body: "## Summary\n\n- Retries once\n\n![shot](https://x.dev/a.png)".into(),
+                author: "maya".into(),
+                ..Default::default()
+            }),
+            thread: Loadable::ready(WorkItemThread {
+                comments: vec![WorkItemComment {
+                    id: "c1".into(),
+                    kind: "comment".into(),
+                    author: "maya".into(),
+                    body: "Can we handle concurrent retries?".into(),
+                    created_at: "2026-09-11T07:00:00Z".into(),
+                    ..Default::default()
+                }],
+                commits: vec![WorkItemCommit {
+                    oid: "abc1234def".into(),
+                    message_headline: "Retry once".into(),
+                    author: "maya".into(),
+                    committed_date: "2026-09-11T07:30:00Z".into(),
+                    url: "https://github.com/acme/web/commit/abc1234def".into(),
+                }],
+                ..Default::default()
+            }),
+            diff,
+            ..Default::default()
+        },
+    );
+    services
+        .state
+        .borrow_mut()
+        .details
+        .insert(157, data.clone());
+    data
+}
+
+#[gpui::test]
+fn the_panel_summary_waits_for_the_diff_and_opens_a_picked_file(cx: &mut TestAppContext) {
+    let services = FakeServices::new(NOW);
+    let data = panel_data(&services, Loadable::loading());
+    let h = mount(cx, services.clone(), pr(), props(DetailMode::Panel));
+    assert!(
+        services
+            .calls()
+            .contains(&"open_detail #157 reusing recent".to_string())
+    );
+    assert!(data.calls.borrow().contains(&"show_diff false".to_string()));
+    assert!(h.view.read_with(h.cx, |view, _| view.overview_settling()));
+
+    h.cx.update(|_, cx| data.update(|state| state.diff = Loadable::ready(two_file_diff()), cx));
+    draw(h.cx);
+    h.view.read_with(h.cx, |view, _| {
+        assert!(!view.overview_settling());
+        assert_eq!(view.code_tab_count(), Some(2));
+        assert!(!view.description_expanded());
+    });
+
+    h.cx.update(|window, cx| {
+        h.view.update(cx, |view, cx| {
+            view.open_code(Some("src/second.txt".into()), window, cx)
+        })
+    });
+    draw(h.cx);
+    let expanded = h.view.read_with(h.cx, |view, cx| {
+        assert_eq!(view.tab(), DetailTab::Code);
+        assert_eq!(view.focus_path(), Some("src/second.txt"));
+        view.diff_view().unwrap().read(cx).expanded_files().clone()
+    });
+    assert_eq!(expanded, [0, 1].into());
+
+    // Back on the Summary, "View all" opens the Code tab with no focus.
+    h.cx.update(|window, cx| {
+        h.view.update(cx, |view, cx| {
+            view.set_tab(DetailTab::Summary, window, cx);
+            view.open_code(None, window, cx);
+        })
+    });
+    draw(h.cx);
+    let expanded = h.view.read_with(h.cx, |view, cx| {
+        assert_eq!(view.focus_path(), None);
+        view.diff_view().unwrap().read(cx).expanded_files().clone()
+    });
+    assert_eq!(expanded, [0].into());
+}
+
+#[gpui::test]
+fn the_inbox_summary_skips_the_diff_and_the_file_count(cx: &mut TestAppContext) {
+    let services = FakeServices::new(NOW);
+    let data = panel_data(&services, Loadable::loading());
+    let h = mount(cx, services.clone(), pr(), props(DetailMode::Inbox));
+    assert!(services.calls().contains(&"open_detail #157".to_string()));
+    assert!(
+        data.calls
+            .borrow()
+            .iter()
+            .all(|call| !call.starts_with("show_diff"))
+    );
+    h.view.read_with(h.cx, |view, _| {
+        assert!(!view.overview_settling());
+        assert_eq!(view.code_tab_count(), None);
+    });
+}

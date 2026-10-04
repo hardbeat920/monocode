@@ -61,6 +61,8 @@ pub struct SessionPane {
     revealed_search: Option<(String, String)>,
     focused: bool,
     workspace: WeakEntity<Workspace>,
+    /// A workspace switch is moving this session (`workspaceSwitchingSessionId`).
+    workspace_switching: bool,
     opening: bool,
     changes: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -250,6 +252,17 @@ impl SessionPane {
         });
         let review = Engine::global(cx).review.clone();
         let search_reveals = crate::adapters::search::SearchReveals::entity(cx);
+        // The composer is disabled while a workspace switch is pending.
+        let switching = workspace.upgrade().map(|workspace| {
+            cx.observe_in(&workspace, window, |this, workspace, window, cx| {
+                let switching = workspace.read(cx).switching_session_id(cx).as_deref()
+                    == Some(this.session_id.as_str());
+                if this.workspace_switching != switching {
+                    this.workspace_switching = switching;
+                    this.sync_composer(window, cx);
+                }
+            })
+        });
         let mut subscriptions = vec![
             cx.subscribe_in(&transcript, window, Self::on_transcript_event),
             cx.subscribe_in(&composer, window, Self::on_composer_event),
@@ -268,6 +281,7 @@ impl SessionPane {
                 this.reveal_search_target(cx);
             }),
         ];
+        subscriptions.extend(switching);
         if let Some(sheet) = &btw_sheet {
             subscriptions.push(cx.subscribe_in(
                 sheet,
@@ -312,6 +326,7 @@ impl SessionPane {
             revealed_search: None,
             focused: false,
             workspace,
+            workspace_switching: false,
             opening: false,
             changes: None,
             _subscriptions: subscriptions,
@@ -479,6 +494,7 @@ impl SessionPane {
     fn sync_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.centered = self.should_center(cx);
         let mut props = composer_props(self.session.as_deref(), self.focused && self.visible, cx);
+        props.disabled |= self.workspace_switching;
         props.enabled = self.visible;
         props.shell = self.centered;
         if self.composer.read(cx).props() != &props {

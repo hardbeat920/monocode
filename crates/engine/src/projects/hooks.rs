@@ -92,6 +92,14 @@ pub trait ProjectsHooks {
     /// `setComposerFocused`.
     fn set_composer_focused(&self, _focused: bool, _cx: &mut App) {}
 
+    /// `workspaceNavigation.selectProject`: the project rail is about to
+    /// open `path`. Once its landing tab shows, the workspace returns to the
+    /// worktree it showed last in that project.
+    fn select_project_workspace(&self, _path: &str, _cx: &mut App) {}
+
+    /// `workspaceNavigation.cancel`: drop a pending workspace switch.
+    fn cancel_workspace_navigation(&self, _cx: &mut App) {}
+
     /// Close the full pages (search, inbox, notes, automations) before a
     /// project opens.
     fn close_pages(&self, _cx: &mut App) {}

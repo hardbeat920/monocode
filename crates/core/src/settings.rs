@@ -404,6 +404,12 @@ pub fn settings_index(platform: Platform) -> Vec<SettingsEntry> {
     index.extend([
         entry("theme", S::Appearance, "Theme", "dark light system appearance mode"),
         entry("accent-color", S::Appearance, "Accent color", "highlight bubble send button tint"),
+        entry(
+            "diff-colors",
+            S::Appearance,
+            "Diff colors",
+            "colorblind color blind accessibility added removed red green blue orange high contrast changes",
+        ),
         entry("hue", S::Appearance, "Hue", "tint color chrome"),
         entry("saturation", S::Appearance, "Saturation", "tint color neutral grey gray"),
         entry("dark-lightness", S::Appearance, "Dark-mode lightness", "black brightness contrast background"),
@@ -425,6 +431,8 @@ pub fn settings_index(platform: Platform) -> Vec<SettingsEntry> {
         entry("empty-session-games", S::Chat, "Empty session games", "pacman snake arcade grid fun"),
         entry("agent-clis", S::Providers, "Agent CLIs", "codex opencode cursor grok pi omp fx hermes antigravity binary path"),
         entry("provider-accounts", S::Providers, "Provider accounts", "account sign in login rename remove delete credentials profile usage limit quota exhausted"),
+        entry("show-remaining-usage", S::Providers, "Show remaining usage", "usage limit meter bar left used quota percent"),
+        entry("mask-emails", S::Providers, "Mask account emails", "email privacy blur hide screenshot account"),
         entry("claude-hooks", S::Providers, "Claude Code hooks", "pretooluse settings.json block command notification"),
         entry("project-notifications", S::Inbox, "Project notifications", "mute resume sounds banners reminders categories"),
         entry("github", S::Inbox, "GitHub", "gh cli connect pull request sign in"),

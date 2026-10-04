@@ -16,6 +16,7 @@ pub mod link_preview;
 pub mod markdown_document;
 pub mod markdown_mode;
 pub mod note_card;
+pub mod particle_text;
 pub mod plan_preview;
 pub mod prompt_outline;
 pub mod prompt_outline_model;
@@ -41,6 +42,7 @@ pub use markdown_mode::{
     markdown_view_shell, set_markdown_mode,
 };
 pub use note_card::{NoteCard, NoteProject, note_card};
+pub use particle_text::{ParticleText, particle_text};
 pub use plan_preview::{PlanPreview, plan_preview};
 pub use prompt_outline::{PromptOutline, PromptOutlineEvent, jump_to_prompt};
 pub use question_form::{QuestionForm, QuestionFormEvent};

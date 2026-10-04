@@ -147,28 +147,40 @@ pub fn format_locale_date_time(ms: i64) -> String {
     )
 }
 
-/// `UsageMeter`: "5h · 2h" over "58% left" and a 4px bar of what remains.
+/// `UsageMeter`: "5h · 2h" over the used percent and a 4px bar of what is
+/// used. With `show_remaining` on, "58% left" and a bar of what remains.
 pub fn usage_meter(
     id: impl Into<ElementId>,
     title: &str,
     window: &RateLimitWindow,
     now: i64,
     width: MeterWidth,
+    show_remaining: bool,
     cx: &App,
 ) -> AnyElement {
     let theme = Theme::of(cx);
     let pct = clamp_used_percent(window.used_percent);
     let remaining = 100.0 - pct;
+    let shown = if show_remaining { remaining } else { pct };
     let full = pct >= 100.0 && window.resets_at.is_none_or(|resets_at| resets_at > now);
     let reset = match window.resets_at {
         None => format_window_label(window.window_minutes),
         Some(resets_at) if resets_at <= now => "reset due".into(),
         Some(resets_at) => format_reset_duration(resets_at - now),
     };
-    let left = format!("{} left", format_usage_percent(remaining));
-    let aria = format!("{title} limit remaining");
-    let value_now = monocode_core::js::round(remaining) as i64;
-    let fill_selector = format!("fill:{aria}={}", css_percent(remaining));
+    let left = if show_remaining {
+        format!("{} left", format_usage_percent(remaining))
+    } else if full {
+        "Full".into()
+    } else {
+        format_usage_percent(pct)
+    };
+    let aria = format!(
+        "{title} limit {}",
+        if show_remaining { "remaining" } else { "used" }
+    );
+    let value_now = monocode_core::js::round(shown) as i64;
+    let fill_selector = format!("fill:{aria}={}", css_percent(shown));
     let bar_selector = format!("progressbar:{aria}={value_now}");
     let mut meter = div().id(id).flex().flex_col();
     meter = match width {
@@ -216,7 +228,7 @@ pub fn usage_meter(
                 .child(
                     div()
                         .h_full()
-                        .w(relative((remaining / 100.0) as f32))
+                        .w(relative((shown / 100.0) as f32))
                         .rounded_full()
                         .bg(bar_color(pct, cx))
                         .debug_selector(move || fill_selector),
@@ -255,6 +267,7 @@ pub fn account_usage_meters(
     id: impl Into<ElementId>,
     limits: Option<&ProviderRateLimits>,
     now: i64,
+    show_remaining: bool,
     window: &Window,
     cx: &App,
 ) -> Option<AnyElement> {
@@ -285,21 +298,30 @@ pub fn account_usage_meters(
     }
     Some(
         row.children(windows.into_iter().map(|(title, window)| {
-            usage_meter(child(title), title, &window, now, MeterWidth::Fixed, cx)
+            usage_meter(
+                child(title),
+                title,
+                &window,
+                now,
+                MeterWidth::Fixed,
+                show_remaining,
+                cx,
+            )
         }))
         .into_any_element(),
     )
 }
 
-/// `ProviderAccountSubtitle`: "Pro · email" with the email masked until
-/// clicked, or `fallback` when the identity has neither. `color` and `size`
-/// are the className the caller passed.
+/// `ProviderAccountSubtitle`: "Pro · email", or `fallback` when the identity
+/// has neither. With `mask_emails` on, the email stays masked until clicked.
+/// `color` and `size` are the className the caller passed.
 pub fn provider_account_subtitle(
     id: impl Into<ElementId>,
     identity: Option<&ProviderAccountIdentity>,
     fallback: Option<&str>,
     color: Hsla,
     size: Option<f32>,
+    mask_emails: bool,
 ) -> Option<AnyElement> {
     let plan = identity.and_then(|identity| identity.plan.clone());
     let email = identity.and_then(|identity| identity.email.clone());
@@ -337,6 +359,7 @@ pub fn provider_account_subtitle(
             el.child(private_email(
                 ElementId::NamedChild(std::sync::Arc::new(id), email.clone().into()),
                 email,
+                mask_emails,
             ))
         })
         .into_any_element(),

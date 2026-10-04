@@ -10,6 +10,7 @@ use super::*;
 use crate::settings::binary_control::BinaryControl;
 use crate::settings::providers::ProvidersSection;
 use crate::settings::store::PROVIDER_BINARY_PATHS_KEY;
+use monocode_settings::display_prefs::{MASK_EMAILS_KEY, SHOW_REMAINING_USAGE_KEY};
 
 const LINUX: Platform = Platform::Linux;
 
@@ -258,4 +259,36 @@ fn sets_the_global_default_provider_and_hides_a_provider(cx: &mut TestAppContext
         setup.kv.get_item(HIDDEN_PICKER_PROVIDERS_KEY).as_deref(),
         Some(r#"["claude"]"#)
     );
+}
+
+#[gpui::test]
+fn offers_remaining_usage_and_email_masking_as_opt_ins(cx: &mut TestAppContext) {
+    let setup = Setup::new(LINUX);
+    let (page, cx) = mount(cx, SettingsSectionId::Providers, &setup);
+    let section = section(&page, cx);
+    let prefs = |cx: &mut VisualTestContext| {
+        section.read_with(cx, |section, _| {
+            (section.show_remaining_usage(), section.mask_emails())
+        })
+    };
+    assert!(exists(cx, "setting-id:show-remaining-usage"));
+    assert!(exists(cx, "setting-id:mask-emails"));
+    assert_eq!(prefs(cx), (false, false));
+    assert_eq!(setup.kv.get_item(SHOW_REMAINING_USAGE_KEY), None);
+    assert_eq!(setup.kv.get_item(MASK_EMAILS_KEY), None);
+
+    click(cx, "switch:Show remaining usage");
+    click(cx, "switch:Mask account emails");
+    assert_eq!(prefs(cx), (true, true));
+    assert_eq!(
+        setup.kv.get_item(SHOW_REMAINING_USAGE_KEY).as_deref(),
+        Some("1")
+    );
+    assert_eq!(setup.kv.get_item(MASK_EMAILS_KEY).as_deref(), Some("1"));
+
+    // Another window turning them off moves these switches too.
+    setup.kv.set_item(SHOW_REMAINING_USAGE_KEY, "0");
+    setup.kv.set_item(MASK_EMAILS_KEY, "0");
+    cx.run_until_parked();
+    assert_eq!(prefs(cx), (false, false));
 }

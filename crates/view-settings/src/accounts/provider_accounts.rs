@@ -544,6 +544,7 @@ impl ProviderAccountsSettings {
             Some(fallback),
             theme.content(0.30),
             None,
+            self.host.mask_emails(cx),
         );
         let icon_button = |id: String, label: String, title: &'static str| {
             let selector = format!("button:{label}");
@@ -668,6 +669,7 @@ impl ProviderAccountsSettings {
                 SharedString::from(format!("meters-{row_id}")),
                 limits.as_ref(),
                 self.now,
+                self.host.show_remaining_usage(cx),
                 window,
                 cx,
             ))

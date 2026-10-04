@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyWindowHandle, AppContext as _, Context, Entity, HeadlessAppContext, IntoElement, Modifiers,
     MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, PlatformInput, Point, Render,
@@ -308,4 +309,82 @@ fn navigating_to_a_folded_result_opens_its_fold() {
             cx
         ))
     ));
+}
+
+/// A pane that can be hidden and resized, like a pooled session tab.
+struct Pane {
+    transcript: Entity<TranscriptView>,
+    width: gpui::Pixels,
+    shown: bool,
+}
+
+impl Render for Pane {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(self.width)
+            .h_full()
+            .when(self.shown, |el| el.child(self.transcript.clone()))
+    }
+}
+
+#[test]
+fn remeasures_prompt_corners_when_a_pooled_tab_is_shown_at_a_new_width() {
+    let _guard = serial();
+    let mut cx = app();
+    let session = Arc::new(session(vec![user(
+        "prompt",
+        "A prompt that fits one wide line",
+    )]));
+    let window = cx
+        .open_window(size(px(800.), px(700.)), move |_, cx| {
+            let transcript = cx.new(|cx| {
+                let mut view = TranscriptView::new(cx);
+                view.set_config(TranscriptConfig::default(), cx);
+                view.set_session(session, cx);
+                view
+            });
+            cx.new(|_| Pane {
+                transcript,
+                width: px(800.),
+                shown: true,
+            })
+        })
+        .expect("open window");
+    let transcript = cx
+        .read_window(&window, |pane, cx| pane.read(cx).transcript.clone())
+        .expect("pane");
+    draw(&mut cx, window);
+    let single_line = |cx: &mut HeadlessAppContext| {
+        cx.update(|cx| transcript.read(cx).prompt_is_single_line("prompt"))
+    };
+    assert_eq!(single_line(&mut cx), Some(true));
+
+    // Hidden, then shown again in a narrower pane: the same prompt wraps,
+    // and the first frame back measures it at the new width.
+    let show_at = |cx: &mut HeadlessAppContext, width: f32| {
+        window
+            .update(cx, |pane, _, cx| {
+                pane.shown = false;
+                cx.notify();
+            })
+            .expect("hide");
+        draw(cx, window);
+        window
+            .update(cx, |pane, _, cx| {
+                pane.width = px(width);
+                pane.shown = true;
+                cx.notify();
+            })
+            .expect("show");
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear();
+        })
+        .expect("draw");
+    };
+    show_at(&mut cx, 300.);
+    assert_eq!(single_line(&mut cx), Some(false));
+
+    // And back to one line when the pane widens again.
+    show_at(&mut cx, 800.);
+    assert_eq!(single_line(&mut cx), Some(true));
 }

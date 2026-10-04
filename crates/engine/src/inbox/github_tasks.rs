@@ -22,6 +22,10 @@ pub use monocode_core::inbox::compose_inbox_message;
 /// `INBOX_CACHE_FRESH_MS`.
 pub const INBOX_CACHE_FRESH_MS: i64 = 30_000;
 
+/// `GITHUB_WORK_ITEM_FRESH_MS`: work item views can reuse a description,
+/// thread, or diff fetched this recently instead of fetching again.
+pub const GITHUB_WORK_ITEM_FRESH_MS: i64 = INBOX_CACHE_FRESH_MS;
+
 /// `INBOX_ALL_LIMIT`: closed history competes for the same slots, so an
 /// unfiltered fetch needs the wider page.
 pub const INBOX_ALL_LIMIT: u32 = 100;

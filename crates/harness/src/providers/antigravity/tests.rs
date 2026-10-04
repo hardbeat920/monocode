@@ -1162,13 +1162,24 @@ fn queues_a_different_cwd_send_without_interrupting_the_running_turn() {
         flush().await;
         // The eager path must not tear down the live turn for another cwd.
         assert!(h.wire.kills.lock().is_empty());
-        finish_prompt(&h);
+        // Arm the mock and reset the log before the first prompt settles. The
+        // queued send runs on executor threads as soon as the reply lands,
+        // so it can write its own session/new and session/prompt before this
+        // thread wakes from `first.await`. The TypeScript ran both on one
+        // thread and could do this after.
+        let prompt = h.wire.last_outbound("session/prompt").unwrap();
+        h.mock.auto_prompt.store(true, Ordering::SeqCst);
+        h.wire.clear_sent();
+        let stop = h.mock.prompt_stop.lock().clone();
+        h.wire.reply(
+            &prompt.session,
+            &prompt.message["id"],
+            json!({ "stopReason": stop }),
+        );
         first.await.unwrap();
         assert!(contains(&events, json!({ "type": "message.completed" })));
         // Once it owns the turn, the queued send recycles onto its own cwd:
         // a moved cwd drops the resume binding and starts a fresh session.
-        h.mock.auto_prompt.store(true, Ordering::SeqCst);
-        h.wire.clear_sent();
         second.await.unwrap();
         assert_eq!(h.wire.spawn_count(), 2);
         assert!(h.wire.count("session/new") > 0);

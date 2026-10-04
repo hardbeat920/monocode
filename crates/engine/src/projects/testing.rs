@@ -476,6 +476,14 @@ impl ProjectsHooks for TestHooks {
         self.state.borrow_mut().pages_closed += 1;
     }
 
+    fn select_project_workspace(&self, path: &str, _cx: &mut App) {
+        self.log(format!("select_project_workspace({path})"));
+    }
+
+    fn cancel_workspace_navigation(&self, _cx: &mut App) {
+        self.log("cancel_workspace_navigation".into());
+    }
+
     fn session_project_changed(&self, session_id: &str, cwd: &str, _cx: &mut App) {
         self.log(format!("session_project_changed({session_id}, {cwd})"));
     }

@@ -138,6 +138,11 @@ pub fn save_chat_background_scope(kv: &Kv, value: ChatBackgroundScope) {
     kv.set_item(CHAT_BACKGROUND_SCOPE_KEY, value.as_str());
 }
 
+/// `saveDiffPalette`.
+pub fn save_diff_palette(kv: &Kv, value: DiffPalette) {
+    kv.set_item(DIFF_PALETTE_KEY, value.as_str());
+}
+
 /// `saveTranscriptLayout`.
 pub fn save_transcript_layout(kv: &Kv, value: TranscriptLayout) {
     kv.set_item(TRANSCRIPT_LAYOUT_KEY, value.as_str());
@@ -180,6 +185,7 @@ pub fn ui_appearance(settings: &AppearanceSettings) -> monocode_ui::AppearanceSe
         chat_background_session_opacity: settings.chat_background_session_opacity as f32,
         chat_background_blur: settings.chat_background_blur as f32,
         ui_scale: settings.ui_scale as f32,
+        diff_palette: monocode_ui::DiffPalette::parse(Some(settings.diff_palette.as_str())),
     }
     .normalized()
 }

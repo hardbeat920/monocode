@@ -1327,3 +1327,56 @@ fn registers_once_with_every_optional_capability() {
     .unwrap_err();
     assert_eq!(error.to_string(), "Git context is not available");
 }
+
+#[test]
+fn closes_an_event_stream_that_ended_on_its_own_when_the_session_stops() {
+    smol::block_on(async {
+        let h = Harness::new();
+        let done = h.start_turn().await;
+        h.host.sse_end(THREAD, Some("stream closed"));
+        let _ = done.await;
+        h.host.clear_sse_closes_and_kills();
+
+        h.adapter.stop_session(THREAD.into()).await.unwrap();
+        assert_eq!(h.host.sse_closes(), [THREAD]);
+        assert_eq!(h.host.watched_streams(), 0);
+    });
+}
+
+#[test]
+fn closes_the_event_stream_after_the_server_exits_on_its_own() {
+    smol::block_on(async {
+        let h = Harness::new();
+        let done = h.start_turn().await;
+        h.host.exit(THREAD, Some(1));
+        assert_eq!(
+            done.await.unwrap_err().to_string(),
+            "OpenCode server exited"
+        );
+        assert!(
+            h.events()
+                .contains(&HarnessEvent::SessionEnded { code: Some(1) })
+        );
+
+        h.adapter.stop_session(THREAD.into()).await.unwrap();
+        assert_eq!(h.host.sse_closes(), [THREAD]);
+        assert_eq!(h.host.kills(), [THREAD]);
+        assert_eq!(h.host.watched_streams(), 0);
+    });
+}
+
+#[test]
+fn still_kills_the_child_when_closing_an_ended_stream_fails() {
+    smol::block_on(async {
+        let h = Harness::new();
+        let done = h.start_turn().await;
+        h.host.sse_end(THREAD, Some("stream closed"));
+        assert_eq!(done.await.unwrap_err().to_string(), "stream closed");
+        h.host.clear_sse_closes_and_kills();
+        h.host.fail_next_sse_close("SSE close failed");
+
+        h.adapter.stop_session(THREAD.into()).await.unwrap();
+        assert_eq!(h.host.sse_closes(), [THREAD]);
+        assert_eq!(h.host.kills(), [THREAD]);
+    });
+}

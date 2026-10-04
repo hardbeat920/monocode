@@ -670,9 +670,10 @@ impl UsageProviderChip {
         let label = self.provider_label();
         let loading = self.loading();
         let disconnected = limits.status == RateLimitStatus::Unavailable;
+        let show_remaining = self.host.show_remaining_usage(cx);
         let tooltip_text = windows
             .iter()
-            .map(|(_, window)| rate_limit_window_tooltip(window, now))
+            .map(|(_, window)| rate_limit_window_tooltip(window, now, show_remaining))
             .collect::<Vec<_>>()
             .join(" · ");
         let title = if !tooltip_text.is_empty() {
@@ -711,9 +712,14 @@ impl UsageProviderChip {
                 if index > 0 {
                     list = list.child(div().text_color(theme.content(0.25)).child("·"));
                 }
+                let pct = if show_remaining {
+                    100.0 - clamp_used_percent(window.used_percent)
+                } else {
+                    window.used_percent
+                };
                 list = list.child(text(format!(
                     "{} {}",
-                    format_usage_percent(window.used_percent),
+                    format_usage_percent(pct),
                     format_rate_limit_window_chip_label(window, now)
                 )));
             }
@@ -730,7 +736,9 @@ impl UsageProviderChip {
                             .text_color(theme.content(0.45)),
                     )
                 })
-                .when_some(tightest, |el, pct| el.child(mini_bar(pct, cx)))
+                .when_some(tightest, |el, pct| {
+                    el.child(mini_bar(pct, show_remaining, cx))
+                })
                 .child(list)
                 .into_any_element()
         };
@@ -822,6 +830,7 @@ impl UsageProviderChip {
         let limits = self.props.limits.clone();
         let now = self.props.now;
         let windows = usage_windows(&limits);
+        let show_remaining = self.host.show_remaining_usage(cx);
         let header = self.render_header(label, cx);
         let mut body = div().flex().flex_col().child(header);
         if limits.status == RateLimitStatus::Error && !windows.is_empty() {
@@ -843,13 +852,11 @@ impl UsageProviderChip {
         body = if windows.is_empty() {
             body.child(empty_usage_state(&limits, self.loading(), cx))
         } else {
-            body.child(
-                div().flex().flex_col().gap(u(6.)).children(
-                    windows
-                        .iter()
-                        .map(|(kind, window)| usage_window_card(*kind, window, now, cx)),
-                ),
-            )
+            body.child(div().flex().flex_col().gap(u(6.)).children(
+                windows.iter().map(|(kind, window)| {
+                    usage_window_card(*kind, window, now, show_remaining, cx)
+                }),
+            ))
         };
         // `SwitchSuggestion`.
         let active_status = account_status(Some(&limits), now);
@@ -988,6 +995,7 @@ impl UsageProviderChip {
             None,
             theme.content(0.35),
             None,
+            self.host.mask_emails(cx),
         );
         let hover_fill = theme.content(0.10);
         let selector = format!("button:Switch {label} account");
@@ -1501,6 +1509,8 @@ impl UsageProviderChip {
     fn render_account_picker(&self, label: &str, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let now = self.props.now;
+        let show_remaining = self.host.show_remaining_usage(cx);
+        let mask_emails = self.host.mask_emails(cx);
         let mut rows = div().mt(u(8.)).flex().flex_col().gap(u(4.));
         for account in &self.props.accounts {
             let selected = Some(&account.id) == self.props.account_id.as_ref();
@@ -1526,6 +1536,7 @@ impl UsageProviderChip {
                 None,
                 theme.content(0.35),
                 Some(10.),
+                mask_emails,
             );
             let status_el = div()
                 .map(|el| {
@@ -1554,6 +1565,7 @@ impl UsageProviderChip {
                             window,
                             now,
                             MeterWidth::Flex,
+                            show_remaining,
                             cx,
                         )
                     }))
@@ -1869,12 +1881,13 @@ fn back_header(
         .into_any_element()
 }
 
-/// `MiniBar`: what remains of the tightest window.
-fn mini_bar(used_pct: f64, cx: &App) -> AnyElement {
+/// `MiniBar`: what is used of the tightest window, or what remains of it
+/// with `show_remaining` on.
+fn mini_bar(used_pct: f64, show_remaining: bool, cx: &App) -> AnyElement {
     let theme = Theme::of(cx);
     let pct = clamp_used_percent(used_pct);
-    let remaining = 100.0 - pct;
-    let selector = format!("minibar={}", css_percent(remaining));
+    let shown = if show_remaining { 100.0 - pct } else { pct };
+    let selector = format!("minibar={}", css_percent(shown));
     div()
         .flex_none()
         .h(u(4.))
@@ -1885,7 +1898,7 @@ fn mini_bar(used_pct: f64, cx: &App) -> AnyElement {
         .child(
             div()
                 .h_full()
-                .w(relative((remaining / 100.0) as f32))
+                .w(relative((shown / 100.0) as f32))
                 .rounded_full()
                 .bg(bar_color(pct, cx))
                 .debug_selector(move || selector),
@@ -1893,16 +1906,33 @@ fn mini_bar(used_pct: f64, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// `UsageWindowCard`.
-fn usage_window_card(kind: WindowKind, window: &RateLimitWindow, now: i64, cx: &App) -> AnyElement {
+/// `UsageWindowCard`: the used percent over a bar of what is used, or the
+/// remaining percent over a bar of what remains with `show_remaining` on.
+fn usage_window_card(
+    kind: WindowKind,
+    window: &RateLimitWindow,
+    now: i64,
+    show_remaining: bool,
+    cx: &App,
+) -> AnyElement {
     let theme = Theme::of(cx);
     let pct = clamp_used_percent(window.used_percent);
     let remaining = 100.0 - pct;
+    let (shown, other) = if show_remaining {
+        (remaining, pct)
+    } else {
+        (pct, remaining)
+    };
+    let (shown_word, other_word) = if show_remaining {
+        ("remaining", "used")
+    } else {
+        ("used", "remaining")
+    };
     let title = window_title(kind);
-    let aria = format!("{title} remaining");
-    let value_now = monocode_core::js::round(remaining) as i64;
+    let aria = format!("{title} {shown_word}");
+    let value_now = monocode_core::js::round(shown) as i64;
     let bar_selector = format!("progressbar:{aria}={value_now}");
-    let fill_selector = format!("fill:{aria}={}", css_percent(remaining));
+    let fill_selector = format!("fill:{aria}={}", css_percent(shown));
     let reset = match window.resets_at {
         None => format!("{} window", format_window_label(window.window_minutes)),
         Some(resets_at) => format_reset_countdown(resets_at - now),
@@ -1935,7 +1965,7 @@ fn usage_window_card(kind: WindowKind, window: &RateLimitWindow, now: i64, cx: &
                         .text_color(theme.content(0.65)),
                 )
                 .child(
-                    text(format!("{} used", format_usage_percent(pct)))
+                    text(format!("{} {shown_word}", format_usage_percent(shown)))
                         .flex_none()
                         .text_px(11.)
                         .medium()
@@ -1953,7 +1983,7 @@ fn usage_window_card(kind: WindowKind, window: &RateLimitWindow, now: i64, cx: &
                 .child(
                     div()
                         .h_full()
-                        .w(relative((remaining / 100.0) as f32))
+                        .w(relative((shown / 100.0) as f32))
                         .rounded_full()
                         .bg(bar_color(pct, cx))
                         .debug_selector(move || fill_selector),
@@ -1969,7 +1999,7 @@ fn usage_window_card(kind: WindowKind, window: &RateLimitWindow, now: i64, cx: &
                 .text_px(10.)
                 .line_height(u(16.))
                 .text_color(theme.content(0.40))
-                .child(text(format!("{value_now}% remaining")).tabular())
+                .child(text(format!("{} {other_word}", format_usage_percent(other))).tabular())
                 .child(reset_el),
         )
         .into_any_element()

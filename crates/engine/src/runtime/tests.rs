@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::engine::Engine;
 use super::harness_flush::{BACKGROUND_FLUSH, FRAME_FLUSH, FlushKind};
-use super::hooks::{EngineHooks, HarnessHooks, OrchestrationHooks};
+use super::hooks::{AttentionHooks, EngineHooks, HarnessHooks, OrchestrationHooks};
 use super::in_flight::{INTERRUPT_MESSAGE, mark_turn_interrupted};
 use super::lifecycle::{Lifecycle, QuitMode, persist_quit_state};
 use super::sessions::{
@@ -95,11 +95,38 @@ impl OrchestrationHooks for RunningLeads {
     }
 }
 
+/// The unseen finished set and the Live Agents setting, as the attention
+/// package would report them.
+struct UnseenSessions {
+    unseen: RefCell<HashSet<String>>,
+    live_agents: std::cell::Cell<bool>,
+}
+
+impl Default for UnseenSessions {
+    fn default() -> Self {
+        Self {
+            unseen: RefCell::default(),
+            live_agents: std::cell::Cell::new(true),
+        }
+    }
+}
+
+impl AttentionHooks for UnseenSessions {
+    fn unseen_finished_ids(&self, _cx: &App) -> HashSet<String> {
+        self.unseen.borrow().clone()
+    }
+
+    fn live_agents_enabled(&self, _cx: &App) -> bool {
+        self.live_agents.get()
+    }
+}
+
 struct Harness {
     backend: Arc<FakeBackend>,
     workspace: Rc<TestWorkspace>,
     harness: Rc<RecordingHarness>,
     leads: Rc<RunningLeads>,
+    attention: Rc<UnseenSessions>,
     sessions: Entity<Sessions>,
     lifecycle: Entity<Lifecycle>,
     events: Rc<RefCell<Vec<SessionsEvent>>>,
@@ -116,10 +143,12 @@ fn setup_with(cx: &mut TestAppContext, live_harness: bool) -> Harness {
         ..RecordingHarness::default()
     });
     let leads = Rc::new(RunningLeads::default());
+    let attention = Rc::new(UnseenSessions::default());
     let hooks = EngineHooks {
         workspace: workspace.clone(),
         harness: harness.clone(),
         orchestration: leads.clone(),
+        attention: attention.clone(),
         ..EngineHooks::default()
     };
     let backend = init_test_engine_with(cx, hooks);
@@ -137,6 +166,7 @@ fn setup_with(cx: &mut TestAppContext, live_harness: bool) -> Harness {
         workspace,
         harness,
         leads,
+        attention,
         sessions,
         lifecycle,
         events,
@@ -624,6 +654,74 @@ fn keeps_inbox_asks_workers_and_opening_sessions_attached(cx: &mut TestAppContex
     assert!(t.harness.calls().is_empty());
 }
 
+/// useIdleSessionDetach.test.ts: a finished worker stays with its lead, then
+/// saves and lets its child go once the lead closes.
+#[gpui::test]
+fn retains_finished_workers_until_their_lead_closes(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    t.tabs(&["lead"]);
+    let worker = Session {
+        orchestration_lead_id: Some("lead".into()),
+        ..chat("worker")
+    };
+    t.open(cx, vec![chat("lead"), worker]);
+    cx.executor().advance_clock(SESSION_DETACH_DELAY);
+    assert_eq!(
+        t.sessions.read_with(cx, |state, _| state.ids()),
+        vec!["lead", "worker"]
+    );
+    assert!(t.harness.calls().is_empty());
+
+    t.tabs(&[]);
+    t.sessions.update(cx, |state, cx| state.schedule_detach(cx));
+    cx.executor().advance_clock(SESSION_DETACH_DELAY);
+    assert!(t.sessions.read_with(cx, |state, _| state.ids()).is_empty());
+    t.sessions.read_with(cx, |state, _| {
+        assert!(state.loaded_cache().contains("worker"))
+    });
+    assert_eq!(
+        t.harness.calls(),
+        vec!["forget cursor lead", "forget cursor worker"]
+    );
+}
+
+#[gpui::test]
+fn keeps_unseen_finished_chats_until_they_are_seen(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    t.tabs(&["visible"]);
+    t.attention.unseen.borrow_mut().insert("done".into());
+    t.open(cx, vec![chat("visible"), chat("done")]);
+    cx.executor().advance_clock(SESSION_DETACH_DELAY);
+    assert_eq!(
+        t.sessions.read_with(cx, |state, _| state.ids()),
+        vec!["visible", "done"]
+    );
+
+    // Seen: it detaches like any hidden idle chat.
+    t.attention.unseen.borrow_mut().clear();
+    t.sessions.update(cx, |state, cx| state.schedule_detach(cx));
+    cx.executor().advance_clock(SESSION_DETACH_DELAY);
+    assert_eq!(
+        t.sessions.read_with(cx, |state, _| state.ids()),
+        vec!["visible"]
+    );
+    assert_eq!(t.harness.calls(), vec!["forget cursor done"]);
+}
+
+#[gpui::test]
+fn does_not_keep_unseen_chats_with_live_agents_off(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    t.tabs(&["visible"]);
+    t.attention.live_agents.set(false);
+    t.attention.unseen.borrow_mut().insert("done".into());
+    t.open(cx, vec![chat("visible"), chat("done")]);
+    cx.executor().advance_clock(SESSION_DETACH_DELAY);
+    assert_eq!(
+        t.sessions.read_with(cx, |state, _| state.ids()),
+        vec!["visible"]
+    );
+}
+
 // Loading (`loadStoredSession`, `ensureOpenSession`, prefetch).
 
 #[gpui::test]
@@ -750,6 +848,66 @@ async fn loading_a_claude_session_restores_bare_shell_rows(cx: &mut TestAppConte
     assert_eq!(t.count("session_upsert"), 1);
     let saved = t.backend.record("s1").unwrap();
     assert_eq!(saved.blocks[1]["text"], json!(session.blocks[1].text));
+}
+
+/// A saved Codex session holding one bare "Shell" row whose preview kept the
+/// command (sessionStoreRestore.test.ts).
+#[cfg(feature = "package-deps")]
+fn codex_shell_session() -> Session {
+    let mut stored = Session {
+        harness: HarnessId::Codex,
+        provider_session_id: Some("01a0e6f4-13e3-7692-9250-4befceed807b".into()),
+        ..chat("s1")
+    };
+    stored.blocks.push(Block {
+        tool: Some(BlockTool {
+            call_id: Some("exec-1".into()),
+            kind: Some("execute".into()),
+            title: Some("Shell".into()),
+            status: Some("completed".into()),
+            preview: Some(monocode_core::block::ToolPreview {
+                title: Some("rg --files -g AGENTS.md -g '!node_modules'".into()),
+                ..monocode_core::block::ToolPreview::new(
+                    monocode_core::block::ToolPreviewKind::Shell,
+                )
+            }),
+            ..BlockTool::default()
+        }),
+        ..Block::new("b1", BlockRole::Tool, "Shell")
+    });
+    stored
+}
+
+/// sessionStoreRestore.test.ts: "still returns the repaired session when the
+/// write fails".
+#[cfg(feature = "package-deps")]
+#[gpui::test]
+async fn a_codex_shell_repair_survives_a_failed_write(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    t.backend.insert_session(&codex_shell_session());
+    t.backend.set_failing("session_upsert", true);
+    let open = t
+        .sessions
+        .update(cx, |state, cx| state.ensure_open("s1", cx));
+    let session = open.await.unwrap();
+    assert_eq!(session.blocks[1].text, "Find files");
+}
+
+/// sessionStoreRestore.test.ts: "persists the repair when the write
+/// succeeds".
+#[cfg(feature = "package-deps")]
+#[gpui::test]
+async fn loading_a_codex_session_relabels_bare_shell_rows(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    t.backend.insert_session(&codex_shell_session());
+    let open = t
+        .sessions
+        .update(cx, |state, cx| state.ensure_open("s1", cx));
+    let session = open.await.unwrap();
+    assert_eq!(session.blocks[1].text, "Find files");
+    assert_eq!(t.count("session_upsert"), 1);
+    let saved = t.backend.record("s1").unwrap();
+    assert_eq!(saved.blocks[1]["text"], json!("Find files"));
 }
 
 // Lifecycle (appLifecycle.test.ts).

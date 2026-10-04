@@ -91,6 +91,8 @@ impl SkillDocumentPreview {
         let body = cx.new(|cx| {
             let mut view = MarkdownView::with_text(body_text, cx);
             view.set_style(style, cx);
+            // A skill doc's lines stay on their own lines.
+            view.set_hard_breaks(true, cx);
             view
         });
         Self {

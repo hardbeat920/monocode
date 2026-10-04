@@ -16,6 +16,7 @@ use monocode_harness::core::auth::{HarnessLogin, supports_harness_login};
 use monocode_harness::core::child::BinaryPathChoice;
 use monocode_harness::core::provider_accounts as accounts;
 use monocode_layout::tab_groups;
+use monocode_settings::display_prefs;
 use monocode_view_settings::accounts::host::{
     HarnessUpdateHost, HostTask, NotificationsHost, OnChange, OnHarnessUpdated, ProjectAppearance,
     UsageHost,
@@ -93,6 +94,14 @@ impl AccountsAdapter {
 impl UsageHost for AccountsAdapter {
     fn observe(&self, change: OnChange, cx: &mut App) -> Option<Subscription> {
         Some(self.observe_changes(change, cx))
+    }
+    // `observe_changes` hears every `Kv` write, so a window redraws when any
+    // window flips either display preference.
+    fn show_remaining_usage(&self, cx: &App) -> bool {
+        display_prefs::load_show_remaining_usage(&AppServices::global(cx).kv)
+    }
+    fn mask_emails(&self, cx: &App) -> bool {
+        display_prefs::load_mask_emails(&AppServices::global(cx).kv)
     }
     fn rate_limits(
         &self,

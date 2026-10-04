@@ -29,7 +29,9 @@ pub mod selection;
 pub mod style;
 mod view;
 
-pub use parse::{Block, Document, IncrementalParser, Inline, InlineStyle, parse};
+pub use parse::{
+    Block, Document, IncrementalParser, Inline, InlineStyle, ParseOptions, parse, parse_with,
+};
 pub use render::{ImageResolver, default_image_source};
 pub use style::{BlockMargins, MarkdownStyle, SyntaxColors};
 pub use view::{

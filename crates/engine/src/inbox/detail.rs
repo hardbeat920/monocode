@@ -72,8 +72,14 @@ impl InboxClient {
         }
     }
 
-    /// Fetch the description of any item.
-    pub fn item_details(&self, item: &InboxItem) -> Pending<WorkItemDetails> {
+    /// Fetch the description of any item. `max_age_ms` lets GitHub answer
+    /// from a description fetched that recently; other providers ignore it,
+    /// as the TypeScript passed `maxAgeMs` to GitHub only.
+    pub fn item_details(
+        &self,
+        item: &InboxItem,
+        max_age_ms: Option<i64>,
+    ) -> Pending<WorkItemDetails> {
         match item.provider {
             InboxProvider::Linear => match item.id.as_deref().filter(|id| !id.is_empty()) {
                 Some(id) => self.linear_issue_details(id),
@@ -96,9 +102,13 @@ impl InboxClient {
                 None => rejected("Unknown inbox item"),
             },
             InboxProvider::Github => match repository_kind(item, InboxProvider::Github) {
-                Some(kind) => {
-                    self.github_work_item_details(&item.project_path, &item.repo, kind, item.number)
-                }
+                Some(kind) => self.github_work_item_details(
+                    &item.project_path,
+                    &item.repo,
+                    kind,
+                    item.number,
+                    max_age_ms,
+                ),
                 None => rejected("Unknown inbox item"),
             },
         }
@@ -127,8 +137,13 @@ impl InboxClient {
     }
 
     /// Fetch the comment thread of any item. `None` when the item has none
-    /// (a GitHub card of an unknown kind).
-    pub fn item_thread(&self, item: &InboxItem, force: bool) -> Option<Pending<WorkItemThread>> {
+    /// (a GitHub card of an unknown kind). `max_age_ms` is GitHub only.
+    pub fn item_thread(
+        &self,
+        item: &InboxItem,
+        force: bool,
+        max_age_ms: Option<i64>,
+    ) -> Option<Pending<WorkItemThread>> {
         Some(match item.provider {
             InboxProvider::Linear => {
                 self.linear_issue_thread(item.id.as_deref().unwrap_or(""), force)
@@ -150,6 +165,7 @@ impl InboxClient {
                     kind,
                     item.number,
                     force,
+                    max_age_ms,
                 )
             }
         })
@@ -164,12 +180,24 @@ impl InboxClient {
         }
     }
 
-    /// Fetch the diff of a pull or merge request.
-    pub fn item_diff(&self, item: &InboxItem, full_file: bool) -> Pending<PrDiff> {
+    /// Fetch the diff of a pull or merge request. `max_age_ms` is GitHub
+    /// only.
+    pub fn item_diff(
+        &self,
+        item: &InboxItem,
+        full_file: bool,
+        max_age_ms: Option<i64>,
+    ) -> Pending<PrDiff> {
         match item.provider {
             InboxProvider::Gitlab => self.gitlab_mr_diff(&item.repo, item.number),
             InboxProvider::AzureDevops => self.azure_dev_ops_mr_diff(&item.repo, item.number),
-            _ => self.github_pr_diff(&item.project_path, &item.repo, item.number, full_file),
+            _ => self.github_pr_diff(
+                &item.project_path,
+                &item.repo,
+                item.number,
+                full_file,
+                max_age_ms,
+            ),
         }
     }
 
@@ -218,7 +246,7 @@ impl InboxClient {
         };
         async move {
             post.await?;
-            let Some(reload) = client.item_thread(&item, true) else {
+            let Some(reload) = client.item_thread(&item, true, None) else {
                 return Ok(PostedComment::default());
             };
             Ok(match reload.await {
@@ -250,6 +278,8 @@ pub struct Loadable<T> {
 pub struct InboxItemDetail {
     client: InboxClient,
     item: InboxItem,
+    /// `panelMaxAge`: how old cached GitHub data may be and still answer.
+    max_age_ms: Option<i64>,
     revision: u64,
     details: Loadable<WorkItemDetails>,
     thread: Loadable<WorkItemThread>,
@@ -287,10 +317,24 @@ fn identity(
 }
 
 impl InboxItemDetail {
+    /// The Inbox page's pane, which always fetches so its refresh stays live.
     pub fn new(client: InboxClient, item: InboxItem, cx: &mut Context<Self>) -> Self {
+        Self::with_max_age(client, item, None, cx)
+    }
+
+    /// A pane that reuses GitHub data fetched within `max_age_ms`. The
+    /// linked side panel passes `GITHUB_WORK_ITEM_FRESH_MS`, since it often
+    /// opens right after a hover prefetch.
+    pub fn with_max_age(
+        client: InboxClient,
+        item: InboxItem,
+        max_age_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut detail = Self {
             client,
             item,
+            max_age_ms,
             revision: 0,
             details: Loadable::default(),
             thread: Loadable::default(),
@@ -395,18 +439,19 @@ impl InboxItemDetail {
 
     fn load(&mut self, cx: &mut Context<Self>) {
         let cached = self.client.peek_item_details(&self.item);
-        let pending = self.client.item_details(&self.item);
+        let pending = self.client.item_details(&self.item, self.max_age_ms);
         start_load(&mut self.details, cached, Some(pending), cx, |this| {
             &mut this.details
         });
         let cached = self.client.peek_item_thread(&self.item);
-        let pending = self.client.item_thread(&self.item, false);
+        let pending = self.client.item_thread(&self.item, false, self.max_age_ms);
         start_load(&mut self.thread, cached, pending, cx, |this| {
             &mut this.thread
         });
     }
 
-    /// The Code tab is showing: load the diff, with full files or hunks.
+    /// The diff is wanted (the Code tab, or the side panel's Summary tab,
+    /// which lists changed files): load it, with full files or hunks.
     pub fn show_diff(&mut self, full_file: bool, cx: &mut Context<Self>) {
         let is_pr = !self.item.is_tracker() && self.item.kind == super::types::InboxKind::Pr;
         if !is_pr {
@@ -422,7 +467,9 @@ impl InboxItemDetail {
     fn load_diff_now(&mut self, full_file: bool, cx: &mut Context<Self>) {
         self.diff_full_file = Some(full_file);
         let cached = self.client.peek_item_diff(&self.item, full_file);
-        let pending = self.client.item_diff(&self.item, full_file);
+        let pending = self
+            .client
+            .item_diff(&self.item, full_file, self.max_age_ms);
         start_load(&mut self.diff, cached, Some(pending), cx, |this| {
             &mut this.diff
         });

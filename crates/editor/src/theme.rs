@@ -4,8 +4,9 @@
 //! src/features/files/editor/editorLanguage.ts. The chrome colors come from
 //! editorChrome.ts, editorGit.ts, editorSearch.ts, and UnifiedDiffView.tsx,
 //! resolved against the default tokens in src/styles/index.css. The app
-//! builds an [`EditorTheme`] from `monocode-ui`'s theme; the defaults here
-//! keep this crate usable on its own.
+//! builds an [`EditorTheme`] from `monocode-ui`'s theme, including the diff
+//! palette through [`EditorTheme::with_diff_colors`]; the defaults here keep
+//! this crate usable on its own.
 
 use std::sync::Arc;
 
@@ -150,6 +151,43 @@ impl HighlightStyleResolver for SyntaxResolver {
     }
 }
 
+/// The `--color-diff-*` tokens: solid marker hues, text readable on the
+/// background, and row and gutter tints. The app's diff palette setting
+/// swaps them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiffColors {
+    pub add: Hsla,
+    pub add_fg: Hsla,
+    pub add_bg: Hsla,
+    pub add_gutter: Hsla,
+    pub del: Hsla,
+    pub del_fg: Hsla,
+    pub del_bg: Hsla,
+    pub del_gutter: Hsla,
+}
+
+impl DiffColors {
+    /// The default palette: emerald and rose, with darker text in light mode.
+    pub fn default_for(scheme: ColorScheme) -> Self {
+        let add = hex(0x10b981);
+        let del = hex(0xf43f5e);
+        let (add_fg, del_fg) = match scheme {
+            ColorScheme::Dark => (hex(0x6ee7b7), hex(0xfda4af)),
+            ColorScheme::Light => (hex(0x047857), hex(0xbe123c)),
+        };
+        Self {
+            add,
+            add_fg,
+            add_bg: with_alpha(add, 0.15),
+            add_gutter: with_alpha(add, 0.25),
+            del,
+            del_fg,
+            del_bg: with_alpha(del, 0.15),
+            del_gutter: with_alpha(del, 0.25),
+        }
+    }
+}
+
 /// Every color and font the editor and diff views draw with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditorTheme {
@@ -185,21 +223,22 @@ pub struct EditorTheme {
     pub search_match: Hsla,
     /// `.cm-searchMatch-selected`.
     pub search_match_selected: Hsla,
-    /// `#34d399`, the added marker and the added count.
+    /// `--color-diff-add`: the added bar in the gutter and overview ruler.
     pub git_added: Hsla,
-    /// `#f87171`, the deleted marker and the deleted count.
+    /// `--color-diff-del`: the deleted bar in the gutter and overview ruler.
     pub git_deleted: Hsla,
-    /// `.cm-gitInsertedLine`: added at 18%.
+    /// `.cm-gitInsertedLine`: `--color-diff-add-bg`.
     pub inserted_line: Hsla,
-    /// `.cm-gitDeletedLine`: deleted at 16%.
+    /// `.cm-gitDeletedLine`: `--color-diff-del-bg`.
     pub deleted_line: Hsla,
-    /// Diff view rows: `bg-emerald-500/15` and `bg-rose-500/15`.
+    /// Diff view rows: `bg-diff-add-bg` and `bg-diff-del-bg`.
     pub diff_added_row: Hsla,
     pub diff_deleted_row: Hsla,
-    /// Diff view gutter tint: the same colors at 25%.
+    /// Diff view gutter tint: `bg-diff-add-gutter` and `bg-diff-del-gutter`.
     pub diff_added_gutter: Hsla,
     pub diff_deleted_gutter: Hsla,
-    /// Diff view line numbers on changed rows: emerald-300 and rose-300.
+    /// `text-diff-add-fg` and `text-diff-del-fg`: line numbers and +/-
+    /// marks on changed rows, and the change counts.
     pub diff_added_number: Hsla,
     pub diff_deleted_number: Hsla,
     pub syntax: SyntaxPalette,
@@ -214,16 +253,8 @@ pub struct EditorTheme {
 impl EditorTheme {
     pub fn new(scheme: ColorScheme, background_base: Hsla, content: Hsla) -> Self {
         let accent: Hsla = gpui::hsla(211. / 360., 0.92, 0.62, 1.);
-        let added = hex(0x34d399);
-        let deleted = hex(0xf87171);
-        let emerald_500 = hex(0x10b981);
-        let rose_500 = hex(0xf43f5e);
-        let (number_added, number_deleted) = match scheme {
-            ColorScheme::Dark => (hex(0x6ee7b7), hex(0xfda4af)),
-            // The light theme keeps the 300 shades in the React app too; use
-            // the 700 shades so numbers stay readable on a light background.
-            ColorScheme::Light => (hex(0x047857), hex(0xbe123c)),
-        };
+        let danger = hex(0xf87171);
+        let diff = DiffColors::default_for(scheme);
         Self {
             scheme,
             background: gpui::transparent_black(),
@@ -239,19 +270,19 @@ impl EditorTheme {
             caret: content,
             muted: with_alpha(content, 0.55),
             hover: with_alpha(content, 0.10),
-            danger: deleted,
+            danger,
             search_match: with_alpha(hex(0xe2c08d), 0.46),
             search_match_selected: with_alpha(accent, 0.52),
-            git_added: added,
-            git_deleted: deleted,
-            inserted_line: with_alpha(added, 0.18),
-            deleted_line: with_alpha(deleted, 0.16),
-            diff_added_row: with_alpha(emerald_500, 0.15),
-            diff_deleted_row: with_alpha(rose_500, 0.15),
-            diff_added_gutter: with_alpha(emerald_500, 0.25),
-            diff_deleted_gutter: with_alpha(rose_500, 0.25),
-            diff_added_number: number_added,
-            diff_deleted_number: number_deleted,
+            git_added: diff.add,
+            git_deleted: diff.del,
+            inserted_line: diff.add_bg,
+            deleted_line: diff.del_bg,
+            diff_added_row: diff.add_bg,
+            diff_deleted_row: diff.del_bg,
+            diff_added_gutter: diff.add_gutter,
+            diff_deleted_gutter: diff.del_gutter,
+            diff_added_number: diff.add_fg,
+            diff_deleted_number: diff.del_fg,
             syntax: SyntaxPalette::for_scheme(scheme),
             mono_font: "Menlo".into(),
             ui_font: ".SystemUIFont".into(),
@@ -276,6 +307,21 @@ impl EditorTheme {
             gpui::hsla(240. / 360., 0., 0.97, 1.),
             gpui::hsla(240. / 360., 0., 0.18, 1.),
         )
+    }
+
+    /// Every diff color from the app's diff palette.
+    pub fn with_diff_colors(mut self, diff: DiffColors) -> Self {
+        self.git_added = diff.add;
+        self.git_deleted = diff.del;
+        self.inserted_line = diff.add_bg;
+        self.deleted_line = diff.del_bg;
+        self.diff_added_row = diff.add_bg;
+        self.diff_deleted_row = diff.del_bg;
+        self.diff_added_gutter = diff.add_gutter;
+        self.diff_deleted_gutter = diff.del_gutter;
+        self.diff_added_number = diff.add_fg;
+        self.diff_deleted_number = diff.del_fg;
+        self
     }
 
     /// Content at `alpha`, for `text-content/NN` classes.

@@ -34,6 +34,31 @@ pub fn workspace_tab_cwd<S: SessionRef>(tab: &WorkspaceTab, sessions: &[S]) -> O
     None
 }
 
+/// `workspaceTabWorktree`: the working copy a tab runs in. That is its first
+/// session's worktree, else the folder its focused file was opened from.
+/// `None` when the tab has neither.
+pub fn workspace_tab_worktree<S: SessionRef>(tab: &WorkspaceTab, sessions: &[S]) -> Option<String> {
+    for id in leaf_ids(&tab.layout) {
+        let Some(session) = sessions.iter().find(|entry| entry.session_id() == id) else {
+            continue;
+        };
+        let cwd = session.session_cwd();
+        if !cwd.is_empty() && cwd != "~" {
+            let worktree = session
+                .session_worktree_cwd()
+                .filter(|worktree| !worktree.is_empty());
+            return Some(worktree.unwrap_or(cwd).to_string());
+        }
+    }
+    let cwd = &focused_file_tab(tab)?.cwd;
+    (!cwd.is_empty() && cwd != "~").then(|| cwd.clone())
+}
+
+/// `tabInWorktree`: tabs without a working copy show in every worktree.
+pub fn tab_in_worktree<S: SessionRef>(tab: &WorkspaceTab, sessions: &[S], worktree: &str) -> bool {
+    workspace_tab_worktree(tab, sessions).is_none_or(|cwd| same_project_path(&cwd, worktree))
+}
+
 /// `focusedWorkspaceTabCwd`: the focused session's cwd, else the focused
 /// file's project, else `workspace_tab_cwd`.
 pub fn focused_workspace_tab_cwd<S: SessionRef>(
@@ -223,6 +248,22 @@ pub fn plan_workspace_tab_close<S: SessionRef>(
     closing_tab_id: &str,
     scope: WorkspaceTabCloseScope,
 ) -> WorkspaceTabClosePlan {
+    plan_workspace_tab_close_in(tabs, sessions, closing_tab_id, scope, None)
+}
+
+/// `worktreeOf`: the worktree a tab belongs to.
+pub type WorktreeOf<'a> = &'a dyn Fn(&WorkspaceTab) -> Option<String>;
+
+/// `planWorkspaceTabClose` with `worktreeOf`. When given, the next tab also
+/// has to share the closing tab's worktree, so closing a tab never leaves
+/// the worktree on screen.
+pub fn plan_workspace_tab_close_in<S: SessionRef>(
+    tabs: &[WorkspaceTab],
+    sessions: &[S],
+    closing_tab_id: &str,
+    scope: WorkspaceTabCloseScope,
+    worktree_of: Option<WorktreeOf<'_>>,
+) -> WorkspaceTabClosePlan {
     let Some(closing_index) = tabs.iter().position(|tab| tab.id == closing_tab_id) else {
         return WorkspaceTabClosePlan::Keep;
     };
@@ -249,19 +290,30 @@ pub fn plan_workspace_tab_close<S: SessionRef>(
         };
     };
 
-    let same_project = |tab: &&WorkspaceTab| {
-        workspace_tab_cwd(tab, sessions).is_some_and(|cwd| same_project_path(&cwd, &closing_cwd))
+    let closing_worktree = worktree_of.and_then(|worktree_of| worktree_of(&tabs[closing_index]));
+    let same_scope = |tab: &&WorkspaceTab| {
+        if !workspace_tab_cwd(tab, sessions)
+            .is_some_and(|cwd| same_project_path(&cwd, &closing_cwd))
+        {
+            return false;
+        }
+        let Some(closing_worktree) = &closing_worktree else {
+            return true;
+        };
+        worktree_of
+            .and_then(|worktree_of| worktree_of(tab))
+            .is_none_or(|worktree| same_project_path(&worktree, closing_worktree))
     };
-    let before = tabs[..closing_index].iter().rev().find(same_project);
-    let after = || tabs[closing_index + 1..].iter().find(same_project);
+    let before = tabs[..closing_index].iter().rev().find(same_scope);
+    let after = || tabs[closing_index + 1..].iter().find(same_scope);
     if let Some(tab) = before.or_else(after) {
         return WorkspaceTabClosePlan::Close {
             next_active_tab_id: Some(tab.id.clone()),
         };
     }
 
-    // Deck mode is one project at a time. Closing the last tab there must not
-    // jump to another project's tab; the caller keeps this one instead.
+    // Deck mode is one project (and worktree) at a time. Closing the last tab
+    // there must not jump to another one's tab; the caller keeps this one.
     WorkspaceTabClosePlan::Keep
 }
 

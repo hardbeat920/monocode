@@ -507,12 +507,12 @@ fn github_passes_the_repository_through_and_isolates_same_number_caches(cx: &mut
     });
     settle(
         cx,
-        client.github_work_item_details("/tmp/web", "maya/web", WorkItemKind::Issue, 10),
+        client.github_work_item_details("/tmp/web", "maya/web", WorkItemKind::Issue, 10, None),
     )
     .unwrap();
     settle(
         cx,
-        client.github_work_item_details("/tmp/web", "acme/web", WorkItemKind::Issue, 10),
+        client.github_work_item_details("/tmp/web", "acme/web", WorkItemKind::Issue, 10, None),
     )
     .unwrap();
     assert_eq!(
@@ -531,10 +531,14 @@ fn github_passes_the_repository_through_and_isolates_same_number_caches(cx: &mut
     );
     settle(
         cx,
-        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false),
+        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false, None),
     )
     .unwrap();
-    settle(cx, client.github_pr_diff("/tmp/web", "acme/web", 10, false)).unwrap();
+    settle(
+        cx,
+        client.github_pr_diff("/tmp/web", "acme/web", 10, false, None),
+    )
+    .unwrap();
     settle(
         cx,
         client.github_work_item_comment(
@@ -577,18 +581,143 @@ fn github_passes_the_repository_through_and_isolates_same_number_caches(cx: &mut
 #[gpui::test]
 fn github_dedupes_a_thread_request_until_forced(cx: &mut TestAppContext) {
     let (client, backend) = client(cx, |_, _| Ok(json!({ "comments": [], "truncated": false })));
-    let first = client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false);
+    let first =
+        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false, None);
     let second =
-        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false);
+        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, false, None);
     settle(cx, first).unwrap();
     settle(cx, second).unwrap();
     assert_eq!(backend.calls().len(), 1);
     settle(
         cx,
-        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, true),
+        client.github_work_item_thread("/tmp/web", "acme/web", WorkItemKind::Pr, 10, true, None),
     )
     .unwrap();
     assert_eq!(backend.calls().len(), 2);
+}
+
+// githubWorkItemFreshness.test.ts
+
+fn freshness_client(
+    cx: &TestAppContext,
+) -> (
+    super::client::InboxClient,
+    Arc<super::backend::fake::FakeBackend>,
+    Arc<Mutex<i64>>,
+) {
+    let now = Arc::new(Mutex::new(1_000_000i64));
+    let clock = now.clone();
+    let backend = super::backend::fake::FakeBackend::new(|command, _| match command {
+        "git_github_pr_diff" => Ok(
+            json!({ "additions": 0, "deletions": 0, "files": [], "patch": "", "truncated": false }),
+        ),
+        "git_github_work_item_thread" => {
+            Ok(json!({ "comments": [], "commits": [], "truncated": false }))
+        }
+        "git_github_work_item" => Ok(json!({
+            "kind": "pr",
+            "number": 1,
+            "title": "Retry",
+            "url": "https://github.com/o/r/pull/1",
+            "state": "open",
+            "updatedAt": "2026-10-03T09:00:00Z",
+        })),
+        _ => Ok(json!({ "body": "", "author": "" })),
+    });
+    let client = super::client::InboxClient::with_clock(
+        backend.clone(),
+        monocode_settings::Kv::in_memory(),
+        cx.executor(),
+        Arc::new(move || *clock.lock()),
+    );
+    (client, backend, now)
+}
+
+#[gpui::test]
+fn github_shares_an_in_flight_details_request(cx: &mut TestAppContext) {
+    let (client, backend, _) = freshness_client(cx);
+    let first = client.github_work_item_details("/repo", "o/r", WorkItemKind::Pr, 1, None);
+    let second = client.github_work_item_details("/repo", "o/r", WorkItemKind::Pr, 1, None);
+    settle(cx, first).unwrap();
+    settle(cx, second).unwrap();
+    assert_eq!(backend.calls().len(), 1);
+}
+
+#[gpui::test]
+fn github_reuses_recent_data_only_when_the_caller_allows_it(cx: &mut TestAppContext) {
+    let (client, backend, now) = freshness_client(cx);
+    let fresh = Some(30_000);
+    settle(
+        cx,
+        client.github_work_item_details("/repo", "o/r", WorkItemKind::Pr, 1, None),
+    )
+    .unwrap();
+    settle(
+        cx,
+        client.github_work_item_thread("/repo", "o/r", WorkItemKind::Pr, 1, false, None),
+    )
+    .unwrap();
+    settle(cx, client.github_pr_diff("/repo", "o/r", 1, false, None)).unwrap();
+    assert_eq!(backend.calls().len(), 3);
+
+    settle(
+        cx,
+        client.github_work_item_details("/repo", "o/r", WorkItemKind::Pr, 1, fresh),
+    )
+    .unwrap();
+    settle(
+        cx,
+        client.github_work_item_thread("/repo", "o/r", WorkItemKind::Pr, 1, false, fresh),
+    )
+    .unwrap();
+    settle(cx, client.github_pr_diff("/repo", "o/r", 1, false, fresh)).unwrap();
+    assert_eq!(backend.calls().len(), 3);
+
+    settle(
+        cx,
+        client.github_work_item_details("/repo", "o/r", WorkItemKind::Pr, 1, None),
+    )
+    .unwrap();
+    assert_eq!(backend.calls().len(), 4);
+
+    // Past the window, even a caller that allows reuse fetches again.
+    *now.lock() += 30_000;
+    settle(
+        cx,
+        client.github_work_item_thread("/repo", "o/r", WorkItemKind::Pr, 1, false, fresh),
+    )
+    .unwrap();
+    assert_eq!(backend.calls().len(), 5);
+
+    // Clearing the cache forgets when anything arrived.
+    client.clear_inbox_cache();
+    settle(cx, client.github_pr_diff("/repo", "o/r", 1, false, fresh)).unwrap();
+    assert_eq!(backend.calls().len(), 6);
+}
+
+#[gpui::test]
+fn github_prefetch_warms_only_what_is_not_cached(cx: &mut TestAppContext) {
+    let (client, backend, _) = freshness_client(cx);
+    settle(
+        cx,
+        client.github_work_item_thread("/repo", "o/r", WorkItemKind::Pr, 1, false, None),
+    )
+    .unwrap();
+    client.prefetch_github_work_item("/repo", "o/r", WorkItemKind::Pr, 1);
+    cx.run_until_parked();
+    assert_eq!(backend.count("git_github_work_item"), 1);
+    assert_eq!(backend.count("git_github_work_item_details"), 1);
+    assert_eq!(backend.count("git_github_work_item_thread"), 1);
+    assert_eq!(backend.count("git_github_pr_diff"), 1);
+    assert!(client.peek_github_pr_diff("o/r", 1, false).is_some());
+
+    // Issues have no diff to warm, and a second hover finds everything cached.
+    client.prefetch_github_work_item("/repo", "o/r", WorkItemKind::Pr, 1);
+    client.prefetch_github_work_item("/repo", "o/r", WorkItemKind::Issue, 2);
+    cx.run_until_parked();
+    assert_eq!(backend.count("git_github_pr_diff"), 1);
+    assert_eq!(backend.count("git_github_work_item_details"), 2);
+    assert_eq!(backend.count("git_github_work_item_thread"), 2);
 }
 
 #[gpui::test]
