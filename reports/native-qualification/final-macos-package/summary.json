@@ -1,0 +1,203 @@
+{
+  "complete": true,
+  "artifact_root": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z",
+  "source": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+  "source_manifest_sha256": "58c060e4687dc6bf600d89ce6423f2682e25355ea2867406ef3d996bb544a4c0",
+  "signing": "ad hoc",
+  "notarization": "not performed",
+  "profile": "qualified development binaries, no optimized release claim",
+  "commands": {
+    "source-before": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.py",
+        "verify",
+        "--root",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+        "--manifest",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.267,
+      "log": "logs/source-before.log"
+    },
+    "host-version": {
+      "arguments": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs/monocode-host",
+        "--version"
+      ],
+      "exit_code": 0,
+      "seconds": 0.379,
+      "log": "logs/host-version.log"
+    },
+    "bundle": {
+      "arguments": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs/monocode-package",
+        "bundle",
+        "--target",
+        "aarch64-apple-darwin",
+        "--binaries",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs",
+        "--output",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages",
+        "--signing-identity",
+        "-"
+      ],
+      "exit_code": 0,
+      "seconds": 14.674,
+      "log": "logs/bundle.log"
+    },
+    "checksums": {
+      "arguments": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs/monocode-package",
+        "checksums",
+        "--directory",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages"
+      ],
+      "exit_code": 0,
+      "seconds": 0.538,
+      "log": "logs/checksums.log"
+    },
+    "verify-package": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/verify-native-macos-package.py",
+        "--output",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages",
+        "--binaries",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs",
+        "--version",
+        "0.6.0",
+        "--summary",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/package-verification.json"
+      ],
+      "exit_code": 0,
+      "seconds": 10.167,
+      "log": "logs/verify-package.log"
+    },
+    "build-updater-fixtures": {
+      "arguments": [
+        "cargo",
+        "build",
+        "-p",
+        "monocode-updater",
+        "--features",
+        "sign",
+        "--bin",
+        "monocode-updater-sign",
+        "--example",
+        "apply_update",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 4.095,
+      "log": "logs/build-updater-fixtures.log"
+    },
+    "private-updater": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/macos-package-update.py",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages/MonoCode_0.6.0_aarch64-apple-darwin.app.tar.gz",
+        "--signer",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs/monocode-updater-sign",
+        "--updater",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/inputs/apply_update"
+      ],
+      "exit_code": 0,
+      "seconds": 4.721,
+      "log": "logs/private-updater.log"
+    },
+    "packaged-renderer": {
+      "arguments": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages/MonoCode.app/Contents/MacOS/monocode-app",
+        "--view",
+        "widgets",
+        "--data-dir",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/render-profile",
+        "--theme",
+        "dark",
+        "--size",
+        "1280x800",
+        "--settle-ms",
+        "2500",
+        "--screenshot",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packaged-widgets.png"
+      ],
+      "exit_code": 0,
+      "seconds": 4.276,
+      "log": "logs/packaged-renderer.log"
+    },
+    "source-after": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.py",
+        "verify",
+        "--root",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+        "--manifest",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.267,
+      "log": "logs/source-after.log"
+    }
+  },
+  "input_sha256": {
+    "monocode-app": "762196d597c41eaafdc5ea9c960c8fefa1033fcc0c9677ca652081aca280deea",
+    "monocode-host": "ef66ca90842f04705254a2f2c2b6391e7bfe874634c71bbf644a4c21e3c4ddf7",
+    "monocode-package": "05f4e78345752fad6eff186453f4c8b58967ab0eac6ac67a99cd1cf34791fd4b",
+    "monocode-updater-sign": "b65dadfcf12905f8c8af5995f8b455ac0211ebfe40ab8b905b30206d9ef0f136",
+    "apply_update": "d981230bd0b22374514ceeaaa2c5895cc0e5da023001e9b288d63af7978e7267"
+  },
+  "version": "0.6.0",
+  "package_verification": {
+    "output": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages",
+    "version": "0.6.0",
+    "target": "aarch64-apple-darwin",
+    "signing": "ad hoc",
+    "notarization": "not performed",
+    "profile": "qualified development binaries, no optimized release claim",
+    "app_cli": "list-views passed",
+    "uuid": {
+      "monocode-app": "C8093A29-162F-3E53-956D-E1A03FB637B3",
+      "monocode-host": "EF14D3AC-10FE-368C-9589-FC842710F78D"
+    },
+    "input_sha256": {
+      "monocode-app": "762196d597c41eaafdc5ea9c960c8fefa1033fcc0c9677ca652081aca280deea",
+      "monocode-host": "ef66ca90842f04705254a2f2c2b6391e7bfe874634c71bbf644a4c21e3c4ddf7",
+      "monocode-package": "05f4e78345752fad6eff186453f4c8b58967ab0eac6ac67a99cd1cf34791fd4b"
+    },
+    "artifact_sha256": {
+      "MonoCode_0.6.0_aarch64-apple-darwin.app.tar.gz": "76339b33d7062437da4792198140caeb2d05530f36a9e0be7a89a640cf0e78eb",
+      "MonoCode_0.6.0_aarch64-apple-darwin.dmg": "fa8b7b20b03541f99c91f596ea125c05f5011c5f46d659d6d589085846e38cb5",
+      "monocode-host_0.6.0_aarch64-apple-darwin.tar.gz": "0cfa5937cb08554f48fa296e88f215c9ac0377a84078b8927b9ed641d82ead49",
+      "SHA256SUMS": "b569070deba36567d1a48597ffbe0ed0f15d1c13562439e393b0225ce69e37e6"
+    }
+  },
+  "renderer": {
+    "image": "packaged-widgets.png",
+    "sha256": "78d583ed5687bf7db9c5c21e2409900b0242754c9069e9a9070729b47a9cceb0",
+    "dimensions": [
+      2560,
+      1600
+    ],
+    "view": "widgets",
+    "engine_booted": false,
+    "settings_imported": false,
+    "scheduled_agents_enabled": false,
+    "expected_widgets": [
+      "Buttons",
+      "Icon buttons",
+      "Text fields",
+      "Switch and segmented control",
+      "Menu, popover, tooltip"
+    ],
+    "visual_review": "passed independent app integration and root coordinator image inspection",
+    "visual_review_metadata": "visual-review.json",
+    "scope": "owned GPUI renderer only, no desktop capture or GUI input"
+  }
+}

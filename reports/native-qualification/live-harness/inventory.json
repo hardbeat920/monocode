@@ -1,0 +1,69 @@
+{
+  "recorded_at": "2026-10-03T14:52:06.208068+00:00",
+  "machine": "local macOS ARM64",
+  "scope": "One text-only native harness turn per installed provider, with existing auth and scratch working directories. Codex belongs to the coordinator.",
+  "installed": [
+    {
+      "cli": "claude",
+      "installed": true,
+      "path": "/opt/homebrew/bin/claude",
+      "version": "2.1.287 (Claude Code)",
+      "version_exit": 0
+    },
+    {
+      "cli": "cursor-agent",
+      "installed": true,
+      "path": "/opt/homebrew/bin/cursor-agent",
+      "version": "2026.09.18-9a7762b",
+      "version_exit": 0
+    },
+    {
+      "cli": "grok",
+      "installed": true,
+      "path": "/Users/gianvillarini/.local/bin/grok",
+      "version": "grok 1.0.46 (2765805b9442) [stable]",
+      "version_exit": 0
+    },
+    {
+      "cli": "droid",
+      "installed": true,
+      "path": "/Users/gianvillarini/.local/bin/droid",
+      "version": "0.228.0",
+      "version_exit": 0
+    },
+    {
+      "cli": "opencode",
+      "installed": true,
+      "path": "/opt/homebrew/bin/opencode",
+      "version": "opencode v2.0.20",
+      "version_exit": 0
+    },
+    {
+      "cli": "pi",
+      "installed": false
+    },
+    {
+      "cli": "omp",
+      "installed": false
+    },
+    {
+      "cli": "fx",
+      "installed": false
+    },
+    {
+      "cli": "hermes",
+      "installed": false
+    },
+    {
+      "cli": "agy_acp_server.par",
+      "installed": false
+    }
+  ],
+  "auth_status": {
+    "claude": "existing Claude account sign-in confirmed by auth status",
+    "cursor-agent": "existing sign-in confirmed by status",
+    "droid": "stored login session loaded, unexpired and authenticated by doctor --auth",
+    "grok": "not probed before the native turn",
+    "opencode": "version 2 installed, while native adapter explicitly supports version 1 API"
+  }
+}

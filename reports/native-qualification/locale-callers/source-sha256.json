@@ -1,0 +1,18 @@
+{
+  "crates/engine/Cargo.toml": "edd71a774e9b6f7167feb1e3b1c48b0183a6bea19036acb3121b80faa826d331",
+  "crates/engine/src/inbox/time.rs": "7bcf17d1c57d7ef9bba9592e52802cb66f541f8adb471fc421ef53afb7700f3e",
+  "crates/engine/src/inbox/text.rs": "059f70a23f5f82c742e57ef2de421acf7f123d3d4e266803c280a270e4abb5af",
+  "crates/engine/src/runtime/session_history.rs": "3adf268a20c1f212f7ff70696b217cb8818adb4c45c498d9a2e673f127cefe30",
+  "crates/engine/src/workspace/files/file_index.rs": "9f0b29112c2f9a77625c2aa5e269b3c50e5420404e391f0902295d3c46a6f8e9",
+  "crates/engine/src/history/app_search.rs": "cf5e0ce0c8ee57621a6c01ab25da580c96fa08f9be5d42388674468c42f9f63c",
+  "crates/engine/src/history/app_search_tests.rs": "b1770436a4372f1165b8a5ba74b704161a11c7c4a0a7462be06470bc92a12d81",
+  "crates/engine/src/history/notes.rs": "76f57ec9a406f40f40c6aed5eaa60fc56ff0b4aeaece1b857ed05bbefe577186",
+  "crates/engine/src/history/notes_entity.rs": "af2028de0e97fcbec414cea8f13da61c47e64c9be2b190dcf4b89abdbfeb6381",
+  "crates/engine/src/history/notes_entity_tests.rs": "149362ff91b8001790b948f9e762258d2ebc4bae5e4613a0f0dbeb0b2de90d9f",
+  "crates/engine/src/submit/mcp_picker.rs": "ceb36108373fc35e4647736a87e856f9950200f679ea3d98f00c617d0902894d",
+  "crates/engine/src/submit/skills/slash_commands.rs": "78bd05a12a0641affb599924bee63b3e81e23eec95398aab9f41630eba322717",
+  "crates/view-inbox/Cargo.toml": "c36eaad706b2f1e16a52daeb435f8830758b43ae27e34099c2d2ee5e2fb85a6d",
+  "crates/view-inbox/src/model.rs": "a89ccd5884cec5c7c22a884fb9163d887e4673a8fdc8842d45c5b47c14697649",
+  "crates/view-pages/Cargo.toml": "8908c1eb9a3b91c6a9e34d775a6b917950fb03c6d8c2c79d73570db16ece05e0",
+  "crates/view-pages/src/format.rs": "40c1bceb736d43da7c5714f39b0725f1b708aa28639fc45b8adb48217da81108"
+}

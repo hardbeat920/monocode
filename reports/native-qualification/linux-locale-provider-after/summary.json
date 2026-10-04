@@ -1,0 +1,107 @@
+{
+  "complete": true,
+  "source": "/home/niost/monocode-gpui-qualification",
+  "steps": [
+    {
+      "step": "compile",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "provider-catalog",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_harness-40442cd2de6928a8",
+        "catalog_locale",
+        "--nocapture"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "harness",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_harness-40442cd2de6928a8"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "locale",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-locale",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "probe-build",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "monocode-locale",
+        "--example",
+        "locale_probe",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "default-locale",
+      "command": [
+        "/usr/bin/python3",
+        "/mnt/c/Users/niost/locale-default-probe.py",
+        "--probe",
+        "/home/niost/monocode-gpui-qualification/target/debug/examples/locale_probe",
+        "--node",
+        "/home/niost/monocode-gpui-qualification/tools/node24/node-v24.21.0-linux-x64/bin/node",
+        "--output",
+        "/home/niost/monocode-gpui-qualification/artifacts/linux-locale-provider-after-20261003T201925Z/default-locale.json",
+        "--linux-matrix"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "platform": "linux",
+  "source_archive_sha256": "ba7de6032e4ba722bd4f6273a0d0cdb057f5e03b3d0b8a0a6687b68acc7e225f",
+  "harness_binary": "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_harness-40442cd2de6928a8",
+  "harness_sha256": "0eda18727cf283388bf1d9dc8e38f3ef6d616ff468aec25c7c3c7dced4b4dadb"
+}

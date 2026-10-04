@@ -1,0 +1,111 @@
+{
+  "source_sha256": {
+    "Cargo.toml": "8323514c635ac67a1bf99b7f72034e822d8f147e5fb0c9724c9c243c71101643",
+    "Cargo.lock": "f4825bffcbad2f712d61fdf8344d2e9fda9b95503bae02e1afddb4b63377f909",
+    "crates/editor/Cargo.toml": "c786f3f7703569bb64cd9ffa96bca09ff75e31c27a4ff705b5fc272577ad3d9f",
+    "crates/editor/src/search.rs": "42d92ce0cc5dee8a3c65b2e70edf6297da62f4133e3772428daee147f6a0aa7b",
+    "crates/view-files/Cargo.toml": "a920f89ae435839c2234272c338777d2117b945220bdc2334d0d362347ddb3a3",
+    "crates/view-files/src/preview_search.rs": "6fd4de354f58cea2c6b5706ec7f66672ce700eb508c030b53f1b0f4a111610cd",
+    "crates/view-files/src/preview_search_tests.rs": "d8b19d810efeecdf1ae6e9823254a2dcc27faa7aa208b18a2a1a158a093cbed5"
+  },
+  "tests": [
+    {
+      "name": "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da",
+        "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da",
+        "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da",
+        "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_view_files-adcd836b928f9647",
+        "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_view_files-adcd836b928f9647",
+        "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da",
+        "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da",
+        "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "suites": [
+    {
+      "name": "editor",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "view-files",
+      "command": [
+        "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_view_files-adcd836b928f9647"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "test_binary_sha256": {
+    "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_view_files-adcd836b928f9647": "dcbf25c22486bba4f93be85b0968cb459d72fe9b5c9148b9b01235721747b215",
+    "/home/niost/monocode-gpui-qualification/target/debug/deps/monocode_editor-0bfd5327b627c0da": "8d11c1deb32af532c43262b8ed89af1bad22975525d11cd8bb71c2e8b54f8450"
+  },
+  "complete": true
+}

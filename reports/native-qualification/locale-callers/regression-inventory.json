@@ -1,0 +1,82 @@
+[
+  {
+    "path": "crates/engine/src/inbox/time.rs",
+    "name": "matches_intl_relative_french_past_and_future"
+  },
+  {
+    "path": "crates/engine/src/inbox/time.rs",
+    "name": "matches_intl_relative_japanese_past_and_future"
+  },
+  {
+    "path": "crates/engine/src/inbox/time.rs",
+    "name": "matches_intl_relative_arabic_past_and_future"
+  },
+  {
+    "path": "crates/engine/src/inbox/time.rs",
+    "name": "matches_intl_relative_rounding_and_unit_boundaries"
+  },
+  {
+    "path": "crates/engine/src/inbox/text.rs",
+    "name": "matches_intl_text_punctuation_and_accents"
+  },
+  {
+    "path": "crates/engine/src/inbox/text.rs",
+    "name": "matches_intl_text_canonical_equivalence"
+  },
+  {
+    "path": "crates/engine/src/runtime/session_history.rs",
+    "name": "matches_intl_history_ties_without_changing_pin_or_recency"
+  },
+  {
+    "path": "crates/engine/src/workspace/files/file_index.rs",
+    "name": "matches_intl_file_ranking_punctuation"
+  },
+  {
+    "path": "crates/engine/src/workspace/files/file_index.rs",
+    "name": "matches_intl_file_ranking_accents"
+  },
+  {
+    "path": "crates/engine/src/workspace/files/file_index.rs",
+    "name": "matches_intl_file_ranking_canonical_equivalence"
+  },
+  {
+    "path": "crates/engine/src/history/app_search_tests.rs",
+    "name": "matches_intl_recent_project_ranking_punctuation_and_accents"
+  },
+  {
+    "path": "crates/engine/src/history/app_search_tests.rs",
+    "name": "matches_intl_grouped_search_canonical_equivalence_and_score_priority"
+  },
+  {
+    "path": "crates/engine/src/history/notes.rs",
+    "name": "matches_intl_note_picker_keeps_input_order_for_equal_score_and_time"
+  },
+  {
+    "path": "crates/engine/src/history/notes_entity_tests.rs",
+    "name": "matches_intl_saved_note_ties_without_changing_recency"
+  },
+  {
+    "path": "crates/engine/src/submit/mcp_picker.rs",
+    "name": "matches_intl_mcp_order_without_changing_availability"
+  },
+  {
+    "path": "crates/engine/src/submit/skills/slash_commands.rs",
+    "name": "matches_intl_skill_ranking_without_changing_scope_or_score"
+  },
+  {
+    "path": "crates/view-inbox/src/model.rs",
+    "name": "matches_intl_inbox_view_default_french_japanese_arabic"
+  },
+  {
+    "path": "crates/view-inbox/src/model.rs",
+    "name": "matches_intl_inbox_view_shared_parser_and_rounding"
+  },
+  {
+    "path": "crates/view-pages/src/format.rs",
+    "name": "matches_intl_secondary_page_default_french_japanese_arabic"
+  },
+  {
+    "path": "crates/view-pages/src/format.rs",
+    "name": "matches_intl_secondary_page_rounding_and_unit_boundaries"
+  }
+]

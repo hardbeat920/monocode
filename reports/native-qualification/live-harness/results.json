@@ -1,0 +1,57 @@
+[
+  {
+    "provider": "claude",
+    "test": "providers::claude::live_tests::live_turn_replies_ok_in_a_temp_directory",
+    "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+    "started_at": "2026-10-03T14:55:11.452338+00:00",
+    "outer_timeout_seconds": 240,
+    "exit": 101,
+    "elapsed_seconds": 1.351,
+    "log": "claude.log",
+    "qualification_status": "blocked by account session quota"
+  },
+  {
+    "provider": "cursor",
+    "test": "providers::cursor::live_tests::live_turn_replies_ok_in_a_temp_directory",
+    "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+    "started_at": "2026-10-03T14:55:30.196930+00:00",
+    "outer_timeout_seconds": 240,
+    "exit": 0,
+    "elapsed_seconds": 6.905,
+    "log": "cursor.log",
+    "qualification_status": "passed"
+  },
+  {
+    "provider": "grok",
+    "test": "providers::grok::live_tests::live_turn_replies_in_a_temp_directory",
+    "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+    "started_at": "2026-10-03T14:55:47.899727+00:00",
+    "outer_timeout_seconds": 240,
+    "exit": 101,
+    "elapsed_seconds": 1.371,
+    "log": "grok.log",
+    "qualification_status": "blocked by usage balance exhausted, HTTP 402"
+  },
+  {
+    "provider": "droid",
+    "test": "providers::droid::live_tests::live_turn_replies_in_a_temp_directory",
+    "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+    "started_at": "2026-10-03T14:56:10.114049+00:00",
+    "outer_timeout_seconds": 240,
+    "exit": 0,
+    "elapsed_seconds": 7.606,
+    "log": "droid.log",
+    "qualification_status": "passed"
+  },
+  {
+    "provider": "opencode",
+    "test": "providers::opencode::transport_tests::live_turn_with_a_real_opencode",
+    "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+    "started_at": "2026-10-03T14:56:57.246117+00:00",
+    "outer_timeout_seconds": 240,
+    "exit": 101,
+    "elapsed_seconds": 0.29,
+    "log": "opencode.log",
+    "qualification_status": "baseline version 2 compatibility gap"
+  }
+]

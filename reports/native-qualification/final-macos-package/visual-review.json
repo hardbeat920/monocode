@@ -1,0 +1,18 @@
+{
+  "image": "packaged-widgets.png",
+  "sha256": "78d583ed5687bf7db9c5c21e2409900b0242754c9069e9a9070729b47a9cceb0",
+  "dimensions": [2560, 1600],
+  "passed": true,
+  "review": "The app integration agent and root coordinator independently inspected the saved image",
+  "reviewers": ["app integration agent", "root coordinator"],
+  "confirmed": [
+    "Readable buttons and disabled variants",
+    "SVG icon buttons",
+    "Badges, keyboard labels, diff statistics, and spinner label",
+    "Switches and segmented controls",
+    "Text fields",
+    "Menu, popover, and tooltip",
+    "Static approval toast with Allow and Deny buttons"
+  ],
+  "scope": "Packaged GPUI renderer and static widget fixture only, no desktop capture, GUI input, or actual Claude approval"
+}

@@ -1,0 +1,18 @@
+{
+  "result": "passed with minimal lockfile",
+  "rustc": "1.98.1",
+  "host_target": "aarch64-apple-darwin",
+  "format": "passed",
+  "strict_clippy_all_targets": "passed",
+  "library_tests": {
+    "passed": 35,
+    "failed": 0,
+    "ignored": 0
+  },
+  "bin_tests": 0,
+  "doc_tests": 0,
+  "dependencies": "Downloaded original wl-clipboard-rs0.9.3 and wayland-backend0.3.16 into isolated task cache. No lock changes during final runner.",
+  "source_changes": "No Rust source fix. Required shared-platform lock changes only. Original Wayland package versions preserved.",
+  "lock_before_sha256": "f7f029186d28df787513b4f884a23ac9d023f1e5cef4e1998ecaf41e55c66f4b",
+  "lock_after_sha256": "92286fbedc0dfda0ab49e3e48d87e0a818dc88040790b650438ad8d93ae08bfd"
+}

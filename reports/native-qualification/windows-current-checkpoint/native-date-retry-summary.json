@@ -1,0 +1,36 @@
+{
+    "native-date-retry-platform.log":  {
+                                           "targets":  1,
+                                           "passed":  7,
+                                           "failed":  0,
+                                           "ignored":  0
+                                       },
+    "native-date-retry-workspace.log":  {
+                                            "targets":  33,
+                                            "passed":  5331,
+                                            "failed":  0,
+                                            "ignored":  42
+                                        },
+    "native-date-retry-core.log":  {
+                                       "targets":  3,
+                                       "passed":  414,
+                                       "failed":  0,
+                                       "ignored":  1
+                                   },
+    "native-date-retry-recovery.log":  {
+                                           "targets":  1,
+                                           "passed":  1,
+                                           "failed":  0,
+                                           "ignored":  0
+                                       },
+    "transcript_repetitions":  {
+                                   "runs":  40,
+                                   "passed":  7920,
+                                   "failed":  0
+                               },
+    "source_sha256":  "56dff4cd8c145fd142f824121872c9dd2bb5eacf2eb2e6da58e945d55d1ce38d",
+    "test_binaries":  {
+                          "monocode_platform-94017bb9b37f4531.exe":  "6e3ffda2886be22b33177b2b0de6b12576d396e27fc8491d2476ec968f19a593",
+                          "monocode_view_transcript-bc8454e35aefb296.exe":  "faedfc5d53af795c5dc9c344f5a249e8a7fb78dccfe50cdfeaac0592d2fb4d77"
+                      }
+}

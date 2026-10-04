@@ -1,0 +1,671 @@
+{
+  "platform": "linux",
+  "probe_sha256": "cb1c028cd4dbed18a79a9f1898ca65993220950255a0558fba09aa9fee96ad6e",
+  "passed": true,
+  "cases": [
+    {
+      "case": "host-default",
+      "child_locale": null,
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "C"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "C",
+      "child_locale": "C",
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "C"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "C.UTF-8",
+      "child_locale": "C.UTF-8",
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "C"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "POSIX",
+      "child_locale": "POSIX",
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "POSIX"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "en_US.UTF-8",
+      "child_locale": "en_US.UTF-8",
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "en-US"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "fr_FR.UTF-8",
+      "child_locale": "fr_FR.UTF-8",
+      "child_language": null,
+      "native": {
+        "icu_locale": "fr_FR",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "il y a 2 heures",
+        "system_locale": "fr-FR"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "fr-FR",
+        "relative_locale": "fr-FR",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "il y a 2 heures"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "conflicting-LANGUAGE",
+      "child_locale": "en_US.UTF-8",
+      "child_language": "fr_FR:de_DE",
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "fr-FR"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    },
+    {
+      "case": "conflicting-LANGUAGE-POSIX",
+      "child_locale": "C",
+      "child_language": "fr_FR",
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "fr-FR"
+      },
+      "node": {
+        "node_version": "v24.21.0",
+        "icu_version": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "Cargo.lock": "a1cc289a4521fb6b7d29a948cbdde1a26c1e2d0f2e871936daea4799035c5610",
+  "Cargo.toml": "c386b43110dd8ad421bec71d42bc2e1eae8c89ac8ea724329001302b89892bb0",
+  "crates/editor/Cargo.toml": "b833cd603e21cb46db67707b295f476aed2f824d8f918898566e1be9cf4f5692",
+  "crates/editor/src/search.rs": "be5a337d539c2ee9a9d009e8f6b3e039a9e7cf30ed28a8b76c57aab1e34045dc",
+  "crates/view-files/Cargo.toml": "80d65bd1aeee67e3916ef9e05495e46afb0164fcd3c9835fcdd3ffb2cbfe7043",
+  "crates/view-files/src/preview_search_tests.rs": "7e2fe3772cdbc48f2ea82176f36e92dc99f0c66fcfe5ef96dce5d06ce6cc9a36"
+}

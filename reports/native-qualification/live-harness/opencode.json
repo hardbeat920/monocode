@@ -1,0 +1,10 @@
+{
+  "provider": "opencode",
+  "test": "providers::opencode::transport_tests::live_turn_with_a_real_opencode",
+  "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+  "started_at": "2026-10-03T14:56:57.246117+00:00",
+  "outer_timeout_seconds": 240,
+  "exit": 101,
+  "elapsed_seconds": 0.29,
+  "log": "/private/tmp/mc/native-qa/live-harness/opencode.log"
+}

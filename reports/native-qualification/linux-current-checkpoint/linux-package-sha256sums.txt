@@ -1,0 +1,4 @@
+a7d459cbb93e4dfb0a56551e71b2316c6fb313dc5b31eb0d5cf40884b21ba1bd  MonoCode_0.6.0_x86_64-unknown-linux-gnu.AppImage
+46a02ef37fa9b156b218e9ce09aed9640d329cd8cd3733ff49cc16756910c5d8  MonoCode_0.6.0_x86_64-unknown-linux-gnu.deb
+a22078ac17495731c3384699a9e2409061e2c59a46d4b959c76152ea451c9e78  MonoCode_0.6.0_x86_64-unknown-linux-gnu.rpm
+89fa02eb7078dd8b5912db33a0e45683fa97a1ee7754af241c8d7c12b9c9d815  monocode-host_0.6.0_x86_64-unknown-linux-gnu.tar.gz

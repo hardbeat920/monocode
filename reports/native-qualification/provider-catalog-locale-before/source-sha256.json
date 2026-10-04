@@ -1,0 +1,17 @@
+{
+  "baseline_manifest_digest": "58c060e4687dc6bf600d89ce6423f2682e25355ea2867406ef3d996bb544a4c0",
+  "test_only_source_delta": [
+    {
+      "path": "crates/harness/src/providers/opencode/protocol.rs",
+      "sha256": "9aca188216c81133d7c17c31aa437c446e38f3f88f650b57d756eccfbe1027ae",
+      "size": 48557
+    },
+    {
+      "path": "crates/harness/src/providers/pi/protocol.rs",
+      "sha256": "e60680ddd1511ceca915108021ddc1cf9c230215fc6edb30245e7df887015111",
+      "size": 66090
+    }
+  ],
+  "source_archive_sha256": "a563eadc2421499e1b626bdba9d769b99ccb98342a3177c70d0175f723ea72a2",
+  "raw_evidence_archive_sha256": "d9345e13fe7b372d74f2be39070e76194c3985cbb29f7266e34fd0d7618b29d5"
+}

@@ -1,0 +1,108 @@
+{
+  "compile_command": [
+    "cargo",
+    "test",
+    "--workspace",
+    "--lib",
+    "--bins",
+    "--all-features",
+    "--locked",
+    "--offline",
+    "-j",
+    "2",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "source_sha256": {
+    "crates/editor/src/search.rs": "be5a337d539c2ee9a9d009e8f6b3e039a9e7cf30ed28a8b76c57aab1e34045dc",
+    "crates/view-files/src/preview_search_tests.rs": "7e2fe3772cdbc48f2ea82176f36e92dc99f0c66fcfe5ef96dce5d06ce6cc9a36",
+    "Cargo.toml": "c386b43110dd8ad421bec71d42bc2e1eae8c89ac8ea724329001302b89892bb0",
+    "Cargo.lock": "a1cc289a4521fb6b7d29a948cbdde1a26c1e2d0f2e871936daea4799035c5610",
+    "crates/editor/Cargo.toml": "b833cd603e21cb46db67707b295f476aed2f824d8f918898566e1be9cf4f5692",
+    "crates/view-files/Cargo.toml": "80d65bd1aeee67e3916ef9e05495e46afb0164fcd3c9835fcdd3ffb2cbfe7043"
+  },
+  "tests": [
+    {
+      "name": "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418",
+        "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418",
+        "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418",
+        "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_view_files-3d8cf6ccc4013167",
+        "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_view_files-3d8cf6ccc4013167",
+        "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418",
+        "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+      "command": [
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418",
+        "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 101,
+      "intended_failure": true
+    }
+  ],
+  "complete": true,
+  "test_binary_sha256": {
+    "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_editor-c7d468a8e879e418": "6df3793265e63672dc2dbf474cbc99ba9141cafec063a33a6a07920de46c2821",
+    "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source/target/debug/deps/monocode_view_files-3d8cf6ccc4013167": "f1ed6b3551529c16d765e19d9fa08a5a5b2307f4b677e2b5d1452afc55c62b87"
+  }
+}

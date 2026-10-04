@@ -1,0 +1,46 @@
+{
+  "platform": "linux",
+  "hostname": "QRK-GLUON",
+  "cases": [
+    {
+      "case": "inherited",
+      "node": {
+        "node": "v24.21.0",
+        "icu": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "relative": "2 hours ago"
+      }
+    },
+    {
+      "case": "language-list-with-english-lc-all",
+      "child_environment": {
+        "LANGUAGE": "fr_FR:de_DE",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
+      },
+      "node": {
+        "node": "v24.21.0",
+        "icu": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "relative": "2 hours ago"
+      }
+    },
+    {
+      "case": "language-french-with-C-lc-all",
+      "child_environment": {
+        "LANGUAGE": "fr_FR",
+        "LANG": "C",
+        "LC_ALL": "C"
+      },
+      "node": {
+        "node": "v24.21.0",
+        "icu": "78.3",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "relative": "2 hours ago"
+      }
+    }
+  ]
+}

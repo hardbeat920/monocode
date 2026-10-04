@@ -1,0 +1,10 @@
+{
+  "Cargo.toml": "99127edad43adcb0996b814e3f6a28c6566efa89c8a81af7bfda0390ebed7032",
+  "Cargo.lock": "cbf13379c7799d7135eb1b517b79b759d2999de6c36742ed0881c01df342c601",
+  "crates/engine/Cargo.toml": "fab92d0a20cc9be415c53c04ae322ce88b98d0a50723a1de885f20bf87b8b413",
+  "crates/engine/src/inbox/time.rs": "a599ee9b55b5c15ccad0a9b2ae48817c48fa659ad4127140f5b3443172194e9b",
+  "crates/engine/src/inbox/text.rs": "5ca1b6ac7858ffb99c564229418c9cb4c07dad5ee182033a1ac993fbcc9383c8",
+  "crates/engine/src/runtime/session_history.rs": "f0a299bbc96f50c75e2a63a5a8eada3fdee4364280adc4daad78b2635afc600a",
+  "crates/engine/src/workspace/files/file_index.rs": "bfba16d6cc7511f050a8bb36954fd5c80bea2071ffe124e15a3ad0b5ec365c85",
+  "crates/engine/src/history/app_search_tests.rs": "8fece5e240bde694cb96130e8e234f4a0a212fd9930854786a44232936349838"
+}

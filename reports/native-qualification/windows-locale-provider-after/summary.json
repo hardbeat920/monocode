@@ -1,0 +1,106 @@
+{
+  "complete": true,
+  "source": "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source",
+  "steps": [
+    {
+      "step": "compile",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "provider-catalog",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_harness-412cddb3959eb966.exe",
+        "catalog_locale",
+        "--nocapture"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "harness",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_harness-412cddb3959eb966.exe"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "locale",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-locale",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "probe-build",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "monocode-locale",
+        "--example",
+        "locale_probe",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j2"
+      ],
+      "exit_code": 0
+    },
+    {
+      "step": "default-locale",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+        "C:\\Users\\niost\\locale-default-probe.py",
+        "--probe",
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\examples\\locale_probe.exe",
+        "--node",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--output",
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\artifacts\\windows-locale-provider-after-20261003T202241Z\\default-locale.json"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "platform": "win32",
+  "source_archive_sha256": "28edc3c50ac009dc747833e9cfa8e54dc88545a913b5bf6e3f9ebc3841a73941",
+  "harness_binary": "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_harness-412cddb3959eb966.exe",
+  "harness_sha256": "44f2dbbd5af8b7a54815e528e164a2514aabb696270b01bf77a9cf577acce33d"
+}
