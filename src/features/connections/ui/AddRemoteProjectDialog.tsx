@@ -108,7 +108,7 @@ export function AddRemoteProjectDialog({
 
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
-      <div className="absolute inset-0 bg-black/30" onMouseDown={cancel} />
+      <div className="absolute inset-0" onMouseDown={cancel} />
       <form
         role="dialog"
         aria-modal="true"
