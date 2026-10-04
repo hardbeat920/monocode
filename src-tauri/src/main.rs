@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("computer-use-mcp") {
+        let interactive = std::env::args().nth(2).as_deref() == Some("interactive");
+        std::process::exit(monocode_lib::claude_computer_use::run_mcp(interactive));
+    }
     if let Some(code) = monocode_lib::ssh_askpass::maybe_run() {
         std::process::exit(code);
     }

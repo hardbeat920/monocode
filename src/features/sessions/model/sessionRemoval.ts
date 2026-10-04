@@ -7,9 +7,13 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
-import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
+import {
+  isFilesystemTab,
+  type WorkspaceTab,
+} from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
+  generatedImagePaths,
   newSession,
   type HarnessId,
   type RuntimeMode,
@@ -146,9 +150,7 @@ async function removeSession(
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
   if (options.mode === "delete") {
-    const imagePaths = stopped?.blocks.flatMap((block) =>
-      block.role === "image" && block.image ? [block.image.path] : [],
-    ) ?? [];
+    const imagePaths = generatedImagePaths(stopped?.blocks ?? []);
     await orchestrator.deleteSession(sessionId, () =>
       deleteSession(sessionId, imagePaths),
     );

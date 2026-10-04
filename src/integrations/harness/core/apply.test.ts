@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  generatedImagePaths,
   newSession,
   type Session,
 } from "../../../features/sessions/model/session";
@@ -254,6 +255,40 @@ describe("streamed markdown", () => {
           alt: "A clean product photo",
         },
       },
+    ]);
+  });
+
+  it("keeps a tool call's screenshots inside that call's row", () => {
+    let session = applyHarnessEvent(newSession("claude", "/tmp"), {
+      type: "tool.started",
+      callId: "shot_1",
+      title: "mcp__computer-use__screenshot",
+      kind: "other",
+    });
+    const shot = {
+      type: "image.generated" as const,
+      itemId: "shot_1:0",
+      path: "/app-data/generated-images/shot.jpg",
+      name: "Claude computer-use screenshot",
+      mimeType: "image/jpeg",
+      size: 8,
+    };
+    session = applyHarnessEvent(session, { ...shot, callId: "shot_1" });
+    expect(session.blocks).toHaveLength(1);
+    expect(session.blocks[0].tool?.images).toEqual([
+      {
+        path: shot.path,
+        name: shot.name,
+        mimeType: "image/jpeg",
+        size: 8,
+      },
+    ]);
+    expect(generatedImagePaths(session.blocks)).toEqual([shot.path]);
+    // A screenshot shown with the answer stands on its own.
+    session = applyHarnessEvent(session, { ...shot, itemId: "shown" });
+    expect(session.blocks.map((block) => block.role)).toEqual([
+      "tool",
+      "image",
     ]);
   });
 

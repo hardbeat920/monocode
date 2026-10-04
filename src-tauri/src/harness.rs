@@ -1032,7 +1032,7 @@ pub fn provider_account_remove(
     })
 }
 
-fn apply_provider_account(
+pub(crate) fn apply_provider_account(
     app: &AppHandle,
     cmd: &mut Command,
     account: Option<&HarnessAccount>,

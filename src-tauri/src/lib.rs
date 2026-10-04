@@ -5,6 +5,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+pub mod claude_computer_use;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -231,6 +232,8 @@ pub fn run() {
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.manage(claude_computer_use::ComputerUseHost::default());
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
@@ -454,6 +457,13 @@ pub fn run() {
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
+            claude_computer_use::claude_cu_config,
+            #[cfg(target_os = "macos")]
+            claude_computer_use::claude_cu_spawn,
+            #[cfg(target_os = "macos")]
+            claude_computer_use::claude_cu_poll,
+            #[cfg(target_os = "macos")]
+            claude_computer_use::claude_cu_close,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
