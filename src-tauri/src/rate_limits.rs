@@ -828,6 +828,70 @@ mod tests {
     }
 
     #[test]
+    fn usage_url_falls_back_to_process_env_and_settings_win() {
+        let dir = std::env::temp_dir().join(format!("monocode-claude-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous = std::env::var_os("ANTHROPIC_BASE_URL");
+        std::env::set_var("ANTHROPIC_BASE_URL", "https://env.example.com/");
+        let from_env = claude_usage_url(Some(&dir));
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://settings.example.com"}}"#,
+        )
+        .unwrap();
+        let from_settings = claude_usage_url(Some(&dir));
+        match previous {
+            Some(value) => std::env::set_var("ANTHROPIC_BASE_URL", value),
+            None => std::env::remove_var("ANTHROPIC_BASE_URL"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(from_env, "https://env.example.com/api/oauth/usage");
+        assert_eq!(
+            from_settings,
+            "https://settings.example.com/api/oauth/usage"
+        );
+    }
+
+    #[test]
+    fn usage_request_goes_to_custom_base_url() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/proxy", listener.local_addr().unwrap());
+        let body = r#"{"five_hour":{"utilization":12}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            let _ = stream.write_all(response.as_bytes());
+            request
+        });
+
+        let result = fetch_usage_with_token(&usage_url_for_base(Some(&base)), "synthetic-token");
+        let request = worker.join().unwrap();
+        assert_eq!(result.status, "ok");
+        assert_eq!(result.body.as_deref(), Some(body));
+        assert!(request.starts_with("GET /proxy/api/oauth/usage HTTP/1.1\r\n"));
+        let request = request.to_lowercase();
+        assert!(request.contains("authorization: bearer synthetic-token\r\n"));
+        assert!(request.contains("anthropic-beta: oauth-2025-04-20\r\n"));
+    }
+
+    #[test]
     fn usage_url_prefers_account_settings_over_defaults() {
         let dir = std::env::temp_dir().join(format!("monocode-claude-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
