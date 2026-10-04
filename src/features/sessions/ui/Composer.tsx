@@ -286,7 +286,11 @@ type Props = {
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
-  onEditQueuedMessage?: (messageId: string, text: string) => void;
+  onEditQueuedMessage?: (
+    messageId: string,
+    text: string,
+    attachments: Attachment[],
+  ) => void;
   onQueuedMessageEditingChange?: (messageId?: string) => void;
   onReorderQueuedMessages?: (orderedIds: string[]) => void;
   onSteerQueuedMessage?: (messageId: string) => void;
@@ -1866,6 +1870,7 @@ export function Composer({
       <MessageQueue
         messages={queuedMessages}
         status={queueStatus}
+        attachmentsSupported={attachmentsSupported}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}
