@@ -214,10 +214,9 @@ pub fn session_link_release_message(
 pub fn session_links_reset(
     store: State<'_, SessionStore>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let conn = store.lock_conn()?;
-    reset_agent_messages(&conn, &session_id)?;
-    Ok(())
+    reset_agent_messages(&conn, &session_id)
 }
 
 #[cfg(test)]

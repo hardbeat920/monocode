@@ -147,13 +147,9 @@ export async function releaseLinkedMessage(from: string, to: string) {
 /** A user message in a linked session lets its agents message again. */
 export function resetLinkBudget(sessionId: string) {
   if (!available()) return;
-  // The cached counts can be stale, since other windows don't announce
-  // recorded messages. The backend only touches links with a count.
-  const linked = links.some(
-    (link) => link.a === sessionId || link.b === sessionId,
-  );
-  if (!linked) return;
-  void invoke("session_links_reset", { sessionId })
-    .then(() => refreshSessionLinks())
+  // The link cache can be empty or stale here, so always ask the backend.
+  // It only resets linked rows with a count and returns how many it changed.
+  void invoke<number>("session_links_reset", { sessionId })
+    .then((changed) => (changed > 0 ? refreshSessionLinks() : undefined))
     .catch(() => undefined);
 }
