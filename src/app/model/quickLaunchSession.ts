@@ -41,7 +41,7 @@ export async function acceptQuickLaunch(
       sessionId: string,
       text: string,
       attachments: Attachment[],
-      options?: { intent: "plan" | "orchestrate" },
+      options?: { intent?: "plan" | "orchestrate"; appRequestId?: string },
     ) => SubmissionAcceptance;
     saveDraft?: (
       sessionId: string,
@@ -113,12 +113,10 @@ export async function acceptQuickLaunch(
       throw new Error("The workspace could not save the session draft yet.");
     }
   } else if (
-    !(await workspace.submit(
-      session.id,
-      launch.prompt,
-      attachments,
-      ...(launch.intent ? [{ intent: launch.intent }] : []),
-    ))
+    !(await workspace.submit(session.id, launch.prompt, attachments, {
+      ...(launch.intent ? { intent: launch.intent } : {}),
+      appRequestId: deliveryId,
+    }))
   ) {
     throw new Error("The workspace could not accept the queued session yet.");
   }

@@ -82,11 +82,12 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 14] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
+    "sessions.wait",
     "sessions.draft",
     "sessions.start",
     "worktrees.list",
@@ -112,6 +113,17 @@ Actions:
   sessions.send  {"sessionId":"...","prompt":"..."}
                   Submit a follow-up to an idle session in this project.
                   A busy session is rejected. Reuse --request-id on retries.
+                  The result's requestId identifies the submitted turn.
+  sessions.wait  {"sessionId":"...","sentRequestId":"<requestId>",
+                  "timeoutSeconds":20,"maxChars":1200}
+                  Wait up to timeoutSeconds (1-25) for the turn that
+                  sessions.send or sessions.start submitted with that
+                  requestId to finish, then return its exchange. The reply
+                  is the turn's last message, after any follow-ups steered
+                  into it. Omit sentRequestId to wait for the session to go
+                  idle and get its newest exchange. settled:false means it is
+                  still working; call again to keep waiting. One wait at a
+                  time per session.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.

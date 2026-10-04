@@ -179,7 +179,18 @@ it("starts the first turn in the mode picked in the floating composer", async ()
     "quick-session",
     request.prompt,
     [],
-    { intent: "orchestrate" },
+    { intent: "orchestrate", appRequestId: "quick-session" },
+  );
+});
+
+it("tags the submitted first turn with the delivery ID", async () => {
+  const { request, workspace } = setup();
+  await acceptQuickLaunch(request, "app-lead-start-1", workspace);
+  expect(workspace.submit).toHaveBeenCalledWith(
+    "app-lead-start-1",
+    request.prompt,
+    [],
+    { appRequestId: "app-lead-start-1" },
   );
 });
 

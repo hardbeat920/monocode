@@ -31,7 +31,10 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
-import { sessionConversationPage } from "./sessionConversation";
+import {
+  sessionConversationPage,
+  sessionConversationTurn,
+} from "./sessionConversation";
 
 export type AppSessionListing = {
   id: string;
@@ -82,6 +85,10 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.list", []],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
+  [
+    "sessions.wait",
+    ["sessionId", "sentRequestId", "timeoutSeconds", "maxChars"],
+  ],
   ["sessions.draft", ["sessionId", "prompt"]],
   [
     "sessions.start",
@@ -109,6 +116,9 @@ const FIELDS = new Map<string, readonly string[]>([
   ["notes.read", ["id"]],
   ["notes.write", ["id", "title", "body", "tags"]],
 ]);
+
+const WAIT_POLL_MS = 500;
+const waitingSources = new Set<string>();
 
 function fields(action: string, input: Record<string, unknown>) {
   const allowed = FIELDS.get(action);
@@ -336,7 +346,52 @@ export async function handleAgentApp(
         prompt,
         `app-${source.id}-${requestId}`,
       );
-      return { sessionId: id, submitted: true, ...result };
+      return { sessionId: id, submitted: true, requestId, ...result };
+    }
+    case "sessions.wait": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("This session cannot wait for its own turn");
+      const sentRequestId = optionalString(
+        input.sentRequestId,
+        "sentRequestId",
+        128,
+      );
+      if (sentRequestId && !/^[A-Za-z0-9_-]{1,128}$/.test(sentRequestId))
+        throw new Error("Invalid sentRequestId");
+      const timeoutSeconds = input.timeoutSeconds ?? 20;
+      if (
+        !Number.isInteger(timeoutSeconds) ||
+        (timeoutSeconds as number) < 1 ||
+        (timeoutSeconds as number) > 25
+      )
+        throw new Error("timeoutSeconds must be an integer from 1 to 25");
+      const maxChars = input.maxChars as number | undefined;
+      await projectSession(source, id, host);
+      if (waitingSources.has(source.id))
+        throw new Error(
+          "This session is already waiting; wait for one session at a time",
+        );
+      waitingSources.add(source.id);
+      try {
+        const appRequestId =
+          sentRequestId && `app-${source.id}-${sentRequestId}`;
+        const deadline = Date.now() + (timeoutSeconds as number) * 1000;
+        for (;;) {
+          const target = await host.session(id);
+          if (!target) throw new Error("Session was not found in this project");
+          const { turn, settled } = sessionConversationTurn(
+            target,
+            appRequestId,
+            maxChars,
+          );
+          if (settled || Date.now() >= deadline)
+            return { sessionId: id, settled, busy: !!target.busy, turn };
+          await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+        }
+      } finally {
+        waitingSources.delete(source.id);
+      }
     }
     case "sessions.draft": {
       const id = requiredString(input.sessionId, "sessionId", 256);
@@ -393,6 +448,7 @@ export async function handleAgentApp(
       else await host.start(launch, id);
       return {
         id,
+        requestId,
         cwd: launch.cwd,
         harness: launch.harness,
         model: launch.model,
