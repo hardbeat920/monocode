@@ -1,6 +1,6 @@
 import { orderByIds } from "../../../shared/lib/reorder";
 import { isPreparingHandoff } from "./handoff";
-import type { QueuedMessage, Session } from "./session";
+import type { Attachment, QueuedMessage, Session } from "./session";
 
 export function queuedHead(session: Session): QueuedMessage | undefined {
   return session.queuedMessages?.[0];
@@ -27,6 +27,27 @@ export function dequeueQueuedMessage(
       session.editingQueuedMessageId === messageId
         ? undefined
         : session.editingQueuedMessageId,
+  };
+}
+
+/** Replace the draft text and attachments of one waiting follow-up. */
+export function editQueuedMessage(
+  session: Session,
+  messageId: string,
+  text: string,
+  attachments: Attachment[],
+): Session {
+  if (!session.queuedMessages?.some((message) => message.id === messageId)) {
+    return session;
+  }
+  return {
+    ...session,
+    queuedMessages: session.queuedMessages.map((message) =>
+      message.id === messageId
+        ? { ...message, text, attachments: [...attachments] }
+        : message,
+    ),
+    editingQueuedMessageId: undefined,
   };
 }
 

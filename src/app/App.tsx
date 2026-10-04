@@ -431,6 +431,7 @@ import {
 import {
   canDispatchQueuedHead,
   dequeueQueuedMessage,
+  editQueuedMessage,
   queuedMessageForSubmit,
   reorderQueuedMessages,
 } from "../features/sessions/model/messageQueue";
@@ -7696,17 +7697,16 @@ function Workspace({
   );
 
   const onEditQueuedMessage = useCallback(
-    (sessionId: string, messageId: string, text: string) => {
+    (
+      sessionId: string,
+      messageId: string,
+      text: string,
+      attachments: Attachment[],
+    ) => {
       setSessions((prev) =>
         prev.map((session) =>
           session.id === sessionId
-            ? {
-                ...session,
-                queuedMessages: session.queuedMessages?.map((message) =>
-                  message.id === messageId ? { ...message, text } : message,
-                ),
-                editingQueuedMessageId: undefined,
-              }
+            ? editQueuedMessage(session, messageId, text, attachments)
             : session,
         ),
       );

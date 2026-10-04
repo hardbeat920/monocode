@@ -3,6 +3,7 @@ import { appendPreparingHandoff } from "./handoff";
 import {
   canDispatchQueuedHead,
   dequeueQueuedMessage,
+  editQueuedMessage,
   isEditingQueuedHead,
   queuedHead,
   queuedMessageForSubmit,
@@ -156,5 +157,35 @@ describe("reorderQueuedMessages", () => {
     expect(reorderQueuedMessages(session, ["a", "b", "c"])).toBe(session);
     expect(reorderQueuedMessages(session, ["a", "missing"])).toBe(session);
     expect(reorderQueuedMessages(session, ["a", "a"])).toBe(session);
+  });
+});
+
+describe("editQueuedMessage", () => {
+  it("writes text and attachments then clears the editing mark", () => {
+    const image = {
+      id: "img",
+      name: "shot.png",
+      mimeType: "image/png",
+      kind: "image" as const,
+      size: 10,
+    };
+    const next = editQueuedMessage(
+      chat({ editingQueuedMessageId: "a" }),
+      "a",
+      "updated",
+      [image],
+    );
+    expect(next.queuedMessages?.[0]).toEqual({
+      id: "a",
+      text: "updated",
+      attachments: [image],
+    });
+    expect(next.queuedMessages?.[1]?.text).toBe("second");
+    expect(next.editingQueuedMessageId).toBeUndefined();
+  });
+
+  it("leaves a missing id unchanged", () => {
+    const session = chat();
+    expect(editQueuedMessage(session, "missing", "x", [])).toBe(session);
   });
 });

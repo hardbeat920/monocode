@@ -33,6 +33,11 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
     settled: true,
   }),
 }));
+const pickAttachments = vi.hoisted(() => vi.fn());
+vi.mock("../model/attachments", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../model/attachments")>();
+  return { ...original, pickAttachments };
+});
 
 import { Composer, ComposerAction } from "./Composer";
 import {
@@ -89,6 +94,8 @@ describe("Composer question focus", () => {
 
   beforeEach(() => {
     clearMcpSettingsCache();
+    pickAttachments.mockReset();
+    pickAttachments.mockResolvedValue([]);
     mcpInvoke.mockReset();
     mcpInvoke.mockImplementation(async (command: string) =>
       command === "mcp_discover"
@@ -1861,6 +1868,173 @@ describe("Composer question focus", () => {
       container.querySelector('img[src="blob:shot"]'),
     ).not.toBeNull();
     expect(container.textContent).toContain("notes.md");
+    expect(
+      container.querySelector('[aria-label="Remove shot.png"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="Attach files to queued message"]'),
+    ).not.toBeNull();
+  });
+
+  it("adds and removes attachments while editing a queued message", async () => {
+    const onEditQueuedMessage = vi.fn();
+    pickAttachments.mockResolvedValueOnce([
+      {
+        id: "extra",
+        name: "extra.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 8,
+        previewUrl: "blob:extra",
+      },
+    ]);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+                {
+                  id: "file",
+                  name: "notes.md",
+                  mimeType: "text/markdown",
+                  kind: "file",
+                  size: 4,
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+          onEditQueuedMessage,
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove shot.png"]')!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:shot"]')).toBeNull();
+    expect(container.textContent).toContain("notes.md");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Attach files to queued message"]',
+        )!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:extra"]')).not.toBeNull();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Save queued message"]',
+        )!
+        .click(),
+    );
+    expect(onEditQueuedMessage).toHaveBeenCalledWith("q1", "see these", [
+      expect.objectContaining({ id: "file", name: "notes.md" }),
+      expect.objectContaining({ id: "extra", name: "extra.png" }),
+    ]);
+  });
+
+  it("discards queued attachment edits on cancel", async () => {
+    const onEditQueuedMessage = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+          onEditQueuedMessage,
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove shot.png"]')!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    expect(onEditQueuedMessage).not.toHaveBeenCalled();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:shot"]')).not.toBeNull();
   });
 
   it("marks queued rows as reorderable when more than one is waiting", async () => {

@@ -149,6 +149,7 @@ export type SessionPaneProps = {
     sessionId: string,
     messageId: string,
     text: string,
+    attachments: Attachment[],
   ) => void;
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
   onReorderQueuedMessages: (sessionId: string, orderedIds: string[]) => void;
@@ -661,8 +662,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onDeleteQueuedMessage={(messageId) =>
         onDeleteQueuedMessage(session.id, messageId)
       }
-      onEditQueuedMessage={(messageId, text) =>
-        onEditQueuedMessage(session.id, messageId, text)
+      onEditQueuedMessage={(messageId, text, attachments) =>
+        onEditQueuedMessage(session.id, messageId, text, attachments)
       }
       onQueuedMessageEditingChange={(messageId) =>
         onQueuedMessageEditingChange(session.id, messageId)

@@ -117,6 +117,7 @@ type Shared = {
     sessionId: string,
     messageId: string,
     text: string,
+    attachments: Attachment[],
   ) => void;
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
   onReorderQueuedMessages: (sessionId: string, orderedIds: string[]) => void;
