@@ -9899,7 +9899,7 @@ function Workspace({
                 );
               // Counts against the loop guard; rejects once the limit is hit.
               // A message the target doesn't accept gives its count back.
-              await recordLinkedMessage(from.id, to);
+              const reservation = await recordLinkedMessage(from.id, to);
               let accepted;
               try {
                 accepted = await submitSessionRef.current(to, message, [], {
@@ -9910,11 +9910,11 @@ function Workspace({
                   sessionContext: undefined,
                 });
               } catch (error) {
-                await releaseLinkedMessage(from.id, to).catch(() => undefined);
+                await releaseLinkedMessage(from.id, to, reservation).catch(() => undefined);
                 throw error;
               }
               if (!accepted) {
-                await releaseLinkedMessage(from.id, to).catch(() => undefined);
+                await releaseLinkedMessage(from.id, to, reservation).catch(() => undefined);
                 throw new Error("The linked session could not accept the message");
               }
               return { queued: !!target.busy, alreadySent: false };

@@ -124,23 +124,37 @@ export async function unlinkSessions(first: string, second: string) {
   await refreshSessionLinks();
 }
 
+/** One counted agent message. Pass it to `releaseLinkedMessage` to give it back. */
+export type LinkReservation = { count: number; epoch: number };
+
 /** Count one agent message on the link; rejects once the limit is reached. */
 export async function recordLinkedMessage(
   from: string,
   to: string,
-): Promise<number> {
-  const count = await invoke<number>("session_link_record_message", {
+): Promise<LinkReservation> {
+  const reservation = await invoke<LinkReservation>("session_link_record_message", {
     first: from,
     second: to,
     limit: LINK_MESSAGE_LIMIT,
   });
   void refreshSessionLinks();
-  return count;
+  return reservation;
 }
 
-/** Give back a counted message that the target session did not accept. */
-export async function releaseLinkedMessage(from: string, to: string) {
-  await invoke("session_link_release_message", { first: from, second: to });
+/**
+ * Give back a counted message that the target session did not accept. The
+ * backend ignores it if the user reset the budget since it was counted.
+ */
+export async function releaseLinkedMessage(
+  from: string,
+  to: string,
+  reservation: LinkReservation,
+) {
+  await invoke("session_link_release_message", {
+    first: from,
+    second: to,
+    epoch: reservation.epoch,
+  });
   void refreshSessionLinks();
 }
 

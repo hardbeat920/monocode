@@ -2,7 +2,9 @@
 //!
 //! A link is stored once per unordered pair. `agent_messages` counts messages
 //! one agent sent to the other since a user last wrote in either session, so a
-//! pair of agents cannot keep each other running forever.
+//! pair of agents cannot keep each other running forever. `budget_epoch` goes
+//! up on every reset, so a late release of a message counted before the reset
+//! cannot lower the new count.
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -22,12 +24,21 @@ pub struct SessionLink {
     created_at: i64,
 }
 
+/// One counted agent message. Pass `epoch` back to release it.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkReservation {
+    count: i64,
+    epoch: i64,
+}
+
 pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS session_links (
            a TEXT NOT NULL,
            b TEXT NOT NULL,
            agent_messages INTEGER NOT NULL DEFAULT 0,
+           budget_epoch INTEGER NOT NULL DEFAULT 0,
            created_at INTEGER NOT NULL,
            PRIMARY KEY (a, b),
            CHECK (a < b)
@@ -98,7 +109,7 @@ fn record_agent_message(
     first: &str,
     second: &str,
     limit: i64,
-) -> Result<i64, String> {
+) -> Result<LinkReservation, String> {
     let (a, b) = pair(first, second)?;
     let changed = conn
         .execute(
@@ -107,30 +118,40 @@ fn record_agent_message(
             params![a, b, limit],
         )
         .map_err(|e| e.to_string())?;
-    let count: Option<i64> = conn
+    let reservation = conn
         .query_row(
-            "SELECT agent_messages FROM session_links WHERE a = ?1 AND b = ?2",
+            "SELECT agent_messages, budget_epoch FROM session_links WHERE a = ?1 AND b = ?2",
             params![a, b],
-            |row| row.get(0),
+            |row| {
+                Ok(LinkReservation {
+                    count: row.get(0)?,
+                    epoch: row.get(1)?,
+                })
+            },
         )
         .ok();
-    match (changed, count) {
+    match (changed, reservation) {
         (_, None) => Err("These sessions are not linked".into()),
         (0, Some(_)) => Err(format!(
             "The agents in these linked sessions have sent each other {limit} messages since the user last wrote. Ask the user to send a message in either session before sending more."
         )),
-        (_, Some(count)) => Ok(count),
+        (_, Some(reservation)) => Ok(reservation),
     }
 }
 
 /// Give back a message counted by `record_agent_message` that the target
-/// session did not accept.
-fn release_agent_message(conn: &Connection, first: &str, second: &str) -> Result<(), String> {
+/// session did not accept. A reset since then already cleared it.
+fn release_agent_message(
+    conn: &Connection,
+    first: &str,
+    second: &str,
+    epoch: i64,
+) -> Result<(), String> {
     let (a, b) = pair(first, second)?;
     conn.execute(
         "UPDATE session_links SET agent_messages = agent_messages - 1
-         WHERE a = ?1 AND b = ?2 AND agent_messages > 0",
-        params![a, b],
+         WHERE a = ?1 AND b = ?2 AND agent_messages > 0 AND budget_epoch = ?3",
+        params![a, b, epoch],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -140,7 +161,7 @@ fn release_agent_message(conn: &Connection, first: &str, second: &str) -> Result
 fn reset_agent_messages(conn: &Connection, session: &str) -> Result<usize, String> {
     validate_id(session, "session")?;
     conn.execute(
-        "UPDATE session_links SET agent_messages = 0
+        "UPDATE session_links SET agent_messages = 0, budget_epoch = budget_epoch + 1
          WHERE (a = ?1 OR b = ?1) AND agent_messages > 0",
         params![session],
     )
@@ -195,7 +216,7 @@ pub fn session_link_record_message(
     first: String,
     second: String,
     limit: i64,
-) -> Result<i64, String> {
+) -> Result<LinkReservation, String> {
     let conn = store.lock_conn()?;
     record_agent_message(&conn, &first, &second, limit.clamp(1, 100))
 }
@@ -205,9 +226,10 @@ pub fn session_link_release_message(
     store: State<'_, SessionStore>,
     first: String,
     second: String,
+    epoch: i64,
 ) -> Result<(), String> {
     let conn = store.lock_conn()?;
-    release_agent_message(&conn, &first, &second)
+    release_agent_message(&conn, &first, &second, epoch)
 }
 
 #[tauri::command(async)]
@@ -250,12 +272,15 @@ mod tests {
         assert!(record_agent_message(&conn, "a", "b", 5).is_err());
         link(&conn, "a", "b").unwrap();
         for expected in 1..=5 {
-            assert_eq!(record_agent_message(&conn, "b", "a", 5).unwrap(), expected);
+            assert_eq!(
+                record_agent_message(&conn, "b", "a", 5).unwrap().count,
+                expected
+            );
         }
         let error = record_agent_message(&conn, "a", "b", 5).unwrap_err();
         assert!(error.contains("5 messages"));
         reset_agent_messages(&conn, "b").unwrap();
-        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
+        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap().count, 1);
     }
 
     #[test]
@@ -263,10 +288,25 @@ mod tests {
         let store = store();
         let conn = store.lock_conn().unwrap();
         link(&conn, "a", "b").unwrap();
-        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
-        release_agent_message(&conn, "b", "a").unwrap();
-        release_agent_message(&conn, "a", "b").unwrap();
-        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
+        let first = record_agent_message(&conn, "a", "b", 5).unwrap();
+        assert_eq!(first.count, 1);
+        release_agent_message(&conn, "b", "a", first.epoch).unwrap();
+        release_agent_message(&conn, "a", "b", first.epoch).unwrap();
+        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap().count, 1);
+    }
+
+    #[test]
+    fn a_release_from_before_a_reset_leaves_the_new_budget_alone() {
+        let store = store();
+        let conn = store.lock_conn().unwrap();
+        link(&conn, "a", "b").unwrap();
+        let stale = record_agent_message(&conn, "a", "b", 5).unwrap();
+        reset_agent_messages(&conn, "a").unwrap();
+        for _ in 0..5 {
+            record_agent_message(&conn, "a", "b", 5).unwrap();
+        }
+        release_agent_message(&conn, "a", "b", stale.epoch).unwrap();
+        assert!(record_agent_message(&conn, "a", "b", 5).is_err());
     }
 
     #[test]
