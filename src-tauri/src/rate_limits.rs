@@ -11,7 +11,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::dirs_home;
 
-const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+const OAUTH_USAGE_PATH: &str = "/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const USER_AGENT: &str = "claude-code/2.1.0";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -427,13 +428,62 @@ fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFet
         return Ok(usage_error(401));
     }
 
-    Ok(fetch_usage_with_token(&creds.access_token))
+    let url = claude_usage_url(config_dir.as_deref());
+    Ok(fetch_usage_with_token(&url, &creds.access_token))
 }
 
-fn fetch_usage_with_token(token: &str) -> ClaudeUsageFetch {
+/// Claude Code sends its OAuth requests to `ANTHROPIC_BASE_URL` when set, so
+/// the usage probe must too or proxied setups report the wrong endpoint's
+/// numbers (or fail outright). Claude applies the `env` block of its
+/// settings.json over the process environment, so that wins here as well.
+fn claude_usage_url(config_dir: Option<&std::path::Path>) -> String {
+    let base = claude_settings_env(config_dir, "ANTHROPIC_BASE_URL")
+        .or_else(|| env_var("ANTHROPIC_BASE_URL"));
+    usage_url_for_base(base.as_deref())
+}
+
+fn usage_url_for_base(base: Option<&str>) -> String {
+    let base = base
+        .map(|value| value.trim().trim_end_matches('/'))
+        .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
+        .unwrap_or(DEFAULT_ANTHROPIC_BASE_URL);
+    format!("{base}{OAUTH_USAGE_PATH}")
+}
+
+fn claude_config_dir(config_dir: Option<&std::path::Path>) -> Option<PathBuf> {
+    if let Some(dir) = config_dir {
+        return Some(dir.to_path_buf());
+    }
+    if let Some(dir) = env_var("CLAUDE_CONFIG_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let home = dirs_home().or_else(|| {
+        std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
+    })?;
+    Some(PathBuf::from(home).join(".claude"))
+}
+
+fn claude_settings_env(config_dir: Option<&std::path::Path>, name: &str) -> Option<String> {
+    let path = claude_config_dir(config_dir)?.join("settings.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    settings_env_value(&raw, name)
+}
+
+fn settings_env_value(raw: &str, name: &str) -> Option<String> {
+    let settings: Value = serde_json::from_str(raw).ok()?;
+    settings
+        .get("env")?
+        .get(name)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+}
+
+fn fetch_usage_with_token(url: &str, token: &str) -> ClaudeUsageFetch {
     let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
     let result = agent
-        .get(OAUTH_USAGE_URL)
+        .get(url)
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", OAUTH_BETA)
         .set("User-Agent", USER_AGENT)
@@ -734,6 +784,64 @@ fn run_with_timeout(cmd: &mut std::process::Command, timeout: Duration) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_url_defaults_to_anthropic() {
+        assert_eq!(
+            usage_url_for_base(None),
+            "https://api.anthropic.com/api/oauth/usage"
+        );
+        assert_eq!(
+            usage_url_for_base(Some("  ")),
+            "https://api.anthropic.com/api/oauth/usage"
+        );
+        assert_eq!(
+            usage_url_for_base(Some("not a url")),
+            "https://api.anthropic.com/api/oauth/usage"
+        );
+    }
+
+    #[test]
+    fn usage_url_honors_custom_base_url() {
+        assert_eq!(
+            usage_url_for_base(Some("https://proxy.example.com/anthropic/")),
+            "https://proxy.example.com/anthropic/api/oauth/usage"
+        );
+        assert_eq!(
+            usage_url_for_base(Some("http://localhost:8080")),
+            "http://localhost:8080/api/oauth/usage"
+        );
+    }
+
+    #[test]
+    fn settings_env_reads_base_url_from_claude_settings() {
+        let raw = r#"{"env":{"ANTHROPIC_BASE_URL":" https://proxy.example.com "}}"#;
+        assert_eq!(
+            settings_env_value(raw, "ANTHROPIC_BASE_URL").as_deref(),
+            Some("https://proxy.example.com")
+        );
+        assert_eq!(
+            settings_env_value(r#"{"env":{}}"#, "ANTHROPIC_BASE_URL"),
+            None
+        );
+        assert_eq!(settings_env_value("{", "ANTHROPIC_BASE_URL"), None);
+    }
+
+    #[test]
+    fn usage_url_prefers_account_settings_over_defaults() {
+        let dir = std::env::temp_dir().join(format!("monocode-claude-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example.com"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            claude_usage_url(Some(&dir)),
+            "https://gateway.example.com/api/oauth/usage"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn extract_access_token_from_claude_credentials() {
