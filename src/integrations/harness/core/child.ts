@@ -79,6 +79,11 @@ const livePid = new Map<string, number>();
  * handlers.
  */
 const retiredPids = new Map<string, number[]>();
+/**
+ * A child that exited on its own. The exit can arrive before its last output
+ * lines, so it is only retired once the session spawns or kills a child.
+ */
+const exitedPid = new Map<string, number>();
 const pendingExit = new Map<
   string,
   Array<{ code: number | null; pid: number }>
@@ -95,13 +100,21 @@ export function isCurrentChildExit(
 }
 
 function retireChild(sessionId: string): void {
-  const pid = livePid.get(sessionId);
+  const pids = [livePid.get(sessionId), exitedPid.get(sessionId)].filter(
+    (pid): pid is number => pid != null,
+  );
   livePid.delete(sessionId);
-  if (pid == null) return;
+  exitedPid.delete(sessionId);
+  if (pids.length === 0) return;
   const retired = retiredPids.get(sessionId) ?? [];
-  retired.push(pid);
+  retired.push(...pids);
   if (retired.length > 8) retired.splice(0, retired.length - 8);
   retiredPids.set(sessionId, retired);
+}
+
+function noteChildExited(sessionId: string, pid: number): void {
+  livePid.delete(sessionId);
+  exitedPid.set(sessionId, pid);
 }
 
 /** True when the line came from a child this session no longer runs. */
@@ -173,7 +186,7 @@ function ensureBridge() {
         if (!handler || pid == null || pid <= 0) return;
         const currentPid = livePid.get(sessionId);
         if (isCurrentChildExit(currentPid, pid)) {
-          retireChild(sessionId);
+          noteChildExited(sessionId, pid);
           handler(code);
           return;
         }
@@ -229,6 +242,7 @@ function teardownBridge() {
   ownedSse.clear();
   livePid.clear();
   retiredPids.clear();
+  exitedPid.clear();
   pendingExit.clear();
   void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
@@ -353,7 +367,7 @@ export async function spawnChild(
   pendingExit.delete(sessionId);
   const exited = exits?.find((event) => event.pid === pid);
   if (!exited) return;
-  retireChild(sessionId);
+  noteChildExited(sessionId, pid);
   exitHandlers.get(sessionId)?.(exited.code);
 }
 
@@ -380,6 +394,7 @@ export function killAllChildren(): Promise<void> {
   ownedSse.clear();
   livePid.clear();
   retiredPids.clear();
+  exitedPid.clear();
   pendingExit.clear();
   return invoke("harness_kill_all");
 }

@@ -276,6 +276,33 @@ describe("child bridge", () => {
     release();
   });
 
+  it("delivers output that arrives after its child's exit", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    const pids = [41, 42];
+    mocks.invoke.mockImplementation(async (command: string) =>
+      command === "harness_spawn" ? pids.shift() : undefined,
+    );
+    const lines: string[] = [];
+    const exit = vi.fn();
+    child.watchChild("thread", (line) => lines.push(line), exit);
+    await child.spawnChild("thread", "/bin/claude", [], "/repo");
+    emit("harness-exit", { sessionId: "thread", code: 0, pid: 41 });
+    emit("harness-stdout", { sessionId: "thread", line: "last", pid: 41 });
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(lines).toEqual(["last"]);
+
+    // Once the session starts another child, the exited one is retired.
+    await child.spawnChild("thread", "/bin/claude", [], "/repo");
+    emit("harness-stdout", { sessionId: "thread", line: "stale", pid: 41 });
+    emit("harness-stdout", { sessionId: "thread", line: "new", pid: 42 });
+    expect(lines).toEqual(["last", "new"]);
+    release();
+  });
+
   it("does not hold output for children another window owns", async () => {
     installResolvedListeners();
     const child = await loadChild();
