@@ -240,6 +240,42 @@ describe("child bridge", () => {
     release();
   });
 
+  it("drops late output from a child replaced under the same session id", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    const pids = [41, 42];
+    mocks.invoke.mockImplementation(async (command: string) =>
+      command === "harness_spawn" ? pids.shift() : undefined,
+    );
+    child.watchChild("thread", () => undefined, vi.fn());
+    await child.spawnChild("thread", "/bin/claude", [], "/repo");
+    await child.killChild("thread");
+
+    const lines: string[] = [];
+    const errors: string[] = [];
+    child.watchChild(
+      "thread",
+      (line) => lines.push(line),
+      vi.fn(),
+      (line) => errors.push(line),
+    );
+    const spawning = child.spawnChild("thread", "/bin/claude", [], "/repo");
+    // The old child's output can still be in flight while the new one starts.
+    emit("harness-stdout", { sessionId: "thread", line: "old", pid: 41 });
+    emit("harness-stderr", { sessionId: "thread", line: "old", pid: 41 });
+    await spawning;
+    emit("harness-stdout", { sessionId: "thread", line: "old-late", pid: 41 });
+    emit("harness-stdout", { sessionId: "thread", line: "new", pid: 42 });
+    emit("harness-stdout", { sessionId: "thread", line: "no pid" });
+
+    expect(lines).toEqual(["new", "no pid"]);
+    expect(errors).toEqual([]);
+    release();
+  });
+
   it("does not hold output for children another window owns", async () => {
     installResolvedListeners();
     const child = await loadChild();

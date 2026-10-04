@@ -700,14 +700,24 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
-  if (type === "result" && isMissingConversationResult(rec)) {
-    live.conversationMissing = true;
-    return;
+  const missing = type === "result" && isMissingConversationResult(rec);
+  if (missing) {
+    // Forget the id either way so the next process starts a new conversation.
+    resumeByThread.delete(sessionId);
+    tasksByThread.delete(sessionId);
+    if (!live.initialized) {
+      // ensureLive retries right away.
+      live.conversationMissing = true;
+      return;
+    }
+    // After startup the result ends the running turn with its error.
   }
 
   const sessionIdFromLine = sessionIdFromMessage(rec);
   const switched =
-    sessionIdFromLine != null && sessionIdFromLine !== live.claudeSessionId;
+    !missing &&
+    sessionIdFromLine != null &&
+    sessionIdFromLine !== live.claudeSessionId;
   if (switched) {
     live.claudeSessionId = sessionIdFromLine;
     // A different conversation starts with its own task ids.
@@ -717,7 +727,10 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       tasks: live.claudeTasks,
     });
   }
-  if (live.conversationSaved ? switched : showsSavedConversation(rec)) {
+  if (
+    !missing &&
+    (live.conversationSaved ? switched : showsSavedConversation(rec))
+  ) {
     bindConversation(sessionId, live);
   }
 
