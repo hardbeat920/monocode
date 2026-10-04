@@ -11,7 +11,7 @@ let openCodeVersion = "opencode 1.14.19";
 /** v2 inbox ids handed out, in order, by the prompt and compact routes. */
 let admittedIds: Record<string, string[]> = {};
 /** Runs before an admission response returns, as a fast server would. */
-let onAdmit: ((path: string, id: string) => void) | undefined;
+let onAdmit: ((path: string, id: string | undefined) => void) | undefined;
 let v2SessionDirectory = "/repo";
 let v2ForkDirectory: string | undefined;
 let v2MoveApplies = true;
@@ -74,8 +74,13 @@ const harnessHttp = vi.fn(
     }
     const admitted =
       input.method === "POST" ? admittedIds[url.pathname]?.shift() : undefined;
-    if (admitted) {
+    if (
+      input.method === "POST" &&
+      /^\/api\/session\/[^/]+\/(?:prompt|compact)$/.test(url.pathname)
+    ) {
       onAdmit?.(url.pathname, admitted);
+    }
+    if (admitted) {
       return { status: 200, body: JSON.stringify({ data: { id: admitted } }) };
     }
     return { status: 204, body: "" };
@@ -522,6 +527,90 @@ describe("OpenCode 2.x completion correlation", () => {
     expect(events).toContainEqual({ type: "message.completed" });
   });
 
+  describe.each(["with an inbox id", "without an inbox id"])(
+    "early completion %s",
+    (admission) => {
+      it.each(["succeeded", "failed", "interrupted"])(
+        "preserves an early %s event when delivery is not reported",
+        async (execution) => {
+          if (admission === "with an inbox id") {
+            admittedIds[PROMPT] = ["msg_fast"];
+          }
+          onAdmit = () => {
+            v2("session.text.delta", {
+              assistantMessageID: "msg_reply",
+              delta: "FAST",
+            });
+            v2(`session.execution.${execution}`, {
+              error: { message: "Rate limited" },
+              reason: "shutdown",
+            });
+          };
+          const events: HarnessEvent[] = [];
+          const done = turn(events);
+          const finished = settled(done);
+          await waitFor(finished, "early terminal completion");
+          await done;
+          expect(replyText(events)).toBe("FAST");
+          if (execution === "failed") {
+            expect(events).toContainEqual({
+              type: "session.error",
+              message: "Rate limited",
+            });
+          } else {
+            expect(events).toContainEqual({ type: "message.completed" });
+          }
+        },
+      );
+    },
+  );
+
+  it("keeps early completion with delivery but no admission id", async () => {
+    onAdmit = () => {
+      v2("session.inbox.delivered", { inboxID: "msg_fast" });
+      v2("session.execution.succeeded");
+    };
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(settled(done), "id-less early completion");
+    await done;
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("preserves the first early outcome instead of a later idle event", async () => {
+    admittedIds[PROMPT] = ["msg_fail"];
+    onAdmit = () => {
+      v2("session.execution.failed", { error: { message: "Rate limited" } });
+      v2("session.idle");
+    };
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(settled(done), "first early outcome");
+    await done;
+    expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
+    expect(events).not.toContainEqual({ type: "message.completed" });
+  });
+
+  it("does not replay an uncorrelated early outcome when delivery becomes available", async () => {
+    admittedIds[PROMPT] = ["msg_current"];
+    onAdmit = () => {
+      v2("session.execution.interrupted", { reason: "user" });
+      v2("session.inbox.delivered", { inboxID: "msg_current" });
+    };
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    const finished = settled(done);
+    await waitFor(() => calls(PROMPT) === 1, "prompt");
+    await drain();
+    expect(finished()).toBe(false);
+    expect(events).not.toContainEqual({ type: "message.completed" });
+
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "CURRENT" });
+    v2("session.execution.succeeded");
+    await done;
+    expect(replyText(events)).toBe("CURRENT");
+  });
+
   it("reports a failed run as a session error", async () => {
     admittedIds[PROMPT] = ["msg_fail"];
     const events: HarnessEvent[] = [];
@@ -581,6 +670,32 @@ describe("OpenCode 2.x completion correlation", () => {
     v2("session.compaction.ended", { reason: "manual", text: "summary" });
     await compaction;
   });
+
+  describe.each(["with an inbox id", "without an inbox id"])(
+    "early compaction %s",
+    (admission) => {
+      it.each(["ended", "failed"])(
+        "preserves an early compaction.%s event when delivery is not reported",
+        async (outcome) => {
+          if (admission === "with an inbox id") {
+            admittedIds[COMPACT] = ["msg_compact"];
+          }
+          onAdmit = () => {
+            v2(`session.compaction.${outcome}`, {
+              error: { message: "Context too large" },
+            });
+          };
+          const done = compact([]);
+          await waitFor(settled(done), "early compaction completion");
+          if (outcome === "failed") {
+            await expect(done).rejects.toThrow("Context too large");
+          } else {
+            await done;
+          }
+        },
+      );
+    },
+  );
 
   it("fails compaction when OpenCode reports a compaction failure", async () => {
     admittedIds[COMPACT] = ["msg_compact"];

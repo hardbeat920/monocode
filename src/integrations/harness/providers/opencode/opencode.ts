@@ -122,6 +122,7 @@ type Live = {
     kind: "turn" | "compaction";
     id?: string;
     uncorrelated?: boolean;
+    early?: OpenCodeV2InboxOutcome;
   } | null;
 };
 
@@ -640,9 +641,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     input.onAccepted?.();
     if (v2) {
-      live.awaitedInbox = inboxID ? { kind: "turn", id: inboxID } : null;
-      // Fast runs can be delivered and finish before the admission response.
-      finishAwaitedInbox(live);
+      admitAwaitedInbox(live, inboxID);
     }
     settlePendingTurn(live);
     await turnPromise;
@@ -689,10 +688,7 @@ async function runCompaction(
       live.openCodeSessionId,
       model,
     );
-    live.awaitedInbox = inboxID
-      ? { kind: "compaction", id: inboxID }
-      : { kind: "compaction", uncorrelated: true };
-    finishAwaitedInbox(live);
+    admitAwaitedInbox(live, inboxID);
     await finished;
   } finally {
     clearTimeout(timer);
@@ -700,6 +696,20 @@ async function runCompaction(
     live.turnDone = null;
     live.turnFailed = null;
   }
+}
+
+function admitAwaitedInbox(live: Live, inboxID: string | undefined): void {
+  const awaited = live.awaitedInbox;
+  if (!awaited) return;
+  awaited.id = inboxID;
+  awaited.uncorrelated = !inboxID;
+  // Fast runs can finish before the admission response. Prefer the tracked
+  // result; an early uncorrelated event might belong to a previously stopped
+  // run, so only use it when inbox correlation is unavailable.
+  finishAwaitedInbox(
+    live,
+    !inboxID || !live.inbox.reportsDelivery ? awaited.early : undefined,
+  );
 }
 
 /**
@@ -726,6 +736,8 @@ function gateAwaitedInbox(
   if (!awaited.id) {
     if (awaited.uncorrelated) {
       finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+    } else {
+      awaited.early ??= inboxFallbackOutcome(type, properties, awaited);
     }
     return true;
   }
