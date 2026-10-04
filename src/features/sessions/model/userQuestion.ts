@@ -6,6 +6,7 @@ export type UserQuestionOption = {
   id: string;
   label: string;
   description?: string;
+  preview?: string;
 };
 
 export type UserQuestion = {
@@ -183,6 +184,10 @@ function optionsFromUnknown(value: unknown): UserQuestionOption[] {
       stringField(rec, "id");
     if (!label) return [];
     const description = stringField(rec, "description") ?? stringField(rec, "detail");
+    const preview =
+      typeof rec.preview === "string" && rec.preview.trim()
+        ? rec.preview.replace(/^\n+|\s+$/g, "")
+        : undefined;
     return [
       {
         id: uniqueId(
@@ -194,6 +199,7 @@ function optionsFromUnknown(value: unknown): UserQuestionOption[] {
         ),
         label,
         ...(description ? { description } : {}),
+        ...(preview ? { preview } : {}),
       },
     ];
   });
