@@ -21,6 +21,13 @@ type Props = {
 
 type Progress = { done: number; total: number; failed: number };
 
+/** `updatedAt` comes from files on disk; a bad value must not break render. */
+function validDate(ms: number): Date | null {
+  if (!Number.isFinite(ms)) return null;
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 const sessionKey = (session: CliSession) =>
   `${session.harness}:${session.providerSessionId}`;
 
@@ -146,14 +153,7 @@ export function ImportCliSessionsDialog({ cwd, name, onClose }: Props) {
                     <span className="min-w-0 flex-1 truncate" title={session.title}>
                       {session.title}
                     </span>
-                    <span
-                      className="shrink-0 text-[11px] text-content/45"
-                      title={`${HARNESS_TITLE[session.harness]} · ${new Date(session.updatedAt).toLocaleString()}`}
-                    >
-                      {formatRelativeTime(
-                        new Date(session.updatedAt).toISOString(),
-                      )}
-                    </span>
+                    <UpdatedAt session={session} />
                   </label>
                 </li>
               ))}
@@ -194,5 +194,21 @@ export function ImportCliSessionsDialog({ cwd, name, onClose }: Props) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+function UpdatedAt({ session }: { session: CliSession }) {
+  const date = validDate(session.updatedAt);
+  return (
+    <span
+      className="shrink-0 text-[11px] text-content/45"
+      title={
+        date
+          ? `${HARNESS_TITLE[session.harness]} · ${date.toLocaleString()}`
+          : HARNESS_TITLE[session.harness]
+      }
+    >
+      {date ? formatRelativeTime(date.toISOString()) : ""}
+    </span>
   );
 }

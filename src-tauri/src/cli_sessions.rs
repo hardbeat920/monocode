@@ -648,16 +648,34 @@ fn read_codex(path: &Path) -> Result<Vec<Entry>, String> {
         .collect();
     // Newer Codex builds log each finished turn item, which carries the real
     // shell command behind code-mode scripts. Older builds only have the raw
-    // model items.
-    let has_items = records.iter().any(|record| {
+    // model items. A thread started on an older build and resumed on a newer
+    // one has both, so the turns before the first item log are read the old
+    // way and the rest the new way.
+    let first_item = records.iter().position(|record| {
         str_field(record, "type") == Some("event_msg")
             && record.pointer("/payload/type").and_then(Value::as_str) == Some("item_completed")
     });
-    Ok(if has_items {
-        codex_entries_from_items(&records)
-    } else {
-        codex_entries_from_responses(&records)
-    })
+    let Some(first_item) = first_item else {
+        return Ok(codex_entries_from_responses(&records));
+    };
+    let split = records[..first_item]
+        .iter()
+        .rposition(is_codex_turn_start)
+        .unwrap_or(0);
+    let mut entries = codex_entries_from_responses(&records[..split]);
+    entries.extend(codex_entries_from_items(&records[split..]));
+    Ok(entries)
+}
+
+/// The record that opens a turn: `turn_context`, or the `task_started` event.
+fn is_codex_turn_start(record: &Value) -> bool {
+    match str_field(record, "type") {
+        Some("turn_context") => true,
+        Some("event_msg") => {
+            record.pointer("/payload/type").and_then(Value::as_str) == Some("task_started")
+        }
+        _ => false,
+    }
 }
 
 fn codex_entries_from_items(records: &[Value]) -> Vec<Entry> {
@@ -1877,6 +1895,50 @@ mod tests {
         };
         assert_eq!(edit.paths, vec!["/a/b.rs".to_owned()]);
         assert!(matches!(&entries[3], Entry::Assistant { text, .. } if text == "Two files."));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn keeps_older_turns_of_a_thread_resumed_on_a_newer_codex() {
+        let root = temp_root("codex-mixed");
+        let id = "01a0fe87-a600-7432-af6c-182db08f7c4f";
+        let path = root.join(format!(
+            "sessions/2026/10/02/rollout-2026-10-02T17-31-38-{id}.jsonl"
+        ));
+        let item = |item: Value| serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed", "item": item}});
+        write_lines(
+            &path,
+            &[
+                codex_meta(id, serde_json::json!("cli")),
+                serde_json::json!({"type": "turn_context", "payload": {"model": "gpt-5"}}),
+                serde_json::json!({"type": "event_msg", "payload": {"type": "user_message", "message": "Old question"}}),
+                serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Old answer"}]}}),
+                serde_json::json!({"type": "turn_context", "payload": {"model": "gpt-6"}}),
+                serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "New answer"}]}}),
+                item(
+                    serde_json::json!({"type": "UserMessage", "id": "u", "content": [{"type": "text", "text": "New question"}]}),
+                ),
+                item(
+                    serde_json::json!({"type": "AgentMessage", "id": "m", "content": [{"type": "Text", "text": "New answer"}]}),
+                ),
+            ],
+        );
+        let roots = Roots {
+            codex: vec![root.clone()],
+            ..Roots::default()
+        };
+        let entries = read_session(&roots, "codex", &path).unwrap();
+        let texts: Vec<&str> = entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::User { text, .. } | Entry::Assistant { text, .. } => text.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Old question", "Old answer", "New question", "New answer"]
+        );
         std::fs::remove_dir_all(root).ok();
     }
 

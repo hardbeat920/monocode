@@ -306,11 +306,15 @@ fn import_session(
     if exists.is_some() {
         return Ok(None);
     }
-    let mut summary = upsert_session(conn, session)?;
-    conn.execute(
+    // One transaction: a row left with import-time timestamps would hide
+    // the session from the next listing without a way to import it again.
+    let tx = conn.unchecked_transaction()?;
+    let mut summary = upsert_session(&tx, session)?;
+    tx.execute(
         "UPDATE sessions SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
         params![session.id, created_at, updated_at],
     )?;
+    tx.commit()?;
     summary.created_at = created_at;
     summary.updated_at = updated_at;
     Ok(Some(summary))
