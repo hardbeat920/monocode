@@ -9383,7 +9383,7 @@ function Workspace({
               return { alreadySaved: false, draft: true };
             },
             /** Restore the target, then use the existing BTW submission callback. */
-            btwAsk: async (target, turn, threadId, messageId, question) => {
+            async btwAsk(target, turn, threadId, messageId, question) {
               const open = await ensureOpenSessionRef.current(target.id);
               if (!open || !sameProjectPath(open.cwd, source.cwd))
                 throw new Error("Session is unavailable in this project");

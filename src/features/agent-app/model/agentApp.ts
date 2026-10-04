@@ -15,6 +15,7 @@ import {
   type HarnessId,
   type Session,
   type Block,
+  type BtwMessage,
 } from "../../sessions/model/session";
 import {
   loadSessionFolders,
@@ -137,6 +138,11 @@ function requiredString(value: unknown, name: string, max = 30_000): string {
       `${name} must be a non-empty string under ${max} characters`,
     );
   return value.trim();
+}
+
+/** Omit provider activity blocks from the message shape returned to the CLI. */
+function btwCliMessage({ id, role, text, createdAt }: BtwMessage) {
+  return { id, role, text, createdAt };
 }
 
 function agentPrompt(value: unknown): string {
@@ -446,15 +452,7 @@ export async function handleAgentApp(
             : thread.status === "ready"
               ? "completed"
               : "failed",
-        messages: thread.messages.map(
-          /** Keep rich provider activity out of the CLI's answer payload. */
-          ({ id: messageId, role, text, createdAt }) => ({
-            id: messageId,
-            role,
-            text,
-            createdAt,
-          }),
-        ),
+        messages: thread.messages.map(btwCliMessage),
         ...(thread.error ? { error: thread.error } : {}),
       };
     }
