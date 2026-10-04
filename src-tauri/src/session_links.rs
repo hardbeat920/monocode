@@ -84,8 +84,11 @@ fn list(conn: &Connection) -> rusqlite::Result<Vec<SessionLink>> {
 
 fn link(conn: &Connection, first: &str, second: &str) -> Result<(), String> {
     let (a, b) = pair(first, second)?;
+    // A random first epoch, so a release left over from an earlier link
+    // between the same sessions cannot match this one.
     conn.execute(
-        "INSERT INTO session_links (a, b, created_at) VALUES (?1, ?2, ?3)
+        "INSERT INTO session_links (a, b, created_at, budget_epoch)
+         VALUES (?1, ?2, ?3, abs(random() % 1000000000000000))
          ON CONFLICT(a, b) DO NOTHING",
         params![a, b, now_millis()],
     )
@@ -302,6 +305,21 @@ mod tests {
         link(&conn, "a", "b").unwrap();
         let stale = record_agent_message(&conn, "a", "b", 5).unwrap();
         reset_agent_messages(&conn, "a").unwrap();
+        for _ in 0..5 {
+            record_agent_message(&conn, "a", "b", 5).unwrap();
+        }
+        release_agent_message(&conn, "a", "b", stale.epoch).unwrap();
+        assert!(record_agent_message(&conn, "a", "b", 5).is_err());
+    }
+
+    #[test]
+    fn a_release_from_an_earlier_link_leaves_a_relink_alone() {
+        let store = store();
+        let conn = store.lock_conn().unwrap();
+        link(&conn, "a", "b").unwrap();
+        let stale = record_agent_message(&conn, "a", "b", 5).unwrap();
+        unlink(&conn, "a", "b").unwrap();
+        link(&conn, "a", "b").unwrap();
         for _ in 0..5 {
             record_agent_message(&conn, "a", "b", 5).unwrap();
         }
