@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { HostChildBackend } from "./child-backend";
+import { HostChildBackend, providerEnv } from "./child-backend";
 import { REMOTE_PROVIDERS } from "../src/features/connections/model/protocol";
 
 it("resolves every provider and runs only allowed catalog commands", async () => {
@@ -233,3 +233,13 @@ setInterval(() => {}, 1000);
     });
   }
 }, 10_000);
+
+it("names MonoCode as Claude's entrypoint so the CLI picker lists its sessions", () => {
+  expect(providerEnv("/opt/homebrew/bin/claude").CLAUDE_CODE_ENTRYPOINT).toBe(
+    "monocode",
+  );
+  expect(providerEnv("C:\\tools\\claude.exe").MONOCODE_HOST).toBe("1");
+  expect(providerEnv("/usr/local/bin/codex").CLAUDE_CODE_ENTRYPOINT).toBe(
+    process.env.CLAUDE_CODE_ENTRYPOINT,
+  );
+});

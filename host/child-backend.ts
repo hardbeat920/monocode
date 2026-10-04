@@ -5,7 +5,7 @@ import {
 } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -288,7 +288,7 @@ export class HostChildBackend implements ChildBackend {
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
-        env: { ...process.env, MONOCODE_HOST: "1" },
+        env: providerEnv(String(args.command)),
       },
     );
     this.children.set(id, child);
@@ -404,4 +404,16 @@ export class HostChildBackend implements ChildBackend {
     for (const id of this.streams.keys()) this.stopStream(id);
     await Promise.all([...this.children.keys()].map((id) => this.kill(id)));
   }
+}
+
+/**
+ * Claude Code hides `sdk-cli` sessions from its `--resume` picker, and that
+ * is the entrypoint a stream-json run gets by default. Naming our own keeps
+ * sessions started here resumable from a terminal.
+ */
+export function providerEnv(command: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, MONOCODE_HOST: "1" };
+  const name = basename(command, extname(command)).toLowerCase();
+  if (name === "claude") env.CLAUDE_CODE_ENTRYPOINT = "monocode";
+  return env;
 }

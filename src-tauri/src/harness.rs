@@ -2805,8 +2805,18 @@ fn prepare_child(cmd: &mut Command, command: &str) {
     if command_basename(command) == "grok" {
         apply_grok_env(cmd);
     }
+    if command_basename(command) == "claude" {
+        cmd.env("CLAUDE_CODE_ENTRYPOINT", CLAUDE_CODE_ENTRYPOINT);
+    }
     isolate_child(cmd);
 }
+
+/// Claude Code tags every transcript with the entrypoint that wrote it, and
+/// its `--resume` picker hides `sdk-cli`, which is what a stream-json run
+/// without a terminal gets by default. A name of our own keeps MonoCode's
+/// sessions in that picker. It also overrides an `sdk-cli` value inherited
+/// when MonoCode itself was launched from inside a Claude Code session.
+const CLAUDE_CODE_ENTRYPOINT: &str = "monocode";
 
 /// fx keeps its Gateway credential in the macOS Keychain and reads it by
 /// shelling out to `osascript`. From a bundled app that read can block on a
@@ -3734,6 +3744,20 @@ mod tests {
         } else {
             assert!(antigravity_args().is_empty());
         }
+    }
+
+    #[test]
+    fn claude_children_name_monocode_as_their_entrypoint() {
+        let mut cmd = Command::new("/usr/local/bin/claude");
+        prepare_child(&mut cmd, "/usr/local/bin/claude");
+        assert!(cmd.get_envs().any(|(key, value)| {
+            key == "CLAUDE_CODE_ENTRYPOINT" && value == Some(std::ffi::OsStr::new("monocode"))
+        }));
+        let mut other = Command::new("/usr/local/bin/codex");
+        prepare_child(&mut other, "/usr/local/bin/codex");
+        assert!(!other
+            .get_envs()
+            .any(|(key, _)| key == "CLAUDE_CODE_ENTRYPOINT"));
     }
 
     #[test]
