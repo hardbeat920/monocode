@@ -152,11 +152,13 @@ export function UnifiedDiffView({
     if (!id || !node) return;
     if (!scrollerRef.current) {
       // Embedded review surfaces jump in from a file list, so open the file
-      // and let the ancestor that owns scrolling bring it up.
+      // and let the ancestor that owns scrolling bring it up once. That
+      // ancestor's scrolling is the reader's, so stop following here.
       setOpen((current) =>
         current.has(id) ? current : new Set(current).add(id),
       );
       node.scrollIntoView({ block: "start" });
+      followFocusRef.current = null;
       return;
     }
     scrollToFocus();

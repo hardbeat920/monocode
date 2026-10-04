@@ -22,9 +22,12 @@ export function createDiffOpenRequests(resolve: ResolveDiffPath) {
         open(path);
         return;
       }
-      void resolve(cwd, path).then((resolved) => {
-        if (request === latest) open(resolved ?? path);
-      });
+      // A failed lookup still opens the requested path, as an index miss does.
+      void resolve(cwd, path)
+        .catch(() => undefined)
+        .then((resolved) => {
+          if (request === latest) open(resolved ?? path);
+        });
     },
     cancel() {
       latest++;

@@ -18,6 +18,7 @@ let heights: Record<string, number> = {};
 let order: string[] = [];
 let notifyResize: () => void = () => {};
 const scrollTo = vi.fn();
+const scrollIntoView = vi.fn();
 
 function file(id: string): UnifiedDiffFileModel {
   return {
@@ -50,7 +51,12 @@ function scroller() {
   return node;
 }
 
-function render(ids: string[], focusId?: string, focusRequest?: number) {
+function render(
+  ids: string[],
+  focusId?: string,
+  focusRequest?: number,
+  fill?: boolean,
+) {
   order = ids;
   act(() =>
     root.render(
@@ -58,6 +64,7 @@ function render(ids: string[], focusId?: string, focusRequest?: number) {
         files: ids.map(file),
         focusId,
         focusRequest,
+        fill,
       }),
     ),
   );
@@ -114,6 +121,13 @@ beforeEach(() => {
   ) {
     if (isScroller(this) && typeof options === "object") scrollTo(options);
   } as HTMLElement["scrollTo"]);
+  scrollIntoView.mockReset();
+  HTMLElement.prototype.scrollIntoView = function (
+    this: HTMLElement,
+    options?: boolean | ScrollIntoViewOptions,
+  ) {
+    scrollIntoView(this.dataset.diffFile, options);
+  };
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
     function (this: HTMLElement) {
       const top = isScroller(this)
@@ -133,6 +147,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+  delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -189,6 +204,24 @@ describe("UnifiedDiffView focus", () => {
 
     // A refreshed file list doesn't pull the reader back either.
     render(["z", "a", "b", "c"], "c");
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("reveals the file once in an embedded view and leaves scrolling to the reader", () => {
+    heights = { a: 20, b: 20, c: 20 };
+    render(["a", "b", "c"], "c", undefined, false);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenLastCalledWith("/r/c.ts", {
+      block: "start",
+    });
+
+    // A refreshed file list doesn't yank the ancestor back to the file.
+    render(["z", "a", "b", "c"], "c", undefined, false);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    // Picking the file again reveals it again.
+    render(["z", "a", "b", "c"], "c", 1, false);
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
     expect(scrollTo).not.toHaveBeenCalled();
   });
 });

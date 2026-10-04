@@ -70,4 +70,31 @@ describe("createDiffOpenRequests", () => {
     await Promise.resolve();
     expect(open).not.toHaveBeenCalled();
   });
+
+  it("opens the requested path when the index lookup fails", async () => {
+    const open = vi.fn();
+    const requests = createDiffOpenRequests(async () => {
+      throw new Error("index unavailable");
+    });
+    requests.open("/r", "a.ts", false, open);
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith("a.ts"));
+  });
+
+  it("still drops a failed lookup that a later click superseded", async () => {
+    const index = deferred<string | undefined>();
+    const open = vi.fn();
+    const requests = createDiffOpenRequests(() =>
+      index.promise.then(() => {
+        throw new Error("index unavailable");
+      }),
+    );
+
+    requests.open("/r", "transcript.ts", false, open);
+    requests.open("/r", "/r/changed.ts", true, open);
+    index.resolve(undefined);
+    await index.promise;
+    await new Promise((done) => setTimeout(done, 0));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenLastCalledWith("/r/changed.ts");
+  });
 });
