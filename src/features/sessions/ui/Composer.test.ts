@@ -1903,6 +1903,67 @@ describe("Composer question focus", () => {
       container.querySelectorAll("[data-message-queue] [data-no-drag]").length,
     ).toBeGreaterThan(0);
 
+    const media = vi.spyOn(window, "matchMedia").mockReturnValue({
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    } as MediaQueryList);
+    try {
+      rows.forEach((row, index) => {
+        vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+          x: 0,
+          y: index * 28,
+          top: index * 28,
+          left: 0,
+          bottom: (index + 1) * 28,
+          right: 300,
+          width: 300,
+          height: 28,
+          toJSON() {
+            return {};
+          },
+        } as DOMRect);
+      });
+
+      await act(async () => {
+        rows[0].dispatchEvent(
+          new PointerEvent("pointerdown", {
+            button: 0,
+            clientX: 40,
+            clientY: 14,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", {
+            clientX: 40,
+            clientY: 42,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", {
+            clientX: 40,
+            clientY: 42,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+      });
+      expect(onReorderQueuedMessages).toHaveBeenCalledWith(["b", "a"]);
+    } finally {
+      media.mockRestore();
+    }
+
     await act(async () =>
       root.render(
         createElement(Composer, {
