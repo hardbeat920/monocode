@@ -105,7 +105,7 @@ Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
-  sessions.list  {}  Project sessions with IDs, busy status and hasDraft.
+  sessions.list  {}  Project sessions with IDs, busy, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
                   reasoning are omitted. Omit before for the newest page;
@@ -119,10 +119,17 @@ Actions:
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
   sessions.archive {"sessionId":"..."}
-                  Archive an idle session in this project. History and drafts
-                  are preserved; this does not stop or delete anything.
+                  Archive an idle project session and close its open views
+                  through the unsaved-file and terminal checks. Eligible new
+                  conversations are saved first; empty unsaved tabs are refused.
+                  Returns {"sessionId":"...","archived":true,"changed":true}.
   sessions.unarchive {"sessionId":"..."}
-                  Restore an archived session in this project. No agent runs.
+                  Restore an archived project session without opening a tab or
+                  running an agent. Returns archived:false and changed state.
+                  Repeating either request succeeds with changed:false.
+                  Archiving a busy/current session, missing or cross-project
+                  IDs, empty unsaved tabs, and declined close confirmations
+                  return errors. Unarchive is allowed while busy.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,

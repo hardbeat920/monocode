@@ -531,12 +531,13 @@ export async function discardDraftSessionRecord(
   );
 }
 
+/** Persist archive state and report whether the stored value changed. */
 export async function setSessionArchived(
   sessionId: string,
   archived: boolean,
-): Promise<void> {
-  await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_set_archived", { sessionId, archived }),
+): Promise<boolean> {
+  return enqueueSessionWrite(sessionId, () =>
+    invoke<boolean>("session_set_archived", { sessionId, archived }),
   );
 }
 

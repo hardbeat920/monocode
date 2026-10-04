@@ -56,7 +56,10 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
-  archive(id: string, archived: boolean): Promise<void>;
+  archive(
+    id: string,
+    archived: boolean,
+  ): Promise<{ changed: boolean }>;
   send(
     id: string,
     prompt: string,
@@ -169,6 +172,7 @@ function requireProject(source: Session): string {
   return source.cwd;
 }
 
+/** Resolve a target only when both its listing and stored project path agree. */
 async function projectSession(
   source: Session,
   id: string,
@@ -178,7 +182,8 @@ async function projectSession(
   if (!(await host.sessions(cwd)).some((session) => session.id === id))
     throw new Error("Session was not found in this project");
   const target = await host.session(id);
-  if (!target) throw new Error("Session was not found in this project");
+  if (!target || pathKey(target.cwd) !== pathKey(cwd))
+    throw new Error("Session was not found in this project");
   return target;
 }
 
@@ -341,8 +346,8 @@ export async function handleAgentApp(
           (await host.sessions(source.cwd)).find((row) => row.id === id)?.busy)
       )
         throw new Error("Session is busy; try again when it finishes");
-      await host.archive(id, archived);
-      return { sessionId: id, archived };
+      const result = await host.archive(id, archived);
+      return { sessionId: id, archived, changed: result.changed };
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);

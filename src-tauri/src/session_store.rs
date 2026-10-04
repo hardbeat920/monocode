@@ -509,12 +509,13 @@ pub fn session_delete(
     Ok(())
 }
 
+/// Set archive state and report whether a stored session changed.
 #[tauri::command(async)]
 pub fn session_set_archived(
     store: State<'_, SessionStore>,
     session_id: String,
     archived: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     set_archived(&conn, &session_id, archived).map_err(|e| e.to_string())
@@ -1803,12 +1804,28 @@ fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-fn set_archived(conn: &Connection, session_id: &str, archived: bool) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE sessions SET archived = ?1 WHERE id = ?2",
-        params![if archived { 1 } else { 0 }, session_id],
+/// Change archive state once, rejecting IDs with no persisted row.
+fn set_archived(conn: &Connection, session_id: &str, archived: bool) -> rusqlite::Result<bool> {
+    let archived = if archived { 1 } else { 0 };
+    let changed = conn.execute(
+        "UPDATE sessions SET archived = ?1 WHERE id = ?2 AND archived != ?1",
+        params![archived, session_id],
     )?;
-    Ok(())
+    if changed > 0 {
+        return Ok(true);
+    }
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM sessions WHERE id = ?1",
+            [session_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(false)
 }
 
 fn set_pinned(conn: &Connection, session_id: &str, pinned: bool) -> rusqlite::Result<()> {
@@ -2716,7 +2733,8 @@ mod tests {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "First")).unwrap();
-        set_archived(&conn, "s1", true).unwrap();
+        assert!(set_archived(&conn, "s1", true).unwrap());
+        assert!(!set_archived(&conn, "s1", true).unwrap());
         let listed = list_by_project(&conn, "/tmp/a").unwrap();
         assert!(listed[0].archived);
         let mut next = sample("s1", "/tmp/a", "Updated");
@@ -2727,9 +2745,11 @@ mod tests {
         let summary = upsert_session(&conn, &next).unwrap();
         assert!(summary.archived);
         assert_eq!(summary.title, "Updated");
-        set_archived(&conn, "s1", false).unwrap();
+        assert!(set_archived(&conn, "s1", false).unwrap());
+        assert!(!set_archived(&conn, "s1", false).unwrap());
         let listed = list_by_project(&conn, "/tmp/a").unwrap();
         assert!(!listed[0].archived);
+        assert!(set_archived(&conn, "missing", true).is_err());
     }
 
     #[test]

@@ -93,7 +93,7 @@ function fixture() {
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
-    archive: vi.fn(async () => {}),
+    archive: vi.fn(async (_id, archived) => ({ changed: archived })),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     worktrees: vi.fn(async () => ({
@@ -180,7 +180,7 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", archived: true });
+    ).toEqual({ sessionId: "other", archived: true, changed: true });
     expect(host.archive).toHaveBeenCalledWith("other", true);
     expect(
       await handleAgentApp(
@@ -190,7 +190,7 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", archived: false });
+    ).toEqual({ sessionId: "other", archived: false, changed: false });
     expect(host.archive).toHaveBeenLastCalledWith("other", false);
     await expect(
       handleAgentApp(
@@ -218,6 +218,34 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("busy");
     expect(host.archive).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not archive missing or cross-project sessions", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.archive",
+        { sessionId: "missing" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    host.session = vi.fn(async (id) =>
+      id === "other"
+        ? { ...newSession("codex", "/tmp/another-project"), id }
+        : null,
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "cross-project",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.archive).not.toHaveBeenCalled();
   });
 
   it("lists archived state without hiding archived sessions", async () => {
