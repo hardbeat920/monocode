@@ -136,10 +136,12 @@ function box(left: number, top: number, width: number, height: number) {
   } as DOMRect;
 }
 
-async function renderWithQueue() {
-  const session = await render({
-    queuedMessages: [{ id: "q1", text: "follow up", attachments: [] }],
-  });
+async function renderSession(queued = false) {
+  const session = await render(
+    queued
+      ? { queuedMessages: [{ id: "q1", text: "follow up", attachments: [] }] }
+      : {},
+  );
   return session;
 }
 
@@ -243,7 +245,7 @@ describe("Composer Explorer file drops", () => {
   });
 
   it("does not show the composer overlay while dragging over a queued editor", async () => {
-    const session = await renderWithQueue();
+    const session = await renderSession(true);
     await startQueuedEdit(session);
 
     act(() =>
@@ -260,7 +262,7 @@ describe("Composer Explorer file drops", () => {
   });
 
   it("attaches an Explorer drop on the queued editor to that message", async () => {
-    const session = await renderWithQueue();
+    const session = await renderSession(true);
     await startQueuedEdit(session);
 
     await act(async () => {
@@ -287,7 +289,7 @@ describe("Composer Explorer file drops", () => {
   });
 
   it("still attaches an Explorer drop below the queued editor to the composer", async () => {
-    const session = await renderWithQueue();
+    const session = await renderSession(true);
     await startQueuedEdit(session);
 
     await act(async () => {
@@ -312,11 +314,68 @@ describe("Composer Explorer file drops", () => {
       ),
     ).toBeNull();
   });
+
+  it("discards a late Explorer drop after canceling and editing the same message", async () => {
+    let finishInspect: (value?: unknown) => void = () => undefined;
+    invoke.mockImplementation((command: string, args: { paths?: string[] }) => {
+      if (command === "inspect_paths") {
+        return new Promise((resolve) => {
+          finishInspect = resolve;
+        }).then(() =>
+          (args.paths ?? []).map((path) => ({
+            path,
+            name: path.split("/").pop() ?? path,
+            size: 12,
+            isDir: false,
+          })),
+        );
+      }
+      return Promise.resolve([]);
+    });
+
+    const session = await renderSession(true);
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      window.dispatchEvent(
+        explorerDrag({
+          type: "drop",
+          path: "/project/src/late.ts",
+          x: 100,
+          y: 40,
+        }),
+      );
+    });
+
+    await act(async () =>
+      session
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      finishInspect();
+    });
+
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/project/src/late.ts"]',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[data-composer-box] [title="/project/src/late.ts"]',
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("Composer queued editor drops", () => {
   it("attaches a native drop on the queued editor to that message", async () => {
-    const session = await renderWithQueue();
+    const session = await renderSession(true);
     const queued = await startQueuedEdit(session);
     const file = new File(["hello"], "notes.md", {
       type: "text/markdown",
@@ -343,7 +402,7 @@ describe("Composer queued editor drops", () => {
   });
 
   it("routes a Tauri drop over the queued editor to that message", async () => {
-    const session = await renderWithQueue();
+    const session = await renderSession(true);
     await startQueuedEdit(session);
 
     await act(async () => {
