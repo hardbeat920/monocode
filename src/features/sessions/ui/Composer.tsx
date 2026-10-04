@@ -341,10 +341,16 @@ function ToolButton({
   );
 }
 
+type QueuedDropSink = {
+  ingestFiles: (files: File[]) => void;
+  ingestPaths: (paths: string[]) => void;
+};
+
 function MessageQueue({
   messages,
   status,
   attachmentsSupported = true,
+  dropSinkRef,
   onDelete,
   onEdit,
   onEditingChange,
@@ -355,6 +361,7 @@ function MessageQueue({
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
   attachmentsSupported?: boolean;
+  dropSinkRef?: { current: QueuedDropSink | null };
   onDelete?: (messageId: string) => void;
   onEdit?: (
     messageId: string,
@@ -469,6 +476,31 @@ function MessageQueue({
       addEditAttachments(pasted);
     });
   };
+  const ingestQueuedPaths = (messageId: string, paths: string[]) => {
+    if (!attachmentsSupported || paths.length === 0) return;
+    void attachmentsFromPaths(paths).then((pasted) => {
+      if (editingIdRef.current !== messageId) {
+        pasted.forEach(revokeAttachment);
+        return;
+      }
+      addEditAttachments(pasted);
+    });
+  };
+  useEffect(() => {
+    if (!dropSinkRef) return;
+    if (!editingId || !attachmentsSupported) {
+      dropSinkRef.current = null;
+      return;
+    }
+    const messageId = editingId;
+    dropSinkRef.current = {
+      ingestFiles: (files) => ingestQueuedFiles(messageId, files),
+      ingestPaths: (paths) => ingestQueuedPaths(messageId, paths),
+    };
+    return () => {
+      dropSinkRef.current = null;
+    };
+  }, [attachmentsSupported, dropSinkRef, editingId]);
   const onQueuedPaste = (
     messageId: string,
     event: ClipboardEvent<HTMLTextAreaElement>,
@@ -782,6 +814,7 @@ export function Composer({
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const queuedDropSinkRef = useRef<QueuedDropSink | null>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -1489,22 +1522,36 @@ export function Composer({
       return { x, y };
     };
 
-    const overTarget = (x: number, y: number) => {
+    const dropHit = (x: number, y: number) => {
       const root = dropRoot();
-      if (!root) return false;
-      const point = toClientPoint(x, y);
-      const rect = root.getBoundingClientRect();
-      return (
-        point.x >= rect.left &&
-        point.x <= rect.right &&
-        point.y >= rect.top &&
-        point.y <= rect.bottom
-      );
+      if (!root) return null;
+      return sessionDropHit(root, toClientPoint(x, y));
+    };
+
+    const ingestDrop = (
+      hit: "queued" | "composer" | null,
+      files?: File[],
+      paths?: string[],
+    ) => {
+      if (!attachmentsSupported || !hit) return;
+      if (hit === "queued") {
+        if (files?.length) queuedDropSinkRef.current?.ingestFiles(files);
+        if (paths?.length) queuedDropSinkRef.current?.ingestPaths(paths);
+        return;
+      }
+      if (files?.length) void attachmentsFromFiles(files).then(addAttachments);
+      if (paths?.length) void attachmentsFromPaths(paths).then(addAttachments);
     };
 
     const onDragOver = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      if (isQueuedMessageEditTarget(event.target)) {
+        event.preventDefault();
+        data.dropEffect = attachmentsSupported ? "copy" : "none";
+        setFileDrag(false);
+        return;
+      }
       event.preventDefault();
       if (!attachmentsSupported) return;
       data.dropEffect = "copy";
@@ -1520,13 +1567,15 @@ export function Composer({
     const onDrop = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      const queued = isQueuedMessageEditTarget(event.target);
       event.preventDefault();
+      if (queued) event.stopPropagation();
       setFileDrag(false);
       if (!attachmentsSupported) return;
       if (Date.now() - nativeDropAt < 250) return;
       const files = [...data.files];
       if (files.length === 0) return;
-      void attachmentsFromFiles(files).then(addAttachments);
+      ingestDrop(queued ? "queued" : "composer", files);
     };
 
     const onExplorerFilePointerDrag = (event: Event) => {
@@ -1537,14 +1586,13 @@ export function Composer({
         setFileDrag(false);
         return;
       }
-      const over = overTarget(detail.x, detail.y);
+      const hit = dropHit(detail.x, detail.y);
       if (detail.type === "move") {
-        setFileDrag(over && attachmentsSupported);
+        setFileDrag(hit === "composer" && attachmentsSupported);
         return;
       }
       setFileDrag(false);
-      if (!over || !attachmentsSupported) return;
-      void attachmentsFromPaths([detail.path]).then(addAttachments);
+      ingestDrop(hit, undefined, [detail.path]);
     };
 
     const root = dropRoot();
@@ -1565,16 +1613,16 @@ export function Composer({
           return;
         }
         const { x, y } = event.payload.position;
-        const over = overTarget(x, y);
+        const hit = dropHit(x, y);
         if (event.payload.type === "enter" || event.payload.type === "over") {
-          setFileDrag(over && attachmentsSupported);
+          setFileDrag(hit === "composer" && attachmentsSupported);
           return;
         }
         if (event.payload.type !== "drop") return;
         setFileDrag(false);
-        if (!over || !attachmentsSupported) return;
+        if (!hit || !attachmentsSupported) return;
         nativeDropAt = Date.now();
-        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
+        ingestDrop(hit, undefined, event.payload.paths);
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -2180,6 +2228,7 @@ export function Composer({
         messages={queuedMessages}
         status={queueStatus}
         attachmentsSupported={attachmentsSupported}
+        dropSinkRef={queuedDropSinkRef}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}
@@ -3043,4 +3092,32 @@ function hasFiles(data: DataTransfer | null): data is DataTransfer {
   return [...data.types].some(
     (type) => type === "Files" || type === "application/x-moz-file",
   );
+}
+
+function pointInRect(rect: DOMRect, point: { x: number; y: number }): boolean {
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
+}
+
+function isQueuedMessageEditTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("[data-queued-message-edit]"))
+  );
+}
+
+function sessionDropHit(
+  root: Element,
+  point: { x: number; y: number },
+): "queued" | "composer" | null {
+  if (!pointInRect(root.getBoundingClientRect(), point)) return null;
+  const queued = root.querySelector("[data-queued-message-edit]");
+  if (queued && pointInRect(queued.getBoundingClientRect(), point)) {
+    return "queued";
+  }
+  return "composer";
 }
