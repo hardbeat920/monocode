@@ -26,6 +26,7 @@ import {
   loadSessionLinks,
   peersOf,
   recordLinkedMessage,
+  releaseLinkedMessage,
   resetLinkBudget,
   type LinkedPeer,
 } from "../features/sessions/model/sessionLinks";
@@ -6279,7 +6280,9 @@ function Workspace({
       )
         return false;
       const storedCurrent = sessionsRef.current.find((s) => s.id === sessionId);
-      if (options?.appRequestId && storedCurrent?.busy) return false;
+      // A linked agent's message to a busy session goes to its queue below.
+      if (options?.appRequestId && !options.linkedFrom && storedCurrent?.busy)
+        return false;
       if (
         options?.ciRepair &&
         storedCurrent &&
@@ -6519,6 +6522,9 @@ function Workspace({
                         handoffCard,
                         ...(sessionContext?.length ? { sessionContext } : {}),
                         ...(linkedFrom ? { linkedFrom } : {}),
+                        ...(linkedFrom && options?.appRequestId
+                          ? { appRequestId: options.appRequestId }
+                          : {}),
                         intent,
                         selection: {
                           harness: current.harness,
@@ -8067,6 +8073,7 @@ function Workspace({
             handoffCard: head.handoffCard,
             sessionContext: head.sessionContext,
             ...(head.linkedFrom ? { linkedFrom: head.linkedFrom } : {}),
+            ...(head.appRequestId ? { appRequestId: head.appRequestId } : {}),
             intent: head.intent,
             buildTarget: head.selection,
           });
@@ -8153,6 +8160,7 @@ function Workspace({
         handoffCard: message.handoffCard,
         sessionContext: message.sessionContext,
         ...(message.linkedFrom ? { linkedFrom: message.linkedFrom } : {}),
+        ...(message.appRequestId ? { appRequestId: message.appRequestId } : {}),
         intent: message.intent,
         buildTarget: message.selection,
       });
@@ -9879,21 +9887,36 @@ function Workspace({
                 throw new Error("The linked session is unavailable");
               if (target.blocks.some((block) => block.appRequestId === requestId))
                 return { queued: false, alreadySent: true };
+              if (
+                target.queuedMessages?.some(
+                  (queued) => queued.appRequestId === requestId,
+                )
+              )
+                return { queued: true, alreadySent: true };
               if (!target.busy && sessionDraftBlock(target))
                 throw new Error(
                   "The linked session has an unsent draft. Ask the user to send or remove it first.",
                 );
               // Counts against the loop guard; rejects once the limit is hit.
+              // A message the target doesn't accept gives its count back.
               await recordLinkedMessage(from.id, to);
-              const accepted = await submitSessionRef.current(to, message, [], {
-                linkedFrom: { id: from.id, title: from.title },
-                appRequestId: requestId,
-                noteCard: undefined,
-                handoffCard: undefined,
-                sessionContext: undefined,
-              });
-              if (!accepted)
+              let accepted;
+              try {
+                accepted = await submitSessionRef.current(to, message, [], {
+                  linkedFrom: { id: from.id, title: from.title },
+                  appRequestId: requestId,
+                  noteCard: undefined,
+                  handoffCard: undefined,
+                  sessionContext: undefined,
+                });
+              } catch (error) {
+                await releaseLinkedMessage(from.id, to).catch(() => undefined);
+                throw error;
+              }
+              if (!accepted) {
+                await releaseLinkedMessage(from.id, to).catch(() => undefined);
                 throw new Error("The linked session could not accept the message");
+              }
               return { queued: !!target.busy, alreadySent: false };
             },
           },

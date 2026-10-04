@@ -277,6 +277,8 @@ export type QueuedMessage = {
   sessionContext?: SessionContextCard[];
   /** Sent by the agent in a linked session, not typed by the user. */
   linkedFrom?: LinkedPeer;
+  /** App CLI request that queued this message, kept so a retry is not sent twice. */
+  appRequestId?: string;
   intent?: TurnIntent;
 };
 

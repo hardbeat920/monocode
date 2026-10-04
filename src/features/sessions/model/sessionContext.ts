@@ -86,7 +86,7 @@ function unescapeAttribute(value: string): string {
 
 /** Keep a transcript from closing the block it is quoted in. */
 function body(value: string): string {
-  return value.replace(/<\/(attached_context|session)>/gi, "&lt;/$1>");
+  return value.replace(/<(\/?)(attached_context|session)\b/gi, "&lt;$1$2");
 }
 
 export type SessionContextEntry = SessionContextCard & {
@@ -114,6 +114,9 @@ function renderSessionHistory(context: PortableContext | null): string {
   ].join("\n");
 }
 
+const ATTACHED_CONTEXT_HEADER =
+  "The user attached other MonoCode sessions for reference. They are separate conversations, not this one. Each holds a manifest and that session's user and assistant messages as JSON. Older messages may be left out for size; read the manifest's retrievalPath, when present, for the full transcript, including tool activity. Attachments are file references only.";
+
 /** The block the agent reads; `parseAttachedContext` turns it back into cards. */
 export function formatAttachedContext(entries: SessionContextEntry[]): string {
   if (entries.length === 0) return "";
@@ -123,7 +126,7 @@ export function formatAttachedContext(entries: SessionContextEntry[]): string {
   );
   return [
     "<attached_context>",
-    "The user attached other MonoCode sessions for reference. They are separate conversations, not this one. Each holds a manifest and that session's user and assistant messages as JSON. Older messages may be left out for size; read the manifest's retrievalPath, when present, for the full transcript, including tool activity. Attachments are file references only.",
+    ATTACHED_CONTEXT_HEADER,
     ...sessions,
     "</attached_context>",
   ].join("\n");
@@ -139,26 +142,35 @@ export function appendAttachedContext(
   return `${lead}\n\n${block}`;
 }
 
-const ATTACHED_CONTEXT = /\n*<attached_context>\n?([\s\S]*?)<\/attached_context>\n*/g;
-const SESSION_TAG = /<session id="([^"]*)" title="([^"]*)">/g;
+const ATTACHED_CONTEXT_OPEN = `<attached_context>\n${ATTACHED_CONTEXT_HEADER}\n`;
+const ATTACHED_CONTEXT_CLOSE = "</attached_context>";
+// `body` escapes these tags inside transcripts, so a line-start tag is ours.
+const SESSION_TAG = /^<session id="([^"]*)" title="([^"]*)">$/gm;
 
 /** Split a sent prompt back into the user's words and the attached sessions. */
 export function parseAttachedContext(text: string): {
   text: string;
   sessions: SessionContextCard[];
 } {
-  if (!text.includes("<attached_context>")) return { text, sessions: [] };
+  // Only the block that appendAttachedContext put at the end counts. Text the
+  // user typed that looks like one stays in the message.
+  const start = text.lastIndexOf(ATTACHED_CONTEXT_OPEN);
+  const trimmed = text.trimEnd();
+  if (start < 0 || !trimmed.endsWith(ATTACHED_CONTEXT_CLOSE))
+    return { text, sessions: [] };
+  const inner = trimmed.slice(
+    start + ATTACHED_CONTEXT_OPEN.length,
+    trimmed.length - ATTACHED_CONTEXT_CLOSE.length,
+  );
   const sessions: SessionContextCard[] = [];
-  const stripped = text.replace(ATTACHED_CONTEXT, (_match, inner: string) => {
-    for (const tag of inner.matchAll(SESSION_TAG)) {
-      sessions.push({
-        id: unescapeAttribute(tag[1]),
-        title: unescapeAttribute(tag[2]),
-      });
-    }
-    return "\n\n";
-  });
-  const visible = stripped.trim();
+  for (const tag of inner.matchAll(SESSION_TAG)) {
+    sessions.push({
+      id: unescapeAttribute(tag[1]),
+      title: unescapeAttribute(tag[2]),
+    });
+  }
+  if (sessions.length === 0) return { text, sessions: [] };
+  const visible = text.slice(0, start).trim();
   return {
     text: sessions.length && visible === SESSION_CONTEXT_LEAD ? "" : visible,
     sessions,

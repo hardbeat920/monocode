@@ -123,6 +123,19 @@ fn record_agent_message(
     }
 }
 
+/// Give back a message counted by `record_agent_message` that the target
+/// session did not accept.
+fn release_agent_message(conn: &Connection, first: &str, second: &str) -> Result<(), String> {
+    let (a, b) = pair(first, second)?;
+    conn.execute(
+        "UPDATE session_links SET agent_messages = agent_messages - 1
+         WHERE a = ?1 AND b = ?2 AND agent_messages > 0",
+        params![a, b],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// A user message in either session gives its links a fresh budget.
 fn reset_agent_messages(conn: &Connection, session: &str) -> Result<usize, String> {
     validate_id(session, "session")?;
@@ -188,6 +201,16 @@ pub fn session_link_record_message(
 }
 
 #[tauri::command(async)]
+pub fn session_link_release_message(
+    store: State<'_, SessionStore>,
+    first: String,
+    second: String,
+) -> Result<(), String> {
+    let conn = store.lock_conn()?;
+    release_agent_message(&conn, &first, &second)
+}
+
+#[tauri::command(async)]
 pub fn session_links_reset(
     store: State<'_, SessionStore>,
     session_id: String,
@@ -233,6 +256,17 @@ mod tests {
         let error = record_agent_message(&conn, "a", "b", 5).unwrap_err();
         assert!(error.contains("5 messages"));
         reset_agent_messages(&conn, "b").unwrap();
+        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_released_message_returns_to_the_budget() {
+        let store = store();
+        let conn = store.lock_conn().unwrap();
+        link(&conn, "a", "b").unwrap();
+        assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
+        release_agent_message(&conn, "b", "a").unwrap();
+        release_agent_message(&conn, "a", "b").unwrap();
         assert_eq!(record_agent_message(&conn, "a", "b", 5).unwrap(), 1);
     }
 

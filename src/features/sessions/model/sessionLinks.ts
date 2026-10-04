@@ -138,14 +138,21 @@ export async function recordLinkedMessage(
   return count;
 }
 
+/** Give back a counted message that the target session did not accept. */
+export async function releaseLinkedMessage(from: string, to: string) {
+  await invoke("session_link_release_message", { first: from, second: to });
+  void refreshSessionLinks();
+}
+
 /** A user message in a linked session lets its agents message again. */
 export function resetLinkBudget(sessionId: string) {
   if (!available()) return;
-  const touched = links.some(
-    (link) =>
-      (link.a === sessionId || link.b === sessionId) && link.agentMessages > 0,
+  // The cached counts can be stale, since other windows don't announce
+  // recorded messages. The backend only touches links with a count.
+  const linked = links.some(
+    (link) => link.a === sessionId || link.b === sessionId,
   );
-  if (!touched) return;
+  if (!linked) return;
   void invoke("session_links_reset", { sessionId })
     .then(() => refreshSessionLinks())
     .catch(() => undefined);

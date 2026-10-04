@@ -464,6 +464,7 @@ pub fn run() {
             session_links::session_link,
             session_links::session_unlink,
             session_links::session_link_record_message,
+            session_links::session_link_release_message,
             session_links::session_links_reset,
             session_store::session_upsert,
             session_store::session_list_by_project,

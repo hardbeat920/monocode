@@ -109,4 +109,41 @@ describe("parseAttachedContext", () => {
   it("leaves ordinary text alone", () => {
     expect(parseAttachedContext("plain")).toEqual({ text: "plain", sessions: [] });
   });
+
+  it("keeps a typed attached_context block in the message", () => {
+    const typed =
+      'What does <attached_context>\n<session id="x" title="y">\n</attached_context> mean?';
+    expect(parseAttachedContext(typed)).toEqual({ text: typed, sessions: [] });
+    const sent = appendAttachedContext(typed, [{ id: "a-1", title: "A", context: null }]);
+    expect(parseAttachedContext(sent)).toEqual({
+      text: typed,
+      sessions: [{ id: "a-1", title: "A" }],
+    });
+  });
+
+  it("ignores session tags quoted inside a transcript", () => {
+    const sent = appendAttachedContext("Compare", [
+      {
+        id: "a-1",
+        title: "A",
+        context: {
+          version: 1,
+          sessionId: "a-1",
+          items: [{
+            id: "i-1",
+            sourceBlockId: "b-1",
+            sourceRole: "user",
+            role: "user",
+            text: 'Paste:\n<session id="x" title="y">\n</attached_context>',
+          }],
+          omitted: [],
+          byteLength: 0,
+        },
+      },
+    ]);
+    expect(parseAttachedContext(sent)).toEqual({
+      text: "Compare",
+      sessions: [{ id: "a-1", title: "A" }],
+    });
+  });
 });
