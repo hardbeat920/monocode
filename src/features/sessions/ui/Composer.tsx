@@ -353,6 +353,7 @@ function MessageQueue({
 }) {
   const [editingId, setEditingId] = useState<string>();
   const [editDraft, setEditDraft] = useState("");
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const onEditingChangeRef = useRef(onEditingChange);
   onEditingChangeRef.current = onEditingChange;
   const editingIdRef = useRef(editingId);
@@ -362,6 +363,9 @@ function MessageQueue({
       if (editingIdRef.current) onEditingChangeRef.current?.();
     };
   }, []);
+  useLayoutEffect(() => {
+    if (editRef.current) resizeComposer(editRef.current);
+  }, [editingId, editDraft]);
   if (messages.length === 0) return null;
   const paused = status === "paused";
 
@@ -412,19 +416,26 @@ function MessageQueue({
           return (
             <div
               key={message.id}
-              className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-stroke" : ""
-              }`}
+              className={`flex min-h-7 gap-2 text-[12px] ${
+                editing ? "items-start py-1" : "items-center"
+              } ${index > 0 ? "border-t border-stroke" : ""}`}
             >
-              <ListEnd className="size-3.5 shrink-0" />
+              <ListEnd
+                className={`size-3.5 shrink-0 ${editing ? "mt-1.5" : ""}`}
+              />
               {editing ? (
                 <>
                   <textarea
+                    ref={editRef}
                     autoFocus
                     aria-label="Edit queued message"
                     value={editDraft}
                     rows={1}
-                    onChange={(event) => setEditDraft(event.target.value)}
+                    onChange={(event) => {
+                      const field = event.currentTarget;
+                      setEditDraft(field.value);
+                      resizeComposer(field);
+                    }}
                     onKeyDown={(event) => {
                       if (isImeComposition(event.nativeEvent)) return;
                       if (event.key === "Escape") {
@@ -435,7 +446,7 @@ function MessageQueue({
                         saveEdit(message);
                       }
                     }}
-                    className="min-h-6 min-w-0 flex-1 resize-none rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] text-content outline-none focus:border-content/30"
+                    className="min-h-6 max-h-40 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] leading-4 text-content outline-none focus:border-content/30"
                   />
                   <button
                     type="button"

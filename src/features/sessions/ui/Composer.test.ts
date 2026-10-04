@@ -1748,4 +1748,58 @@ describe("Composer question focus", () => {
       window.removeEventListener("monocode:open-mcp-settings", onOpen);
     }
   });
+
+  it("grows the queued-message editor to fit the draft", async () => {
+    const scrollHeight = vi
+      .spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLTextAreaElement) {
+        return this.getAttribute("aria-label") === "Edit queued message"
+          ? 88
+          : 24;
+      });
+
+    try {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            queuedMessages: [
+              {
+                id: "q1",
+                text: "line one\nline two\nline three",
+                attachments: [],
+              },
+            ],
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit: vi.fn(),
+          }),
+        ),
+      );
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Edit queued message"]',
+          )!
+          .click(),
+      );
+
+      const editor = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Edit queued message"]',
+      )!;
+      expect(editor.value).toBe("line one\nline two\nline three");
+      expect(editor.style.height).toBe("88px");
+    } finally {
+      scrollHeight.mockRestore();
+    }
+  });
 });
