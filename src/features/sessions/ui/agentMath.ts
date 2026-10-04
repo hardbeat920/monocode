@@ -40,9 +40,23 @@ function isMathElement(node: HastNode): boolean {
   );
 }
 
+function withoutMathClasses(node: HastNode): unknown[] | undefined {
+  const className = node.properties?.className;
+  if (!Array.isArray(className)) return undefined;
+  return className.filter((name) => !MATH_CLASSES.includes(String(name)));
+}
+
+// Clears the whole subtree, so math nested in a rejected element can't reach
+// KaTeX unmeasured.
+function disableMath(node: HastNode) {
+  const kept = withoutMathClasses(node);
+  if (kept) node.properties = { ...node.properties, className: kept };
+  for (const child of node.children ?? []) disableMath(child);
+}
+
 function showAsSource(node: HastNode) {
-  const className = node.properties?.className as unknown[];
-  const kept = className.filter((name) => !MATH_CLASSES.includes(String(name)));
+  disableMath(node);
+  const kept = withoutMathClasses(node) ?? [];
   node.properties = {
     ...node.properties,
     className: [...kept, "language-latex"],

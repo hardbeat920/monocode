@@ -261,6 +261,16 @@ describe("AgentMarkdown math", () => {
     expect(markup).not.toContain("katex");
   });
 
+  it("disables math nested inside rejected raw HTML math", () => {
+    const huge = "x".repeat(6000);
+    const markup = render(
+      `<code class="language-math">${huge}<code class="language-math">${huge}</code></code>`,
+    );
+
+    expect(markup).not.toContain("katex");
+    expect(markup).not.toContain("language-math");
+  });
+
   it("caps how much math one block typesets", () => {
     const markup = render(Array.from({ length: 600 }, () => "$x$").join(" "));
 
