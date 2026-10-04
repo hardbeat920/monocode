@@ -122,6 +122,55 @@ function explorerDrag(detail: ExplorerFilePointerDragDetail) {
   );
 }
 
+function box(left: number, top: number, width: number, height: number) {
+  return {
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    x: left,
+    y: top,
+    toJSON: () => undefined,
+  } as DOMRect;
+}
+
+async function renderWithQueue() {
+  const session = await render({
+    queuedMessages: [{ id: "q1", text: "follow up", attachments: [] }],
+  });
+  return session;
+}
+
+async function startQueuedEdit(session: HTMLElement) {
+  await act(async () =>
+    session
+      .querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]')!
+      .click(),
+  );
+  const queued = session.querySelector<HTMLElement>(
+    "[data-queued-message-edit]",
+  )!;
+  queued.getBoundingClientRect = () => box(0, 0, 500, 80);
+  return queued;
+}
+
+function fileDragEvent(type: "dragover" | "drop", file: File) {
+  const files = Object.assign([file], {
+    item: (index: number) => (index === 0 ? file : null),
+  }) as unknown as FileList;
+  const event = new DragEvent(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      types: ["Files"],
+      files,
+      dropEffect: "none",
+    },
+  });
+  return event;
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   platform.isWin = false;
@@ -191,6 +240,136 @@ describe("Composer Explorer file drops", () => {
     expect(
       container.querySelector('[title="/project/src/main.ts"]'),
     ).not.toBeNull();
+  });
+
+  it("does not show the composer overlay while dragging over a queued editor", async () => {
+    const session = await renderWithQueue();
+    await startQueuedEdit(session);
+
+    act(() =>
+      window.dispatchEvent(
+        explorerDrag({
+          type: "move",
+          path: "/project/src/main.ts",
+          x: 100,
+          y: 40,
+        }),
+      ),
+    );
+    expect(container.textContent).not.toContain("Drop files to attach");
+  });
+
+  it("attaches an Explorer drop on the queued editor to that message", async () => {
+    const session = await renderWithQueue();
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      window.dispatchEvent(
+        explorerDrag({
+          type: "drop",
+          path: "/project/src/main.ts",
+          x: 100,
+          y: 40,
+        }),
+      );
+    });
+
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/project/src/main.ts"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-composer-box] [title="/project/src/main.ts"]',
+      ),
+    ).toBeNull();
+  });
+
+  it("still attaches an Explorer drop below the queued editor to the composer", async () => {
+    const session = await renderWithQueue();
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      window.dispatchEvent(
+        explorerDrag({
+          type: "drop",
+          path: "/project/src/notes.md",
+          x: 100,
+          y: 200,
+        }),
+      );
+    });
+
+    expect(
+      container.querySelector(
+        '[data-composer-box] [title="/project/src/notes.md"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/project/src/notes.md"]',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("Composer queued editor drops", () => {
+  it("attaches a native drop on the queued editor to that message", async () => {
+    const session = await renderWithQueue();
+    const queued = await startQueuedEdit(session);
+    const file = new File(["hello"], "notes.md", {
+      type: "text/markdown",
+    }) as File & { path?: string };
+    file.path = "/tmp/notes.md";
+
+    await act(async () => {
+      queued.dispatchEvent(fileDragEvent("dragover", file));
+    });
+    expect(container.textContent).not.toContain("Drop files to attach");
+
+    await act(async () => {
+      queued.dispatchEvent(fileDragEvent("drop", file));
+    });
+
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/tmp/notes.md"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-composer-box] [title="/tmp/notes.md"]'),
+    ).toBeNull();
+  });
+
+  it("routes a Tauri drop over the queued editor to that message", async () => {
+    const session = await renderWithQueue();
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            type: "over",
+            position: { x: 100, y: 40 },
+          } as DragDropEvent,
+        });
+      }
+    });
+    expect(container.textContent).not.toContain("Drop files to attach");
+
+    await nativeDrop(["/project/src/queued.ts"], 100, 40);
+
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/project/src/queued.ts"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-composer-box] [title="/project/src/queued.ts"]',
+      ),
+    ).toBeNull();
   });
 });
 

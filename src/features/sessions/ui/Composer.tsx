@@ -36,7 +36,7 @@ import {
   messageFilesFromClipboard,
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
-import { useFileDrop } from "../hooks/useFileDrop";
+import { useFileDrop, type QueuedDropSink } from "../hooks/useFileDrop";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   loadProjectFiles,
@@ -427,6 +427,7 @@ export function Composer({
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const queuedDropSinkRef = useRef<QueuedDropSink | null>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -1190,6 +1191,7 @@ export function Composer({
     state: fileDropStateRef,
     read: readDroppedAttachments,
     onError: setPasteError,
+    queuedSinkRef,
   });
   const restoreDraft = useCallback(
     (
@@ -1871,6 +1873,7 @@ export function Composer({
         messages={queuedMessages}
         status={queueStatus}
         attachmentsSupported={attachmentsSupported}
+        dropSinkRef={queuedDropSinkRef}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}

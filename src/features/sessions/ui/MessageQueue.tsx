@@ -27,12 +27,14 @@ import {
 } from "../../../platform/tauri/clipboard";
 import {
   attachmentsFromFiles,
+  attachmentsFromPaths,
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
   revokeAttachment,
 } from "../model/attachments";
 import { resizeComposer } from "../model/composerResize";
+import type { QueuedDropSink } from "../hooks/useFileDrop";
 import type {
   Attachment,
   MessageQueueStatus,
@@ -44,6 +46,7 @@ export function MessageQueue({
   messages,
   status,
   attachmentsSupported = true,
+  dropSinkRef,
   onDelete,
   onEdit,
   onEditingChange,
@@ -56,6 +59,7 @@ export function MessageQueue({
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
   attachmentsSupported?: boolean;
+  dropSinkRef?: { current: QueuedDropSink | null };
   onDelete?: (messageId: string) => void;
   onEdit?: (
     messageId: string,
@@ -173,6 +177,31 @@ export function MessageQueue({
       addEditAttachments(pasted);
     });
   };
+  const ingestQueuedPaths = (messageId: string, paths: string[]) => {
+    if (!attachmentsSupported || paths.length === 0) return;
+    void attachmentsFromPaths(paths).then((pasted) => {
+      if (editingIdRef.current !== messageId) {
+        pasted.forEach(revokeAttachment);
+        return;
+      }
+      addEditAttachments(pasted);
+    });
+  };
+  useEffect(() => {
+    if (!dropSinkRef) return;
+    if (!editingId || !attachmentsSupported) {
+      dropSinkRef.current = null;
+      return;
+    }
+    const messageId = editingId;
+    dropSinkRef.current = {
+      ingestFiles: (files) => ingestQueuedFiles(messageId, files),
+      ingestPaths: (paths) => ingestQueuedPaths(messageId, paths),
+    };
+    return () => {
+      dropSinkRef.current = null;
+    };
+  }, [attachmentsSupported, dropSinkRef, editingId]);
   const onQueuedPaste = (
     messageId: string,
     event: ClipboardEvent<HTMLTextAreaElement>,
