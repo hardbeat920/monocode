@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The default Claude account no longer inherits `CLAUDE_CONFIG_DIR` or `CLAUDE_SECURESTORAGE_CONFIG_DIR` from a terminal that launched MonoCode, so its sign-in, turns and usage all use Claude's default profile. In #623.
+- Default-account conversations started under an inherited `CLAUDE_CONFIG_DIR` still resume from that directory while MonoCode inherits it. In #623.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

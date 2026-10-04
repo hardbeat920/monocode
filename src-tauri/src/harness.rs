@@ -856,7 +856,7 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
-    apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    apply_provider_account(&app, &mut cmd, account.as_ref(), &args)?;
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -1036,11 +1036,14 @@ fn apply_provider_account(
     app: &AppHandle,
     cmd: &mut Command,
     account: Option<&HarnessAccount>,
+    args: &[String],
 ) -> Result<(), String> {
     let Some(account) = account else {
+        apply_default_claude_profile(cmd, args);
         return Ok(());
     };
     let Some(dir) = provider_account_dir(app, &account.provider, Some(&account.id))? else {
+        apply_default_claude_profile(cmd, args);
         return Ok(());
     };
     match account.provider.as_str() {
@@ -1049,7 +1052,10 @@ fn apply_provider_account(
             // credential to these exact strings. Setting both keeps profiles
             // isolated on every supported platform.
             cmd.env("CLAUDE_CONFIG_DIR", &dir)
-                .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", &dir)
+                .env(
+                    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                    crate::rate_limits::claude_credential_selector(Some(&dir)),
+                )
                 .env_remove("ANTHROPIC_API_KEY")
                 .env_remove("ANTHROPIC_AUTH_TOKEN")
                 .env_remove("CLAUDE_CODE_OAUTH_TOKEN");
@@ -1063,6 +1069,41 @@ fn apply_provider_account(
         _ => unreachable!("provider_account_dir validates the provider"),
     }
     Ok(())
+}
+
+/// The default account is Claude's own default profile. A selector inherited
+/// from a terminal that launched MonoCode must not move its sign-in, so it
+/// always uses the default credential store, the one usage reads.
+fn apply_default_claude_profile(cmd: &mut Command, args: &[String]) {
+    cmd.env(
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        crate::rate_limits::claude_credential_selector(None),
+    );
+    match legacy_claude_config_dir(claude_resume_id(args)) {
+        Some(dir) => cmd.env("CLAUDE_CONFIG_DIR", dir),
+        None => cmd.env_remove("CLAUDE_CONFIG_DIR"),
+    };
+}
+
+fn claude_resume_id(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--resume")
+        .map(|pair| pair[1].as_str())
+}
+
+/// Earlier builds passed an inherited `CLAUDE_CONFIG_DIR` through to the
+/// default account, so a conversation whose transcript only exists there
+/// keeps running under that directory instead of the default one.
+pub(crate) fn legacy_claude_config_dir(provider_session_id: Option<&str>) -> Option<PathBuf> {
+    let inherited = PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR")?);
+    let default = PathBuf::from(dirs_home()?).join(".claude");
+    legacy_transcript_dir(provider_session_id?, &default, inherited)
+}
+
+fn legacy_transcript_dir(session_id: &str, default: &Path, inherited: PathBuf) -> Option<PathBuf> {
+    (crate::fs::find_claude_transcript(default, session_id).is_none()
+        && crate::fs::find_claude_transcript(&inherited, session_id).is_some())
+    .then_some(inherited)
 }
 
 /// A child that stops draining stdin can block `write_all` for minutes, so the
@@ -3244,6 +3285,68 @@ mod tests {
             libc::ENOENT
         )));
         assert!(!is_text_file_busy(&std::io::Error::other("no errno")));
+    }
+
+    #[test]
+    fn default_claude_account_launches_with_the_default_credential_store() {
+        let mut cmd = Command::new("true");
+        cmd.env("CLAUDE_CONFIG_DIR", "/tmp/inherited")
+            .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/tmp/inherited");
+        apply_default_claude_profile(&mut cmd, &["--session-id".into(), "abc".into()]);
+        let envs: HashMap<_, _> = cmd.get_envs().collect();
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("CLAUDE_SECURESTORAGE_CONFIG_DIR")),
+            Some(&Some(crate::rate_limits::claude_credential_selector(None)))
+        );
+        assert_eq!(
+            envs.get(std::ffi::OsStr::new("CLAUDE_CONFIG_DIR")),
+            Some(&None)
+        );
+    }
+
+    #[test]
+    fn claude_resume_id_reads_the_resume_flag() {
+        let args: Vec<String> = ["--model", "opus", "--resume", "abc-1"]
+            .map(String::from)
+            .into();
+        assert_eq!(claude_resume_id(&args), Some("abc-1"));
+        assert_eq!(claude_resume_id(&args[..3]), None);
+    }
+
+    #[test]
+    fn resume_keeps_an_inherited_config_dir_only_for_its_own_transcripts() {
+        let root =
+            std::env::temp_dir().join(format!("monocode-claude-legacy-{}", uuid::Uuid::new_v4()));
+        let default = root.join("default");
+        let inherited = root.join("inherited");
+        let transcript = |dir: &Path, id: &str| {
+            let project = dir.join("projects").join("-repo");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(project.join(format!("{id}.jsonl")), "").unwrap();
+        };
+        transcript(&inherited, "old");
+        transcript(&inherited, "both");
+        transcript(&default, "both");
+        transcript(&default, "new");
+
+        assert_eq!(
+            legacy_transcript_dir("old", &default, inherited.clone()),
+            Some(inherited.clone())
+        );
+        assert_eq!(
+            legacy_transcript_dir("both", &default, inherited.clone()),
+            None
+        );
+        assert_eq!(
+            legacy_transcript_dir("new", &default, inherited.clone()),
+            None
+        );
+        assert_eq!(
+            legacy_transcript_dir("missing", &default, inherited.clone()),
+            None
+        );
+        assert_eq!(legacy_transcript_dir("../old", &default, inherited), None);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
