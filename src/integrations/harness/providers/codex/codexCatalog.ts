@@ -14,6 +14,10 @@ import {
 } from "../../core/child";
 import { asRecord, stringField } from "./codexProtocol";
 import { JsonRpcClient } from "../../core/jsonRpc";
+import {
+  getHarnessRuntimeOverride,
+  inspectHarnessRuntime,
+} from "../../../../features/providers/model/harnessRuntime";
 
 const PROBE_ID = "monocode-codex-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -50,6 +54,9 @@ export function refreshCodexCatalog(): Promise<void> {
 export async function discoverCodexModels(
   workingDirectory?: string,
 ): Promise<AgentModel[]> {
+  // API-key providers may not expose the app-server OAuth account surface.
+  const runtimeModels = await discoverConfiguredApiModels();
+  if (runtimeModels.length > 0) return runtimeModels;
   const { path } = await resolveCodexBinary();
   const cwd = workingDirectory ?? (await homeDir());
   const probeId = `${PROBE_ID}-${crypto.randomUUID()}`;
@@ -102,6 +109,8 @@ export async function discoverCodexModels(
           .catch(() => null);
 
         if (account && !account.account && account.requiresOpenaiAuth) {
+          const configured = await discoverConfiguredApiModels();
+          if (configured.length > 0) return configured;
           throw new Error(
             "Codex CLI is not authenticated. Run `codex login` and try again.",
           );
@@ -116,6 +125,43 @@ export async function discoverCodexModels(
   } finally {
     await stop();
   }
+}
+
+async function discoverConfiguredApiModels(): Promise<AgentModel[]> {
+  try {
+    const runtime = await inspectHarnessRuntime("codex", {
+      refreshModels: true,
+      force: true,
+      override: getHarnessRuntimeOverride("codex"),
+    });
+    if (runtime.authMode !== "api" || runtime.authStatus !== "configured") {
+      return [];
+    }
+    return runtime.models.map((model) => ({
+      id: `codex:${model.id}`,
+      harness: "codex",
+      name: formatDisplayName(model.name || model.id),
+      nativeId: model.id,
+      settings: [codexReasoningSetting()],
+    }));
+  } catch (error) {
+    console.debug("[monocode] codex API model discovery", error);
+    return [];
+  }
+}
+
+function codexReasoningSetting(): ModelSetting {
+  const values = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  return {
+    id: "reasoningEffort",
+    label: "Reasoning",
+    kind: "select",
+    value: "high",
+    options: values.map((value) => ({
+      value,
+      label: REASONING_LABELS[value] ?? value,
+    })),
+  };
 }
 
 async function listAllModels(rpc: JsonRpcClient): Promise<AgentModel[]> {

@@ -12,6 +12,7 @@ mod external_editor;
 mod fs;
 mod gitlab;
 mod harness;
+mod harness_config;
 mod harness_updates;
 mod inbox_media;
 mod jira;
@@ -422,6 +423,7 @@ pub fn run() {
             harness::harness_resolve_opencode,
             harness::harness_resolve_configured,
             harness::harness_runtime_binary_paths,
+            harness_config::harness_runtime_inspect,
             harness::harness_resolve_claude,
             harness::claude_mcp_list,
             mcp::mcp_discover,

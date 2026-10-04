@@ -831,6 +831,7 @@ pub fn harness_spawn(
     account: Option<HarnessAccount>,
     binary_provider: Option<String>,
     binary_path: Option<String>,
+    environment: Option<serde_json::Value>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -857,6 +858,15 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    if let Some(values) = environment.and_then(|value| value.as_object().cloned()) {
+        for (name, value) in values {
+            if let Some(value) = value.as_str() {
+                if !name.is_empty() {
+                    cmd.env(name, value);
+                }
+            }
+        }
+    }
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -1920,6 +1930,11 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
     }
 }
 
+/// Runtime discovery uses the same resolver as child launches.
+pub(crate) fn resolve_harness_binary_for_config(provider: &str) -> Option<String> {
+    resolve_harness_binary_default(provider).map(|path| path.to_string_lossy().into_owned())
+}
+
 const MAX_CONFIGURED_BINARY_VALIDATIONS: usize = 32;
 type ConfiguredBinaryValidation = (String, PathBuf);
 type ConfiguredBinaryValidationCache = HashMap<(String, String), ConfiguredBinaryValidation>;
@@ -2822,7 +2837,7 @@ fn apply_fx_env(cmd: &mut Command) {
         if std::env::var_os(key).is_some() {
             continue;
         }
-        if let Some(value) = login_shell_env(key) {
+        if let Some(value) = login_shell_env_value(key) {
             cmd.env(key, value);
         }
     }
@@ -2833,7 +2848,7 @@ fn apply_grok_env(cmd: &mut Command) {
         if std::env::var_os(key).is_some() {
             continue;
         }
-        if let Some(value) = login_shell_env(key) {
+        if let Some(value) = login_shell_env_value(key) {
             cmd.env(key, value);
         }
     }
@@ -2843,8 +2858,12 @@ static LOGIN_SHELL_ENV: Mutex<Option<HashMap<String, String>>> = Mutex::new(None
 
 /// Keys worth keeping out of `printenv`. PATH is the important one: a
 /// Finder-launched app inherits only launchd's bare PATH.
-const LOGIN_SHELL_KEYS: [&str; 6] = [
+const LOGIN_SHELL_KEYS: [&str; 10] = [
     "PATH",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "CODEX_API_KEY",
+    "CODEX_ACCESS_TOKEN",
     "AI_GATEWAY_API_KEY",
     "FX_AI_GATEWAY_API_KEY",
     "VERCEL_OIDC_TOKEN",
@@ -2853,10 +2872,10 @@ const LOGIN_SHELL_KEYS: [&str; 6] = [
 ];
 
 fn login_shell_path() -> Option<String> {
-    login_shell_env("PATH")
+    login_shell_env_value("PATH")
 }
 
-fn login_shell_env(name: &str) -> Option<String> {
+pub(crate) fn login_shell_env_value(name: &str) -> Option<String> {
     let mut cache = LOGIN_SHELL_ENV.lock().ok()?;
     if cache.is_none() {
         *cache = Some(load_login_shell_env());

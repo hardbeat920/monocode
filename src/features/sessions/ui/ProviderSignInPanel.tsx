@@ -2,6 +2,8 @@ import type { HarnessId } from "../model/session";
 import { HARNESS_TITLE } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
 import { Check, RefreshCw } from "../../../shared/ui/icons";
+import { inspectHarnessRuntime } from "../../providers/model/harnessRuntime";
+import { useEffect, useState } from "react";
 
 export type ProviderSignInState = "idle" | "running" | "complete" | "error";
 
@@ -24,6 +26,22 @@ export function ProviderSignInPanel({
 }) {
   const title = HARNESS_TITLE[harness];
   const complete = state === "complete";
+  const [apiConfigured, setApiConfigured] = useState(false);
+  const [apiProvider, setApiProvider] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (harness !== "codex") return;
+    void inspectHarnessRuntime("codex")
+      .then((runtime) => {
+        setApiConfigured(
+          runtime.authMode === "api" && runtime.authStatus === "configured",
+        );
+        setApiProvider(runtime.providerName);
+      })
+      .catch(() => undefined);
+  }, [harness]);
+
+  const configuredByApi = harness === "codex" && apiConfigured && !complete;
 
   return (
     <div
@@ -34,14 +52,20 @@ export function ProviderSignInPanel({
         <HarnessIcon harness={harness} className="size-9" />
       </span>
       <h2 className="mt-3.5 text-[15px] font-medium leading-5 text-content">
-        {complete ? `Signed in to ${title}` : "Authentication required"}
+        {complete
+          ? `Signed in to ${title}`
+          : configuredByApi
+            ? `${title} API configured`
+            : "Authentication required"}
       </h2>
       <p className="mt-1 max-w-56 text-[11px] leading-4 text-content/45">
         {complete
           ? "You can retry your last message now."
-          : `Sign in to continue using ${title}.`}
+          : configuredByApi
+            ? `${apiProvider ? `${apiProvider} · ` : ""}Using the API key and runtime configuration from your Codex CLI.`
+            : `Sign in to continue using ${title}.`}
       </p>
-      <button
+      {configuredByApi && !onComplete && state !== "error" ? null : <button
         type="button"
         autoFocus={autoFocus}
         className="mt-4 inline-flex h-8 items-center  gap-1.5 rounded-lg bg-content px-3.5 text-[12px] font-medium text-background-base transition-transform duration-150 ease-out hover:bg-content/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.98] disabled:cursor-default disabled:opacity-55 text-center"
@@ -57,8 +81,10 @@ export function ProviderSignInPanel({
           ? "Waiting for browser…"
           : complete
             ? (completeActionLabel ?? "Signed in")
-            : `Sign in to ${title}`}
-      </button>
+            : configuredByApi
+              ? "Retry"
+              : `Sign in to ${title}`}
+      </button>}
       {state === "error" && error ? (
         <p
           className="mt-2.5 max-w-60 text-[10px] leading-4 text-red-500"
