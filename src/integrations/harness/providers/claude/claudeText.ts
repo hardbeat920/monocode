@@ -22,6 +22,7 @@ import {
   stringField,
   summarizeToolRequest,
   toolKindFromName,
+  toolResultsFromUserMessage,
   toolStartFromEvent,
   toolTitle,
   tryParseJsonRecord,
@@ -29,11 +30,15 @@ import {
 } from "./claudeProtocol";
 import type { TurnIntent } from "../../../../features/sessions/model/session";
 import type { HarnessEvent } from "../../core/types";
-import { mergeStream } from "../../core/streamText";
+import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 
 const TEXT_CHILD_ID = "monocode-claude-text";
 const INIT_TIMEOUT_MS = 8_000;
+// Idle limit: the timer restarts on every line from the CLI, so a side answer
+// that is still working through tools is not cut off mid-answer.
 const REQUEST_TIMEOUT_MS = 45_000;
+// Read-only side answers may use tools, but stay bounded.
+const READ_ONLY_MAX_TURNS = 8;
 const TEXT_MODEL = "claude-haiku-4-5";
 
 type TextSettings = {
@@ -43,6 +48,7 @@ type TextSettings = {
   promptEffort?: string;
   settings: Record<string, boolean>;
   permissionMode?: "plan";
+  maxTurns?: number;
 };
 
 type InFlightTool = {
@@ -59,7 +65,12 @@ type LiveText = {
   model: string;
   settingsKey: string;
   collecting: boolean;
+  /** Finished assistant messages, separated by blank lines. */
   output: string;
+  /** Text of the assistant message currently streaming. */
+  messageText: string;
+  pendingMessageBoundary: boolean;
+  onActivity: (() => void) | null;
   closed: boolean;
   ready: boolean;
   turnDone: (() => void) | null;
@@ -93,7 +104,9 @@ function textSettings(
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
     settings,
-    ...(readOnly ? { permissionMode: "plan" as const } : {}),
+    ...(readOnly
+      ? { permissionMode: "plan" as const, maxTurns: READ_ONLY_MAX_TURNS }
+      : {}),
   };
 }
 
@@ -166,11 +179,14 @@ async function promptOnLive(input: {
   );
   input.signal?.throwIfAborted();
   session.output = "";
+  session.messageText = "";
+  session.pendingMessageBoundary = false;
   session.collecting = true;
   session.onEvent = input.onEvent;
   session.toolsByIndex = new Map();
   session.toolsById = new Map();
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let abortHandler: (() => void) | undefined;
   const abortPromise = input.signal
     ? new Promise<never>((_, reject) => {
@@ -203,15 +219,20 @@ async function promptOnLive(input: {
     await Promise.race([
       turnPromise,
       new Promise<void>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Claude text generation timed out")),
-          timeoutMs,
-        );
+        const arm = () => {
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(
+            () => reject(new Error("Claude text generation timed out")),
+            timeoutMs,
+          );
+        };
+        session.onActivity = arm;
+        arm();
       }),
       ...(abortPromise ? [abortPromise] : []),
     ]);
 
-    const output = session.output.trim();
+    const output = answerText(session).trim();
     if (!output) throw new Error("Claude returned empty output.");
     return output;
   } catch (error) {
@@ -221,6 +242,8 @@ async function promptOnLive(input: {
     if (abortHandler && input.signal) {
       input.signal.removeEventListener("abort", abortHandler);
     }
+    clearTimeout(idleTimer);
+    session.onActivity = null;
     session.collecting = false;
     session.turnDone = null;
     session.turnFailed = null;
@@ -264,6 +287,9 @@ async function startLive(
     settingsKey: settings.key,
     collecting: false,
     output: "",
+    messageText: "",
+    pendingMessageBoundary: false,
+    onActivity: null,
     closed: false,
     ready: false,
     turnDone: null,
@@ -297,6 +323,7 @@ async function startLive(
         effort: settings.effort,
         settings: settings.settings,
         permissionMode: settings.permissionMode,
+        maxTurns: settings.maxTurns,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
@@ -342,9 +369,13 @@ function handleLine(session: LiveText, line: string): void {
     session.readyDone = null;
   }
   if (!session.collecting) return;
+  session.onActivity?.();
   if (type === "assistant") {
-    const snapshot = assistantTextBlocks(rec).join("");
-    if (snapshot) session.output = mergeStream(session.output, snapshot);
+    handleAssistant(session, rec);
+    return;
+  }
+  if (type === "user") {
+    handleToolResults(session, rec);
     return;
   }
   if (type === "stream_event") {
@@ -353,7 +384,11 @@ function handleLine(session: LiveText, line: string): void {
   }
   if (type === "result") {
     const result = turnStatusFromResult(rec);
-    if (result.status === "failed") {
+    if (stringField(rec, "subtype") === "error_max_turns") {
+      session.turnFailed?.(
+        new Error("Claude used too many tool steps to answer."),
+      );
+    } else if (result.status === "failed") {
       session.turnFailed?.(new Error(result.error ?? "Claude turn failed"));
     } else {
       session.turnDone?.();
@@ -370,7 +405,8 @@ function handleStreamEvent(
   const delta = streamDeltaFromEvent(rec);
   if (delta) {
     if (delta.kind === "assistant") {
-      session.output = mergeStream(session.output, delta.text);
+      closePendingMessage(session);
+      session.messageText = joinStreamText(session.messageText, delta.text);
       session.onEvent?.({ type: "message.delta", text: delta.text });
     } else {
       session.onEvent?.({ type: "reasoning.delta", text: delta.text });
@@ -424,6 +460,58 @@ function handleStreamEvent(
     detail: summarizeToolRequest(tool.name, parsed),
     preview: previewFromTool(tool.name, parsed),
   });
+}
+
+/**
+ * Each assistant record is one finished Claude message. A side answer that
+ * uses tools spans several, so the snapshot only fills in what streaming
+ * missed for the current message, then the message is committed on its own.
+ */
+function handleAssistant(
+  session: LiveText,
+  rec: Record<string, unknown>,
+): void {
+  const snapshot = assistantTextBlocks(rec).join("");
+  if (snapshot) closePendingMessage(session);
+  const extra = snapshotRemainder(session.messageText, snapshot);
+  if (extra) {
+    session.messageText = joinStreamText(session.messageText, extra);
+    session.onEvent?.({ type: "message.delta", text: extra });
+  }
+  session.output = answerText(session);
+  session.pendingMessageBoundary ||= !!session.messageText;
+  session.messageText = "";
+}
+
+function handleToolResults(
+  session: LiveText,
+  rec: Record<string, unknown>,
+): void {
+  for (const result of toolResultsFromUserMessage(rec)) {
+    const tool = session.toolsById.get(result.toolUseId);
+    if (!tool) continue;
+    session.onEvent?.({
+      type: "tool.updated",
+      callId: tool.id,
+      title: tool.title,
+      kind: toolKindFromName(tool.name),
+      status: result.isError ? "failed" : "completed",
+      detail: result.text || undefined,
+      preview: previewFromTool(tool.name, tool.input, result.text),
+    });
+  }
+}
+
+function closePendingMessage(session: LiveText): void {
+  if (!session.pendingMessageBoundary) return;
+  session.pendingMessageBoundary = false;
+  session.onEvent?.({ type: "message.completed" });
+}
+
+function answerText(session: LiveText): string {
+  return [session.output, session.messageText]
+    .filter((part) => part.trim())
+    .join("\n\n");
 }
 
 function waitForReady(session: LiveText, timeoutMs: number): Promise<void> {
