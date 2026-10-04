@@ -1,4 +1,4 @@
-import { Chunk } from "@codemirror/merge";
+import { Chunk, type DiffConfig } from "@codemirror/merge";
 import {
   EditorState,
   Facet,
@@ -53,16 +53,29 @@ const gitCommentFacet = Facet.define<
 const insertedLine = Decoration.line({ class: "cm-gitInsertedLine" });
 const LINE_HEIGHT = Math.round(13 * 1.6);
 
-const addMarker = new (class extends GutterMarker {
-  eq() {
-    return true;
+class GitMarker extends GutterMarker {
+  constructor(
+    readonly kind: string,
+    readonly glyph: string,
+  ) {
+    super();
   }
+
+  eq(other: GitMarker) {
+    return this.kind === other.kind && this.glyph === other.glyph;
+  }
+
   toDOM() {
     const el = document.createElement("div");
-    el.className = "cm-gitMarker cm-gitAdd";
+    el.className = `cm-gitMarker ${this.kind}`;
+    el.textContent = this.glyph;
     return el;
   }
-})();
+}
+
+const addMarker = new GitMarker("cm-gitAdd", "+");
+// U+2212 minus, matching the removed-line mark in the other diff views.
+const delMarker = new GitMarker("cm-gitDel", "−");
 
 const originalField = StateField.define<Text | null>({
   create() {
@@ -128,39 +141,36 @@ const gitDecorations = StateField.define<GitDecorations>({
     EditorView.decorations.from(field, (value) => value.lines),
 });
 
-class DeletedLinesWidget extends WidgetType {
+// One widget per removed line so each gets its own gutter glyph, aligned
+// even when the line wraps.
+class DeletedLineWidget extends WidgetType {
   constructor(
-    readonly lines: readonly string[],
+    readonly text: string,
     readonly pos: number,
-    readonly firstLine: number,
+    readonly oldLine: number,
   ) {
     super();
   }
 
-  eq(other: DeletedLinesWidget) {
+  eq(other: DeletedLineWidget) {
     return (
       this.pos === other.pos &&
-      this.firstLine === other.firstLine &&
-      this.lines.length === other.lines.length &&
-      this.lines.every((line, i) => line === other.lines[i])
+      this.oldLine === other.oldLine &&
+      this.text === other.text
     );
   }
 
   toDOM() {
-    const wrap = document.createElement("div");
-    wrap.className = "cm-gitDeletedChunk";
-    wrap.setAttribute("aria-hidden", "true");
-    for (const [index, text] of this.lines.entries()) {
-      const line = wrap.appendChild(document.createElement("div"));
-      line.className = "cm-gitDeletedLine";
-      line.dataset.oldLine = String(this.firstLine + index);
-      line.textContent = text || "\u00a0";
-    }
-    return wrap;
+    const line = document.createElement("div");
+    line.className = "cm-gitDeletedLine";
+    line.setAttribute("aria-hidden", "true");
+    line.dataset.oldLine = String(this.oldLine);
+    line.textContent = this.text || "\u00a0";
+    return line;
   }
 
   get estimatedHeight() {
-    return this.lines.length * LINE_HEIGHT;
+    return LINE_HEIGHT;
   }
 
   ignoreEvent() {
@@ -329,10 +339,19 @@ export function stageChunkText(
   current: string,
   pos: number,
   selection?: GitTextRange | null,
+  /** Must match the config that produced `pos`, so the same hunk is found. */
+  diffConfig: DiffConfig = DIFF_CONFIG,
 ): string | null {
   const orig = textFromString(original);
   const doc = textFromString(current);
-  const changes = stageChunkChanges(orig, doc, pos, selection, "\n");
+  const changes = stageChunkChanges(
+    orig,
+    doc,
+    pos,
+    selection,
+    "\n",
+    diffConfig,
+  );
   if (!changes) return null;
   return orig.replace(changes.from, changes.to, changes.insert).toString();
 }
@@ -376,9 +395,13 @@ export function findChunk(
   });
 }
 
-function chunksFor(original: Text | null, current: Text): readonly Chunk[] {
+function chunksFor(
+  original: Text | null,
+  current: Text,
+  diffConfig: DiffConfig = DIFF_CONFIG,
+): readonly Chunk[] {
   if (!original) return [];
-  return Chunk.build(original, current, DIFF_CONFIG);
+  return Chunk.build(original, current, diffConfig);
 }
 
 function replacesEntireDoc(tr: Transaction): boolean {
@@ -419,8 +442,9 @@ function stageChunkChanges(
   pos: number,
   selection: GitTextRange | null | undefined,
   lineBreak: string,
+  diffConfig?: DiffConfig,
 ): { from: number; to: number; insert: Text } | null {
-  const range = actionChunkRange(original, doc, pos, selection);
+  const range = actionChunkRange(original, doc, pos, selection, diffConfig);
   if (!range) return null;
   return applySide(
     doc,
@@ -464,8 +488,9 @@ function actionChunkRange(
   doc: Text,
   pos: number,
   selection: GitTextRange | null | undefined,
+  diffConfig?: DiffConfig,
 ): ChunkRange | null {
-  const chunk = findChunk(doc, chunksFor(original, doc), pos);
+  const chunk = findChunk(doc, chunksFor(original, doc, diffConfig), pos);
   if (!chunk) return null;
   return narrowChunk(original, doc, chunk, selection);
 }
@@ -638,14 +663,16 @@ function buildDecorations(state: EditorState): GitDecorations {
       const firstLine = original.lineAt(
         Math.min(chunk.fromA, original.length),
       ).number;
-      lineItems.push({
-        from: widgetAt,
-        deco: Decoration.widget({
-          widget: new DeletedLinesWidget(deleted, widgetAt, firstLine),
-          block: true,
-          side: -1,
-        }),
-      });
+      for (const [index, text] of deleted.entries()) {
+        lineItems.push({
+          from: widgetAt,
+          deco: Decoration.widget({
+            widget: new DeletedLineWidget(text, widgetAt, firstLine + index),
+            block: true,
+            side: -1,
+          }),
+        });
+      }
     }
 
     if (!insertion) continue;
@@ -692,6 +719,8 @@ function sameText(a: Text | null, b: Text | null): boolean {
 const gitGutter = gutter({
   class: "cm-gitGutter",
   markers: (view) => view.state.field(gitDecorations).gutter,
+  widgetMarker: (_view, widget) =>
+    widget instanceof DeletedLineWidget ? delMarker : null,
   lineMarkerChange: (update) =>
     update.startState.field(chunksField) !== update.state.field(chunksField),
 });
@@ -1059,25 +1088,35 @@ const gitTheme = EditorView.theme({
     justifyContent: "flex-end",
     padding: "0",
   },
+  // The +/- glyph keeps added and removed lines distinguishable without
+  // relying on color; the bar on the right edge carries the color.
   ".cm-gitMarker": {
-    width: "3px",
+    width: "100%",
     height: "100%",
+    paddingRight: "6px",
+    boxSizing: "border-box",
+    fontFamily: "var(--font-mono)",
+    fontSize: "11px",
+    fontWeight: "600",
+    lineHeight: `${LINE_HEIGHT}px`,
+    textAlign: "right",
   },
   ".cm-gitAdd": {
-    backgroundColor: "#34d399",
+    color: "var(--color-diff-add-fg)",
+    boxShadow: "inset -3px 0 0 var(--color-diff-add)",
+  },
+  ".cm-gitDel": {
+    color: "var(--color-diff-del-fg)",
+    boxShadow: "inset -3px 0 0 var(--color-diff-del)",
   },
   ".cm-gitInsertedLine": {
-    backgroundColor: "color-mix(in srgb, #34d399 18%, transparent)",
-    boxShadow: "inset 3px 0 0 #34d399",
-  },
-  ".cm-gitDeletedChunk": {
-    position: "relative",
-    width: "100%",
+    backgroundColor: "var(--color-diff-add-bg)",
+    boxShadow: "inset 3px 0 0 var(--color-diff-add)",
   },
   ".cm-gitDeletedLine": {
     padding: "0 12px 0 6px",
-    backgroundColor: "color-mix(in srgb, #f87171 16%, transparent)",
-    boxShadow: "inset 3px 0 0 #f87171",
+    backgroundColor: "var(--color-diff-del-bg)",
+    boxShadow: "inset 3px 0 0 var(--color-diff-del)",
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
   },
@@ -1099,15 +1138,16 @@ const gitTheme = EditorView.theme({
     pointerEvents: "auto",
   },
   ".cm-gitOverview-add": {
-    backgroundColor: "#34d399",
+    backgroundColor: "var(--color-diff-add)",
   },
   ".cm-gitOverview-del": {
-    backgroundColor: "#f87171",
+    backgroundColor: "var(--color-diff-del)",
   },
   ".cm-gitOverview-mod": {
     display: "flex",
     flexDirection: "row",
-    background: "linear-gradient(to right, #f87171 0 50%, #34d399 50% 100%)",
+    background:
+      "linear-gradient(to right, var(--color-diff-del) 0 50%, var(--color-diff-add) 50% 100%)",
   },
   ".cm-gitHunkBar": {
     position: "absolute",

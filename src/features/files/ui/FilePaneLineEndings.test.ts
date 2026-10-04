@@ -122,8 +122,10 @@ describe("file editor line endings", () => {
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() =>
+        expect(written.content).toBe("second first alpha\n"),
+      );
     });
-    expect(written.content).toBe("second first alpha\n");
   });
 
   it("keeps changes dirty when autosave is disabled", async () => {
@@ -173,8 +175,8 @@ describe("file editor line endings", () => {
     await act(async () => {
       view.dispatch({ changes: { from: 0, insert: "local " } });
       await vi.advanceTimersByTimeAsync(FILE_EDITOR_AUTOSAVE_DELAY_MS);
+      await vi.waitFor(() => expect(formatText).toHaveBeenCalledOnce());
     });
-    expect(formatText).toHaveBeenCalledOnce();
 
     await act(async () => {
       disk.content = "external\n";
@@ -207,10 +209,20 @@ describe("file editor line endings", () => {
     });
     expect(writeAttempts).toBe(1);
 
+    // The failed write passes through the save queue before its catch handler
+    // restores the autosave timer. Wait for that failure to settle first.
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(container.textContent).toContain(
+          "Save failed: disk unavailable",
+        ),
+      );
+    });
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(FILE_EDITOR_AUTOSAVE_DELAY_MS);
+      await vi.waitFor(() => expect(writeAttempts).toBe(2));
     });
-    expect(writeAttempts).toBe(2);
     expect(written.content).toBe("changed alpha\n");
   });
 

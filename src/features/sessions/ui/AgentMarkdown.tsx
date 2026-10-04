@@ -1,4 +1,3 @@
-import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -30,6 +29,7 @@ import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { boundedCode } from "../../files/editor/codeHighlightPlugin";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
   displayPath,
@@ -48,6 +48,7 @@ import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
 import { agentMathPlugin, parseAgentMarkdownBlocks } from "./agentMath";
+import { rehypeHardBreaks } from "./hardBreaks";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 import "katex/dist/katex.min.css";
 
@@ -64,7 +65,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-const MARKDOWN_PLUGINS = { code, mermaid, math: agentMathPlugin };
+const MARKDOWN_PLUGINS = { code: boundedCode, mermaid, math: agentMathPlugin };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,
@@ -510,6 +511,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   cwd,
   onOpenFile,
   allowRemoteMedia,
+  hardBreaks,
 }: {
   text: string;
   streaming?: boolean;
@@ -517,6 +519,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   cwd?: string;
   onOpenFile?: OpenFileFn;
   allowRemoteMedia?: boolean;
+  /** Show a newline inside a block as a line break, as a document does (#591). */
+  hardBreaks?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
@@ -546,13 +550,20 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   // element. Dropping one mid-fade would remount it and fade it again. Once
   // the fade is over they come off, or a finished reply would keep a span per
   // word for as long as this transcript stays mounted.
-  const rehypePlugins = fading
+  const baseRehypePlugins = fading
     ? remoteMedia
       ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
       : FADING_MARKDOWN_REHYPE_PLUGINS
     : remoteMedia
       ? INBOX_MEDIA_REHYPE_PLUGINS
       : MARKDOWN_REHYPE_PLUGINS;
+  // Hard breaks go last, so nothing after them undoes them, and after the word
+  // fade, whose word spans would otherwise hide the newlines from them.
+  const rehypePlugins = useMemo(
+    () =>
+      hardBreaks ? [...baseRehypePlugins, rehypeHardBreaks] : baseRehypePlugins,
+    [baseRehypePlugins, hardBreaks],
+  );
 
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
@@ -640,12 +651,14 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   cwd,
   onOpenFile,
   header,
+  hardBreaks,
 }: {
   text: string;
   streaming?: boolean;
   cwd?: string;
   onOpenFile?: OpenFileFn;
   header?: ReactNode;
+  hardBreaks?: boolean;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
@@ -664,6 +677,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           streaming={streaming}
           cwd={cwd}
           onOpenFile={onOpenFile}
+          hardBreaks={hardBreaks}
         />
       </div>
     </div>

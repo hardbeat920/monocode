@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { titleFromToolInput } from "../../../integrations/harness/core/preview";
+import {
+  isWeakToolTitle,
+  titleFromToolInput,
+} from "../../../integrations/harness/core/preview";
+import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
@@ -360,14 +364,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   if (!record) return null;
   const session = recordToSession(record);
   if (session.harness === "claude" && session.providerSessionId) {
-    const toolIds = session.blocks.flatMap((block) =>
-      block.role === "tool" &&
-      block.tool?.kind === "execute" &&
-      block.text.trim() === "Shell" &&
-      block.tool.callId
-        ? [block.tool.callId]
-        : [],
-    );
+    const toolIds = shellPlaceholderIds(session.blocks);
     if (toolIds.length) {
       try {
         const commands = await claudeShellCommands(
@@ -383,6 +380,18 @@ export async function getSession(sessionId: string): Promise<Session | null> {
       } catch {
         // A missing or unreadable Claude transcript must not block the session.
       }
+    }
+  }
+  if (session.harness === "codex") {
+    // Relabel from the command already saved on the row. Codex sends it with
+    // the item and `shellCommandPreview` stores it as the preview title, so
+    // this needs no disk read at all.
+    const blocks = backfillCodexShellCommands(session.blocks);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
+      // A failed write must not cost the reader the session. The repair stays
+      // in memory and the next load retries it.
+      await upsertSession(session).catch(() => undefined);
     }
   }
   if (session.harness !== "omp" || !session.providerSessionId) {
@@ -432,6 +441,55 @@ export function backfillClaudeShellCommands(
       ...block,
       text: title,
       tool: { ...block.tool, title },
+    };
+  });
+  return changed ? repaired : blocks;
+}
+
+/** Exec rows that were saved without their command, keyed by their tool call. */
+function shellPlaceholderIds(blocks: Block[]): string[] {
+  return blocks.flatMap((block) =>
+    block.role === "tool" &&
+    block.tool?.kind === "execute" &&
+    block.text.trim() === "Shell" &&
+    block.tool.callId
+      ? [block.tool.callId]
+      : [],
+  );
+}
+
+/**
+ * Relabel exec rows that were saved without their command.
+ *
+ * The command is already on the row: Codex sends it with the item, and
+ * `shellCommandPreview` stores it as the preview title. Reading it back from
+ * there keeps whatever Codex chose to show the user — including anything it
+ * redacted — and never re-reads a secret off disk into the transcript store. A
+ * row saved without a usable preview has no command left to recover, so it keeps
+ * its placeholder label.
+ */
+export function backfillCodexShellCommands(blocks: Block[]): Block[] {
+  let changed = false;
+  const repaired = blocks.map((block) => {
+    if (
+      block.role !== "tool" ||
+      block.tool?.kind !== "execute" ||
+      block.text.trim() !== "Shell"
+    ) {
+      return block;
+    }
+    const saved = block.tool.preview?.title?.trim();
+    if (!saved || isWeakToolTitle(saved)) return block;
+    changed = true;
+    const { title, preview } = codexCommandPresentation({}, saved);
+    return {
+      ...block,
+      text: title,
+      tool: {
+        ...block.tool,
+        title,
+        ...(preview ? { preview } : {}),
+      },
     };
   });
   return changed ? repaired : blocks;
@@ -1010,10 +1068,15 @@ function sanitizeTaskList(value: unknown): TaskListMeta | null {
   });
   if (items.length === 0) return null;
   const key = typeof record.key === "string" ? record.key.trim() : "";
+  const providerSessionId =
+    typeof record.providerSessionId === "string"
+      ? record.providerSessionId.trim()
+      : "";
   const explanation =
     typeof record.explanation === "string" ? record.explanation.trim() : "";
   return {
     ...(key ? { key } : {}),
+    ...(providerSessionId ? { providerSessionId } : {}),
     ...(explanation ? { explanation } : {}),
     items,
   };

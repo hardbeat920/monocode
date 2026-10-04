@@ -119,6 +119,18 @@ npm run build:windows
 The Windows build emits an NSIS installer under `target/release/bundle/nsis/`.
 Tauri loads `src-tauri/tauri.windows.conf.json` automatically for Windows development and builds.
 
+## Contributors
+
+Thanks to everyone who contributes to MonoCode!
+
+[![MonoCode contributors](https://contrib.rocks/image?repo=hardbeat920/monocode)](https://github.com/hardbeat920/monocode/graphs/contributors)
+
 ## License
 
 [MIT](LICENSE). Provider names and logos are trademarks of their owners - see [NOTICE](NOTICE).
+
+## Acknowledgments
+
+Special thanks to the project that helps us recognize MonoCode's contributors:
+
+- [contrib.rocks](https://contrib.rocks)

@@ -1090,10 +1090,10 @@ function ProjectDiffStat({
       className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
-        <span className="text-emerald-400">+{formatInteger(additions)}</span>
+        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{formatInteger(deletions)}</span>
+        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
       ) : null}
     </span>
   );

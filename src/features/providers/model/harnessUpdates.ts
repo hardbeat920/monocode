@@ -31,17 +31,25 @@ export type HarnessUpdateDeps = {
 
 /** Every window keeps its own model catalog, so each has to hear about it. */
 const HARNESS_UPDATED_EVENT = "harness-updated";
+const updateEventSource = crypto.randomUUID();
+
+type HarnessUpdatedEvent = {
+  harness: HarnessId;
+  source: string;
+};
 
 export function announceHarnessUpdated(harness: HarnessId): Promise<void> {
-  return emit(HARNESS_UPDATED_EVENT, harness);
+  return emit(HARNESS_UPDATED_EVENT, { harness, source: updateEventSource });
 }
 
 export function onHarnessUpdated(
   handler: (harness: HarnessId) => void,
 ): Promise<UnlistenFn> {
-  return listen<HarnessId>(HARNESS_UPDATED_EVENT, (event) =>
-    handler(event.payload),
-  );
+  return listen<HarnessUpdatedEvent>(HARNESS_UPDATED_EVENT, (event) => {
+    // The sender awaited its local refresh before announcing the update.
+    if (event.payload.source === updateEventSource) return;
+    handler(event.payload.harness);
+  });
 }
 
 export function claimLaunchHarnessUpdateCheck(): Promise<boolean> {

@@ -218,11 +218,11 @@ pub fn enable_glass(window: &WebviewWindow) {
     apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
 }
 
-/// Light mode stays opaque because pale desktop content makes translucent UI illegible.
-pub fn disable_glass(window: &WebviewWindow) {
+/// Turn off the blur and fall back to an opaque window in the caller's colour.
+pub fn disable_glass(window: &WebviewWindow, r: u8, g: u8, b: u8) {
     set_glass_enabled(window, false);
     apply_blur(window, 0);
-    set_launch_background(window, 247, 247, 247);
+    set_launch_background(window, r, g, b);
 }
 
 fn prepare_glass(window: &WebviewWindow) {

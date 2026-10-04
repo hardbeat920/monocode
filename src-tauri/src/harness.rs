@@ -121,6 +121,16 @@ pub struct HarnessHost {
 }
 
 impl HarnessHost {
+    pub(crate) fn runtime_binary_path(&self, provider: &str) -> Option<String> {
+        self.runtime_binary_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()?
+            .get(provider)
+            .map(|path| path.trim().to_owned())
+            .filter(|path| !path.is_empty())
+    }
+
     pub(crate) fn has_working_dir(&self, path: &Path) -> bool {
         self.lock_inner()
             .children
@@ -359,6 +369,366 @@ pub fn harness_resolve_claude() -> Result<CursorBinary, String> {
             "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`, then retry."
                 .into()
         })
+}
+
+fn resolve_mcp_binary(provider: &str, binary_path: Option<&str>) -> Result<PathBuf, String> {
+    if !matches!(provider, "claude" | "codex" | "cursor" | "opencode") {
+        return Err("Unsupported MCP provider".into());
+    }
+    match binary_path {
+        Some(path) => resolve_harness_binary_override(provider, path),
+        None => resolve_harness_binary_default(provider)
+            .ok_or_else(|| format!("{provider} CLI not found")),
+    }
+}
+
+fn claude_mcp_command(
+    args: Vec<String>,
+    cwd: String,
+    timeout: Duration,
+    binary_path: Option<&str>,
+) -> Result<String, String> {
+    let binary = resolve_mcp_binary("claude", binary_path)?;
+    mcp_command(binary, args, cwd, timeout)
+}
+
+fn mcp_command(
+    binary: PathBuf,
+    args: Vec<String>,
+    cwd: String,
+    timeout: Duration,
+) -> Result<String, String> {
+    let workdir = expand_home(&cwd);
+    if !workdir.is_dir() {
+        return Err("Project directory does not exist".into());
+    }
+    let output = exec_output(&binary.to_string_lossy(), &args, Some(&cwd), timeout)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() {
+        return Ok(stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("{} {}", stderr.trim(), stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub async fn claude_mcp_list(host: State<'_, HarnessHost>, cwd: String) -> Result<String, String> {
+    let binary_path = host.runtime_binary_path("claude");
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut output = claude_mcp_command(
+            vec!["mcp".into(), "list".into()],
+            cwd.clone(),
+            Duration::from_secs(30),
+            binary_path.as_deref(),
+        )?;
+        for name in configured_ws_mcp_servers(&expand_home(&cwd)) {
+            if !output
+                .lines()
+                .any(|line| line.starts_with(&format!("{name}:")))
+            {
+                output.push_str(&format!(
+                    "\n{name}: WebSocket server (open Claude /mcp for status)"
+                ));
+            }
+        }
+        Ok(output)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn configured_ws_mcp_servers(cwd: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let read = |path: &Path| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
+    let collect = |servers: Option<&serde_json::Value>, names: &mut Vec<String>| {
+        if let Some(servers) = servers.and_then(serde_json::Value::as_object) {
+            for (name, config) in servers {
+                if config.get("type").and_then(serde_json::Value::as_str) == Some("ws")
+                    && valid_mcp_name(name)
+                    && !names.contains(name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+    };
+    if let Some(home) = dirs_home() {
+        if let Some(settings) = read(&Path::new(&home).join(".claude.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+            collect(
+                settings
+                    .get("projects")
+                    .and_then(|projects| projects.get(cwd.to_string_lossy().as_ref()))
+                    .and_then(|project| project.get("mcpServers")),
+                &mut names,
+            );
+        }
+    }
+    for directory in cwd.ancestors() {
+        if let Some(settings) = read(&directory.join(".mcp.json")) {
+            collect(settings.get("mcpServers"), &mut names);
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    names
+}
+
+#[tauri::command]
+pub async fn claude_mcp_add(
+    host: State<'_, HarnessHost>,
+    cwd: String,
+    name: String,
+    config: String,
+    scope: String,
+) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Server name must use letters, numbers, hyphens, or underscores".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    let value: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
+    if !value.is_object() {
+        return Err("Server configuration must be a JSON object".into());
+    }
+    let binary_path = host.runtime_binary_path("claude");
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec![
+                "mcp".into(),
+                "add-json".into(),
+                name,
+                config,
+                "--scope".into(),
+                scope,
+            ],
+            cwd,
+            Duration::from_secs(30),
+            binary_path.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+pub(crate) fn add_mcp_via_cli(
+    provider: &str,
+    scope: &str,
+    cwd: &str,
+    name: &str,
+    config: &serde_json::Value,
+    binary_path: Option<&str>,
+) -> Result<(), String> {
+    let (binary, args) = mcp_add_args(provider, scope, name, config, binary_path)?;
+    mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
+    Ok(())
+}
+
+pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Result<u32, String> {
+    let binary = resolve_mcp_binary("opencode", binary_path)?;
+    let version = mcp_command(
+        binary,
+        vec!["--version".into()],
+        cwd.to_owned(),
+        Duration::from_secs(10),
+    )?;
+    version
+        .split_whitespace()
+        .find_map(|part| {
+            part.trim_start_matches('v')
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+        .filter(|major| matches!(major, 1 | 2))
+        .ok_or_else(|| format!("Unsupported OpenCode version: {version}"))
+}
+
+fn mcp_add_args(
+    provider: &str,
+    scope: &str,
+    name: &str,
+    config: &serde_json::Value,
+    binary_path: Option<&str>,
+) -> Result<(PathBuf, Vec<String>), String> {
+    if provider == "claude" {
+        if !matches!(scope, "local" | "project" | "user") {
+            return Err("Invalid Claude MCP scope".into());
+        }
+        let binary = resolve_mcp_binary("claude", binary_path)?;
+        let config = serde_json::to_string(config).map_err(|e| e.to_string())?;
+        return Ok((
+            binary,
+            vec![
+                "mcp".into(),
+                "add-json".into(),
+                name.into(),
+                config,
+                "--scope".into(),
+                scope.into(),
+            ],
+        ));
+    }
+    if provider == "codex" && scope != "user" {
+        return Err("Codex CLI adds user-scoped servers only".into());
+    }
+    let binary = match provider {
+        "codex" => resolve_mcp_binary("codex", binary_path)?,
+        _ => return Err("Unsupported MCP provider".into()),
+    };
+    let object = config
+        .as_object()
+        .ok_or("Server configuration must be an object")?;
+    let remote = object.get("url").and_then(serde_json::Value::as_str);
+    let allowed: &[&str] = if remote.is_some() {
+        &["type", "url", "bearerTokenEnvVar"]
+    } else {
+        &["type", "command", "args", "env"]
+    };
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!(
+            "{provider} add cannot preserve '{key}'; edit its config file instead"
+        ));
+    }
+    let kind = object.get("type").and_then(serde_json::Value::as_str);
+    if remote.is_some() && !matches!(kind, None | Some("http") | Some("remote")) {
+        return Err(format!("{provider} CLI supports HTTP URLs only"));
+    }
+    if remote.is_none() && !matches!(kind, None | Some("stdio") | Some("local")) {
+        return Err("Local server type must be stdio".into());
+    }
+    let mut args = vec!["mcp".into(), "add".into(), name.into()];
+    if let Some(url) = remote {
+        let parsed = url::Url::parse(url).map_err(|_| "Invalid server URL")?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("MCP URL must use HTTP or HTTPS".into());
+        }
+        args.extend(["--url".into(), url.into()]);
+        if let Some(var) = object
+            .get("bearerTokenEnvVar")
+            .and_then(serde_json::Value::as_str)
+        {
+            args.extend(["--bearer-token-env-var".into(), var.into()]);
+        }
+    } else {
+        args.extend(mcp_key_values(config, "env", "--env")?);
+        let command = object
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("Local server needs a command")?;
+        let parameters = object
+            .get("args")
+            .map(|value| value.as_array().ok_or("args must be an array"))
+            .transpose()?;
+        args.push("--".into());
+        args.push(command.into());
+        for parameter in parameters.into_iter().flatten() {
+            args.push(
+                parameter
+                    .as_str()
+                    .ok_or("args must contain strings")?
+                    .into(),
+            );
+        }
+    }
+    Ok((binary, args))
+}
+
+fn mcp_key_values(
+    config: &serde_json::Value,
+    field: &str,
+    flag: &str,
+) -> Result<Vec<String>, String> {
+    let Some(value) = config.get(field) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_object()
+        .ok_or_else(|| format!("{field} must be an object"))?;
+    let mut args = Vec::new();
+    for (key, value) in values {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("{field} values must be strings"))?;
+        args.extend([flag.to_owned(), format!("{key}={value}")]);
+    }
+    Ok(args)
+}
+
+#[tauri::command]
+pub async fn claude_mcp_remove(
+    host: State<'_, HarnessHost>,
+    cwd: String,
+    name: String,
+    scope: String,
+) -> Result<(), String> {
+    if !valid_mcp_name(&name) {
+        return Err("Invalid MCP server name".into());
+    }
+    if !matches!(scope.as_str(), "local" | "project" | "user") {
+        return Err("Invalid MCP scope".into());
+    }
+    let binary_path = host.runtime_binary_path("claude");
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_mcp_command(
+            vec!["mcp".into(), "remove".into(), name, "--scope".into(), scope],
+            cwd,
+            Duration::from_secs(30),
+            binary_path.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mcp_provider_login(
+    host: State<'_, HarnessHost>,
+    cwd: String,
+    provider: String,
+    name: String,
+) -> Result<(), String> {
+    let valid_name = if provider == "opencode" {
+        !name.trim().is_empty() && !name.chars().any(char::is_control)
+    } else {
+        valid_mcp_name(&name)
+    };
+    if !valid_name {
+        return Err("Invalid MCP server name".into());
+    }
+    let binary_path = host.runtime_binary_path(&provider);
+    tauri::async_runtime::spawn_blocking(move || {
+        let args = match provider.as_str() {
+            "claude" | "codex" | "cursor" => vec!["mcp", "login"],
+            "opencode" => vec!["mcp", "auth"],
+            _ => return Err("Unsupported MCP provider".into()),
+        };
+        let binary = resolve_mcp_binary(&provider, binary_path.as_deref())?;
+        mcp_command(
+            binary,
+            args.into_iter().map(String::from).chain([name]).collect(),
+            cwd,
+            Duration::from_secs(180),
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn valid_mcp_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Resolve the Pi coding agent CLI (`pi`).
@@ -2895,6 +3265,106 @@ mod tests {
 
         assert_eq!(initialize_runtime_binary_paths(&runtime, old.clone()), old);
         assert_eq!(initialize_runtime_binary_paths(&runtime, new), old);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_commands_use_active_configured_binaries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("monocode-mcp-binaries-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let host = HarnessHost::new();
+        let mut paths = HashMap::new();
+        for (provider, filename) in [
+            ("claude", "claude"),
+            ("codex", "codex"),
+            ("cursor", "cursor-agent"),
+            ("opencode", "opencode"),
+        ] {
+            let binary = root.join(filename);
+            std::fs::write(
+                &binary,
+                format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{provider} 2.3.4'; else printf '%s\\n' \"$@\"; fi\n"),
+            ).unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            paths.insert(provider.to_string(), binary.to_string_lossy().into_owned());
+        }
+        initialize_runtime_binary_paths(&host.runtime_binary_paths, paths.clone());
+        initialize_runtime_binary_paths(&host.runtime_binary_paths, HashMap::new());
+        let cwd = root.to_string_lossy().into_owned();
+        for (provider, path) in &paths {
+            let active = host.runtime_binary_path(provider).unwrap();
+            assert_eq!(&active, path);
+            let binary = resolve_mcp_binary(provider, Some(&active)).unwrap();
+            assert_eq!(binary, PathBuf::from(path));
+            assert_eq!(
+                mcp_command(
+                    binary,
+                    vec!["mcp".into(), "login".into(), "docs".into()],
+                    cwd.clone(),
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                "mcp\nlogin\ndocs"
+            );
+        }
+        assert_eq!(
+            claude_mcp_command(
+                vec!["mcp".into(), "list".into()],
+                cwd.clone(),
+                Duration::from_secs(5),
+                paths.get("claude").map(String::as_str),
+            )
+            .unwrap(),
+            "mcp\nlist"
+        );
+        for provider in ["claude", "codex"] {
+            let config = serde_json::json!({"command":"node","args":["docs"]});
+            let (binary, args) = mcp_add_args(
+                provider,
+                "user",
+                "docs",
+                &config,
+                paths.get(provider).map(String::as_str),
+            )
+            .unwrap();
+            assert_eq!(binary, PathBuf::from(&paths[provider]));
+            assert_eq!(
+                &args[..3],
+                [
+                    "mcp",
+                    if provider == "claude" {
+                        "add-json"
+                    } else {
+                        "add"
+                    },
+                    "docs"
+                ]
+            );
+            add_mcp_via_cli(
+                provider,
+                "user",
+                &cwd,
+                "docs",
+                &config,
+                paths.get(provider).map(String::as_str),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            opencode_major_version(&cwd, paths.get("opencode").map(String::as_str)),
+            Ok(2)
+        );
+        assert!(resolve_mcp_binary(
+            "claude",
+            Some(&root.join("missing/claude").to_string_lossy())
+        )
+        .is_err());
+        assert!(resolve_mcp_binary("claude", paths.get("codex").map(String::as_str)).is_err());
+        assert!(resolve_mcp_binary("pi", paths.get("claude").map(String::as_str)).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

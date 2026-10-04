@@ -104,6 +104,29 @@ describe("historyWithLiveSessions", () => {
     expect(replacement[0].orchestration?.tasks).toEqual([]);
   });
 
+  it("shows a live generated title and work item before the next persist", () => {
+    const cwd = "/tmp/project-a";
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    const session = {
+      ...newSession("cursor", cwd),
+      id: "live",
+      title: "cursor · Fix tab title refresh",
+      linkedWorkItem,
+      blocks: [{ id: "u", role: "user" as const, text: "Fix PR #42" }],
+      busy: true,
+    };
+    const rows = historyWithLiveSessions([summary("live", cwd)], [session], cwd);
+    expect(rows[0]).toMatchObject({
+      title: "cursor · Fix tab title refresh",
+      linkedWorkItem,
+    });
+  });
+
   it("does not inject an internal worker without a loaded run", () => {
     const worker = {
       ...newSession("codex", run.cwd),

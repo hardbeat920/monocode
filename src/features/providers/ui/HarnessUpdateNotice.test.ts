@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
 
 let claimed = false;
@@ -35,27 +35,45 @@ vi.mock("../../sessions/model/models", () => ({
 }));
 const refreshHarnessCatalogs = vi.fn(async () => undefined);
 vi.mock("../../../integrations/harness/core/registry", () => ({
-  refreshHarnessCatalogs: (...args: unknown[]) => refreshHarnessCatalogs(...(args as [])),
+  refreshHarnessCatalogs: (...args: unknown[]) =>
+    refreshHarnessCatalogs(...(args as [])),
 }));
-const emit = vi.fn(async () => undefined);
+const eventListeners = new Set<(event: { payload: unknown }) => void>();
+const emit = vi.fn(async (_event: string, payload: unknown) => {
+  eventListeners.forEach((listener) => listener({ payload }));
+});
 vi.mock("@tauri-apps/api/event", () => ({
-  emit: (...args: unknown[]) => emit(...(args as [])),
-  listen: vi.fn(async () => () => undefined),
+  emit: (event: string, payload: unknown) => emit(event, payload),
+  listen: vi.fn(
+    async (_event: string, listener: (event: { payload: unknown }) => void) => {
+      eventListeners.add(listener);
+      return () => {
+        eventListeners.delete(listener);
+      };
+    },
+  ),
 }));
 vi.mock("../../sessions/ui/HarnessIcon", () => ({ HarnessIcon: () => null }));
 
 describe("HarnessUpdateNotice", () => {
+  beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
+  afterEach(() => vi.unstubAllGlobals());
+
   it("survives a StrictMode remount and updates from the card", async () => {
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(async () => {
-      root.render(createElement(StrictMode, null, createElement(HarnessUpdateNotice)));
+      root.render(
+        createElement(StrictMode, null, createElement(HarnessUpdateNotice)),
+      );
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    const notice = document.body.querySelector('[aria-label="Harness updates"]');
+    const notice = document.body.querySelector(
+      '[aria-label="Harness updates"]',
+    );
     expect(notice?.textContent).toContain("Claude Code");
     expect(notice?.textContent).toContain("2.1.284 → 2.1.285");
 
@@ -70,8 +88,22 @@ describe("HarnessUpdateNotice", () => {
     expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["claude"], {
       force: true,
     });
-    expect(emit).toHaveBeenCalledWith("harness-updated", "claude");
+    expect(refreshHarnessCatalogs).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith("harness-updated", {
+      harness: "claude",
+      source: expect.any(String),
+    });
     expect(notice?.textContent).toContain("Model picker refreshed");
+    await act(async () => {
+      await emit("harness-updated", {
+        harness: "claude",
+        source: "other-window",
+      });
+    });
+    expect(refreshHarnessCatalogs).toHaveBeenCalledTimes(2);
+    expect(refreshHarnessCatalogs).toHaveBeenLastCalledWith(["claude"], {
+      force: true,
+    });
     act(() => root.unmount());
   });
 });

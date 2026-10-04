@@ -187,11 +187,20 @@ export function historyWithLiveSessions(
       const stored = rows[storedIndex];
       const draft = !!sessionDraftBlock(session);
       const automationId = session.automationId || stored.automationId;
-      if (!!stored.draft !== draft || stored.automationId !== automationId) {
+      // Live title and work item land before the next persist, e.g. mid-turn.
+      const linkedWorkItem = session.linkedWorkItem ?? stored.linkedWorkItem;
+      if (
+        !!stored.draft !== draft ||
+        stored.automationId !== automationId ||
+        stored.title !== session.title ||
+        stored.linkedWorkItem?.url !== linkedWorkItem?.url
+      ) {
         rows[storedIndex] = {
           ...stored,
+          title: session.title,
           draft: draft || undefined,
           ...(automationId ? { automationId } : {}),
+          ...(linkedWorkItem ? { linkedWorkItem } : {}),
         };
       }
       continue;
