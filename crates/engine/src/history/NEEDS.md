@@ -30,8 +30,8 @@ History works around each gap locally. None blocks the package.
    - No setter for the saved fingerprint alone. Renaming a closed session
      calls `adopt_restored`, which also records the provider and last user
      block.
-   - The pending loads (`sessionLoads`) are private, so releasing a deleted
-     lead's workers cannot invalidate reads in flight.
+   - Resolved. `Sessions::invalidate_pending_loads` rejects reads in flight
+     when a deleted lead releases its workers.
 3. `SessionBackend` has no note commands. `StoreNotesBackend` takes the
    `Arc<SessionStore>` (`StoreBackend::session_store`) and the data
    directory, which `StoreBackend` does not expose.

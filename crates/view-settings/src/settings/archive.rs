@@ -20,49 +20,15 @@ use super::providers::{harness_logo, looks_like_project};
 use super::section::SectionContext;
 use super::store;
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/// The month and day of `ms` in local time.
-#[cfg(unix)]
-fn local_month_day(ms: i64) -> Option<(usize, i64)> {
-    let seconds = (ms / 1000) as libc::time_t;
-    // SAFETY: localtime_r writes only into `tm`, which outlives the call.
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&seconds, &mut tm).is_null() {
-            return None;
-        }
-        Some((tm.tm_mon as usize, tm.tm_mday as i64))
-    }
-}
-
-/// The month and day of `ms` in UTC, from the days since the epoch.
-#[cfg(not(unix))]
-fn local_month_day(ms: i64) -> Option<(usize, i64)> {
-    let days = ms.div_euclid(86_400_000);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    Some(((month - 1) as usize, day))
-}
-
-/// `formatDate`: `Oct 2`, or nothing for a missing time.
-// TODO(port): Intl.DateTimeFormat followed the system locale; this uses
-// the en-US month names.
+/// The archived item's month and day in the system locale.
 pub fn format_date(value: i64) -> String {
     if value <= 0 {
         return String::new();
     }
-    local_month_day(value)
-        .map(|(month, day)| format!("{} {day}", MONTHS[month.min(11)]))
-        .unwrap_or_default()
+    monocode_platform::date_time::format_local(
+        value,
+        monocode_platform::date_time::DateTimeStyle::MonthDay,
+    )
 }
 
 type DialogHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -534,8 +500,14 @@ mod tests {
     fn formats_dates_as_month_and_day() {
         assert_eq!(format_date(0), "");
         assert_eq!(format_date(-5), "");
-        // Noon UTC stays on the same day in any time zone within 12 hours.
         let october_2 = 1_790_942_400_000;
-        assert_eq!(format_date(october_2), "Oct 2");
+        assert_eq!(
+            format_date(october_2),
+            monocode_platform::date_time::format_local(
+                october_2,
+                monocode_platform::date_time::DateTimeStyle::MonthDay,
+            )
+        );
+        assert!(!format_date(october_2).is_empty());
     }
 }

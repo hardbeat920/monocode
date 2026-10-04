@@ -1,50 +1,93 @@
 //! The app shell. Port of the layout in src/app/App.tsx (the root around
 //! lines 10545-11078) and the chrome in src/app/shell: the project rail or
-//! compact rail, the session sidebar, and the main column with the title bar,
-//! the pane area, and the usage footer.
+//! the compact rail, the session sidebar, and the main column with the
+//! title bar, the workspace or a full page, and the usage footer.
 //!
-//! The shell owns the window's `Workspace` entity once the boot restore
-//! finishes. Each region renders from one [`ShellData`] value collected from
-//! the engine, through its own `impl Shell` block.
+//! `Shell` is the window's root view. It owns the window's `Workspace` and
+//! `History` once the boot restore finishes, the layout state the regions
+//! share ([`ShellLayout`]), and the actions every region calls. Each region
+//! is its own entity (`ProjectRail`, `SessionSidebar`, `TitleBar`) that
+//! holds a `WeakEntity<Shell>`: it reads the layout in its render and calls
+//! the shell's methods from its handlers, the way the React regions read
+//! props and called App.tsx callbacks.
 
+mod actions;
 mod footer;
+mod github_star;
+mod glass_backdrop;
+mod hosts;
+mod launch_host;
+mod live_agents;
 mod main_pane;
+mod menu_bar;
+mod packages;
+mod project_menu;
+mod project_picker;
 mod project_rail;
+mod projects;
+mod rail_action;
+mod session_actions;
+mod settings_rail;
+mod shortcuts;
 mod sidebar;
-mod title_bar;
+mod sidebar_update;
+#[cfg(test)]
+mod tests;
+pub(crate) mod title_bar;
+mod update_rail_card;
+pub(crate) mod whats_new;
 
-use std::collections::{HashMap, HashSet};
+// The keymap, menus, and windows sit at the top of `src/` but compile as
+// part of the shell, because `main.rs` belongs to the boot code.
+#[path = "../keymap.rs"]
+pub mod keymap;
+#[path = "../menus.rs"]
+pub mod menus;
+#[path = "../windows.rs"]
+pub mod windows;
+
+use std::collections::HashMap;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Entity, InteractiveElement as _, IntoElement,
-    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Render, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Task, WeakEntity, Window, div,
 };
-use gpui_component::input::InputState;
 use monocode_app::boot::{self, AppServices};
 use monocode_app::bridge::ActiveWorkspace;
-use monocode_app::history::{SidebarHistory, new_history};
-use monocode_app::projects::{RailProject, rail_projects};
+use monocode_core::appearance::SidebarTabId;
 use monocode_engine::attention::{Attention, AttentionFocus};
+use monocode_engine::history::{History, HistoryPackage};
 use monocode_engine::runtime::Engine;
 use monocode_engine::runtime::util::project_path::same_project_path;
-use monocode_engine::workspace::{SessionFactory as _, Workspace};
+use monocode_engine::workspace::{Workspace, WorkspaceConfig};
 use monocode_layout::leaf_ids;
 use monocode_ui::appearance::{
     PROJECT_RAIL_WIDTH_DEFAULT, PROJECT_RAIL_WIDTH_MAX, PROJECT_RAIL_WIDTH_MIN,
     SESSION_SIDEBAR_WIDTH_DEFAULT, SESSION_SIDEBAR_WIDTH_MAX, SESSION_SIDEBAR_WIDTH_MIN,
 };
-use monocode_ui::widgets::{MenuEntry, MenuItem, context_menu, menu, toast_stack};
-use monocode_ui::{Theme, u};
+use monocode_ui::widgets::toast_stack;
+use monocode_ui::{Theme, UiStyled as _, u};
 
 use crate::file_pane::FilePane;
 use crate::session_pane::SessionPane;
-use crate::view_data::ShellData;
+use crate::slots::{AppSlots, Page};
 
-gpui::actions!(shell, [NewSession]);
+use project_rail::ProjectRail;
+use sidebar::{CompactRail, SessionSidebar};
+use title_bar::TitleBar;
+
+/// Bind the keymap, install the app-level actions, and set the native menu
+/// bar. Call once at startup, after `monocode_ui::init`.
+pub fn init(cx: &mut App) {
+    keymap::init(cx);
+    windows::init(cx);
+    menus::init(cx);
+}
 
 /// The session sidebar's tabs, `SidebarTabId` in appearance.ts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SidebarTab {
     Sessions,
     Inbox,
@@ -65,11 +108,31 @@ impl SidebarTab {
             Self::Changes => "Changes",
         }
     }
+
+    pub fn id(self) -> SidebarTabId {
+        match self {
+            Self::Sessions => SidebarTabId::Sessions,
+            Self::Inbox => SidebarTabId::Inbox,
+            Self::Files => SidebarTabId::Files,
+            Self::Changes => SidebarTabId::Changes,
+        }
+    }
+}
+
+impl From<SidebarTabId> for SidebarTab {
+    fn from(id: SidebarTabId) -> Self {
+        match id {
+            SidebarTabId::Sessions => Self::Sessions,
+            SidebarTabId::Inbox => Self::Inbox,
+            SidebarTabId::Files => Self::Files,
+            SidebarTabId::Changes => Self::Changes,
+        }
+    }
 }
 
 /// Which pane edge a resize drag moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ResizeTarget {
+pub(crate) enum ResizeTarget {
     ProjectRail,
     SessionSidebar,
 }
@@ -79,6 +142,16 @@ struct Resize {
     target: ResizeTarget,
     start_x: Pixels,
     start_width: f32,
+}
+
+/// How a window's workspace starts.
+#[derive(Clone, Debug, Default)]
+pub enum WorkspaceStart {
+    /// The workspace the last quit saved (the first window).
+    #[default]
+    Restore,
+    /// A new window: one new chat in `project`, or the last project.
+    Fresh { project: Option<String> },
 }
 
 /// How the shell starts, for `--view` variants and the command line.
@@ -91,6 +164,7 @@ pub struct ShellOptions {
     pub demo_menu: Option<(f32, f32)>,
     /// Open this session once the workspace restores (`--open-session`).
     pub open_session: Option<String>,
+    pub start: WorkspaceStart,
 }
 
 impl ShellOptions {
@@ -101,144 +175,394 @@ impl ShellOptions {
             session_sidebar_open: true,
             demo_menu: None,
             open_session: None,
+            start: WorkspaceStart::Restore,
+        }
+    }
+
+    pub fn saved(cx: &App) -> Self {
+        AppServices::try_global(cx)
+            .map(|services| Self::from_preferences(&services.kv))
+            .unwrap_or_else(Self::full)
+    }
+
+    fn from_preferences(kv: &monocode_settings::Kv) -> Self {
+        let preferences =
+            monocode_settings::load_app_settings(kv, monocode_core::Platform::current());
+        Self {
+            project_rail_open: preferences.appearance.project_rail_open,
+            compact_rail: preferences.settings.collapsed_project_rail_mode
+                == monocode_core::settings::CollapsedProjectRailMode::Compact,
+            session_sidebar_open: preferences.appearance.session_sidebar_open,
+            ..Self::full()
         }
     }
 }
+
+struct RememberedSidebarWidth(f32);
+impl gpui::Global for RememberedSidebarWidth {}
 
 /// Set once by `main` for `--open-session`, read by the shell builders.
 pub struct StartupSession(pub Option<String>);
 
 impl gpui::Global for StartupSession {}
 
-pub struct Shell {
-    project_rail_open: bool,
+/// The layout state the regions share. App.tsx kept these in React state
+/// and passed them down as props.
+#[derive(Clone, Debug)]
+pub struct ShellLayout {
+    /// `projectRailOpen`.
+    pub project_rail_open: bool,
     /// `collapsedProjectRailMode === "compact"`: show the 48px rail when the
     /// project rail is closed.
-    compact_rail: bool,
-    session_sidebar_open: bool,
-    rail_width: f32,
-    sidebar_width: f32,
-    sidebar_tab: SidebarTab,
+    pub compact_rail: bool,
+    /// `sessionSidebarOpen`.
+    pub session_sidebar_open: bool,
+    pub rail_width: f32,
+    pub sidebar_width: f32,
+    /// The sidebar's visible tab.
+    pub sidebar_tab: SidebarTab,
+    /// The full page over the workspace (`searchViewOpen`, `inboxViewOpen`,
+    /// `notesViewOpen`, `automationsViewOpen`, `settingsOpen`).
+    pub page: Option<Page>,
+}
+
+impl ShellLayout {
+    /// `compactRailVisible`.
+    pub fn compact_rail_visible(&self) -> bool {
+        self.compact_rail && !self.project_rail_open
+    }
+
+    /// `compactTitleBar`: on macOS the compact rail moves the title bar
+    /// above everything, so the traffic lights sit in it.
+    pub fn compact_title_bar(&self) -> bool {
+        cfg!(target_os = "macos") && self.compact_rail_visible()
+    }
+}
+
+pub struct Shell {
+    focus: FocusHandle,
+    pub(crate) layout: ShellLayout,
+    sidebar_project: String,
+    window_label: String,
     resize: Option<Resize>,
     /// Armed by a press on a drag region; the first move hands the drag to
     /// the window manager.
     drag_armed: bool,
-    session_search: Entity<InputState>,
-    session_menu: Option<Point<Pixels>>,
-    /// The title bar's tab strip, and the tab it last scrolled to.
-    title_scroll: ScrollHandle,
-    scrolled_tab: Option<String>,
+    rail: Entity<ProjectRail>,
+    compact_rail: Entity<CompactRail>,
+    sidebar: Entity<SessionSidebar>,
+    title_bar: Entity<TitleBar>,
+    live_agents: Entity<live_agents::LiveAgentsArea>,
     /// The window's workspace, once the boot restore is done.
-    workspace: Option<Entity<Workspace>>,
-    history: Option<Entity<SidebarHistory>>,
-    projects: Vec<RailProject>,
-    /// `(additions, deletions)` per project path (`useProjectDiffStats`).
-    project_stats: HashMap<String, (i64, i64)>,
+    pub(crate) workspace: Option<Entity<Workspace>>,
+    /// The window's history: the package's for the first window, a new one
+    /// for each later window.
+    pub(crate) history: Option<Entity<History>>,
+    usage_footer: Option<Entity<monocode_view_settings::accounts::UsageFooter>>,
+    file_picker: Option<Entity<monocode_view_files::FilePicker>>,
+    picker_subscription: Option<Subscription>,
+    project_menu: Option<Entity<monocode_view_workbench::panes::tab_group_menu::TabGroupMenu>>,
+    project_menu_subscription: Option<Subscription>,
+    project_menu_return_focus: Option<gpui::FocusHandle>,
+    project_picker: Option<Entity<project_picker::ProjectPicker>>,
+    project_picker_subscription: Option<Subscription>,
+    project_picker_return_focus: Option<gpui::FocusHandle>,
+    project_dialog: Option<gpui::AnyView>,
+    project_dialog_subscription: Option<Subscription>,
+    project_dialog_return_focus: Option<gpui::FocusHandle>,
     session_panes: HashMap<String, Entity<SessionPane>>,
     file_panes: HashMap<String, Entity<FilePane>>,
-    /// The sidebar card under the context menu.
-    menu_session: Option<String>,
     open_session: Option<String>,
+    start: WorkspaceStart,
     _subscriptions: Vec<Subscription>,
     _tasks: Vec<Task<()>>,
 }
 
 impl Shell {
     pub fn new(options: ShellOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search sessions"));
+        packages::ensure(cx);
         let rail_width = AppServices::try_global(cx)
-            .map(|services| services.settings.appearance.project_rail_width as f32)
+            .map(|services| {
+                monocode_settings::load_app_settings(
+                    &services.kv,
+                    monocode_core::Platform::current(),
+                )
+                .appearance
+                .project_rail_width as f32
+            })
             .filter(|width| *width > 0.0)
             .unwrap_or(PROJECT_RAIL_WIDTH_DEFAULT)
             .clamp(PROJECT_RAIL_WIDTH_MIN, PROJECT_RAIL_WIDTH_MAX);
-        let mut shell = Self {
-            project_rail_open: options.project_rail_open,
-            compact_rail: options.compact_rail,
-            session_sidebar_open: options.session_sidebar_open,
-            rail_width,
-            sidebar_width: SESSION_SIDEBAR_WIDTH_DEFAULT,
-            sidebar_tab: SidebarTab::Sessions,
+        let shell = cx.weak_entity();
+        let rail = cx.new(|cx| ProjectRail::new(shell.clone(), window, cx));
+        let compact_rail = cx.new(|cx| CompactRail::new(shell.clone(), window, cx));
+        let sidebar =
+            cx.new(|cx| SessionSidebar::new(shell.clone(), options.demo_menu, window, cx));
+        let title_bar = cx.new(|cx| TitleBar::new(shell.clone(), window, cx));
+        let live_agents = cx.new(|cx| live_agents::LiveAgentsArea::new(shell.clone(), cx));
+        let mut this = Self {
+            focus: cx.focus_handle().tab_stop(false),
+            sidebar_project: "~".into(),
+            window_label: windows::window_label(window.window_handle().window_id()),
+            layout: ShellLayout {
+                project_rail_open: options.project_rail_open,
+                compact_rail: options.compact_rail,
+                session_sidebar_open: options.session_sidebar_open,
+                rail_width,
+                sidebar_width: cx
+                    .try_global::<RememberedSidebarWidth>()
+                    .map(|width| width.0)
+                    .unwrap_or(SESSION_SIDEBAR_WIDTH_DEFAULT),
+                sidebar_tab: SidebarTab::Sessions,
+                page: None,
+            },
             resize: None,
             drag_armed: false,
-            session_search,
-            session_menu: options
-                .demo_menu
-                .map(|(x, y)| gpui::point(gpui::px(x), gpui::px(y))),
-            title_scroll: ScrollHandle::new(),
-            scrolled_tab: None,
+            rail,
+            compact_rail,
+            sidebar,
+            title_bar,
+            live_agents,
             workspace: None,
             history: None,
-            projects: Vec::new(),
-            project_stats: HashMap::new(),
+            usage_footer: None,
+            file_picker: None,
+            picker_subscription: None,
+            project_menu: None,
+            project_menu_subscription: None,
+            project_menu_return_focus: None,
+            project_picker: None,
+            project_picker_subscription: None,
+            project_picker_return_focus: None,
+            project_dialog: None,
+            project_dialog_subscription: None,
+            project_dialog_return_focus: None,
             session_panes: HashMap::new(),
             file_panes: HashMap::new(),
-            menu_session: None,
             open_session: options.open_session.or_else(|| {
                 cx.try_global::<StartupSession>()
                     .and_then(|startup| startup.0.clone())
             }),
+            start: options.start,
             _subscriptions: Vec::new(),
             _tasks: Vec::new(),
         };
-        shell.start(window, cx);
-        // `onFocusChanged`: banners and the Dock badge follow window focus.
-        let activation = cx.observe_window_activation(window, |_, window, cx| {
+        this.start(window, cx);
+        if window.focused(cx).is_none() {
+            this.focus.focus(window, cx);
+        }
+        this._subscriptions
+            .push(cx.on_focus_lost(window, |this, window, cx| {
+                this.focus.focus(window, cx);
+            }));
+        // `onFocusChanged`: banners and the Dock badge follow window focus,
+        // and the focused window's workspace takes app-level calls.
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            windows::sync_window_visibility(window, cx);
+            let active = window.is_window_active();
+            if active && let Some(workspace) = &this.workspace {
+                ActiveWorkspace::set(workspace.downgrade(), cx);
+                hosts::install(this.history.clone(), cx);
+                if let Some(package) =
+                    monocode_engine::automations::AutomationsPackage::try_global(cx)
+                {
+                    let host = std::rc::Rc::new(launch_host::WindowLaunchHost::new(
+                        cx.weak_entity(),
+                        window,
+                    ));
+                    let automations = package.automations.clone();
+                    automations.update(cx, |automations, cx| {
+                        automations.set_host(host);
+                        automations.window_visible(cx);
+                    });
+                }
+                workspace.update(cx, |workspace, cx| workspace.window_focused(cx));
+                if let Some(package) =
+                    monocode_engine::automations::AutomationsPackage::try_global(cx)
+                {
+                    let (quick, reminders) =
+                        (package.quick_launch.clone(), package.reminders.clone());
+                    quick.update(cx, |quick, cx| quick.window_focused(&this.window_label, cx));
+                    reminders.update(cx, |reminders, cx| {
+                        reminders.window_focused(&this.window_label, cx)
+                    });
+                }
+                if let Some(projects) = monocode_engine::projects::ProjectsGlobal::try_global(cx) {
+                    let git = projects.git.clone();
+                    git.update(cx, |git, cx| git.window_focused(cx));
+                }
+                if let Some(inbox) = monocode_engine::inbox::inbox::Inbox::try_global(cx) {
+                    inbox.update(cx, |inbox, cx| inbox.window_became_visible(cx));
+                }
+            }
             if Attention::try_global(cx).is_some() {
-                Attention::set_window_focused(cx, window.is_window_active());
+                Attention::set_window_focused(cx, active);
             }
         });
-        shell._subscriptions.push(activation);
-        shell
-    }
-
-    /// Restore the workspace the last quit saved, then follow it.
-    fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if AppServices::try_global(cx).is_none() {
-            return;
+        this._subscriptions.push(activation);
+        this._subscriptions
+            .push(cx.observe_window_bounds(window, |_, window, cx| {
+                windows::sync_window_visibility(window, cx);
+            }));
+        if let Some(submit) = monocode_engine::submit::Submit::try_global(cx) {
+            this._subscriptions.push(cx.subscribe_in(
+                &submit,
+                window,
+                |this, _, event: &monocode_engine::submit::SubmitEvent, window, cx| {
+                    let monocode_engine::submit::SubmitEvent::AddToChat(item) = event;
+                    let item = workspace_chat_context(item);
+                    let active = ActiveWorkspace::get(cx).and_then(|weak| weak.upgrade());
+                    let Some(workspace) = this.workspace.clone().filter(|workspace| {
+                        active
+                            .as_ref()
+                            .is_some_and(|active| active.entity_id() == workspace.entity_id())
+                    }) else {
+                        return;
+                    };
+                    let existing = Engine::sessions(cx)
+                        .read(cx)
+                        .all()
+                        .iter()
+                        .map(|session| session.id.clone())
+                        .collect::<std::collections::HashSet<_>>();
+                    let target =
+                        workspace.update(cx, |workspace, cx| workspace.add_to_chat(&item, cx));
+                    if let Some(target) =
+                        target.as_ref().filter(|target| existing.contains(*target))
+                    {
+                        let area = crate::panes::workspace_area(window, cx);
+                        area.update(cx, |area, cx| {
+                            area.add_to_chat_to(target, &item, window, cx)
+                        });
+                    } else if target.is_none() {
+                        let area = crate::panes::workspace_area(window, cx);
+                        area.update(cx, |area, cx| area.add_to_chat(&item, window, cx));
+                    }
+                },
+            ));
         }
-        let restore = boot::restore_workspace(cx);
-        let task = cx.spawn_in(window, async move |this, cx| {
-            let restored = restore.await;
-            this.update_in(cx, |this, window, cx| {
-                let workspace = cx.new(|cx| Workspace::new(restored.config, cx));
-                ActiveWorkspace::set(workspace.downgrade(), cx);
-                let history = new_history(restored.history, restored.history_cwd, cx);
-                this._subscriptions.push(cx.observe_in(
-                    &workspace,
-                    window,
-                    |this, _, window, cx| this.workspace_changed(window, cx),
-                ));
-                this._subscriptions
-                    .push(cx.observe(&history, |_, _, cx| cx.notify()));
-                let sessions = Engine::sessions(cx);
-                this._subscriptions
-                    .push(cx.observe(&sessions, |_, _, cx| cx.notify()));
-                if let Some(attention) = Attention::try_global(cx) {
-                    let approvals = attention.approvals.clone();
-                    let notifier = attention.notifier.clone();
-                    this._subscriptions
-                        .push(cx.observe(&approvals, |_, _, cx| cx.notify()));
-                    this._subscriptions
-                        .push(cx.observe(&notifier, |_, _, cx| cx.notify()));
+        let requests = monocode_app::bridge::shell::ShellRequests::entity(cx);
+        this._subscriptions.push(cx.subscribe_in(&requests, window, |this, _, request: &monocode_app::bridge::shell::ShellRequest, window, cx| {
+            use monocode_app::bridge::shell::{ShellRequest, ShellPage};
+            if let ShellRequest::SetCompactRail(compact) = request {
+                this.set_compact_rail(*compact, cx);
+                return;
+            }
+            let active = ActiveWorkspace::get(cx).and_then(|weak| weak.upgrade());
+            if this.workspace.as_ref().zip(active.as_ref()).is_none_or(|(a, b)| a.entity_id() != b.entity_id()) { return; }
+            let page = |page: ShellPage| match page {
+                ShellPage::Search => Page::Search, ShellPage::Inbox => Page::Inbox,
+                ShellPage::Notes => Page::Notes, ShellPage::Automations => Page::Automations,
+                ShellPage::Settings => Page::Settings,
+            };
+            match request {
+                ShellRequest::ClosePages => this.close_page(cx),
+                ShellRequest::ClosePage(requested) => if this.layout.page == Some(page(*requested)) { this.close_page(cx) },
+                ShellRequest::OpenPage(requested) => this.open_page(page(*requested), cx),
+                ShellRequest::ShowSessions { cwd } => {
+                    this.close_page(cx); this.set_sidebar_tab(SidebarTab::Sessions, cx);
+                    if let Some(cwd) = cwd { this.select_project(cwd, cx); }
                 }
-                this.workspace = Some(workspace.clone());
-                this.history = Some(history);
-                if let Some(id) = this.open_session.take() {
-                    workspace
-                        .update(cx, |workspace, cx| workspace.open_session(&id, cx))
-                        .detach();
+                ShellRequest::BringForward => windows::bring_forward(window, cx),
+                ShellRequest::HideWindow => windows::hide_window(window, cx),
+                ShellRequest::SetCompactRail(_) => {},
+                ShellRequest::ProjectSidebarRemoved(path) => {
+                    if same_project_path(&this.sidebar_project, path) {
+                        this.sidebar_project = "~".into();
+                        if let Some(services) = AppServices::try_global(cx) {
+                            this.layout.sidebar_tab = monocode_engine::projects::project_sidebar_tab::load_project_sidebar_tab(&services.kv, "~").into();
+                        }
+                        cx.notify();
+                    }
                 }
-                this.workspace_changed(window, cx);
-            })
-            .ok();
-        });
-        self._tasks.push(task);
+                ShellRequest::ProjectSidebarMoved { from, to } => {
+                    if same_project_path(&this.sidebar_project, from) { this.sidebar_project = to.clone(); cx.notify(); }
+                },
+            }
+        }));
+        this
     }
 
-    /// The workspace moved: show its project in the sidebar and the rail,
-    /// tell attention which session is on screen, and drop panes no tab
-    /// shows anymore.
+    /// Start the window's workspace: the saved one for the first window, a
+    /// fresh one for a new window. Then follow it.
+    fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(services) = AppServices::try_global(cx) else {
+            return;
+        };
+        match self.start.clone() {
+            WorkspaceStart::Restore => {
+                let restore = boot::restore_workspace(cx);
+                let task = cx.spawn_in(window, async move |this, cx| {
+                    let restored = restore.await;
+                    this.update_in(cx, |this, window, cx| {
+                        let history = HistoryPackage::history(cx);
+                        history.update(cx, |history, cx| {
+                            history.set_boot_rows(
+                                restored.history,
+                                restored.history_cwd.as_deref(),
+                                cx,
+                            )
+                        });
+                        this.attach(restored.config, history, window, cx);
+                    })
+                    .ok();
+                });
+                self._tasks.push(task);
+            }
+            WorkspaceStart::Fresh { project } => {
+                let kv = services.kv.clone();
+                let project =
+                    project.or_else(|| monocode_engine::projects::recents::last_project_path(&kv));
+                let mut config = WorkspaceConfig::fresh(project.as_deref());
+                config.kv = Some(kv.clone());
+                let history = cx.new(|cx| History::new(kv, cx));
+                self.attach(config, history, window, cx);
+            }
+        }
+    }
+
+    /// Take the window's workspace and history and follow them.
+    fn attach(
+        &mut self,
+        config: WorkspaceConfig,
+        history: Entity<History>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = cx.new(|cx| Workspace::new(config, cx));
+        ActiveWorkspace::set(workspace.downgrade(), cx);
+        crate::slots::register_workspace(workspace.clone(), window, cx);
+        self._subscriptions
+            .push(cx.observe_in(&workspace, window, |this, _, window, cx| {
+                this.workspace_changed(window, cx)
+            }));
+        self._subscriptions
+            .push(cx.observe(&history, |_, _, cx| cx.notify()));
+        let sessions = Engine::sessions(cx);
+        self._subscriptions
+            .push(cx.observe(&sessions, |_, _, cx| cx.notify()));
+        if let Some(attention) = Attention::try_global(cx) {
+            let approvals = attention.approvals.clone();
+            let notifier = attention.notifier.clone();
+            self._subscriptions
+                .push(cx.observe(&approvals, |_, _, cx| cx.notify()));
+            self._subscriptions
+                .push(cx.observe(&notifier, |_, _, cx| cx.notify()));
+        }
+        self.workspace = Some(workspace.clone());
+        self.history = Some(history);
+        launch_host::attach(cx.weak_entity(), window, &self.window_label, cx);
+        hosts::install(self.history.clone(), cx);
+        if let Some(id) = self.open_session.take() {
+            workspace
+                .update(cx, |workspace, cx| workspace.open_session(&id, cx))
+                .detach();
+        }
+        self.workspace_changed(window, cx);
+    }
+
+    /// The workspace moved: show its project in the sidebar, tell attention
+    /// which session is on screen, and drop panes no tab shows anymore.
     fn workspace_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.workspace.clone() else {
             return;
@@ -251,16 +575,21 @@ impl Shell {
                 workspace.tabs().to_vec(),
             )
         };
+        if !same_project_path(&self.sidebar_project, &cwd) {
+            self.sidebar_project = cwd.clone();
+            if let Some(services) = AppServices::try_global(cx) {
+                self.layout.sidebar_tab =
+                    monocode_engine::projects::project_sidebar_tab::load_project_sidebar_tab(
+                        &services.kv,
+                        &cwd,
+                    )
+                    .into();
+            }
+        }
         if let Some(history) = &self.history {
-            history.update(cx, |history, cx| history.show(&cwd, cx));
+            history.update(cx, |history, cx| history.set_sidebar_cwd(&cwd, cx));
         }
-        if !self
-            .projects
-            .iter()
-            .any(|project| same_project_path(&project.path, &cwd))
-        {
-            self.reload_projects(&cwd, cx);
-        }
+        self.sync_sessions_tab_active(cx);
         if Attention::try_global(cx).is_some() {
             Attention::set_focus(
                 cx,
@@ -270,7 +599,14 @@ impl Shell {
                 },
             );
         }
-        let mut live: HashSet<String> = HashSet::new();
+        if let Some(package) = monocode_engine::automations::AutomationsPackage::try_global(cx) {
+            let reminders = package.reminders.clone();
+            let ids = tabs.iter().flat_map(|tab| leaf_ids(&tab.layout)).collect();
+            reminders.update(cx, |reminders, _| {
+                reminders.register_window(&self.window_label, ids)
+            });
+        }
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
         for tab in &tabs {
             live.extend(leaf_ids(&tab.layout));
             live.extend(tab.editor_panes.iter().map(|pane| pane.id.clone()));
@@ -278,49 +614,14 @@ impl Shell {
         }
         self.session_panes.retain(|id, _| live.contains(id));
         self.file_panes.retain(|id, _| live.contains(id));
-        if workspace.read(cx).composer_focused()
+        if AppSlots::get(cx).workspace.is_none()
+            && workspace.read(cx).composer_focused()
             && let Some(id) = active
         {
             let pane = self.session_pane(&id, window, cx);
             pane.update(cx, |pane, cx| pane.focus_composer(window, cx));
         }
         cx.notify();
-    }
-
-    /// The rail's projects, and their uncommitted line counts off the UI
-    /// thread (`useProjectDiffStats`).
-    fn reload_projects(&mut self, cwd: &str, cx: &mut Context<Self>) {
-        let Some(services) = AppServices::try_global(cx) else {
-            return;
-        };
-        self.projects = rail_projects(&services.kv, cwd);
-        let paths: Vec<String> = self
-            .projects
-            .iter()
-            .map(|project| project.path.clone())
-            .filter(|path| !self.project_stats.contains_key(path))
-            .collect();
-        if paths.is_empty() {
-            return;
-        }
-        let task = cx.spawn(async move |this, cx| {
-            let stats = smol::unblock(move || {
-                paths
-                    .into_iter()
-                    .map(|path| {
-                        let stats = monocode_git::fs::git_diff_stats(path.clone());
-                        (path, (stats.additions, stats.deletions))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                this.project_stats.extend(stats);
-                cx.notify();
-            })
-            .ok();
-        });
-        self._tasks.push(task);
     }
 
     /// The pane entity for a session leaf, created on first use.
@@ -337,7 +638,7 @@ impl Shell {
             .workspace
             .as_ref()
             .map(|workspace| workspace.downgrade())
-            .unwrap_or_else(gpui::WeakEntity::new_invalid);
+            .unwrap_or_else(WeakEntity::new_invalid);
         let id = session_id.to_string();
         let pane = cx.new(|cx| SessionPane::new(id, workspace, window, cx));
         self.session_panes
@@ -362,21 +663,41 @@ impl Shell {
         Some(pane)
     }
 
-    fn data(&self, cx: &App) -> ShellData {
-        ShellData::collect(
-            self.workspace.as_ref(),
-            self.history.as_ref(),
-            &self.projects,
-            &self.project_stats,
-            cx,
-        )
+    // What the regions read.
+
+    #[cfg(test)]
+    pub fn layout(&self) -> &ShellLayout {
+        &self.layout
     }
 
-    // Actions.
+    #[cfg(test)]
+    pub fn workspace(&self) -> Option<&Entity<Workspace>> {
+        self.workspace.as_ref()
+    }
+
+    #[cfg(test)]
+    pub fn history(&self) -> Option<&Entity<History>> {
+        self.history.as_ref()
+    }
+
+    /// The project the sidebar shows (`sidebarCwd`).
+    pub fn sidebar_cwd(&self, cx: &App) -> String {
+        self.workspace
+            .as_ref()
+            .map(|workspace| workspace.read(cx).sidebar_cwd(cx))
+            .unwrap_or_else(|| "~".to_string())
+    }
+
+    // Actions the regions call.
 
     /// `onSelectHistorySession`: open a sidebar card's session.
-    fn open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
-        if let Some(workspace) = &self.workspace {
+    pub fn open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        self.close_page(cx);
+        if let Some(history) = self.history.clone() {
+            history
+                .update(cx, |history, cx| history.select_session(session_id, cx))
+                .detach();
+        } else if let Some(workspace) = &self.workspace {
             workspace
                 .update(cx, |workspace, cx| workspace.open_session(session_id, cx))
                 .detach();
@@ -384,63 +705,35 @@ impl Shell {
     }
 
     /// `onNew`: a new chat with the default model in a new tab, in the
-    /// current project.
-    fn new_session(&mut self, cx: &mut Context<Self>) {
-        if let Some(workspace) = &self.workspace {
-            workspace.update(cx, |workspace, cx| {
-                workspace.new_session_tab(cx);
-            });
-        }
-    }
-
-    /// The project rail: show the project's open tab, or start a chat in it.
-    fn select_project(&mut self, path: &str, cx: &mut Context<Self>) {
-        let Some(workspace) = self.workspace.clone() else {
-            return;
-        };
-        let existing = {
-            let sessions = Engine::sessions(cx);
-            let sessions = sessions.read(cx);
-            workspace
-                .read(cx)
-                .tabs()
-                .iter()
-                .find(|tab| {
-                    leaf_ids(&tab.layout).iter().any(|id| {
-                        sessions
-                            .get(id)
-                            .is_some_and(|session| same_project_path(&session.cwd, path))
-                    })
-                })
-                .map(|tab| tab.id.clone())
-        };
-        if let Some(tab_id) = existing {
-            workspace.update(cx, |workspace, cx| {
-                workspace.activate_tab(&tab_id, None, cx)
-            });
-            return;
-        }
-        let Some(services) = AppServices::try_global(cx) else {
-            return;
-        };
-        let session = services.factory.new_default_session(path, None);
-        let id = session.id.clone();
-        Engine::sessions(cx).update(cx, |sessions, cx| {
-            sessions.insert(session, cx);
-        });
+    /// current project. Returns the new session's id.
+    pub fn new_session(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        self.close_page(cx);
+        let workspace = self.workspace.clone()?;
         workspace.update(cx, |workspace, cx| {
-            workspace.set_project_cwd(path, cx);
-            workspace.open_session(&id, cx).detach();
+            workspace.new_session_tab(cx);
         });
+        workspace
+            .read(cx)
+            .active_session(cx)
+            .map(|session| session.id)
     }
 
-    fn activate_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+    /// Restore the project's selected tab through the projects package.
+    pub fn select_project(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.close_page(cx);
+        if self.workspace.is_some() {
+            monocode_engine::projects::actions::on_select_project(path, cx);
+        }
+    }
+
+    pub fn activate_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+        self.close_page(cx);
         if let Some(workspace) = &self.workspace {
             workspace.update(cx, |workspace, cx| workspace.activate_tab(tab_id, None, cx));
         }
     }
 
-    fn close_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+    pub fn close_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
         if let Some(workspace) = &self.workspace {
             workspace
                 .update(cx, |workspace, cx| workspace.close_title_tab(tab_id, cx))
@@ -448,25 +741,333 @@ impl Shell {
         }
     }
 
-    fn compact_rail_visible(&self) -> bool {
-        self.compact_rail && !self.project_rail_open
+    /// `onVisitBack`.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(workspace) = &self.workspace {
+            workspace.update(cx, |workspace, cx| workspace.visit_back(cx));
+        }
     }
 
-    fn toggle_project_rail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.project_rail_open = !self.project_rail_open;
+    /// `onVisitForward`.
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) {
+        if let Some(workspace) = &self.workspace {
+            workspace.update(cx, |workspace, cx| workspace.visit_forward(cx));
+        }
+    }
+
+    /// `(canGoBack, canGoForward)`.
+    pub fn visit_nav(&self, cx: &App) -> (bool, bool) {
+        self.workspace
+            .as_ref()
+            .map(|workspace| workspace.read(cx).tab_visit_nav())
+            .unwrap_or((false, false))
+    }
+
+    /// Open a full page over the workspace, closing any other.
+    pub fn open_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        if self.layout.page != Some(page) {
+            self.close_page(cx);
+            self.layout.page = Some(page);
+            if let Some(package) = HistoryPackage::try_global(cx) {
+                match page {
+                    Page::Notes => {
+                        let notes = package.notes.clone();
+                        notes.update(cx, |notes, cx| notes.open_page(cx));
+                    }
+                    Page::Search => {
+                        let search = package.search.clone();
+                        let cwd = self.sidebar_cwd(cx);
+                        let recents = monocode_engine::projects::ProjectsGlobal::try_global(cx)
+                            .map(|p| {
+                                p.projects
+                                    .read(cx)
+                                    .recents()
+                                    .iter()
+                                    .map(|project| project.path.clone())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        search.update(cx, |search, cx| search.open(&cwd, recents, cx));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(workspace) = &self.workspace {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.set_full_page_open(true, cx);
+                    workspace.set_inbox_visible(page == Page::Inbox, cx);
+                });
+            }
+            cx.notify();
+        }
+    }
+
+    /// Open `page`, or close it when it is already open.
+    pub fn toggle_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        if self.layout.page == Some(page) {
+            self.close_page(cx);
+        } else {
+            self.open_page(page, cx);
+        }
+    }
+
+    /// Close the full page and show the workspace again.
+    pub fn close_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = self.layout.page.take() {
+            if let Some(package) = HistoryPackage::try_global(cx) {
+                match page {
+                    Page::Notes => {
+                        let notes = package.notes.clone();
+                        notes.update(cx, |notes, cx| notes.close_page(cx));
+                    }
+                    Page::Search => {
+                        let search = package.search.clone();
+                        search.update(cx, |search, cx| search.close(cx));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(workspace) = &self.workspace {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.set_full_page_open(false, cx);
+                    workspace.set_inbox_visible(false, cx);
+                });
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_file_picker(
+        &mut self,
+        commands: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let cwd = workspace.read(cx).project_cwd().to_string();
+        let paths = workspace
+            .read(cx)
+            .tabs()
+            .iter()
+            .flat_map(|tab| tab.editor_panes.iter().chain(&tab.terminal_panes))
+            .flat_map(|pane| pane.files.iter())
+            .map(|file| file.path.clone())
+            .collect();
+        let data = crate::adapters::files::app_files(cx);
+        let picker = cx.new(|cx| {
+            monocode_view_files::FilePicker::new(
+                data,
+                cwd,
+                paths,
+                if commands { ">" } else { "" },
+                window,
+                cx,
+            )
+        });
+        let actions = [
+            ("new-session", "New session"),
+            ("open-project", "Open project"),
+            ("new-terminal", "New terminal"),
+            ("settings", "Open settings"),
+            ("search", "Search project"),
+            ("notes", "Open notes"),
+            ("inbox", "Open inbox"),
+            ("automations", "Open automations"),
+            ("reload", "Reload MonoCode"),
+        ]
+        .into_iter()
+        .map(
+            |(id, label)| monocode_view_files::file_picker::PaletteAction {
+                id: id.into(),
+                label: label.into(),
+                hint: None,
+            },
+        )
+        .collect();
+        picker.update(cx, |picker, cx| picker.set_actions(actions, cx));
+        self.picker_subscription = Some(cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event, window, cx| {
+                use monocode_view_files::FilePickerEvent;
+                match event {
+                    FilePickerEvent::OpenFile { path, options } => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.open_file(
+                                    path,
+                                    None,
+                                    monocode_engine::workspace::workspace::FileOpenOptions {
+                                        exact: options.exact,
+                                        pin: options.pin,
+                                    },
+                                    cx,
+                                )
+                            })
+                            .detach();
+                    }
+                    FilePickerEvent::RunAction(id) => match id.as_ref() {
+                        "new-session" => {
+                            this.new_session(cx);
+                        }
+                        "settings" => this.open_page(Page::Settings, cx),
+                        "search" => this.open_page(Page::Search, cx),
+                        "notes" => this.open_page(Page::Notes, cx),
+                        "inbox" => this.open_page(Page::Inbox, cx),
+                        "automations" => this.open_page(Page::Automations, cx),
+                        "new-terminal" => {
+                            workspace.update(cx, |workspace, cx| workspace.new_terminal(cx));
+                        }
+                        "open-project" => window.dispatch_action(Box::new(keymap::OpenProject), cx),
+                        "reload" => window.dispatch_action(Box::new(keymap::Reload), cx),
+                        _ => {}
+                    },
+                    FilePickerEvent::Close => {
+                        this.file_picker = None;
+                        this.picker_subscription = None;
+                        cx.notify();
+                    }
+                }
+            },
+        ));
+        window.focus(&picker.read(cx).focus_handle(cx), cx);
+        self.file_picker = Some(picker);
         cx.notify();
     }
 
-    fn start_resize(&mut self, target: ResizeTarget, x: Pixels) {
+    /// `onToggleSidebar` (⌘B): the project rail.
+    pub fn toggle_project_rail(&mut self, cx: &mut Context<Self>) {
+        self.layout.project_rail_open = !self.layout.project_rail_open;
+        self.save_open_state(
+            monocode_core::appearance::PROJECT_RAIL_OPEN_KEY,
+            self.layout.project_rail_open,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// `onToggleSessionSidebar` (⌘⇧B).
+    pub fn toggle_session_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.set_session_sidebar_open(!self.layout.session_sidebar_open, cx);
+    }
+
+    pub fn set_session_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.layout.session_sidebar_open != open {
+            self.layout.session_sidebar_open = open;
+            self.save_open_state(
+                monocode_core::appearance::SESSION_SIDEBAR_OPEN_KEY,
+                open,
+                cx,
+            );
+            self.sync_sessions_tab_active(cx);
+            cx.notify();
+        }
+    }
+
+    fn settings_kv(&self, cx: &App) -> Option<monocode_settings::Kv> {
+        AppServices::try_global(cx)
+            .map(|services| services.kv.clone())
+            .or_else(|| {
+                self.history
+                    .as_ref()
+                    .map(|history| history.read(cx).kv().clone())
+            })
+    }
+
+    fn save_open_state(&self, key: &str, open: bool, cx: &App) {
+        if let Some(kv) = self.settings_kv(cx) {
+            monocode_settings::storage_flags::write_flag(&kv, key, open);
+        }
+    }
+
+    fn commit_width(&self, target: ResizeTarget, cx: &mut App) {
+        match target {
+            ResizeTarget::ProjectRail => {
+                if let Some(kv) = self.settings_kv(cx) {
+                    let width = monocode_core::appearance::clamp_project_rail_width(
+                        self.layout.rail_width as f64,
+                    );
+                    kv.set_item(
+                        monocode_core::appearance::PROJECT_RAIL_WIDTH_KEY,
+                        &width.to_string(),
+                    );
+                }
+            }
+            ResizeTarget::SessionSidebar => {
+                cx.set_global(RememberedSidebarWidth(self.layout.sidebar_width));
+            }
+        }
+    }
+
+    /// `onTabChange`: show a sidebar tab.
+    pub fn set_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.sidebar_project = self.sidebar_cwd(cx);
+        if let Some(services) = AppServices::try_global(cx) {
+            monocode_engine::projects::project_sidebar_tab::save_project_sidebar_tab(
+                &services.kv,
+                &self.sidebar_project,
+                tab.id(),
+            );
+        }
+        if self.layout.sidebar_tab != tab {
+            self.layout.sidebar_tab = tab;
+            self.sync_sessions_tab_active(cx);
+            cx.notify();
+        }
+    }
+
+    fn sync_sessions_tab_active(&mut self, cx: &mut Context<Self>) {
+        let active =
+            self.layout.session_sidebar_open && self.layout.sidebar_tab == SidebarTab::Sessions;
+        if let Some(history) = &self.history {
+            history.update(cx, |history, cx| {
+                history.set_sessions_tab_active(active, cx)
+            });
+        }
+    }
+
+    /// `collapsedProjectRailMode` changed in Settings.
+    pub fn set_compact_rail(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if self.layout.compact_rail != compact {
+            self.layout.compact_rail = compact;
+            cx.notify();
+        }
+    }
+
+    // Resizing and window dragging.
+
+    pub(crate) fn start_resize(&mut self, target: ResizeTarget, x: Pixels) {
         let start_width = match target {
-            ResizeTarget::ProjectRail => self.rail_width,
-            ResizeTarget::SessionSidebar => self.sidebar_width,
+            ResizeTarget::ProjectRail => self.layout.rail_width,
+            ResizeTarget::SessionSidebar => self.layout.sidebar_width,
         };
         self.resize = Some(Resize {
             target,
             start_x: x,
             start_width,
         });
+    }
+
+    pub(crate) fn resizing(&self, target: ResizeTarget) -> bool {
+        self.resize.is_some_and(|resize| resize.target == target)
+    }
+
+    /// Double-click on a handle resets the width, like `useResizablePane`.
+    pub(crate) fn reset_width(&mut self, target: ResizeTarget, cx: &mut Context<Self>) {
+        match target {
+            ResizeTarget::ProjectRail => self.layout.rail_width = PROJECT_RAIL_WIDTH_DEFAULT,
+            ResizeTarget::SessionSidebar => {
+                self.layout.sidebar_width = SESSION_SIDEBAR_WIDTH_DEFAULT
+            }
+        }
+        self.commit_width(target, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn arm_window_drag(&mut self) {
+        self.drag_armed = true;
     }
 
     fn on_mouse_move(
@@ -487,6 +1088,8 @@ impl Shell {
         };
         if event.pressed_button != Some(MouseButton::Left) {
             self.resize = None;
+            self.commit_width(resize.target, cx);
+            cx.notify();
             return;
         }
         // Widths are CSS px; the pointer moves in window px.
@@ -495,7 +1098,7 @@ impl Shell {
         let width = resize.start_width + delta;
         match resize.target {
             ResizeTarget::ProjectRail => {
-                self.rail_width = width
+                self.layout.rail_width = width
                     .clamp(PROJECT_RAIL_WIDTH_MIN, PROJECT_RAIL_WIDTH_MAX)
                     .round();
             }
@@ -505,7 +1108,7 @@ impl Shell {
                 let max = SESSION_SIDEBAR_WIDTH_MAX
                     .min(half)
                     .max(SESSION_SIDEBAR_WIDTH_MIN);
-                self.sidebar_width = width.clamp(SESSION_SIDEBAR_WIDTH_MIN, max).round();
+                self.layout.sidebar_width = width.clamp(SESSION_SIDEBAR_WIDTH_MIN, max).round();
             }
         }
         cx.notify();
@@ -513,118 +1116,52 @@ impl Shell {
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drag_armed = false;
-        if self.resize.take().is_some() {
+        if let Some(resize) = self.resize.take() {
+            self.commit_width(resize.target, cx);
             cx.notify();
         }
     }
 
-    /// The vertical resize handle on a pane's right edge
-    /// (`absolute inset-y-0 -right-px w-1.5 cursor-col-resize`).
-    fn resize_handle(&self, target: ResizeTarget, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let dragging = self.resize.is_some_and(|resize| resize.target == target);
-        let width = theme.metrics.resize_handle_width;
-        let hover = theme.content(0.10);
-        let id = match target {
-            ResizeTarget::ProjectRail => "rail-resize",
-            ResizeTarget::SessionSidebar => "sidebar-resize",
-        };
-        let mut handle = div()
-            .id(id)
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .right(u(-1.))
-            .w(u(width))
-            .cursor_col_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.start_resize(target, event.position.x);
-                    cx.notify();
-                }),
-            )
-            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                // Double-click resets the width, like `useResizablePane`.
-                if event.click_count() == 2 {
-                    match target {
-                        ResizeTarget::ProjectRail => this.rail_width = PROJECT_RAIL_WIDTH_DEFAULT,
-                        ResizeTarget::SessionSidebar => {
-                            this.sidebar_width = SESSION_SIDEBAR_WIDTH_DEFAULT
-                        }
-                    }
-                    cx.notify();
-                }
-            }));
-        if dragging {
-            handle = handle.bg(theme.content(0.15));
-        } else {
-            handle = handle.hover(move |s| s.bg(hover));
+    /// The main column's body: a full page, or the workspace.
+    fn render_main_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let slots = AppSlots::get(cx);
+        if let Some(page) = self.layout.page {
+            if let Some(view) = slots
+                .page
+                .as_ref()
+                .and_then(|page_slot| page_slot(page, window, cx))
+            {
+                return div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(view)
+                    .into_any_element();
+            }
+            let theme = Theme::of(cx);
+            return div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .text_px(theme.text.label)
+                .text_color(theme.content(0.45))
+                .child(format!("{page:?}"))
+                .into_any_element();
         }
-        handle
-    }
-
-    /// Marks an element as a window drag region (`data-tauri-drag-region`).
-    /// A double click zooms the window like a native title bar.
-    fn drag_region<E>(&self, element: E, cx: &mut Context<Self>) -> E
-    where
-        E: gpui::InteractiveElement + gpui::StatefulInteractiveElement,
-    {
-        element
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &gpui::MouseDownEvent, _, _| this.drag_armed = true),
-            )
-            .on_click(|event, window, _| {
-                if event.click_count() == 2 {
-                    if cfg!(target_os = "macos") {
-                        window.titlebar_double_click();
-                    } else {
-                        window.zoom_window();
-                    }
-                }
-            })
-    }
-
-    fn render_session_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let position = self.session_menu?;
-        let entries: Vec<MenuEntry> = vec![
-            MenuItem::new("open", "Open in New Tab")
-                .shortcut("⌘↩")
-                .into(),
-            MenuItem::new("rename", "Rename").shortcut("F2").into(),
-            MenuItem::new("pin", "Pin").into(),
-            MenuItem::new("link", "Link Issue or PR…").into(),
-            MenuEntry::Separator,
-            MenuItem::new("archive", "Archive").into(),
-            MenuItem::new("delete", "Delete").danger().into(),
-        ];
-        let weak = cx.entity().downgrade();
-        let pick = weak.clone();
-        Some(context_menu(
-            position,
-            menu("session-menu", entries).on_pick(move |id, _, cx| {
-                pick.update(cx, |this, cx| {
-                    this.session_menu = None;
-                    if id.as_ref() == "open"
-                        && let Some(session_id) = this.menu_session.take()
-                    {
-                        this.open_session(&session_id, cx);
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }),
-            move |_, cx| {
-                weak.update(cx, |this, cx| {
-                    this.session_menu = None;
-                    cx.notify();
-                })
-                .ok();
-            },
-            cx,
-        ))
+        if let Some(factory) = slots.workspace.as_ref() {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(factory(window, cx))
+                .into_any_element();
+        }
+        self.render_main_pane(window, cx).into_any_element()
     }
 }
 
@@ -632,33 +1169,29 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let c = theme.colors;
-        let data = self.data(cx);
-        if !data.active_tab_id.is_empty()
-            && self.scrolled_tab.as_deref() != Some(data.active_tab_id.as_str())
-            && let Some(index) = data
-                .tabs
-                .iter()
-                .position(|tab| tab.id == data.active_tab_id)
-        {
-            self.title_scroll.scroll_to_item(index);
-            self.scrolled_tab = Some(data.active_tab_id.clone());
-        }
-        // On macOS the compact rail moves the title bar above everything, so
-        // the traffic lights sit in it (`compactTitleBar` in App.tsx).
-        let compact_title_bar = cfg!(target_os = "macos") && self.compact_rail_visible();
-        let rail = if self.project_rail_open {
-            Some(
-                self.render_project_rail(&data, window, cx)
-                    .into_any_element(),
+        let layout = self.layout.clone();
+        self.live_agents.update(cx, |agents, cx| {
+            agents.set_visible(
+                layout.page != Some(Page::Settings)
+                    && (layout.project_rail_open || layout.session_sidebar_open),
+                cx,
             )
-        } else if self.compact_rail_visible() {
-            Some(self.render_compact_rail(&data, cx).into_any_element())
+        });
+        let compact_title_bar = layout.compact_title_bar();
+        let rail: Option<AnyElement> = if layout.project_rail_open {
+            Some(if layout.page == Some(Page::Settings) {
+                settings_rail::view(cx.weak_entity(), layout.rail_width, window, cx)
+                    .into_any_element()
+            } else {
+                self.rail.clone().into_any_element()
+            })
+        } else if layout.compact_rail_visible() {
+            Some(self.compact_rail.clone().into_any_element())
         } else {
             None
         };
-        let sidebar = self
-            .session_sidebar_open
-            .then(|| self.render_sidebar(&data, window, cx).into_any_element());
+        let sidebar = (layout.session_sidebar_open && layout.page != Some(Page::Settings))
+            .then(|| self.sidebar.clone().into_any_element());
         let mut main = div()
             .flex()
             .flex_col()
@@ -667,10 +1200,10 @@ impl Render for Shell {
             .min_h_0()
             .bg(c.body_glass);
         if !compact_title_bar {
-            main = main.child(self.render_title_bar(&data, cx));
+            main = main.child(self.title_bar.clone());
         }
-        let pane = self.render_main_pane(window, cx);
-        let main = main.child(pane).child(self.render_footer(&data, cx));
+        let body = self.render_main_body(window, cx);
+        let main = main.child(body).child(self.render_footer(cx));
         let row = div()
             .flex()
             .flex_1()
@@ -682,6 +1215,8 @@ impl Render for Shell {
 
         let mut root = div()
             .id("shell")
+            .key_context("Shell")
+            .track_focus(&self.focus)
             .relative()
             .flex()
             .flex_col()
@@ -690,22 +1225,30 @@ impl Render for Shell {
             .text_color(c.content)
             .font_family(theme.fonts.sans.clone())
             .line_height(gpui::relative(theme.leading.normal))
-            .on_action(cx.listener(|this, _: &NewSession, _, cx| this.new_session(cx)))
+            .on_key_down(cx.listener(Self::on_unhandled_key))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up));
+        root = self.register_actions(root, cx);
         if compact_title_bar {
-            root = root.child(self.render_title_bar(&data, cx));
+            root = root.child(self.title_bar.clone());
         }
-        root = root.child(row).child(toast_stack());
+        root = root
+            .child(row)
+            .child(toast_stack())
+            .children(self.file_picker.clone())
+            .children(self.project_picker.clone())
+            .children(self.project_menu.clone())
+            .children(self.project_dialog.clone())
+            .child(crate::shell::whats_new::layer(window, cx));
         if self.resize.is_some() {
             root = root.cursor_col_resize();
         }
-        root.children(self.render_session_menu(cx))
+        root
     }
 }
 
 /// macOS-only children, such as the traffic-light spacer.
-pub(super) trait WhenMac: Sized {
+pub(crate) trait WhenMac: Sized {
     fn when_mac(self, f: impl FnOnce(Self) -> Self) -> Self;
 }
 
@@ -719,7 +1262,117 @@ impl<T: IntoElement> WhenMac for T {
     }
 }
 
+/// Marks an element as a window drag region (`data-tauri-drag-region`).
+/// A double click zooms the window like a native title bar.
+pub(crate) fn drag_region<E>(element: E, shell: WeakEntity<Shell>) -> E
+where
+    E: gpui::InteractiveElement + gpui::StatefulInteractiveElement,
+{
+    element
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            shell.update(cx, |shell, _| shell.arm_window_drag()).ok();
+        })
+        .on_click(|event, window, _| {
+            if event.click_count() == 2 {
+                if cfg!(target_os = "macos") {
+                    window.titlebar_double_click();
+                } else {
+                    window.zoom_window();
+                }
+            }
+        })
+}
+
+/// The vertical resize handle on a pane's right edge
+/// (`absolute inset-y-0 -right-px w-1.5 cursor-col-resize`).
+pub(crate) fn resize_handle(
+    target: ResizeTarget,
+    shell: WeakEntity<Shell>,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = Theme::of(cx);
+    let dragging = shell
+        .upgrade()
+        .is_some_and(|shell| shell.read(cx).resizing(target));
+    let width = theme.metrics.resize_handle_width;
+    let hover = theme.content(0.10);
+    let id = match target {
+        ResizeTarget::ProjectRail => "rail-resize",
+        ResizeTarget::SessionSidebar => "sidebar-resize",
+    };
+    let down = shell.clone();
+    let mut handle = div()
+        .id(id)
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right(u(-1.))
+        .w(u(width))
+        .cursor_col_resize()
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            cx.stop_propagation();
+            down.update(cx, |shell, cx| {
+                shell.start_resize(target, event.position.x);
+                cx.notify();
+            })
+            .ok();
+        })
+        .on_click(move |event, _, cx| {
+            if event.click_count() == 2 {
+                shell
+                    .update(cx, |shell, cx| shell.reset_width(target, cx))
+                    .ok();
+            }
+        });
+    if dragging {
+        handle = handle.bg(theme.content(0.15));
+    } else {
+        handle = handle.hover(move |s| s.bg(hover));
+    }
+    handle
+}
+
 /// Builds the shell for `--view`.
 pub fn build(options: ShellOptions, window: &mut Window, cx: &mut App) -> gpui::AnyView {
     cx.new(|cx| Shell::new(options, window, cx)).into()
+}
+
+fn workspace_chat_context(
+    item: &monocode_engine::submit::chat_context::ChatContextItem,
+) -> monocode_engine::workspace::chat_context::ChatContextItem {
+    use monocode_engine::submit::chat_context::{
+        ChatContextItem as Source, DiffLineChange as SourceChange,
+    };
+    use monocode_engine::workspace::chat_context::{
+        ChatContextItem as Target, DiffLineChange as TargetChange,
+    };
+    match item {
+        Source::Quote { text } => Target::Quote { text: text.clone() },
+        Source::Code {
+            path,
+            start_line,
+            end_line,
+        } => Target::Code {
+            path: path.clone(),
+            start_line: *start_line,
+            end_line: *end_line,
+        },
+        Source::Comment {
+            path,
+            line,
+            change,
+            code,
+            comment,
+        } => Target::Comment {
+            path: path.clone(),
+            line: *line,
+            change: match change {
+                SourceChange::Added => TargetChange::Added,
+                SourceChange::Removed => TargetChange::Removed,
+                SourceChange::Unchanged => TargetChange::Unchanged,
+            },
+            code: code.clone(),
+            comment: comment.clone(),
+        },
+    }
 }

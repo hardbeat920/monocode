@@ -11,7 +11,7 @@ use monocode_core::js;
 use super::types::{InboxItem, kind_str, provider_str};
 
 /// The bundled discussion instructions.
-pub const INBOX_INSTRUCTIONS: &str = include_str!("../../../../src/instructions/inbox.md");
+pub const INBOX_INSTRUCTIONS: &str = include_str!("instructions.md");
 
 /// `url.host`: the host name plus a non-default port.
 fn url_host(url: &url::Url) -> String {

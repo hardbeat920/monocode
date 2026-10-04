@@ -18,11 +18,13 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 use monocode_core::Session;
+use monocode_core::block::PlanBuildTarget;
 use monocode_editor::viewer::{is_image_path, is_pdf_path};
 use monocode_layout::{
     EditorPane, FilePaneTab, is_agent_tab, is_changes_tab, is_commit_tab, is_plan_tab,
     is_release_notes_tab, is_review_tab, is_session_changes_tab, is_terminal_tab,
 };
+use monocode_view_transcript::threads::ModelMenuSource;
 
 use crate::binary_view::BinaryFileSurface;
 use crate::data::{EditorNavigation, FilesData};
@@ -63,7 +65,7 @@ pub type SurfaceFactory = Rc<dyn Fn(&SurfaceRequest<'_>, &mut Window, &mut App) 
 pub type TabStrip = Rc<dyn Fn(&EditorPane, &mut Window, &mut App) -> AnyElement>;
 
 /// What the pane reports to its owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FilePaneEvent {
     /// `onFocus`: a mouse down anywhere in the pane.
     Focus { pane_id: String },
@@ -81,6 +83,7 @@ pub enum FilePaneEvent {
     BuildPlan {
         session_id: String,
         block_id: String,
+        target: Option<PlanBuildTarget>,
     },
     /// Add to chat on a selection in an editor tab.
     AddToChat(EditorCodeSelection),
@@ -172,6 +175,7 @@ pub struct FilePane {
     unified_diffs: bool,
     settings: EditorSettings,
     sessions: Rc<Vec<Session>>,
+    plan_model_source: Option<Rc<dyn ModelMenuSource>>,
     navigation: Option<EditorNavigation>,
     factory: Option<SurfaceFactory>,
     tab_strip: Option<TabStrip>,
@@ -198,6 +202,7 @@ impl FilePane {
             unified_diffs: false,
             settings: EditorSettings::default(),
             sessions: Rc::default(),
+            plan_model_source: None,
             navigation: None,
             factory,
             tab_strip: None,
@@ -289,6 +294,19 @@ impl FilePane {
             }
         }
         cx.notify();
+    }
+
+    pub fn set_plan_model_source(
+        &mut self,
+        source: Rc<dyn ModelMenuSource>,
+        cx: &mut Context<Self>,
+    ) {
+        self.plan_model_source = Some(source.clone());
+        for surface in self.surfaces.values() {
+            if let Surface::Plan(plan) = surface {
+                plan.update(cx, |plan, cx| plan.set_model_source(source.clone(), cx));
+            }
+        }
     }
 
     /// `editorNavigation`: reveal a location in the tab showing its file.
@@ -416,6 +434,9 @@ impl FilePane {
                 let sessions = self.sessions.clone();
                 let file = file.clone();
                 let plan = cx.new(|cx| PlanSurface::new(file, sessions, window, cx));
+                if let Some(source) = &self.plan_model_source {
+                    plan.update(cx, |plan, cx| plan.set_model_source(source.clone(), cx));
+                }
                 let subscription = cx.subscribe(&plan, |_, _, event: &PlanSurfaceEvent, cx| {
                     cx.emit(match event.clone() {
                         PlanSurfaceEvent::Update {
@@ -430,9 +451,11 @@ impl FilePane {
                         PlanSurfaceEvent::Build {
                             session_id,
                             block_id,
+                            target,
                         } => FilePaneEvent::BuildPlan {
                             session_id,
                             block_id,
+                            target,
                         },
                     })
                 });

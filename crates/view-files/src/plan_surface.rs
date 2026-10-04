@@ -11,19 +11,22 @@ use gpui::{
 };
 use gpui_base::input::{Textarea, TextareaState};
 use gpui_component::input::InputEvent;
-use monocode_core::block::PlanStatus;
+use monocode_core::block::{PlanBuildTarget, PlanStatus};
 use monocode_core::{Block, Session};
 use monocode_layout::FilePaneTab;
 use monocode_layout::paths::is_remote_project_path;
 use monocode_markdown::MarkdownView;
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
+use monocode_view_transcript::threads::{
+    ModelMenuSource, SecondOpinionButton, SecondOpinionEvent, SecondOpinionProps,
+};
 
 use crate::markdown_shell::{
     MarkdownViewMode, markdown_view_shell, remember_mode, remembered_mode,
 };
 
 /// What the plan tab asks its owner to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PlanSurfaceEvent {
     /// `onUpdatePlan`: the user edited the plan source.
     Update {
@@ -31,10 +34,11 @@ pub enum PlanSurfaceEvent {
         block_id: String,
         text: String,
     },
-    /// `onBuildPlan` with the default target.
+    /// `onBuildPlan` with the selected provider, model, and settings.
     Build {
         session_id: String,
         block_id: String,
+        target: Option<PlanBuildTarget>,
     },
 }
 
@@ -60,6 +64,25 @@ fn find_plan<'a>(
 
 fn plan_status(block: &Block) -> Option<PlanStatus> {
     block.plan.as_ref().map(|plan| plan.status)
+}
+
+fn plan_locked(session: &Session, block: &Block) -> bool {
+    is_remote_project_path(&session.cwd)
+        || matches!(
+            plan_status(block),
+            Some(PlanStatus::Streaming | PlanStatus::Building | PlanStatus::Built)
+        )
+}
+
+fn build_target_props(session: &Session, block: &Block) -> Option<SecondOpinionProps> {
+    (!is_remote_project_path(&session.cwd)).then(|| {
+        SecondOpinionProps::build_target(
+            session.harness,
+            Some(session.model.clone()),
+            Some(session.model_settings.clone()),
+            build_disabled(Some(session), block),
+        )
+    })
 }
 
 /// `buildDisabled`.
@@ -88,6 +111,8 @@ pub struct PlanSurface {
     mode: MarkdownViewMode,
     preview: Entity<MarkdownView>,
     source: Entity<TextareaState>,
+    model_source: Option<Rc<dyn ModelMenuSource>>,
+    target_picker: Option<(Entity<SecondOpinionButton>, Subscription)>,
     _subscription: Subscription,
 }
 
@@ -109,6 +134,9 @@ impl PlanSurface {
         let subscription = cx.subscribe(&source, |this, source, event: &InputEvent, cx| {
             if let InputEvent::Change = event
                 && let Some(plan) = &this.file.plan
+                && let (Some(session), Some(block)) = find_plan(&this.file, &this.sessions)
+                && !plan_locked(session, block)
+                && !session.is_busy()
             {
                 cx.emit(PlanSurfaceEvent::Update {
                     session_id: plan.session_id.clone(),
@@ -123,6 +151,8 @@ impl PlanSurface {
             sessions,
             preview,
             source,
+            model_source: None,
+            target_picker: None,
             _subscription: subscription,
         };
         this.sync(window, cx);
@@ -131,6 +161,14 @@ impl PlanSurface {
 
     pub fn mode(&self) -> MarkdownViewMode {
         self.mode
+    }
+
+    pub fn set_model_source(&mut self, source: Rc<dyn ModelMenuSource>, cx: &mut Context<Self>) {
+        self.model_source = Some(source.clone());
+        if let Some((picker, _)) = &self.target_picker {
+            picker.update(cx, |picker, cx| picker.set_source(source, cx));
+        }
+        cx.notify();
     }
 
     /// New session data: follow the block's text and status.
@@ -150,12 +188,7 @@ impl PlanSurface {
         let Some(block) = block else {
             return;
         };
-        let remote = session.is_some_and(|session| is_remote_project_path(&session.cwd));
-        let locked = remote
-            || matches!(
-                plan_status(block),
-                Some(PlanStatus::Streaming | PlanStatus::Building | PlanStatus::Built)
-            );
+        let locked = session.is_none_or(|session| plan_locked(session, block));
         let text = block.text.clone();
         let streaming = block.streaming == Some(true);
         self.preview.update(cx, |preview, cx| {
@@ -196,16 +229,32 @@ impl Render for PlanSurface {
         };
         let disabled = build_disabled(session, block);
         let label = build_label(block);
-        let locked = session.is_some_and(|session| is_remote_project_path(&session.cwd))
-            || matches!(
-                plan_status(block),
-                Some(PlanStatus::Streaming | PlanStatus::Building | PlanStatus::Built)
-            );
+        let locked = session.is_none_or(|session| plan_locked(session, block));
+        let target_props = session.and_then(|session| build_target_props(session, block));
+        let target_picker =
+            if let (Some(props), Some(source)) = (target_props, self.model_source.clone()) {
+                if let Some((picker, _)) = &self.target_picker {
+                    picker.update(cx, |picker, cx| picker.set_props(props, cx));
+                    Some(picker.clone())
+                } else {
+                    let picker = cx.new(|cx| SecondOpinionButton::new(props, source, cx));
+                    let target_plan = plan.clone();
+                    let subscription = cx.subscribe(&picker, move |_, _, event, cx| {
+                        let SecondOpinionEvent::Pick(target) = event;
+                        cx.emit(PlanSurfaceEvent::Build {
+                            session_id: target_plan.session_id.clone(),
+                            block_id: target_plan.block_id.clone(),
+                            target: Some(target.clone()),
+                        });
+                    });
+                    self.target_picker = Some((picker.clone(), subscription));
+                    Some(picker)
+                }
+            } else {
+                None
+            };
         let background = theme.colors.background_base;
         let hover = theme.content(0.90);
-        // TODO(port): BuildTargetButton (build with another model) lives
-        // with the sessions views and is not here yet, so the Build button
-        // keeps its full radius.
         let build = div()
             .id("build-plan")
             .flex()
@@ -227,6 +276,7 @@ impl Render for PlanSurface {
                         cx.emit(PlanSurfaceEvent::Build {
                             session_id: plan.session_id.clone(),
                             block_id: plan.block_id.clone(),
+                            target: None,
                         })
                     }))
             })
@@ -264,7 +314,13 @@ impl Render for PlanSurface {
                     preview,
                     source,
                 )
-                .actions(build),
+                .actions(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(build)
+                        .children(target_picker),
+                ),
             )
             .into_any_element()
     }
@@ -299,5 +355,27 @@ mod tests {
             None,
             &plan_block("x", PlanStatus::Streaming)
         ));
+    }
+
+    #[test]
+    fn local_build_targets_keep_the_current_model_and_effort_while_remote_plans_stay_locked() {
+        use monocode_core::HarnessId;
+        let block = plan_block("Build the app", PlanStatus::Ready);
+        let mut session = Session::blank("tab", HarnessId::Codex, "codex:current", "/repo");
+        session
+            .model_settings
+            .insert("effort".into(), "high".into());
+        let props = build_target_props(&session, &block).unwrap();
+        assert_eq!(props.from, HarnessId::Codex);
+        assert_eq!(props.from_model.as_deref(), Some("codex:current"));
+        assert_eq!(props.from_settings, Some(session.model_settings.clone()));
+        assert!(!props.disabled);
+        assert!(props.include_current);
+        assert!(!plan_locked(&session, &block));
+        session.busy = Some(true);
+        assert!(build_target_props(&session, &block).unwrap().disabled);
+        session.cwd = "remote://env/repo".into();
+        assert!(build_target_props(&session, &block).is_none());
+        assert!(plan_locked(&session, &block));
     }
 }

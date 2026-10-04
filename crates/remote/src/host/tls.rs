@@ -117,12 +117,14 @@ pub(crate) fn make_temporary_dir(prefix: &Path) -> std::io::Result<std::path::Pa
     loop {
         let suffix: String = uuid::Uuid::new_v4().simple().to_string()[..6].into();
         let path = std::path::PathBuf::from(format!("{}{suffix}", prefix.display()));
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
+            let mut builder = builder;
             use std::os::unix::fs::DirBuilderExt;
             builder.mode(0o700);
-        }
+            builder
+        };
         match builder.create(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,

@@ -200,6 +200,8 @@ pub struct DiffView {
     widest_row: usize,
     tokens: HashMap<usize, Arc<Vec<Option<LineStyles>>>>,
     highlight_tasks: Vec<Task<()>>,
+    #[cfg(test)]
+    highlight_delay: Option<std::time::Duration>,
     scroll: UniformListScrollHandle,
     hovered_row: Option<usize>,
     busy: Option<SharedString>,
@@ -221,6 +223,8 @@ impl DiffView {
             widest_row: 0,
             tokens: HashMap::new(),
             highlight_tasks: Vec::new(),
+            #[cfg(test)]
+            highlight_delay: None,
             scroll: UniformListScrollHandle::new(),
             hovered_row: None,
             busy: None,
@@ -283,8 +287,24 @@ impl DiffView {
     pub fn set_theme(&mut self, theme: EditorTheme, cx: &mut Context<Self>) {
         self.theme = theme;
         self.tokens.clear();
+        self.highlight_tasks.clear();
         self.highlight_open_files(cx);
         cx.notify();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn theme(&self) -> &EditorTheme {
+        &self.theme
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn expanded_files(&self) -> &HashSet<usize> {
+        &self.open
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn revealed_folds(&self) -> &HashMap<(usize, String), FoldReveal> {
+        &self.reveals
     }
 
     pub fn on_hunk_action(&mut self, handler: Option<HunkActionHandler>) {
@@ -480,7 +500,16 @@ impl DiffView {
                 .collect();
             // Mark as requested so a second call does not start another job.
             self.tokens.insert(index, Arc::new(Vec::new()));
+            #[cfg(test)]
+            let delay = self
+                .highlight_delay
+                .take()
+                .map(|delay| (cx.background_executor().clone(), delay));
             let job = cx.background_spawn(async move {
+                #[cfg(test)]
+                if let Some((executor, delay)) = delay {
+                    executor.timer(delay).await;
+                }
                 let mut old_index = Vec::new();
                 let mut new_index = Vec::new();
                 let mut old = DiffSide { lines: Vec::new() };
@@ -1220,6 +1249,67 @@ Binary files a/img.png and b/img.png differ
             let styles = tokens[deleted].as_ref().unwrap();
             let keyword = view.theme.syntax.keyword;
             assert!(styles.iter().any(|(_, style)| style.color == Some(keyword)));
+        });
+    }
+
+    #[gpui::test]
+    fn pending_highlight_cannot_restore_the_previous_theme(cx: &mut TestAppContext) {
+        let original = (0..60)
+            .map(|line| format!("fn line_{line}() {{}}\n"))
+            .collect::<String>();
+        let current = original.replace("fn line_30()", "fn changed_30()");
+        let file = DiffFile::from_texts("change.rs", &original, &current);
+        let expected_diff = file.diff.clone();
+        let view = cx.new(|cx| DiffView::new(Vec::new(), EditorTheme::dark(), cx));
+        view.update(cx, |view, cx| {
+            view.highlight_delay = Some(std::time::Duration::from_secs(1));
+            view.set_files(vec![file], InitialExpansion::All, cx);
+            let fold = view.files[0]
+                .diff
+                .blocks
+                .iter()
+                .position(UnifiedBlock::is_fold)
+                .unwrap();
+            view.reveal_fold(0, fold, FoldDirection::Down, cx);
+            view.scroll.scroll_to_item(10, ScrollStrategy::Top);
+        });
+        cx.run_until_parked();
+        let (open, reveals, rows) = view.read_with(cx, |view, _| {
+            assert!(
+                view.tokens[&0].is_empty(),
+                "the old syntax job must be pending"
+            );
+            (view.open.clone(), view.reveals.clone(), view.rows.clone())
+        });
+        view.update(cx, |view, cx| view.set_theme(EditorTheme::light(), cx));
+        cx.run_until_parked();
+        let assert_light_syntax = |view: &DiffView| {
+            let deleted = view.files[0]
+                .diff
+                .lines
+                .iter()
+                .position(|line| line.kind == UnifiedLineKind::Del)
+                .unwrap();
+            let styles = view.tokens[&0][deleted].as_ref().unwrap();
+            assert!(
+                styles
+                    .iter()
+                    .any(|(_, style)| { style.color == Some(EditorTheme::light().syntax.keyword) }),
+                "a completed old syntax job must not replace the new palette",
+            );
+        };
+        view.read_with(cx, |view, _| assert_light_syntax(view));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.theme, EditorTheme::light());
+            assert_eq!(view.files[0].diff, expected_diff);
+            assert_eq!(view.open, open);
+            assert_eq!(view.reveals, reveals);
+            assert_eq!(view.rows, rows);
+            assert_eq!(view.scroll.logical_scroll_top_index(), 10);
+            assert_light_syntax(view);
         });
     }
 }

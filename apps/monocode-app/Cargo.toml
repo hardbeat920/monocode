@@ -28,6 +28,7 @@ harness = false
 screenshot = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
@@ -38,15 +39,30 @@ monocode-store.workspace = true
 monocode-git.workspace = true
 monocode-process.workspace = true
 monocode-harness.workspace = true
-# Only the packages M1 needs. The others are still being written.
-monocode-engine = { path = "../../crates/engine", default-features = false, features = ["submit", "attention", "workspace", "side_threads"] }
+# Every desktop engine package.
+monocode-engine = { path = "../../crates/engine", default-features = false, features = ["submit", "attention", "workspace", "side_threads", "projects", "history", "automations", "inbox", "orchestration", "remote"] }
 monocode-layout.workspace = true
 monocode-view-transcript.workspace = true
 monocode-view-composer.workspace = true
+monocode-view-files.workspace = true
+monocode-view-scm.workspace = true
+monocode-view-pages.workspace = true
+monocode-view-inbox.workspace = true
+monocode-view-settings.workspace = true
+monocode-view-workbench.workspace = true
+monocode-view-remote.workspace = true
+monocode-view-quick.workspace = true
+monocode-remote.workspace = true
+monocode-integrations.workspace = true
+monocode-updater.workspace = true
+# `monocode-app host ...` runs the remote host CLI.
+monocode-host.workspace = true
 gpui-base.workspace = true
 monocode-editor.workspace = true
 monocode-markdown.workspace = true
 monocode-terminal-view.workspace = true
+# The PTY host, for the projects package's "folder in use" checks.
+monocode-terminal.workspace = true
 monocode-platform.workspace = true
 anyhow.workspace = true
 serde.workspace = true
@@ -62,3 +78,10 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 [target.'cfg(unix)'.dependencies]
 # localtime_r, for the sidebar's month and day labels.
 libc.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Test windows and the engine's fake store, for the shell's view tests.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+monocode-engine = { path = "../../crates/engine", default-features = false, features = ["test-support"] }

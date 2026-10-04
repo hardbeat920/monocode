@@ -886,7 +886,7 @@ struct ConnectOutput {
 }
 
 /// Sets up or updates a host over SSH: runs `monocode-host connect` there
-/// through npx, then pairs over the host's direct addresses, falling back to
+/// from the matching native release, then pairs over the host's direct addresses, falling back to
 /// an SSH forward when this computer cannot reach them.
 fn start_ssh_job(
     remote: Remote,
@@ -921,7 +921,7 @@ fn start_ssh_job(
             job.message(if upgrade {
                 "Updating MonoCode Host on the machine…"
             } else {
-                "Starting MonoCode Host with npx. The first run downloads it…"
+                "Starting MonoCode Host. The first run downloads the native executable."
             });
             let output = remote_ssh::run_script(
                 &target,

@@ -26,7 +26,9 @@ use super::chat::ChatSection;
 use super::chrome::{Anchors, NARROW_WIDTH, Reveal, card_note, group, page_header};
 use super::controls::{HostsGlobal, css_px};
 use super::general::GeneralSection;
-use super::host::{SettingsCallbacks, SettingsHosts, SettingsProps, SlotContext, ViewSlot};
+use super::host::{
+    LiveSlotContext, SettingsCallbacks, SettingsHosts, SettingsProps, SlotContext, ViewSlot,
+};
 use super::inbox::InboxSection;
 use super::keybindings::KeybindingsSection;
 use super::providers::ProvidersSection;
@@ -77,6 +79,8 @@ pub struct SettingsPage {
     section: SettingsSectionId,
     anchor: Option<SharedString>,
     reveal: Entity<RevealState>,
+    /// What slot views see change after they were built.
+    live_slot: Entity<LiveSlotContext>,
     anchors: Anchors,
     reveal_timer: Option<Task<()>>,
     pending_scroll: Rc<RefCell<Option<SharedString>>>,
@@ -107,6 +111,9 @@ impl SettingsPage {
                 ..Default::default()
             })
         });
+        let live_slot = cx.new(|_| LiveSlotContext::default());
+        cx.observe(&reveal, |this, _, cx| this.sync_live_slot(cx))
+            .detach();
         let appearance_host = hosts.appearance.clone();
         let appearance_kv = kv.clone();
         let appearance = cx.new(|cx| {
@@ -137,6 +144,7 @@ impl SettingsPage {
             section,
             anchor: None,
             reveal,
+            live_slot,
             anchors,
             reveal_timer: None,
             pending_scroll: Rc::new(RefCell::new(None)),
@@ -147,6 +155,7 @@ impl SettingsPage {
             focus: cx.focus_handle(),
         };
         this.body = this.build_body(window, cx);
+        this.sync_live_slot(cx);
         this
     }
 
@@ -200,7 +209,21 @@ impl SettingsPage {
             notification_project_path: self.props.notification_project_path.clone(),
             notification_settings_request: self.props.notification_settings_request,
             highlighted: self.revealed(cx).as_deref() == Some("project-notifications"),
+            revealed: self.revealed(cx),
+            live: Some(self.live_slot.clone()),
         }
+    }
+
+    /// Publishes the current slot context to slot views.
+    fn sync_live_slot(&mut self, cx: &mut Context<Self>) {
+        let context = SlotContext {
+            live: None,
+            ..self.slot_context(cx)
+        };
+        self.live_slot.update(cx, |live, cx| {
+            live.0 = context;
+            cx.notify();
+        });
     }
 
     fn slot(&self, slot: Option<&ViewSlot>, window: &mut Window, cx: &mut App) -> SectionBody {
@@ -277,6 +300,7 @@ impl SettingsPage {
         self.anchors.clear();
         self.scroll.set_offset(point(gpui::px(0.), gpui::px(0.)));
         self.body = self.build_body(window, cx);
+        self.sync_live_slot(cx);
         // The reveal effect re-runs for the new page, so a search result on
         // another page scrolls once that page has mounted its row.
         let revealed = self.revealed(cx);
@@ -311,6 +335,7 @@ impl SettingsPage {
         if request_changed {
             self.reveal(self.anchor.clone(), cx);
         }
+        self.sync_live_slot(cx);
         cx.notify();
     }
 

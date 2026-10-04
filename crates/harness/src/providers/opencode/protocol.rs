@@ -540,14 +540,9 @@ pub fn open_code_variant_label(value: &str) -> String {
         .unwrap_or_else(|| title_case_slug(value))
 }
 
-/// Approximation of `String.prototype.localeCompare`: case-insensitive
-/// first, then lowercase before uppercase.
-// TODO(port): localeCompare uses ICU collation, which also orders
-// punctuation before digits. This matches it for ASCII names.
+/// The default collation used by `String.prototype.localeCompare`.
 pub(crate) fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 /// `sortOpenCodeVariants`: lowest to highest effort; unknown values sort last.
@@ -1157,6 +1152,53 @@ mod tests {
             sort_open_code_variants(&strings(&["high", "minimal", "xhigh", "low", "medium"])),
             strings(&["minimal", "low", "medium", "high", "xhigh"])
         );
+    }
+
+    #[test]
+    fn catalog_locale_preserves_effort_rank_and_collates_unknown_variants() {
+        monocode_locale::with_locale("fr-FR", || {
+            assert_eq!(
+                sort_open_code_variants(&strings(&[
+                    "Zebra",
+                    "éclair",
+                    "e\u{301}clair",
+                    "xhigh",
+                    "high"
+                ])),
+                strings(&["high", "xhigh", "éclair", "e\u{301}clair", "Zebra"])
+            );
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn catalog_locale_keeps_equivalent_model_names_in_provider_order() {
+        use super::super::catalog::{flatten_open_code_models, parse_models_cli_output};
+
+        let output = [
+            "anthropic/composed",
+            r#"{"id":"composed","name":"éclair"}"#,
+            "anthropic/decomposed",
+            r#"{"id":"decomposed","name":"e\u0301clair"}"#,
+            "anthropic/zebra",
+            r#"{"id":"zebra","name":"Zebra"}"#,
+        ]
+        .join("\n");
+        monocode_locale::with_locale("fr-FR", || {
+            let models = flatten_open_code_models(&parse_models_cli_output(&output), &[]);
+            assert_eq!(
+                models
+                    .iter()
+                    .map(|model| model.native_id.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "anthropic/composed",
+                    "anthropic/decomposed",
+                    "anthropic/zebra"
+                ]
+            );
+        })
+        .unwrap();
     }
 
     // describe("contextUsedFromMessageInfo")

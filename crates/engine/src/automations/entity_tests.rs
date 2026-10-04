@@ -965,8 +965,13 @@ fn chooses_next_monday() {
 fn rejects_unknown_and_cancel_actions() {
     assert_eq!(reminder_time("reminder:cancel", 0), None);
     assert_eq!(reminder_time("unknown", 0), None);
-    assert!(
-        super::reminders::format_reminder_time(local_ms(2026, 8, 21, 9, 0))
-            .starts_with("Mon, Sep 21, 9:00")
+    let due = local_ms(2026, 8, 21, 9, 0);
+    assert_eq!(
+        super::reminders::format_reminder_time(due),
+        monocode_platform::date_time::format_local(
+            due,
+            monocode_platform::date_time::DateTimeStyle::Reminder
+        )
     );
+    assert!(!super::reminders::format_reminder_time(due).is_empty());
 }

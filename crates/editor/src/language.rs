@@ -60,9 +60,7 @@ pub fn language_for_path(path: &str) -> Option<&'static str> {
         return Some("sql");
     }
     if matches!(extension, ".xml" | ".svg") {
-        // TODO(port): no tree-sitter XML grammar in gpui-component; the HTML
-        // grammar tokenizes tags, attributes, and strings the same way.
-        return Some("html");
+        return Some("xml");
     }
     if matches!(extension, ".yaml" | ".yml") {
         return Some("yaml");
@@ -74,9 +72,7 @@ pub fn language_for_path(path: &str) -> Option<&'static str> {
         return Some("go");
     }
     if extension == ".dart" {
-        // TODO(port): no Dart grammar. CodeMirror used its C-like mode; the
-        // Java grammar is the closest C-like grammar available.
-        return Some("java");
+        return Some("dart");
     }
     if extension == ".swift" {
         return Some("swift");
@@ -104,24 +100,26 @@ pub fn language_for_path(path: &str) -> Option<&'static str> {
     if extension == ".lua" {
         return Some("lua");
     }
-    if matches!(extension, ".r" | ".pl" | ".pm" | ".ps1" | ".psd1" | ".psm1") {
-        // TODO(port): no R, Perl, or PowerShell grammar. They share `#`
-        // comments and quoted strings with shell, so the Bash grammar stands in.
-        return Some("bash");
+    if extension == ".r" {
+        return Some("r");
+    }
+    if matches!(extension, ".pl" | ".pm") {
+        return Some("perl");
+    }
+    if matches!(extension, ".ps1" | ".psd1" | ".psm1") {
+        return Some("powershell");
     }
     if extension == ".m" {
-        // TODO(port): no Objective-C grammar; C covers its C subset.
-        return Some("c");
+        return Some("objc");
     }
     if extension == ".mm" {
-        return Some("cpp");
+        return Some("objc");
     }
     if extension == ".proto" {
         return Some("proto");
     }
     if name == "dockerfile" || name.starts_with("dockerfile.") {
-        // TODO(port): no Dockerfile grammar; shell covers comments and RUN lines.
-        return Some("bash");
+        return Some("dockerfile");
     }
     None
 }

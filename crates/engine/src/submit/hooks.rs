@@ -57,12 +57,12 @@ pub trait SubmitOrchestrationHooks {
     }
 
     /// `discoverOrchestrationSettings`.
-    fn discover_settings(&self, _cx: &mut App) -> Task<OrchestrationSettings> {
-        Task::ready(OrchestrationSettings {
+    fn discover_settings(&self, _cx: &mut App) -> Task<Result<OrchestrationSettings, String>> {
+        Task::ready(Ok(OrchestrationSettings {
             choices: Vec::new(),
             max_workers: 2,
             extra: Extra::new(),
-        })
+        }))
     }
 
     /// `orchestrationPlanningPrompt`.

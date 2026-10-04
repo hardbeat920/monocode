@@ -123,6 +123,11 @@ pub fn inbox_pr_diff<T>(diff: &PrDiff, full_file: bool, cx: &mut Context<T>) -> 
         let mut view = DiffView::new(Vec::new(), theme, cx);
         view.set_files(files, InitialExpansion::First, cx);
         view.set_truncated(truncated, None, cx);
+        let appearance = cx.observe_global::<Theme>(|view, cx| {
+            let theme = editor_theme(cx);
+            view.set_theme(theme, cx);
+        });
+        cx.on_release(move |_, _| drop(appearance)).detach();
         view
     })
 }

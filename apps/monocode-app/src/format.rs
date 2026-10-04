@@ -32,35 +32,6 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/// The local calendar month (0-based) and day of an epoch time.
-#[cfg(unix)]
-fn local_month_day(epoch_ms: i64) -> Option<(usize, u32)> {
-    let seconds = (epoch_ms / 1000) as libc::time_t;
-    let mut out: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are valid for the call; localtime_r is the
-    // thread-safe form.
-    let result = unsafe { libc::localtime_r(&seconds, &mut out) };
-    (!result.is_null()).then_some((out.tm_mon as usize, out.tm_mday as u32))
-}
-
-/// The UTC calendar month and day elsewhere (days-from-civil, inverted).
-#[cfg(not(unix))]
-fn local_month_day(epoch_ms: i64) -> Option<(usize, u32)> {
-    let days = epoch_ms.div_euclid(86_400_000) + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as usize;
-    Some((month - 1, day))
-}
-
 /// `formatRelative` from Sidebar.tsx.
 pub fn format_relative(value: i64, now: i64) -> String {
     if value <= 0 {
@@ -87,11 +58,10 @@ pub fn format_relative(value: i64, now: i64) -> String {
     if days < 7 {
         return format!("{days}d");
     }
-    // `Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" })`
-    // in the en-US form.
-    local_month_day(value)
-        .map(|(month, day)| format!("{} {day}", MONTHS[month.min(11)]))
-        .unwrap_or_default()
+    monocode_platform::date_time::format_local(
+        value,
+        monocode_platform::date_time::DateTimeStyle::MonthDay,
+    )
 }
 
 /// `formatGitLabel` from Sidebar.tsx.
@@ -104,11 +74,6 @@ pub fn format_git_label(repo: Option<&str>, branch: Option<&str>) -> String {
         (Some(repo), None) => repo.to_string(),
         (None, None) => String::new(),
     }
-}
-
-/// `formatUsagePercent`: whole percent.
-pub fn format_percent(value: f32) -> String {
-    format!("{}%", value.round() as i64)
 }
 
 /// `NO_BRANCH_LABEL` from worktrees.ts.
@@ -130,7 +95,14 @@ mod tests {
         assert_eq!(format_relative(now - (7 * 60 + 59) * MINUTE, now), "7h 59m");
         assert_eq!(format_relative(now - 3 * 24 * 60 * MINUTE, now), "3d");
         let old = format_relative(now - 30 * 24 * 60 * MINUTE, now);
-        assert!(MONTHS.iter().any(|month| old.starts_with(month)), "{old}");
+        assert_eq!(
+            old,
+            monocode_platform::date_time::format_local(
+                now - 30 * 24 * 60 * MINUTE,
+                monocode_platform::date_time::DateTimeStyle::MonthDay,
+            )
+        );
+        assert!(!old.is_empty());
     }
 
     #[test]

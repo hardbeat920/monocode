@@ -16,7 +16,7 @@ use gpui_base::input::{
     EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
     InputHighlighterFactory, Rope,
 };
-use gpui_component::highlighter::{LanguageRegistry, SyntaxHighlighter};
+use gpui_component::highlighter::{LanguageConfig, LanguageRegistry, SyntaxHighlighter};
 
 const SYNC_PARSE_TIMEOUT: Duration = Duration::from_millis(2);
 const SYNC_PARSE_MAX_BYTES: usize = 256 * 1024;
@@ -25,8 +25,59 @@ const PARSE_DEBOUNCE: Duration = Duration::from_millis(150);
 /// `MAX_DIFF_HIGHLIGHT_CHARS`: past this, a diff side shows unstyled.
 pub const MAX_DIFF_HIGHLIGHT_CHARS: usize = 250_000;
 
+/// Register the file grammars that gpui-component does not include.
+fn register_file_grammars() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let registry = LanguageRegistry::singleton();
+        for (name, language, highlights) in [
+            (
+                "xml",
+                tree_sitter_xml::LANGUAGE_XML.into(),
+                tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+            ),
+            (
+                "dart",
+                tree_sitter_dart::LANGUAGE.into(),
+                tree_sitter_dart::HIGHLIGHTS_QUERY,
+            ),
+            (
+                "r",
+                tree_sitter_r::LANGUAGE.into(),
+                tree_sitter_r::HIGHLIGHTS_QUERY,
+            ),
+            (
+                "perl",
+                tree_sitter_perl::LANGUAGE.into(),
+                include_str!("queries/perl.scm"),
+            ),
+            (
+                "powershell",
+                tree_sitter_powershell::LANGUAGE.into(),
+                tree_sitter_powershell::HIGHLIGHTS_QUERY,
+            ),
+            (
+                "objc",
+                tree_sitter_objc::LANGUAGE.into(),
+                tree_sitter_objc::HIGHLIGHTS_QUERY,
+            ),
+            (
+                "dockerfile",
+                tree_sitter_containerfile::LANGUAGE.into(),
+                tree_sitter_containerfile::HIGHLIGHTS_QUERY,
+            ),
+        ] {
+            registry.register(
+                name,
+                &LanguageConfig::new(name, language, vec![], highlights, "", ""),
+            );
+        }
+    });
+}
+
 /// Whether gpui-component has a grammar for `language`.
 pub fn has_grammar(language: &str) -> bool {
+    register_file_grammars();
     LanguageRegistry::singleton()
         .language(language)
         .is_some_and(|config| config.has_grammar())
@@ -291,6 +342,37 @@ mod tests {
             color_of("  // note", &lines[1], "// note"),
             Some(palette.comment)
         );
+    }
+
+    #[test]
+    fn loads_native_queries_and_colors_previously_substituted_languages() {
+        for (path, source) in [
+            (
+                "layout.xml",
+                "<?xml version=\"1.0\"?><root id=\"one\"><![CDATA[value]]></root>",
+            ),
+            (
+                "app.dart",
+                "Future<String> name() async { return \"agent\"; }",
+            ),
+            ("analysis.r", "value <- function(x) { \"agent\" } # note"),
+            ("script.pl", "my $name = \"agent\"; # note"),
+            ("profile.ps1", "$name = \"agent\"; Write-Host $name # note"),
+            (
+                "Controller.m",
+                "@interface Agent : NSObject\n@property NSString *name;\n@end",
+            ),
+            ("Dockerfile", "FROM alpine:3.21\nRUN echo \"agent\"\n# note"),
+        ] {
+            let language = crate::language::language_for_path(path).unwrap();
+            assert!(has_grammar(language), "{path}");
+            let config = LanguageRegistry::singleton().language(language).unwrap();
+            tree_sitter::Query::new(config.language.as_ref().unwrap(), &config.highlights)
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            let resolver = SyntaxResolver::new(SyntaxPalette::dark(), language);
+            let styles = highlight_source(source, Some(language), &resolver);
+            assert!(styles.iter().any(|line| !line.is_empty()), "{path}");
+        }
     }
 
     #[test]

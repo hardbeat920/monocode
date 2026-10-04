@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
 use monocode_core::js;
+use monocode_locale::RelativeTimeUnit;
 use serde::{Deserialize, Serialize};
 
 /// `Date.now()`.
@@ -98,25 +99,27 @@ pub fn time_filter_start(time: InboxTimeFilter, now: i64) -> i64 {
 }
 
 /// `formatRelativeTime` with `Intl.RelativeTimeFormat(locale, { numeric: "auto" })`.
-/// Only English output exists, so `locale` is ignored.
-// TODO(port): Intl.RelativeTimeFormat localized the phrase. Only English is
-// produced here.
-pub fn format_relative_time(iso: &str, now: i64, _locale: Option<&str>) -> String {
+pub fn format_relative_time(iso: &str, now: i64, locale: Option<&str>) -> String {
     let Some(then) = date_parse(iso) else {
         return String::new();
     };
+    format_relative_time_at(then, now, locale)
+}
+
+/// The same formatter for pages that already have epoch milliseconds.
+pub fn format_relative_time_at(then: i64, now: i64, locale: Option<&str>) -> String {
     let delta = js::round((then - now) as f64 / 1000.0);
-    let divisions: [(f64, &str); 7] = [
-        (60.0, "second"),
-        (60.0, "minute"),
-        (24.0, "hour"),
-        (7.0, "day"),
-        (4.34524, "week"),
-        (12.0, "month"),
-        (f64::INFINITY, "year"),
+    let divisions = [
+        (60.0, RelativeTimeUnit::Second),
+        (60.0, RelativeTimeUnit::Minute),
+        (24.0, RelativeTimeUnit::Hour),
+        (7.0, RelativeTimeUnit::Day),
+        (4.34524, RelativeTimeUnit::Week),
+        (12.0, RelativeTimeUnit::Month),
+        (f64::INFINITY, RelativeTimeUnit::Year),
     ];
     let mut value = delta;
-    let mut unit = "second";
+    let mut unit = RelativeTimeUnit::Second;
     let mut amount = delta.abs();
     for (step, next) in divisions {
         unit = next;
@@ -126,45 +129,92 @@ pub fn format_relative_time(iso: &str, now: i64, _locale: Option<&str>) -> Strin
         value = js::round(value / step);
         amount = value.abs();
     }
-    relative_phrase(value, unit)
-}
-
-/// The English `numeric: "auto"` phrase for a rounded value and unit.
-fn relative_phrase(value: f64, unit: &str) -> String {
-    let value = if value == 0.0 { 0.0 } else { value };
-    let special = match (unit, value as i64) {
-        ("second", 0) => Some("now"),
-        ("minute", 0) => Some("this minute"),
-        ("hour", 0) => Some("this hour"),
-        ("day", 0) => Some("today"),
-        ("day", -1) => Some("yesterday"),
-        ("day", 1) => Some("tomorrow"),
-        ("week", 0) => Some("this week"),
-        ("week", -1) => Some("last week"),
-        ("week", 1) => Some("next week"),
-        ("month", 0) => Some("this month"),
-        ("month", -1) => Some("last month"),
-        ("month", 1) => Some("next month"),
-        ("year", 0) => Some("this year"),
-        ("year", -1) => Some("last year"),
-        ("year", 1) => Some("next year"),
-        _ => None,
-    };
-    if let Some(special) = special {
-        return special.to_string();
-    }
-    let count = value.abs() as i64;
-    let plural = if count == 1 { "" } else { "s" };
-    if value < 0.0 {
-        format!("{count} {unit}{plural} ago")
-    } else {
-        format!("in {count} {unit}{plural}")
-    }
+    monocode_locale::format_relative_time(value as i32, unit, locale).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn relative_cases(locale: &str, phrases: [&str; 7]) {
+        let now = date_parse("2026-08-27T12:00:00Z").unwrap();
+        for (seconds, expected) in [0, -86_400, 86_400, -172_800, 172_800, -7_200, 7_200]
+            .into_iter()
+            .zip(phrases)
+        {
+            assert_eq!(
+                format_relative_time(&to_iso_string(now + seconds * 1_000), now, Some(locale)),
+                expected,
+                "locale {locale}, offset {seconds} seconds"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_intl_relative_french_past_and_future() {
+        relative_cases(
+            "fr",
+            [
+                "maintenant",
+                "hier",
+                "demain",
+                "avant-hier",
+                "après-demain",
+                "il y a 2 heures",
+                "dans 2 heures",
+            ],
+        );
+    }
+
+    #[test]
+    fn matches_intl_relative_japanese_past_and_future() {
+        relative_cases(
+            "ja",
+            [
+                "今",
+                "昨日",
+                "明日",
+                "一昨日",
+                "明後日",
+                "2 時間前",
+                "2 時間後",
+            ],
+        );
+    }
+
+    #[test]
+    fn matches_intl_relative_arabic_past_and_future() {
+        relative_cases(
+            "ar",
+            [
+                "الآن",
+                "أمس",
+                "غدًا",
+                "أول أمس",
+                "بعد الغد",
+                "قبل ساعتين",
+                "خلال ساعتين",
+            ],
+        );
+    }
+
+    #[test]
+    fn matches_intl_relative_rounding_and_unit_boundaries() {
+        let now = date_parse("2026-08-27T12:00:00Z").unwrap();
+        for (milliseconds, expected) in [
+            (59_500, "in 1 minute"),
+            (-59_500, "59 seconds ago"),
+            (31 * 86_400_000, "in 4 weeks"),
+            (-31 * 86_400_000, "4 weeks ago"),
+            (32 * 86_400_000, "next month"),
+            (-32 * 86_400_000, "last month"),
+        ] {
+            assert_eq!(
+                format_relative_time(&to_iso_string(now + milliseconds), now, Some("en")),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn parses_provider_timestamps() {
@@ -190,15 +240,15 @@ mod tests {
             "2 hours ago"
         );
         assert_eq!(
-            format_relative_time("2026-08-27T12:00:00Z", now, None),
+            format_relative_time("2026-08-27T12:00:00Z", now, Some("en")),
             "now"
         );
         assert_eq!(
-            format_relative_time("2026-08-26T12:00:00Z", now, None),
+            format_relative_time("2026-08-26T12:00:00Z", now, Some("en")),
             "yesterday"
         );
         assert_eq!(
-            format_relative_time("2026-08-27T12:00:30Z", now, None),
+            format_relative_time("2026-08-27T12:00:30Z", now, Some("en")),
             "in 30 seconds"
         );
     }

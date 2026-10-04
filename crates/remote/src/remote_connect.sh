@@ -1,41 +1,61 @@
 set -eu
-PACKAGE=@@PACKAGE@@
-
-# A non-interactive login shell may not load version managers that set up
-# Node only for interactive shells, so also look where they install it.
-find_npx() {
-  if command -v npx >/dev/null 2>&1; then
-    command -v npx
-    return 0
+umask 077
+RELEASE_BASE=@@PACKAGE@@
+VERSION=@@VERSION@@
+case "$(uname -s)" in
+  Darwin) os=apple-darwin ;;
+  Linux) os=unknown-linux-gnu ;;
+  *) echo "MonoCode Host supports macOS, Linux, and Windows." >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) arch=aarch64 ;;
+  x86_64|amd64) arch=x86_64 ;;
+  *) echo "This host architecture has no MonoCode release." >&2; exit 1 ;;
+esac
+target="$arch-$os"
+installed="$HOME/.monocode-host/runtime/$VERSION/monocode-host"
+if [ -x "$installed" ] && [ "$("$installed" --version)" = "$VERSION" ]; then
+  exec "$installed" connect --json@@FLAGS@@ </dev/null
+fi
+archive="monocode-host_${VERSION}_${target}.tar.gz"
+temp=$(mktemp -d)
+trap 'rm -rf "$temp"' EXIT HUP INT TERM
+download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$1" --output "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget --quiet --https-only "$1" -O "$2"
+  else
+    echo "Install curl or wget to download MonoCode Host." >&2
+    exit 1
   fi
-  for dir in "$HOME/.volta/bin" "$HOME/.local/share/mise/shims" "$HOME/.asdf/shims" \
-    "$HOME/.local/bin" "$HOME/.bun/bin" /opt/homebrew/bin /usr/local/bin /usr/bin; do
-    if [ -x "$dir/npx" ]; then
-      printf '%s\n' "$dir/npx"
-      return 0
-    fi
-  done
-  if [ -d "$HOME/.nvm/versions/node" ]; then
-    newest=$(ls -1 "$HOME/.nvm/versions/node" | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
-    if [ -n "$newest" ] && [ -x "$HOME/.nvm/versions/node/v$newest/bin/npx" ]; then
-      printf '%s\n' "$HOME/.nvm/versions/node/v$newest/bin/npx"
-      return 0
-    fi
-  fi
-  return 1
 }
-
-if ! NPX=$(find_npx); then
-  echo "Node.js was not found for this user. Install Node.js 22.13 or newer on the machine, then try again." >&2
+download "$RELEASE_BASE/$archive" "$temp/$archive"
+download "$RELEASE_BASE/SHA256SUMS" "$temp/SHA256SUMS"
+expected=$(awk -v name="$archive" '$2 == name { print $1 }' "$temp/SHA256SUMS")
+if [ "${#expected}" -ne 64 ]; then
+  echo "The release does not contain exactly one checksum for $archive." >&2
   exit 1
 fi
-BIN=$(dirname "$NPX")
-PATH="$BIN:$PATH"
-export PATH
-NODE=node
-[ -x "$BIN/node" ] && NODE="$BIN/node"
-if ! "$NODE" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
-  echo "MonoCode Host needs Node.js 22.13 or newer; this machine has $("$NODE" --version 2>/dev/null || echo 'an unknown version'). Update Node.js for this user, then try again." >&2
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$temp/$archive" | awk '{print $1}')
+else
+  actual=$(shasum -a 256 "$temp/$archive" | awk '{print $1}')
+fi
+if [ "$actual" != "$expected" ]; then
+  echo "MonoCode Host download checksum did not match." >&2
   exit 1
 fi
-exec "$NPX" --yes --package "$PACKAGE" monocode-host connect --json@@FLAGS@@ </dev/null
+entries=$(tar -tzf "$temp/$archive")
+kind=$(tar -tvzf "$temp/$archive" | cut -c 1)
+if [ "$entries" != "monocode-host" ] || [ "$kind" != "-" ]; then
+  echo "The MonoCode Host archive has unexpected files." >&2
+  exit 1
+fi
+tar -xzf "$temp/$archive" -C "$temp"
+chmod 700 "$temp/monocode-host"
+if [ "$("$temp/monocode-host" --version)" != "$VERSION" ]; then
+  echo "The downloaded host version does not match this desktop." >&2
+  exit 1
+fi
+"$temp/monocode-host" connect --json@@FLAGS@@ </dev/null

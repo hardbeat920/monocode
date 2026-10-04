@@ -193,6 +193,14 @@ impl AutomationsView {
             .default_target(self.cwd.as_deref(), self.snapshot.selected(), cx)
     }
 
+    /// New drafts use the window's active project after the page reopens.
+    pub fn set_cwd(&mut self, cwd: Option<&str>, cx: &mut Context<Self>) {
+        if self.cwd.as_deref() != cwd {
+            self.cwd = cwd.map(str::to_owned);
+            cx.notify();
+        }
+    }
+
     /// `beginBlank`.
     pub fn begin_blank(&mut self, cx: &mut Context<Self>) {
         let target = self.default_target(cx);

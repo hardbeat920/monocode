@@ -893,6 +893,170 @@ fn persists_a_delegation_and_its_retry_receipt_in_the_same_snapshot(cx: &mut Tes
 }
 
 #[gpui::test]
+fn restored_typescript_receipt_reuses_the_delegation_without_dispatching_again(
+    cx: &mut TestAppContext,
+) {
+    let f = setup(cx);
+    f.start(cx);
+    let input = json!({"title":"A","prompt":"Implement","harness":"codex","files":["a"]});
+    let result = f
+        .call_id_now(cx, "delegate", input.clone(), "legacy-retry")
+        .unwrap();
+    let legacy_signature = r#"{"action":"delegate","input":{"title":"A","prompt":"Implement","harness":"codex","files":["a"]}}"#;
+    f.store
+        .saved
+        .borrow_mut()
+        .get_mut("lead")
+        .unwrap()
+        .requests
+        .get_mut("legacy-retry")
+        .unwrap()
+        .signature = legacy_signature.into();
+    let restored = orchestrator(f.store.clone(), f.host.clone(), cx);
+    let weak = restored.downgrade();
+    finish(
+        cx,
+        cx.spawn(|mut cx| async move { hydrate(&weak, "lead", &mut cx).await }),
+    )
+    .unwrap();
+    let submissions = f.host.submit_count();
+    let workers = f.host.created.borrow().len();
+    let scopes = f.store.scope_calls.get();
+    let tasks = restored.read_with(cx, |o, _| o.run("lead").unwrap().tasks.clone());
+    let dispatches = restored.read_with(cx, |o, _| o.run("lead").unwrap().dispatch_list().to_vec());
+    let weak = restored.downgrade();
+    let object: serde_json::Map<String, Value> = ["files", "harness", "prompt", "title"]
+        .into_iter()
+        .map(|key| (key.into(), input[key].clone()))
+        .collect();
+    let retry = finish(
+        cx,
+        cx.spawn(|mut cx| async move {
+            handle(&weak, "lead", "legacy-retry", "delegate", &object, &mut cx).await
+        }),
+    )
+    .expect("the unchanged TypeScript receipt must return its saved result");
+    assert_eq!(retry, result);
+    cx.run_until_parked();
+    assert_eq!(f.host.submit_count(), submissions);
+    assert_eq!(f.host.created.borrow().len(), workers);
+    assert_eq!(f.store.scope_calls.get(), scopes);
+    assert_eq!(
+        restored.read_with(cx, |o, _| o.run("lead").unwrap().tasks.clone()),
+        tasks
+    );
+    assert_eq!(
+        restored.read_with(cx, |o, _| o.run("lead").unwrap().dispatch_list().to_vec()),
+        dispatches
+    );
+    assert_eq!(
+        restored.read_with(cx, |o, _| o.run("lead").unwrap().requests["legacy-retry"]
+            .signature
+            .clone()),
+        legacy_signature
+    );
+    let weak = restored.downgrade();
+    let mut changed = input.as_object().cloned().unwrap();
+    changed.insert("prompt".into(), json!("Different work"));
+    let conflict = finish(
+        cx,
+        cx.spawn(|mut cx| async move {
+            handle(&weak, "lead", "legacy-retry", "delegate", &changed, &mut cx).await
+        }),
+    )
+    .unwrap_err();
+    assert!(conflict.contains("different input"));
+}
+
+#[gpui::test]
+fn restored_typescript_approval_receipt_accepts_ordinary_integral_spelling(
+    cx: &mut TestAppContext,
+) {
+    let f = setup(cx);
+    f.start(cx);
+    f.delegate(cx, &["a"], json!({})).unwrap();
+    let task = f.tasks(cx)[0].clone();
+    f.host.with_session(&task.session_id, |worker| {
+        worker.blocks = vec![approval(7, "Owned fixture")]
+    });
+    let input = json!({"taskId":task.id,"requestId":7.0,"decision":"deny"});
+    let result = f
+        .call_id_now(cx, "respond", input.clone(), "legacy-approval")
+        .unwrap();
+    assert_eq!(f.host.approvals.borrow().len(), 1);
+    let mut legacy_input = input.clone();
+    legacy_input["requestId"] = json!(7);
+    let legacy_signature =
+        serde_json::to_string(&json!({"action":"respond","input":legacy_input})).unwrap();
+    f.store
+        .saved
+        .borrow_mut()
+        .get_mut("lead")
+        .unwrap()
+        .requests
+        .get_mut("legacy-approval")
+        .unwrap()
+        .signature = legacy_signature.clone();
+    let restored = orchestrator(f.store.clone(), f.host.clone(), cx);
+    let weak = restored.downgrade();
+    finish(
+        cx,
+        cx.spawn(|mut cx| async move { hydrate(&weak, "lead", &mut cx).await }),
+    )
+    .unwrap();
+    let weak = restored.downgrade();
+    let object = input.as_object().cloned().unwrap();
+    assert_eq!(
+        finish(
+            cx,
+            cx.spawn(|mut cx| async move {
+                handle(
+                    &weak,
+                    "lead",
+                    "legacy-approval",
+                    "respond",
+                    &object,
+                    &mut cx,
+                )
+                .await
+            })
+        )
+        .expect("TypeScript serializes valid request ID 7.0 as 7"),
+        result
+    );
+    assert_eq!(f.host.approvals.borrow().len(), 1);
+    assert_eq!(
+        restored.read_with(cx, |o, _| {
+            o.run("lead").unwrap().requests["legacy-approval"]
+                .signature
+                .clone()
+        }),
+        legacy_signature
+    );
+    let weak = restored.downgrade();
+    let mut changed = input.as_object().cloned().unwrap();
+    changed.insert("requestId".into(), json!(8));
+    assert!(
+        finish(
+            cx,
+            cx.spawn(|mut cx| async move {
+                handle(
+                    &weak,
+                    "lead",
+                    "legacy-approval",
+                    "respond",
+                    &changed,
+                    &mut cx,
+                )
+                .await
+            })
+        )
+        .unwrap_err()
+        .contains("different input")
+    );
+}
+
+#[gpui::test]
 fn rejects_conflicting_reuse_of_an_in_flight_request_id(cx: &mut TestAppContext) {
     let f = setup(cx);
     f.start(cx);

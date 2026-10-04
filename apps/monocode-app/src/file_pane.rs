@@ -1,65 +1,34 @@
-//! An editor surface pane: its file tabs and the active file, drawn with
-//! `monocode-editor`. Port of the editor half of SurfaceTabs.tsx and
-//! FilePane.tsx for M1: a file opens in the code editor (Cmd+S saves it), a
-//! session's changes and the working tree's changes open as diffs. Plans,
-//! commits, terminals, and images land with their feature ports.
-
-use std::path::Path;
-
+//! Native file surfaces and their workspace tab strip.
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, WeakEntity, Window, div,
+    AnyView, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, WeakEntity, Window, div,
 };
-use monocode_editor::{CodeEditor, ColorScheme, DiffFile, DiffView, EditorTheme, SaveRequest};
-use monocode_engine::runtime::Engine;
-use monocode_engine::workspace::{Workspace, WorkspaceEvent};
-use monocode_layout::{EditorPane, FilePaneTab, GitFileDiffKind, find_surface_pane};
-use monocode_ui::widgets::{icon_button, spinner, tooltip};
-use monocode_ui::{Theme, UiStyled as _, file_type_icon, u};
-
-/// What the pane shows for its active file.
-enum Content {
-    Loading,
-    Editor(Entity<CodeEditor>),
-    Diff(Entity<DiffView>),
-    Message(SharedString),
-}
+use monocode_app::boot::AppServices;
+use monocode_engine::{
+    remote::RemoteGlobal,
+    runtime::Engine,
+    submit::Submit,
+    workspace::{Terminals, Workspace, WorkspaceEvent},
+};
+use monocode_layout::{EditorPane, find_surface_pane};
+use monocode_ui::Theme;
+use monocode_view_files::{
+    EditorNavigation, EditorSettings, ExternalSurface, FilePane as NativeFilePane, FilePaneEvent,
+    SurfaceRequest,
+};
+use monocode_view_workbench::panes::{
+    pane_tree::PaneTree,
+    surface_tabs::{SurfaceTabActions, SurfaceTabs, SurfaceTabsEvent, SurfaceTabsProps},
+};
+use std::{rc::Rc, sync::Arc};
 
 pub struct FilePane {
     pane_id: String,
     workspace: WeakEntity<Workspace>,
-    /// The active file the content was loaded for, by id and path.
-    loaded: Option<(String, String)>,
-    content: Content,
-    load: Option<Task<()>>,
+    pane: Option<Entity<NativeFilePane>>,
+    tabs: Entity<SurfaceTabs>,
+    tree: Option<WeakEntity<PaneTree>>,
     _subscriptions: Vec<Subscription>,
-}
-
-/// The editor colors from the app theme.
-fn editor_theme(cx: &gpui::App) -> EditorTheme {
-    let theme = Theme::of(cx);
-    let scheme = if theme.is_dark() {
-        ColorScheme::Dark
-    } else {
-        ColorScheme::Light
-    };
-    EditorTheme::new(scheme, theme.colors.background_base, theme.colors.content)
-}
-
-/// `path` relative to `cwd`, for git and checkpoint reads.
-fn relative_to(path: &str, cwd: &str) -> String {
-    Path::new(path)
-        .strip_prefix(cwd)
-        .map(|relative| relative.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string())
-}
-
-fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string())
 }
 
 impl FilePane {
@@ -69,447 +38,630 @@ impl FilePane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut subscriptions = Vec::new();
-        if let Some(entity) = workspace.upgrade() {
-            subscriptions
-                .push(cx.observe_in(&entity, window, |this, _, window, cx| this.sync(window, cx)));
-            subscriptions.push(cx.subscribe_in(
-                &entity,
+        let tabs = cx
+            .new(|cx| SurfaceTabs::new(SurfaceTabsProps::default(), Rc::new(NativeTabActions), cx));
+        let mut this = Self {
+            pane_id,
+            workspace,
+            pane: None,
+            tabs: tabs.clone(),
+            tree: None,
+            _subscriptions: Vec::new(),
+        };
+        this._subscriptions.push(cx.subscribe_in(
+            &tabs,
+            window,
+            |this, _, event: &SurfaceTabsEvent, window, cx| {
+                if let SurfaceTabsEvent::PaneDragStart { position } = event {
+                    if let Some(tree) = this.tree.as_ref().and_then(|tree| tree.upgrade()) {
+                        tree.update(cx, |tree, cx| {
+                            tree.start_pane_drag(&this.pane_id, *position, window, cx)
+                        });
+                    }
+                    return;
+                }
+                let Some(workspace) = this.workspace.upgrade() else {
+                    return;
+                };
+                let pane_id = this.pane_id.clone();
+                let dock = this.is_dock(cx);
+                workspace.update(cx, |workspace, cx| match event {
+                    SurfaceTabsEvent::Select(id) => {
+                        if dock {
+                            workspace.select_project_terminal(id, cx)
+                        } else {
+                            workspace.select_file_surface(&pane_id, id, cx)
+                        }
+                    }
+                    SurfaceTabsEvent::Close(id) => {
+                        if dock {
+                            workspace.close_project_terminal(id, cx).detach()
+                        } else {
+                            workspace.close_file(&pane_id, id, cx).detach()
+                        }
+                    }
+                    SurfaceTabsEvent::CloseOthers(id) => {
+                        if dock {
+                            workspace.close_other_project_terminals(id, cx).detach()
+                        } else {
+                            workspace.close_other_files(&pane_id, id, cx).detach()
+                        }
+                    }
+                    SurfaceTabsEvent::Pin(id) => workspace.pin_file(id, cx),
+                    SurfaceTabsEvent::Reorder { ids, .. } => {
+                        if dock {
+                            workspace.reorder_project_terminals(ids, cx)
+                        } else {
+                            workspace.reorder_files(&pane_id, ids, cx)
+                        }
+                    }
+                    SurfaceTabsEvent::PaneDragStart { .. } => {}
+                });
+            },
+        ));
+        if let Some(workspace) = this.workspace.upgrade() {
+            this._subscriptions
+                .push(cx.observe_in(&workspace, window, |this, _, window, cx| {
+                    this.sync(window, cx)
+                }));
+            this._subscriptions.push(cx.subscribe_in(
+                &workspace,
                 window,
                 |this, _, event: &WorkspaceEvent, window, cx| {
                     if let WorkspaceEvent::EditorNavigation(target) = event
-                        && let Content::Editor(editor) = &this.content
-                        && this
-                            .loaded
-                            .as_ref()
-                            .is_some_and(|(_, path)| *path == target.path)
+                        && let Some(pane) = &this.pane
                     {
-                        let line = target.line.max(1) as usize;
-                        let column = target.column.map(|column| column.max(1) as usize);
-                        editor.update(cx, |editor, cx| {
-                            editor.reveal_position(line, column, window, cx)
+                        let navigation = EditorNavigation {
+                            path: target.path.clone(),
+                            line: target.line.max(1) as usize,
+                            column: target.column.map(|column| column.max(1) as usize),
+                            token: target.token as u64,
+                        };
+                        pane.update(cx, |pane, cx| {
+                            pane.set_navigation(Some(navigation), window, cx)
                         });
                     }
                 },
             ));
         }
-        let mut pane = Self {
-            pane_id,
-            workspace,
-            loaded: None,
-            content: Content::Loading,
-            load: None,
-            _subscriptions: subscriptions,
-        };
-        pane.sync(window, cx);
-        pane
+        let sessions = Engine::sessions(cx);
+        this._subscriptions
+            .push(cx.observe_in(&sessions, window, |this, _, window, cx| {
+                this.sync(window, cx)
+            }));
+        this.sync(window, cx);
+        this
     }
 
-    /// This pane's files, from whichever tab holds it.
-    fn pane(&self, cx: &gpui::App) -> Option<EditorPane> {
+    pub fn pane_id(&self) -> &str {
+        &self.pane_id
+    }
+    pub fn set_tree(&mut self, tree: Option<WeakEntity<PaneTree>>, _: &mut Context<Self>) {
+        self.tree = tree;
+    }
+
+    fn is_dock(&self, cx: &App) -> bool {
+        self.workspace.upgrade().is_some_and(|workspace| {
+            workspace
+                .read(cx)
+                .terminals()
+                .read(cx)
+                .docks()
+                .iter()
+                .any(|dock| dock.pane.id == self.pane_id)
+        })
+    }
+
+    fn model(&self, cx: &App) -> Option<EditorPane> {
         let workspace = self.workspace.upgrade()?;
         let workspace = workspace.read(cx);
         workspace
             .tabs()
             .iter()
             .find_map(|tab| find_surface_pane(tab, &self.pane_id).map(|(_, pane)| pane.clone()))
+            .or_else(|| {
+                workspace
+                    .terminals()
+                    .read(cx)
+                    .docks()
+                    .iter()
+                    .find(|dock| dock.pane.id == self.pane_id)
+                    .map(|dock| dock.pane.clone())
+            })
     }
 
-    fn active_file(&self, cx: &gpui::App) -> Option<FilePaneTab> {
-        let pane = self.pane(cx)?;
-        pane.files
-            .iter()
-            .find(|file| file.id == pane.active_file_id)
-            .or(pane.files.first())
-            .cloned()
-    }
-
-    /// Load the active file when it changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(file) = self.active_file(cx) else {
-            return;
-        };
-        let key = (file.id.clone(), file.path.clone());
-        if self.loaded.as_ref() == Some(&key) {
-            return;
-        }
-        // A session review that moved to another file scrolls instead of
-        // reloading.
-        if let (Content::Diff(diff), Some((id, _))) = (&self.content, &self.loaded)
-            && *id == file.id
-        {
-            let target = relative_to(&file.path, &file.cwd);
-            diff.update(cx, |diff, cx| diff.scroll_to_file(&target, cx));
-            self.loaded = Some(key);
-            cx.notify();
-            return;
-        }
-        self.loaded = Some(key);
-        self.content = Content::Loading;
-        self.load = Some(self.start_load(file, window, cx));
-        cx.notify();
-    }
-
-    fn start_load(
-        &mut self,
-        file: FilePaneTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        if file.terminal == Some(true) {
-            return self.message("Terminal tabs land with the terminal dock.", cx);
-        }
-        if file.plan.is_some() || file.commit.is_some() || file.release_notes.is_some() {
-            return self.message("This tab lands with its feature port.", cx);
-        }
-        if file.agent.is_some() {
-            return self.message("Worker transcripts land with orchestration.", cx);
-        }
-        if let Some(source) = file.session_changes.clone() {
-            return self.load_session_changes(source.session_id, file, window, cx);
-        }
-        if file.changes == Some(true) {
-            return self.load_working_tree(file, window, cx);
-        }
-        if file.review == Some(true) {
-            let staged = file.change_kind == Some(GitFileDiffKind::Staged);
-            return self.load_file_diff(file, staged, window, cx);
-        }
-        self.load_editor(file, window, cx)
-    }
-
-    fn message(&mut self, text: &'static str, cx: &mut Context<Self>) -> Task<()> {
-        self.content = Content::Message(text.into());
-        cx.notify();
-        Task::ready(())
-    }
-
-    fn show_diff(&mut self, files: Vec<DiffFile>, focus: Option<String>, cx: &mut Context<Self>) {
-        if files.is_empty() {
-            self.content = Content::Message("No changes".into());
-            cx.notify();
-            return;
-        }
-        let theme = editor_theme(cx);
-        let diff = cx.new(|cx| DiffView::new(files, theme, cx));
-        if let Some(focus) = focus {
-            diff.update(cx, |diff, cx| diff.scroll_to_file(&focus, cx));
-        }
-        self.content = Content::Diff(diff);
-        cx.notify();
-    }
-
-    /// A session's changes from its checkpoint, every file in one review.
-    fn load_session_changes(
-        &mut self,
-        session_id: String,
-        file: FilePaneTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        let checkpoints = Engine::checkpoints(cx);
-        let cwd = file.cwd.clone();
-        let status = checkpoints.status(&session_id, &cwd);
-        let focus = (file.path != file.cwd).then(|| relative_to(&file.path, &cwd));
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(status) = status.await else {
-                this.update(cx, |this, cx| {
-                    this.content = Content::Message("Could not read this session's changes".into());
-                    cx.notify();
-                })
-                .ok();
-                return;
-            };
-            let mut files = Vec::new();
-            for changed in status.files {
-                let diff = cx
-                    .update(|_, _| checkpoints.file_diff(&session_id, &cwd, &changed.relative))
-                    .ok();
-                let Some(diff) = diff else {
-                    return;
-                };
-                if let Ok(diff) = diff.await {
-                    let mut file =
-                        DiffFile::from_texts(diff.relative.clone(), &diff.original, &diff.current);
-                    file.binary = diff.binary;
-                    file.too_large = diff.too_large;
-                    files.push(file);
-                }
-            }
-            this.update(cx, |this, cx| this.show_diff(files, focus, cx))
-                .ok();
-        })
-    }
-
-    /// Every working-tree change in one review.
-    fn load_working_tree(
-        &mut self,
-        file: FilePaneTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        let cwd = file.cwd.clone();
-        let focus = (file.path != file.cwd).then(|| relative_to(&file.path, &cwd));
-        cx.spawn_in(window, async move |this, cx| {
-            let files = smol::unblock(move || {
-                let index = monocode_git::fs::git_diff_files(cwd.clone());
-                index
-                    .files
-                    .into_iter()
-                    .filter_map(|changed| {
-                        let staged = changed.staged && !changed.unstaged;
-                        monocode_git::fs::git_file_diff(cwd.clone(), changed.relative, staged).ok()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await;
-            let files = files
-                .into_iter()
-                .map(|diff| {
-                    let mut file =
-                        DiffFile::from_texts(diff.relative.clone(), &diff.original, &diff.current);
-                    file.binary = diff.binary;
-                    file.too_large = diff.too_large;
-                    file
-                })
-                .collect();
-            this.update(cx, |this, cx| this.show_diff(files, focus, cx))
-                .ok();
-        })
-    }
-
-    /// One file's staged or unstaged diff.
-    fn load_file_diff(
-        &mut self,
-        file: FilePaneTab,
-        staged: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        let cwd = file.cwd.clone();
-        let relative = relative_to(&file.path, &cwd);
-        cx.spawn_in(window, async move |this, cx| {
-            let diff =
-                smol::unblock(move || monocode_git::fs::git_file_diff(cwd, relative, staged)).await;
-            this.update_in(cx, |this, window, cx| match diff {
-                Ok(diff) => {
-                    let mut file =
-                        DiffFile::from_texts(diff.relative.clone(), &diff.original, &diff.current);
-                    file.binary = diff.binary;
-                    file.too_large = diff.too_large;
-                    this.show_diff(vec![file], None, cx);
-                }
-                // A file outside the repository has no diff: show the file.
-                Err(_) => this.load = Some(this.load_editor(file, window, cx)),
-            })
-            .ok();
-        })
-    }
-
-    /// A file in the code editor. Cmd+S writes it back.
-    fn load_editor(
-        &mut self,
-        file: FilePaneTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        let path = file.path.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let read_path = path.clone();
-            let text = smol::unblock(move || monocode_git::fs::read_text_file(read_path)).await;
-            this.update_in(cx, |this, window, cx| match text {
-                Ok(text) => {
-                    let theme = editor_theme(cx);
-                    let editor = cx.new(|cx| {
-                        let mut editor = CodeEditor::new(path.clone(), &text, theme, window, cx);
-                        editor.on_save(std::rc::Rc::new(
-                            |request: SaveRequest, _: &mut Window, cx: &mut gpui::App| {
-                                let path = request.path.to_string();
-                                let contents = request.contents;
-                                cx.background_spawn(async move {
-                                    monocode_git::fs::write_text_file(path, contents)
-                                        .map_err(anyhow::Error::msg)
-                                })
-                            },
-                        ));
-                        editor
-                    });
-                    this.content = Content::Editor(editor);
-                    this.reveal_pending(window, cx);
-                    cx.notify();
-                }
-                Err(error) => {
-                    this.content = Content::Message(error.into());
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-    }
-
-    /// Apply a navigation the workspace asked for before the file loaded.
-    fn reveal_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(model) = self.model(cx) else { return };
         let Some(workspace) = self.workspace.upgrade() else {
             return;
         };
-        let Some(target) = workspace.read(cx).editor_navigation().cloned() else {
-            return;
+        let focused = workspace
+            .read(cx)
+            .active_tab()
+            .is_some_and(|tab| tab.focused_id == self.pane_id)
+            || self.is_dock(cx) && workspace.read(cx).terminals().read(cx).is_focused();
+        let settings = AppServices::try_global(cx).map(|services| &services.kv);
+        let unified = settings.is_some_and(|kv| {
+            monocode_settings::settings_store::load_diff_viewer(kv)
+                == monocode_core::settings::DiffViewer::Unified
+        });
+        let editor_settings = settings
+            .map(|kv| EditorSettings {
+                autosave: monocode_settings::settings_store::load_autosave(kv),
+                format_on_save: monocode_settings::settings_store::load_format_on_save(kv),
+            })
+            .unwrap_or_default();
+        let sessions = Rc::new(Engine::sessions(cx).read(cx).all().to_vec());
+        let show_tabs = self.is_dock(cx)
+            || workspace.read(cx).active_tab().is_none_or(|tab| {
+                tab.editor_panes.len() + tab.terminal_panes.len() != 1
+                    || !monocode_layout::leaf_ids(&tab.layout)
+                        .iter()
+                        .all(|id| id == &self.pane_id)
+            });
+        let props = SurfaceTabsProps {
+            files: model.files.clone(),
+            active_file_id: model.active_file_id.clone(),
+            dirty_file_ids: workspace.read(cx).dirty_files().clone(),
+            file_error_counts: workspace
+                .read(cx)
+                .file_error_counts()
+                .iter()
+                .map(|(id, count)| (id.clone(), (*count).max(0) as usize))
+                .collect(),
+            can_pin: !self.is_dock(cx),
+            can_drag_pane: !self.is_dock(cx),
+            ..Default::default()
         };
-        if let Content::Editor(editor) = &self.content
-            && self
-                .loaded
-                .as_ref()
-                .is_some_and(|(_, path)| *path == target.path)
-        {
-            let line = target.line.max(1) as usize;
-            let column = target.column.map(|column| column.max(1) as usize);
-            editor.update(cx, |editor, cx| {
-                editor.reveal_position(line, column, window, cx)
-            });
-        }
-    }
-
-    fn select(&mut self, file_id: &str, cx: &mut Context<Self>) {
-        let pane_id = self.pane_id.clone();
-        if let Some(workspace) = self.workspace.upgrade() {
-            workspace.update(cx, |workspace, cx| {
-                workspace.select_file_surface(&pane_id, file_id, cx)
-            });
-        }
-    }
-
-    fn close(&mut self, file_id: &str, cx: &mut Context<Self>) {
-        let pane_id = self.pane_id.clone();
-        if let Some(workspace) = self.workspace.upgrade() {
-            workspace
-                .update(cx, |workspace, cx| {
-                    workspace.close_file(&pane_id, file_id, cx)
-                })
-                .detach();
-        }
-    }
-
-    fn render_tabs(&self, pane: &EditorPane, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
-        let c = theme.colors;
-        let mut strip = div()
-            .id(SharedString::from(format!("surface-tabs-{}", self.pane_id)))
-            .flex()
-            .flex_none()
-            .h(u(theme.metrics.toolbar_height))
-            .items_center()
-            .gap(u(2.))
-            .px(u(6.))
-            .border_b_1()
-            .border_color(c.stroke)
-            .overflow_x_scroll();
-        for file in &pane.files {
-            let active = file.id == pane.active_file_id;
-            let name = if file.session_changes.is_some() {
-                "Session changes".to_string()
-            } else if file.changes == Some(true) {
-                "Changes".to_string()
-            } else {
-                file_name(&file.path)
-            };
-            let select_id = file.id.clone();
-            let close_id = file.id.clone();
-            let group = SharedString::from(format!("surface-tab-{}", file.id));
-            let mut tab = div()
-                .id(SharedString::from(format!("surface-tab-{}", file.id)))
-                .group(group.clone())
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(u(6.))
-                .h(u(26.))
-                .pl(u(8.))
-                .pr(u(4.))
-                .rounded(u(theme.radius.md))
-                .text_px(theme.text.label)
-                .child(file_type_icon(name.clone()).size(14.))
-                .child({
-                    let label = div().max_w(u(180.)).truncate().child(name.clone());
-                    if file.preview == Some(true) {
-                        label.italic()
-                    } else {
-                        label
-                    }
-                })
-                .child(
-                    icon_button(
-                        SharedString::from(format!("surface-close-{}", file.id)),
-                        monocode_ui::IconName::X,
-                    )
-                    .size(18.)
-                    .icon_size(11.)
-                    .tooltip("Close")
-                    .on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.close(&close_id, cx)),
-                    ),
+        self.tabs.update(cx, |tabs, cx| tabs.set_props(props, cx));
+        if self.pane.is_none() {
+            let data = crate::adapters::files::app_files(cx);
+            let factory = Rc::new(external_surface);
+            let pane =
+                cx.new(|cx| NativeFilePane::new(data, model.clone(), Some(factory), window, cx));
+            let tabs = self.tabs.clone();
+            pane.update(cx, |pane, cx| {
+                pane.set_tab_strip(
+                    Some(Rc::new(move |_, _, _| tabs.clone().into_any_element())),
+                    cx,
                 )
-                .tooltip(tooltip(file.path.clone()))
-                .on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.select(&select_id, cx)),
-                );
-            if active {
-                tab = tab.bg(c.selection).text_color(c.content);
-            } else {
-                let hover = theme.content(0.05);
-                tab = tab
-                    .text_color(theme.content(0.55))
-                    .hover(move |s| s.bg(hover));
+            });
+            if let Some(source) = crate::session_threads::model_menu_source(cx) {
+                pane.update(cx, |pane, cx| pane.set_plan_model_source(source, cx));
             }
-            strip = strip.child(tab);
+            let target = self.workspace.clone();
+            self._subscriptions.push(cx.subscribe(
+                &pane,
+                move |_, _, event: &FilePaneEvent, cx| {
+                    let Some(workspace) = target.upgrade() else {
+                        return;
+                    };
+                    match event {
+                        FilePaneEvent::Focus { pane_id } => {
+                            workspace.update(cx, |workspace, cx| {
+                                let dock_file = workspace
+                                    .terminals()
+                                    .read(cx)
+                                    .docks()
+                                    .iter()
+                                    .find(|dock| &dock.pane.id == pane_id)
+                                    .map(|dock| dock.pane.active_file_id.clone());
+                                if let Some(file) = dock_file {
+                                    workspace.select_project_terminal(&file, cx)
+                                } else {
+                                    workspace.focus_pane(pane_id, cx)
+                                }
+                            })
+                        }
+                        FilePaneEvent::DirtyChanged { file_id, dirty } => workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.file_dirty_change(file_id, *dirty, cx)
+                            }),
+                        FilePaneEvent::OpenFile { path } => workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.open_file(path, None, Default::default(), cx)
+                            })
+                            .detach(),
+                        FilePaneEvent::UpdatePlan {
+                            session_id,
+                            block_id,
+                            text,
+                        } => update_plan(session_id, block_id, text, cx),
+                        FilePaneEvent::BuildPlan {
+                            session_id,
+                            block_id,
+                            target,
+                        } => build_plan(session_id, block_id, target.clone(), cx),
+                        FilePaneEvent::AddToChat(selection) => {
+                            Submit::global(cx).update(cx, |submit, cx| {
+                                submit.request_add_to_chat(
+                                    monocode_engine::submit::chat_context::ChatContextItem::Code {
+                                        path: selection.path.clone(),
+                                        start_line: selection.start_line as i64,
+                                        end_line: selection.end_line as i64,
+                                    },
+                                    cx,
+                                )
+                            });
+                        }
+                    }
+                },
+            ));
+            self.pane = Some(pane);
         }
-        strip
+        self.pane.as_ref().unwrap().update(cx, |pane, cx| {
+            pane.set_pane(model, window, cx);
+            pane.set_unified_diffs(unified, window, cx);
+            pane.set_sessions(sessions, window, cx);
+            pane.set_settings(editor_settings, window, cx);
+            pane.set_show_tabs(show_tabs, cx);
+            pane.set_focused(focused, window, cx);
+        });
+        cx.notify();
     }
 }
 
 impl Render for FilePane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
-        let tabs = self
-            .pane(cx)
-            .map(|pane| self.render_tabs(&pane, cx).into_any_element());
-        let body: AnyElement = match &self.content {
-            Content::Loading => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .child(spinner(SharedString::from(format!(
-                    "file-{}",
-                    self.pane_id
-                ))))
-                .into_any_element(),
-            Content::Editor(editor) => editor.clone().into_any_element(),
-            Content::Diff(diff) => diff.clone().into_any_element(),
-            Content::Message(text) => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_px(theme.text.body)
-                .text_color(theme.content(0.45))
-                .child(text.clone())
-                .into_any_element(),
-        };
-        let pane_id = self.pane_id.clone();
-        let workspace = self.workspace.clone();
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id(SharedString::from(format!("file-pane-{}", self.pane_id)))
             .flex()
             .flex_col()
-            .flex_1()
+            .size_full()
             .min_h_0()
             .min_w_0()
-            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                if let Some(workspace) = workspace.upgrade() {
-                    workspace.update(cx, |workspace, cx| workspace.focus_pane(&pane_id, cx));
-                }
+            .children(self.pane.clone())
+    }
+}
+
+fn remote_plan_session(session_id: &str, cx: &App) -> Option<monocode_core::Session> {
+    Engine::sessions(cx)
+        .read(cx)
+        .get(session_id)
+        .filter(|session| {
+            monocode_layout::paths::is_remote_project_path(&session.cwd)
+                || RemoteGlobal::is_remote_session(session, cx)
+        })
+        .cloned()
+}
+
+fn update_plan(session_id: &str, block_id: &str, text: &str, cx: &mut App) {
+    // Remote plan sources are read-only, as in the original file editor.
+    if remote_plan_session(session_id, cx).is_some() {
+        return;
+    }
+    Submit::global(cx).update(cx, |submit, cx| {
+        submit.update_plan(session_id, block_id, text, cx)
+    });
+}
+
+fn build_plan(
+    session_id: &str,
+    block_id: &str,
+    target: Option<monocode_core::block::PlanBuildTarget>,
+    cx: &mut App,
+) {
+    if let Some(shell) = remote_plan_session(session_id, cx) {
+        if let Some(sessions) = RemoteGlobal::try_global(cx).map(|remote| remote.sessions.clone()) {
+            if sessions.read(cx).session(session_id).is_none() {
+                sessions.update(cx, |sessions, cx| {
+                    sessions.open(&shell, false, cx);
+                });
+            }
+            RemoteGlobal::build_plan(session_id, block_id, target.as_ref(), cx);
+        }
+        return;
+    }
+    Submit::global(cx).update(cx, |submit, cx| {
+        submit.build_plan(session_id, block_id, target, cx)
+    });
+}
+
+fn external_surface(
+    request: &SurfaceRequest<'_>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyView> {
+    let file = request.file;
+    match request.kind {
+        ExternalSurface::Terminal => {
+            let pty = Terminals::global(cx).attach(&file.id, &file.cwd, cx);
+            let theme = terminal_theme(cx);
+            let terminal = cx.new(|cx| {
+                let terminal = monocode_terminal_view::TerminalView::new(pty, theme, window, cx);
+                let appearance = cx.observe_global::<Theme>(|terminal, cx| {
+                    let theme = terminal_theme(cx);
+                    terminal.set_theme(theme, cx);
+                });
+                cx.on_release(move |_, _| drop(appearance)).detach();
+                terminal
+            });
+            cx.subscribe(
+                &terminal,
+                |_, event: &monocode_terminal_view::TerminalEvent, cx| {
+                    if let monocode_terminal_view::TerminalEvent::OpenUrl(url) = event {
+                        cx.open_url(url);
+                    }
+                },
+            )
+            .detach();
+            Some(terminal.into())
+        }
+        ExternalSurface::Agent => {
+            let id = file.agent.as_ref()?.session_id.clone();
+            Some(cx.new(|cx| WorkerSurface::new(id, cx)).into())
+        }
+        ExternalSurface::ReleaseNotes => {
+            let view = cx.new(monocode_markdown::MarkdownView::new);
+            let markdown = include_str!("../../../CHANGELOG.md");
+            view.update(cx, |view, cx| view.set_text(markdown, cx));
+            Some(view.into())
+        }
+        _ => crate::adapters::scm::diff_surface(request, window, cx),
+    }
+}
+
+pub fn terminal_theme(cx: &App) -> monocode_terminal_view::TerminalTheme {
+    let theme = Theme::of(cx);
+    let mut terminal = if theme.is_dark() {
+        monocode_terminal_view::TerminalTheme::dark()
+    } else {
+        monocode_terminal_view::TerminalTheme::light()
+    };
+    terminal.foreground = theme.colors.content.into();
+    terminal.base_background = theme.colors.background_base.into();
+    terminal.cursor = theme.colors.accent.into();
+    terminal.font_family = theme.fonts.mono.clone();
+    terminal
+}
+
+struct NativeTabActions;
+impl SurfaceTabActions for NativeTabActions {
+    fn open_with_default_app(&self, path: &str, cx: &mut App) -> Task<Result<(), String>> {
+        native_path_action(path, false, cx)
+    }
+    fn reveal(&self, path: &str, cx: &mut App) -> Task<Result<(), String>> {
+        native_path_action(path, true, cx)
+    }
+}
+fn native_path_action(path: &str, reveal: bool, cx: &App) -> Task<Result<(), String>> {
+    let path = path.to_string();
+    cx.background_spawn(async move {
+        let mut command = if cfg!(target_os = "macos") {
+            std::process::Command::new("open")
+        } else if cfg!(target_os = "windows") {
+            std::process::Command::new("explorer")
+        } else {
+            std::process::Command::new("xdg-open")
+        };
+        if reveal && cfg!(target_os = "macos") {
+            command.arg("-R");
+        }
+        let status = command
+            .arg(path)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("The file action exited with {status}"))
+        }
+    })
+}
+
+struct WorkerSurface {
+    session_id: String,
+    view: Entity<monocode_view_workbench::panes::agent_tab_view::AgentTabView>,
+    transcript: Entity<monocode_view_transcript::transcript::TranscriptView>,
+    _subscription: Subscription,
+}
+impl WorkerSurface {
+    fn new(session_id: String, cx: &mut Context<Self>) -> Self {
+        let view =
+            cx.new(|_| monocode_view_workbench::panes::agent_tab_view::AgentTabView::new("Agent"));
+        let transcript = cx.new(monocode_view_transcript::transcript::TranscriptView::new);
+        let sessions = Engine::sessions(cx);
+        let subscription = cx.observe(&sessions, |this, _, cx| this.sync(cx));
+        let mut this = Self {
+            session_id,
+            view,
+            transcript,
+            _subscription: subscription,
+        };
+        this.sync(cx);
+        this
+    }
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        let session = Engine::sessions(cx).read(cx).get(&self.session_id).cloned();
+        if let Some(session) = session {
+            let model = monocode_view_workbench::panes::agent_tab_view::AgentTabSession {
+                id: session.id.clone(),
+                title: session.title.clone(),
+                harness: session.harness,
+                cwd: session.cwd.clone(),
+                model_name: session.model.clone(),
+            };
+            self.transcript.update(cx, |view, cx| {
+                view.set_config(
+                    monocode_view_transcript::transcript::TranscriptConfig {
+                        managed: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                view.set_session(Arc::new(session), cx);
+            });
+            let transcript = self.transcript.clone().into();
+            self.view.update(cx, |view, cx| {
+                view.set_session(Some(model), cx);
+                view.set_transcript(Some(transcript), cx);
+            });
+        } else {
+            self.view.update(cx, |view, cx| view.set_session(None, cx));
+        }
+        cx.notify();
+    }
+}
+impl Render for WorkerSurface {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.view.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use monocode_engine::workspace::terminals::PtyBackend;
+    use monocode_terminal::pty::PtyEvents;
+    use monocode_terminal_view::TerminalView;
+    use monocode_ui::{AppearanceSettings, ThemePreference, set_appearance};
+    use monocode_view_files::{LocalFiles, file_pane::Surface};
+    use parking_lot::Mutex;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum PtyCall {
+        Spawn(String, String),
+        Write(String, Vec<u8>),
+        Kill(String),
+        KillAll,
+    }
+
+    #[derive(Default)]
+    struct ControlledPty {
+        calls: Mutex<Vec<PtyCall>>,
+        events: Mutex<Option<Arc<dyn PtyEvents>>>,
+    }
+
+    impl ControlledPty {
+        fn output(&self, id: &str, bytes: &[u8]) {
+            self.events.lock().as_ref().unwrap().data(id, bytes);
+        }
+    }
+
+    impl PtyBackend for ControlledPty {
+        fn spawn(&self, id: &str, cwd: &str, _: u16, _: u16) -> Result<(), String> {
+            self.calls
+                .lock()
+                .push(PtyCall::Spawn(id.into(), cwd.into()));
+            self.output(id, b"ready\r\n");
+            Ok(())
+        }
+
+        fn write(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
+            self.calls
+                .lock()
+                .push(PtyCall::Write(id.into(), bytes.into()));
+            Ok(())
+        }
+
+        fn resize(&self, _: &str, _: u16, _: u16) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn status(&self, _: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn kill(&self, id: &str) -> Result<(), String> {
+            self.calls.lock().push(PtyCall::Kill(id.into()));
+            Ok(())
+        }
+
+        fn kill_all(&self) -> Result<(), String> {
+            self.calls.lock().push(PtyCall::KillAll);
+            Ok(())
+        }
+    }
+
+    #[gpui::test]
+    fn cached_terminal_follows_appearance_without_restarting_the_pty(cx: &mut TestAppContext) {
+        cx.skip_drawing();
+        let backend = Arc::new(ControlledPty::default());
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            monocode_ui::init(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Dark,
+                    ..Default::default()
+                },
+                cx,
+            );
+            let backend = backend.clone();
+            Terminals::init_with(
+                move |events| {
+                    *backend.events.lock() = Some(events);
+                    backend
+                },
+                cx,
+            );
+        });
+        let file = monocode_layout::new_terminal_file("/isolated-project", None, None);
+        let id = file.id.clone();
+        let window = cx.add_window(|window, cx| {
+            NativeFilePane::new(
+                Rc::new(LocalFiles::new()),
+                monocode_layout::new_editor_pane(file),
+                Some(Rc::new(external_surface)),
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let terminal = window
+            .update(cx, |pane, _, _| match pane.surface(&id) {
+                Some(Surface::External(view)) => view.clone().downcast::<TerminalView>().unwrap(),
+                _ => panic!("the terminal tab must use the native terminal factory"),
             })
-            .children(tabs)
-            .child(div().flex().flex_col().flex_1().min_h_0().child(body))
+            .unwrap();
+        let (original, text, grid) = terminal.read_with(cx, |terminal, _| {
+            (
+                terminal.theme().clone(),
+                terminal.emulator().screen_text(),
+                terminal.grid_size(),
+            )
+        });
+        assert!(text.contains("ready"));
+        terminal.update(cx, |terminal, cx| terminal.input(b"before", cx));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            set_appearance(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Light,
+                    accent_color: Some("#cc5500".into()),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |pane, _, cx| {
+                let Some(Surface::External(cached)) = pane.surface(&id) else {
+                    panic!("an appearance change must retain the terminal surface");
+                };
+                assert_eq!(cached.entity_id(), terminal.entity_id());
+                let cached = terminal.read(cx);
+                assert_eq!(cached.theme(), &terminal_theme(cx));
+                assert_ne!(cached.theme(), &original);
+                assert_eq!(cached.emulator().screen_text(), text);
+                assert_eq!(cached.grid_size(), grid);
+                assert!(!cached.has_exited());
+                assert_eq!(Terminals::global(cx).open_ids(), [id.clone()].into());
+            })
+            .unwrap();
+        backend.output(&id, b"still attached\r\n");
+        terminal.update(cx, |terminal, cx| terminal.input(b"after", cx));
+        cx.run_until_parked();
+        assert!(terminal.read_with(cx, |terminal, _| {
+            terminal.emulator().screen_text().contains("still attached")
+        }));
+        assert_eq!(
+            backend.calls.lock().as_slice(),
+            [
+                PtyCall::Spawn(id.clone(), "/isolated-project".into()),
+                PtyCall::Write(id.clone(), b"before".to_vec()),
+                PtyCall::Write(id, b"after".to_vec()),
+            ]
+        );
     }
 }

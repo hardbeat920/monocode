@@ -137,10 +137,8 @@ impl ChildBackend for HeadlessChildBackend {
                 "Named provider accounts are not supported by this host yet".into(),
             ));
         }
-        // TODO(port): the Node host started each child through
-        // provider-guard.mjs and set MONOCODE_HOST=1. The process supervisor
-        // here owns the process group and kills it on exit instead, and
-        // nothing reads MONOCODE_HOST.
+        // The native supervisor guards Unix groups with a host-owned pipe.
+        // Windows enrolls the tree in the host's managed job before it runs.
         self.inner.spawn(request)
     }
 

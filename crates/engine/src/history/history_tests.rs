@@ -999,3 +999,41 @@ fn releases_an_orchestration_worker_and_its_blocks() {
     assert_eq!(released.blocks[0].orchestration_lead_id, None);
     assert!(release_orchestration_worker(&chat("x"), "lead").is_none());
 }
+
+#[gpui::test]
+async fn releasing_a_lead_invalidates_a_pending_worker_read(cx: &mut TestAppContext) {
+    let t = setup(cx);
+    let mut worker = chat("worker");
+    worker.orchestration_lead_id = Some("lead".into());
+    worker.blocks[0].orchestration_lead_id = Some("lead".into());
+    t.backend.insert_session(&worker);
+    let gate = t.backend.hold_next("session_get");
+    let sessions = t.sessions(cx);
+    let pending = sessions.update(cx, |sessions, cx| sessions.load_stored("worker", cx));
+    cx.run_until_parked();
+
+    t.history.update(cx, |history, cx| {
+        history.apply_removal_change(
+            "lead",
+            None,
+            WorkspaceChange::OrchestrationReleased {
+                lead_id: "lead".into(),
+            },
+            cx,
+        );
+    });
+    let released = release_orchestration_worker(&worker, "lead").unwrap();
+    gate.release();
+    assert!(
+        pending.await.is_none(),
+        "the pending read carries the deleted lead"
+    );
+
+    t.backend.insert_session(&released);
+    let fresh = sessions.update(cx, |sessions, cx| sessions.ensure_open("worker", cx));
+    let fresh = fresh.await.expect("the released worker can reopen");
+    assert_eq!(fresh.orchestration_lead_id, None);
+    assert_eq!(fresh.blocks[0].orchestration_lead_id, None);
+    assert_eq!(fresh.blocks[0].text, worker.blocks[0].text);
+    assert_eq!(t.backend.calls("session_get").len(), 2);
+}

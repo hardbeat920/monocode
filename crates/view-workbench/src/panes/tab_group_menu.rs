@@ -63,6 +63,7 @@ pub enum SubmenuEntry {
         id: SharedString,
         label: SharedString,
         disabled: bool,
+        checked: bool,
     },
     Separator,
 }
@@ -826,6 +827,7 @@ impl TabGroupMenu {
                     id,
                     label,
                     disabled,
+                    checked,
                 } => {
                     let hover = theme.content(0.05);
                     let pick = id.clone();
@@ -854,7 +856,10 @@ impl TabGroupMenu {
                                     },
                                 ))
                             })
-                            .child(label),
+                            .child(label)
+                            .when(checked, |row| {
+                                row.child(icon(IconName::Check).ml(u(8.)).size(u(12.)))
+                            }),
                     );
                 }
             }

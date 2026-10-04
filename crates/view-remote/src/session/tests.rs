@@ -208,6 +208,32 @@ fn centers_the_composer_in_a_new_conversation(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn docks_an_empty_split_without_drawing_a_second_composer(cx: &mut TestAppContext) {
+    let split = RemoteSessionProps {
+        force_docked: true,
+        ..props(host_session(Vec::new()))
+    };
+    let (view, cx, _host, _events) = render(cx, split);
+    assert!(exists(cx, "composer:docked"));
+    assert!(!exists(cx, "composer:centered"));
+    assert!(!exists(cx, "empty-session-title"));
+    assert!(!view.read_with(cx, |view, cx| view.composer().read(cx).props().shell));
+}
+
+#[test]
+fn hidden_remote_panes_disable_their_composer_hotkeys_even_if_focus_is_cached() {
+    let hidden = RemoteSessionProps {
+        visible: false,
+        focused: true,
+        ..props(host_session(Vec::new()))
+    };
+    let composer = composer_props(&hidden);
+    assert!(!composer.enabled);
+    assert!(!composer.hotkeys);
+    assert!(!composer.focused);
+}
+
+#[gpui::test]
 fn keeps_a_new_session_on_its_selected_remote_provider(cx: &mut TestAppContext) {
     let mut session = host_session(Vec::new());
     session.harness = HarnessId::Cursor;

@@ -977,9 +977,7 @@ impl History {
                     for id in cached {
                         sessions.invalidate_loaded(&id);
                     }
-                    // TODO(port): App.tsx also invalidated every pending read,
-                    // which may still carry the deleted lead. `Sessions` does
-                    // not expose its pending loads (NEEDS.md).
+                    sessions.invalidate_pending_loads();
                 });
                 let release = |row: &mut SessionSummary| {
                     if row.orchestration_lead_id.as_deref() == Some(lead_id.as_str()) {

@@ -13,35 +13,55 @@ use gpui::{App, AppContext as _, Global, Task};
 use monocode_core::platform::Platform;
 use monocode_core::settings::AppSettings;
 use monocode_engine::attention::{
-    Attention, AttentionConfig, AttentionPlatform, NativePlatform, NativeRateLimitFetcher,
-    system_clock,
+    Attention, AttentionConfig, AttentionPlatform, KvLocalStore, NativePlatform,
+    NativeRateLimitFetcher, system_clock,
 };
+use monocode_engine::automations::{AutomationsConfig, AutomationsPackage};
+use monocode_engine::history::notes_backend::StoreNotesBackend;
+use monocode_engine::history::{HistoryConfig, HistoryPackage};
+use monocode_engine::inbox::backend::LiveInboxBackend;
+use monocode_engine::inbox::client::InboxClient;
+use monocode_engine::inbox::inbox::Inbox;
+use monocode_engine::orchestration::{Orchestration, OrchestrationConfig, start_control_server};
+use monocode_engine::projects::ProjectsGlobal;
+use monocode_engine::remote::{RemoteGlobal, peers::RemoteFs};
+use monocode_engine::runtime::backend::NoStoreEvents;
 use monocode_engine::runtime::session_store::SessionSummary;
 use monocode_engine::runtime::sessions::bind_resumed_sessions;
-use monocode_engine::runtime::{Engine, EngineConfig};
+use monocode_engine::runtime::{Engine, EngineConfig, StoreBackend};
 use monocode_engine::side_threads::{SideThreads, SideThreadsConfig};
 use monocode_engine::submit::attention_glue::install_attention_submit;
 use monocode_engine::submit::{Submit, SubmitConfig};
 use monocode_engine::workspace::files::LocalFs;
-use monocode_engine::workspace::{self, NoDelegate, WorkspaceConfig, WorkspaceSetup};
+use monocode_engine::workspace::terminals::Terminals;
+use monocode_engine::workspace::terminals::pty::HostPty;
+use monocode_engine::workspace::{self, WorkspaceConfig, WorkspaceSetup};
 use monocode_harness::core::catalog::SharedCatalog;
 use monocode_harness::core::child::HostChildOptions;
-use monocode_harness::core::registry::RegistryOptions;
+use monocode_harness::core::provider_binary_paths::ProviderBinaryPaths;
+use monocode_harness::core::registry::{ControlTurns, RegistryOptions};
 use monocode_harness::core::task::SharedSpawner;
 use monocode_harness::providers::{claude, codex, cursor, grok, opencode};
 use monocode_harness::{
     BridgeLease, Children, HarnessAvailabilityProbe, HarnessAvailabilityStore, HarnessContext,
     HarnessRegistry, register_builtin_harnesses,
 };
+use monocode_process::control::ControlHost;
 use monocode_process::harness::HarnessHost;
 use monocode_settings::{APP_IDENTIFIER, ImportStatus, Kv, WebviewData};
+use monocode_store::session_store::SessionStore;
+use monocode_terminal::pty::PtyHost;
 
 use crate::attention_platform::{UnbundledPlatform, running_in_bundle};
-use crate::bridge::{AppApprovalRouter, AppHarnessHooks};
+use crate::bridge::{self, AppApprovalRouter, AppHarnessHooks};
 use crate::data_dir::DataDir;
-use crate::projects;
 use crate::provider_hooks::{CursorSessionStore, GeneratedImageStore, MonoGit};
 use crate::session_factory::AppSessionFactory;
+
+/// The control owner the app's turns are granted to. One process holds
+/// every window's sessions, so the app needs one owner, not one per window
+/// label as the Tauri app had.
+pub const CONTROL_OWNER: &str = "main";
 
 /// How to start.
 #[derive(Debug, Clone)]
@@ -56,17 +76,28 @@ pub struct BootOptions {
     /// real data dir, since a development run may share the machine with
     /// another MonoCode.
     pub reap_orphans: bool,
+    /// Run due automations and reminders. Only for the real data dir by
+    /// default: a development run on a copy of the user's data must not
+    /// start the user's scheduled agents. `MONOCODE_RUN_SCHEDULES=1` turns
+    /// it on anyway.
+    pub run_schedules: bool,
+    /// Start the loopback control server, so agents get the `app` and
+    /// `control` CLI.
+    pub control_server: bool,
 }
 
 impl BootOptions {
     /// The defaults for a window on `data_dir`.
     pub fn app(data_dir: DataDir) -> Self {
         let real = data_dir.is_default();
+        let forced = std::env::var("MONOCODE_RUN_SCHEDULES").is_ok_and(|value| value == "1");
         Self {
             data_dir,
             import_webkit: true,
             sounds: true,
             reap_orphans: real,
+            run_schedules: real || forced,
+            control_server: true,
         }
     }
 }
@@ -81,6 +112,12 @@ pub struct AppServices {
     pub catalog: SharedCatalog,
     pub availability: HarnessAvailabilityStore,
     pub factory: Rc<AppSessionFactory>,
+    /// `monocode.db`, shared with the packages that open their own tables.
+    pub store: Arc<SessionStore>,
+    /// The loopback control server, when it started.
+    pub control: Option<Arc<ControlHost>>,
+    /// The terminals' PTY host, for the "folder in use" checks.
+    pub pty: PtyHost,
     /// Settings as they were at boot.
     pub settings: AppSettings,
     /// `startHarnessBridge`: the child router keeps its routes while held.
@@ -172,6 +209,11 @@ fn register_providers(ctx: &HarnessContext, kv: &Kv, data_dir: &Path) {
     register_builtin_harnesses(ctx);
 }
 
+fn initialize_provider_binary_paths(host: &HarnessHost, kv: &Kv) {
+    let store = KvLocalStore(kv.clone());
+    ProviderBinaryPaths::from_store(&store).initialize(host, &store);
+}
+
 /// Start the engine on `options.data_dir`. Call once, before any window.
 pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
     let data_dir = options.data_dir.path.clone();
@@ -181,22 +223,52 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
         monocode_process::harness::reap_orphaned_harness_processes();
     }
 
-    let mut config = EngineConfig::open_store(data_dir.clone(), cx)
-        .map_err(|error| anyhow!("opening monocode.db in {}: {error}", data_dir.display()))?;
+    let backend = Arc::new(
+        StoreBackend::open(data_dir.clone(), cx.background_executor().clone())
+            .map_err(|error| anyhow!("opening monocode.db in {}: {error}", data_dir.display()))?,
+    );
+    let store = backend.session_store().clone();
+    let mut config = EngineConfig::with_backend(backend);
+
+    // The control server: agents reach the app through the `app` and
+    // `control` CLI it grants per turn (`initControl` in the Tauri app).
+    let control = if options.control_server {
+        match start_control_server(cx) {
+            Ok(host) => Some(host),
+            Err(error) => {
+                log::error!("[monocode] control server did not start: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // The harness bridge.
     let spawner = background_spawner(cx);
     let (children, host) = Children::for_host(
         HostChildOptions {
             data_dir: data_dir.clone(),
-            control: None,
+            control: control.clone(),
             updater: None,
         },
         spawner.clone(),
     );
+    initialize_provider_binary_paths(&host, &kv);
     let bridge = children.start_harness_bridge();
     let catalog = SharedCatalog::new();
-    let registry = HarnessRegistry::new(spawner.clone(), RegistryOptions::default());
+    let registry = HarnessRegistry::new(
+        spawner.clone(),
+        RegistryOptions {
+            turn_control: control.clone().map(|host| {
+                Arc::new(ControlTurns {
+                    host,
+                    owner: CONTROL_OWNER.into(),
+                }) as _
+            }),
+            ..RegistryOptions::default()
+        },
+    );
     let ctx = HarnessContext::new(registry.clone(), children.clone(), catalog.clone());
     register_providers(&ctx, &kv, &data_dir);
     let availability = HarnessAvailabilityStore::new();
@@ -236,23 +308,15 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
     Attention::init(
         AttentionConfig {
             kv: kv.clone(),
-            platform,
+            platform: platform.clone(),
             fetcher,
             clock: system_clock(),
         },
         cx,
     );
-    let notifier = Attention::global(cx).notifier.downgrade();
     cx.spawn(async move |cx| {
-        while let Ok(session_id) = clicked.recv().await {
-            let Some(notifier) = notifier.upgrade() else {
-                break;
-            };
-            cx.update(|cx| {
-                notifier.update(cx, |notifier, cx| {
-                    notifier.notification_clicked(&session_id, cx)
-                })
-            });
+        while let Ok(identifier) = clicked.recv().await {
+            cx.update(|cx| bridge::notification_clicked(&identifier, cx));
         }
     })
     .detach();
@@ -265,6 +329,16 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
 
     // Submit.
     let mut submit = SubmitConfig::new(registry.clone(), catalog.clone(), kv.clone(), spawner);
+    submit.mcp_settings = Some(
+        monocode_engine::submit::mcp_settings_cache::McpSettingsCache::new(
+            Arc::new(
+                monocode_engine::submit::mcp_settings_cache::ProcessMcpSources {
+                    host: host.clone(),
+                },
+            ),
+            registry.spawner().clone(),
+        ),
+    );
     let available = availability.clone();
     submit.is_harness_available = Arc::new(move |id| available.is_harness_available(id));
     Submit::init(submit, cx);
@@ -275,7 +349,10 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
         SideThreads::init(config, cx);
     }
 
-    // Workspace.
+    RemoteGlobal::init_native(kv.clone(), data_dir.clone(), cx);
+
+    // Workspace, with the terminals' PTY host kept for the projects
+    // package's "folder in use" checks.
     let factory = Rc::new(AppSessionFactory::new(
         kv.clone(),
         catalog.clone(),
@@ -283,13 +360,98 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
     ));
     workspace::init(
         WorkspaceSetup {
-            fs: Arc::new(LocalFs),
+            fs: Arc::new(RemoteFs::new(
+                Arc::new(LocalFs),
+                RemoteGlobal::global(cx).client.clone(),
+            )),
             sessions: factory.clone(),
-            delegate: Rc::new(NoDelegate),
-            terminals: true,
+            delegate: Rc::new(bridge::AppWorkspaceDelegate),
+            terminals: false,
         },
         cx,
     );
+    let mut pty = None;
+    Terminals::init_with(
+        |events| {
+            let host = PtyHost::new(events);
+            pty = Some(host.clone());
+            Arc::new(HostPty(host))
+        },
+        cx,
+    );
+    let pty = pty.expect("Terminals::init_with builds the backend at once");
+
+    // Projects: the rail, project settings, and git status.
+    let terminals_in_use = {
+        let pty = pty.clone();
+        Arc::new(move |path: &Path| pty.has_working_dir(path))
+    };
+    let in_use = {
+        let pty = pty.clone();
+        let agents = host.clone();
+        Arc::new(move |path: &Path| pty.has_working_dir(path) || agents.has_working_dir(path))
+    };
+    let local_projects = Arc::new(
+        monocode_engine::projects::backend::LocalProjectsBackend::new(
+            data_dir.clone(),
+            store.clone(),
+            terminals_in_use,
+            in_use,
+        ),
+    );
+    let project_backend = Arc::new(crate::bridge::projects::AppProjectsBackend::new(
+        local_projects,
+        RemoteGlobal::global(cx).client.clone(),
+    ));
+    ProjectsGlobal::init(
+        monocode_engine::projects::ProjectsConfig {
+            kv: kv.clone(),
+            backend: project_backend,
+            clock: monocode_engine::projects::system_clock(),
+        },
+        cx,
+    );
+
+    // History: the sidebar list, search, and notes.
+    let notes = Arc::new(StoreNotesBackend::new(
+        store.clone(),
+        data_dir.clone(),
+        cx.background_executor().clone(),
+    ));
+    HistoryPackage::init(HistoryConfig::new(kv.clone(), notes, cx), cx);
+
+    // Inbox.
+    let client = InboxClient::new(
+        LiveInboxBackend::new(data_dir.clone()),
+        kv.clone(),
+        cx.background_executor().clone(),
+    );
+    Inbox::init(client, cx);
+
+    // Automations, reminders, and quick launches.
+    AutomationsPackage::init(
+        AutomationsConfig::from_store(
+            kv.clone(),
+            store.clone(),
+            Arc::new(NoStoreEvents),
+            Some(platform),
+            cx,
+        ),
+        cx,
+    );
+
+    // Orchestration and the agent app API behind the control server.
+    if let Some(control) = control.clone() {
+        let mut config = OrchestrationConfig::native(
+            store.clone(),
+            control,
+            Some(host.clone()),
+            CONTROL_OWNER,
+            kv.clone(),
+        );
+        config.peers = Rc::new(bridge::AppOrchestrationPeers);
+        Orchestration::init(config, cx);
+    }
 
     cx.set_global(AppServices {
         data_dir: options.data_dir,
@@ -300,10 +462,31 @@ pub fn boot(options: BootOptions, cx: &mut App) -> Result<()> {
         catalog,
         availability,
         factory,
+        store,
+        control,
+        pty,
         settings,
         _bridge: Rc::new(bridge),
     });
+
+    // The calls between packages.
+    bridge::install_peers(cx);
+    start_schedules(options.run_schedules, cx);
     Ok(())
+}
+
+/// Load the automation and reminder lists. With `run`, also start the
+/// scheduler, the reminder poller, and the quick composer shortcut
+/// (`AutomationsPackage::start`).
+fn start_schedules(run: bool, cx: &mut App) {
+    if run {
+        AutomationsPackage::start(cx);
+        return;
+    }
+    let package = AutomationsPackage::global(cx);
+    let (automations, reminders) = (package.automations.clone(), package.reminders.clone());
+    automations.update(cx, |automations, cx| automations.refresh(cx).detach());
+    reminders.update(cx, |reminders, cx| reminders.refresh(cx).detach());
 }
 
 /// What a window starts with.
@@ -319,7 +502,7 @@ pub struct RestoredWorkspace {
 /// saved, bind their provider threads, and refresh the model catalogs.
 pub fn restore_workspace(cx: &mut App) -> Task<RestoredWorkspace> {
     let kv = AppServices::global(cx).kv.clone();
-    let hinted = projects::last_project_path(&kv);
+    let hinted = monocode_engine::projects::recents::last_project_path(&kv);
     let lifecycle = Engine::lifecycle(cx);
     let boot = lifecycle.update(cx, |lifecycle, cx| {
         lifecycle.load_boot_workspace(hinted.clone(), cx)
@@ -376,4 +559,35 @@ pub fn shutdown(cx: &App) -> Task<()> {
             smol::unblock(move || host.kill_all()).await;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use monocode_harness::core::provider_binary_paths::STORAGE_KEY;
+
+    #[test]
+    fn provider_paths_take_effect_on_the_next_app_launch() {
+        let kv = Kv::in_memory();
+        kv.set_item(STORAGE_KEY, r#"{"codex":"/configured/codex"}"#);
+        let first = HarnessHost::default();
+        initialize_provider_binary_paths(&first, &kv);
+        assert_eq!(
+            first.runtime_binary_path("codex").as_deref(),
+            Some("/configured/codex")
+        );
+
+        kv.set_item(STORAGE_KEY, r#"{"codex":"/changed/codex"}"#);
+        initialize_provider_binary_paths(&first, &kv);
+        assert_eq!(
+            first.runtime_binary_path("codex").as_deref(),
+            Some("/configured/codex")
+        );
+        let second = HarnessHost::default();
+        initialize_provider_binary_paths(&second, &kv);
+        assert_eq!(
+            second.runtime_binary_path("codex").as_deref(),
+            Some("/changed/codex")
+        );
+    }
 }

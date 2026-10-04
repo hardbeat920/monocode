@@ -31,6 +31,7 @@ use monocode_layout::GitFileDiffKind;
 use monocode_markdown::{LinkClick, MarkdownView};
 use monocode_ui::widgets::{PopoverSide, popover_frame};
 use monocode_ui::{IconName, Theme, UiStyled as _, icon, u};
+use monocode_view_transcript::transcript::view::style::{MarkdownVariant, markdown_style};
 
 use crate::data::{EditorNavigation, FilesData};
 use crate::markdown_shell::{
@@ -222,6 +223,17 @@ impl FileEditorSurface {
                 this.load_git_base(cx);
             }
         });
+        let appearance = cx.observe_global::<Theme>(|this, cx| {
+            if let Some(preview) = this.preview.clone() {
+                let style = markdown_style(Theme::of(cx), MarkdownVariant::Normal);
+                preview.update(cx, |preview, cx| preview.set_style(style, cx));
+            }
+            if let Some(editor) = this.editor.clone() {
+                let theme = crate::editor_theme(cx);
+                editor.update(cx, |editor, cx| editor.set_theme(theme, cx));
+            }
+            cx.notify();
+        });
         let mut this = Self {
             mode: remembered_mode(&path, cx),
             data,
@@ -255,7 +267,7 @@ impl FileEditorSurface {
             _watch: None,
             _git: None,
             _editor_subscriptions: Vec::new(),
-            _subscriptions: vec![activation],
+            _subscriptions: vec![activation, appearance],
         };
         this.load(window, cx);
         this
@@ -508,12 +520,16 @@ impl FileEditorSurface {
         let save = self.save_handler();
         let settings = self.settings;
         let path = self.path.clone();
+        let formatter_data = self.data.clone();
         let editor = cx.new(|cx| {
             let mut editor = CodeEditor::new(path, &text, theme, window, cx);
             editor.set_footer(Some(relative), cx);
             editor.on_save(save);
             editor.set_autosave(settings.autosave, window, cx);
             editor.set_format_on_save(settings.format_on_save);
+            editor.set_formatter(Some(Rc::new(move |path, source, cursor| {
+                formatter_data.format_text(path, source, cursor)
+            })));
             editor
         });
         let state = editor.read(cx).editor_state().clone();
@@ -606,7 +622,12 @@ impl FileEditorSurface {
     fn build_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let parts = split_markdown_frontmatter(&self.draft);
         self.metadata = parts.metadata;
-        let preview = cx.new(|cx| MarkdownView::with_text(parts.body, cx));
+        let style = markdown_style(Theme::of(cx), MarkdownVariant::Normal);
+        let preview = cx.new(|cx| {
+            let mut preview = MarkdownView::with_text(parts.body, cx);
+            preview.set_style(style, cx);
+            preview
+        });
         let weak = cx.entity().downgrade();
         let cwd = self.cwd.clone();
         preview.update(cx, |preview, _| {

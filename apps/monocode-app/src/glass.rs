@@ -13,6 +13,7 @@ use monocode_core::appearance::AppearanceSettings as StoredAppearance;
 use monocode_ui::{AppearanceSettings, Theme, ThemePreference};
 
 /// The per-window key `monocode_platform::macos` files glass state under.
+#[cfg(target_os = "macos")]
 pub const WINDOW_KEY: &str = "main";
 
 /// The stored appearance settings as the theme's values.

@@ -1,31 +1,36 @@
 //! `TranscriptBlock` from AgentTranscript.tsx: how each kind of block draws
-//! on its own row, with `HandoffDivider`, `InterjectionDivider`, and simple
-//! forms of TaskListPreview.tsx, PlanPreview.tsx, GeneratedImage.tsx, and
-//! the orchestration result card.
+//! on its own row, with `HandoffDivider` and `InterjectionDivider`. Task
+//! lists, plans, and generated images draw through `crate::cards`; the
+//! orchestration result is `crate::threads::OrchestrationPreview`.
 
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, Context, InteractiveElement as _, IntoElement,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, img, px,
+    Animation, AnimationExt as _, AnyElement, AppContext as _, Context, InteractiveElement as _,
+    IntoElement, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
-use monocode_core::block::{HandoffStatus, PlanStatus, TaskListItem, TaskListItemStatus};
-use monocode_core::plan::{plan_summary, plan_title};
-use monocode_core::task_list::{legacy_task_list_from_text, task_list_progress_label};
+use monocode_core::block::HandoffStatus;
+use monocode_core::task_list::legacy_task_list_from_text;
 use monocode_core::transcript::BlockRef;
 use monocode_core::{Block, BlockRole};
 use monocode_ui::styled::UiStyled as _;
 use monocode_ui::widgets::tooltip;
-use monocode_ui::{IconName, Theme, icon, u};
+use monocode_ui::{Theme, u};
 
+use crate::cards::generated_image::GeneratedImage;
+use crate::cards::plan_preview::{build_disabled, plan_preview};
+use crate::cards::task_list::task_list_preview;
+use crate::threads::{
+    OrchestrationPreview, SecondOpinionButton, SecondOpinionEvent, SecondOpinionProps,
+};
 use crate::transcript::model::plan::Row;
 use crate::transcript::model::turn::interjection_chrome;
 
 use super::activity::{interjection_body, severity_color};
 use super::parts::harness_icon;
 use super::shimmer::shimmer;
-use super::style::{MarkdownVariant, TextSizes as _, palette};
+use super::style::{MarkdownVariant, TextSizes as _};
 use super::{MarkdownSlot, TranscriptEvent, TranscriptView, eid};
 
 /// `TerminalSpinner` frames, 80ms apart.
@@ -60,12 +65,10 @@ impl TranscriptView {
                 .filter(|list| !list.items.is_empty())
             {
                 Some(list) => gutter(div().py(u(4.)))
-                    .child(task_list(
-                        key,
-                        &list.items,
-                        list.explanation.as_deref(),
-                        Theme::of(cx),
-                    ))
+                    .child(
+                        task_list_preview(eid(key, "tasks"), list.items.clone())
+                            .explanation(list.explanation.clone()),
+                    )
                     .into_any_element(),
                 None => div().into_any_element(),
             },
@@ -75,7 +78,7 @@ impl TranscriptView {
                 }
                 if let Some(items) = legacy_task_list_from_text(&block.text) {
                     return gutter(div().py(u(4.)))
-                        .child(task_list(key, &items, None, Theme::of(cx)))
+                        .child(task_list_preview(eid(key, "tasks"), items))
                         .into_any_element();
                 }
                 let card = self.render_plan(key, block, cx);
@@ -283,284 +286,154 @@ impl TranscriptView {
 
     /// `PlanPreview`: the plan's title and summary, with Open and Build.
     fn render_plan(&mut self, key: &str, block: &Block, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).clone();
-        let title = plan_title(&block.text);
-        let summary = plan_summary(&block.text);
-        let streaming = block.is_streaming();
-        let status = block.plan.as_ref().map(|plan| plan.status);
         let busy = self.session().is_some_and(|session| session.is_busy());
-        let build_disabled = busy
-            || streaming
-            || monocode_core::js::trim(&block.text).is_empty()
-            || matches!(
-                status,
-                Some(PlanStatus::Streaming | PlanStatus::Building | PlanStatus::Built)
-            );
-        let build_label = match status {
-            Some(PlanStatus::Building) => "Building\u{2026}",
-            Some(PlanStatus::Built) => "Built",
-            _ => "Build",
-        };
-        let can_open = self.config.can_open_plans;
-        let can_build = self.config.can_build_plans;
-        let id = block.id.clone();
-        let title_el = div()
-            .id(eid(key, &format!("plan-title:{}", block.id)))
-            .truncate()
-            .font_family(theme.fonts.sans.clone())
-            .text_px(13.)
-            .line_height(u(20.))
-            .medium()
-            .text_color(theme.content(0.9))
-            .tooltip(tooltip(title.clone()))
-            .when(can_open, |el| {
-                let id = id.clone();
-                el.cursor_pointer()
-                    .hover(|s| s.text_color(palette::yellow_100()))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(TranscriptEvent::OpenPlan {
-                            block_id: id.clone(),
-                        })
-                    }))
-            })
-            .child(title);
-        let actions = (can_open || can_build).then(|| {
-            div()
-                .mt(u(8.))
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap(u(6.))
-                .when(can_open, |el| {
-                    let id = id.clone();
-                    el.child(
-                        div()
-                            .id(eid(key, &format!("plan-open:{}", block.id)))
-                            .flex()
-                            .items_center()
-                            .gap(u(4.))
-                            .h(u(24.))
-                            .px(u(8.))
-                            .rounded(u(6.))
-                            .bg(theme.content(0.08))
-                            .font_family(theme.fonts.sans.clone())
-                            .text_px(11.)
-                            .text_color(theme.content(0.7))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.content(0.12)).text_color(theme.colors.content))
-                            .tooltip(tooltip("Open in pane"))
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(TranscriptEvent::OpenPlan {
-                                    block_id: id.clone(),
-                                })
-                            }))
-                            .child(
-                                icon(IconName::PanelRight)
-                                    .size(u(12.))
-                                    .text_color(theme.content(0.7)),
-                            )
-                            .child("Open"),
-                    )
-                })
-                .when(can_build, |el| {
-                    let id = id.clone();
-                    el.child(
-                        div()
-                            .id(eid(key, &format!("plan-build:{}", block.id)))
-                            .flex()
-                            .items_center()
-                            .gap(u(4.))
-                            .h(u(24.))
-                            .px(u(8.))
-                            .rounded(u(6.))
-                            .bg(theme.colors.content)
-                            .font_family(theme.fonts.sans.clone())
-                            .text_px(11.)
-                            .text_color(theme.colors.background_base)
-                            .tooltip(tooltip("Build this plan"))
-                            .when(build_disabled, |el| el.opacity(0.4))
-                            .when(!build_disabled, |el| {
-                                el.cursor_pointer()
-                                    .hover(|s| s.bg(theme.content(0.9)))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.emit(TranscriptEvent::BuildPlan {
-                                            block_id: id.clone(),
-                                        })
-                                    }))
-                            })
-                            .child(
-                                icon(IconName::Play)
-                                    .size(u(12.))
-                                    .text_color(theme.colors.background_base),
-                            )
-                            .child(build_label),
-                    )
-                })
-        });
-        div()
-            .mb(u(8.))
-            .overflow_hidden()
-            .rounded(u(12.))
-            .border_1()
-            .border_color(theme.content(0.1))
-            .bg(theme.content(0.07))
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(u(10.))
-                    .px(u(12.))
-                    .py(u(10.))
-                    .child(
-                        icon(if streaming {
-                            IconName::CircleDashed
-                        } else {
-                            IconName::AiIdea
-                        })
-                        .mt(u(2.))
-                        .size(u(16.))
-                        .text_color(theme.content(0.4)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(title_el)
-                            .when(!summary.is_empty(), |el| {
-                                el.child(
-                                    div()
-                                        .mt(u(2.))
-                                        .line_clamp(3)
-                                        .font_family(theme.fonts.sans.clone())
-                                        .text_px(12.)
-                                        .line_height(u(18.))
-                                        .text_color(theme.content(0.5))
-                                        .child(summary),
-                                )
-                            })
-                            .children(actions),
+        let mut card = plan_preview(eid(key, &format!("plan:{}", block.id)), block.text.clone())
+            .streaming(block.is_streaming())
+            .busy(busy)
+            .status(block.plan.as_ref().map(|plan| plan.status));
+        if self.config.can_open_plans {
+            let id = block.id.clone();
+            let weak = cx.entity().downgrade();
+            card = card.on_open(move |_, _, cx| {
+                let block_id = id.clone();
+                weak.update(cx, |_, cx| cx.emit(TranscriptEvent::OpenPlan { block_id }))
+                    .ok();
+            });
+        }
+        if self.config.can_build_plans {
+            let id = block.id.clone();
+            let weak = cx.entity().downgrade();
+            card = card.on_build(move |_, _, cx| {
+                let block_id = id.clone();
+                weak.update(cx, |_, cx| cx.emit(TranscriptEvent::BuildPlan { block_id }))
+                    .ok();
+            });
+            if self.config.can_build_plan_targets
+                && let Some(session) = self.session()
+            {
+                let props = SecondOpinionProps::build_target(
+                    session.harness,
+                    Some(session.model.clone()),
+                    Some(session.model_settings.clone()),
+                    build_disabled(
+                        &block.text,
+                        block.is_streaming(),
+                        busy,
+                        block.plan.as_ref().map(|plan| plan.status),
                     ),
-            )
-            .into_any_element()
+                );
+                let key = format!("build-plan:{}", block.id);
+                let picker = if let Some((picker, _)) = self.turn_model_menus.get(&key) {
+                    picker.update(cx, |picker, cx| picker.set_props(props, cx));
+                    picker.clone()
+                } else {
+                    let source = self.model_menu_source();
+                    let picker = cx.new(|cx| SecondOpinionButton::new(props, source, cx));
+                    let block_id = block.id.clone();
+                    let subscription =
+                        cx.subscribe(&picker, move |_, _, event: &SecondOpinionEvent, cx| {
+                            let SecondOpinionEvent::Pick(target) = event;
+                            cx.emit(TranscriptEvent::BuildPlanWithTarget {
+                                block_id: block_id.clone(),
+                                target: target.clone(),
+                            });
+                        });
+                    self.turn_model_menus
+                        .insert(key, (picker.clone(), subscription));
+                    picker
+                };
+                card = card.target_picker(picker.into());
+            }
+        }
+        card.into_any_element()
     }
 
-    /// The orchestration result after a finished lead turn. The full
-    /// assignment card (`OrchestrationPreview`) belongs to the cards module;
-    /// this shows its title and summary in the same frame.
+    /// The orchestration result after a finished lead turn
+    /// (`data-orchestration-result`): the assignment card,
+    /// `crate::threads::OrchestrationPreview`, one per proposal block.
     pub(super) fn render_proposal(
         &mut self,
         row: &Row,
         block: &BlockRef,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = Theme::of(cx);
-        let Some(proposal) = &block.orchestration else {
+        if block.orchestration.is_none() {
             return div().into_any_element();
+        }
+        let busy = self.session().is_some_and(|session| session.is_busy());
+        let catalog = self.config.catalog.clone();
+        let card = match self.orchestration_cards.get(&block.id).cloned() {
+            Some(card) => {
+                // Only pass on what changed: each setter redraws the card.
+                let seen = self.orchestration_seen.get(&block.id).cloned();
+                let block_changed = seen
+                    .as_ref()
+                    .is_none_or(|(seen, _, _)| !std::sync::Arc::ptr_eq(seen, block));
+                let busy_changed = seen.as_ref().is_none_or(|(_, seen, _)| *seen != busy);
+                let catalog_changed = seen
+                    .as_ref()
+                    .is_none_or(|(_, _, seen)| !std::sync::Arc::ptr_eq(seen, &catalog));
+                card.update(cx, |card, cx| {
+                    if block_changed {
+                        card.set_block(block, window, cx);
+                    }
+                    if busy_changed {
+                        card.set_busy(busy, cx);
+                    }
+                    if catalog_changed {
+                        card.set_catalog(catalog.clone(), cx);
+                    }
+                });
+                self.orchestration_seen
+                    .insert(block.id.clone(), (block.clone(), busy, catalog));
+                card
+            }
+            None => {
+                let (runs, actions) = self.orchestration_providers();
+                let seen_catalog = catalog.clone();
+                let card = cx.new(|cx| {
+                    let mut card = OrchestrationPreview::new(block, runs, actions, window, cx);
+                    card.set_busy(busy, cx);
+                    card.set_catalog(catalog, cx);
+                    card
+                });
+                self.orchestration_seen
+                    .insert(block.id.clone(), (block.clone(), busy, seen_catalog));
+                self.orchestration_cards
+                    .insert(block.id.clone(), card.clone());
+                card
+            }
         };
         div()
             .id(eid(&row.key, "proposal"))
             .px(u(16.))
             .pt(u(4.))
             .pb(u(8.))
-            .child(
-                div()
-                    .rounded(u(12.))
-                    .border_1()
-                    .border_color(theme.content(0.1))
-                    .bg(theme.content(0.04))
-                    .px(u(12.))
-                    .py(u(10.))
-                    .font_family(theme.fonts.sans.clone())
-                    .child(
-                        div()
-                            .text_px(13.)
-                            .line_height(u(20.))
-                            .medium()
-                            .text_color(theme.content(0.9))
-                            .child(proposal.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_px(12.)
-                            .line_height(u(18.))
-                            .text_color(theme.content(0.5))
-                            .child(proposal.summary.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(u(6.))
-                            .text_px(11.)
-                            .text_color(theme.content(0.4))
-                            .child(format!(
-                                "{} {}",
-                                proposal.tasks.len(),
-                                if proposal.tasks.len() == 1 {
-                                    "task"
-                                } else {
-                                    "tasks"
-                                }
-                            )),
-                    ),
-            )
+            .child(card)
             .into_any_element()
     }
 
-    /// `GeneratedImage`: the image the agent produced, from its path.
+    /// `GeneratedImage`: the image the agent produced, read from its path.
     fn render_generated_image(&mut self, block: &Block, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx);
         let Some(image) = &block.image else {
             return div().into_any_element();
         };
-        let path = std::path::PathBuf::from(&image.path);
-        div()
-            .min_w_0()
-            .px(u(16.))
-            .pt(u(12.))
-            .pb(u(12.))
-            .child(
-                div()
-                    .max_w_full()
-                    .overflow_hidden()
-                    .rounded(u(12.))
-                    .border_1()
-                    .border_color(theme.content(0.1))
-                    .bg(theme.content(0.05))
-                    .child(img(path).max_h(u(640.)).max_w_full()),
-            )
-            .child(
-                div()
-                    .mt(u(4.))
-                    .flex()
-                    .min_w_0()
-                    .items_center()
-                    .gap(u(8.))
-                    .font_family(theme.fonts.sans.clone())
-                    .text_px(11.)
-                    .text_color(theme.content(0.45))
-                    .child(div().min_w_0().truncate().child(image.name.clone()))
-                    .child(format_file_size(image.size)),
-            )
-            .into_any_element()
-    }
-}
-
-/// `formatFileSize`.
-fn format_file_size(bytes: i64) -> String {
-    let bytes = bytes.max(0) as f64;
-    if bytes < 1024. {
-        return format!("{bytes:.0} B");
-    }
-    let units = ["KB", "MB", "GB"];
-    let mut value = bytes / 1024.;
-    let mut unit = 0;
-    while value >= 1024. && unit + 1 < units.len() {
-        value /= 1024.;
-        unit += 1;
-    }
-    if value >= 10. {
-        format!("{value:.0} {}", units[unit])
-    } else {
-        format!("{value:.1} {}", units[unit])
+        let card = match self.image_cards.get(&block.id) {
+            Some(card) => {
+                let card = card.clone();
+                let meta = image.clone();
+                card.update(cx, |card, cx| card.set_image(meta, cx));
+                card
+            }
+            None => {
+                let meta = image.clone();
+                let card = cx.new(|cx| GeneratedImage::new(meta, cx));
+                self.image_cards.insert(block.id.clone(), card.clone());
+                card
+            }
+        };
+        div().min_w_0().child(card).into_any_element()
     }
 }
 
@@ -581,183 +454,4 @@ pub(super) fn text_overflows(
         .map(|line| line.chars().count().div_ceil(per_line).max(1))
         .sum();
     needed > lines
-}
-
-/// `TaskListPreview`.
-fn task_list(
-    key: &str,
-    items: &[TaskListItem],
-    explanation: Option<&str>,
-    theme: &Theme,
-) -> AnyElement {
-    let header = div()
-        .flex()
-        .items_start()
-        .gap(u(8.))
-        .border_b(px(1.))
-        .border_color(theme.colors.stroke)
-        .px(u(10.))
-        .py(u(8.))
-        .child(
-            icon(IconName::ListEnd)
-                .mt(u(2.))
-                .size(u(16.))
-                .text_color(theme.content(0.45)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(u(12.))
-                        .child(
-                            div()
-                                .font_family(theme.fonts.mono.clone())
-                                .text_px(12.)
-                                .line_height(u(16.))
-                                .medium()
-                                .text_color(theme.content(0.85))
-                                .child("Tasks"),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .rounded_full()
-                                .bg(theme.content(0.07))
-                                .px(u(8.))
-                                .py(u(2.))
-                                .font_family(theme.fonts.mono.clone())
-                                .text_px(10.)
-                                .line_height(u(14.))
-                                .text_color(theme.content(0.5))
-                                .child(task_list_progress_label(items)),
-                        ),
-                )
-                .when_some(explanation, |el, explanation| {
-                    el.child(
-                        div()
-                            .mt(u(2.))
-                            .line_clamp(2)
-                            .font_family(theme.fonts.sans.clone())
-                            .text_px(11.5)
-                            .line_height(u(16.))
-                            .text_color(theme.content(0.5))
-                            .child(explanation.to_string()),
-                    )
-                }),
-        );
-    let mut list = div().py(u(4.)).flex().flex_col();
-    for (index, item) in items.iter().enumerate() {
-        let (ink, strike) = match item.status {
-            TaskListItemStatus::Completed => (theme.content(0.4), true),
-            TaskListItemStatus::Cancelled => (theme.content(0.35), true),
-            TaskListItemStatus::InProgress => (theme.content(0.85), false),
-            TaskListItemStatus::Pending => (theme.content(0.6), false),
-        };
-        list = list.child(
-            div()
-                .flex()
-                .items_start()
-                .gap(u(10.))
-                .min_w_0()
-                .px(u(10.))
-                .py(u(6.))
-                .child(task_state(
-                    eid(key, &format!("task:{index}")),
-                    item.status,
-                    theme,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(theme.fonts.sans.clone())
-                        .text_px(12.5)
-                        .line_height(u(18.))
-                        .text_color(ink)
-                        .when(strike, |el| el.line_through())
-                        .child(item.text.clone()),
-                ),
-        );
-    }
-    div()
-        .mb(u(8.))
-        .overflow_hidden()
-        .rounded(u(10.))
-        .border_1()
-        .border_color(theme.content(0.1))
-        .bg(theme.content(0.035))
-        .child(header)
-        .child(list)
-        .into_any_element()
-}
-
-/// `TaskState`.
-fn task_state(id: gpui::ElementId, status: TaskListItemStatus, theme: &Theme) -> AnyElement {
-    let frame = div()
-        .mt(px(1.))
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(u(16.))
-        .rounded_full();
-    match status {
-        TaskListItemStatus::Completed => frame
-            .bg(gpui::Hsla {
-                a: 0.2,
-                ..theme.colors.success
-            })
-            .child(
-                icon(IconName::Check)
-                    .size(u(10.))
-                    .text_color(palette::emerald_300()),
-            )
-            .into_any_element(),
-        TaskListItemStatus::InProgress => frame
-            .child(
-                icon(IconName::Loader)
-                    .size(u(16.))
-                    .text_color(palette::sky_300())
-                    .with_animation(
-                        id,
-                        Animation::new(Duration::from_secs(1)).repeat(),
-                        |svg, delta| {
-                            svg.with_transformation(gpui::Transformation::rotate(gpui::percentage(
-                                delta,
-                            )))
-                        },
-                    ),
-            )
-            .into_any_element(),
-        TaskListItemStatus::Cancelled => frame
-            .bg(theme.content(0.08))
-            .child(
-                icon(IconName::Minus)
-                    .size(u(10.))
-                    .text_color(theme.content(0.35)),
-            )
-            .into_any_element(),
-        TaskListItemStatus::Pending => frame
-            .border_1()
-            .border_color(theme.content(0.25))
-            .bg(theme.content(0.02))
-            .into_any_element(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::format_file_size;
-
-    #[test]
-    fn formats_file_sizes() {
-        assert_eq!(format_file_size(512), "512 B");
-        assert_eq!(format_file_size(2048), "2.0 KB");
-        assert_eq!(format_file_size(20 * 1024 * 1024), "20 MB");
-    }
 }

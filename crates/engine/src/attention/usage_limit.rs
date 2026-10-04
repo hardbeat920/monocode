@@ -8,32 +8,8 @@ pub use monocode_core::session::{USAGE_LIMIT_RESUME_GRACE_MS, usage_limit_resume
 
 use super::rate_limits::format_reset_duration;
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
 fn local(ms: i64) -> Option<DateTime<Local>> {
     Local.timestamp_millis_opt(ms).single()
-}
-
-/// `toLocaleString(undefined, { hour: "numeric", minute: "2-digit" })` in
-/// the en-US form: "3:16 AM". With `with_date`, the month and day lead:
-/// "Sep 26, 3:16 AM".
-fn locale_time<Tz: TimeZone>(time: &DateTime<Tz>, with_date: bool) -> String {
-    use chrono::{Datelike, Timelike};
-    let hour = time.hour();
-    let (hour12, meridiem) = match hour {
-        0 => (12, "AM"),
-        1..=11 => (hour, "AM"),
-        12 => (12, "PM"),
-        _ => (hour - 12, "PM"),
-    };
-    let clock = format!("{hour12}:{:02} {meridiem}", time.minute());
-    if with_date {
-        format!("{} {}, {clock}", MONTHS[time.month0() as usize], time.day())
-    } else {
-        clock
-    }
 }
 
 /// `formatUsageLimitReset`: "3:16 AM · in 4h 42m" today, "Sep 26, 3:16 AM ·
@@ -53,7 +29,14 @@ fn format_usage_limit_reset_at<Tz: TimeZone>(
 ) -> String {
     format!(
         "{} · in {}",
-        locale_time(reset, !same_day),
+        monocode_platform::date_time::format_local(
+            reset.timestamp_millis(),
+            if same_day {
+                monocode_platform::date_time::DateTimeStyle::Time
+            } else {
+                monocode_platform::date_time::DateTimeStyle::MonthDayTime
+            },
+        ),
         format_reset_duration(left_ms)
     )
 }
@@ -116,13 +99,31 @@ mod tests {
         let today = at(2026, 9, 25, 23, 50);
         let label = format_usage_limit_reset(today, now);
         assert!(label.ends_with(" · in 1h 16m"), "{label}");
-        assert_eq!(label, "11:50 PM · in 1h 16m");
+        assert_eq!(
+            label,
+            format!(
+                "{} · in 1h 16m",
+                monocode_platform::date_time::format_local(
+                    today,
+                    monocode_platform::date_time::DateTimeStyle::Time,
+                )
+            )
+        );
         let tomorrow = at(2026, 9, 26, 3, 16);
         let label = format_usage_limit_reset(tomorrow, now);
         assert!(
             label.contains("26") && label.ends_with(" · in 4h 42m"),
             "{label}"
         );
-        assert_eq!(label, "Sep 26, 3:16 AM · in 4h 42m");
+        assert_eq!(
+            label,
+            format!(
+                "{} · in 4h 42m",
+                monocode_platform::date_time::format_local(
+                    tomorrow,
+                    monocode_platform::date_time::DateTimeStyle::MonthDayTime,
+                )
+            )
+        );
     }
 }

@@ -4,18 +4,22 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, img, px, relative,
+    AnyElement, AppContext as _, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px, relative,
 };
 use monocode_core::AttachmentKind;
 use monocode_core::appearance::TranscriptLayout;
-use monocode_core::block::SecondOpinionKind;
+use monocode_core::block::{SecondOpinionKind, TurnIntent};
 use monocode_core::transcript::BlockRef;
 use monocode_core::{Attachment, Block};
 use monocode_ui::styled::UiStyled as _;
 use monocode_ui::widgets::tooltip;
 use monocode_ui::{IconName, Theme, file_type_icon, folder_type_icon, icon, u};
 
+use crate::cards::celebration::{BurstKind, celebration_burst};
+use crate::cards::link_preview::{UserLinkPreview, UserLinkPreviewEvent};
+use crate::cards::note_card::note_card;
+use crate::threads::OrchestratorConstellation;
 use crate::transcript::model::chat_context::{
     ChatContextItem, chip_label, file_target, split_chat_context,
 };
@@ -74,7 +78,23 @@ impl TranscriptView {
             None => text.clone(),
         };
         let chat = self.config.layout == TranscriptLayout::Chat;
-        let attachments = block.attachments.clone().unwrap_or_default();
+        let attachments = block.attachments.as_deref().unwrap_or_default();
+        let attachments_changed = (!attachments.is_empty()
+            || self.attachment_seen.contains_key(&block.id))
+            && self
+                .attachment_seen
+                .get(&block.id)
+                .is_none_or(|previous| !std::sync::Arc::ptr_eq(previous, block));
+        if attachments_changed {
+            self.attachment_cards.retain(|(block_id, file_id), _| {
+                block_id != &block.id || attachments.iter().any(|file| &file.id == file_id)
+            });
+            if attachments.is_empty() {
+                self.attachment_seen.remove(&block.id);
+            } else {
+                self.attachment_seen.insert(block.id.clone(), block.clone());
+            }
+        }
         let draft = block.is_draft();
         let text_only = !text.is_empty()
             && !draft
@@ -106,13 +126,14 @@ impl TranscriptView {
             (false, Some(accent)) => (with(accent, 0.24), Some(with(accent, 0.30))),
             (false, None) => (theme.content(0.10), (!chat).then(|| theme.content(0.10))),
         };
-        let radius = if !chat {
-            u(8.)
+        let radius_px = if !chat {
+            8.
         } else if single_line {
-            u(9999.)
+            9999.
         } else {
-            u(12.)
+            12.
         };
+        let radius = u(radius_px);
         let mut bubble = div()
             .relative()
             .min_w_0()
@@ -157,7 +178,14 @@ impl TranscriptView {
                 chips = chips.child(self.render_context_chip(key, index, item, cx));
             }
             for (index, file) in attachments.iter().enumerate() {
-                chips = chips.child(attachment_chip(key, index, file, &theme));
+                chips = chips.child(self.render_attachment_chip(
+                    key,
+                    &block.id,
+                    index,
+                    file,
+                    attachments_changed,
+                    cx,
+                ));
             }
             bubble = bubble.child(chips);
         }
@@ -165,36 +193,7 @@ impl TranscriptView {
             bubble = bubble.child(
                 div()
                     .when(!text.is_empty() || card.is_some(), |el| el.mb(u(8.)))
-                    .rounded(u(6.))
-                    .border_1()
-                    .border_color(theme.content(0.1))
-                    .bg(theme.content(0.06))
-                    .px(u(10.))
-                    .py(u(8.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(u(6.))
-                            .child(
-                                icon(IconName::StickyNote)
-                                    .size(u(14.))
-                                    .text_color(theme.content(0.45)),
-                            )
-                            .child(
-                                div()
-                                    .text_px(11.)
-                                    .text_color(theme.content(0.5))
-                                    .child("Note"),
-                            ),
-                    )
-                    .child(div().mt(u(4.)).truncate().text_px(13.).semibold().child(
-                        if note.title.is_empty() {
-                            "Untitled".to_string()
-                        } else {
-                            note.title.clone()
-                        },
-                    )),
+                    .child(note_card(eid(key, "note"), note.clone()).embedded(true)),
             );
         }
         if let Some(card) = &card {
@@ -244,7 +243,7 @@ impl TranscriptView {
             );
         }
         if let Some(link) = &link {
-            let chip = self.render_link_chip(key, &link.link, cx);
+            let chip = self.link_card(&block.id, &link.link, window, cx);
             // GPUI cannot flow an element inside wrapped text, so the chip
             // sits on its own line between the text around it.
             let before = monocode_core::js::trim_end(&link.before_text).to_string();
@@ -357,6 +356,25 @@ impl TranscriptView {
         }
         if draft {
             bubble = bubble.child(self.render_draft_controls(key, block, cx));
+        }
+        // A fresh /operator, Plan, or Orchestrator turn plays its one-shot
+        // burst.
+        let burst = if monocode {
+            Some(BurstKind::Sparkles)
+        } else if block.intent == Some(TurnIntent::Plan) {
+            Some(BurstKind::PlanSteps)
+        } else {
+            None
+        };
+        if let Some(kind) = burst {
+            bubble = bubble.child(
+                celebration_burst(kind, block.id.clone(), block.started_at)
+                    .radius(radius_px.min(9999.)),
+            );
+        } else if block.intent == Some(TurnIntent::Orchestrate)
+            && let Some(constellation) = self.constellation(block, cx)
+        {
+            bubble = bubble.child(constellation);
         }
 
         // The actions under the bubble show on hover.
@@ -679,87 +697,60 @@ impl TranscriptView {
             .into_any_element()
     }
 
-    /// The compact link chip in a prompt (`UserLinkPreview compact`). A
-    /// GitHub pull request or issue reads as "PR #73".
-    fn render_link_chip(
+    /// `OrchestratorConstellation` for a fresh Orchestrator turn. The entity
+    /// decides once, when made, whether the turn is fresh.
+    fn constellation(
         &mut self,
-        key: &str,
+        block: &Block,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<OrchestratorConstellation>> {
+        if let Some(existing) = self.constellations.get(&block.id) {
+            return Some(existing.clone());
+        }
+        let now = crate::cards::util::now_ms();
+        if !crate::threads::constellation::is_fresh_turn(block.started_at, now) {
+            return None;
+        }
+        let (id, started_at) = (block.id.clone(), block.started_at);
+        let reduced = cx.reduce_motion();
+        let constellation = cx.new(|cx| {
+            let mut view = OrchestratorConstellation::new(&id, started_at, cx);
+            view.set_reduced_motion(reduced, cx);
+            view
+        });
+        self.constellations
+            .insert(block.id.clone(), constellation.clone());
+        Some(constellation)
+    }
+
+    /// The compact link chip in a prompt (`UserLinkPreview compact`): one
+    /// card per prompt, kept while the prompt stays in the transcript.
+    fn link_card(
+        &mut self,
+        block_id: &str,
         link: &UserLink,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = Theme::of(cx).clone();
-        let url = link.url.clone();
-        let chip = div()
-            .id(eid(key, "link"))
-            .flex()
-            .flex_none()
-            .items_center()
-            .mx(px(1.))
-            .cursor_pointer()
-            .on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(TranscriptEvent::OpenUrl { url: url.clone() })
-            }));
-        if let Some(item) = &link.github_work_item {
-            let tone = if item.pull_request {
-                palette::violet_400()
-            } else {
-                theme.colors.success
-            };
-            return chip
-                .tooltip(tooltip(format!(
-                    "Open {} #{} in {}",
-                    if item.pull_request {
-                        "pull request"
-                    } else {
-                        "issue"
-                    },
-                    item.number,
-                    item.repo
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(u(2.))
-                        .h(u(18.))
-                        .px(u(6.))
-                        .rounded(u(6.))
-                        .bg(with(tone, 0.1))
-                        .text_xs_ui()
-                        .medium()
-                        .text_color(with(tone, 0.9))
-                        .child(
-                            icon(if item.pull_request {
-                                IconName::GitPullRequest
-                            } else {
-                                IconName::CircleDot
-                            })
-                            .size(u(12.))
-                            .text_color(with(tone, 0.9)),
-                        )
-                        .child(format!(
-                            "{} #{}",
-                            if item.pull_request { "PR" } else { "Issue" },
-                            item.number
-                        )),
-                )
-                .into_any_element();
+        let cwd = self.cwd();
+        if let Some(card) = self.link_cards.get(block_id).cloned() {
+            let link = link.clone();
+            card.update(cx, |card, cx| card.set_link(link, cwd, true, cx));
+            return card.into_any_element();
         }
-        chip.tooltip(tooltip(format!("Open {}", link.host)))
-            .gap(u(4.))
-            .rounded(u(6.))
-            .px(u(6.))
-            .bg(theme.content(0.06))
-            .text_sm_ui()
-            .text_color(theme.colors.link)
-            .hover(|s| s.bg(theme.content(0.1)))
-            .child(
-                icon(IconName::Globe)
-                    .size(u(12.))
-                    .text_color(theme.colors.link),
-            )
-            .child(div().min_w_0().truncate().child(link.display_url.clone()))
-            .into_any_element()
+        let link = link.clone();
+        let card = cx.new(|cx| UserLinkPreview::new(link, cwd, true, window, cx));
+        cx.subscribe(
+            &card,
+            |_, _, event: &UserLinkPreviewEvent, cx| match event {
+                UserLinkPreviewEvent::Open { url } => {
+                    cx.emit(TranscriptEvent::OpenUrl { url: url.clone() })
+                }
+            },
+        )
+        .detach();
+        self.link_cards.insert(block_id.to_string(), card.clone());
+        card.into_any_element()
     }
 }
 
@@ -797,57 +788,87 @@ fn with(color: Hsla, alpha: f32) -> Hsla {
     monocode_ui::color::with_alpha(color, alpha)
 }
 
-/// `AttachmentChip` as sent: an image thumbnail, or the file's icon and name.
-fn attachment_chip(key: &str, index: usize, file: &Attachment, theme: &Theme) -> AnyElement {
-    let path = file.path.clone().filter(|path| !path.is_empty());
-    let title = path.clone().unwrap_or_else(|| file.name.clone());
-    if file.kind == AttachmentKind::Image
-        && let Some(path) = &path
-    {
-        return div()
-            .id(eid(key, &format!("attachment:{index}")))
-            .flex_none()
-            .size(u(36.))
-            .overflow_hidden()
-            .rounded(u(8.))
-            .tooltip(tooltip(title))
-            .child(img(std::path::PathBuf::from(path)).size_full())
-            .into_any_element();
-    }
-    let folder = file.mime_type == "inode/directory";
-    div()
-        .id(eid(key, &format!("attachment:{index}")))
-        .flex()
-        .min_w_0()
-        .items_center()
-        .gap(u(6.))
-        .rounded(u(6.))
-        .bg(theme.content(0.1))
-        .py(u(2.))
-        .px(u(4.))
-        .tooltip(tooltip(title))
-        .child(
-            div()
-                .flex()
+impl TranscriptView {
+    /// `AttachmentChip` as sent: an image thumbnail, or the file's icon and name.
+    fn render_attachment_chip(
+        &mut self,
+        key: &str,
+        block_id: &str,
+        index: usize,
+        file: &Attachment,
+        changed: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        let path = file.path.clone().filter(|path| !path.is_empty());
+        let title = path.clone().unwrap_or_else(|| file.name.clone());
+        if file.kind == AttachmentKind::Image
+            && (path.is_some()
+                || file.data.as_ref().is_some_and(|data| !data.is_empty())
+                || file.preview_url.as_ref().is_some_and(|url| !url.is_empty()))
+        {
+            let cache_key = (block_id.to_owned(), file.id.clone());
+            let preview = match self.attachment_cards.get(&cache_key) {
+                Some(preview) => {
+                    let preview = preview.clone();
+                    if changed {
+                        let file = file.clone();
+                        preview.update(cx, |preview, cx| preview.set_attachment(file, cx));
+                    }
+                    preview
+                }
+                None => {
+                    let file = file.clone();
+                    let preview =
+                        cx.new(|cx| crate::cards::GeneratedImage::new_attachment(file, cx));
+                    self.attachment_cards.insert(cache_key, preview.clone());
+                    preview
+                }
+            };
+            return div()
+                .id(eid(key, &format!("attachment:{index}")))
                 .flex_none()
-                .items_center()
-                .justify_center()
-                .size(u(20.))
-                .child(if folder {
-                    folder_type_icon(file.name.clone(), false, false).into_any_element()
-                } else {
-                    file_type_icon(file.name.clone()).into_any_element()
-                }),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .max_w(u(140.))
-                .truncate()
-                .text_px(11.)
-                .line_height(u(11.))
-                .text_color(theme.content(0.8))
-                .child(file.name.clone()),
-        )
-        .into_any_element()
+                .size(u(36.))
+                .rounded(u(8.))
+                .tooltip(tooltip(title))
+                .child(preview)
+                .into_any_element();
+        }
+        let folder = file.mime_type == "inode/directory";
+        div()
+            .id(eid(key, &format!("attachment:{index}")))
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap(u(6.))
+            .rounded(u(6.))
+            .bg(theme.content(0.1))
+            .py(u(2.))
+            .px(u(4.))
+            .tooltip(tooltip(title))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(u(20.))
+                    .child(if folder {
+                        folder_type_icon(file.name.clone(), false, false).into_any_element()
+                    } else {
+                        file_type_icon(file.name.clone()).into_any_element()
+                    }),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .max_w(u(140.))
+                    .truncate()
+                    .text_px(11.)
+                    .line_height(u(11.))
+                    .text_color(theme.content(0.8))
+                    .child(file.name.clone()),
+            )
+            .into_any_element()
+    }
 }

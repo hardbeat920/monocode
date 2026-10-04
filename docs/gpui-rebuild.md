@@ -124,7 +124,7 @@ Each milestone ends with something runnable and a check that proves it.
 
 - Upstream drift. `hardbeat920/monocode` keeps shipping TypeScript fixes, especially for provider protocols. After the port, every upstream fix must be ported by hand. Porting the protocol tests first makes that cheaper, because an upstream test change can be replayed against the Rust adapter.
 - zui pin. It is a git-only fork with a small maintainer base. Bumping the pin means following comet's pin pair. `gpui-kit 0.7` on crates.io is the fallback.
-- Transcript rendering. Streaming partial markdown, text selection across blocks, code highlighting, and virtualization of long sessions have no ready-made equivalent. Mermaid diagrams have no Rust renderer; they show as code blocks until we pick an approach.
+- Transcript rendering. Streaming partial markdown, text selection across blocks, code highlighting, and virtualization of long sessions need native behavior checks. Mermaid fences now render SVG through `mermaid-rs-renderer`, coalesce streaming updates, and allow source toggling. Unsupported diagrams retain their source.
 - Editor parity. CodeMirror carries 4.4k lines of custom extensions. The gpui-component editor in the fork (0.5.2) is older than the one in gpui-kit 0.7.
 - In-window backdrop blur. zui has a BackdropBlur element on Metal, wgpu, and Windows, so popovers can keep their frosted look. Upstream GPUI does not.
 - Licensing. Zed's `editor`, `terminal_view`, `markdown`, `ui`, and `theme` crates are GPL-3.0. Copy nothing from them. Comet (MIT), termy (MIT), and tty7 (Apache-2.0) are safe references.

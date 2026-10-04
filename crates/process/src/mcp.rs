@@ -1052,7 +1052,7 @@ mod tests {
     fn discovers_provider_configs_without_exposing_credentials() {
         let root = std::env::temp_dir().join(format!("monocode-mcp-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
-        let project = root.join("project");
+        let project = home.join("project");
         std::fs::create_dir_all(home.join(".cursor")).unwrap();
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::create_dir_all(home.join(".config/opencode")).unwrap();

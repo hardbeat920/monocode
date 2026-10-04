@@ -40,7 +40,7 @@ pub fn help(version: &str) -> String {
         "MonoCode Host {version}
 
 Set up this machine for MonoCode:
-  npx monocode-host connect           Install the host as a background service, turn on
+  monocode-host connect           Install the host as a background service, turn on
                                       network access, and print a pairing link
     --local-only                      Listen on loopback only; pair over SSH
     --bind <address>                  Listen on one address instead of all (0.0.0.0)

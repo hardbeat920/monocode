@@ -12,5 +12,5 @@ gpui-base.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rust-embed = { version = "8", features = ["include-exclude"] }
+rust-embed = { version = "8", features = ["include-exclude", "debug-embed"] }
 gpui-component-assets = { git = "https://github.com/zeronsh/gpui-component", rev = "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70" }

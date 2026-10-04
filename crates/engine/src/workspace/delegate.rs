@@ -46,6 +46,11 @@ pub trait WorkspaceDelegate {
         false
     }
 
+    /// The encoded remote path of a pane's cached or pending host checkout.
+    fn remote_working_cwd(&self, _project: &str, _shell_id: &str, _cx: &App) -> Option<String> {
+        None
+    }
+
     /// `cachedRemoteSessionSummary` for a remote project's shell pane.
     fn remote_summary(&self, _session: &Session, _cx: &App) -> Option<RemoteSummary> {
         None

@@ -1,20 +1,19 @@
-//! The M1 exit check, headless: Engine, Submit, and the Claude provider on a
-//! temporary project. A supervised Claude session asks to write a file, the
-//! test approves through attention's `Approvals` (the path the transcript's
-//! Approve button takes), and waits for the turn to finish. A second
-//! process then boots the engine from the same data dir, opens the session
-//! from the store, checks its blocks, and resumes it with one more prompt.
+//! Boots Engine and Submit with a real provider in a temporary project.
+//! The test approves a file write through attention's `Approvals`, waits
+//! for the turn to finish, and starts another process. The second process
+//! loads the session from the store and resumes it with another prompt.
 //!
-//! It spawns the real `claude` CLI, so it only runs when asked:
+//! It spawns a real provider CLI, so it only runs when asked. The provider
+//! defaults to Claude. Set MONOCODE_LIVE_HARNESS=codex to test Codex.
 //!
 //! ```sh
 //! MONOCODE_DATA_DIR=/tmp/mc/appdata \
 //!   cargo test -p monocode-app --test live_engine -- --ignored
 //! ```
 //!
-//! GPUI's run loop needs the main thread, so this file has its own `main`
-//! (`harness = false`) and reports itself ignored unless `--ignored` or
-//! `--include-ignored` is passed, like an `#[ignore]` test.
+//! GPUI's run loop needs the main thread, so this file has its own `main`.
+//! Cargo sets `harness = false`. The executable reports itself ignored
+//! unless the caller passes `--ignored` or `--include-ignored`.
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -32,8 +31,9 @@ use monocode_engine::runtime::Engine;
 use monocode_engine::submit::{Submit, SubmitOptions};
 use monocode_engine::workspace::SessionFactory as _;
 
-const TEST_NAME: &str = "live_claude_turn_survives_restart";
-const FIRST_PROMPT: &str = "Use the Write tool to create a file named hello.txt in the current directory containing exactly the word hi. Do nothing else.";
+const TEST_NAME: &str = "live_provider_turn_survives_restart";
+const PROJECT_DIR_ENV: &str = "MONOCODE_LIVE_PROJECT_DIR";
+const FIRST_PROMPT: &str = "Create a file named hello.txt in the current directory containing exactly the word hi. Use a file editing tool and request approval if necessary. Do nothing else.";
 const SECOND_PROMPT: &str =
     "What is the name of the file you just created? Reply with the file name only.";
 const TURN_TIMEOUT: Duration = Duration::from_secs(240);
@@ -92,24 +92,33 @@ fn test_data_dir() -> Result<DataDir> {
     Ok(dir)
 }
 
-fn project_dir() -> PathBuf {
-    std::env::temp_dir().join("monocode-live-project")
+fn project_dir() -> Result<PathBuf> {
+    std::env::var_os(PROJECT_DIR_ENV)
+        .map(PathBuf::from)
+        .context("the live test phase has no isolated project directory")
+}
+
+fn harness() -> Result<HarnessId> {
+    let id = std::env::var("MONOCODE_LIVE_HARNESS").unwrap_or_else(|_| "claude".into());
+    match HarnessId::parse(&id) {
+        Some(id @ (HarnessId::Claude | HarnessId::Codex)) => Ok(id),
+        _ => bail!("MONOCODE_LIVE_HARNESS must be claude or codex"),
+    }
 }
 
 /// Run both phases as child processes, so the second one starts the
 /// engine from nothing, the way a relaunch does.
 fn orchestrate() -> Result<()> {
     let data_dir = test_data_dir()?;
-    let project = project_dir();
-    if project.exists() {
-        std::fs::remove_dir_all(&project)?;
-    }
-    std::fs::create_dir_all(&project)?;
+    let _ = harness()?;
+    let project = std::env::temp_dir().join(format!("monocode-live-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&project)?;
     let exe = std::env::current_exe()?;
 
     let first = Command::new(&exe)
         .args(["--phase", "turn"])
         .env(data_dir::DATA_DIR_ENV, &data_dir.path)
+        .env(PROJECT_DIR_ENV, &project)
         .output()
         .context("running the first phase")?;
     let stdout = String::from_utf8_lossy(&first.stdout);
@@ -129,6 +138,7 @@ fn orchestrate() -> Result<()> {
     let second = Command::new(&exe)
         .args(["--phase", "resume", "--session", &session_id])
         .env(data_dir::DATA_DIR_ENV, &data_dir.path)
+        .env(PROJECT_DIR_ENV, &project)
         .output()
         .context("running the second phase")?;
     eprint!("{}", String::from_utf8_lossy(&second.stderr));
@@ -151,6 +161,8 @@ fn run_phase(phase: &str, session: Option<String>) -> ExitCode {
                     import_webkit: false,
                     sounds: false,
                     reap_orphans: false,
+                    run_schedules: false,
+                    control_server: true,
                 },
                 cx,
             )
@@ -224,7 +236,7 @@ fn describe(session: &Session) -> String {
         .blocks
         .iter()
         .map(|block| {
-            let text: String = block.text.chars().take(80).collect();
+            let text: String = block.text.chars().take(500).collect();
             format!("  {:?} {:?}", block.role, text)
         })
         .collect::<Vec<_>>()
@@ -261,19 +273,25 @@ fn last_assistant_text(session: &Session) -> String {
         .unwrap_or_default()
 }
 
-/// Phase one: a supervised Claude turn that needs an approval.
+/// Phase one runs a supervised turn that needs an approval.
 async fn first_turn(cx: &mut AsyncApp) -> Result<()> {
-    let project = project_dir();
+    let project = project_dir()?;
+    let harness = harness()?;
+    let (registry, catalog) = cx.update(|cx| {
+        let services = AppServices::global(cx);
+        (services.registry.clone(), services.catalog.clone())
+    });
+    registry
+        .refresh_harness_catalogs([harness], false, |id| catalog.has_live_catalog(id))
+        .await;
+    ensure!(
+        harness != HarnessId::Codex || !catalog.read().default_model_id(harness).is_empty(),
+        "Codex did not return a default model from its live catalog"
+    );
     let cwd = project.to_string_lossy().to_string();
     let id = cx.update(|cx| {
         let factory = AppServices::global(cx).factory.clone();
-        let session = factory.new_session(
-            HarnessId::Claude,
-            &cwd,
-            None,
-            Some(RuntimeMode::Supervised),
-            None,
-        );
+        let session = factory.new_session(harness, &cwd, None, Some(RuntimeMode::Supervised), None);
         let id = session.id.clone();
         Engine::sessions(cx).update(cx, |sessions, cx| {
             sessions.insert(session, cx);
@@ -297,10 +315,22 @@ async fn first_turn(cx: &mut AsyncApp) -> Result<()> {
     eprintln!("[live] approving request {request_id}");
     cx.update(|cx| Approvals::approve(&id, request_id, ApprovalDecision::Allow, cx));
 
-    let done = wait_for(&id, "the turn to finish", TURN_TIMEOUT, cx, |session| {
-        !session.is_busy() && pending_approval(session).is_none()
-    })
-    .await?;
+    let started = Instant::now();
+    let done = loop {
+        cx.background_executor().timer(POLL).await;
+        let current = session(&id, cx).context("the live session disappeared")?;
+        if let Some(request_id) = pending_approval(&current) {
+            eprintln!("[live] approving follow-up request {request_id}");
+            cx.update(|cx| Approvals::approve(&id, request_id, ApprovalDecision::Allow, cx));
+        } else if !current.is_busy() {
+            break current;
+        }
+        ensure!(
+            started.elapsed() < TURN_TIMEOUT,
+            "timed out waiting for the turn to finish\n{}",
+            describe(&current)
+        );
+    };
     let decided = done
         .blocks
         .iter()
@@ -315,7 +345,7 @@ async fn first_turn(cx: &mut AsyncApp) -> Result<()> {
         done.provider_session_id
             .as_deref()
             .is_some_and(|id| !id.is_empty()),
-        "the session has no Claude session id"
+        "the session has no provider session id"
     );
     eprintln!("[live] turn finished with {} blocks", done.blocks.len());
     eprintln!("{}", describe(&done));
@@ -330,7 +360,7 @@ async fn first_turn(cx: &mut AsyncApp) -> Result<()> {
 }
 
 /// Phase two: a fresh engine loads the session from the store and resumes
-/// the Claude conversation.
+/// the provider conversation.
 async fn resume(id: &str, cx: &mut AsyncApp) -> Result<()> {
     let opening = cx
         .update(|cx| Engine::sessions(cx).update(cx, |sessions, cx| sessions.ensure_open(id, cx)));
@@ -356,7 +386,7 @@ async fn resume(id: &str, cx: &mut AsyncApp) -> Result<()> {
     let provider = loaded
         .provider_session_id
         .clone()
-        .ok_or_else(|| anyhow!("the stored session has no Claude session id"))?;
+        .ok_or_else(|| anyhow!("the stored session has no provider session id"))?;
     ensure!(!loaded.is_busy(), "the stored session is still busy");
 
     let before = loaded.blocks.len();
@@ -378,7 +408,7 @@ async fn resume(id: &str, cx: &mut AsyncApp) -> Result<()> {
     );
     ensure!(
         done.provider_session_id.as_deref() == Some(provider.as_str()),
-        "the resumed turn started a new Claude session ({:?} became {:?})",
+        "the resumed turn started a new provider session ({:?} became {:?})",
         provider,
         done.provider_session_id
     );

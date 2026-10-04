@@ -14,7 +14,7 @@ use gpui::{
 };
 use monocode_core::Attachment;
 use monocode_core::attachment::{AttachmentKind, is_attachment_folder};
-use monocode_ui::styled::UiStyled as _;
+use monocode_ui::styled::{UiStyled as _, glass_backdrop};
 use monocode_ui::widgets::popover_frame;
 use monocode_ui::{IconName, Theme, file_type_icon, folder_type_icon, icon, u};
 
@@ -27,6 +27,20 @@ use crate::pickers::anchor::{Side, anchored_popover};
 
 const HOVER_OPEN_DELAY: Duration = Duration::from_millis(220);
 const HOVER_CLOSE_DELAY: Duration = Duration::from_millis(100);
+
+pub(crate) struct AttachmentPreview {
+    pub(crate) id: String,
+    source: gpui::ImageSource,
+    name: String,
+    focus: gpui::FocusHandle,
+    previous_focus: Option<gpui::FocusHandle>,
+}
+
+pub(crate) struct AttachmentImage {
+    file: Attachment,
+    source: Option<gpui::ImageSource>,
+    _load: gpui::Task<()>,
+}
 
 /// The chip whose preview is showing, and the timer that will change it.
 #[derive(Default)]
@@ -436,12 +450,12 @@ impl Composer {
 
     /// `AttachmentChip` with a remove button.
     pub(crate) fn render_attachment_chip(
-        &self,
+        &mut self,
         file: &Attachment,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let preview = attachment_image(file);
+        let preview = self.attachment_image(file, cx);
         let id = file.id.clone();
         let remove_hover = theme.content(0.15);
         let remove_ink = theme.colors.content;
@@ -488,12 +502,35 @@ impl Composer {
             .gap(u(6.))
             .rounded(u(theme.radius.md));
         let chip = if let Some(source) = preview.filter(|_| image) {
+            let name = file.name.clone();
+            let attachment_id = file.id.clone();
+            let full_source = source.clone();
             chip.child(
                 div()
+                    .id(SharedString::from(format!("attachment-open-{}", file.id)))
+                    .debug_selector(|| "composer-attachment-image".into())
                     .size(u(36.))
                     .flex_none()
                     .rounded(u(theme.radius.lg))
                     .overflow_hidden()
+                    .cursor_pointer()
+                    .tooltip(monocode_ui::widgets::tooltip(format!(
+                        "Open {name} full screen"
+                    )))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        let focus = cx.focus_handle();
+                        let previous_focus = window.focused(cx);
+                        focus.focus(window, cx);
+                        this.attachment_preview = Some(AttachmentPreview {
+                            id: attachment_id.clone(),
+                            source: full_source.clone(),
+                            name: name.clone(),
+                            focus,
+                            previous_focus,
+                        });
+                        cx.notify();
+                    }))
                     .child(
                         img(source)
                             .size_full()
@@ -533,10 +570,200 @@ impl Composer {
         };
         chip.child(remove).into_any_element()
     }
+
+    fn attachment_image(
+        &mut self,
+        file: &Attachment,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::ImageSource> {
+        let preview_url = file.preview_url.as_deref().filter(|url| !url.is_empty());
+        let avif = file.kind == AttachmentKind::Image
+            && (preview_url.is_some_and(|url| url.starts_with("data:image/avif;base64,"))
+                || (file.mime_type == "image/avif" && preview_url.is_none()));
+        if !avif {
+            return attachment_image(file);
+        }
+        if let Some(preview) = self.attachment_images.get(&file.id)
+            && preview.file == *file
+        {
+            return preview.source.clone();
+        }
+        let loading = file.clone();
+        let id = file.id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { load_avif_attachment(&loading) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(preview) = this.attachment_images.get_mut(&id) {
+                    preview.source = result.ok().map(gpui::ImageSource::Image);
+                    cx.notify();
+                }
+            })
+            .ok();
+        });
+        self.attachment_images.insert(
+            file.id.clone(),
+            AttachmentImage {
+                file: file.clone(),
+                source: None,
+                _load: task,
+            },
+        );
+        None
+    }
+
+    pub(crate) fn close_attachment_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(preview) = self.attachment_preview.take() {
+            if let Some(focus) = preview.previous_focus {
+                focus.focus(window, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn render_attachment_preview(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let preview = self.attachment_preview.as_ref()?;
+        let theme = Theme::of(cx).clone();
+        let viewport = window.viewport_size();
+        Some(
+            gpui::deferred(
+                gpui::anchored()
+                    .position_mode(gpui::AnchoredPositionMode::Window)
+                    .position(gpui::point(gpui::px(0.), gpui::px(0.)))
+                    .child(
+                        div()
+                            .id("composer-image-lightbox")
+                            .debug_selector(|| "composer-image-lightbox".into())
+                            .track_focus(&preview.focus)
+                            .relative()
+                            .w(viewport.width)
+                            .h(viewport.height)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .p(u(24.))
+                            .child(glass_backdrop(0., 4., gpui::black().opacity(0.85)))
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui::KeyDownEvent, window, cx| {
+                                    if event.keystroke.key == "escape" {
+                                        cx.stop_propagation();
+                                        this.close_attachment_preview(window, cx);
+                                    }
+                                },
+                            ))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_attachment_preview(window, cx);
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(|| "composer-image-lightbox-image".into())
+                                    .max_w_full()
+                                    .max_h_full()
+                                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(
+                                        img(preview.source.clone())
+                                            .max_w_full()
+                                            .max_h_full()
+                                            .object_fit(gpui::ObjectFit::Contain)
+                                            .shadow_2xl(),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("composer-image-lightbox-close")
+                                    .absolute()
+                                    .right(u(16.))
+                                    .top(u(16.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(u(36.))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(gpui::white().opacity(0.15))
+                                    .bg(gpui::black().opacity(0.45))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(gpui::black().opacity(0.65)))
+                                    .tooltip(monocode_ui::widgets::tooltip("Close image preview"))
+                                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.close_attachment_preview(window, cx)
+                                    }))
+                                    .child(
+                                        icon(IconName::X)
+                                            .size(u(16.))
+                                            .text_color(gpui::white().opacity(0.8)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .size_0()
+                                    .overflow_hidden()
+                                    .child(preview.name.clone()),
+                            ),
+                    ),
+            )
+            .with_priority(theme.layer.dialog)
+            .into_any_element(),
+        )
+    }
+}
+
+fn load_avif_attachment(file: &Attachment) -> Result<Arc<gpui::Image>, String> {
+    let inline = file
+        .preview_url
+        .as_deref()
+        .and_then(|url| url.strip_prefix("data:image/avif;base64,"))
+        .or_else(|| file.data.as_deref().filter(|data| !data.is_empty()));
+    let bytes = match inline {
+        Some(data) => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|error| error.to_string())?,
+        None => std::fs::read(file.path.as_deref().ok_or("image has no bytes or path")?)
+            .map_err(|error| error.to_string())?,
+    };
+    let rgba = monocode_editor::image_view::decode_avif_rgba(&bytes)?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(Arc::new(gpui::Image::from_bytes(
+        ImageFormat::Png,
+        png.into_inner(),
+    )))
 }
 
 /// `attachmentPreviewSrc` as an image source: inline bytes, else the file.
 fn attachment_image(file: &Attachment) -> Option<gpui::ImageSource> {
+    if let Some(url) = file.preview_url.as_deref().filter(|url| !url.is_empty()) {
+        if let Some(data) = url.strip_prefix("data:")
+            && let Some((header, data)) = data.split_once(',')
+            && let Some(mime) = header.strip_suffix(";base64")
+            && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data)
+            && let Some(format) = ImageFormat::from_mime_type(mime)
+        {
+            return Some(gpui::ImageSource::Image(Arc::new(gpui::Image::from_bytes(
+                format, bytes,
+            ))));
+        }
+        return Some(gpui::ImageSource::from(SharedString::from(url.to_string())));
+    }
     if let Some(data) = file.data.as_deref().filter(|data| !data.is_empty())
         && file.kind == AttachmentKind::Image
         && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data)
@@ -546,11 +773,35 @@ fn attachment_image(file: &Attachment) -> Option<gpui::ImageSource> {
             format, bytes,
         ))));
     }
-    if let Some(url) = file.preview_url.as_deref().filter(|url| !url.is_empty()) {
-        return Some(gpui::ImageSource::from(SharedString::from(url.to_string())));
-    }
     file.path
         .as_deref()
         .filter(|path| !path.is_empty() && file.kind == AttachmentKind::Image)
         .map(|path| gpui::ImageSource::from(std::path::PathBuf::from(path)))
+}
+
+#[cfg(test)]
+mod attachment_image_tests {
+    use super::*;
+
+    #[test]
+    fn avif_attachment_preview_preserves_dimensions_and_color() {
+        let file = Attachment {
+            kind: AttachmentKind::Image,
+            mime_type: "image/avif".into(),
+            path: Some("/missing/on-this-desktop/image.avif".into()),
+            data: Some(
+                base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                    "../../../../editor/tests/fixtures/red-blue.avif"
+                )),
+            ),
+            ..Attachment::default()
+        };
+        let preview = load_avif_attachment(&file).unwrap();
+        let pixels = image::load_from_memory(&preview.bytes).unwrap().to_rgba8();
+        assert_eq!(pixels.dimensions(), (32, 16));
+        let left = pixels.get_pixel(4, 8);
+        let right = pixels.get_pixel(28, 8);
+        assert!(left[0] > left[2]);
+        assert!(right[2] > right[0]);
+    }
 }

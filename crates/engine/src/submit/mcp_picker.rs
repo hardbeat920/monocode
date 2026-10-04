@@ -174,9 +174,7 @@ pub fn tagged_mcp_servers(text: &str, tags: &[McpTag]) -> Vec<McpConnection> {
 
 /// `localeCompare` for server and provider names.
 fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 /// `mcpPickerServers`: matching rows, usable ones first.
@@ -309,6 +307,68 @@ mod tests {
                 "stdio",
             ),
         ]
+    }
+
+    #[test]
+    fn matches_intl_mcp_order_without_changing_availability() {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                let mut connections: Vec<_> =
+                    ["filez", "fileé", "filee", "file.a", "file-a", "file_a"]
+                        .into_iter()
+                        .map(|name| {
+                            connection(
+                                McpProvider::Claude,
+                                name,
+                                McpScope::Project,
+                                "/fixture",
+                                "stdio",
+                            )
+                        })
+                        .collect();
+                connections.push(connection(
+                    McpProvider::Claude,
+                    "aaa-auth",
+                    McpScope::User,
+                    "/fixture",
+                    "http",
+                ));
+                let mut disabled = connection(
+                    McpProvider::Claude,
+                    "aaa-disabled",
+                    McpScope::User,
+                    "/fixture",
+                    "stdio",
+                );
+                disabled.enabled = Some(false);
+                connections.push(disabled);
+                let status = HashMap::from([("aaa-auth".into(), "Needs authentication".into())]);
+                let rows = mcp_picker_servers(&connections, HarnessId::Claude, &status, "");
+                assert_eq!(
+                    rows.iter()
+                        .map(|row| row.server.name.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "file_a",
+                        "file-a",
+                        "file.a",
+                        "filee",
+                        "fileé",
+                        "filez",
+                        "aaa-auth",
+                        "aaa-disabled"
+                    ]
+                );
+                assert!(
+                    rows[..6]
+                        .iter()
+                        .all(|row| row.availability == McpAvailability::Available)
+                );
+                assert_eq!(rows[6].availability, McpAvailability::Authentication);
+                assert_eq!(rows[7].availability, McpAvailability::Unavailable);
+            })
+            .unwrap();
+        }
     }
 
     #[test]

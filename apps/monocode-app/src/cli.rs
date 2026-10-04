@@ -37,6 +37,7 @@ pub struct Args {
     pub view: String,
     pub theme: Option<String>,
     pub size: (f32, f32),
+    pub size_override: bool,
     pub ui_scale: Option<f32>,
     pub screenshot: Option<PathBuf>,
     pub backdrop: Option<[u8; 3]>,
@@ -44,6 +45,7 @@ pub struct Args {
     pub data_dir: Option<PathBuf>,
     pub open_session: Option<String>,
     pub settle_ms: Option<u64>,
+    pub urls: Vec<String>,
 }
 
 impl Default for Args {
@@ -52,6 +54,7 @@ impl Default for Args {
             view: "shell".into(),
             theme: None,
             size: (1280.0, 800.0),
+            size_override: false,
             ui_scale: None,
             screenshot: None,
             backdrop: Some([0x5f, 0x55, 0x60]),
@@ -59,6 +62,7 @@ impl Default for Args {
             data_dir: None,
             open_session: None,
             settle_ms: None,
+            urls: Vec::new(),
         }
     }
 }
@@ -102,7 +106,10 @@ impl Args {
                     }
                     out.theme = Some(theme);
                 }
-                "--size" => out.size = parse_size(&value("--size")?)?,
+                "--size" => {
+                    out.size = parse_size(&value("--size")?)?;
+                    out.size_override = true;
+                }
                 "--ui-scale" => {
                     let scale: f32 = value("--ui-scale")?
                         .parse()
@@ -124,6 +131,7 @@ impl Args {
                     print!("{USAGE}");
                     std::process::exit(0);
                 }
+                other if other.starts_with("monocode://") => out.urls.push(other.to_string()),
                 other => bail!("unknown argument {other}\n\n{USAGE}"),
             }
         }

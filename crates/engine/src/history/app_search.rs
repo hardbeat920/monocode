@@ -710,15 +710,9 @@ impl Scored for MessageHit {
     }
 }
 
-/// `localeCompare`, close to ICU's root order: case-insensitive first,
-/// lowercase before uppercase on a tie. Same as the workspace file index.
-// TODO(port): ICU also orders punctuation differently from code points.
+/// `localeCompare` with the OS default locale.
 fn locale_compare(a: &str, b: &str) -> Ordering {
-    let folded = a.to_lowercase().cmp(&b.to_lowercase());
-    if folded != Ordering::Equal {
-        return folded;
-    }
-    b.cmp(a)
+    monocode_locale::compare(a, b)
 }
 
 #[cfg(test)]

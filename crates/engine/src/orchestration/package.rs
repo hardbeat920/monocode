@@ -297,18 +297,18 @@ impl SubmitOrchestrationHooks for SubmitHooks {
         }))
     }
 
-    fn discover_settings(&self, cx: &mut App) -> Task<OrchestrationSettings> {
+    fn discover_settings(&self, cx: &mut App) -> Task<Result<OrchestrationSettings, String>> {
         let probe = self.peers.probe_availability(cx);
         let config = Submit::try_global(cx).map(|submit| submit.read(cx).config().clone());
         cx.spawn(async move |_| {
             let Some(config) = config else {
-                return empty_settings();
+                return Ok(empty_settings());
             };
             let registry = config.registry.clone();
             let catalog = config.catalog.clone();
             let live = config.catalog.clone();
             let available = config.is_harness_available.clone();
-            let discovered = discover_orchestration_settings(
+            discover_orchestration_settings(
                 || probe,
                 |id| available(id),
                 |ids| async move {
@@ -318,14 +318,7 @@ impl SubmitOrchestrationHooks for SubmitHooks {
                 },
                 || catalog.snapshot(),
             )
-            .await;
-            // TODO(port): discoverOrchestrationSettings threw here and the
-            // turn failed; submit's hook has no error path, so an empty
-            // catalog fails the proposal's validation instead.
-            discovered.unwrap_or_else(|error| {
-                log::warn!("[orchestration] {error}");
-                empty_settings()
-            })
+            .await
         })
     }
 

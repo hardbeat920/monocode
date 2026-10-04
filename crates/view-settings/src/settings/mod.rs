@@ -44,10 +44,10 @@ pub use background::{BackgroundEffects, BackgroundImage, ChatBackground};
 pub use chrome::page_header;
 pub use host::{
     AppearanceHost, ArchiveHost, ArchivedProject, BinaryInspection, GeneralHost, GithubStatus,
-    HostTask, InboxHost, JiraProject, JiraStatus, KeybindingsHost, LinearTeam, NoopHost,
-    NotificationPermission, ProjectBackgroundHost, ProjectBackgroundSettings, ProvidersHost,
-    SessionSummary, SettingsCallbacks, SettingsHosts, SettingsProps, SlotContext, UpdatePhase,
-    UpdaterSnapshot, UrlStatus, ViewSlot,
+    HostTask, InboxHost, JiraProject, JiraStatus, KeybindingsHost, LinearTeam, LiveSlotContext,
+    NoopHost, NotificationPermission, ProjectBackgroundHost, ProjectBackgroundSettings,
+    ProvidersHost, SessionSummary, SettingsCallbacks, SettingsHosts, SettingsProps, SlotContext,
+    UpdatePhase, UpdaterSnapshot, UrlStatus, ViewSlot,
 };
 pub use native_glass::{GlassWindow, NativeGlass};
 pub use page::{SectionBody, SettingsPage};

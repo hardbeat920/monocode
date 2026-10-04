@@ -393,28 +393,35 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// The npm package the desktop installs on hosts: the release matching this
-/// desktop. `MONOCODE_HOST_PACKAGE` overrides it for development, such as a
-/// tarball path on the host or a tarball URL.
+/// The native host release directory matching this desktop. Development
+/// builds can use MONOCODE_HOST_RELEASE_BASE_URL for an HTTPS mirror.
 pub fn host_package() -> Result<String, String> {
-    let package = std::env::var("MONOCODE_HOST_PACKAGE")
+    let package = std::env::var("MONOCODE_HOST_RELEASE_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("monocode-host@{}", env!("CARGO_PKG_VERSION")));
+        .unwrap_or_else(|| {
+            format!(
+                "https://github.com/hardbeat920/monocode/releases/download/v{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        });
     // Passed through sh, PowerShell, and cmd.exe; keep it to characters that
     // none of them interpret.
-    if package.is_empty()
+    if !package.starts_with("https://")
         || package.len() > 1024
         || !package
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"@._-/:+~\\".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/:+~".contains(&b))
     {
-        return Err("MONOCODE_HOST_PACKAGE contains unsupported characters".into());
+        return Err(
+            "MONOCODE_HOST_RELEASE_BASE_URL must be an HTTPS URL without shell characters".into(),
+        );
     }
-    Ok(package)
+    Ok(package.trim_end_matches('/').to_owned())
 }
 
-/// Runs `monocode-host connect --json` on the host through npx. The host
+/// Downloads the matching Rust host, verifies its SHA-256 and version, and
+/// runs `monocode-host connect --json`. The host
 /// installs or reuses its background service and prints one JSON line with
 /// a pairing link. `upgrade` restarts an older host even with running turns;
 /// the desktop asks the user before setting it.
@@ -438,9 +445,11 @@ fn connect_script_from_template(
         HostPlatform::Unix => template
             .replace("\r\n", "\n")
             .replace("@@PACKAGE@@", &shell_quote(package))
+            .replace("@@VERSION@@", &shell_quote(env!("CARGO_PKG_VERSION")))
             .replace("@@FLAGS@@", flags),
         HostPlatform::Windows => template
             .replace("@@PACKAGE@@", &powershell_quote(package))
+            .replace("@@VERSION@@", &powershell_quote(env!("CARGO_PKG_VERSION")))
             .replace("@@FLAGS@@", flags),
     }
 }
@@ -805,19 +814,21 @@ mod tests {
     #[test]
     fn connect_runs_the_matching_host_package_and_upgrades_only_when_asked() {
         let package = host_package().unwrap();
-        assert!(
-            package.starts_with("monocode-host@") || std::env::var("MONOCODE_HOST_PACKAGE").is_ok()
-        );
-        let unix = connect_script(HostPlatform::Unix, "monocode-host@1.2.3", false);
+        assert!(package.starts_with("https://"));
+        let unix = connect_script(HostPlatform::Unix, "https://example.test/v0.6.0", false);
         assert!(!unix.contains("@@"));
         assert!(!unix.contains('\r'));
-        assert!(unix.contains("PACKAGE='monocode-host@1.2.3'"));
-        assert!(unix.contains("--package \"$PACKAGE\" monocode-host connect --json <"));
+        assert!(unix.contains("RELEASE_BASE='https://example.test/v0.6.0'"));
+        assert!(unix.contains("\"$temp/monocode-host\" connect --json <"));
+        assert!(unix.contains("SHA256SUMS"));
+        assert!(!unix.contains("npx"));
         assert!(!unix.contains("--json --yes"));
         assert!(connect_script(HostPlatform::Unix, "p", true).contains("connect --json --yes"));
-        let windows = connect_script(HostPlatform::Windows, "monocode-host@1.2.3", true);
+        let windows = connect_script(HostPlatform::Windows, "https://example.test/v0.6.0", true);
         assert!(!windows.contains("@@"));
-        assert!(windows.contains("$package = 'monocode-host@1.2.3'"));
+        assert!(windows.contains("$releaseBase = 'https://example.test/v0.6.0'"));
+        assert!(windows.contains("Get-FileHash"));
+        assert!(!windows.contains("npx"));
         assert!(windows.contains("connect --json --yes"));
     }
     #[test]
@@ -830,6 +841,127 @@ mod tests {
         assert_eq!(
             script,
             connect_script_from_template(HostPlatform::Unix, &lf_template, "p", false)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn native_bootstrap_checks_the_download_before_running_connect() {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let fixture = root.path().join("release");
+        let bin = root.path().join("tools");
+        let home = root.path().join("home");
+        for path in [&fixture, &bin, &home] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let host = fixture.join("monocode-host");
+        let host_script = format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo {}; else printf '%s\\n' \"$*\" > \"$BOOTSTRAP_CALLS\"; echo '{{\"link\":\"fixture\",\"port\":3774}}'; fi\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        std::fs::write(&host, host_script).unwrap();
+        std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let os = if cfg!(target_os = "macos") {
+            "apple-darwin"
+        } else {
+            "unknown-linux-gnu"
+        };
+        let name = format!(
+            "monocode-host_{}_{}-{os}.tar.gz",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH
+        );
+        let archive = fixture.join(&name);
+        assert!(
+            Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&fixture)
+                .arg("monocode-host")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let digest = Sha256::digest(std::fs::read(&archive).unwrap());
+        std::fs::write(fixture.join("SHA256SUMS"), format!("{digest:x}  {name}\n")).unwrap();
+        let curl = bin.join("curl");
+        std::fs::write(&curl, "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in https://*) url=$1;; --output) shift; output=$1;; esac; shift; done\ncp \"$RELEASE_FIXTURE/${url##*/}\" \"$output\"\n").unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let calls = root.path().join("connect-args");
+        let run = |upgrade| {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(connect_script(
+                    HostPlatform::Unix,
+                    "https://example.test/releases/v0.6.0",
+                    upgrade,
+                ))
+                .env("HOME", &home)
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("RELEASE_FIXTURE", &fixture)
+                .env("BOOTSTRAP_CALLS", &calls)
+                .output()
+                .unwrap()
+        };
+        let success = run(false);
+        assert!(
+            success.status.success(),
+            "{}",
+            String::from_utf8_lossy(&success.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap().trim(),
+            "connect --json"
+        );
+        assert!(run(true).status.success());
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap().trim(),
+            "connect --json --yes"
+        );
+        std::fs::remove_file(&calls).unwrap();
+        std::fs::write(
+            fixture.join("SHA256SUMS"),
+            format!("{}  {name}\n", "0".repeat(64)),
+        )
+        .unwrap();
+        let rejected = run(false);
+        assert!(!rejected.status.success());
+        assert!(!calls.exists());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("checksum did not match"));
+
+        // A matching checksum does not permit a symlink executable.
+        let outside = root.path().join("outside-host");
+        std::fs::write(&outside, b"preserve this file").unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::remove_file(&host).unwrap();
+        std::os::unix::fs::symlink(&outside, &host).unwrap();
+        assert!(
+            Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&fixture)
+                .arg("monocode-host")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let digest = Sha256::digest(std::fs::read(&archive).unwrap());
+        std::fs::write(fixture.join("SHA256SUMS"), format!("{digest:x}  {name}\n")).unwrap();
+        let rejected = run(false);
+        assert!(!rejected.status.success());
+        assert!(!calls.exists());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("unexpected files"));
+        assert_eq!(std::fs::read(&outside).unwrap(), b"preserve this file");
+        assert_eq!(
+            std::fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o400
         );
     }
     #[test]

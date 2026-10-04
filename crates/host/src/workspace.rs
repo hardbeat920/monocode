@@ -36,7 +36,10 @@ fn outside() -> String {
 
 /// The part of `path` below `root`, when both are absolute and normalized.
 fn below(root: &Path, path: &Path) -> Option<PathBuf> {
-    path.strip_prefix(root).ok().map(Path::to_path_buf)
+    dunce::simplified(path)
+        .strip_prefix(dunce::simplified(root))
+        .ok()
+        .map(Path::to_path_buf)
 }
 
 fn has_git_component(relative: &Path) -> bool {
@@ -89,7 +92,7 @@ pub fn existing_path(
     allow_root: bool,
 ) -> Result<PathBuf, String> {
     let path = workspace_path(root, input, allow_root)?;
-    let actual = std::fs::canonicalize(&path).map_err(|error| error.to_string())?;
+    let actual = dunce::canonicalize(&path).map_err(|error| error.to_string())?;
     let relative = below(root, &actual).ok_or_else(outside)?;
     if (!allow_root && relative.as_os_str().is_empty()) || has_git_component(&relative) {
         return Err(outside());
@@ -553,7 +556,7 @@ mod tests {
 
     fn real_tempdir() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
         (directory, root)
     }
 

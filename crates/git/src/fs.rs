@@ -821,7 +821,7 @@ fn git_info_uncached(root: &Path) -> GitInfo {
     }
 }
 
-#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffStats {
     pub files: i64,
@@ -835,7 +835,7 @@ pub fn git_diff_stats(cwd: String) -> GitDiffStats {
     git_diff_stats_for(&expand_home(&cwd))
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitChangedFile {
     pub path: String,
@@ -847,7 +847,7 @@ pub struct GitChangedFile {
     pub unstaged: bool,
 }
 
-#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffIndex {
     pub branch: Option<String>,
@@ -874,7 +874,7 @@ pub fn git_diff_files(cwd: String) -> GitDiffIndex {
     git_diff_files_for(&expand_home(&cwd))
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileDiff {
     pub path: String,
@@ -895,14 +895,14 @@ pub fn git_file_diff(cwd: String, relative: String, staged: bool) -> Result<GitF
 const GIT_HISTORY_DEFAULT: u32 = 200;
 const GIT_HISTORY_MAX: u32 = 500;
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHistoryRef {
     pub name: String,
     pub kind: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHistoryCommit {
     pub sha: String,
@@ -915,7 +915,7 @@ pub struct GitHistoryCommit {
     pub head: bool,
 }
 
-#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHistory {
     pub head: Option<String>,
@@ -1020,7 +1020,7 @@ pub fn git_sync(cwd: String) -> Result<(), String> {
     git_sync_changes_for(&expand_home(&cwd))
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRangeContext {
     pub base: String,
@@ -1076,21 +1076,21 @@ pub fn git_pr_create(
     )
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubLabel {
     pub name: String,
     pub color: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubAssignee {
     pub login: String,
     pub avatar_url: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubWorkItem {
     pub kind: String,
@@ -1522,7 +1522,7 @@ fn github_check_details_with(
     Ok(details)
 }
 
-#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranches {
     pub current: Option<String>,
@@ -1530,7 +1530,7 @@ pub struct GitBranches {
     pub branches: Vec<GitBranchEntry>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchEntry {
     pub name: String,
@@ -4899,7 +4899,11 @@ pub fn read_file_preview(
             return Err("Binary file".into());
         }
         if line.len() > 200 {
-            line.truncate(199);
+            let mut end = 199;
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            line.truncate(end);
             line.push('…');
         }
         lines.push(line);
@@ -5528,6 +5532,18 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn file_preview_truncates_multibyte_lines_without_panicking() {
+        let dir = tmp("unicode-preview");
+        let path = dir.0.join("source.txt");
+        let line = format!("{}{}", "a".repeat(198), "界".repeat(4));
+        std::fs::write(&path, format!("{line}\nsecond\n")).unwrap();
+        let preview = read_file_preview(path.to_string_lossy().into_owned(), 2, None).unwrap();
+        assert!(preview[0].ends_with('…'));
+        assert!(line.starts_with(preview[0].trim_end_matches('…')));
+        assert_eq!(preview[1], "second");
+    }
 
     #[test]
     fn claude_shell_commands_match_only_requested_bash_tool_ids() {

@@ -6,14 +6,25 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod date_time;
+pub mod global_hotkey;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]
 pub mod macos_background;
+#[cfg(target_os = "macos")]
+pub mod macos_panel;
 pub mod notifications;
+pub mod panel_geometry;
 pub mod pasteboard;
 #[cfg(target_os = "macos")]
 pub mod screenshots;
+pub mod tray;
+pub mod video;
+#[cfg(target_os = "linux")]
+mod video_linux;
+#[cfg(windows)]
+mod video_windows;
 #[cfg(windows)]
 pub mod windows;
 

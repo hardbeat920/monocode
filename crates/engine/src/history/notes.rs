@@ -469,6 +469,25 @@ mod tests {
     }
 
     #[test]
+    fn matches_intl_note_picker_keeps_input_order_for_equal_score_and_time() {
+        let notes = [
+            note("filez", "one", "same"),
+            note("fileé", "two", "same"),
+            note("filee", "three", "same"),
+        ];
+        for query in ["", "same"] {
+            let ranked = rank_note_files(&notes, query);
+            assert_eq!(
+                ranked
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["note:filez", "note:fileé", "note:filee"]
+            );
+        }
+    }
+
+    #[test]
     fn uses_the_first_heading() {
         assert_eq!(
             note_title("intro\n# Auth approach\n\nbody"),

@@ -1,89 +1,67 @@
-# monocode-app
+# Native app
 
-The native GPUI app. It boots the engine on the app data directory (the same `monocode.db` and settings the Tauri app uses), restores the saved workspace, and shows real sessions. Gallery views check `monocode-ui` by screenshot.
+MonoCode draws its desktop UI with Rust and GPUI. It boots the shared engine, restores workspace tabs, and connects the native views to sessions, files, terminals, projects, inbox, settings, and remote hosts.
 
 ## Run
 
-Never point a development run at the real data directory while the Tauri app may be using it. Copy it first:
+Use a separate data directory for development while another MonoCode instance is running:
 
 ```sh
-mkdir -p /tmp/mc/appdata
-sqlite3 ~/Library/Application\ Support/com.monocode.desktop/monocode.db ".backup /tmp/mc/appdata/monocode.db"
-MONOCODE_DATA_DIR=/tmp/mc/appdata cargo run -p monocode-app -j 4
-cargo run -p monocode-app -j 4 -- --view widgets --theme light
+cargo run -p monocode-app -- --data-dir /tmp/monocode-native-dev
 ```
 
-The data directory is `--data-dir`, else `MONOCODE_DATA_DIR`, else the Tauri app's (`~/Library/Application Support/com.monocode.desktop` on macOS). The first start copies the Tauri app's WebKit localStorage into `local-storage.json` there; the import only reads the WebKit files.
-
-`monocode-app app ...` and `monocode-app control ...` run the agent CLI (`monocode_process::control_cli`), as the Tauri binary does.
-
-## Live test
-
-`tests/live_engine.rs` runs Claude Code for real: a supervised turn that needs an approval, then a second process that reloads the session from the store and resumes it. It has its own `main`, because GPUI's run loop needs the main thread, and runs only with `--ignored`:
+To inspect existing sessions, back up SQLite into the development directory first:
 
 ```sh
-MONOCODE_DATA_DIR=/tmp/mc/appdata cargo test -p monocode-app --test live_engine -j 4 -- --ignored
+mkdir -p /tmp/monocode-native-dev
+sqlite3 "$HOME/Library/Application Support/com.monocode.desktop/monocode.db" ".backup /tmp/monocode-native-dev/monocode.db"
+cargo run -p monocode-app -- --data-dir /tmp/monocode-native-dev
 ```
 
-## Screenshots
+The app chooses `--data-dir`, then `MONOCODE_DATA_DIR`, then the existing MonoCode data directory. It uses the existing database migrations and JSON settings keys. First launch can import WebKit settings into the selected directory by reading the previous app's local storage.
 
-Agents cannot capture the screen, so the app can capture itself. Build with the `screenshot` feature, which turns on GPUI's `test-support` for `Window::render_to_image`:
+On a machine with limited free space, set `CARGO_PROFILE_DEV_DEBUG=0` for the build. GPUI dependencies still use the workspace's optimized development profile.
+
+The executable also runs `app`, `control`, and `host` subcommands. The first two are the agent control clients. `host` runs the native remote host.
+
+## Validate
 
 ```sh
-cargo build -p monocode-app --features screenshot -j 4
-./target/debug/monocode-app --screenshot /tmp/shell.png
-./target/debug/monocode-app --view widgets --size 1280x800 --screenshot /tmp/widgets.png
+cargo check -p monocode-app --all-targets --features screenshot --locked
+cargo test --workspace --lib --bins --features monocode-app/screenshot --locked
+cargo test -p monocode-platform --test inline_video --locked
 ```
 
-The app opens its window, redraws for 900ms (2500ms for views that boot the engine) so SVGs, images, and the store finish loading, writes the frame as a PNG, and exits with code 0. Open the PNG with the Read tool. A failed capture prints `screenshot failed: ...` and exits with code 1.
+The ignored live test runs a supervised provider turn, approves a file write, reloads the session in another process, and resumes the conversation. It requires an isolated data directory and a logged-in provider CLI. It defaults to Claude. Set `MONOCODE_LIVE_HARNESS=codex` to test Codex.
 
-The PNG is at the display's pixel density, so a 1280x800 window on a Retina screen gives a 2560x1600 image. One CSS px from the React source is 2 image px.
+```sh
+MONOCODE_DATA_DIR=/tmp/monocode-native-live cargo test -p monocode-app --test live_engine -- --ignored
+```
 
-| Flag | Meaning |
-| --- | --- |
-| `--screenshot <path>` | Write the settled frame to `path` and exit. Needs `--features screenshot`. |
-| `--size WxH` | Window content size in points. Default `1280x800`. The window manager may shrink it to fit the screen. |
-| `--view <name>` | Which view fills the window. Default `shell`. `--list-views` prints the names. |
-| `--theme dark\|light\|system` | Overrides the color scheme preference. Default `dark`. |
-| `--ui-scale <factor>` | Interface scale, 0.5 to 2, like the Appearance setting. |
-| `--backdrop <#rrggbb\|none>` | The color the transparent window is composited over in the PNG, standing in for the blurred desktop. Default `#5f5560`. `none` keeps the alpha channel. |
-| `--data-dir <dir>` | The app data directory. |
-| `--open-session <id>` | Opens this stored session once the workspace restores. |
-| `--settle-ms <ms>` | How long to redraw before the capture. |
+## Capture native views
 
-Two things in a capture differ from the window on screen:
+The screenshot feature captures GPUI's rendered window and exits. Engine views use the supplied data directory.
 
-- AppKit draws the traffic lights outside GPUI's scene. The capture paints stand-ins at the same position when it composites over a backdrop.
-- The real desktop blur is not in the capture. The window glass shows as the backdrop color.
+```sh
+cargo build -p monocode-app --features screenshot --locked
+./target/debug/monocode-app --data-dir /tmp/monocode-native-dev --screenshot /tmp/monocode-shell.png
+./target/debug/monocode-app --view widgets --theme light --screenshot /tmp/monocode-widgets.png
+./target/debug/monocode-app --list-views
+```
 
-The capture moves GPUI's pointer outside the window before drawing, so no hover state shows wherever the real cursor sits.
+`--view` can open the shell, individual pages, sidebar tabs, or widget galleries. `--size WxH` sets the content size. `--settle-ms` controls image and store loading time before capture. `--open-session` opens a stored session after workspace restoration.
 
-## Views
+Captures use the display's pixel density. They composite the transparent window over `--backdrop`, which defaults to `#5f5560`. `--backdrop none` preserves alpha. The capture draws stand-ins for macOS traffic lights because AppKit draws the actual controls outside GPUI's scene. Inspect the running app separately to verify desktop blur, native controls, focus, and interaction.
 
-| Name | Shows |
-| --- | --- |
-| `shell` | The app: project rail, session sidebar, title bar with the workspace tabs, the active tab's panes, and the usage footer. |
-| `shell-compact` | The shell with the 48px compact rail. On macOS the title bar moves above everything. |
-| `shell-no-rail` | The shell with the project rail closed. The sidebar takes the traffic lights and the project picker. |
-| `shell-menu` | The shell with the session context menu open. |
-| `widgets` | Every `monocode-ui` widget and a toast. |
-| `modal` | A modal over the shell. |
-| `icons` | All chrome icons, provider logos, and a sample of file-type icons. |
-| `blank` | An empty themed window. |
+## Build packages
 
-To check a new view, add a `ViewEntry` to `VIEWS` in `src/views.rs` with a `build` function that returns an `AnyView`, then pass its name to `--view`.
+`monocode-package` creates desktop bundles and native host archives. For an Apple Silicon macOS bundle:
 
-## Layout
+```sh
+cargo build -p monocode-app -p monocode-host --bins --release --target aarch64-apple-darwin --locked
+cargo run -p monocode-package --locked -- bundle --target aarch64-apple-darwin
+```
 
-The library (`src/lib.rs`) is the engine side, shared by the window and the live test:
+The retained Tauri sources and release path remain available during validation of this branch. The native release workflow stages packages without switching the production update feed.
 
-- `data_dir.rs` resolves the data directory. `boot.rs` opens the settings (`Kv`) and runs the WebKit import, opens `monocode.db`, starts the harness bridge and registers every provider, then initializes attention, submit, side threads, and the workspace, and restores the saved workspace.
-- `bridge.rs` is the runtime's `HarnessHooks` and attention's `ApprovalRouter` over the harness registry. `provider_hooks.rs` gives the providers git context, generated images, and Cursor's stores. `session_factory.rs` builds new sessions from the live catalog.
-- `projects.rs` (the rail list) and `history.rs` (sidebar rows) are small stand-ins for the engine's projects and history packages. `attention_platform.rs` keeps notification calls out of unbundled builds.
-
-The binary draws:
-
-- `src/main.rs` opens the window: transparent in dark mode with the user's blur radius on macOS (`glass.rs`), hidden title bar, traffic lights at (12, 13) so they sit centered in the 40px chrome.
-- `src/shell/` is the shell, one module per region: `title_bar.rs`, `project_rail.rs` (also the compact rail), `sidebar.rs`, `main_pane.rs` (the split tree), `footer.rs`. `mod.rs` holds the layout, the window's `Workspace`, resize handles, and window drag regions. `view_data.rs` collects what the regions draw from the engine.
-- `session_pane.rs` is a session's transcript and composer; `composer_host.rs` connects the composer to `Submit`. `file_pane.rs` shows editor surfaces with `monocode-editor`.
-- `src/gallery.rs` holds the `widgets`, `modal`, and `icons` views.
+See the [native packaging instructions](../../packaging/README.md) for platform dependencies and Windows static-runtime flags. The [qualification report](../../reports/native-qualification.md) records tested behavior and the remaining runtime and installation checks.

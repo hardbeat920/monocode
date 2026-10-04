@@ -714,7 +714,6 @@ mod provider_tests {
     }
 
     #[test]
-    #[ignore = "fx and grok still call the stand-in acp_agent_info in providers/grok/deps.rs"]
     fn names_delegated_work_and_merges_child_tool_updates_without_leaking_prose() {
         for (harness, parse) in providers() {
             let mut run = Run::new(harness, parse);

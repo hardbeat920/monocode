@@ -11,6 +11,7 @@ gpui.workspace = true
 pulldown-cmark = { version = "0.13.4", default-features = false }
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-onig", "yaml-load"] }
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

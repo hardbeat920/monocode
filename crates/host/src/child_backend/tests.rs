@@ -1,8 +1,7 @@
 //! Port of host/child-backend.test.ts.
 //!
-//! "stops a provider tree when its host pipe closes unexpectedly" tested
-//! provider-guard.mjs, which this host does not have: the process
-//! supervisor owns each provider's process group instead.
+//! The unexpected-host-exit fixture uses the actual native supervisor and
+//! checks its provider group, a stubborn descendant, and an unrelated child.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -11,13 +10,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use monocode_core::HarnessId;
-use monocode_harness::core::child::{ChildEvent, SseEvent};
+#[cfg(unix)]
+use monocode_harness::core::child::ChildEvent;
+use monocode_harness::core::child::SseEvent;
 use monocode_harness::core::task::SharedSpawner;
 use monocode_remote::host::protocol::REMOTE_PROVIDERS;
 
 use super::*;
 use crate::runtime::HostRuntime;
-use crate::testing::{fake_provider, fake_providers, wait_for};
+#[cfg(unix)]
+use crate::testing::wait_for;
+use crate::testing::{fake_provider, fake_providers};
+
+#[cfg(any(unix, windows))]
+#[path = "provider_guard_tests.rs"]
+mod provider_guard_tests;
 
 const ECHO_ARGS: &str = "console.log(JSON.stringify(process.argv.slice(2)));\n";
 
@@ -208,6 +215,7 @@ fn runs_the_resolved_claude_version_fallback_in_headless_mode() {
     runtime.shutdown();
 }
 
+#[cfg(unix)]
 fn alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])

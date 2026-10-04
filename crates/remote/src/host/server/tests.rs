@@ -44,14 +44,15 @@ pub(crate) fn setup(providers: &[RemoteProvider]) -> Setup {
     let project = backend
         .open_project(directory.path().to_str().unwrap())
         .unwrap();
-    let clock = Arc::new(AtomicI64::new(0));
-    let offset = clock.clone();
+    // Keep exact expiry boundaries independent of wall-clock adjustments.
+    let clock = Arc::new(AtomicI64::new(now_ms()));
+    let current = clock.clone();
     let http = create_host_server(
         backend.clone(),
         providers.to_vec(),
         HostServerOptions {
             endpoints: Some(Arc::new(|| vec!["https://10.0.0.5:3774".into()])),
-            clock: Arc::new(move || now_ms() + offset.load(Ordering::SeqCst)),
+            clock: Arc::new(move || current.load(Ordering::SeqCst)),
             ..Default::default()
         },
     );

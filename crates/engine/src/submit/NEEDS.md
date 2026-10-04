@@ -33,9 +33,8 @@ no-op defaults and the method names below, so moving them into
 
 ## Runtime `Sessions`
 
-8. A way to clear all save bookkeeping for one session (`pendingPersist`,
-   `lastPersisted`, `lastPersistedUserBlock`). `onRemoveDraft` cleared all
-   three; `Sessions` only exposes `forget_persisted`. Marked `TODO(port)`.
+8. Resolved. `Sessions::clear_save_state` clears the queued save, saved
+   fingerprint, and saved user block when `onRemoveDraft` discards a chat.
 
 ## Engine globals
 

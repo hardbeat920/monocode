@@ -6,7 +6,6 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use monocode_core::js;
 use monocode_core::paths::slash;
 use monocode_layout::paths::{is_remote_project_path, pretty_cwd};
 
@@ -18,65 +17,9 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// `formatRelativeTime(new Date(at).toISOString(), now)` with
-/// `Intl.RelativeTimeFormat("en", { numeric: "auto" })`.
-// TODO(port): Intl localized the phrase. Only English is produced here.
+/// `formatRelativeTime(new Date(at).toISOString(), now)` with the OS locale.
 pub fn format_relative_time(at: i64, now: i64) -> String {
-    let delta = js::round((at - now) as f64 / 1000.0);
-    let divisions: [(f64, &str); 7] = [
-        (60.0, "second"),
-        (60.0, "minute"),
-        (24.0, "hour"),
-        (7.0, "day"),
-        (4.34524, "week"),
-        (12.0, "month"),
-        (f64::INFINITY, "year"),
-    ];
-    let mut value = delta;
-    let mut unit = "second";
-    let mut amount = delta.abs();
-    for (step, next) in divisions {
-        unit = next;
-        if amount < step {
-            break;
-        }
-        value = js::round(value / step);
-        amount = value.abs();
-    }
-    relative_phrase(value, unit)
-}
-
-/// The English `numeric: "auto"` phrase for a rounded value and unit.
-fn relative_phrase(value: f64, unit: &str) -> String {
-    let value = if value == 0.0 { 0.0 } else { value };
-    let special = match (unit, value as i64) {
-        ("second", 0) => Some("now"),
-        ("minute", 0) => Some("this minute"),
-        ("hour", 0) => Some("this hour"),
-        ("day", 0) => Some("today"),
-        ("day", -1) => Some("yesterday"),
-        ("day", 1) => Some("tomorrow"),
-        ("week", 0) => Some("this week"),
-        ("week", -1) => Some("last week"),
-        ("week", 1) => Some("next week"),
-        ("month", 0) => Some("this month"),
-        ("month", -1) => Some("last month"),
-        ("month", 1) => Some("next month"),
-        ("year", 0) => Some("this year"),
-        ("year", -1) => Some("last year"),
-        ("year", 1) => Some("next year"),
-        _ => None,
-    };
-    if let Some(special) = special {
-        return special.to_string();
-    }
-    let count = value.abs() as i64;
-    let plural = if count == 1 { "" } else { "s" };
-    if value < 0.0 {
-        format!("{count} {unit}{plural} ago")
-    } else {
-        format!("in {count} {unit}{plural}")
-    }
+    monocode_engine::inbox::time::format_relative_time_at(at, now, None)
 }
 
 /// `/^[A-Za-z]:$/`.
@@ -131,19 +74,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn formats_relative_times_in_english() {
+    fn matches_intl_secondary_page_default_french_japanese_arabic() {
         let now = 1_787_832_000_000;
-        assert_eq!(
-            format_relative_time(now - 2 * 3_600_000, now),
-            "2 hours ago"
-        );
-        assert_eq!(format_relative_time(now, now), "now");
-        assert_eq!(format_relative_time(now - 86_400_000, now), "yesterday");
-        assert_eq!(format_relative_time(now - 5 * 60_000, now), "5 minutes ago");
-        assert_eq!(
-            format_relative_time(now - 3 * 86_400_000, now),
-            "3 days ago"
-        );
+        for (locale, past, future) in [
+            ("fr", "avant-hier", "dans 2 heures"),
+            ("ja", "一昨日", "2 時間後"),
+            ("ar", "أول أمس", "خلال ساعتين"),
+        ] {
+            monocode_locale::with_locale(locale, || {
+                assert_eq!(format_relative_time(now - 2 * 86_400_000, now), past);
+                assert_eq!(format_relative_time(now + 2 * 3_600_000, now), future);
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn matches_intl_secondary_page_rounding_and_unit_boundaries() {
+        let now = 1_787_832_000_000;
+        monocode_locale::with_locale("en", || {
+            for (milliseconds, expected) in [
+                (59_500, "in 1 minute"),
+                (-59_500, "59 seconds ago"),
+                (31 * 86_400_000, "in 4 weeks"),
+                (-31 * 86_400_000, "4 weeks ago"),
+                (32 * 86_400_000, "next month"),
+                (-32 * 86_400_000, "last month"),
+            ] {
+                assert_eq!(format_relative_time(now + milliseconds, now), expected);
+            }
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn formats_relative_times_in_english() {
+        monocode_locale::with_locale("en", || {
+            let now = 1_787_832_000_000;
+            assert_eq!(
+                format_relative_time(now - 2 * 3_600_000, now),
+                "2 hours ago"
+            );
+            assert_eq!(format_relative_time(now, now), "now");
+            assert_eq!(format_relative_time(now - 86_400_000, now), "yesterday");
+            assert_eq!(format_relative_time(now - 5 * 60_000, now), "5 minutes ago");
+            assert_eq!(
+                format_relative_time(now - 3 * 86_400_000, now),
+                "3 days ago"
+            );
+        })
+        .unwrap();
     }
 
     #[test]

@@ -48,6 +48,13 @@ impl Composer {
 
     /// `removeAttachment`.
     pub fn remove_attachment(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .attachment_preview
+            .as_ref()
+            .is_some_and(|preview| preview.id == id)
+        {
+            self.close_attachment_preview(window, cx);
+        }
         if let Some(index) = self.attachments.iter().position(|file| file.id == id) {
             let removed = self.attachments.remove(index);
             if !self.borrowed_attachment_ids.remove(&removed.id) {

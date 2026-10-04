@@ -37,6 +37,7 @@ pub struct BinaryFileSurface {
     load: Option<Task<()>>,
     reload_timer: Option<Task<()>>,
     _watch: Subscription,
+    _appearance: Subscription,
 }
 
 impl BinaryFileSurface {
@@ -55,6 +56,19 @@ impl BinaryFileSurface {
             }),
             cx,
         );
+        let appearance = cx.observe_global::<Theme>(|this, cx| {
+            let theme = crate::editor_theme(cx);
+            match &this.state {
+                BinaryState::Image(image) => {
+                    image.update(cx, |image, cx| image.set_theme(theme, cx));
+                }
+                BinaryState::Pdf(pdf) => {
+                    pdf.update(cx, |pdf, cx| pdf.set_theme(theme, cx));
+                }
+                _ => {}
+            }
+            cx.notify();
+        });
         let mut this = Self {
             data,
             path,
@@ -64,6 +78,7 @@ impl BinaryFileSurface {
             load: None,
             reload_timer: None,
             _watch: watch,
+            _appearance: appearance,
         };
         this.reload(cx);
         this
@@ -288,6 +303,8 @@ mod tests {
     use super::*;
     use crate::test_support::FakeFiles;
     use gpui::TestAppContext;
+    use monocode_editor::viewer::Zoom;
+    use monocode_ui::{AppearanceSettings, ThemePreference, set_appearance};
 
     const PNG: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0,
@@ -300,6 +317,15 @@ mod tests {
         cx: &mut TestAppContext,
     ) -> (Rc<FakeFiles>, Entity<BinaryFileSurface>) {
         cx.update(crate::test_support::init);
+        cx.update(|cx| {
+            set_appearance(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Dark,
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
         let fs = FakeFiles::new();
         if let Some(bytes) = bytes {
             fs.state.borrow_mut().binary.insert(path.into(), bytes);
@@ -309,6 +335,106 @@ mod tests {
         let surface = cx.new(|cx| BinaryFileSurface::new(data, path, "/repo", cx));
         cx.run_until_parked();
         (fs, surface)
+    }
+
+    fn switch_to_light(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            set_appearance(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Light,
+                    accent_color: Some("#cc5500".into()),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn cached_image_follows_appearance_without_resetting_zoom(cx: &mut TestAppContext) {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            2,
+            1,
+            image::Rgba([255, 0, 0, 255]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+        let bytes = png.into_inner();
+        let (fs, surface) = mount("/repo/logo.png", Some(bytes.clone()), cx);
+        let image = surface.read_with(cx, |surface, _| match surface.state() {
+            BinaryState::Image(image) => image.clone(),
+            _ => panic!("the PNG must open in an image viewer"),
+        });
+        image.update(cx, |image, cx| image.set_zoom(Zoom::Scale(2.5), cx));
+        let original = image.read_with(cx, |image, _| image.theme().clone());
+        switch_to_light(cx);
+        surface.read_with(cx, |surface, cx| {
+            let BinaryState::Image(cached) = surface.state() else {
+                panic!("an appearance change must retain the loaded image");
+            };
+            assert_eq!(cached.entity_id(), image.entity_id());
+            assert_eq!(cached.read(cx).theme(), &crate::editor_theme(cx));
+            assert_ne!(cached.read(cx).theme(), &original);
+            assert_eq!(cached.read(cx).zoom(), Zoom::Scale(2.5));
+        });
+        assert_eq!(fs.state.borrow().binary["/repo/logo.png"], bytes);
+    }
+
+    fn two_page_pdf() -> Vec<u8> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> >>",
+        ];
+        let mut bytes = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(
+            format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        bytes
+    }
+
+    #[gpui::test]
+    fn cached_pdf_follows_appearance_without_reopening_the_document(cx: &mut TestAppContext) {
+        let bytes = two_page_pdf();
+        let (fs, surface) = mount("/repo/document.pdf", Some(bytes.clone()), cx);
+        let pdf = surface.read_with(cx, |surface, _| match surface.state() {
+            BinaryState::Pdf(pdf) => pdf.clone(),
+            _ => panic!("the PDF must open in a PDF viewer"),
+        });
+        pdf.update(cx, |pdf, cx| pdf.set_zoom(Zoom::Scale(1.75), cx));
+        let (original, current_page) = pdf.read_with(cx, |pdf, _| {
+            assert!(pdf.is_ready(), "the controlled PDF must load");
+            assert_eq!(pdf.page_count(), 2);
+            (pdf.theme().clone(), pdf.current_page())
+        });
+        switch_to_light(cx);
+        surface.read_with(cx, |surface, cx| {
+            let BinaryState::Pdf(cached) = surface.state() else {
+                panic!("an appearance change must retain the loaded PDF");
+            };
+            assert_eq!(cached.entity_id(), pdf.entity_id());
+            let cached = cached.read(cx);
+            assert_eq!(cached.theme(), &crate::editor_theme(cx));
+            assert_ne!(cached.theme(), &original);
+            assert!(cached.is_ready());
+            assert_eq!(cached.page_count(), 2);
+            assert_eq!(cached.current_page(), current_page);
+            assert_eq!(cached.scale(), 1.75);
+        });
+        assert_eq!(fs.state.borrow().binary["/repo/document.pdf"], bytes);
     }
 
     #[gpui::test]

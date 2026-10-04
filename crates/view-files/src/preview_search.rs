@@ -25,7 +25,7 @@ use gpui_component::input::{Enter, Escape, InputEvent, InputState};
 use monocode_core::Platform;
 use monocode_markdown::RenderedText;
 use monocode_ui::{IconName, Theme, UiStyled as _, color::with_alpha, icon, u, widgets::tooltip};
-use regex::{Regex, RegexBuilder};
+use regress::{Flags, Regex};
 
 /// `MATCH_CAP`.
 pub const MATCH_CAP: usize = 999;
@@ -85,10 +85,7 @@ pub struct SearchResult<T> {
     pub invalid: bool,
 }
 
-/// `searchPattern`. JavaScript used the `u` flag and `i` unless case
-/// sensitive; Rust's `regex` is Unicode-aware by default.
-// TODO(port): patterns follow Rust regex syntax, which has no lookaround or
-// backreferences.
+/// `searchPattern` uses JavaScript Unicode regular expressions.
 fn search_pattern(query: &str, options: SearchOptions) -> Option<Regex> {
     if query.is_empty() {
         return None;
@@ -96,12 +93,17 @@ fn search_pattern(query: &str, options: SearchOptions) -> Option<Regex> {
     let source = if options.regexp {
         query.to_string()
     } else {
-        regex::escape(query)
+        regress::escape(query)
     };
-    RegexBuilder::new(&source)
-        .case_insensitive(!options.case_sensitive)
-        .build()
-        .ok()
+    Regex::with_flags(
+        &source,
+        Flags {
+            unicode: true,
+            icase: !options.case_sensitive,
+            ..Flags::default()
+        },
+    )
+    .ok()
 }
 
 /// `isWordCharacter`: `[\p{L}\p{N}_]`.
@@ -125,7 +127,7 @@ fn collect_matches<T>(
     wrap: impl Fn(Range<usize>) -> T,
 ) -> bool {
     for found in pattern.find_iter(text) {
-        if found.is_empty() {
+        if found.range.is_empty() {
             continue;
         }
         if options.whole_word && !is_whole_word(text, found.start(), found.end()) {
@@ -134,7 +136,7 @@ fn collect_matches<T>(
         if out.len() >= MATCH_CAP {
             return false;
         }
-        out.push(wrap(found.range()));
+        out.push(wrap(found.range));
     }
     true
 }

@@ -7,6 +7,7 @@ publish = false
 description = "The session composer, its prompt input, and the pickers it opens"
 
 [dependencies]
+monocode-locale.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 # The pickers style gpui-base's unframed inputs themselves (InputEditorStyle).
@@ -14,6 +15,8 @@ gpui-base.workspace = true
 monocode-core.workspace = true
 monocode-ui.workspace = true
 monocode-markdown.workspace = true
+monocode-editor.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Pasteboard reads the GPUI clipboard cannot do: copied file paths and images.
 monocode-platform.workspace = true
 serde.workspace = true
@@ -27,7 +30,6 @@ unicode-segmentation = "1.12"
 # screenshots and the headless test windows.
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[example]]
 name = "composer"

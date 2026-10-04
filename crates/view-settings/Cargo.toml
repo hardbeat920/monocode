@@ -7,6 +7,8 @@ publish = false
 description = "The settings page, its sections, the chat background effects, and the account views"
 
 [dependencies]
+monocode-locale.workspace = true
+monocode-platform.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 # Settings fields style gpui-base's unframed inputs themselves (InputEditorStyle).
@@ -26,6 +28,9 @@ futures.workspace = true
 # Decodes chat backgrounds and draws the dither, ASCII, halftone, scanline,
 # and haze effects. The same 0.25 line GPUI's RenderImage frames use.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Local dates and times for mute deadlines, the mute date picker, and reset
+# times in the usage views. The same line the engine and view-inbox use.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(unix)'.dependencies]
 # localtime_r, for the archive's month and day dates.
@@ -40,3 +45,7 @@ gpui_platform = { workspace = true, features = ["test-support"] }
 [[example]]
 name = "settings_gallery"
 path = "examples/settings_gallery.rs"
+
+[[example]]
+name = "accounts_gallery"
+path = "examples/accounts_gallery.rs"

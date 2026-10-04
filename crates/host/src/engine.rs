@@ -803,9 +803,15 @@ impl HostEngine {
         if !std::path::Path::new(path).is_absolute() || path.contains('\0') {
             return Err("Choose an absolute directory path on the host".into());
         }
-        let cwd = std::fs::canonicalize(path).map_err(|error| error.to_string())?;
+        let cwd = dunce::canonicalize(path).map_err(|error| error.to_string())?;
         if !std::fs::metadata(&cwd).is_ok_and(|meta| meta.is_dir()) {
             return Err("Project path is not a directory".into());
+        }
+        #[cfg(windows)]
+        for project in self.inner.store.projects()? {
+            if dunce::canonicalize(&project.cwd).is_ok_and(|existing| existing == cwd) {
+                return Ok(project);
+            }
         }
         let name = cwd
             .file_name()

@@ -39,6 +39,7 @@ struct TestDelegate {
     confirms: RefCell<Vec<String>>,
     answer: Cell<bool>,
     history: RefCell<Vec<String>>,
+    remote_cwds: RefCell<HashMap<String, String>>,
 }
 
 impl WorkspaceDelegate for TestDelegate {
@@ -49,6 +50,12 @@ impl WorkspaceDelegate for TestDelegate {
 
     fn refresh_history(&self, cwd: &str, _cx: &mut App) {
         self.history.borrow_mut().push(cwd.to_string());
+    }
+
+    fn remote_working_cwd(&self, project: &str, shell_id: &str, _cx: &App) -> Option<String> {
+        monocode_layout::paths::is_remote_project_path(project)
+            .then(|| self.remote_cwds.borrow().get(shell_id).cloned())
+            .flatten()
     }
 }
 
@@ -130,6 +137,74 @@ fn starts_with_one_tab_holding_a_new_chat(cx: &mut TestAppContext) {
     assert_eq!(leaf_ids(&tab.layout), vec![open[0].id.clone()]);
     let ids = cx.update(|cx| Engine::hooks(cx).workspace.tab_session_ids(cx));
     assert_eq!(ids, vec![open[0].id.clone()]);
+}
+
+#[gpui::test]
+fn git_cwd_uses_the_remote_host_checkout_and_preserves_focused_files(cx: &mut TestAppContext) {
+    let h = setup(cx);
+    let session_id = sessions(cx)[0].id.clone();
+    let project = "remote://host/repo";
+    let checkout = "remote://host/worktrees/review";
+    h.delegate
+        .remote_cwds
+        .borrow_mut()
+        .insert(session_id.clone(), checkout.into());
+    // A delegate result for another project must not change a local checkout.
+    assert_eq!(
+        h.workspace
+            .read_with(cx, |workspace, cx| workspace.git_cwd(cx)),
+        PROJECT,
+    );
+    cx.update(|cx| {
+        Engine::sessions(cx).update(cx, |sessions, cx| {
+            sessions.update(&session_id, cx, |session| session.cwd = project.into());
+        });
+    });
+    assert_eq!(
+        h.workspace
+            .read_with(cx, |workspace, cx| workspace.git_cwd(cx)),
+        checkout,
+    );
+    h.delegate.remote_cwds.borrow_mut().clear();
+    assert_eq!(
+        h.workspace
+            .read_with(cx, |workspace, cx| workspace.git_cwd(cx)),
+        project,
+    );
+    h.delegate
+        .remote_cwds
+        .borrow_mut()
+        .insert(session_id.clone(), checkout.into());
+    let file_cwd = "remote://host/worktrees/other";
+    let file = new_file_tab(
+        &format!("{file_cwd}/README.md"),
+        file_cwd,
+        false,
+        None,
+        None,
+    );
+    let tab = WorkspaceTab {
+        layout: monocode_layout::leaf("file-pane"),
+        focused_id: "file-pane".into(),
+        editor_panes: vec![monocode_layout::EditorPane::new(
+            "file-pane",
+            vec![file.clone()],
+            file.id.clone(),
+        )],
+        ..active(&h, cx)
+    };
+    let config = WorkspaceConfig::transferred(
+        vec![tab.clone()],
+        tab.id.clone(),
+        project.into(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let workspace = cx.new(|cx| Workspace::new(config, cx));
+    assert_eq!(
+        workspace.read_with(cx, |workspace, cx| workspace.git_cwd(cx)),
+        file_cwd,
+    );
 }
 
 #[gpui::test]
@@ -644,6 +719,46 @@ fn reports_foreground_chats_and_hidden_windows(cx: &mut TestAppContext) {
         hooks.resolve_workspace_path("src/a.rs", PROJECT).as_deref(),
         Some("/Users/me/repo/src/a.rs")
     );
+}
+
+#[gpui::test]
+fn inbox_ask_focus_preserves_the_workspace_and_tracks_page_visibility(cx: &mut TestAppContext) {
+    let h = setup(cx);
+    let before = active(&h, cx);
+    let hooks = cx.update(|cx| Engine::hooks(cx).workspace.clone());
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.set_inbox_session(Some("ask".into()), cx);
+        workspace.set_full_page_open(true, cx);
+        workspace.set_inbox_visible(true, cx);
+        workspace.set_composer_focused(false, cx);
+        workspace.focus_pane("ask", cx);
+    });
+    assert_eq!(active(&h, cx), before);
+    assert!(
+        h.workspace
+            .read_with(cx, |workspace, _| workspace.composer_focused())
+    );
+    assert!(cx.update(|cx| hooks.is_foreground("ask", cx)));
+    assert!(!cx.update(|cx| hooks.is_foreground(&before.focused_id, cx)));
+
+    h.workspace
+        .update(cx, |workspace, cx| workspace.set_inbox_visible(false, cx));
+    assert!(!cx.update(|cx| hooks.is_foreground("ask", cx)));
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.set_inbox_visible(true, cx);
+        workspace.set_window_hidden(true, cx);
+    });
+    assert!(!cx.update(|cx| hooks.is_foreground("ask", cx)));
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.set_window_hidden(false, cx);
+        workspace.set_inbox_session(None, cx);
+    });
+    assert!(!cx.update(|cx| hooks.is_foreground("ask", cx)));
+    h.workspace.update(cx, |workspace, cx| {
+        workspace.set_full_page_open(false, cx);
+        workspace.set_inbox_visible(false, cx);
+    });
+    assert!(cx.update(|cx| hooks.is_foreground(&before.focused_id, cx)));
 }
 
 #[gpui::test]

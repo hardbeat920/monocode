@@ -51,6 +51,7 @@ actions!(
     [
         /// Save the buffer through the save callback.
         Save,
+        FormatDocument,
         /// Turn line wrapping on or off.
         ToggleSoftWrap,
         /// Open the find bar with the replace row.
@@ -69,6 +70,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-s", Save, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-z", ToggleSoftWrap, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-shift-i", FormatDocument, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-alt-f", OpenReplace, Some(KEY_CONTEXT)),
         KeyBinding::new("f3", FindNext, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-f3", FindPrevious, Some(KEY_CONTEXT)),
@@ -649,6 +651,28 @@ impl CodeEditor {
         }));
     }
 
+    /// Format the current buffer without writing it to disk.
+    pub fn format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(formatter) = self.formatter.clone() else {
+            return;
+        };
+        let before = self.text(cx);
+        let cursor = self.state.read(cx).cursor();
+        let Some((formatted, cursor)) = formatter(&self.path, &before, cursor) else {
+            return;
+        };
+        if formatted == before {
+            return;
+        }
+        let cursor = cursor.min(formatted.len());
+        self.state.update(cx, |state, cx| {
+            let scroll = state.scroll_offset();
+            state.replace_all(formatted, window, cx);
+            state.set_selected_range(cursor..cursor, cx);
+            state.set_scroll_offset(scroll, cx);
+        });
+    }
+
     /// `save` in CodeMirrorEditor: format, then hand the text to the save
     /// callback with the file's line endings restored.
     pub fn save(&mut self, automatic: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1188,6 +1212,11 @@ impl Render for CodeEditor {
                 }),
             )
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &FormatDocument, window, cx| {
+                    this.format_document(window, cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &ToggleSoftWrap, window, cx| {
                     this.toggle_soft_wrap(window, cx)

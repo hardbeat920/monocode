@@ -9,17 +9,19 @@
 //! - `text`, `title`, `git`: one-shot prompts on a separate server.
 //! - `catalog`: models from `opencode models --verbose` and `agent list`.
 //!
-//! The adapter speaks the OpenCode 1 server API (1.14.19 or newer). OpenCode
-//! 2 serves a different API under `/api`, so it is not supported yet.
+//! Version dispatch preserves the OpenCode 1 API and selects the separate
+//! OpenCode 2 HTTP adapter for CLI major version 2.
 
 pub mod adapter;
 pub mod catalog;
 pub mod client;
 mod deps;
+pub mod dispatch;
 pub mod git;
 pub mod protocol;
 pub mod text;
 pub mod title;
+pub mod v2;
 
 #[cfg(test)]
 mod live_tests;
@@ -32,7 +34,7 @@ use std::sync::Arc;
 
 use monocode_core::harness::HarnessId;
 
-pub use adapter::OpenCodeAdapter;
+pub use dispatch::OpenCodeAdapter;
 pub use git::{GitContextSource, GitRangeContext, GitStagedContext, SharedGitSource};
 
 use crate::core::register::HarnessContext;

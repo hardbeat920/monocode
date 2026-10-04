@@ -173,6 +173,11 @@ impl GitStatusMap {
 
 /// Everything the file views read and change. See the module docs.
 pub trait FilesData: 'static {
+    /// Format a buffer and return its new text and byte cursor offset.
+    fn format_text(&self, _path: &str, _source: &str, _cursor: usize) -> Option<(String, usize)> {
+        None
+    }
+
     // The explorer cache: src/features/files/model/fileTree.ts.
 
     /// `peekDir`: the cached listing, so a remounted tree draws at once.

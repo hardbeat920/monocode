@@ -15,9 +15,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div,
+    AnyView, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
 };
 use monocode_core::harness_event::ApprovalDecision;
 use monocode_core::session::{ComposerTurnOptions, session_draft_block, session_work_cwd};
@@ -79,7 +79,7 @@ impl RemoteMachineState {
 /// What the pane shows. The engine derives it from the host snapshot, the
 /// outbox, and the composer selection; the field comments name the
 /// `RemoteSessionOverrides` and RemoteSession.tsx values they stand for.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RemoteSessionProps {
     pub machine: RemoteMachineState,
     /// The machine's name, for the status line.
@@ -116,6 +116,8 @@ pub struct RemoteSessionProps {
     pub model_controls_beside: bool,
     /// The composer runner setting.
     pub runner_enabled: bool,
+    /// An empty session in a split or an inbox question keeps its composer docked.
+    pub force_docked: bool,
     /// Turn animations off, for screenshots and tests.
     pub animate: bool,
     /// The transcript settings (layout, prompt anchoring, model catalog).
@@ -142,6 +144,7 @@ impl Default for RemoteSessionProps {
             compact_supported: false,
             model_controls_beside: false,
             runner_enabled: true,
+            force_docked: false,
             animate: true,
             transcript: TranscriptConfig::default(),
         }
@@ -161,7 +164,8 @@ impl RemoteSessionProps {
             return true;
         };
         self.loading
-            || (session_draft_block(&session.blocks).is_none() && !session.blocks.is_empty())
+            || (session_draft_block(&session.blocks).is_none()
+                && (!session.blocks.is_empty() || self.force_docked))
     }
 
     /// The empty session's heading.
@@ -190,8 +194,8 @@ fn project_label(cwd: &str) -> Option<String> {
 pub fn composer_props(props: &RemoteSessionProps) -> ComposerProps {
     let mut composer = ComposerProps {
         enabled: props.visible,
-        focused: props.focused,
-        hotkeys: props.focused,
+        focused: props.focused && props.visible,
+        hotkeys: props.focused && props.visible,
         remote_session: true,
         remote_features: Some(props.features),
         allowed_model_harnesses: Some(props.allowed_model_harnesses.clone()),
@@ -221,6 +225,7 @@ pub fn composer_props(props: &RemoteSessionProps) -> ComposerProps {
         composer.queued_messages = session.queued_messages.clone().unwrap_or_default();
         composer.queue_status = session.queue_status;
         composer.worktree_removed = session.worktree_removed == Some(true);
+        composer.disabled = session.pending_question.is_some();
         composer.can_save_draft = props.features.draft
             && !busy
             && session_draft_block(&session.blocks).is_none()
@@ -241,6 +246,7 @@ pub fn transcript_config(props: &RemoteSessionProps) -> TranscriptConfig {
     config.visible = props.visible;
     config.approvals = !removed;
     config.can_build_plans = !removed;
+    config.can_build_plan_targets = false;
     config.can_open_plans = true;
     config.can_send_drafts =
         session.is_some_and(|session| session_draft_block(&session.blocks).is_some());
@@ -458,6 +464,8 @@ pub struct RemoteSessionPane {
     props: RemoteSessionProps,
     transcript: Entity<TranscriptView>,
     composer: Entity<Composer>,
+    empty_view: Option<AnyView>,
+    navigation_view: Option<AnyView>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -494,6 +502,8 @@ impl RemoteSessionPane {
             props,
             transcript,
             composer,
+            empty_view: None,
+            navigation_view: None,
             _subscriptions: subscriptions,
         }
     }
@@ -508,6 +518,15 @@ impl RemoteSessionPane {
 
     pub fn composer(&self) -> &Entity<Composer> {
         &self.composer
+    }
+    /// A persistent empty session with the same composer entity and its arcade.
+    pub fn set_empty_view(&mut self, view: AnyView, cx: &mut Context<Self>) {
+        self.empty_view = Some(view);
+        cx.notify();
+    }
+    pub fn set_navigation_view(&mut self, view: AnyView, cx: &mut Context<Self>) {
+        self.navigation_view = Some(view);
+        cx.notify();
     }
 
     /// The engine's state changed.
@@ -587,7 +606,8 @@ impl RemoteSessionPane {
             TranscriptEvent::Copied { text } => RemoteSessionEvent::Copied { text: text.clone() },
             // Host sessions have no edits of the last turn, notes, second
             // opinions, handoffs, or local change review.
-            TranscriptEvent::EditLastTurn
+            TranscriptEvent::BuildPlanWithTarget { .. }
+            | TranscriptEvent::EditLastTurn
             | TranscriptEvent::SaveNote { .. }
             | TranscriptEvent::SecondOpinion { .. }
             | TranscriptEvent::Handoff { .. }
@@ -732,6 +752,12 @@ impl RemoteSessionPane {
     }
 
     fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(view) = &self.empty_view {
+            return div().size_full().child(view.clone());
+        }
+        if self.props.docks_composer() {
+            return div().size_full();
+        }
         let theme = Theme::of(cx).clone();
         div().size_full().flex().justify_center().child(
             div()
@@ -786,7 +812,7 @@ impl Render for RemoteSessionPane {
             .is_none_or(|session| session.blocks.is_empty());
         let body = if self.props.loading {
             div().flex_1().min_h_0()
-        } else if empty && !docked {
+        } else if empty {
             div().flex_1().min_h_0().child(self.render_empty(cx))
         } else {
             div()
@@ -825,6 +851,6 @@ impl Render for RemoteSessionPane {
                 ),
             );
         }
-        root
+        root.children(self.navigation_view.clone())
     }
 }

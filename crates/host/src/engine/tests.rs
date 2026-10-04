@@ -259,6 +259,51 @@ fn setup() -> Setup {
     setup_with(HarnessId::Codex, None)
 }
 
+#[cfg(windows)]
+#[test]
+fn reopening_a_verbatim_windows_project_preserves_its_identity_and_workspace_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(HostStore::open(&directory.path().join("host.db")).unwrap());
+    let legacy = std::fs::canonicalize(directory.path()).unwrap();
+    let project = store
+        .add_project(&legacy.to_string_lossy(), "Legacy")
+        .unwrap();
+    let runtime = HostRuntime::new(2);
+    let engine = engine_over(store.clone(), Arc::new(Fake::default()), &[], &runtime);
+    let compatible = dunce::canonicalize(directory.path()).unwrap();
+    assert_eq!(
+        engine
+            .open_project(&compatible.to_string_lossy())
+            .unwrap()
+            .id,
+        project.id
+    );
+    assert_eq!(store.projects().unwrap().len(), 1);
+    let commands = crate::workspace_commands::WorkspaceCommands::new(store.clone());
+    let result = commands
+        .run(
+            Some(&json!("create_path")),
+            Some(&json!({ "parent": project.cwd, "name": "kept.txt", "isDir": false })),
+            &|_, _, action| action(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        commands
+            .run(
+                Some(&json!("read_text_file")),
+                Some(&json!({ "path": result })),
+                &|_, _, action| action(),
+            )
+            .unwrap(),
+        Some(json!("")),
+    );
+    assert!(compatible.join("kept.txt").is_file());
+    engine.close();
+    runtime.shutdown();
+    store.close();
+}
+
 impl Setup {
     fn session(&self) -> Arc<HostSession> {
         self.store.session(&self.id).unwrap()
@@ -1123,7 +1168,7 @@ mod worktrees {
 
     fn repository() -> (tempfile::TempDir, String) {
         let directory = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
         let git = |args: &[&str]| run_git(&root, args);
         git(&["init", "-q"]);
         git(&["checkout", "-q", "-b", "main"]);

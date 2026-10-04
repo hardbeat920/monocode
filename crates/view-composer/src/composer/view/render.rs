@@ -1142,5 +1142,6 @@ impl Render for Composer {
             .children(self.header_views.iter().cloned())
             .children(queue)
             .child(wrapper)
+            .children(self.render_attachment_preview(window, cx))
     }
 }

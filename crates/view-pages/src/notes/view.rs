@@ -225,6 +225,16 @@ impl NotesView {
         &self.page
     }
 
+    /// The active project changed while the window kept this page cached.
+    pub fn set_cwd(&mut self, cwd: Option<&str>, cx: &mut Context<Self>) {
+        if self.cwd.as_deref() != cwd {
+            self.cwd = cwd.map(str::to_owned);
+            self.picker
+                .update(cx, |picker, cx| picker.set_rail_cwd(cwd, cx));
+            cx.notify();
+        }
+    }
+
     pub fn list_width(&self) -> f32 {
         self.list_width
     }

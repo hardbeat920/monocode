@@ -101,9 +101,9 @@ pub async fn discover_open_code_models(
     if compare_semver(&version, MINIMUM_OPENCODE_VERSION) < 0 {
         bail!("OpenCode v{version} is too old. Upgrade to v{MINIMUM_OPENCODE_VERSION} or newer.");
     }
-
-    // TODO(port): OpenCode 2 has no `models --verbose` or `agent list`; it
-    // prints its help, which parses as no models, so the bundled list stays.
+    if super::v2::protocol::version(&version_out)? == super::v2::protocol::MajorVersion::Two {
+        return super::v2::catalog::discover(children.clone(), &cwd, &Default::default()).await;
+    }
     let models_out = exec(&["models", "--verbose"]).await?;
     let parsed = parse_models_cli_output(&models_out);
     let agents = match exec(&["agent", "list"]).await {

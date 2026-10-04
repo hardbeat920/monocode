@@ -1,15 +1,14 @@
 //! Tool rows: `ActivityToolRow`, `ToolCall`, `ToolCallSummary`,
-//! `MonoCodeCallRow`, and `ApprovalControls` from AgentTranscript.tsx, the
-//! edit card from src/features/files/ui/FilePreview.tsx, and the hover diff
-//! from ToolDiffPreview.tsx.
+//! `MonoCodeCallRow`, and `ApprovalControls` from AgentTranscript.tsx and
+//! the edit card from src/features/files/ui/FilePreview.tsx. The hover diff
+//! is `crate::cards::tool_diff::ToolDiffPopover`.
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext as _, Context, FontWeight, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, StyledText, Window, div, px,
 };
 use monocode_core::block::{ToolPreview, ToolPreviewKind, ToolPreviewLine, ToolPreviewLineKind};
@@ -29,6 +28,8 @@ use monocode_ui::styled::{UiStyled as _, format_integer};
 use monocode_ui::widgets::tooltip;
 use monocode_ui::{IconName, Theme, file_type_icon, folder_type_icon, icon, u};
 use regex::Regex;
+
+use crate::cards::tool_diff::{self, ToolDiffPopover};
 
 use super::parts::{chevron, monocode_mark, pending_ring};
 use super::style::{TextSizes as _, palette};
@@ -436,22 +437,26 @@ impl TranscriptView {
         target_el = if can_preview {
             let preview = preview.cloned().expect("previewed write");
             let label = target.clone();
-            let theme = theme.clone();
+            let weak = cx.entity().downgrade();
+            let cwd = cwd.clone();
             target_el
                 .hoverable_tooltip(move |_, cx| {
-                    let preview = preview.clone();
-                    let label = label.clone();
-                    let theme = theme.clone();
-                    cx.new(|_| DiffPopover {
-                        preview,
-                        label,
-                        status,
-                        cwd: None,
-                        theme,
+                    let weak = weak.clone();
+                    let (preview, label, cwd) = (preview.clone(), label.clone(), cwd.clone());
+                    cx.new(|cx| {
+                        ToolDiffPopover::new(preview, label, status, cwd, cx).on_open_file(
+                            move |path, _, cx| {
+                                let path = path.to_string();
+                                weak.update(cx, |_, cx| {
+                                    cx.emit(TranscriptEvent::OpenFile { path, line: None })
+                                })
+                                .ok();
+                            },
+                        )
                     })
                     .into()
                 })
-                .tooltip_show_delay(Duration::from_millis(300))
+                .tooltip_show_delay(tool_diff::OPEN_DELAY)
         } else {
             target_el.tooltip(tooltip(target))
         };
@@ -1087,62 +1092,6 @@ fn file_preview(
     }
     card.child(div().h(px(1.)).bg(theme.content(0.1)))
         .child(body)
-}
-
-/// The hover preview of a write row's own edit (`ToolDiffPreview`).
-struct DiffPopover {
-    preview: ToolPreview,
-    label: String,
-    status: ToolCallState,
-    cwd: Option<String>,
-    theme: Theme,
-}
-
-impl Render for DiffPopover {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let theme = &self.theme;
-        let description = match self.status {
-            ToolCallState::Pending => "Proposed changes",
-            ToolCallState::Rejected => "Attempted changes \u{b7} tool did not complete",
-            ToolCallState::Accepted if self.preview.content_only == Some(true) => {
-                "Written content \u{b7} previous contents unavailable"
-            }
-            ToolCallState::Accepted => "Change preview",
-        };
-        let _ = &self.label;
-        div()
-            .w(u(460.))
-            .max_h(u(280.))
-            .overflow_hidden()
-            .rounded(u(theme.radius.xl))
-            .border_1()
-            .border_color(theme.colors.popover_border)
-            .bg(theme.colors.background_base)
-            .shadow_lg()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(u(8.))
-                    .border_b(px(1.))
-                    .border_color(theme.colors.stroke)
-                    .px(u(10.))
-                    .py(u(6.))
-                    .font_family(theme.fonts.sans.clone())
-                    .text_px(11.)
-                    .text_color(theme.content(0.5))
-                    .child(description),
-            )
-            .child(file_preview(
-                "diff-popover".into(),
-                &self.preview,
-                self.status,
-                self.cwd.as_deref(),
-                true,
-                theme,
-                None::<fn(&gpui::ClickEvent, &mut Window, &mut App)>,
-            ))
-    }
 }
 
 #[cfg(test)]

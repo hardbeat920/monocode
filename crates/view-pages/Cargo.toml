@@ -7,12 +7,15 @@ publish = false
 description = "Secondary pages: automations, notes, search, MCP settings, skills, and the date and time picker"
 
 [dependencies]
+monocode-locale.workspace = true
+monocode-platform.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 # Text fields style gpui-base's unframed inputs themselves (InputEditorStyle),
 # and the note source editor installs its own highlighter.
 gpui-base.workspace = true
 monocode-core.workspace = true
+monocode-engine = { path = "../engine", default-features = false, features = ["inbox"] }
 monocode-ui.workspace = true
 monocode-markdown.workspace = true
 # `Note` and `NoteImageAsset` are the store's types, as in the engine.
@@ -30,6 +33,7 @@ regex.workspace = true
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
+monocode-locale = { workspace = true, features = ["test-support"] }
 # `test-support` turns on `Window::render_to_image` for the gallery's
 # screenshots and the headless test windows.
 gpui = { workspace = true, features = ["test-support"] }

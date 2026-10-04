@@ -117,12 +117,9 @@ pub struct SlashToken {
 /// `MAX_PICKER` in slashCommands.ts.
 pub const MAX_PICKER: usize = 50;
 
-/// `localeCompare` for skill names. Names are ASCII slugs, so a
-/// case-insensitive comparison with a case-sensitive tiebreak matches it.
+/// `localeCompare` for skill names with the OS default locale.
 fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 fn scope_rank(skill: &Skill) -> u8 {
@@ -417,6 +414,52 @@ pub fn skill_text_parts(text: &str, names: &HashSet<String>) -> Vec<SkillTextPar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_intl_composer_skill_order_without_changing_scope_or_score() {
+        let mut skills: Vec<_> = [
+            "filez",
+            "file.a",
+            "fileé",
+            "filee\u{301}",
+            "file-a",
+            "filee",
+            "file_a",
+        ]
+        .into_iter()
+        .map(|name| Skill::native(name, name, "lookup", "codex"))
+        .collect();
+        skills.push(Skill::builtin("z-builtin", "z-builtin", "lookup"));
+        let expected = [
+            "file_a",
+            "file-a",
+            "file.a",
+            "filee",
+            "fileé",
+            "filee\u{301}",
+            "filez",
+        ];
+        let ranked = rank_skills(&skills, "", usize::MAX);
+        assert_eq!(ranked[0].name, "z-builtin");
+        assert_eq!(
+            ranked[1..]
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        skills.pop();
+        skills.push(Skill::native("lookup", "lookup", "lookup", "codex"));
+        let ranked = rank_skills(&skills, "lookup", usize::MAX);
+        assert_eq!(ranked[0].name, "lookup");
+        assert_eq!(
+            ranked[1..]
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
 
     fn token(start: usize, end: usize, query: &str) -> SlashToken {
         SlashToken {

@@ -6,32 +6,9 @@ use std::cmp::Ordering;
 
 use monocode_core::js;
 
-/// Approximation of `String.prototype.localeCompare` with the default ICU
-/// collation: punctuation and symbols sort before digits, digits before
-/// letters, letters compare without case first, and lowercase wins a tie.
-// TODO(port): ICU collation has more rules (accents, ignorable characters).
-// This matches it for the paths, names, and kinds the inbox sorts.
+/// `String.prototype.localeCompare` with the OS default locale.
 pub fn locale_compare(a: &str, b: &str) -> Ordering {
-    fn class(c: char) -> u8 {
-        if c.is_alphabetic() {
-            2
-        } else if c.is_numeric() {
-            1
-        } else {
-            0
-        }
-    }
-    let primary = |s: &str| -> Vec<(u8, String)> {
-        s.chars()
-            .map(|c| (class(c), c.to_lowercase().collect::<String>()))
-            .collect()
-    };
-    primary(a).cmp(&primary(b)).then_with(|| {
-        // Tertiary level: lowercase before uppercase.
-        let flip =
-            |s: &str| -> Vec<(bool, char)> { s.chars().map(|c| (c.is_uppercase(), c)).collect() };
-        flip(a).cmp(&flip(b))
-    })
+    monocode_locale::compare(a, b)
 }
 
 /// `value.length <= max ? value : `${value.slice(0, max - 1)}…``, in UTF-16
@@ -87,6 +64,33 @@ pub fn non_empty(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_intl_text_punctuation_and_accents() {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                assert_eq!(locale_compare("file_a.rs", "file-a.rs"), Ordering::Less);
+                assert_eq!(locale_compare("file-a.rs", "file.a.rs"), Ordering::Less);
+                assert_eq!(locale_compare("filee.rs", "fileé.rs"), Ordering::Less);
+                assert_eq!(locale_compare("fileé.rs", "filez.rs"), Ordering::Less);
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn matches_intl_text_canonical_equivalence() {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                assert_eq!(
+                    locale_compare("fileé.rs", "filee\u{301}.rs"),
+                    Ordering::Equal
+                );
+                assert_eq!(locale_compare("fileÅ.rs", "fileÅ.rs"), Ordering::Equal);
+            })
+            .unwrap();
+        }
+    }
 
     #[test]
     fn compares_like_locale_compare_for_paths() {

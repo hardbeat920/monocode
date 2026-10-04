@@ -103,7 +103,12 @@ mod tests {
 
     #[test]
     fn the_root_has_no_parent() {
-        let result = browse_host_directories(Some(&json!("/"))).unwrap();
+        let current = std::env::current_dir().unwrap();
+        let root: PathBuf = current
+            .components()
+            .take_while(|part| matches!(part, Component::Prefix(_) | Component::RootDir))
+            .collect();
+        let result = browse_host_directories(Some(&json!(root))).unwrap();
         assert_eq!(result.parent, None);
     }
 }

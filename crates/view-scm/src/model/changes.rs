@@ -424,25 +424,9 @@ fn sort_change_dir(dir: &mut ChangeDir) -> Option<String> {
     dir.status.clone()
 }
 
-/// `String.prototype.localeCompare` for file names: case-insensitive, with
-/// lowercase before uppercase on a tie.
-// TODO(port): ICU collation also orders punctuation and digits differently
-// from code points; this keeps code point order for those.
+/// `String.prototype.localeCompare` for file names with the OS default locale.
 pub fn locale_compare(a: &str, b: &str) -> Ordering {
-    let folded = a.to_lowercase().cmp(&b.to_lowercase());
-    if folded != Ordering::Equal {
-        return folded;
-    }
-    for (x, y) in a.chars().zip(b.chars()) {
-        if x != y {
-            return match (x.is_lowercase(), y.is_lowercase()) {
-                (true, false) => Ordering::Less,
-                (false, true) => Ordering::Greater,
-                _ => x.cmp(&y),
-            };
-        }
-    }
-    a.len().cmp(&b.len())
+    monocode_locale::compare(a, b)
 }
 
 /// `dirname`: the folder part of a repo-relative path.
@@ -661,6 +645,50 @@ mod tests {
             "Discard all unstaged changes in 2 files? This cannot be undone."
         );
         assert_eq!(discard_all_prompt(&[]), None);
+    }
+
+    #[test]
+    fn matches_intl_change_tree_directory_and_file_order() {
+        let names = [
+            "filez",
+            "file.a",
+            "fileé",
+            "filee\u{301}",
+            "file-a",
+            "filee",
+            "file_a",
+        ];
+        let mut files = Vec::new();
+        for name in names {
+            files.push(file(&format!("{name}/nested.rs"), "modified"));
+            files.push(file(&format!("{name}.rs"), "modified"));
+        }
+        let tree = build_change_tree(&files);
+        let expected = [
+            "file_a",
+            "file-a",
+            "file.a",
+            "filee",
+            "fileé",
+            "filee\u{301}",
+            "filez",
+        ];
+        assert_eq!(
+            tree.dirs
+                .iter()
+                .map(|dir| dir.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            tree.files
+                .iter()
+                .map(|entry| entry.relative.as_str())
+                .collect::<Vec<_>>(),
+            expected.map(|name| format!("{name}.rs"))
+        );
+        assert_eq!(tree.status.as_deref(), Some("modified"));
+        assert!(tree.dirs.iter().all(|dir| dir.files.len() == 1));
     }
 
     #[test]

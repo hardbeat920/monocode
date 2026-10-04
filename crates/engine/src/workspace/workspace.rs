@@ -471,14 +471,15 @@ impl Workspace {
     }
 
     /// `gitCwd`: the working copy git views, files, and terminals use.
-    // TODO(port): `filesCwd` mapped this into a remote host's path for
-    // remote projects; the remote package should supply that mapping.
     pub fn git_cwd(&self, cx: &App) -> String {
         if let Some(file) = self.active_tab().and_then(focused_file_tab) {
             return file.cwd.clone();
         }
         match self.active_session(cx) {
-            Some(session) => session_work_cwd(&session).to_string(),
+            Some(session) => self
+                .delegate
+                .remote_working_cwd(&session.cwd, &session.id, cx)
+                .unwrap_or_else(|| session_work_cwd(&session).to_string()),
             None => self.sidebar_cwd(cx),
         }
     }
@@ -645,6 +646,53 @@ impl Workspace {
         });
     }
 
+    /// Reconcile the current tabs before a project selection reads its return target.
+    pub fn read_project_return_memory(&mut self, cx: &mut Context<Self>) -> ProjectReturnMemory {
+        self.project_return = reconcile_project_return(
+            &self.project_return,
+            &self.tabs,
+            &open_refs(cx),
+            &self.active_tab_id,
+        );
+        self.sync_mirror(cx);
+        self.project_return.clone()
+    }
+
+    /// A focused session that moved projects leaves an incompatible tab group.
+    pub fn session_project_changed(&mut self, session_id: &str, cwd: &str, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|tab| leaf_ids(&tab.layout).iter().any(|id| id == session_id))
+        else {
+            return;
+        };
+        let Some(group) = tab.group_id.as_deref() else {
+            return;
+        };
+        if tab.focused_id != session_id {
+            return;
+        }
+        let tab_id = tab.id.clone();
+        let others = self
+            .tabs
+            .iter()
+            .filter(|other| other.id != tab_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let project = project_name(cwd);
+        let others_project =
+            monocode_layout::tab_groups::tab_group_project(&others, group, &|id| {
+                self.project_of_tab(id, cx)
+            });
+        if others_project
+            .is_some_and(|other| !other.is_empty() && !project.is_empty() && other != project)
+        {
+            self.tabs = monocode_layout::tab_groups::remove_tab_from_group(&self.tabs, &tab_id);
+            self.tabs_changed(cx);
+        }
+    }
+
     fn set_tabs(&mut self, tabs: Vec<WorkspaceTab>, cx: &mut Context<Self>) {
         self.tabs = tabs;
         self.tabs_changed(cx);
@@ -754,6 +802,60 @@ impl Workspace {
         self.tabs = tabs;
     }
 
+    /// Insert a project tab and update the saved workspace.
+    pub fn append_project_tab(
+        &mut self,
+        tab: WorkspaceTab,
+        cwd: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        self.append_tab(tab, cwd, cx);
+        self.tabs_changed(cx);
+    }
+
+    /// Insert beside the requested tab while preserving project grouping.
+    pub fn insert_project_tab_beside(
+        &mut self,
+        tab: WorkspaceTab,
+        anchor: &str,
+        cwd: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let sessions = all_sessions(cx);
+        let new_id = tab.id.clone();
+        let project = cwd.map(project_name);
+        let lookup = |id: &str| {
+            if id == new_id {
+                project.clone()
+            } else {
+                self.tabs
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .map(|entry| title_tab_project(entry, &sessions))
+            }
+        };
+        self.tabs = insert_tab_beside_active(&self.tabs, tab, Some(anchor), Some(&lookup));
+        self.tabs_changed(cx);
+    }
+
+    /// Replace project tabs and select the requested surviving tab.
+    pub fn replace_project_tabs(
+        &mut self,
+        tabs: Vec<WorkspaceTab>,
+        active: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.tabs = tabs;
+        self.active_tab_id = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == active)
+            .or_else(|| self.tabs.first())
+            .map(|tab| tab.id.clone())
+            .unwrap_or_default();
+        self.tabs_changed(cx);
+    }
+
     // Window state.
 
     /// `document.hidden` changed for this window.
@@ -774,8 +876,29 @@ impl Workspace {
 
     /// A full page (settings, search, inbox, notes) covers the workspace, so
     /// its chats are not in the foreground.
-    pub fn set_full_page_open(&mut self, open: bool, _cx: &mut Context<Self>) {
-        self.mirror.borrow_mut().covered = open;
+    pub fn full_page_open(&self) -> bool {
+        self.mirror.borrow().covered
+    }
+
+    pub fn set_full_page_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.mirror.borrow().covered != open {
+            self.mirror.borrow_mut().covered = open;
+            cx.notify();
+        }
+    }
+
+    pub fn set_inbox_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.mirror.borrow().inbox_visible != visible {
+            self.mirror.borrow_mut().inbox_visible = visible;
+            cx.notify();
+        }
+    }
+
+    pub fn set_inbox_session(&mut self, session_id: Option<String>, cx: &mut Context<Self>) {
+        if self.mirror.borrow().inbox_session_id != session_id {
+            self.mirror.borrow_mut().inbox_session_id = session_id;
+            cx.notify();
+        }
     }
 
     // Tabs.
@@ -1792,10 +1915,16 @@ impl Workspace {
     // Panes.
 
     /// `onFocusPane`.
-    // TODO(port): focusing the open Inbox Ask's session only focused the
-    // composer; the inbox package does not report that portal yet.
     pub fn focus_pane(&mut self, pane_id: &str, cx: &mut Context<Self>) {
         self.set_dock_focused(false, cx);
+        let inbox_ask = {
+            let mirror = self.mirror.borrow();
+            mirror.inbox_visible && mirror.inbox_session_id.as_deref() == Some(pane_id)
+        };
+        if inbox_ask {
+            self.set_composer_focused(true, cx);
+            return;
+        }
         let active = self.active_tab_id.clone();
         let pane = pane_id.to_string();
         self.map_tab(&active, cx, |tab| WorkspaceTab {
@@ -2940,6 +3069,28 @@ impl Workspace {
                 sessions.insert(session, cx);
             }
         });
+    }
+
+    /// Apply the layout history computed after it updated the session store.
+    #[cfg(feature = "history")]
+    pub fn apply_history_removal(
+        &mut self,
+        removal: crate::history::session_workspace_lifecycle::SessionWorkspaceRemoval,
+        cx: &mut Context<Self>,
+    ) {
+        let open_files: HashSet<String> = removal
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.editor_panes.iter().chain(&tab.terminal_panes))
+            .flat_map(|pane| &pane.files)
+            .map(|file| file.id.clone())
+            .collect();
+        self.dirty_files.retain(|id| open_files.contains(id));
+        self.file_error_counts
+            .retain(|id, _| open_files.contains(id));
+        self.tabs = removal.tabs;
+        self.active_tab_id = removal.active_tab_id;
+        self.tabs_changed(cx);
     }
 
     /// `collectWindowTransfer` for these tabs: what a new window needs to

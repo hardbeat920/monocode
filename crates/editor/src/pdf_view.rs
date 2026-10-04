@@ -168,6 +168,16 @@ impl PdfView {
         cx.notify();
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn theme(&self) -> &EditorTheme {
+        &self.theme
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn current_page(&self) -> usize {
+        self.current_page
+    }
+
     /// `fitScale`: the widest page fills the viewport width.
     fn fit_scale(&self) -> f32 {
         let widest = self

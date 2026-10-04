@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use futures::future::BoxFuture;
 use monocode_core::js;
 
-use super::text::OpenCodeText;
+use super::text::TextBackend;
 use crate::core::git_text::{
     CommitMessagePromptInput, PrContent, PrContentPromptInput, build_branch_name_prompt,
     build_commit_message_prompt, build_pr_content_prompt, format_commit_message, parse_branch_name,
@@ -93,7 +93,7 @@ fn squash_whitespace(text: &str) -> String {
 
 /// `generateOpenCodeCommitMessage`.
 pub async fn generate_open_code_commit_message(
-    text: &OpenCodeText,
+    text: &impl TextBackend,
     git: Option<&SharedGitSource>,
     cwd: &str,
     signal: Option<AbortSignal>,
@@ -102,7 +102,7 @@ pub async fn generate_open_code_commit_message(
     let context = git_source(git)?.staged_context(cwd).await?;
     throw_if_aborted(signal.as_ref())?;
     let output = text
-        .run(prompt(
+        .run_text(prompt(
             cwd,
             build_commit_message_prompt(&CommitMessagePromptInput {
                 branch: context.branch,
@@ -126,13 +126,13 @@ pub async fn generate_open_code_commit_message(
 
 /// `generateOpenCodePrContent`.
 pub async fn generate_open_code_pr_content(
-    text: &OpenCodeText,
+    text: &impl TextBackend,
     git: Option<&SharedGitSource>,
     cwd: &str,
 ) -> Result<Option<GeneratedPrContent>> {
     let range = git_source(git)?.range_context(cwd).await?;
     let output = text
-        .run(prompt(
+        .run_text(prompt(
             cwd,
             build_pr_content_prompt(&PrContentPromptInput {
                 base_branch: range.base.clone(),
@@ -178,12 +178,12 @@ pub async fn generate_open_code_pr_content(
 
 /// `generateOpenCodeBranchName`.
 pub async fn generate_open_code_branch_name(
-    text: &OpenCodeText,
+    text: &impl TextBackend,
     cwd: &str,
     message: &str,
 ) -> Option<String> {
     match text
-        .run(prompt(cwd, build_branch_name_prompt(message), None))
+        .run_text(prompt(cwd, build_branch_name_prompt(message), None))
         .await
     {
         Ok(output) => parse_branch_name(&output),

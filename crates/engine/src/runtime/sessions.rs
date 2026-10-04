@@ -510,6 +510,13 @@ impl Sessions {
         self.last_persisted.remove(session_id);
     }
 
+    /// Clear the queued save and saved-turn bookkeeping for a discarded chat.
+    pub fn clear_save_state(&mut self, session_id: &str) {
+        self.pending_persist.retain(|pending| pending != session_id);
+        self.last_persisted.remove(session_id);
+        self.last_persisted_user_block.remove(session_id);
+    }
+
     /// The fingerprint of the last save that finished for this session.
     pub fn last_persisted(&self, session_id: &str) -> Option<&str> {
         self.last_persisted.get(session_id).map(String::as_str)
@@ -837,6 +844,14 @@ impl Sessions {
         self.loaded_cache.remove(session_id);
         self.loads.remove(session_id);
         *self.load_epochs.entry(session_id.to_string()).or_insert(0) += 1;
+    }
+
+    /// Reject in-flight reads that may still contain deleted ownership.
+    pub(crate) fn invalidate_pending_loads(&mut self) {
+        let pending: Vec<String> = self.loads.keys().cloned().collect();
+        for id in pending {
+            self.invalidate_loaded(&id);
+        }
     }
 
     /// `loadStoredSession`: the cached copy, the load already running, or a

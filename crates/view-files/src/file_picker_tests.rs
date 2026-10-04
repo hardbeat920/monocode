@@ -63,7 +63,7 @@ fn open<'a>(fs: Rc<FakeFiles>, cwd: &str, query: &str, cx: &'a mut TestAppContex
 impl Harness<'_> {
     /// Replace the query by selecting everything and typing.
     fn type_query(&mut self, text: &str) {
-        self.cx.simulate_keystrokes("cmd-a");
+        self.cx.simulate_keystrokes("secondary-a");
         self.cx.simulate_input(text);
         self.cx.run_until_parked();
     }

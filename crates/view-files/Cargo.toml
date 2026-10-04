@@ -15,16 +15,19 @@ monocode-ui.workspace = true
 monocode-editor.workspace = true
 monocode-markdown.workspace = true
 monocode-layout.workspace = true
+monocode-view-transcript.workspace = true
 # The data trait's default IO goes through these, like LocalFs in the engine.
 monocode-git.workspace = true
 monocode-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
+regress.workspace = true
 futures.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+monocode-editor = { workspace = true, features = ["test-support"] }
 # `test-support` turns on `Window::render_to_image` for the gallery's
 # screenshots and the headless test windows.
 gpui = { workspace = true, features = ["test-support"] }

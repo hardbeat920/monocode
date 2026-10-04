@@ -1,7 +1,7 @@
 //! Windows job objects for child processes. Moved from src-tauri/src/windows.rs.
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::sync::OnceLock;
 use windows_sys::Win32::System::{
     JobObjects::{
@@ -15,6 +15,90 @@ use windows_sys::Win32::System::{
 };
 
 static MANAGED_JOB: OnceLock<Result<OwnedHandle, i32>> = OnceLock::new();
+
+/// Keep command output available when a release desktop runs as a CLI.
+pub fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+pub fn primary_scale_factor() -> f32 {
+    unsafe { ::windows::Win32::UI::HiDpi::GetDpiForSystem() as f32 / 96. }
+}
+
+fn native_window(
+    window: &impl raw_window_handle::HasWindowHandle,
+) -> Result<::windows::Win32::Foundation::HWND, String> {
+    match window
+        .window_handle()
+        .map_err(|error| error.to_string())?
+        .as_raw()
+    {
+        raw_window_handle::RawWindowHandle::Win32(handle) => Ok(
+            ::windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _),
+        ),
+        _ => Err("The window has no Windows handle.".into()),
+    }
+}
+
+/// Hide a workspace while its agent processes keep running.
+pub fn hide_native_window(window: &impl raw_window_handle::HasWindowHandle) -> Result<(), String> {
+    use ::windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+    unsafe {
+        let _ = ShowWindow(native_window(window)?, SW_HIDE);
+    }
+    Ok(())
+}
+
+/// Show a hidden or minimized workspace before focusing it.
+pub fn show_native_window(window: &impl raw_window_handle::HasWindowHandle) -> Result<(), String> {
+    use ::windows::Win32::UI::WindowsAndMessaging::{
+        IsIconic, SW_RESTORE, SW_SHOWNOACTIVATE, ShowWindow,
+    };
+    let window = native_window(window)?;
+    unsafe {
+        let mode = if IsIconic(window).as_bool() {
+            SW_RESTORE
+        } else {
+            SW_SHOWNOACTIVATE
+        };
+        let _ = ShowWindow(window, mode);
+    }
+    Ok(())
+}
+
+fn visible_native_window(window: ::windows::Win32::Foundation::HWND) -> bool {
+    use ::windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+    unsafe { IsWindowVisible(window).as_bool() && !IsIconic(window).as_bool() }
+}
+
+/// Minimized windows are hidden; windows behind another app remain visible.
+pub fn workspace_is_visible(
+    window: &impl raw_window_handle::HasWindowHandle,
+) -> Result<bool, String> {
+    Ok(visible_native_window(native_window(window)?))
+}
+
+/// Read visibility after the GPUI window borrow ends.
+pub fn visibility_reader(
+    window: &impl raw_window_handle::HasWindowHandle,
+) -> Result<std::rc::Rc<dyn Fn() -> bool>, String> {
+    let window = native_window(window)?;
+    Ok(std::rc::Rc::new(move || visible_native_window(window)))
+}
+
+/// Read whether this is the foreground window after the GPUI borrow ends.
+pub fn focus_reader(
+    window: &impl raw_window_handle::HasWindowHandle,
+) -> Result<std::rc::Rc<dyn Fn() -> bool>, String> {
+    use ::windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let window = native_window(window)?;
+    Ok(std::rc::Rc::new(move || unsafe {
+        GetForegroundWindow() == window
+    }))
+}
 
 /// Restrict DLL lookup before the first PTY is opened. MonoCode itself stays
 /// outside the job so relaunches and external applications do not inherit it.
@@ -61,8 +145,10 @@ fn create_job() -> io::Result<OwnedHandle> {
 
 /// The app owns the only job handle. OS handle cleanup kills registered trees
 /// after a crash; unrelated children are never enrolled in this job.
-pub fn assign_child(process: RawHandle) -> io::Result<()> {
-    if unsafe { AssignProcessToJobObject(managed_job()?.as_raw_handle(), process) } == 0 {
+pub fn assign_child(process: BorrowedHandle<'_>) -> io::Result<()> {
+    if unsafe { AssignProcessToJobObject(managed_job()?.as_raw_handle(), process.as_raw_handle()) }
+        == 0
+    {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -88,7 +174,7 @@ pub fn spawn_managed(command: &mut std::process::Command) -> io::Result<std::pro
     // while suspended, then let the first thread run.
     command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
     let mut child = command.spawn()?;
-    if let Err(err) = assign_child(child.as_raw_handle()).and_then(|()| resume_child(child.id())) {
+    if let Err(err) = assign_child(child.as_handle()).and_then(|()| resume_child(child.id())) {
         let _ = child.kill();
         let _ = child.wait();
         return Err(err);

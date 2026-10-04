@@ -601,7 +601,7 @@ pub fn connect_pair(
     out: &mut Output,
 ) -> Result<(), String> {
     let status = running_status(directory).ok_or(
-        "MonoCode Host is not running. Run `npx monocode-host connect` to install and start it.",
+        "MonoCode Host is not running. Run `monocode-host connect` to install and start it.",
     )?;
     let endpoints = advertised(status.state.port, status.status.network.as_ref());
     let issued = issue_link(directory, &endpoints, name)?;
@@ -694,7 +694,7 @@ pub fn connect_status(directory: &Path, json: bool, out: &mut Output) -> Result<
             running.state.pid,
             running.state.port
         ),
-        None => "  Host: stopped. Run `npx monocode-host connect` to start it.".into(),
+        None => "  Host: stopped. Run `monocode-host connect` to start it.".into(),
     });
     if status.is_some() {
         let names: Vec<String> = providers.iter().map(|id| provider_label(id)).collect();

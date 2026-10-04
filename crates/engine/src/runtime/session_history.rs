@@ -74,8 +74,7 @@ pub fn compare_session_summaries(a: &SessionSummary, b: &SessionSummary) -> Orde
     pinned(b)
         .cmp(&pinned(a))
         .then_with(|| b.updated_at.cmp(&a.updated_at))
-        // TODO(port): `localeCompare` sorts by locale; this compares code points.
-        .then_with(|| a.id.cmp(&b.id))
+        .then_with(|| monocode_locale::compare(&a.id, &b.id))
 }
 
 /// `mergeHistorySummary`: put `summary` first, keeping the flags and
@@ -425,6 +424,41 @@ mod tests {
     }
 
     const PROJECT_A: &str = "/tmp/project-a";
+
+    #[test]
+    fn matches_intl_history_ties_without_changing_pin_or_recency() {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                let mut pinned = summary("pinned", PROJECT_A, 0);
+                pinned.pinned = Some(true);
+                let mut rows = vec![
+                    summary("filez", PROJECT_A, 1),
+                    summary("fileé", PROJECT_A, 1),
+                    summary("filee", PROJECT_A, 1),
+                    summary("file.a", PROJECT_A, 1),
+                    summary("file-a", PROJECT_A, 1),
+                    summary("file_a", PROJECT_A, 1),
+                    summary("newest", PROJECT_A, 2),
+                    pinned,
+                ];
+                rows.sort_by(compare_session_summaries);
+                assert_eq!(
+                    ids(&rows),
+                    [
+                        "pinned", "newest", "file_a", "file-a", "file.a", "filee", "fileé", "filez"
+                    ]
+                );
+                assert_eq!(
+                    compare_session_summaries(
+                        &summary("fileé", PROJECT_A, 1),
+                        &summary("filee\u{301}", PROJECT_A, 1)
+                    ),
+                    Ordering::Equal
+                );
+            })
+            .unwrap();
+        }
+    }
 
     #[test]
     fn groups_live_and_already_saved_workers_under_their_lead_before_adoption_effects_run() {

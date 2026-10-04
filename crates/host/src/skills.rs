@@ -132,8 +132,15 @@ mod tests {
         );
         assert_eq!(
             polish.path,
-            home.join(".claude/skills/polish/SKILL.md")
-                .to_string_lossy()
+            if cfg!(windows) {
+                home.join(".claude/skills/polish/SKILL.md")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            } else {
+                home.join(".claude/skills/polish/SKILL.md")
+                    .to_string_lossy()
+                    .into_owned()
+            }
         );
         assert_eq!(find(&skills, "cursor-only").unwrap().source, "cursor");
         assert!(find(&skills, "no-skill-md").is_none());

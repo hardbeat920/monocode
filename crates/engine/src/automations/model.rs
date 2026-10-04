@@ -625,24 +625,20 @@ pub fn gmt_offset_label(at: i64) -> String {
     }
 }
 
-/// `nextRunPreview`: `Next run Mon Sep 21, 09:00 GMT+2`.
-///
-/// The TypeScript used the locale's short time zone name and fell back to
-/// the GMT offset. chrono has no zone names, so this always shows the
-/// offset, and the date uses the en-US form.
+/// The next run's localized date and zone, with its 24 hour schedule time.
 pub fn next_run_preview(at: i64) -> String {
+    use monocode_platform::date_time::{DateTimeStyle, format_local};
     let date = LocalFields::of(at);
-    let day = format!(
-        "{} {} {}",
-        local_time::short_weekday(local_time::weekday(at)),
-        local_time::short_month(date.month),
-        date.day
-    );
-    format!(
-        "Next run {day}, {:02}:{:02} {}",
-        date.hours,
-        date.minutes,
+    let day = format_local(at, DateTimeStyle::WeekdayMonthDay).replace(',', "");
+    let zone = format_local(at, DateTimeStyle::TimeZone);
+    let zone = if zone.is_empty() {
         gmt_offset_label(at)
+    } else {
+        zone
+    };
+    format!(
+        "Next run {day}, {:02}:{:02} {zone}",
+        date.hours, date.minutes
     )
 }
 
@@ -919,10 +915,10 @@ fn clamp(value: Option<f64>, min: i64, max: i64) -> i64 {
     }
 }
 
-/// `formatClock`: `9:00 AM`, in the en-US form.
+/// The schedule time in the system locale.
 fn format_clock(value: &str) -> String {
     let (hour, minute) = parse_time(value);
-    local_time::clock_12h(hour, minute)
+    local_time::clock_label(hour, minute)
 }
 
 /// The automations view's search: name, prompt, project label, and folder,

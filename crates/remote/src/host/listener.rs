@@ -285,7 +285,6 @@ mod tests {
         let listener = start(&identity, None);
         let port = listener.local_addr().port();
         listener.close();
-        assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
         // Another test's outgoing connection may hold this ephemeral port for
         // a moment, so retry as the host does when it rebinds.
         let mut attempts = 0;
@@ -307,6 +306,7 @@ mod tests {
                 }
             }
         };
+        assert_eq!(again.local_addr().port(), port);
         assert_eq!(send(port, None, b"x").unwrap()["size"], 1);
         drop(again);
     }

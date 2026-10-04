@@ -43,7 +43,7 @@ fn available(path: &str) -> bool {
 
 /// `realpathSync.native`, as a string.
 fn real(path: &str) -> String {
-    std::fs::canonicalize(path)
+    dunce::canonicalize(path)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string())
 }
@@ -372,7 +372,7 @@ mod tests {
 
     pub(crate) fn repository() -> (tempfile::TempDir, String) {
         let directory = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
         let git = |args: &[&str]| run_git(&root, args);
         git(&["init", "-q"]);
         git(&["checkout", "-q", "-b", "main"]);

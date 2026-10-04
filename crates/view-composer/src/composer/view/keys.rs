@@ -31,7 +31,10 @@ pub(crate) enum KeyOutcome {
 
 impl Composer {
     fn keys_blocked(&self, cx: &gpui::App) -> bool {
-        self.props.disabled || self.creating_skill || self.prompt.read(cx).is_composing()
+        self.props.disabled
+            || self.creating_skill
+            || self.prompt.read(cx).is_composing()
+            || self.attachment_preview.is_some()
     }
 
     pub(crate) fn on_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
@@ -64,6 +67,11 @@ impl Composer {
     }
 
     pub(crate) fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.attachment_preview.is_some() {
+            self.close_attachment_preview(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.escape(window, cx) == KeyOutcome::Handled {
             cx.stop_propagation();
         }

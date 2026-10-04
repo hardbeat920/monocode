@@ -114,6 +114,11 @@ pub fn exec(program: &str, args: &[&str], options: ExecOptions) -> Result<ExecOu
             .env_clear()
             .envs(env.iter().map(|(key, value)| (key, value)));
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -153,6 +158,11 @@ pub fn exec(program: &str, args: &[&str], options: ExecOptions) -> Result<ExecOu
             Err(_) => break None,
         }
         if Instant::now() >= deadline || exceeded.load(Ordering::SeqCst) {
+            #[cfg(unix)]
+            // SAFETY: The child has its own group. Descendants must release their output pipes too.
+            unsafe {
+                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+            }
             let _ = child.kill();
             killed = true;
             break child.wait().ok();

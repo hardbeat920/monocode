@@ -43,6 +43,98 @@ fn file(index: usize, score: i64) -> AppSearchHit {
 }
 
 #[test]
+fn matches_intl_recent_project_ranking_punctuation_and_accents() {
+    for locale in ["en", "fr", "ja", "ar"] {
+        monocode_locale::with_locale(locale, || {
+            for (input, expected) in [
+                (
+                    ["file.a", "file-a", "file_a"],
+                    ["file_a", "file-a", "file.a"],
+                ),
+                (["filez", "fileé", "filee"], ["filee", "fileé", "filez"]),
+            ] {
+                let paths: Vec<_> = input.iter().map(|name| format!("/tmp/{name}")).collect();
+                let ranked = search_recent_projects(&paths, "file");
+                assert_eq!(ranked.len(), input.len());
+                assert!(ranked.windows(2).all(|pair| pair[0].score == pair[1].score));
+                assert_eq!(
+                    ranked
+                        .iter()
+                        .map(|hit| hit.name.as_str())
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn matches_intl_grouped_search_canonical_equivalence_and_score_priority() {
+    for locale in ["en", "fr", "ja", "ar"] {
+        monocode_locale::with_locale(locale, || {
+            let input = [
+                "fileé.rs",
+                "filee\u{301}.rs",
+                "filez.rs",
+                "filee.rs",
+                "file.a.rs",
+                "file-a.rs",
+                "file_a.rs",
+            ];
+            let mut hits: Vec<_> = input
+                .iter()
+                .map(|name| {
+                    AppSearchHit::File(FileHit {
+                        id: format!("file:{name}"),
+                        path: format!("/tmp/{name}"),
+                        relative: (*name).into(),
+                        name: (*name).into(),
+                        score: 10,
+                        positions: vec![0, 1, 2, 3],
+                    })
+                })
+                .collect();
+            hits.push(AppSearchHit::File(FileHit {
+                id: "high".into(),
+                path: "/tmp/high".into(),
+                relative: "high".into(),
+                name: "high".into(),
+                score: 11,
+                positions: vec![],
+            }));
+            let grouped = group_hits(&hits, SearchScope::Files);
+            assert_eq!(
+                grouped
+                    .files
+                    .iter()
+                    .map(|hit| hit.relative.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "high",
+                    "file_a.rs",
+                    "file-a.rs",
+                    "file.a.rs",
+                    "filee.rs",
+                    "fileé.rs",
+                    "filee\u{301}.rs",
+                    "filez.rs"
+                ]
+            );
+            assert!(
+                grouped
+                    .files
+                    .iter()
+                    .skip(1)
+                    .all(|hit| hit.score == 10 && hit.positions == [0, 1, 2, 3])
+            );
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn keeps_a_short_string() {
     assert_eq!(snippet_around("hello world", "hello"), "hello world");
 }

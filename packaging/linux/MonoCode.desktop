@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=MonoCode
+Comment=Native workspace for coding agents
+Exec=monocode %U
+Icon=monocode
+Type=Application
+Categories=Development;IDE;
+Terminal=false
+StartupWMClass=monocode
+MimeType=x-scheme-handler/monocode;

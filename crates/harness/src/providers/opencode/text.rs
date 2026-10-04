@@ -39,6 +39,17 @@ use crate::core::json_text::js_string;
 use crate::core::registry::{EventSink, TextPromptInput};
 use crate::core::task::{SharedSpawner, sleep};
 
+/// Shared prompt builders can use either OpenCode transport.
+pub trait TextBackend: Send + Sync {
+    fn run_text(&self, input: TextPromptInput) -> crate::core::task::BoxFuture<'_, Result<String>>;
+}
+
+impl TextBackend for OpenCodeText {
+    fn run_text(&self, input: TextPromptInput) -> crate::core::task::BoxFuture<'_, Result<String>> {
+        self.run(input).boxed()
+    }
+}
+
 pub const TEXT_CHILD_ID: &str = "monocode-opencode-text";
 const SERVER_TIMEOUT_MS: u64 = 30_000;
 const REQUEST_TIMEOUT_MS: i64 = 45_000;

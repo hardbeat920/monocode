@@ -13,6 +13,69 @@ const OPTIONS: SearchOptions = SearchOptions {
 };
 
 #[test]
+fn javascript_preview_regex_accepts_lookaround_and_backreferences() {
+    let options = SearchOptions {
+        regexp: true,
+        ..OPTIONS
+    };
+    for (pattern, expected) in [
+        (r"foo(?=bar)", 0..3),
+        (r"(?<=foo)bar", 3..6),
+        (r"(foo)\1", 7..13),
+    ] {
+        let result = find_preview_text_matches("foobar foofoo", pattern, options);
+        assert!(!result.invalid, "JavaScript accepts {pattern}");
+        assert_eq!(result.matches, vec![expected], "{pattern}");
+    }
+    let result = find_preview_text_matches("foobar foofoo", r"(?<=f+)oo", options);
+    assert!(
+        !result.invalid,
+        "JavaScript accepts a variable-width lookbehind"
+    );
+    assert_eq!(result.matches, vec![1..3, 8..10, 11..13]);
+}
+
+#[test]
+fn javascript_preview_regex_keeps_unicode_character_class_rules() {
+    let options = SearchOptions {
+        regexp: true,
+        ..OPTIONS
+    };
+    for (pattern, text, expected) in [
+        (r"\w+", "é foo ٣", 3..6),
+        (r"\d+", "٣ 3", 3..4),
+        (r"\s", "a\u{feff}b\u{85}c", 1..4),
+    ] {
+        let result = find_preview_text_matches(text, pattern, options);
+        assert!(!result.invalid);
+        assert_eq!(result.matches, vec![expected], "{pattern}");
+    }
+    assert!(find_preview_text_matches("foo", "(?i)foo", options).invalid);
+}
+
+#[test]
+fn preview_search_keeps_literal_punctuation_and_single_line_anchors() {
+    assert_eq!(
+        find_preview_text_matches("a-b", "a-b", OPTIONS).matches,
+        vec![0..3]
+    );
+    let options = SearchOptions {
+        regexp: true,
+        ..OPTIONS
+    };
+    assert!(
+        find_preview_text_matches("a\nb", "^b", options)
+            .matches
+            .is_empty()
+    );
+    assert!(
+        find_preview_text_matches("a\nb", "a$", options)
+            .matches
+            .is_empty()
+    );
+}
+
+#[test]
 fn finds_literal_text_case_insensitively() {
     assert_eq!(
         find_preview_text_matches("Alpha beta ALPHA", "alpha", OPTIONS).matches,
@@ -83,7 +146,7 @@ fn mount<'a>(
 }
 
 fn type_query(text: &str, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
     cx.run_until_parked();
 }
@@ -95,7 +158,7 @@ fn count(search: &Entity<FilePreviewSearch>, cx: &mut VisualTestContext) -> Stri
 #[gpui::test]
 fn opens_from_the_find_shortcut_and_navigates_rendered_matches(cx: &mut TestAppContext) {
     let (search, cx) = mount("Alpha **beta**\n\nalpha", cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("secondary-f");
     assert!(search.read_with(cx, |search, _| search.is_open()));
 
     type_query("Alpha beta", cx);
@@ -108,7 +171,7 @@ fn opens_from_the_find_shortcut_and_navigates_rendered_matches(cx: &mut TestAppC
     assert_eq!(count(&search, cx), "2 of 2");
     cx.simulate_keystrokes("shift-enter");
     assert_eq!(count(&search, cx), "1 of 2");
-    cx.simulate_keystrokes("cmd-g cmd-g");
+    cx.simulate_keystrokes("secondary-g secondary-g");
     assert_eq!(count(&search, cx), "1 of 2");
 
     // Match Case drops the capitalized match.
@@ -135,14 +198,14 @@ fn opens_from_a_custom_find_shortcut_instead_of_the_default(cx: &mut TestAppCont
     assert!(search.read_with(cx, |search, _| search.is_open()));
     cx.simulate_keystrokes("escape");
     assert!(!search.read_with(cx, |search, _| search.is_open()));
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("secondary-f");
     assert!(!search.read_with(cx, |search, _| search.is_open()));
 }
 
 #[gpui::test]
 fn reports_no_results_and_invalid_patterns(cx: &mut TestAppContext) {
     let (search, cx) = mount("Alpha", cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("secondary-f");
     type_query("zeta", cx);
     assert_eq!(count(&search, cx), "No results");
     cx.simulate_keystrokes("alt-r");
@@ -153,7 +216,7 @@ fn reports_no_results_and_invalid_patterns(cx: &mut TestAppContext) {
 #[gpui::test]
 fn closes_when_the_preview_hides(cx: &mut TestAppContext) {
     let (search, cx) = mount("Alpha", cx);
-    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("secondary-f");
     type_query("alpha", cx);
     search.update(cx, |search, cx| search.set_active(false, cx));
     search.read_with(cx, |search, _| {

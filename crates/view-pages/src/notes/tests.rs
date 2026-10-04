@@ -113,6 +113,64 @@ fn refreshes_an_open_note_after_an_operator_write(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn matches_intl_local_note_save_ties_without_changing_recency(cx: &mut TestAppContext) {
+    let mut notes: Vec<_> = [
+        "filez",
+        "file.a",
+        "fileé",
+        "filee\u{301}",
+        "file-a",
+        "filee",
+        "file_a",
+    ]
+    .into_iter()
+    .map(|id| Note {
+        id: id.into(),
+        ..stored()
+    })
+    .collect();
+    notes.push(Note {
+        id: "newest".into(),
+        updated_at: 2,
+        ..stored()
+    });
+    let page = render(cx, notes);
+    let data = page.data.clone();
+    page.cx.update(|_, cx| {
+        data.write_from_outside(
+            Note {
+                id: "file-a".into(),
+                title: "Saved".into(),
+                ..stored()
+            },
+            cx,
+        );
+        let saved = data.page(cx);
+        assert_eq!(
+            saved
+                .notes
+                .iter()
+                .map(|note| note.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "newest",
+                "file_a",
+                "file-a",
+                "file.a",
+                "filee",
+                "fileé",
+                "filee\u{301}",
+                "filez"
+            ]
+        );
+        let changed = saved.notes.iter().find(|note| note.id == "file-a").unwrap();
+        assert_eq!(changed.title, "Saved");
+        assert_eq!(changed.body, "Keep this text.");
+        assert_eq!(changed.updated_at, 1);
+    });
+}
+
+#[gpui::test]
 fn moves_the_existing_note_and_keeps_its_content(cx: &mut TestAppContext) {
     let mut page = render(cx, vec![stored()]);
     assert!(picker_label(&mut page).contains("Move note to project, current project Edefyn"));

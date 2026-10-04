@@ -20,9 +20,9 @@ use std::time::Instant;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, BorderStyle, Bounds, CursorStyle, ElementId, FontWeight, Hitbox,
-    HitboxBehavior, Hsla, ImageSource, ObjectFit, PathBuilder, Pixels, Point, SharedString,
-    StyledImage, StyledText, TextLayout, TextRun, UnderlineStyle, WeakEntity, canvas, div, font,
-    img, point, px, quad, size,
+    HitboxBehavior, Hsla, Image, ImageFormat, ImageSource, ObjectFit, PathBuilder, Pixels, Point,
+    SharedString, StyledImage, StyledText, TextLayout, TextRun, UnderlineStyle, WeakEntity, canvas,
+    div, font, img, point, px, quad, size,
 };
 
 use crate::fade::RevealTimeline;
@@ -269,6 +269,69 @@ pub(crate) struct CodeState {
     pub copied: Option<ElementKey>,
     /// Highlight work for the view to run off the UI thread.
     pub jobs: Vec<HighlightJob>,
+    diagrams: HashMap<ElementKey, DiagramEntry>,
+    pub diagram_jobs: Vec<DiagramJob>,
+}
+
+struct DiagramEntry {
+    source: SharedString,
+    dark: bool,
+    image: Option<Arc<Image>>,
+    size: (f32, f32),
+    source_visible: bool,
+    in_flight: bool,
+    attempted: Option<(SharedString, bool)>,
+}
+
+pub(crate) struct DiagramJob {
+    key: ElementKey,
+    source: SharedString,
+    dark: bool,
+    svg: Option<String>,
+}
+
+impl DiagramJob {
+    pub fn run(mut self) -> Self {
+        self.svg = render_diagram(&self.source, self.dark);
+        self
+    }
+}
+
+fn render_diagram(source: &str, dark: bool) -> Option<String> {
+    if source.len() > 512 * 1024 {
+        return None;
+    }
+    let mut theme = if dark {
+        mermaid_rs_renderer::Theme::dark()
+    } else {
+        mermaid_rs_renderer::Theme::modern()
+    };
+    theme.font_family = "Helvetica, Arial, sans-serif".into();
+    let options = mermaid_rs_renderer::RenderOptions {
+        theme,
+        ..Default::default()
+    };
+    mermaid_rs_renderer::render_with_options(source, options).ok()
+}
+
+fn diagram_size(svg: &str) -> (f32, f32) {
+    let dimensions = svg
+        .split_once("viewBox=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(value, _)| {
+            value
+                .split_whitespace()
+                .filter_map(|v| v.parse::<f32>().ok())
+                .collect::<Vec<_>>()
+        });
+    match dimensions.as_deref() {
+        Some([_, _, width, height])
+            if width.is_finite() && height.is_finite() && *width > 0. && *height > 0. =>
+        {
+            (*width, *height)
+        }
+        _ => (640., 320.),
+    }
 }
 
 /// One background highlight: bring `highlight` up to date with `code`.
@@ -346,11 +409,72 @@ impl CodeState {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.jobs.clear();
+        self.diagrams.clear();
+        self.diagram_jobs.clear();
     }
 
     /// Drop entries for blocks past the end of the document.
     pub fn retain_blocks(&mut self, blocks: usize) {
         self.entries.retain(|key, _| key.block() < blocks);
+        self.diagrams.retain(|key, _| key.block() < blocks);
+    }
+
+    pub fn finish_diagram(&mut self, job: DiagramJob) {
+        let Some(entry) = self.diagrams.get_mut(&job.key) else {
+            return;
+        };
+        entry.in_flight = false;
+        if entry.source != job.source || entry.dark != job.dark {
+            return;
+        }
+        if let Some(svg) = job.svg {
+            entry.size = diagram_size(&svg);
+            entry.image = Some(Arc::new(Image::from_bytes(
+                ImageFormat::Svg,
+                svg.into_bytes(),
+            )));
+        }
+    }
+
+    pub fn toggle_diagram_source(&mut self, key: ElementKey) {
+        if let Some(entry) = self.diagrams.get_mut(&key) {
+            entry.source_visible = !entry.source_visible;
+        }
+    }
+
+    fn diagram(&mut self, code: &PreparedCode, dark: bool) -> Option<(Arc<Image>, (f32, f32))> {
+        let entry = self
+            .diagrams
+            .entry(code.key)
+            .or_insert_with(|| DiagramEntry {
+                source: code.code.clone(),
+                dark,
+                image: None,
+                size: (640., 320.),
+                source_visible: false,
+                in_flight: false,
+                attempted: None,
+            });
+        if entry.source != code.code || entry.dark != dark {
+            entry.source = code.code.clone();
+            entry.dark = dark;
+            entry.image = None;
+        }
+        let desired = (code.code.clone(), dark);
+        if !entry.in_flight && entry.attempted.as_ref() != Some(&desired) {
+            entry.in_flight = true;
+            entry.attempted = Some(desired);
+            self.diagram_jobs.push(DiagramJob {
+                key: code.key,
+                source: code.code.clone(),
+                dark,
+                svg: None,
+            });
+        }
+        if entry.source_visible {
+            return None;
+        }
+        Some((entry.image.clone()?, entry.size))
     }
 
     /// Take back the state from a finished background job.
@@ -1206,6 +1330,62 @@ fn measure_columns(
 
 fn render_code(code: &PreparedCode, frame: &mut Frame) -> AnyElement {
     let style = frame.style;
+    if code.fence.is_mermaid()
+        && let Some((image, (width, height))) = frame.code.diagram(code, style.text.l > 0.5)
+    {
+        frame.registry.borrow_mut().push(
+            Element {
+                key: code.key,
+                text: code.code.clone(),
+                hidden: Vec::new(),
+                separator: crate::selection::Separator::Paragraph,
+                line_mode: true,
+            },
+            None,
+            Arc::from(Vec::new()),
+        );
+        let scale = (600. / height).min(1.);
+        return div()
+            .w_full()
+            .min_w_0()
+            .rounded(style.code_radius)
+            .border_1()
+            .border_color(style.code_border)
+            .bg(style.code_background)
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(12.))
+                    .min_h(style.code_header_height)
+                    .text_size(style.code_label_size)
+                    .text_color(style.code_label)
+                    .child("Mermaid")
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .child(diagram_toggle(code.key, "Source", frame))
+                            .child(copy_button(
+                                code,
+                                frame.code.copied == Some(code.key),
+                                frame,
+                            )),
+                    ),
+            )
+            .child(
+                div().flex().justify_center().p(px(12.)).child(
+                    img(image)
+                        .w(px(width * scale))
+                        .h(px(height * scale))
+                        .max_w_full()
+                        .object_fit(ObjectFit::Contain),
+                ),
+            )
+            .into_any_element();
+    }
     let runs = frame.code.runs(code, style);
     let copied = frame.code.copied == Some(code.key);
 
@@ -1325,7 +1505,21 @@ fn render_code(code: &PreparedCode, frame: &mut Frame) -> AnyElement {
                     label
                 })),
         )
-        .child(copy_button(code, copied, frame));
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .when(
+                    code.fence.is_mermaid()
+                        && frame
+                            .code
+                            .diagrams
+                            .get(&key)
+                            .is_some_and(|entry| entry.image.is_some()),
+                    |el| el.child(diagram_toggle(key, "Diagram", frame)),
+                )
+                .child(copy_button(code, copied, frame)),
+        );
 
     div()
         .w_full()
@@ -1339,6 +1533,23 @@ fn render_code(code: &PreparedCode, frame: &mut Frame) -> AnyElement {
         .overflow_hidden()
         .child(header)
         .child(body)
+        .into_any_element()
+}
+
+fn diagram_toggle(key: ElementKey, label: &'static str, frame: &Frame) -> AnyElement {
+    let view = frame.view.clone();
+    div()
+        .id(ElementId::NamedInteger("md-diagram-source".into(), key.0))
+        .cursor_pointer()
+        .px(px(8.))
+        .py(px(4.))
+        .text_size(frame.style.code_label_size)
+        .text_color(frame.style.code_label)
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            let _ = view.update(cx, |view, cx| view.toggle_diagram_source(key, cx));
+        })
+        .child(label)
         .into_any_element()
 }
 
@@ -1430,6 +1641,46 @@ fn check_icon(color: Hsla) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_mermaid_diagrams_with_native_svg_text_and_geometry() {
+        for source in [
+            "flowchart LR\n A[Start] --> B[Done]",
+            "sequenceDiagram\n Alice->>Bob: Hello",
+            "classDiagram\n Animal <|-- Duck",
+        ] {
+            let svg = render_diagram(source, true).unwrap();
+            assert!(svg.contains("<svg"));
+            assert!(svg.contains("<text"));
+            let (width, height) = diagram_size(&svg);
+            assert!(width > 0. && height > 0.);
+        }
+        assert!(render_diagram("this is not a diagram", false).is_none());
+    }
+
+    #[test]
+    fn coalesces_streaming_diagram_updates_until_the_worker_finishes() {
+        let mut state = CodeState::default();
+        let mut code = PreparedCode {
+            key: ElementKey(0),
+            fence: crate::parse::CodeFence::parse("mermaid"),
+            code: "flowchart LR; A-->B".into(),
+            line_count: 1,
+        };
+        assert!(state.diagram(&code, true).is_none());
+        let first = state.diagram_jobs.pop().unwrap();
+        code.code = "flowchart LR; A-->B-->C".into();
+        assert!(state.diagram(&code, true).is_none());
+        assert!(state.diagram_jobs.is_empty());
+        state.finish_diagram(first.run());
+        assert!(state.diagram(&code, true).is_none());
+        let next = state.diagram_jobs.pop().unwrap();
+        state.finish_diagram(next.run());
+        assert!(state.diagram(&code, true).is_some());
+        state.toggle_diagram_source(code.key);
+        assert!(state.diagram(&code, true).is_none());
+        assert!(state.diagram_jobs.is_empty());
+    }
 
     #[test]
     fn base64_decodes() {

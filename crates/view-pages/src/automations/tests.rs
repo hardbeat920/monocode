@@ -2,7 +2,7 @@
 //! from automations.test.ts, as the engine's model_tests.rs has them), the
 //! trigger and run labels, and the page over [`LocalAutomations`].
 
-use super::local_time::local_ms;
+use super::local_time::{self, local_ms};
 use super::model::*;
 use monocode_core::HarnessId;
 use monocode_core::block::Extra;
@@ -135,7 +135,7 @@ fn describes_weekly_schedules() {
     );
     assert_eq!(
         automation_schedule_label(&schedule(AutomationScheduleKind::Weekdays, 0, "13:30", 1)),
-        "Weekdays at 1:30 PM"
+        format!("Weekdays at {}", local_time::clock_label(13, 30))
     );
 }
 
@@ -228,7 +228,13 @@ fn labels_the_timezone_offset_and_next_run() {
     assert!(matches!(label.as_bytes()[3], b'+' | b'-'));
     assert!(label.as_bytes()[4].is_ascii_digit());
     assert!(next_run_preview(at(2026, 9, 21, 9, 0)).starts_with("Next run "));
-    assert!(next_run_preview(at(2026, 9, 21, 9, 0)).starts_with("Next run Mon Sep 21, 09:00 GMT"));
+    let stamp = at(2026, 9, 21, 9, 0);
+    let date = monocode_platform::date_time::format_local(
+        stamp,
+        monocode_platform::date_time::DateTimeStyle::WeekdayMonthDay,
+    )
+    .replace(',', "");
+    assert!(next_run_preview(stamp).starts_with(&format!("Next run {date}, 09:00 ")));
 }
 
 #[test]
@@ -302,7 +308,10 @@ fn saving_syncs_triggers_and_schedules_after_now() {
 #[test]
 fn formats_the_triggered_timestamp_as_day_month_24h_time() {
     let stamp = local_ms(2026, 8, 19, 13, 36);
-    assert_eq!(format_automation_run_at(stamp), "19 Sep, 13:36");
+    assert_eq!(
+        format_automation_run_at(stamp),
+        format!("19 {}, 13:36", local_time::short_month(8))
+    );
     assert_eq!(format_automation_run_at(0), "—");
 }
 
@@ -386,7 +395,10 @@ mod labels {
         ]);
         assert_eq!(trigger_label(&stored), "Pull request opened +1");
         stored.triggers = Some(vec![time_trigger("daily", "18:30", None)]);
-        assert_eq!(trigger_label(&stored), "Daily at 6:30 PM");
+        assert_eq!(
+            trigger_label(&stored),
+            format!("Daily at {}", local_time::clock_label(18, 30))
+        );
         stored.triggers = Some(vec![create_automation_trigger(
             AutomationTriggerKind::Jira,
             "unknown_event",
@@ -438,7 +450,7 @@ mod labels {
             run_trigger_meta(&run("scheduled", serde_json::json!({})), &draft),
             (
                 AutomationTriggerKind::Time,
-                "Scheduled · Weekdays at 9:00 AM".to_string()
+                format!("Scheduled · Weekdays at {}", local_time::clock_label(9, 0))
             )
         );
         draft.triggers.truncate(1);

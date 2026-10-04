@@ -22,12 +22,9 @@ workspace go through `OrchestrationPeers` (peers.rs), which has defaults.
 
 ## Submit
 
-3. `SubmitOrchestrationHooks::discover_settings` returns settings with no
-   error path. `discoverOrchestrationSettings` threw "No worker models are
-   available" and the planning turn failed. The hook here logs the error and
-   returns an empty catalog, so the proposal fails validation instead
-   (`TODO(port)` in package.rs). A `Task<Result<OrchestrationSettings, String>>`
-   would restore the original message.
+3. Resolved. `SubmitOrchestrationHooks::discover_settings` returns a result.
+   Discovery errors stop the planning turn before the lead provider runs.
+   The failed proposal retains the original error message.
 
 ## Workspace
 
@@ -70,9 +67,13 @@ workspace go through `OrchestrationPeers` (peers.rs), which has defaults.
 12. `OrchestrationPeers::probe_availability`: `probeHarnessAvailability` before
     worker models are discovered.
 
-## Known difference
+## Receipt compatibility
 
-13. Control receipts compare a JSON signature of the request input. The
-    control server parses input into `serde_json::Value`, which sorts object
-    keys, so a receipt saved by the TypeScript app for input whose keys were
-    not in sorted order reads as changed input on retry.
+13. Saved control receipts keep their original signature bytes. Retries first
+    compare exact strings, then compare equal JSON values across object key
+    order and decimal number spelling. Raw number digits prevent floating-point
+    rounding from hiding changed input. Pending requests still compare exact
+    signatures. GPUI enables `serde_json/preserve_order` in the current graph,
+    so the original key-sorting difference did not reproduce there. The
+    hydrated approval fixture did reproduce TypeScript's `7` signature
+    rejecting unchanged native input `7.0` before this comparison fix.

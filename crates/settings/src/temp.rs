@@ -26,12 +26,14 @@ impl TempDir {
                 "monocode-{prefix}-{}-{nanos}-{n}",
                 std::process::id()
             ));
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let builder = {
+                let mut builder = builder;
                 use std::os::unix::fs::DirBuilderExt;
                 builder.mode(0o700);
-            }
+                builder
+            };
             match builder.create(&path) {
                 Ok(()) => return Ok(TempDir(path)),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

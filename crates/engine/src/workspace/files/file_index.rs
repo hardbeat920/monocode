@@ -541,16 +541,9 @@ pub fn rank_project_files_limit(
     scored
 }
 
-/// `String.prototype.localeCompare` for paths, close to ICU's root order:
-/// case-insensitive first, lowercase before uppercase on a tie.
-// TODO(port): ICU also orders punctuation differently from code points.
+/// `String.prototype.localeCompare` for paths with the OS default locale.
 pub fn locale_compare(a: &str, b: &str) -> Ordering {
-    let folded = a.to_lowercase().cmp(&b.to_lowercase());
-    if folded != Ordering::Equal {
-        return folded;
-    }
-    // ICU puts lowercase first, which is the reverse of code point order.
-    b.cmp(a)
+    monocode_locale::compare(a, b)
 }
 
 #[cfg(test)]
@@ -560,6 +553,54 @@ mod tests {
     use gpui::{AppContext, Entity, TestAppContext};
 
     const CWD: &str = "/Users/me/project";
+
+    fn assert_ranked_names(input: &[&str], expected: &[&str]) {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                let files: Vec<_> = input
+                    .iter()
+                    .map(|name| ProjectFile::new(*name, format!("{CWD}/{name}"), *name))
+                    .collect();
+                let ranked = rank_project_files(&files, "file", &[]);
+                assert_eq!(ranked.len(), input.len());
+                assert!(ranked.windows(2).all(|pair| pair[0].score == pair[1].score));
+                assert!(ranked.windows(2).all(|pair| monocode_core::js::len(
+                    &pair[0].file.relative
+                ) == monocode_core::js::len(
+                    &pair[1].file.relative
+                )));
+                assert_eq!(
+                    ranked
+                        .iter()
+                        .map(|hit| hit.file.relative.as_str())
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn matches_intl_file_ranking_punctuation() {
+        assert_ranked_names(
+            &["file.a.rs", "file-a.rs", "file_a.rs"],
+            &["file_a.rs", "file-a.rs", "file.a.rs"],
+        );
+    }
+
+    #[test]
+    fn matches_intl_file_ranking_accents() {
+        assert_ranked_names(
+            &["filez.rs", "fileé.rs", "filee.rs"],
+            &["filee.rs", "fileé.rs", "filez.rs"],
+        );
+    }
+
+    #[test]
+    fn matches_intl_file_ranking_canonical_equivalence() {
+        assert_ranked_names(&["fileÅ.rs", "fileÅ.rs"], &["fileÅ.rs", "fileÅ.rs"]);
+    }
 
     fn files() -> Vec<ProjectFile> {
         vec![

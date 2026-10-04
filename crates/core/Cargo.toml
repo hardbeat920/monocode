@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+monocode-locale.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

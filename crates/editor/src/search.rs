@@ -3,13 +3,13 @@
 //! `replaceAll` behavior of `@codemirror/search` that the find panel relies on
 //! (configured with `literal: true`).
 //!
-//! Offsets are UTF-8 byte offsets. Regular expressions use Rust's `regex`
-//! syntax, which has no lookaround or backreferences, so a JavaScript pattern
-//! that needs them reports "Invalid regex".
+//! Offsets are UTF-8 byte offsets. Regular expressions use JavaScript syntax.
+//! Literal matching applies CodeMirror's per-character NFKD normalization.
 
 use std::ops::Range;
 
-use regex::{Regex, RegexBuilder};
+use regress::{Flags, Regex};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::git_diff::TextChange;
 
@@ -30,7 +30,8 @@ pub struct SearchQuery {
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     query: SearchQuery,
-    regex: Regex,
+    regex: Option<Regex>,
+    literal: String,
 }
 
 /// One match, with the capture groups a regex replacement needs.
@@ -38,6 +39,7 @@ pub struct CompiledQuery {
 pub struct SearchMatch {
     pub range: Range<usize>,
     groups: Vec<Option<Range<usize>>>,
+    precise: bool,
 }
 
 impl SearchMatch {
@@ -60,19 +62,26 @@ impl SearchQuery {
         if self.search.is_empty() {
             return None;
         }
-        let pattern = if self.regexp {
-            self.search.clone()
+        let regex = if self.regexp {
+            Some(
+                Regex::with_flags(
+                    &self.search,
+                    Flags {
+                        multiline: true,
+                        unicode: true,
+                        icase: !self.case_sensitive,
+                        ..Flags::default()
+                    },
+                )
+                .ok()?,
+            )
         } else {
-            regex::escape(&self.search)
+            None
         };
-        let regex = RegexBuilder::new(&pattern)
-            .multi_line(true)
-            .case_insensitive(!self.case_sensitive)
-            .build()
-            .ok()?;
         Some(CompiledQuery {
             query: self.clone(),
             regex,
+            literal: normalize_literal(&self.search, self.case_sensitive),
         })
     }
 }
@@ -112,7 +121,101 @@ fn next_char_boundary(text: &str, pos: usize) -> usize {
     next
 }
 
+fn advance_utf16(text: &str, pos: usize, count: usize) -> usize {
+    let mut units = 0;
+    for (offset, ch) in text[pos..].char_indices() {
+        units += ch.len_utf16();
+        if units >= count {
+            return pos + offset + ch.len_utf8();
+        }
+    }
+    text.len()
+}
+
+fn retreat_utf16(text: &str, pos: usize, count: usize) -> usize {
+    let mut units = 0;
+    for (offset, ch) in text[..pos].char_indices().rev() {
+        units += ch.len_utf16();
+        if units >= count {
+            return offset;
+        }
+    }
+    0
+}
+
+fn normalize_literal(text: &str, case_sensitive: bool) -> String {
+    let normalized: String = text.nfkd().collect();
+    if case_sensitive {
+        normalized
+    } else {
+        normalized.to_lowercase()
+    }
+}
+
 impl CompiledQuery {
+    fn literal_matches(
+        &self,
+        text: &str,
+        from: usize,
+        to: usize,
+        limit: usize,
+        overlapping: bool,
+    ) -> Vec<SearchMatch> {
+        let Some(input) = text.get(from..to.min(text.len())) else {
+            return Vec::new();
+        };
+        let mut normalized = String::new();
+        let mut positions = Vec::new();
+        for (offset, ch) in input.char_indices() {
+            let start = from + offset;
+            let end = start + ch.len_utf8();
+            let part = normalize_literal(&ch.to_string(), self.query.case_sensitive);
+            for (index, c) in part.char_indices() {
+                for _ in 0..c.len_utf8() {
+                    positions.push((start, end, index == 0, index + c.len_utf8() == part.len()));
+                }
+            }
+            normalized.push_str(&part);
+        }
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while out.len() < limit && !self.literal.is_empty() {
+            let Some(offset) = normalized[pos..].find(&self.literal) else {
+                break;
+            };
+            let start = pos + offset;
+            let end = start + self.literal.len();
+            let first = positions[start];
+            let last = positions[end - 1];
+            let accepted = !self.query.whole_word || word_test(text, first.0, last.1);
+            if accepted {
+                out.push(SearchMatch {
+                    range: first.0..last.1,
+                    groups: Vec::new(),
+                    precise: first.2 && last.3,
+                });
+            }
+            // SearchCursor consumes the entire original character at a match end.
+            pos = if accepted && !overlapping {
+                let mut next = end;
+                while next < positions.len() && positions[next].0 == last.0 {
+                    next += 1;
+                }
+                next
+            } else {
+                let mut next = next_char_boundary(&normalized, start);
+                while next < positions.len() && positions[next].0 == first.0 {
+                    next += 1;
+                }
+                next
+            };
+            if pos >= normalized.len() {
+                break;
+            }
+        }
+        out
+    }
+
     pub fn query(&self) -> &SearchQuery {
         &self.query
     }
@@ -121,18 +224,23 @@ impl CompiledQuery {
     fn find_from(&self, text: &str, mut pos: usize, to: usize) -> Option<SearchMatch> {
         let to = to.min(text.len());
         while pos <= to {
-            let captures = self.regex.captures_at(text, pos)?;
-            let whole = captures.get(0)?;
+            let Some(regex) = &self.regex else {
+                return self
+                    .literal_matches(text, pos, to, 1, false)
+                    .into_iter()
+                    .next();
+            };
+            let whole = regex.find_from(text, pos).next()?;
             if whole.end() > to {
                 return None;
             }
             if !self.query.whole_word || word_test(text, whole.start(), whole.end()) {
+                let mut groups = vec![Some(whole.range.clone())];
+                groups.extend(whole.captures);
                 return Some(SearchMatch {
-                    range: whole.range(),
-                    groups: captures
-                        .iter()
-                        .map(|group| group.map(|g| g.range()))
-                        .collect(),
+                    range: whole.range,
+                    groups,
+                    precise: true,
                 });
             }
             if whole.start() >= text.len() {
@@ -145,6 +253,9 @@ impl CompiledQuery {
 
     /// Non-overlapping matches inside `from..to`, the cursor `getCursor` returns.
     pub fn matches_in(&self, text: &str, from: usize, to: usize, limit: usize) -> Vec<SearchMatch> {
+        if !self.query.regexp {
+            return self.literal_matches(text, from, to, limit, false);
+        }
         let mut out = Vec::new();
         let mut pos = from;
         let mut last_end: Option<usize> = None;
@@ -191,7 +302,7 @@ impl CompiledQuery {
             let end = if self.query.regexp {
                 cur_from
             } else {
-                text.len().min(cur_from + self.query.search.len())
+                advance_utf16(text, cur_from, self.query.search.encode_utf16().count())
             };
             self.find_from(text, 0, end)
         })?;
@@ -203,18 +314,15 @@ impl CompiledQuery {
 
     /// `prevMatchInRange`: the last match that fits inside `from..to`.
     fn prev_match_in_range(&self, text: &str, from: usize, to: usize) -> Option<SearchMatch> {
-        let mut last = None;
-        let mut pos = from;
-        while let Some(found) = self.find_from(text, pos, to) {
-            pos = if found.range.start >= text.len() {
-                last = Some(found);
-                break;
-            } else {
-                next_char_boundary(text, found.range.start)
-            };
-            last = Some(found);
+        if !self.query.regexp {
+            return self
+                .literal_matches(text, from, to, usize::MAX, true)
+                .into_iter()
+                .last();
         }
-        last
+        self.matches_in(text, from, to, usize::MAX)
+            .into_iter()
+            .last()
     }
 
     /// `prevMatch(state, curFrom, curTo)`: the last match before `cur_from`,
@@ -224,11 +332,11 @@ impl CompiledQuery {
             let start = if self.query.regexp {
                 cur_to
             } else {
-                cur_to.saturating_sub(self.query.search.len())
+                retreat_utf16(text, cur_to, self.query.search.encode_utf16().count())
             };
             self.prev_match_in_range(text, start, text.len())
         })?;
-        if found.range.start == cur_from && found.range.end == cur_to {
+        if !self.query.regexp && found.range.start == cur_from && found.range.end == cur_to {
             return None;
         }
         Some(found)
@@ -302,7 +410,9 @@ impl CompiledQuery {
         let first = self.next_match(text, from, from)?;
         let mut next = Some(first.clone());
         let mut change = None;
-        if first.range.start == from && first.range.end == to {
+        if !first.precise {
+            next = self.next_match(text, first.range.start, first.range.end);
+        } else if first.range.start == from && first.range.end == to {
             change = Some(TextChange {
                 from: first.range.start,
                 to: first.range.end,
@@ -322,13 +432,18 @@ impl CompiledQuery {
         let matches = self.matches_in(text, 0, text.len(), usize::MAX);
         let mut out = String::with_capacity(text.len());
         let mut last = 0;
+        let mut replaced = 0;
         for found in &matches {
+            if !found.precise {
+                continue;
+            }
+            replaced += 1;
             out.push_str(&text[last..found.range.start]);
             out.push_str(&self.replacement(text, found));
             last = found.range.end;
         }
         out.push_str(&text[last..]);
-        (out, matches.len())
+        (out, replaced)
     }
 
     /// The match `reveal` selects after the query changes: the first match at
@@ -457,6 +572,141 @@ mod tests {
 
     fn ranges(compiled: &CompiledQuery, text: &str) -> Vec<Range<usize>> {
         compiled.count_matches(text).0
+    }
+
+    #[test]
+    fn javascript_regex_search_accepts_lookaround_and_backreferences() {
+        for (pattern, expected) in [
+            (r"foo(?=bar)", 0..3),
+            (r"(?<=foo)bar", 3..6),
+            (r"(foo)\1", 7..13),
+        ] {
+            let compiled = SearchQuery {
+                regexp: true,
+                ..query(pattern)
+            }
+            .compile()
+            .expect("the retained JavaScript search accepts this pattern");
+            assert_eq!(
+                ranges(&compiled, "foobar foofoo"),
+                vec![expected],
+                "{pattern}"
+            );
+        }
+        let compiled = SearchQuery {
+            regexp: true,
+            ..query(r"(?<=a+)b")
+        }
+        .compile()
+        .expect("JavaScript accepts a variable-width lookbehind");
+        assert_eq!(ranges(&compiled, "aaab ab"), vec![3..4, 6..7]);
+    }
+
+    #[test]
+    fn javascript_regex_replacement_keeps_lookbehind_and_capture_groups() {
+        let compiled = SearchQuery {
+            regexp: true,
+            replace: "$1 [$&]".into(),
+            ..query(r"(?<=prefix:)(\w+)\1")
+        }
+        .compile()
+        .expect("the retained JavaScript search accepts this pattern");
+        let text = "prefix:foofoo suffix:barbar";
+        let matches = compiled.matches_in(text, 0, text.len(), MATCH_CAP);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].range, 7..13);
+        assert_eq!(compiled.replacement(text, &matches[0]), "foo [foofoo]");
+    }
+
+    #[test]
+    fn javascript_regex_classes_keep_word_digit_and_whitespace_rules() {
+        for (pattern, text, expected) in [
+            (r"\w+", "é foo ٣", 3..6),
+            (r"\d+", "٣ 3", 3..4),
+            (r"\s", "a\u{feff}b\u{85}c", 1..4),
+        ] {
+            let compiled = SearchQuery {
+                regexp: true,
+                ..query(pattern)
+            }
+            .compile()
+            .unwrap();
+            assert_eq!(ranges(&compiled, text), vec![expected], "{pattern}");
+        }
+        assert!(
+            !SearchQuery {
+                regexp: true,
+                ..query("(?i)foo")
+            }
+            .valid()
+        );
+    }
+
+    #[test]
+    fn codemirror_literal_search_normalizes_canonical_and_compatibility_characters() {
+        for (search, text, expected) in [
+            ("café", "café cafe\u{301}", vec![0..5, 6..12]),
+            ("ff", "ﬀ ff", vec![0..3, 4..6]),
+            ("A", "Ａ A", vec![0..3, 4..5]),
+        ] {
+            let compiled = SearchQuery {
+                case_sensitive: true,
+                ..query(search)
+            }
+            .compile()
+            .unwrap();
+            assert_eq!(ranges(&compiled, text), expected, "{search}");
+        }
+    }
+
+    #[test]
+    fn codemirror_literal_replacement_skips_partial_normalized_characters() {
+        let compiled = SearchQuery {
+            replace: "X".into(),
+            ..query("f")
+        }
+        .compile()
+        .unwrap();
+        assert_eq!(ranges(&compiled, "ﬀ ff"), vec![0..3, 4..5, 5..6]);
+        assert_eq!(compiled.replace_all("ﬀ ff"), ("ﬀ XX".into(), 2));
+        let next = compiled.replace_next("ﬀ ff", 0..3).unwrap();
+        assert!(next.change.is_none());
+        assert_eq!(next.select, Some(4..5));
+    }
+
+    #[test]
+    fn normalized_literal_navigation_wraps_at_unicode_boundaries() {
+        let compiled = query("é").compile().unwrap();
+        assert_eq!(compiled.next_match("é é", 3, 5).unwrap().range, 0..2);
+        assert_eq!(compiled.prev_match("é é", 0, 2).unwrap().range, 3..5);
+        let compiled = query("ff").compile().unwrap();
+        assert_eq!(compiled.next_match("ﬀ ff", 4, 6).unwrap().range, 0..3);
+        assert_eq!(compiled.prev_match("ﬀ ff", 0, 3).unwrap().range, 4..6);
+    }
+
+    #[test]
+    fn previous_regex_match_uses_non_overlapping_matches() {
+        let compiled = SearchQuery {
+            regexp: true,
+            ..query("aba")
+        }
+        .compile()
+        .unwrap();
+        assert_eq!(compiled.prev_match("ababa", 5, 5).unwrap().range, 0..3);
+        let literal = query("aba").compile().unwrap();
+        assert_eq!(literal.prev_match("ababa", 5, 5).unwrap().range, 2..5);
+    }
+
+    #[test]
+    fn regex_navigation_can_return_the_current_empty_match() {
+        let compiled = SearchQuery {
+            regexp: true,
+            ..query("^")
+        }
+        .compile()
+        .unwrap();
+        assert_eq!(compiled.prev_match("a", 0, 0).unwrap().range, 0..0);
+        assert_eq!(compiled.next_match("a", 0, 0).unwrap().range, 0..0);
     }
 
     // describe("matchIndexAtSelection")

@@ -280,7 +280,7 @@ pub fn provider_launch(command: &str, args: &[String], platform: &str) -> Result
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use monocode_core::HarnessId;

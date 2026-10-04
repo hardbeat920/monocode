@@ -1619,3 +1619,7 @@ pub fn checks_tab_label(overall: &ChecksOverall) -> String {
 pub fn key_id(prefix: &str, key: &str) -> ElementId {
     ElementId::Name(format!("{prefix}:{key}").into())
 }
+
+#[cfg(test)]
+#[path = "detail_appearance_tests.rs"]
+mod appearance_tests;

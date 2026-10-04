@@ -122,28 +122,20 @@ pub fn local_ms(year: i32, month: i64, day: i64, hours: i64, minutes: i64) -> i6
     .to_ms()
 }
 
-/// `toLocaleDateString(undefined, { month: "short" })` in en-US.
-pub fn short_month(month: i64) -> &'static str {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    MONTHS[month.rem_euclid(12) as usize]
+/// The standalone abbreviated month in the system locale.
+pub fn short_month(month: i64) -> String {
+    monocode_platform::date_time::format_local(
+        local_ms(2000, month.rem_euclid(12), 1, 12, 0),
+        monocode_platform::date_time::DateTimeStyle::ShortMonth,
+    )
 }
 
-/// The en-US short weekday, 0 is Sunday.
-pub fn short_weekday(day: i64) -> &'static str {
-    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    DAYS[day.rem_euclid(7) as usize]
-}
-
-/// The en-US `hour: "numeric", minute: "2-digit"` clock: `9:05 AM`.
-pub fn clock_12h(hours: i64, minutes: i64) -> String {
-    let suffix = if hours < 12 { "AM" } else { "PM" };
-    let hour = match hours % 12 {
-        0 => 12,
-        hour => hour,
-    };
-    format!("{hour}:{minutes:02} {suffix}")
+/// The schedule's wall-clock time in the system locale.
+pub fn clock_label(hours: i64, minutes: i64) -> String {
+    monocode_platform::date_time::format_local(
+        local_ms(2000, 0, 1, hours, minutes),
+        monocode_platform::date_time::DateTimeStyle::Time,
+    )
 }
 
 #[cfg(test)]
@@ -168,7 +160,7 @@ mod tests {
         assert_eq!(local_ms(2026, 11, 32, 9, 0), local_ms(2027, 0, 1, 9, 0));
         assert_eq!(local_ms(2026, 8, 19, 24, 0), local_ms(2026, 8, 20, 0, 0));
         assert_eq!(weekday(local_ms(2026, 8, 19, 12, 0)), 6);
-        assert_eq!(clock_12h(0, 5), "12:05 AM");
-        assert_eq!(clock_12h(13, 0), "1:00 PM");
+        assert!(!clock_label(0, 5).is_empty());
+        assert_ne!(clock_label(0, 5), clock_label(13, 0));
     }
 }

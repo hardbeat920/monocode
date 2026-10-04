@@ -312,6 +312,7 @@ mod tests {
                     account: None,
                     binary_provider: Some(HarnessId::Claude),
                     binary_path: None,
+                    environment: Default::default(),
                 }]
             );
             exit(

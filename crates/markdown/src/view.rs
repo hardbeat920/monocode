@@ -286,6 +286,11 @@ impl MarkdownView {
         cx.notify();
     }
 
+    pub(crate) fn toggle_diagram_source(&mut self, key: ElementKey, cx: &mut Context<Self>) {
+        self.code.toggle_diagram_source(key);
+        cx.notify();
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         match self.selected_text() {
             Some(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
@@ -406,6 +411,20 @@ impl Render for MarkdownView {
             render_blocks(&self.prepared, &self.layout, &mut frame)
         };
         self.code.retain_blocks(self.prepared.len());
+        for job in std::mem::take(&mut self.code.diagram_jobs) {
+            cx.spawn(async move |this, cx| {
+                let job = cx
+                    .background_executor()
+                    .spawn(async move { job.run() })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.code.finish_diagram(job);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         for job in std::mem::take(&mut self.code.jobs) {
             let job = job.into_send();
             cx.spawn(async move |this, cx| {

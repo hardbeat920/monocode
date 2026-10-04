@@ -271,14 +271,49 @@ pub fn mcp_picker_servers(
 }
 
 fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_intl_composer_mcp_order_without_changing_availability() {
+        let mut connections: Vec<_> = ["filez", "fileé", "filee", "file.a", "file-a", "file_a"]
+            .into_iter()
+            .map(|name| server("claude", name, "project", "/fixture"))
+            .collect();
+        connections.push(server("claude", "aaa-auth", "user", "/fixture"));
+        connections.push(McpConnection {
+            enabled: Some(false),
+            ..server("claude", "aaa-disabled", "user", "/fixture")
+        });
+        let status = HashMap::from([("aaa-auth".into(), "Needs authentication".into())]);
+        let rows = mcp_picker_servers(&connections, "claude", &status, "");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.server.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "file_a",
+                "file-a",
+                "file.a",
+                "filee",
+                "fileé",
+                "filez",
+                "aaa-auth",
+                "aaa-disabled"
+            ]
+        );
+        assert!(
+            rows[..6]
+                .iter()
+                .all(|row| row.availability == McpAvailability::Available)
+        );
+        assert_eq!(rows[6].availability, McpAvailability::Authentication);
+        assert_eq!(rows[7].availability, McpAvailability::Unavailable);
+    }
 
     fn server(provider: &str, name: &str, scope: &str, config: &str) -> McpConnection {
         McpConnection {

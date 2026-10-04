@@ -1,0 +1,34 @@
+[package]
+name = "monocode-view-quick"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "The floating quick composer and the quick git popup"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+# The prompt input, the mode command model, and the mascots.
+monocode-view-composer.workspace = true
+# Project names, pretty paths, and tab group appearance (pure, no IO).
+monocode-layout.workspace = true
+# The panel helpers and frame math.
+monocode-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "quick_gallery"
+path = "examples/quick_gallery.rs"

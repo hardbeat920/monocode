@@ -80,15 +80,11 @@ pub fn reminder_time(preset: &str, now: i64) -> Option<i64> {
     (at > now).then_some(at)
 }
 
-/// `formatReminderTime`: `Mon, Sep 21, 9:00 AM` in the en-US form.
+/// The reminder's weekday, date, and clock time in the system locale.
 pub fn format_reminder_time(due_at: i64) -> String {
-    let date = LocalFields::of(due_at);
-    format!(
-        "{}, {} {}, {}",
-        local_time::short_weekday(local_time::weekday(due_at)),
-        local_time::short_month(date.month),
-        date.day,
-        local_time::clock_12h(date.hours, date.minutes)
+    monocode_platform::date_time::format_local(
+        due_at,
+        monocode_platform::date_time::DateTimeStyle::Reminder,
     )
 }
 

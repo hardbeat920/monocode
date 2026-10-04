@@ -1601,7 +1601,7 @@ mod tests {
                 ..Block::new("read", BlockRole::Tool, "Read file.ts")
             },
         ];
-        let command = "npm run check:web ".to_string() + &"--filter tests ".repeat(20);
+        let command = format!("npm run check:web {}", "--filter tests ".repeat(20));
         let command = command.trim().to_string();
         let commands: HashMap<String, String> = [
             ("toolu_shell".to_string(), command.clone()),

@@ -12,7 +12,7 @@ mod blocks;
 mod changes;
 mod fold;
 mod footer;
-mod mascot;
+pub(crate) mod mascot;
 mod parts;
 mod shimmer;
 pub mod style;
@@ -34,6 +34,7 @@ use gpui::{
     Window, canvas, div, list, px,
 };
 use monocode_core::appearance::TranscriptLayout;
+use monocode_core::block::ModelTarget;
 use monocode_core::models::ModelCatalog;
 use monocode_core::transcript::BlockRef;
 use monocode_core::transcript::paths::resolve_workspace_path;
@@ -43,6 +44,16 @@ use monocode_ui::{Theme, u};
 
 pub use monocode_core::harness_event::ApprovalDecision;
 
+use crate::cards::TranscriptCardEvent;
+use crate::cards::generated_image::GeneratedImage;
+use crate::cards::link_preview::UserLinkPreview;
+use crate::cards::selection_menu::{
+    SelectionMenuEvent, TranscriptSelection, TranscriptSelectionMenu,
+};
+use crate::threads::{
+    CatalogMenuSource, ModelMenuSource, NoRuns, OrchestrationActions, OrchestrationPreview,
+    OrchestrationRuns, OrchestratorConstellation, SecondOpinionButton,
+};
 use crate::transcript::model::plan::{
     BlockStore, FoldTitle, PlanCache, PlanOptions, PlanState, Row, RowKind, build_plan,
     visible_blocks,
@@ -71,7 +82,7 @@ pub struct ChangedFile {
 
 /// What the host offers and how the transcript is shown: the
 /// `AgentTranscript` props that are not the session itself.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TranscriptConfig {
     pub layout: TranscriptLayout,
     /// `monocode.transcriptAnchor`: a sent prompt sits at the top.
@@ -93,7 +104,11 @@ pub struct TranscriptConfig {
     pub can_handoff: bool,
     pub can_open_plans: bool,
     pub can_build_plans: bool,
+    pub can_build_plan_targets: bool,
     pub can_send_drafts: bool,
+    /// The host takes selected text into the composer
+    /// ([`TranscriptCardEvent::AddToChat`]).
+    pub can_add_to_chat: bool,
 }
 
 impl Default for TranscriptConfig {
@@ -113,7 +128,9 @@ impl Default for TranscriptConfig {
             can_handoff: false,
             can_open_plans: false,
             can_build_plans: false,
+            can_build_plan_targets: false,
             can_send_drafts: false,
+            can_add_to_chat: false,
         }
     }
 }
@@ -142,6 +159,10 @@ pub enum TranscriptEvent {
     BuildPlan {
         block_id: String,
     },
+    BuildPlanWithTarget {
+        block_id: String,
+        target: ModelTarget,
+    },
     SendDraft {
         block_id: String,
     },
@@ -158,9 +179,11 @@ pub enum TranscriptEvent {
     },
     SecondOpinion {
         turn_id: String,
+        target: ModelTarget,
     },
     Handoff {
         turn_id: String,
+        target: ModelTarget,
     },
     UndoChanges,
     KeepChanges,
@@ -229,10 +252,31 @@ pub struct TranscriptView {
     theme_epoch: u64,
     /// The list's width in the last frame, for measuring text.
     width: Rc<Cell<Pixels>>,
+    /// Link chips in prompts, by block id.
+    pub(crate) link_cards: HashMap<String, Entity<UserLinkPreview>>,
+    /// Generated images, by block id.
+    pub(crate) image_cards: HashMap<String, Entity<GeneratedImage>>,
+    pub(crate) attachment_cards: HashMap<(String, String), Entity<GeneratedImage>>,
+    pub(crate) attachment_seen: HashMap<String, BlockRef>,
+    /// Orchestrator turn bursts, by prompt block id.
+    pub(crate) constellations: HashMap<String, Entity<OrchestratorConstellation>>,
+    /// Orchestration assignment cards, by proposal block id.
+    pub(crate) orchestration_cards: HashMap<String, Entity<OrchestrationPreview>>,
+    /// What each card was last given: the block, busy, and the catalog.
+    pub(crate) orchestration_seen: HashMap<String, (BlockRef, bool, Arc<ModelCatalog>)>,
+    /// The orchestrator the assignment cards read runs from and act through.
+    orchestration_runs: Option<Rc<dyn OrchestrationRuns>>,
+    orchestration_actions: Option<Rc<dyn OrchestrationActions>>,
+    /// "Add to chat" and "Add to notes" over selected text.
+    selection_menu: Entity<TranscriptSelectionMenu>,
+    model_menu_source: Option<Rc<dyn ModelMenuSource>>,
+    turn_model_menus: HashMap<String, (Entity<SecondOpinionButton>, gpui::Subscription)>,
     _theme: gpui::Subscription,
+    _selection: gpui::Subscription,
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
+impl EventEmitter<TranscriptCardEvent> for TranscriptView {}
 
 /// Epoch ms now, `Date.now()`.
 pub(crate) fn now_ms() -> i64 {
@@ -257,10 +301,19 @@ impl TranscriptView {
             // The list re-engages the tail on its next layout, after this
             // event, so reaching the bottom padding counts as back.
             let at_bottom = event.is_following_tail || event.visible_range.end >= event.count;
-            weak.update(cx, |this, cx| this.set_show_jump(!at_bottom, cx))
-                .ok();
+            weak.update(cx, |this, cx| {
+                this.set_show_jump(!at_bottom, cx);
+                // Scrolling moves the text out from under the selection menu.
+                this.dismiss_selection_menu(cx);
+            })
+            .ok();
         });
         let theme = cx.observe_global::<Theme>(|this, cx| this.theme_changed(cx));
+        let selection_menu = cx.new(|_| TranscriptSelectionMenu::new(false, false));
+        let selection = cx.subscribe(
+            &selection_menu,
+            |this, menu, event: &SelectionMenuEvent, cx| this.selection_menu_event(menu, event, cx),
+        );
         Self {
             config: TranscriptConfig::default(),
             session: None,
@@ -288,7 +341,20 @@ impl TranscriptView {
             feedback_timer: None,
             theme_epoch: 0,
             width: Rc::new(Cell::new(px(0.))),
+            link_cards: HashMap::new(),
+            image_cards: HashMap::new(),
+            attachment_cards: HashMap::new(),
+            attachment_seen: HashMap::new(),
+            constellations: HashMap::new(),
+            orchestration_cards: HashMap::new(),
+            orchestration_seen: HashMap::new(),
+            orchestration_runs: None,
+            orchestration_actions: None,
+            selection_menu,
+            model_menu_source: None,
+            turn_model_menus: HashMap::new(),
             _theme: theme,
+            _selection: selection,
         }
     }
 
@@ -310,6 +376,14 @@ impl TranscriptView {
             self.state = PlanState::default();
             self.clocks.clear();
             self.markdown.clear();
+            self.link_cards.clear();
+            self.image_cards.clear();
+            self.attachment_cards.clear();
+            self.attachment_seen.clear();
+            self.constellations.clear();
+            self.orchestration_cards.clear();
+            self.orchestration_seen.clear();
+            self.turn_model_menus.clear();
             self.anchor_turn = session.is_busy();
             self.last_user_id = None;
             self.user_seen = false;
@@ -335,6 +409,9 @@ impl TranscriptView {
     }
 
     pub fn set_config(&mut self, config: TranscriptConfig, cx: &mut Context<Self>) {
+        if self.config == config {
+            return;
+        }
         let was_parked = self.config.parked;
         let busy = self
             .session
@@ -347,7 +424,16 @@ impl TranscriptView {
             self.state.search_current = None;
             self.search_query.clear();
         }
+        let (chat, notes) = (config.can_add_to_chat, config.can_save_notes);
+        self.selection_menu
+            .update(cx, |menu, cx| menu.set_actions(chat, notes, cx));
         self.config = config;
+        if self.model_menu_source.is_none() {
+            let source = self.model_menu_source();
+            for (view, _) in self.turn_model_menus.values() {
+                view.update(cx, |view, cx| view.set_source(source.clone(), cx));
+            }
+        }
         self.rebuild(cx);
     }
 
@@ -640,7 +726,7 @@ impl TranscriptView {
 
     /// Drop markdown views of blocks that left the transcript.
     fn prune_markdown(&mut self) {
-        if self.markdown.len() < 64 {
+        if self.markdown.len() < 64 && self.attachment_cards.is_empty() {
             return;
         }
         let mut live: HashSet<&str> = HashSet::new();
@@ -654,6 +740,160 @@ impl TranscriptView {
         }
         self.markdown
             .retain(|key, _| live.contains(key.id.as_str()));
+        self.link_cards.retain(|id, _| live.contains(id.as_str()));
+        self.image_cards.retain(|id, _| live.contains(id.as_str()));
+        self.attachment_cards
+            .retain(|(block, _), _| live.contains(block.as_str()));
+        self.attachment_seen
+            .retain(|id, _| live.contains(id.as_str()));
+        self.constellations
+            .retain(|id, _| live.contains(id.as_str()));
+        self.orchestration_cards
+            .retain(|id, _| live.contains(id.as_str()));
+        self.orchestration_seen
+            .retain(|id, _| live.contains(id.as_str()));
+        self.turn_model_menus.retain(|id, _| {
+            id.split_once(':')
+                .is_some_and(|(_, block)| live.contains(block))
+        });
+    }
+
+    /// The orchestrator behind the assignment cards
+    /// (`OrchestrationActions` and `orchestrator` in React). Without it the
+    /// cards are read-only and show no run.
+    pub fn set_orchestration(
+        &mut self,
+        runs: Rc<dyn OrchestrationRuns>,
+        actions: Option<Rc<dyn OrchestrationActions>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.orchestration_runs = Some(runs);
+        self.orchestration_actions = actions;
+        // The runs source is fixed per card, so the cards start over.
+        self.orchestration_cards.clear();
+        self.orchestration_seen.clear();
+        self.list.remeasure();
+        cx.notify();
+    }
+
+    /// The footer's provider, model, and effort menus read the app's live
+    /// catalog, saved preferences, and installed providers.
+    pub fn set_model_menu_source(
+        &mut self,
+        source: Rc<dyn ModelMenuSource>,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_menu_source = Some(source.clone());
+        for (view, _) in self.turn_model_menus.values() {
+            view.update(cx, |view, cx| view.set_source(source.clone(), cx));
+        }
+        cx.notify();
+    }
+
+    fn model_menu_source(&self) -> Rc<dyn ModelMenuSource> {
+        self.model_menu_source.clone().unwrap_or_else(|| {
+            Rc::new(CatalogMenuSource::new(
+                self.config.catalog.as_ref().clone(),
+                Default::default(),
+                Default::default(),
+            ))
+        })
+    }
+
+    pub(crate) fn orchestration_providers(
+        &self,
+    ) -> (
+        Rc<dyn OrchestrationRuns>,
+        Option<Rc<dyn OrchestrationActions>>,
+    ) {
+        (
+            self.orchestration_runs
+                .clone()
+                .unwrap_or_else(|| Rc::new(NoRuns)),
+            self.orchestration_actions.clone(),
+        )
+    }
+
+    /// After a drag ends over a reply, offer the selected text to the chat
+    /// and to notes (`TranscriptSelectionMenu`). Only text inside one settled
+    /// reply counts.
+    fn offer_selection(&mut self, position: gpui::Point<Pixels>, cx: &mut Context<Self>) {
+        if !self.config.can_add_to_chat && !self.config.can_save_notes {
+            return;
+        }
+        let mut found: Option<(String, bool)> = None;
+        for (key, entry) in &self.markdown {
+            let view = entry.view.read(cx);
+            let Some(text) = view.selected_text() else {
+                continue;
+            };
+            let under_pointer = view
+                .rendered_text()
+                .iter()
+                .any(|rendered| rendered.bounds.contains(&position));
+            let candidate = monocode_core::transcript::selection::TranscriptSelectionCandidate {
+                text: &text,
+                collapsed: false,
+                anchor_response_id: (!view.is_streaming()).then_some(key.id.as_str()),
+                focus_response_id: (!view.is_streaming()).then_some(key.id.as_str()),
+            };
+            let Some(text) =
+                monocode_core::transcript::selection::validate_transcript_selection(&candidate)
+            else {
+                continue;
+            };
+            if found.as_ref().is_none_or(|(_, hit)| !hit && under_pointer) {
+                found = Some((text, under_pointer));
+            }
+        }
+        let selection = found.map(|(text, _)| TranscriptSelection {
+            text,
+            rect: gpui::Bounds::new(position, gpui::size(px(1.), px(1.))),
+        });
+        self.selection_menu
+            .update(cx, |menu, cx| menu.set_selection(selection, cx));
+    }
+
+    /// The "Add to chat" and "Add to notes" menu over selected text.
+    pub fn selection_menu(&self) -> &Entity<TranscriptSelectionMenu> {
+        &self.selection_menu
+    }
+
+    fn dismiss_selection_menu(&mut self, cx: &mut Context<Self>) {
+        if self.selection_menu.read(cx).selection().is_some() {
+            self.selection_menu
+                .update(cx, |menu, cx| menu.dismiss(false, cx));
+        }
+    }
+
+    fn selection_menu_event(
+        &mut self,
+        menu: Entity<TranscriptSelectionMenu>,
+        event: &SelectionMenuEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SelectionMenuEvent::AddToChat { text } => {
+                cx.emit(TranscriptCardEvent::AddToChat { text: text.clone() })
+            }
+            SelectionMenuEvent::AddToNotes { text } => {
+                // `SaveNote` reports no result, so the save counts as done.
+                cx.emit(TranscriptEvent::SaveNote { text: text.clone() });
+                menu.update(cx, |menu, cx| menu.finish_note(Ok(()), cx));
+            }
+            SelectionMenuEvent::Dismiss { clear_selection } => {
+                if *clear_selection {
+                    let views: Vec<Entity<MarkdownView>> = self
+                        .markdown
+                        .values()
+                        .map(|entry| entry.view.clone())
+                        .collect();
+                    for view in views {
+                        view.update(cx, |view, cx| view.clear_selection(cx));
+                    }
+                }
+            }
+        }
     }
 
     /// Tick once a second while a turn's clock is on screen.
@@ -831,7 +1071,7 @@ impl TranscriptView {
                 placement,
             } => self.render_item(&row, item, *index, *view, *placement, window, cx),
             RowKind::FoldLine(line) => self.render_fold_line(&row, line, cx),
-            RowKind::Proposal(block) => self.render_proposal(&row, block, cx),
+            RowKind::Proposal(block) => self.render_proposal(&row, block, window, cx),
             RowKind::Accessory => self.render_changes(&row, cx),
             RowKind::Footer(footer) => self.render_footer(&row, footer, cx),
         };
@@ -876,6 +1116,12 @@ impl Render for TranscriptView {
             .line_height(u(20.))
             .text_color(theme.colors.content)
             .relative()
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
+                    this.offer_selection(event.position, cx)
+                }),
+            )
             .child(
                 list(
                     self.list.clone(),
@@ -894,5 +1140,6 @@ impl Render for TranscriptView {
                 .left_0()
                 .size_full()
             })
+            .child(self.selection_menu.clone())
     }
 }

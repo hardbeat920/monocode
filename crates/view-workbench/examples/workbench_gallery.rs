@@ -474,6 +474,7 @@ fn tab_group_menu(window: &mut Window, cx: &mut App) -> Entity<TabGroupMenu> {
             id: id.into(),
             label: label.into(),
             disabled: false,
+            checked: false,
         })
         .collect(),
     );

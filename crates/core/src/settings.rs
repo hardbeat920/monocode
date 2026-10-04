@@ -462,14 +462,9 @@ fn match_score(needle: &str, label: &str, keywords: Option<&str>) -> Option<u32>
     None
 }
 
-/// Approximation of `String.prototype.localeCompare` for settings labels:
-/// case-insensitive first, then lowercase before uppercase.
-// TODO(port): localeCompare uses ICU collation. This matches it for the
-// ASCII labels in the settings index.
+/// `String.prototype.localeCompare` for settings labels with the OS default locale.
 pub(crate) fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 /// `searchSettings`: individual settings first, then whole sections, so a row

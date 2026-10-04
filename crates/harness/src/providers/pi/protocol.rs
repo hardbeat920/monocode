@@ -923,14 +923,9 @@ pub fn summarize_tool_request(tool_name: &str, input: &Rec) -> String {
     format!("{tool_name}: {}...", js::slice_prefix(&serialized, 397))
 }
 
-/// Approximation of `String.prototype.localeCompare`: case-insensitive
-/// first, then lowercase before uppercase.
-// TODO(port): localeCompare uses ICU collation, which also orders
-// punctuation before digits. This matches it for ASCII model names.
+/// The default collation used by `String.prototype.localeCompare`.
 fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 /// `modelsFromRpcData`: flatten a `get_available_models` payload.
@@ -1568,6 +1563,63 @@ mod tests {
             assert_eq!(models[0].settings.as_ref().unwrap()[0].id, "thinking");
             assert_eq!(models[0].context_window, Some(200000));
             assert_eq!(models[1].settings, None);
+        }
+
+        #[test]
+        fn catalog_locale_preserves_equivalent_pi_and_omp_model_order() {
+            let data = json!({
+                "models": [
+                    { "provider": "anthropic", "id": "composed", "name": "éclair" },
+                    { "provider": "anthropic", "id": "decomposed", "name": "e\u{301}clair" },
+                    { "provider": "anthropic", "id": "zebra", "name": "Zebra" },
+                ]
+            });
+            monocode_locale::with_locale("fr-FR", || {
+                for flavor in [&PI_FLAVOR, &OMP_FLAVOR] {
+                    let models = models_from_rpc_data(flavor, Some(&data));
+                    assert_eq!(
+                        models
+                            .iter()
+                            .map(|model| model.native_id.as_deref().unwrap())
+                            .collect::<Vec<_>>(),
+                        [
+                            "anthropic/composed",
+                            "anthropic/decomposed",
+                            "anthropic/zebra"
+                        ]
+                    );
+                    assert!(models.iter().all(|model| model.harness == flavor.id));
+                }
+            })
+            .unwrap();
+        }
+
+        #[test]
+        fn catalog_locale_selects_french_and_swedish_pi_and_omp_model_order() {
+            let data = json!({
+                "models": [
+                    { "provider": "anthropic", "id": "alands", "name": "Åland" },
+                    { "provider": "anthropic", "id": "zebra", "name": "Zebra" },
+                ]
+            });
+            for (locale, expected) in [
+                ("fr-FR", ["anthropic/alands", "anthropic/zebra"]),
+                ("sv-SE", ["anthropic/zebra", "anthropic/alands"]),
+            ] {
+                monocode_locale::with_locale(locale, || {
+                    for flavor in [&PI_FLAVOR, &OMP_FLAVOR] {
+                        let models = models_from_rpc_data(flavor, Some(&data));
+                        assert_eq!(
+                            models
+                                .iter()
+                                .map(|model| model.native_id.as_deref().unwrap())
+                                .collect::<Vec<_>>(),
+                            expected
+                        );
+                    }
+                })
+                .unwrap();
+            }
         }
 
         #[test]

@@ -230,11 +230,8 @@ impl Submit {
             return false;
         };
         if !should_persist_session(&without_draft) {
-            // TODO(port): App.tsx also cleared `pendingPersist` and
-            // `lastPersistedUserBlock`; `Sessions` does not expose them yet
-            // (NEEDS.md).
             sessions.update(cx, |sessions, _| {
-                sessions.forget_persisted(session_id);
+                sessions.clear_save_state(session_id);
                 sessions.invalidate_loaded(session_id);
             });
             self.peers.history.draft_session_discarded(session_id, cx);

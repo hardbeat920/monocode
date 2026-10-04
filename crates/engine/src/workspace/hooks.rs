@@ -47,6 +47,9 @@ pub struct Mirror {
     pub hidden: bool,
     /// A full page (settings, search, inbox) covers the workspace.
     pub covered: bool,
+    /// The mounted Inbox Ask conversation in this window.
+    pub inbox_session_id: Option<String>,
+    pub inbox_visible: bool,
 }
 
 type Windows = Rc<RefCell<Vec<Weak<RefCell<Mirror>>>>>;
@@ -173,6 +176,8 @@ pub fn mirror_from_layout(layout: &Value, project_cwd: &str) -> Option<Mirror> {
         autosave: true,
         hidden: false,
         covered: false,
+        inbox_session_id: None,
+        inbox_visible: false,
     })
 }
 
@@ -185,8 +190,12 @@ impl WorkspaceHooks for WorkspaceHooksImpl {
     fn is_foreground(&self, session_id: &str, _cx: &App) -> bool {
         self.mirrors().iter().any(|mirror| {
             let mirror = mirror.borrow();
-            if mirror.hidden || mirror.covered {
+            if mirror.hidden {
                 return false;
+            }
+            if mirror.covered {
+                return mirror.inbox_visible
+                    && mirror.inbox_session_id.as_deref() == Some(session_id);
             }
             let Some(tab) = mirror
                 .tabs
@@ -208,8 +217,6 @@ impl WorkspaceHooks for WorkspaceHooksImpl {
                     .is_some_and(|agent| agent.session_id == session_id)
             })
         })
-        // TODO(port): the open Inbox Ask counted as foreground too; the
-        // inbox package does not report it yet.
     }
 
     fn tab_session_ids(&self, _cx: &App) -> Vec<String> {

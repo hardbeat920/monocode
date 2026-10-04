@@ -22,6 +22,15 @@ pub struct ExternalEditor {
     name: &'static str,
 }
 
+impl ExternalEditor {
+    pub fn id(&self) -> &str {
+        self.id
+    }
+    pub fn name(&self) -> &str {
+        self.name
+    }
+}
+
 struct EditorDefinition {
     id: &'static str,
     name: &'static str,

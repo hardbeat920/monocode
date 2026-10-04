@@ -89,6 +89,8 @@ struct LiveChild {
     stdin: Mutex<ChildStdin>,
     pid: u32,
     account: Option<HarnessAccount>,
+    #[cfg(unix)]
+    _guard: crate::provider_guard::ProviderGuard,
 }
 
 struct LiveSse {
@@ -823,6 +825,58 @@ pub fn harness_spawn(
     binary_provider: Option<String>,
     binary_path: Option<String>,
 ) -> Result<u32, String> {
+    harness_spawn_with_env(
+        host,
+        data_dir,
+        control,
+        session_id,
+        command,
+        args,
+        cwd,
+        account,
+        binary_provider,
+        binary_path,
+        HashMap::new(),
+    )
+}
+
+/// Starts a managed child with explicit process-local provider overrides.
+#[allow(clippy::too_many_arguments)]
+pub fn harness_spawn_with_env(
+    host: &HarnessHost,
+    data_dir: &Path,
+    control: Option<&ControlHost>,
+    session_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    account: Option<HarnessAccount>,
+    binary_provider: Option<String>,
+    binary_path: Option<String>,
+    environment: HashMap<String, String>,
+) -> Result<u32, String> {
+    for (name, value) in &environment {
+        if binary_provider.as_deref() != Some("opencode")
+            || !matches!(
+                name.as_str(),
+                "OPENCODE_PASSWORD"
+                    | "OPENCODE_CONFIG_DIR"
+                    | "OPENCODE_CONFIG"
+                    | "OPENCODE_CONFIG_CONTENT"
+                    | "OPENCODE_CONFIG_PROJECT_DISABLE"
+                    | "OPENCODE_DISABLE_MODELS_FETCH"
+                    | "OPENCODE_CLIENT"
+                    | "XDG_DATA_HOME"
+                    | "XDG_CONFIG_HOME"
+                    | "XDG_CACHE_HOME"
+                    | "XDG_STATE_HOME"
+                    | "TMPDIR"
+            )
+            || value.contains('\0')
+        {
+            return Err("Unsupported provider environment override".into());
+        }
+    }
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
         return Err(format!(
@@ -848,8 +902,13 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(data_dir, &mut cmd, account.as_ref())?;
+    cmd.envs(environment);
 
     crate::control::configure_child(control, &session_id, &mut cmd);
+
+    #[cfg(unix)]
+    let guard = crate::provider_guard::ProviderGuard::new(&mut cmd)
+        .map_err(|error| format!("Failed to guard {command}: {error}"))?;
 
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
@@ -873,6 +932,8 @@ pub fn harness_spawn(
         stdin: Mutex::new(stdin),
         pid,
         account,
+        #[cfg(unix)]
+        _guard: guard,
     });
     if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live) {
         // A kill, or a newer spawn, won the race while this one was forking.
@@ -1339,6 +1400,19 @@ fn isolate_child(cmd: &mut Command) {
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+        // Dispatch workers can block SIGCHLD and termination signals. A CLI
+        // must receive them to reap its subprocesses and stop when requested.
+        unsafe {
+            cmd.pre_exec(|| {
+                let mut mask = std::mem::zeroed::<libc::sigset_t>();
+                if libc::sigemptyset(&mut mask) != 0
+                    || libc::sigprocmask(libc::SIG_SETMASK, &mask, std::ptr::null_mut()) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     #[cfg(windows)]
     {
@@ -2934,13 +3008,15 @@ mod tests {
     /// A real child so `install_spawn` can be exercised directly, rather than
     /// through a helper that re-states its condition.
     fn live_child() -> (Arc<LiveChild>, std::process::Child) {
-        let mut child = Command::new("sleep")
+        let mut command = Command::new("sleep");
+        command
             .arg("30")
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn test process");
+            .stderr(Stdio::null());
+        let guard = crate::provider_guard::ProviderGuard::new(&mut command).unwrap();
+        let mut child = command.spawn().expect("spawn test process");
         let pid = child.id();
         let stdin = child.stdin.take().expect("test child stdin");
         (
@@ -2949,6 +3025,7 @@ mod tests {
                 stdin: Mutex::new(stdin),
                 pid,
                 account: None,
+                _guard: guard,
             }),
             child,
         )
@@ -3097,14 +3174,15 @@ mod tests {
     }
 
     fn live_group(script: &str) -> (Arc<LiveChild>, std::process::Child) {
-        let mut child = Command::new("sh")
+        let mut command = Command::new("sh");
+        command
             .args(["-c", script])
             .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn grouped child");
+            .stderr(Stdio::null());
+        let guard = crate::provider_guard::ProviderGuard::new(&mut command).unwrap();
+        let mut child = command.spawn().expect("spawn grouped child");
         let pid = child.id();
         let stdin = child.stdin.take().expect("grouped child stdin");
         (
@@ -3113,6 +3191,7 @@ mod tests {
                 stdin: Mutex::new(stdin),
                 pid,
                 account: None,
+                _guard: guard,
             }),
             child,
         )
@@ -3223,6 +3302,73 @@ mod tests {
             key == std::ffi::OsStr::new(HARNESS_PARENT_ENV)
                 && value == Some(std::ffi::OsStr::new(pid.as_str()))
         }));
+    }
+
+    #[test]
+    fn managed_children_reset_the_inherited_signal_mask() {
+        const PROBE: &str = "MONOCODE_TEST_CHILD_SIGNAL_MASK";
+        let signals = [libc::SIGCHLD, libc::SIGINT, libc::SIGTERM];
+        if std::env::var_os(PROBE).is_some() {
+            let mut mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+            assert_eq!(
+                unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut mask) },
+                0
+            );
+            for signal in signals {
+                assert_eq!(
+                    unsafe { libc::sigismember(&mask, signal) },
+                    0,
+                    "the child inherited blocked signal {signal}"
+                );
+            }
+            return;
+        }
+        thread::spawn(move || {
+            struct RestoreMask(libc::sigset_t);
+            impl Drop for RestoreMask {
+                fn drop(&mut self) {
+                    unsafe {
+                        libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut())
+                    };
+                }
+            }
+            let mut blocked = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+            let mut previous = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+            assert_eq!(unsafe { libc::sigemptyset(&mut blocked) }, 0);
+            for signal in signals {
+                assert_eq!(unsafe { libc::sigaddset(&mut blocked, signal) }, 0);
+            }
+            assert_eq!(
+                unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous) },
+                0
+            );
+            let _restore = RestoreMask(previous);
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "harness::tests::managed_children_reset_the_inherited_signal_mask",
+                    "--nocapture",
+                ])
+                .env(PROBE, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            isolate_child(&mut command);
+            let output = spawn_managed(&mut command)
+                .unwrap()
+                .wait_with_output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

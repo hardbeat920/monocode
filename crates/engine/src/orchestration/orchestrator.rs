@@ -22,6 +22,7 @@ use monocode_core::orchestration::{
 use monocode_core::user_question::UserQuestionReply;
 use monocode_core::{Extra, HARNESSES, HarnessEvent, HarnessId, Session};
 use serde::Serialize;
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
 use super::host::{OrchestrationHost, OrchestrationStorage, PendingInput};
@@ -1291,6 +1292,87 @@ async fn start_run(
     Ok(())
 }
 
+fn receipt_signature_matches(previous: &str, current: &str) -> bool {
+    if previous == current {
+        return true;
+    }
+    let (Ok(previous), Ok(current)) = (
+        serde_json::from_str::<Box<RawValue>>(previous),
+        serde_json::from_str::<Box<RawValue>>(current),
+    ) else {
+        return false;
+    };
+    receipt_value_matches(&previous, &current)
+}
+
+fn receipt_value_matches(previous: &RawValue, current: &RawValue) -> bool {
+    let previous = previous.get().trim();
+    let current = current.get().trim();
+    if previous == current {
+        return true;
+    }
+    match (previous.as_bytes().first(), current.as_bytes().first()) {
+        (Some(b'{'), Some(b'{')) => {
+            let (Ok(previous), Ok(current)) = (
+                serde_json::from_str::<HashMap<String, Box<RawValue>>>(previous),
+                serde_json::from_str::<HashMap<String, Box<RawValue>>>(current),
+            ) else {
+                return false;
+            };
+            previous.len() == current.len()
+                && previous.iter().all(|(key, value)| {
+                    current
+                        .get(key)
+                        .is_some_and(|current| receipt_value_matches(value, current))
+                })
+        }
+        (Some(b'['), Some(b'[')) => {
+            let (Ok(previous), Ok(current)) = (
+                serde_json::from_str::<Vec<Box<RawValue>>>(previous),
+                serde_json::from_str::<Vec<Box<RawValue>>>(current),
+            ) else {
+                return false;
+            };
+            previous.len() == current.len()
+                && previous
+                    .iter()
+                    .zip(&current)
+                    .all(|(previous, current)| receipt_value_matches(previous, current))
+        }
+        (Some(b'"'), Some(b'"')) => serde_json::from_str::<String>(previous)
+            .ok()
+            .zip(serde_json::from_str::<String>(current).ok())
+            .is_some_and(|(previous, current)| previous == current),
+        (Some(b'-' | b'0'..=b'9'), Some(b'-' | b'0'..=b'9')) => receipt_number(previous)
+            .zip(receipt_number(current))
+            .is_some_and(|(previous, current)| previous == current),
+        _ => false,
+    }
+}
+
+fn receipt_number(number: &str) -> Option<(bool, String, i64)> {
+    // RawValue validates the JSON number. Keep its decimal digits so parsing
+    // a float cannot round a changed integer into a matching receipt.
+    let negative = number.starts_with('-');
+    let number = number.strip_prefix('-').unwrap_or(number);
+    let (mantissa, exponent) = if let Some(index) = number.find(['e', 'E']) {
+        (&number[..index], number[index + 1..].parse::<i64>().ok()?)
+    } else {
+        (number, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = [whole, fraction].concat();
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some((false, "0".into(), 0));
+    }
+    let significant = digits.trim_end_matches('0');
+    let scale = exponent
+        .checked_sub(i64::try_from(fraction.len()).ok()?)?
+        .checked_add(i64::try_from(digits.len() - significant.len()).ok()?)?;
+    Some((negative, significant.into(), scale))
+}
+
 /// `handle`: run one control command for a lead. Each `requestId` applies at
 /// most once; a retry with the same input gets the same answer.
 pub async fn handle(
@@ -1311,7 +1393,7 @@ pub async fn handle(
             .and_then(|run| run.requests.get(request_id).cloned())
     })?;
     if let Some(previous) = receipt {
-        if previous.signature != signature {
+        if !receipt_signature_matches(&previous.signature, &signature) {
             return Err("Request ID was already used with different input".into());
         }
         return Ok(previous.result);
@@ -2994,4 +3076,111 @@ fn is_absolute_report(path: &str) -> bool {
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
             && matches!(bytes[2], b'/' | b'\\'))
+}
+
+#[cfg(test)]
+mod receipt_signature_tests {
+    use super::receipt_signature_matches;
+
+    #[test]
+    fn object_order_does_not_change_a_persisted_request() {
+        assert!(receipt_signature_matches(
+            r#"{"action":"delegate","input":{"title":"A","files":["a","b"],"modelSettings":{"variant":"high","agent":"plan"}}}"#,
+            r#"{"input":{"modelSettings":{"agent":"plan","variant":"high"},"files":["a","b"],"title":"A"},"action":"delegate"}"#,
+        ));
+        for changed in [
+            r#"{"action":"delegate","input":{"title":"B","files":["a","b"],"modelSettings":{"variant":"high","agent":"plan"}}}"#,
+            r#"{"action":"delegate","input":{"title":"A","files":["b","a"],"modelSettings":{"variant":"high","agent":"plan"}}}"#,
+            r#"{"action":"delegate","input":{"title":"A","files":["a","b"],"modelSettings":{"variant":"low","agent":"plan"}}}"#,
+            r#"{"action":"retry","input":{"title":"A","files":["a","b"],"modelSettings":{"variant":"high","agent":"plan"}}}"#,
+        ] {
+            assert!(!receipt_signature_matches(
+                r#"{"action":"delegate","input":{"title":"A","files":["a","b"],"modelSettings":{"variant":"high","agent":"plan"}}}"#,
+                changed,
+            ));
+        }
+    }
+
+    #[test]
+    fn integral_spelling_preserves_safe_values_without_rounding_large_integers() {
+        for (integer, float) in [
+            ("7", "7.0"),
+            ("7", "7e0"),
+            ("7", "7000e-3"),
+            ("-7", "-7.0"),
+            ("0", "-0.0"),
+            ("9007199254740991", "9007199254740991.0"),
+        ] {
+            assert!(
+                receipt_signature_matches(integer, float),
+                "{integer} != {float}"
+            );
+            assert!(
+                receipt_signature_matches(float, integer),
+                "{float} != {integer}"
+            );
+        }
+        for (previous, current) in [
+            ("7", "7.1"),
+            ("7", "8.0"),
+            ("0.10000000000000001", "0.1"),
+            ("9007199254740990", "9007199254740991.0"),
+            ("9007199254740993", "9007199254740992"),
+            ("9007199254740993", "9007199254740992.0"),
+            ("-9007199254740993", "-9007199254740992.0"),
+            ("18446744073709551615", "18446744073709551616.0"),
+        ] {
+            assert!(
+                !receipt_signature_matches(previous, current),
+                "{previous} == {current}"
+            );
+            assert!(
+                !receipt_signature_matches(current, previous),
+                "{current} == {previous}"
+            );
+        }
+    }
+
+    #[test]
+    fn decimal_and_exponent_comparisons_are_exact_and_fail_closed_on_overflow() {
+        for (previous, current) in [
+            ("1e3", "1000.0"),
+            ("0.0010", "1e-3"),
+            ("1.234e2", "123.4"),
+            ("-1.234e2", "-123.4"),
+            ("-0.0010", "-1e-3"),
+        ] {
+            assert!(receipt_signature_matches(previous, current));
+            assert!(receipt_signature_matches(current, previous));
+        }
+        for (previous, current) in [
+            ("1e3", "1001.0"),
+            ("0.0010", "1e-2"),
+            ("1.234e2", "123.5"),
+            ("-0.0010", "1e-3"),
+            ("1e9223372036854775808", "10e9223372036854775807"),
+            ("1e-9223372036854775809", "0.1e-9223372036854775808"),
+        ] {
+            assert!(!receipt_signature_matches(previous, current));
+            assert!(!receipt_signature_matches(current, previous));
+        }
+        assert!(receipt_signature_matches(
+            "1e9223372036854775808",
+            "1e9223372036854775808"
+        ));
+    }
+
+    #[test]
+    fn corrupt_receipts_and_different_value_types_do_not_match() {
+        for (previous, current) in [
+            ("not json", "{}"),
+            ("{", "{}"),
+            ("{}", "{\"extra\":null}"),
+            ("[1]", "[1,2]"),
+            ("\"7\"", "7"),
+            ("true", "1"),
+        ] {
+            assert!(!receipt_signature_matches(previous, current));
+        }
+    }
 }

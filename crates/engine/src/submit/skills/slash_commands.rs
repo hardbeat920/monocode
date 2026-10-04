@@ -22,12 +22,9 @@ pub struct SlashToken {
 /// `MAX_PICKER`.
 pub const MAX_PICKER: usize = 50;
 
-/// `localeCompare` for skill names. Names are ASCII slugs, so a
-/// case-insensitive comparison with a case-sensitive tiebreak matches it.
+/// `localeCompare` for skill names with the OS default locale.
 fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
+    monocode_locale::compare(a, b)
 }
 
 /// `rankSkills`. Pass `usize::MAX` for `Number.POSITIVE_INFINITY`.
@@ -176,6 +173,46 @@ pub fn replace_slash_token(text: &str, token: &SlashToken, name: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn native_skill(name: &str) -> Skill {
+        Skill::Native(monocode_harness::core::native_commands::NativeCommand {
+            name: name.into(),
+            description: "fixture command".into(),
+            invocation: name.into(),
+            source: monocode_core::HarnessId::Codex,
+            origin: None,
+            aliases: None,
+            input_hint: None,
+            subcommands: None,
+        })
+    }
+
+    #[test]
+    fn matches_intl_skill_ranking_without_changing_scope_or_score() {
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                let input: Vec<_> = ["file.a", "file-a", "file_a"]
+                    .into_iter()
+                    .map(native_skill)
+                    .collect();
+                let ranked = rank_skills(&input, "file", usize::MAX);
+                assert_eq!(
+                    ranked.iter().map(Skill::name).collect::<Vec<_>>(),
+                    ["file_a", "file-a", "file.a"]
+                );
+                let mut scopes = input.clone();
+                scopes.push(Skill::Builtin(super::super::BuiltinSkill::new(
+                    "zzz", "zzz", "fixture",
+                )));
+                let ranked = rank_skills(&scopes, "", usize::MAX);
+                assert_eq!(
+                    ranked.iter().map(Skill::name).collect::<Vec<_>>(),
+                    ["zzz", "file_a", "file-a", "file.a"]
+                );
+            })
+            .unwrap();
+        }
+    }
 
     fn token(start: usize, end: usize, query: &str) -> SlashToken {
         SlashToken {

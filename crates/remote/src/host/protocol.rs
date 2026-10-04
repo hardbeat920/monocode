@@ -14,15 +14,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 pub const HOST_PROTOCOL_VERSION: i64 = 1;
-/// The npm package a machine runs to host sessions for this desktop.
+/// The native executable a machine runs to host sessions for this desktop.
 pub const HOST_PACKAGE: &str = "monocode-host";
 
-/// The command that installs, updates, or pairs a host for this desktop.
-pub fn host_connect_command(desktop_version: Option<&str>) -> String {
-    match desktop_version.filter(|version| !version.is_empty()) {
-        Some(version) => format!("npx {HOST_PACKAGE}@{version} connect"),
-        None => format!("npx {HOST_PACKAGE} connect"),
-    }
+/// Pairs an installed native host. SSH setup installs the desktop's version
+/// before pairing and checks the reported version against that desktop.
+pub fn host_connect_command(_desktop_version: Option<&str>) -> String {
+    "monocode-host connect".to_owned()
 }
 
 /// Compares `a.b.c` versions, ignoring prerelease suffixes.
@@ -791,11 +789,8 @@ mod tests {
         assert!(!host_needs_update(&host, None));
         assert!(host_needs_update(&host, Some("0.6.0")));
         assert!(!host_needs_update(&host, Some("0.5.0")));
-        assert_eq!(
-            host_connect_command(Some("0.6.0")),
-            "npx monocode-host@0.6.0 connect"
-        );
-        assert_eq!(host_connect_command(None), "npx monocode-host connect");
+        assert_eq!(host_connect_command(Some("0.6.0")), "monocode-host connect");
+        assert_eq!(host_connect_command(None), "monocode-host connect");
     }
 
     #[test]

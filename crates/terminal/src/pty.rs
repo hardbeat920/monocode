@@ -489,10 +489,10 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
 fn default_shell() -> (String, Vec<String>) {
     #[cfg(windows)]
     {
-        if let Ok(comspec) = std::env::var("COMSPEC") {
-            if !comspec.is_empty() {
-                return (comspec, Vec::new());
-            }
+        if let Ok(comspec) = std::env::var("COMSPEC")
+            && !comspec.is_empty()
+        {
+            return (comspec, Vec::new());
         }
         ("powershell.exe".into(), vec!["-NoLogo".into()])
     }

@@ -45,6 +45,7 @@ test-support = ["gpui/test-support"]
 [dependencies]
 gpui.workspace = true
 monocode-core.workspace = true
+monocode-locale.workspace = true
 monocode-harness = { workspace = true, optional = true }
 monocode-process = { workspace = true, optional = true }
 monocode-store.workspace = true
@@ -55,7 +56,7 @@ monocode-settings = { workspace = true, optional = true }
 monocode-terminal = { workspace = true, optional = true }
 monocode-terminal-view = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 futures.workspace = true
 async-channel.workspace = true
 smol.workspace = true
@@ -64,6 +65,12 @@ uuid.workspace = true
 log.workspace = true
 anyhow.workspace = true
 regex.workspace = true
+dprint-plugin-typescript = "0.96.1"
+dprint-plugin-markdown = "0.24.0"
+dprint-plugin-json = "0.21.1"
+markup_fmt = "0.27.5"
+malva = "0.16.0"
+similar = "2.7.0"
 # attention: rate limit fetches, native notifications, and local time for
 # usage limit resets.
 monocode-integrations = { workspace = true, optional = true }
@@ -77,3 +84,4 @@ monocode-remote = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+monocode-locale = { workspace = true, features = ["test-support"] }

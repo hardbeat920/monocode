@@ -17,6 +17,7 @@ pub const HEADERS_TIMEOUT: Duration = Duration::from_secs(10);
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+const REJECT_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// A plain or TLS connection.
 pub enum Transport {
@@ -34,6 +35,26 @@ impl Transport {
 
     fn encrypted(&self) -> bool {
         matches!(self, Self::Tls(_))
+    }
+
+    fn finish_rejected_upload(&self) {
+        let mut socket = self.socket();
+        // Closing with an unread upload can reset the socket and erase the
+        // rejection. Finish sending first, then drain for at most 250 ms.
+        let _ = socket.shutdown(Shutdown::Write);
+        let deadline = Instant::now() + REJECT_DRAIN_TIMEOUT;
+        let mut buffer = [0; 16 * 1024];
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            if socket.set_read_timeout(Some(remaining)).is_err() {
+                break;
+            }
+            match socket.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
     }
 }
 
@@ -460,6 +481,7 @@ impl HttpServer {
             buffer: Vec::new(),
             start: 0,
         };
+        let mut unread_upload = false;
         // The listener already waited for the first bytes.
         let mut idle = HEADERS_TIMEOUT;
         while !self.is_closed() {
@@ -522,6 +544,7 @@ impl HttpServer {
             };
             let response = self.handler.handle(&mut request);
             // An unread body would be parsed as the next request.
+            unread_upload = !request.complete;
             let close = wants_close || !request.complete || self.is_closed();
             if write_response(&mut connection.transport, &response, close).is_err() || close {
                 break;
@@ -530,6 +553,9 @@ impl HttpServer {
         if let Transport::Tls(stream) = &mut connection.transport {
             stream.conn.send_close_notify();
             let _ = stream.flush();
+        }
+        if unread_upload {
+            connection.transport.finish_rejected_upload();
         }
         let _ = connection.transport.socket().shutdown(Shutdown::Both);
         self.connections
@@ -607,5 +633,78 @@ mod tests {
         huge.extend_from_slice(b"\r\n\r\n");
         assert!(exchange(address, &huge).starts_with("HTTP/1.1 431"));
         assert!(exchange(address, b"nonsense\r\n\r\n").starts_with("HTTP/1.1 400"));
+    }
+
+    #[test]
+    fn early_rejection_preserves_its_response_with_an_unread_request_body() {
+        struct Reject(Arc<std::sync::Barrier>);
+        impl HttpHandler for Reject {
+            fn handle(&self, _: &mut Request<'_>) -> Response {
+                self.0.wait();
+                Response::new(401).body("invalid or revoked")
+            }
+        }
+
+        let queued = Arc::new(std::sync::Barrier::new(2));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = HttpServer::new(Arc::new(Reject(queued.clone())));
+        let serving = std::thread::spawn(move || {
+            let (stream, peer) = listener.accept().unwrap();
+            server.serve(Transport::Plain(stream), peer);
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client
+            .write_all(b"POST /rpc HTTP/1.1\r\nContent-Length: 65536\r\n\r\n")
+            .unwrap();
+        client.write_all(&[b'x'; 65536]).unwrap();
+        // The handler rejects the headers after the client has queued its body.
+        // Most of that body remains unread in the socket when it sends 401.
+        queued.wait();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        let read = client.read_to_string(&mut response);
+        serving.join().unwrap();
+        assert!(read.is_ok(), "the rejection ended in a TCP reset: {read:?}");
+        assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+        assert!(response.ends_with("invalid or revoked"), "{response}");
+    }
+
+    #[test]
+    fn early_rejection_closes_without_waiting_for_a_stalled_upload() {
+        struct Reject;
+        impl HttpHandler for Reject {
+            fn handle(&self, _: &mut Request<'_>) -> Response {
+                Response::new(401).body("invalid or revoked")
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = HttpServer::new(Arc::new(Reject));
+        let serving = std::thread::spawn(move || {
+            let (stream, peer) = listener.accept().unwrap();
+            server.serve(Transport::Plain(stream), peer);
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client
+            .write_all(b"POST /rpc HTTP/1.1\r\nContent-Length: 65536\r\n\r\n")
+            .unwrap();
+        let started = Instant::now();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        // Keep the client's upload open while the server finishes its bounded drain.
+        serving.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(response.ends_with("invalid or revoked"), "{response}");
     }
 }

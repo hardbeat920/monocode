@@ -533,7 +533,7 @@ impl Notes {
         self.notes.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
-                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| monocode_locale::compare(&a.id, &b.id))
         });
         self.sync_editor(cx);
         cx.notify();

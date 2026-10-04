@@ -23,6 +23,7 @@ antigravity = []
 
 [dependencies]
 monocode-core.workspace = true
+monocode-locale.workspace = true
 monocode-process.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -40,3 +41,6 @@ thiserror.workspace = true
 url.workspace = true
 sha2.workspace = true
 time.workspace = true
+
+[dev-dependencies]
+monocode-locale = { workspace = true, features = ["test-support"] }

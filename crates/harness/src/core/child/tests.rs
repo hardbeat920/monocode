@@ -272,6 +272,7 @@ fn spawn_kill_and_write_reach_the_backend() {
                 }),
                 binary_provider: Some(HarnessId::Codex),
                 binary_path: Some("/opt/codex".into()),
+                environment: Default::default(),
             }),
             Call::Write("s1".into(), "{}".into()),
             Call::Kill("s1".into()),

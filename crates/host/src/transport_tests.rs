@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::backend::HostEngineOptions;
 use crate::engine::HostEngine;
-use crate::testing::{fake_provider, fake_providers};
+use crate::testing::{fake_provider_script, fake_providers};
 
 const FIXTURE: &str = r#"const readline = require('node:readline');
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -304,6 +304,15 @@ fn completes_acp_turns_over_the_headless_transport() {
         );
         host.send(&id, &format!("{}-send", harness.as_str()));
         let state = host.wait_idle(&id, Duration::from_secs(20));
+        if cfg!(windows) && harness == HarnessId::Antigravity {
+            assert!(
+                last_text(&state)
+                    .contains("Antigravity ACP server overrides are not supported on Windows.")
+            );
+            assert_eq!(assistant_count(&state), 0);
+            assert_eq!(state.provider_session_id, None);
+            continue;
+        }
         assert!(
             last_text(&state).contains("Headless ACP completed"),
             "{harness}: {}",
@@ -438,8 +447,7 @@ server.listen(port, '127.0.0.1', () => console.log('opencode server listening on
 #[test]
 fn runs_an_opencode_session_through_the_host_http_and_sse_bridge() {
     let host = Host::start(|root| {
-        let path = fake_provider(root, HarnessId::Opencode, "");
-        std::fs::write(&path, OPENCODE).unwrap();
+        let path = fake_provider_script(root, HarnessId::Opencode, OPENCODE);
         std::collections::HashMap::from([(HarnessId::Opencode, path)])
     });
     let id = host.create(

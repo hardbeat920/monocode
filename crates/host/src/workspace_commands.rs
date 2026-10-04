@@ -326,7 +326,7 @@ impl WorkspaceCommands {
         // Resolve symlinks on the nearest existing ancestor, then re-append
         // the part that does not exist yet.
         loop {
-            if let Ok(real) = std::fs::canonicalize(&actual) {
+            if let Ok(real) = dunce::canonicalize(&actual) {
                 actual = missing
                     .iter()
                     .rev()
@@ -342,7 +342,7 @@ impl WorkspaceCommands {
             actual = parent;
         }
         for root in self.allowed_roots()? {
-            let root = PathBuf::from(root);
+            let root = dunce::simplified(Path::new(&root)).to_path_buf();
             if actual.starts_with(&root) {
                 return Ok(Located {
                     relative: slash_relative(&root, &actual),
@@ -908,7 +908,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, Arc<HostStore>, WorkspaceCommands, String) {
         let directory = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
         let project = root.join("project");
         std::fs::create_dir(&project).unwrap();
         let store = Arc::new(HostStore::open(&root.join("host.db")).unwrap());
@@ -937,7 +937,8 @@ mod tests {
     #[test]
     fn answers_file_commands_inside_projects_only() {
         let (_directory, _store, commands, cwd) = setup();
-        let file = format!("{cwd}/src/app.ts");
+        let file = joined(&cwd, "src/app.ts");
+        let outside = Path::new(&cwd).with_file_name("outside");
         assert_eq!(
             run(
                 &commands,
@@ -978,18 +979,14 @@ mod tests {
         let listed = run(
             &commands,
             "list_dir",
-            json!({ "path": format!("{cwd}/src") }),
+            json!({ "path": joined(&cwd, "src") }),
         )
         .unwrap()
         .unwrap();
         assert_eq!(listed[0]["path"], json!(file));
-        let stats = run(
-            &commands,
-            "stat_files",
-            json!({ "paths": [file, "/etc/hosts"] }),
-        )
-        .unwrap()
-        .unwrap();
+        let stats = run(&commands, "stat_files", json!({ "paths": [file, outside] }))
+            .unwrap()
+            .unwrap();
         assert!(stats[0]["mtimeMs"].is_i64());
         assert_eq!(stats[1]["mtimeMs"], Value::Null);
         let renamed = run(
@@ -999,7 +996,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(renamed, json!(format!("{cwd}/src/main.ts")));
+        assert_eq!(renamed, json!(joined(&cwd, "src/main.ts")));
         let copied = run(
             &commands,
             "copy_path",
@@ -1007,10 +1004,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(copied, json!(format!("{cwd}/main.ts")));
+        assert_eq!(copied, json!(joined(&cwd, "main.ts")));
         run(&commands, "delete_path", json!({ "path": copied })).unwrap();
         assert!(
-            run(&commands, "read_text_file", json!({ "path": "/etc/hosts" }))
+            run(&commands, "read_text_file", json!({ "path": outside }))
                 .unwrap_err()
                 .contains("outside this machine")
         );

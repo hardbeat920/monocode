@@ -186,7 +186,15 @@ impl DiffState {
     fn new(cx: &mut App) -> Self {
         let theme = editor_theme(cx);
         Self {
-            view: cx.new(|cx| DiffView::new(Vec::new(), theme, cx)),
+            view: cx.new(|cx| {
+                let view = DiffView::new(Vec::new(), theme, cx);
+                let appearance = cx.observe_global::<Theme>(|view, cx| {
+                    let theme = editor_theme(cx);
+                    view.set_theme(theme, cx);
+                });
+                cx.on_release(move |_, _| drop(appearance)).detach();
+                view
+            }),
             models: Arc::new(Vec::new()),
             focus: None,
             focused: false,
@@ -1080,5 +1088,89 @@ impl Render for SessionChangesDiff {
             None,
             cx,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use monocode_editor::unified_diff::{FoldDirection, UnifiedBlock};
+    use monocode_ui::{AppearanceSettings, ThemePreference, set_appearance};
+
+    #[gpui::test]
+    fn cached_diff_follows_appearance_without_resetting_content_or_expansion(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            monocode_ui::init(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Dark,
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        let original = (0..40)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let current = original.replace("line 20\n", "changed line 20\n");
+        let first = DiffFile::from_texts("first.txt", &original, &current);
+        let second = DiffFile::from_texts("second.txt", "before\n", "after\n");
+        let mut state = cx.update(DiffState::new);
+        cx.update(|cx| state.publish(vec![FileModel(first), FileModel(second)], cx));
+        let view = state.view.clone();
+        view.update(cx, |view, cx| {
+            view.toggle_file(1, cx);
+            let fold = view.files()[0]
+                .diff
+                .blocks
+                .iter()
+                .position(|block| matches!(block, UnifiedBlock::Fold { .. }))
+                .expect("the controlled diff must have collapsed context");
+            view.reveal_fold(0, fold, FoldDirection::All, cx);
+        });
+        cx.run_until_parked();
+        let (original_theme, files, expanded, revealed) = view.read_with(cx, |view, _| {
+            assert_eq!(view.expanded_files(), &[0].into());
+            assert!(!view.revealed_folds().is_empty());
+            (
+                view.theme().clone(),
+                view.files()
+                    .iter()
+                    .map(|file| file.diff.clone())
+                    .collect::<Vec<_>>(),
+                view.expanded_files().clone(),
+                view.revealed_folds().clone(),
+            )
+        });
+        let models = state.models.clone();
+        cx.update(|cx| {
+            set_appearance(
+                AppearanceSettings {
+                    theme_preference: ThemePreference::Light,
+                    accent_color: Some("#cc5500".into()),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(state.view.entity_id(), view.entity_id());
+        assert!(Arc::ptr_eq(&models, &state.models));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.theme(), &editor_theme(cx));
+            assert_ne!(view.theme(), &original_theme);
+            assert_eq!(view.expanded_files(), &expanded);
+            assert_eq!(view.revealed_folds(), &revealed);
+            assert_eq!(
+                view.files()
+                    .iter()
+                    .map(|file| file.diff.clone())
+                    .collect::<Vec<_>>(),
+                files,
+            );
+        });
     }
 }

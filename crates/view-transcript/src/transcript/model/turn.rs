@@ -217,47 +217,12 @@ pub fn turn_metrics_summary(
     })
 }
 
-/// Local hour and minute for an epoch ms time.
-#[cfg(unix)]
-fn local_hour_minute(epoch_ms: i64) -> (i64, i64) {
-    let secs = epoch_ms.div_euclid(1000) as libc::time_t;
-    // SAFETY: `tm` is plain old data that `localtime_r` fills in. Both
-    // pointers are valid for the call and `localtime_r` is reentrant.
-    let tm = unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&secs, &mut tm).is_null() {
-            return utc_hour_minute(epoch_ms);
-        }
-        tm
-    };
-    (tm.tm_hour as i64, tm.tm_min as i64)
-}
-
-#[cfg(not(unix))]
-fn local_hour_minute(epoch_ms: i64) -> (i64, i64) {
-    // TODO(port): read the Windows time zone. UTC until then.
-    utc_hour_minute(epoch_ms)
-}
-
-fn utc_hour_minute(epoch_ms: i64) -> (i64, i64) {
-    let day_ms = epoch_ms.rem_euclid(86_400_000);
-    (day_ms / 3_600_000, (day_ms / 60_000) % 60)
-}
-
-/// `formatClockTime`: "5:43 AM" in local time.
-// TODO(port): the TypeScript used the reader's locale; this is the en-US form.
+/// The turn's clock time in the reader's locale and time zone.
 pub fn format_clock_time(epoch_ms: i64) -> String {
-    let (hour, minute) = local_hour_minute(epoch_ms);
-    format_hour_minute(hour, minute)
-}
-
-fn format_hour_minute(hour: i64, minute: i64) -> String {
-    let suffix = if hour < 12 { "AM" } else { "PM" };
-    let hour12 = match hour % 12 {
-        0 => 12,
-        h => h,
-    };
-    format!("{hour12}:{minute:02} {suffix}")
+    monocode_platform::date_time::format_local(
+        epoch_ms,
+        monocode_platform::date_time::DateTimeStyle::Time,
+    )
 }
 
 /// `subagentStatusLine`: how far a run got, "3 steps, 1 failed", or "failed".
@@ -489,13 +454,16 @@ mod tests {
     }
 
     #[test]
-    fn formats_clock_times_in_twelve_hours() {
-        assert_eq!(format_hour_minute(0, 5), "12:05 AM");
-        assert_eq!(format_hour_minute(5, 43), "5:43 AM");
-        assert_eq!(format_hour_minute(12, 0), "12:00 PM");
-        assert_eq!(format_hour_minute(23, 59), "11:59 PM");
-        assert_eq!(utc_hour_minute(3_600_000 * 5 + 60_000 * 43), (5, 43));
-        assert!(format_clock_time(0).ends_with('M'));
+    fn formats_clock_times_in_the_system_locale() {
+        let label = format_clock_time(0);
+        assert!(!label.is_empty());
+        assert_eq!(
+            label,
+            monocode_platform::date_time::format_local(
+                0,
+                monocode_platform::date_time::DateTimeStyle::Time,
+            )
+        );
     }
 
     #[test]

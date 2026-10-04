@@ -4,13 +4,17 @@
 //! [`child_host`] and passes the host arguments in an environment variable.
 
 use super::*;
+#[cfg(unix)]
 use crate::host::network::parse_pairing_link;
 use crate::host::runtime::RuntimeBundle;
 use crate::host::server::HOST_VERSION;
+#[cfg(unix)]
 use crate::host::server::tests::post;
 use crate::host::test_backend::TestBackend;
+#[cfg(unix)]
 use crate::remote::{Remote, remote_pair, remote_request};
 use monocode_core::HarnessId;
+#[cfg(unix)]
 use std::time::Instant;
 
 const ARGS: &str = "MONOCODE_HOST_TEST_ARGS";
@@ -72,6 +76,7 @@ fn free_port() -> u16 {
         .port()
 }
 
+#[cfg(unix)]
 struct Host {
     _root: tempfile::TempDir,
     data: PathBuf,
@@ -79,6 +84,7 @@ struct Host {
     runtime: RuntimeSource,
 }
 
+#[cfg(unix)]
 impl Host {
     fn new(prefix: &str) -> Self {
         let root = crate::host::store::tests::temporary(prefix);
@@ -122,6 +128,7 @@ impl Host {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Host {
     fn drop(&mut self) {
         if let Some(state) = read_running(&self.data) {

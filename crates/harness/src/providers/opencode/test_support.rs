@@ -42,6 +42,9 @@ struct State {
     kills: Vec<String>,
     sse_opens: Vec<(String, String)>,
     exec_output: String,
+    exec_calls: Vec<ExecRequest>,
+    logs: VecDeque<Result<Vec<Value>, String>>,
+    runtime_path: Option<String>,
 }
 
 struct Inner {
@@ -82,6 +85,18 @@ pub fn path_of(url: &str) -> String {
 
 impl FakeHost {
     pub fn new() -> Self {
+        Self::with_version(false, None)
+    }
+
+    pub fn v2() -> Self {
+        Self::with_version(true, None)
+    }
+
+    pub fn v2_startup(line: &str) -> Self {
+        Self::with_version(true, Some(line))
+    }
+
+    fn with_version(v2: bool, line: Option<&str>) -> Self {
         let router = Arc::new(ChildRouter::new());
         let inner = Arc::new(Inner {
             router: router.clone(),
@@ -93,10 +108,24 @@ impl FakeHost {
                 spawns: Vec::new(),
                 kills: Vec::new(),
                 sse_opens: Vec::new(),
-                exec_output: "opencode 1.14.19".into(),
+                exec_output: if v2 {
+                    "opencode 2.0.20"
+                } else {
+                    "opencode 1.14.19"
+                }
+                .into(),
+                exec_calls: Vec::new(),
+                logs: VecDeque::new(),
+                runtime_path: None,
             }),
             next_pid: AtomicU32::new(4000),
-            server_line: "opencode server listening on http://127.0.0.1:4096".into(),
+            server_line: line
+                .unwrap_or(if v2 {
+                    r#"{"url":"http://127.0.0.1:4096"}"#
+                } else {
+                    "opencode server listening on http://127.0.0.1:4096"
+                })
+                .into(),
         });
         let spawner: SharedSpawner = Arc::new(SmolSpawner);
         let backend = Arc::new(FakeBackend {
@@ -175,6 +204,30 @@ impl FakeHost {
         self.inner.state.lock().kills.clone()
     }
 
+    pub fn exec_calls(&self) -> Vec<ExecRequest> {
+        self.inner.state.lock().exec_calls.clone()
+    }
+
+    pub fn watched_children(&self) -> usize {
+        self.inner.router.watched_children()
+    }
+
+    pub fn watched_streams(&self) -> usize {
+        self.inner.router.watched_streams()
+    }
+
+    pub fn next_log(&self, events: Vec<Value>) {
+        self.inner.state.lock().logs.push_back(Ok(events));
+    }
+
+    pub fn next_log_error(&self, error: &str) {
+        self.inner.state.lock().logs.push_back(Err(error.into()));
+    }
+
+    pub fn set_runtime_path(&self, path: &str) {
+        self.inner.state.lock().runtime_path = Some(path.into());
+    }
+
     pub fn sse_opens(&self) -> Vec<(String, String)> {
         self.inner.state.lock().sse_opens.clone()
     }
@@ -242,7 +295,7 @@ impl ChildBackend for FakeBackend {
     }
 
     fn runtime_binary_path(&self, _provider: HarnessId) -> Option<String> {
-        None
+        self.inner.state.lock().runtime_path.clone()
     }
 
     fn resolve_default(&self, _provider: HarnessId) -> ChildFuture<ResolvedHarnessBinary> {
@@ -263,8 +316,10 @@ impl ChildBackend for FakeBackend {
         }))
     }
 
-    fn exec(&self, _request: ExecRequest) -> ChildFuture<String> {
-        ready(Ok(self.inner.state.lock().exec_output.clone()))
+    fn exec(&self, request: ExecRequest) -> ChildFuture<String> {
+        let mut state = self.inner.state.lock();
+        state.exec_calls.push(request);
+        ready(Ok(state.exec_output.clone()))
     }
 
     fn free_port(&self) -> ChildFuture<u16> {
@@ -307,7 +362,37 @@ impl ChildBackend for FakeBackend {
         url: String,
         _headers: Option<HashMap<String, String>>,
     ) -> ChildFuture<()> {
-        self.inner.state.lock().sse_opens.push((session_id, url));
+        self.inner
+            .state
+            .lock()
+            .sse_opens
+            .push((session_id.clone(), url.clone()));
+        if self.inner.server_line.starts_with('{') && path_of(&url) == "/api/event" {
+            self.inner.router.on_sse(
+                &session_id,
+                r#"{"type":"server.connected","data":{}}"#.into(),
+            );
+        }
+        if self.inner.server_line.starts_with('{')
+            && path_of(&url).starts_with("/api/experimental/session/")
+        {
+            let events = self
+                .inner
+                .state
+                .lock()
+                .logs
+                .pop_front()
+                .unwrap_or(Ok(Vec::new()));
+            match events {
+                Ok(events) => {
+                    for event in events {
+                        self.inner.router.on_sse(&session_id, event.to_string());
+                    }
+                    self.inner.router.on_sse_end(&session_id, None);
+                }
+                Err(error) => self.inner.router.on_sse_end(&session_id, Some(error)),
+            }
+        }
         ready(Ok(()))
     }
 

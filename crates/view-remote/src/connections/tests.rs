@@ -273,7 +273,7 @@ fn pairs_a_machine_from_the_link_that_connect_prints(cx: &mut TestAppContext) {
     click(cx, "button:Add machine");
     assert_eq!(
         read(&view, cx, |view, _| view.command()),
-        "npx monocode-host@1.2.3 connect"
+        "monocode-host connect"
     );
     assert!(exists(cx, "connect-command"));
     let link = "monocode://pair?v=1&id=env-2";
@@ -320,7 +320,7 @@ fn shows_a_paired_machines_address_and_retries_every_route_when_it_is_offline(
         .is_some_and(|status| status.needs_update(Some("1.2.3")))));
     assert_eq!(
         read(&view, cx, |view, _| view.command()),
-        "npx monocode-host@1.2.3 connect"
+        "monocode-host connect"
     );
 }
 

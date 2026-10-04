@@ -13,13 +13,19 @@ monocode-core.workspace = true
 monocode-ui.workspace = true
 monocode-markdown.workspace = true
 monocode-editor.workspace = true
+monocode-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-# localtime_r, for the wall-clock time under a finished turn.
-libc.workspace = true
+# threads: the btw sheet embeds the session composer; the second opinion
+# and assignment pickers use gpui-base's unframed inputs.
+monocode-view-composer.workspace = true
+monocode-layout.workspace = true
+gpui-base.workspace = true
+uuid.workspace = true
+# cards: favicon data URLs in link previews.
+base64.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 # `test-support` turns on `Window::render_to_image` for the gallery's
@@ -27,8 +33,15 @@ libc.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[example]]
 name = "transcript_gallery"
 path = "examples/transcript_gallery.rs"
+
+[[example]]
+name = "threads_gallery"
+path = "examples/threads_gallery.rs"
+
+[[example]]
+name = "cards_gallery"
+path = "examples/cards_gallery.rs"

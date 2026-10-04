@@ -6,10 +6,9 @@
 //! inboxFilters.ts, linkedWorkItemActivity.ts,
 //! src/features/sessions/model/sessionWorkItem.ts, and
 //! src/features/notifications/ui/notificationMuteActions.ts. The engine's
-//! inbox package ports the same functions for its own use; this crate keeps
-//! its copies so it does not depend on the engine.
-// TODO(port): fold these into one shared copy with
-// monocode_engine::inbox once the views may depend on the engine.
+//! inbox package ports the same functions for its own use. Relative time
+//! delegates to that package so the views use the same date and unit rules.
+// TODO(port): share the remaining duplicated presentation helpers with the engine.
 
 use std::sync::LazyLock;
 
@@ -50,73 +49,18 @@ pub fn date_parse(value: &str) -> Option<i64> {
 /// `new Date(iso).toLocaleString()`, for the Created tooltip.
 pub fn local_date_time(iso: &str) -> String {
     date_parse(iso)
-        .and_then(|ms| Local.timestamp_millis_opt(ms).earliest())
-        .map(|date| date.format("%-m/%-d/%Y, %-I:%M:%S %p").to_string())
+        .map(|ms| {
+            monocode_platform::date_time::format_local(
+                ms,
+                monocode_platform::date_time::DateTimeStyle::DateTime,
+            )
+        })
         .unwrap_or_default()
 }
 
-/// `formatRelativeTime` with `Intl.RelativeTimeFormat("en", { numeric:
-/// "auto" })`.
-// TODO(port): Intl.RelativeTimeFormat localized the phrase. Only English is
-// produced here.
+/// `formatRelativeTime` with the OS default locale and numeric:auto.
 pub fn format_relative_time(iso: &str, now: i64) -> String {
-    let Some(then) = date_parse(iso) else {
-        return String::new();
-    };
-    let delta = js::round((then - now) as f64 / 1000.0);
-    let divisions: [(f64, &str); 7] = [
-        (60.0, "second"),
-        (60.0, "minute"),
-        (24.0, "hour"),
-        (7.0, "day"),
-        (4.34524, "week"),
-        (12.0, "month"),
-        (f64::INFINITY, "year"),
-    ];
-    let mut value = delta;
-    let mut unit = "second";
-    let mut amount = delta.abs();
-    for (step, next) in divisions {
-        unit = next;
-        if amount < step {
-            break;
-        }
-        value = js::round(value / step);
-        amount = value.abs();
-    }
-    relative_phrase(value, unit)
-}
-
-fn relative_phrase(value: f64, unit: &str) -> String {
-    let value = if value == 0.0 { 0.0 } else { value };
-    let special = match (unit, value as i64) {
-        ("second", 0) => Some("now"),
-        ("minute", 0) => Some("this minute"),
-        ("hour", 0) => Some("this hour"),
-        ("day", 0) => Some("today"),
-        ("day", -1) => Some("yesterday"),
-        ("day", 1) => Some("tomorrow"),
-        ("week", 0) => Some("this week"),
-        ("week", -1) => Some("last week"),
-        ("week", 1) => Some("next week"),
-        ("month", 0) => Some("this month"),
-        ("month", -1) => Some("last month"),
-        ("month", 1) => Some("next month"),
-        ("year", 0) => Some("this year"),
-        ("year", -1) => Some("last year"),
-        ("year", 1) => Some("next year"),
-        _ => None,
-    };
-    if let Some(special) = special {
-        return special.to_string();
-    }
-    let count = value.abs() as i64;
-    let plural = if count == 1 { "" } else { "s" };
-    if value < 0.0 {
-        format!("{count} {unit}{plural} ago")
-    } else {
-        format!("in {count} {unit}{plural}")
-    }
+    monocode_engine::inbox::time::format_relative_time(iso, now, None)
 }
 
 /// `inboxItemStatus`.
@@ -715,17 +659,59 @@ mod tests {
 
     #[test]
     fn formats_relative_times() {
+        monocode_locale::with_locale("en", || {
+            let now = date_parse("2026-08-27T12:00:00Z").unwrap();
+            assert_eq!(
+                format_relative_time("2026-08-27T10:00:00Z", now),
+                "2 hours ago"
+            );
+            assert_eq!(format_relative_time("2026-08-27T12:00:00Z", now), "now");
+            assert_eq!(
+                format_relative_time("2026-08-26T12:00:00Z", now),
+                "yesterday"
+            );
+            assert_eq!(format_relative_time("nope", now), "");
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn matches_intl_inbox_view_default_french_japanese_arabic() {
         let now = date_parse("2026-08-27T12:00:00Z").unwrap();
-        assert_eq!(
-            format_relative_time("2026-08-27T10:00:00Z", now),
-            "2 hours ago"
-        );
-        assert_eq!(format_relative_time("2026-08-27T12:00:00Z", now), "now");
-        assert_eq!(
-            format_relative_time("2026-08-26T12:00:00Z", now),
-            "yesterday"
-        );
-        assert_eq!(format_relative_time("nope", now), "");
+        for (locale, past, future) in [
+            ("fr", "avant-hier", "dans 2 heures"),
+            ("ja", "一昨日", "2 時間後"),
+            ("ar", "أول أمس", "خلال ساعتين"),
+        ] {
+            monocode_locale::with_locale(locale, || {
+                assert_eq!(format_relative_time("2026-08-25T12:00:00Z", now), past);
+                assert_eq!(format_relative_time("2026-08-27T14:00:00Z", now), future);
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn matches_intl_inbox_view_shared_parser_and_rounding() {
+        let now = date_parse("2026-08-27T12:00:00Z").unwrap();
+        for locale in ["en", "fr", "ja", "ar"] {
+            monocode_locale::with_locale(locale, || {
+                for iso in [
+                    "2026-08-27T14:00+02:00",
+                    "2026-08-27T12:00:59.500Z",
+                    "2026-08-27T11:59:00.500Z",
+                    "2026-09-28T12:00:00Z",
+                    "not-a-date",
+                ] {
+                    assert_eq!(
+                        format_relative_time(iso, now),
+                        monocode_engine::inbox::time::format_relative_time(iso, now, Some(locale)),
+                        "{iso} in {locale}"
+                    );
+                }
+            })
+            .unwrap();
+        }
     }
 
     #[test]

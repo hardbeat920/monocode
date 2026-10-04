@@ -101,7 +101,7 @@ impl Harness<'_> {
     fn save(&mut self) {
         let editor = self.editor();
         editor.update_in(self.cx, |editor, window, cx| editor.focus(window, cx));
-        self.cx.simulate_keystrokes("cmd-s");
+        self.cx.simulate_keystrokes("secondary-s");
         self.cx.run_until_parked();
     }
 

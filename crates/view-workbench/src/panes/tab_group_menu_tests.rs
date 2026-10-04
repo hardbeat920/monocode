@@ -24,6 +24,7 @@ fn mute_actions() -> Vec<SubmenuEntry> {
         id: id.into(),
         label: label.into(),
         disabled: false,
+        checked: false,
     })
     .collect()
 }

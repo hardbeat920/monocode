@@ -7,6 +7,7 @@ publish = false
 description = "Source control views: changes panel, history graph, branch and worktree pickers, diffs, dialogs"
 
 [dependencies]
+monocode-locale.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 # The unstyled multi-line input, sized by its parent.
@@ -28,6 +29,7 @@ rusqlite.workspace = true
 futures.workspace = true
 
 [dev-dependencies]
+monocode-editor = { workspace = true, features = ["test-support"] }
 # `test-support` turns on `Window::render_to_image` for the gallery's
 # screenshots and the test windows.
 gpui = { workspace = true, features = ["test-support"] }

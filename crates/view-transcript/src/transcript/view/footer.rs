@@ -1,6 +1,7 @@
 //! `TurnDuration` and `TurnMetricsBadge` from AgentTranscript.tsx: what a
 //! finished turn leaves under its answer.
 
+use crate::threads::{SecondOpinionButton, SecondOpinionEvent, SecondOpinionProps};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -94,32 +95,10 @@ impl TranscriptView {
             }
         }
         if footer.harness.is_some() && self.config.can_handoff {
-            let turn_id = row.turn_id.clone();
-            actions = actions.child(
-                self.action_button(&row.key, "handoff", IconName::Replace, "Handoff", cx)
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(TranscriptEvent::Handoff {
-                            turn_id: turn_id.clone(),
-                        })
-                    })),
-            );
+            actions = actions.child(self.turn_model_menu(row, footer, true, cx));
         }
         if footer.harness.is_some() && self.config.can_second_opinion {
-            let turn_id = row.turn_id.clone();
-            actions = actions.child(
-                self.action_button(
-                    &row.key,
-                    "second-opinion",
-                    IconName::MessageMultiple,
-                    "Second opinion",
-                    cx,
-                )
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.emit(TranscriptEvent::SecondOpinion {
-                        turn_id: turn_id.clone(),
-                    })
-                })),
-            );
+            actions = actions.child(self.turn_model_menu(row, footer, false, cx));
         }
         if let Some(summary) =
             turn_metrics_summary(footer.metrics.as_ref(), Some(footer.elapsed_ms))
@@ -200,6 +179,53 @@ impl TranscriptView {
                 )
             })
             .into_any_element()
+    }
+
+    fn turn_model_menu(
+        &mut self,
+        row: &Row,
+        footer: &TurnFooter,
+        handoff: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<SecondOpinionButton> {
+        use gpui::AppContext as _;
+        let kind = if handoff { "handoff" } else { "second-opinion" };
+        let key = format!("{kind}:{}", row.turn_id);
+        let harness = footer.harness.expect("turn has a provider");
+        let mut props = if handoff {
+            SecondOpinionProps::handoff(harness)
+        } else {
+            SecondOpinionProps::second_opinion(harness)
+        };
+        props.from_model = footer.from_model.clone();
+        if !handoff {
+            props.include_current = true;
+            props.exclude_from_model = true;
+        }
+        if let Some((view, _)) = self.turn_model_menus.get(&key) {
+            view.update(cx, |view, cx| view.set_props(props, cx));
+            return view.clone();
+        }
+        let source = self.model_menu_source();
+        let view = cx.new(|cx| SecondOpinionButton::new(props, source, cx));
+        let turn_id = row.turn_id.clone();
+        let subscription = cx.subscribe(&view, move |_, _, event: &SecondOpinionEvent, cx| {
+            let SecondOpinionEvent::Pick(target) = event;
+            cx.emit(if handoff {
+                TranscriptEvent::Handoff {
+                    turn_id: turn_id.clone(),
+                    target: target.clone(),
+                }
+            } else {
+                TranscriptEvent::SecondOpinion {
+                    turn_id: turn_id.clone(),
+                    target: target.clone(),
+                }
+            });
+        });
+        self.turn_model_menus
+            .insert(key, (view.clone(), subscription));
+        view
     }
 
     /// The quiet icon buttons on action rows (`rounded-md p-1

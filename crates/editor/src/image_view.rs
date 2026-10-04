@@ -10,8 +10,8 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gpui::{
     Context, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render,
-    ScrollHandle, SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _,
-    Window, canvas, div, img, point, px, size,
+    RenderImage, ScrollHandle, SharedString, Size, StatefulInteractiveElement as _, Styled,
+    StyledImage as _, Window, canvas, div, img, point, px, size,
 };
 
 use crate::{
@@ -35,7 +35,7 @@ struct Drag {
 
 enum Content {
     Ready {
-        image: Arc<Image>,
+        image: ImageSource,
         natural: Option<(u32, u32)>,
         mime: &'static str,
     },
@@ -62,7 +62,6 @@ fn format_for(mime: &str) -> Option<ImageFormat> {
         "image/bmp" => ImageFormat::Bmp,
         "image/x-icon" => ImageFormat::Ico,
         "image/webp" => ImageFormat::Webp,
-        // TODO(port): GPUI cannot decode AVIF, which WebKit could.
         _ => return None,
     })
 }
@@ -74,6 +73,63 @@ fn natural_size(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()?
         .into_dimensions()
         .ok()
+}
+
+/// Decode AVIF with the bundled Rust AV1 decoder to standard RGBA pixels.
+pub fn decode_avif_rgba(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+    use avif_decode::Image as AvifImage;
+    let decoded = avif_decode::Decoder::from_avif(bytes)
+        .and_then(avif_decode::Decoder::to_image)
+        .map_err(|error| error.to_string())?;
+    macro_rules! pixels {
+        ($image:expr, $convert:expr) => {{
+            let (pixels, width, height) = $image.into_contiguous_buf();
+            let width = u32::try_from(width).map_err(|_| "AVIF width is too large")?;
+            let height = u32::try_from(height).map_err(|_| "AVIF height is too large")?;
+            (
+                width,
+                height,
+                pixels.into_iter().flat_map($convert).collect(),
+            )
+        }};
+    }
+    let (width, height, data) = match decoded {
+        AvifImage::Rgb8(image) => pixels!(image, |pixel| [pixel.r, pixel.g, pixel.b, 255]),
+        AvifImage::Rgba8(image) => pixels!(image, |pixel| [pixel.r, pixel.g, pixel.b, pixel.a]),
+        AvifImage::Rgb16(image) => pixels!(image, |pixel| [
+            (pixel.r >> 8) as u8,
+            (pixel.g >> 8) as u8,
+            (pixel.b >> 8) as u8,
+            255,
+        ]),
+        AvifImage::Rgba16(image) => pixels!(image, |pixel| [
+            (pixel.r >> 8) as u8,
+            (pixel.g >> 8) as u8,
+            (pixel.b >> 8) as u8,
+            (pixel.a >> 8) as u8,
+        ]),
+        AvifImage::Gray8(image) => pixels!(image, |pixel| [
+            pixel.value(),
+            pixel.value(),
+            pixel.value(),
+            255
+        ]),
+        AvifImage::Gray16(image) => pixels!(image, |pixel| {
+            let value = (pixel.value() >> 8) as u8;
+            [value, value, value, 255]
+        }),
+    };
+    image::RgbaImage::from_raw(width, height, data)
+        .ok_or_else(|| "AVIF bitmap size is invalid".into())
+}
+
+/// GPUI's renderer accepts pixels in BGRA order.
+fn decode_avif(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+    let mut image = decode_avif_rgba(bytes)?;
+    for pixel in image.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Ok(image)
 }
 
 impl ImageView {
@@ -95,12 +151,22 @@ impl ImageView {
         let Some(mime) = sniff_image_mime(&bytes) else {
             return Content::Unsupported;
         };
+        if mime == "image/avif" {
+            return match decode_avif(&bytes) {
+                Ok(buffer) => Content::Ready {
+                    natural: Some(buffer.dimensions()),
+                    image: Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])).into(),
+                    mime,
+                },
+                Err(_) => Content::Unsupported,
+            };
+        }
         let Some(format) = format_for(mime) else {
             return Content::Unsupported;
         };
         let natural = natural_size(&bytes);
         Content::Ready {
-            image: Arc::new(Image::from_bytes(format, bytes)),
+            image: Arc::new(Image::from_bytes(format, bytes)).into(),
             natural,
             mime,
         }
@@ -116,6 +182,11 @@ impl ImageView {
     pub fn set_theme(&mut self, theme: EditorTheme, cx: &mut Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn theme(&self) -> &EditorTheme {
+        &self.theme
     }
 
     pub fn zoom(&self) -> Zoom {
@@ -242,7 +313,7 @@ impl Render for ImageView {
             format_file_size(self.size).into(),
             mime.trim_start_matches("image/").to_uppercase().into(),
         ];
-        let picture = img(ImageSource::Image(image)).object_fit(ObjectFit::Contain);
+        let picture = img(image).object_fit(ObjectFit::Contain);
         // Lay the image out by hand: centered while it fits, scrollable from
         // its top-left corner once it is larger than the pane.
         let view = self.viewport.get();
@@ -333,5 +404,38 @@ impl Render for ImageView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod avif_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_avif_dimensions_and_preserves_bgra_channel_order() {
+        let bytes = include_bytes!("../tests/fixtures/red-blue.avif");
+        let pixels = decode_avif(bytes).unwrap();
+        assert_eq!(pixels.dimensions(), (32, 16));
+        let red = pixels.get_pixel(4, 8).0;
+        let blue = pixels.get_pixel(24, 8).0;
+        assert!(red[2] > 240 && red[0] < 10 && red[3] == 255, "{red:?}");
+        assert!(blue[0] > 240 && blue[2] < 10 && blue[3] == 255, "{blue:?}");
+        assert!(matches!(
+            ImageView::content_for(bytes.to_vec()),
+            Content::Ready {
+                natural: Some((32, 16)),
+                mime: "image/avif",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_avif_without_panicking() {
+        assert!(decode_avif(b"not an AVIF image").is_err());
+        assert!(matches!(
+            ImageView::content_for(b"\0\0\0\x18ftypavif".to_vec()),
+            Content::Unsupported
+        ));
     }
 }
