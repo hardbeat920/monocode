@@ -126,12 +126,30 @@ fn check_package_target_bytes(bytes: &[u8], target: &str) -> Result<()> {
         "x86_64-pc-windows-msvc" => (BinaryFormat::Pe, Architecture::X86_64),
         _ => bail!("unsupported package target {target}"),
     };
-    let executable = object::File::parse(bytes)?;
-    if (executable.format(), executable.architecture()) != expected {
+    let actual = match object::FileKind::parse(bytes)? {
+        // Read only the Mach-O header. object's full parser rejects some load
+        // commands that the macOS 26 linker writes, and the CPU type is all
+        // this check needs.
+        object::FileKind::MachO64 => {
+            use object::read::macho::MachHeader;
+            let header = object::macho::MachHeader64::<object::Endianness>::parse(bytes, 0)?;
+            let architecture = match header.cputype(header.endian()?) {
+                object::macho::CPU_TYPE_ARM64 => Architecture::Aarch64,
+                object::macho::CPU_TYPE_X86_64 => Architecture::X86_64,
+                _ => Architecture::Unknown,
+            };
+            (BinaryFormat::MachO, architecture)
+        }
+        _ => {
+            let executable = object::File::parse(bytes)?;
+            (executable.format(), executable.architecture())
+        }
+    };
+    if actual != expected {
         bail!(
             "the executable is {:?}/{:?}, but package target {target} requires {:?}/{:?}",
-            executable.format(),
-            executable.architecture(),
+            actual.0,
+            actual.1,
             expected.0,
             expected.1,
         );
@@ -768,6 +786,23 @@ mod tests {
         }
         assert!(check_package_target_bytes(b"not an executable", targets[0]).is_err());
         assert!(check_package_target_bytes(&target_fixture(targets[0]), "unknown").is_err());
+    }
+
+    #[test]
+    fn package_target_reads_only_the_mach_o_header() {
+        // One LC_SEGMENT_64 whose section count overflows its command size,
+        // which object's full parser rejects as an invalid number of sections.
+        let mut bytes = target_fixture("aarch64-apple-darwin");
+        bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[20..24].copy_from_slice(&72_u32.to_le_bytes());
+        let mut segment = vec![0; 72];
+        segment[..4].copy_from_slice(&0x19_u32.to_le_bytes());
+        segment[4..8].copy_from_slice(&72_u32.to_le_bytes());
+        segment[64..68].copy_from_slice(&1_u32.to_le_bytes());
+        bytes.extend(segment);
+        assert!(object::File::parse(&*bytes).is_err());
+        check_package_target_bytes(&bytes, "aarch64-apple-darwin").unwrap();
+        assert!(check_package_target_bytes(&bytes, "x86_64-apple-darwin").is_err());
     }
 
     #[test]
