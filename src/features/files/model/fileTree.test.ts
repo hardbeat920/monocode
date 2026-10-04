@@ -37,6 +37,17 @@ vi.mock("../../../platform/tauri/fs", async (importOriginal) => {
   };
 });
 
+/** Hold the next `listDir` open so a test can land its response after a drop. */
+function deferListDir() {
+  let land!: (entries: FsEntry[]) => void;
+  listDir.mockReturnValueOnce(
+    new Promise<FsEntry[]>((resolve) => {
+      land = resolve;
+    }),
+  );
+  return (entries: FsEntry[]) => land(entries);
+}
+
 describe("fileTree cache", () => {
   beforeEach(() => {
     forgetDir("/tmp");
@@ -208,6 +219,77 @@ describe("fileTree cache", () => {
     expect(peekDir(root)).toEqual([entry("from-agent.ts")]);
     expect(onChange).toHaveBeenCalledTimes(1);
     stop();
+  });
+
+  it("ignores a listing that lands after its folder was collapsed", async () => {
+    const collapsed = `${root}/src`;
+    registerExplorer(root);
+    saveExpanded(root, new Set([root, collapsed]));
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+
+    const land = deferListDir();
+    const inFlight = listCachedDir(collapsed);
+    // Collapsed again while the listing is still open, so the prune drops it.
+    saveExpanded(root, new Set([root]));
+    await refreshCachedDirs();
+
+    land([entry("late.ts")]);
+    await expect(inFlight).resolves.toEqual([entry("late.ts")]);
+
+    expect(peekDir(collapsed)).toBeNull();
+  });
+
+  it("ignores a listing that lands after its explorer unmounts", async () => {
+    const child = `${root}/src`;
+    registerExplorer(root);
+    saveExpanded(root, new Set([root, child]));
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+
+    const land = deferListDir();
+    const inFlight = listCachedDir(child);
+    unregisterExplorer(root);
+    await refreshCachedDirs();
+
+    land([entry("late.ts")]);
+    await inFlight;
+
+    expect(peekDir(child)).toBeNull();
+    expect(peekDir(root)).toBeNull();
+  });
+
+  it("ignores a listing that lands after its folder was forgotten", async () => {
+    const deleted = `${root}/src`;
+    const land = deferListDir();
+    const inFlight = listCachedDir(deleted);
+
+    forgetDir(deleted);
+    land([]);
+    await inFlight;
+
+    expect(peekDir(deleted)).toBeNull();
+  });
+
+  it("caches a listing requested again after its folder was dropped", async () => {
+    const collapsed = `${root}/src`;
+    registerExplorer(root);
+    saveExpanded(root, new Set([root]));
+    listDir.mockResolvedValue([]);
+    await listCachedDir(root);
+
+    const land = deferListDir();
+    const inFlight = listCachedDir(collapsed);
+    await refreshCachedDirs();
+    land([]);
+    await inFlight;
+    expect(peekDir(collapsed)).toBeNull();
+
+    // Re-expanding re-lists on demand, and that listing is worth keeping.
+    saveExpanded(root, new Set([root, collapsed]));
+    listDir.mockResolvedValueOnce([entry("index.ts")]);
+    expect(await listCachedDir(collapsed)).toEqual([entry("index.ts")]);
+    expect(peekDir(collapsed)).toEqual([entry("index.ts")]);
   });
 });
 

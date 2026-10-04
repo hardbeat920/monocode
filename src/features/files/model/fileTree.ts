@@ -9,6 +9,11 @@ const listeners = new Set<() => void>();
 /** Roots with an explorer on screen, counted so two can share a cwd. */
 const mountedRoots = new Map<string, number>();
 
+/** One open `listDir`. `retired` marks a listing the cache no longer wants. */
+type Request = { retired: boolean };
+/** Open requests by path, so a drop can reach every one of them. */
+const openRequests = new Map<string, Set<Request>>();
+
 const REFRESH_MS = 150;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
@@ -53,21 +58,55 @@ export function peekDir(path: string): FsEntry[] | null {
 export function listCachedDir(path: string): Promise<FsEntry[]> {
   const hit = dirs.get(path);
   if (hit) return Promise.resolve(hit);
-  return listDir(path).then((entries) => {
-    dirs.set(path, entries);
-    return entries;
-  });
+  const pending = listDir(path);
+  const request: Request = { retired: false };
+  const open = openRequests.get(path);
+  if (open) open.add(request);
+  else openRequests.set(path, new Set([request]));
+  return pending
+    .then((entries) => {
+      // A response that lands after the folder was dropped describes a cache
+      // entry that no longer exists, so it must not be written back.
+      if (!request.retired) dirs.set(path, entries);
+      return entries;
+    })
+    .finally(() => {
+      const live = openRequests.get(path);
+      if (!live) return;
+      live.delete(request);
+      if (live.size === 0) openRequests.delete(path);
+    });
 }
 
 export function refreshDir(path: string): Promise<FsEntry[]> {
-  dirs.delete(path);
+  dropDir(path);
   return listCachedDir(path);
 }
 
 export function forgetDir(path: string) {
   for (const key of [...dirs.keys()]) {
-    if (key === path || key.startsWith(`${path}/`)) dirs.delete(key);
+    if (atOrUnder(key, path)) dropDir(key);
   }
+  // Nothing was cached yet for these, but a listing already on its way would
+  // put the deleted folder straight back.
+  for (const key of [...openRequests.keys()]) {
+    if (atOrUnder(key, path)) retireRequests(key);
+  }
+}
+
+/** Evict a path's listing and stop its in-flight requests from restoring it. */
+function dropDir(path: string) {
+  dirs.delete(path);
+  retireRequests(path);
+}
+
+function retireRequests(path: string) {
+  for (const request of openRequests.get(path) ?? []) request.retired = true;
+}
+
+/** `path` itself, or anything inside it. */
+function atOrUnder(key: string, path: string): boolean {
+  return key === path || key.startsWith(`${path}/`);
 }
 
 /**
@@ -137,7 +176,12 @@ function everyFolderAbove(
 export async function refreshCachedDirs(): Promise<void> {
   const visible = visibleDirs();
   for (const path of [...dirs.keys()]) {
-    if (!visible.has(path)) dirs.delete(path);
+    if (!visible.has(path)) dropDir(path);
+  }
+  // A listing still in flight for a folder nothing can show belongs to the
+  // entries the prune above just cleared, so it must not land after this.
+  for (const path of [...openRequests.keys()]) {
+    if (!visible.has(path)) retireRequests(path);
   }
   const paths = [...visible].filter((path) => dirs.has(path));
   if (paths.length === 0) return;
