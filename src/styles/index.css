@@ -337,6 +337,10 @@ html.has-native-glass:not(.theme-light) #root {
   visibility: hidden;
 }
 
+.queue-reorder-item[data-reordering] [data-no-drag] {
+  visibility: hidden;
+}
+
 .project-reorder-item[data-reordering] > button:first-of-type {
   padding-right: 0;
 }

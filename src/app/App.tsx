@@ -431,7 +431,9 @@ import {
 import {
   canDispatchQueuedHead,
   dequeueQueuedMessage,
+  editQueuedMessage,
   queuedMessageForSubmit,
+  reorderQueuedMessages,
 } from "../features/sessions/model/messageQueue";
 import {
   USAGE_LIMIT_RESUME_GRACE_MS,
@@ -7668,6 +7670,19 @@ function Workspace({
     [],
   );
 
+  const onReorderQueuedMessages = useCallback(
+    (sessionId: string, orderedIds: string[]) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? reorderQueuedMessages(session, orderedIds)
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
   const onQueuedMessageEditingChange = useCallback(
     (sessionId: string, messageId?: string) => {
       setSessions((prev) =>
@@ -7682,17 +7697,16 @@ function Workspace({
   );
 
   const onEditQueuedMessage = useCallback(
-    (sessionId: string, messageId: string, text: string) => {
+    (
+      sessionId: string,
+      messageId: string,
+      text: string,
+      attachments: Attachment[],
+    ) => {
       setSessions((prev) =>
         prev.map((session) =>
           session.id === sessionId
-            ? {
-                ...session,
-                queuedMessages: session.queuedMessages?.map((message) =>
-                  message.id === messageId ? { ...message, text } : message,
-                ),
-                editingQueuedMessageId: undefined,
-              }
+            ? editQueuedMessage(session, messageId, text, attachments)
             : session,
         ),
       );
@@ -10690,6 +10704,7 @@ function Workspace({
     onDeleteQueuedMessage,
     onEditQueuedMessage,
     onQueuedMessageEditingChange,
+    onReorderQueuedMessages,
     onSteerQueuedMessage,
     onResumeQueue,
     onUsageLimitResume,

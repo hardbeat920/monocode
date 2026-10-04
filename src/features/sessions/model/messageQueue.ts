@@ -1,5 +1,6 @@
+import { orderByIds } from "../../../shared/lib/reorder";
 import { isPreparingHandoff } from "./handoff";
-import type { QueuedMessage, Session } from "./session";
+import type { Attachment, QueuedMessage, Session } from "./session";
 
 export function queuedHead(session: Session): QueuedMessage | undefined {
   return session.queuedMessages?.[0];
@@ -26,6 +27,27 @@ export function dequeueQueuedMessage(
       session.editingQueuedMessageId === messageId
         ? undefined
         : session.editingQueuedMessageId,
+  };
+}
+
+/** Replace the draft text and attachments of one waiting follow-up. */
+export function editQueuedMessage(
+  session: Session,
+  messageId: string,
+  text: string,
+  attachments: Attachment[],
+): Session {
+  if (!session.queuedMessages?.some((message) => message.id === messageId)) {
+    return session;
+  }
+  return {
+    ...session,
+    queuedMessages: session.queuedMessages.map((message) =>
+      message.id === messageId
+        ? { ...message, text, attachments: [...attachments] }
+        : message,
+    ),
+    editingQueuedMessageId: undefined,
   };
 }
 
@@ -61,4 +83,20 @@ export function queuedMessageForSubmit(
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;
+}
+
+/** Rewrite send order. Auto-dispatch always takes the new head. */
+export function reorderQueuedMessages(
+  session: Session,
+  orderedIds: string[],
+): Session {
+  const current = session.queuedMessages ?? [];
+  if (current.length < 2) return session;
+  if (orderedIds.length !== current.length) return session;
+  const currentIds = current.map((message) => message.id);
+  if (new Set(orderedIds).size !== orderedIds.length) return session;
+  const allowed = new Set(currentIds);
+  if (orderedIds.some((id) => !allowed.has(id))) return session;
+  if (orderedIds.every((id, index) => id === currentIds[index])) return session;
+  return { ...session, queuedMessages: orderByIds(current, orderedIds) };
 }

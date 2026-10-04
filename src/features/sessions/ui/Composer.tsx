@@ -26,6 +26,7 @@ import {
   useState,
   useSyncExternalStore,
   type ClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -39,6 +40,7 @@ import {
   revokeAttachment,
 } from "../model/attachments";
 import { resizeComposer } from "../model/composerResize";
+import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import {
   isFileReferenceText,
   messageFilesFromClipboard,
@@ -289,8 +291,13 @@ type Props = {
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
-  onEditQueuedMessage?: (messageId: string, text: string) => void;
+  onEditQueuedMessage?: (
+    messageId: string,
+    text: string,
+    attachments: Attachment[],
+  ) => void;
   onQueuedMessageEditingChange?: (messageId?: string) => void;
+  onReorderQueuedMessages?: (orderedIds: string[]) => void;
   onSteerQueuedMessage?: (messageId: string) => void;
   onResumeQueue?: () => void;
   onUsageLimitResume?: () => void;
@@ -334,52 +341,221 @@ function ToolButton({
   );
 }
 
+type QueuedDropSink = {
+  ingestFiles: (files: File[]) => void;
+  ingestPaths: (paths: string[]) => void;
+};
+
 function MessageQueue({
   messages,
   status,
+  attachmentsSupported = true,
+  dropSinkRef,
   onDelete,
   onEdit,
   onEditingChange,
+  onReorder,
   onSteer,
   onResume,
 }: {
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
+  attachmentsSupported?: boolean;
+  dropSinkRef?: { current: QueuedDropSink | null };
   onDelete?: (messageId: string) => void;
-  onEdit?: (messageId: string, text: string) => void;
+  onEdit?: (
+    messageId: string,
+    text: string,
+    attachments: Attachment[],
+  ) => void;
   onEditingChange?: (messageId?: string) => void;
+  onReorder?: (orderedIds: string[]) => void;
   onSteer?: (messageId: string) => void;
   onResume?: () => void;
 }) {
   const [editingId, setEditingId] = useState<string>();
   const [editDraft, setEditDraft] = useState("");
+  const [editAttachments, setEditAttachments] = useState<Attachment[]>([]);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const onEditingChangeRef = useRef(onEditingChange);
   onEditingChangeRef.current = onEditingChange;
   const editingIdRef = useRef(editingId);
   editingIdRef.current = editingId;
+  const editGenerationRef = useRef(0);
+  const editAttachmentsRef = useRef(editAttachments);
+  editAttachmentsRef.current = editAttachments;
+  const editOriginalIdsRef = useRef<Set<string>>(new Set());
+  const beginEditSession = () => {
+    editGenerationRef.current += 1;
+  };
   useEffect(() => {
     return () => {
+      beginEditSession();
       if (editingIdRef.current) onEditingChangeRef.current?.();
+      for (const file of editAttachmentsRef.current) {
+        if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
+      }
     };
   }, []);
+  useLayoutEffect(() => {
+    if (editRef.current) resizeComposer(editRef.current);
+  }, [editingId, editDraft]);
+  const messageIds = useMemo(
+    () => messages.map((message) => message.id),
+    [messages],
+  );
+  const sortable = useAnimatedReorder(
+    messageIds,
+    (ids) => onReorder?.(ids),
+    "y",
+  );
   if (messages.length === 0) return null;
   const paused = status === "paused";
 
+  const discardAddedAttachments = (files: Attachment[]) => {
+    for (const file of files) {
+      if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
+    }
+  };
+  const clearEdit = () => {
+    beginEditSession();
+    setEditingId(undefined);
+    setEditDraft("");
+    setEditAttachments([]);
+    editOriginalIdsRef.current = new Set();
+    onEditingChange?.();
+  };
   const startEdit = (message: QueuedMessage) => {
+    if (editingId && editingId !== message.id) {
+      discardAddedAttachments(editAttachments);
+    }
+    beginEditSession();
     setEditingId(message.id);
     setEditDraft(message.text);
+    setEditAttachments(message.attachments);
+    editOriginalIdsRef.current = new Set(
+      message.attachments.map((file) => file.id),
+    );
     onEditingChange?.(message.id);
   };
   const cancelEdit = () => {
-    setEditingId(undefined);
-    setEditDraft("");
-    onEditingChange?.();
+    discardAddedAttachments(editAttachments);
+    clearEdit();
   };
   const saveEdit = (message: QueuedMessage) => {
-    if (!editDraft.trim() && message.attachments.length === 0) return;
-    onEdit?.(message.id, editDraft);
-    setEditingId(undefined);
-    setEditDraft("");
+    if (!editDraft.trim() && editAttachments.length === 0) return;
+    const kept = new Set(editAttachments.map((file) => file.id));
+    for (const file of message.attachments) {
+      if (!kept.has(file.id)) revokeAttachment(file);
+    }
+    onEdit?.(message.id, editDraft, editAttachments);
+    clearEdit();
+  };
+  const addEditAttachments = (incoming: Attachment[]) => {
+    if (incoming.length === 0) return;
+    setEditAttachments((prev) => mergeAttachments(prev, incoming));
+  };
+  const acceptQueuedAttachments = (
+    messageId: string,
+    generation: number,
+    files: Attachment[],
+  ) => {
+    if (
+      editingIdRef.current === messageId &&
+      editGenerationRef.current === generation
+    ) {
+      addEditAttachments(files);
+      return true;
+    }
+    files.forEach(revokeAttachment);
+    return false;
+  };
+  const removeEditAttachment = (id: string) => {
+    const removed = editAttachments.find((file) => file.id === id);
+    if (removed && !editOriginalIdsRef.current.has(removed.id)) {
+      revokeAttachment(removed);
+    }
+    setEditAttachments((prev) => prev.filter((file) => file.id !== id));
+  };
+  const attachToQueued = (messageId: string) => {
+    if (!attachmentsSupported) return;
+    const generation = editGenerationRef.current;
+    void pickAttachments().then((files) => {
+      if (!acceptQueuedAttachments(messageId, generation, files)) return;
+      editRef.current?.focus();
+    });
+  };
+  const ingestQueuedFiles = (messageId: string, files: File[]) => {
+    if (!attachmentsSupported || files.length === 0) return;
+    const generation = editGenerationRef.current;
+    void attachmentsFromFiles(files).then((pasted) => {
+      acceptQueuedAttachments(messageId, generation, pasted);
+    });
+  };
+  const ingestQueuedPaths = (messageId: string, paths: string[]) => {
+    if (!attachmentsSupported || paths.length === 0) return;
+    const generation = editGenerationRef.current;
+    void attachmentsFromPaths(paths).then((pasted) => {
+      acceptQueuedAttachments(messageId, generation, pasted);
+    });
+  };
+  useEffect(() => {
+    if (!dropSinkRef) return;
+    if (!editingId || !attachmentsSupported) {
+      dropSinkRef.current = null;
+      return;
+    }
+    const messageId = editingId;
+    dropSinkRef.current = {
+      ingestFiles: (files) => ingestQueuedFiles(messageId, files),
+      ingestPaths: (paths) => ingestQueuedPaths(messageId, paths),
+    };
+    return () => {
+      dropSinkRef.current = null;
+    };
+  }, [attachmentsSupported, dropSinkRef, editingId]);
+  const onQueuedPaste = (
+    messageId: string,
+    event: ClipboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (!attachmentsSupported) return;
+    const messageFiles = messageFilesFromClipboard(event.clipboardData);
+    if (messageFiles) {
+      event.preventDefault();
+      ingestQueuedFiles(messageId, messageFiles);
+      return;
+    }
+    const files = filesFromClipboard(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      ingestQueuedFiles(messageId, files);
+      return;
+    }
+    const text = event.clipboardData.getData("text/plain");
+    if (text && !isFileReferenceText(text)) return;
+    event.preventDefault();
+    const generation = editGenerationRef.current;
+    void nativeClipboardAttachments(text)
+      .then(({ files: pasted }) => {
+        acceptQueuedAttachments(messageId, generation, pasted);
+      })
+      .catch(() => undefined);
+  };
+  const onQueuedDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!attachmentsSupported || !hasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onQueuedDrop = (
+    messageId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    if (!hasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!attachmentsSupported) return;
+    ingestQueuedFiles(messageId, [...event.dataTransfer.files]);
   };
 
   return (
@@ -406,43 +582,101 @@ function MessageQueue({
         ) : null}
         {messages.map((message, index) => {
           const editing = editingId === message.id;
+          const canDrag = messages.length > 1 && !editing;
           const label =
             message.text.trim() ||
             `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
           return (
             <div
               key={message.id}
-              className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-stroke" : ""
-              }`}
+              ref={(el) => sortable.setItemRef(message.id, el)}
+              data-message-queue-row={message.id}
+              className={`flex min-h-7 gap-2 text-[12px] ${
+                editing ? "items-start py-1" : "items-center"
+              } ${index > 0 ? "border-t border-stroke" : ""} ${
+                messages.length > 1
+                  ? "queue-reorder-item reorder-item relative"
+                  : ""
+              } ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
+              onPointerDown={(event) => {
+                if (!canDrag) return;
+                if (
+                  (event.target as HTMLElement | null)?.closest("[data-no-drag]")
+                ) {
+                  return;
+                }
+                sortable.onItemPointerDown(message.id, event);
+              }}
+              onClick={(event) => {
+                if (!sortable.consumeClick()) return;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
-              <ListEnd className="size-3.5 shrink-0" />
+              <ListEnd
+                className={`size-3.5 shrink-0 ${editing ? "mt-1.5" : ""}`}
+              />
               {editing ? (
                 <>
-                  <textarea
-                    autoFocus
-                    aria-label="Edit queued message"
-                    value={editDraft}
-                    rows={1}
-                    onChange={(event) => setEditDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isImeComposition(event.nativeEvent)) return;
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelEdit();
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        saveEdit(message);
-                      }
-                    }}
-                    className="min-h-6 min-w-0 flex-1 resize-none rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] text-content outline-none focus:border-content/30"
-                  />
+                  <div
+                    data-no-drag
+                    data-queued-message-edit
+                    className="flex min-w-0 flex-1 flex-col gap-1"
+                    onDragOver={onQueuedDragOver}
+                    onDrop={(event) => onQueuedDrop(message.id, event)}
+                  >
+                    <textarea
+                      ref={editRef}
+                      autoFocus
+                      aria-label="Edit queued message"
+                      value={editDraft}
+                      rows={1}
+                      onChange={(event) => {
+                        const field = event.currentTarget;
+                        setEditDraft(field.value);
+                        resizeComposer(field);
+                      }}
+                      onPaste={(event) => onQueuedPaste(message.id, event)}
+                      onKeyDown={(event) => {
+                        if (isImeComposition(event.nativeEvent)) return;
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelEdit();
+                        } else if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          saveEdit(message);
+                        }
+                      }}
+                      className="min-h-6 max-h-40 w-full resize-none overflow-y-auto rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] leading-4 text-content outline-none focus:border-content/30"
+                    />
+                    <div className="flex flex-wrap items-center gap-1">
+                      {editAttachments.map((file) => (
+                        <AttachmentChip
+                          key={file.id}
+                          attachment={file}
+                          onRemove={() => removeEditAttachment(file.id)}
+                        />
+                      ))}
+                      {attachmentsSupported ? (
+                        <button
+                          type="button"
+                          title="Attach files or images"
+                          aria-label="Attach files to queued message"
+                          onClick={() => attachToQueued(message.id)}
+                          className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                        >
+                          <FilePlus className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                   <button
                     type="button"
+                    data-no-drag
                     title="Save queued message"
                     aria-label="Save queued message"
                     disabled={
-                      !editDraft.trim() && message.attachments.length === 0
+                      !editDraft.trim() && editAttachments.length === 0
                     }
                     onClick={() => saveEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
@@ -451,6 +685,7 @@ function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Cancel queued message edit"
                     aria-label="Cancel queued message edit"
                     onClick={cancelEdit}
@@ -466,6 +701,7 @@ function MessageQueue({
                   </span>
                   <button
                     type="button"
+                    data-no-drag
                     onClick={() => onSteer?.(message.id)}
                     className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
                   >
@@ -474,6 +710,7 @@ function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Edit queued message"
                     aria-label="Edit queued message"
                     onClick={() => startEdit(message)}
@@ -483,6 +720,7 @@ function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Remove queued message"
                     aria-label="Remove queued message"
                     onClick={() => onDelete?.(message.id)}
@@ -572,6 +810,7 @@ export function Composer({
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
+  onReorderQueuedMessages,
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
@@ -585,6 +824,7 @@ export function Composer({
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const queuedDropSinkRef = useRef<QueuedDropSink | null>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -1292,22 +1532,36 @@ export function Composer({
       return { x, y };
     };
 
-    const overTarget = (x: number, y: number) => {
+    const dropHit = (x: number, y: number) => {
       const root = dropRoot();
-      if (!root) return false;
-      const point = toClientPoint(x, y);
-      const rect = root.getBoundingClientRect();
-      return (
-        point.x >= rect.left &&
-        point.x <= rect.right &&
-        point.y >= rect.top &&
-        point.y <= rect.bottom
-      );
+      if (!root) return null;
+      return sessionDropHit(root, toClientPoint(x, y));
+    };
+
+    const ingestDrop = (
+      hit: "queued" | "composer" | null,
+      files?: File[],
+      paths?: string[],
+    ) => {
+      if (!attachmentsSupported || !hit) return;
+      if (hit === "queued") {
+        if (files?.length) queuedDropSinkRef.current?.ingestFiles(files);
+        if (paths?.length) queuedDropSinkRef.current?.ingestPaths(paths);
+        return;
+      }
+      if (files?.length) void attachmentsFromFiles(files).then(addAttachments);
+      if (paths?.length) void attachmentsFromPaths(paths).then(addAttachments);
     };
 
     const onDragOver = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      if (isQueuedMessageEditTarget(event.target)) {
+        event.preventDefault();
+        data.dropEffect = attachmentsSupported ? "copy" : "none";
+        setFileDrag(false);
+        return;
+      }
       event.preventDefault();
       if (!attachmentsSupported) return;
       data.dropEffect = "copy";
@@ -1323,13 +1577,15 @@ export function Composer({
     const onDrop = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      const queued = isQueuedMessageEditTarget(event.target);
       event.preventDefault();
+      if (queued) event.stopPropagation();
       setFileDrag(false);
       if (!attachmentsSupported) return;
       if (Date.now() - nativeDropAt < 250) return;
       const files = [...data.files];
       if (files.length === 0) return;
-      void attachmentsFromFiles(files).then(addAttachments);
+      ingestDrop(queued ? "queued" : "composer", files);
     };
 
     const onExplorerFilePointerDrag = (event: Event) => {
@@ -1340,14 +1596,13 @@ export function Composer({
         setFileDrag(false);
         return;
       }
-      const over = overTarget(detail.x, detail.y);
+      const hit = dropHit(detail.x, detail.y);
       if (detail.type === "move") {
-        setFileDrag(over && attachmentsSupported);
+        setFileDrag(hit === "composer" && attachmentsSupported);
         return;
       }
       setFileDrag(false);
-      if (!over || !attachmentsSupported) return;
-      void attachmentsFromPaths([detail.path]).then(addAttachments);
+      ingestDrop(hit, undefined, [detail.path]);
     };
 
     const root = dropRoot();
@@ -1368,16 +1623,16 @@ export function Composer({
           return;
         }
         const { x, y } = event.payload.position;
-        const over = overTarget(x, y);
+        const hit = dropHit(x, y);
         if (event.payload.type === "enter" || event.payload.type === "over") {
-          setFileDrag(over && attachmentsSupported);
+          setFileDrag(hit === "composer" && attachmentsSupported);
           return;
         }
         if (event.payload.type !== "drop") return;
         setFileDrag(false);
-        if (!over || !attachmentsSupported) return;
+        if (!hit || !attachmentsSupported) return;
         nativeDropAt = Date.now();
-        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
+        ingestDrop(hit, undefined, event.payload.paths);
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -1982,9 +2237,12 @@ export function Composer({
       <MessageQueue
         messages={queuedMessages}
         status={queueStatus}
+        attachmentsSupported={attachmentsSupported}
+        dropSinkRef={queuedDropSinkRef}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}
+        onReorder={onReorderQueuedMessages}
         onSteer={onSteerQueuedMessage}
         onResume={onResumeQueue}
       />
@@ -2844,4 +3102,32 @@ function hasFiles(data: DataTransfer | null): data is DataTransfer {
   return [...data.types].some(
     (type) => type === "Files" || type === "application/x-moz-file",
   );
+}
+
+function pointInRect(rect: DOMRect, point: { x: number; y: number }): boolean {
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
+}
+
+function isQueuedMessageEditTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("[data-queued-message-edit]"))
+  );
+}
+
+function sessionDropHit(
+  root: Element,
+  point: { x: number; y: number },
+): "queued" | "composer" | null {
+  if (!pointInRect(root.getBoundingClientRect(), point)) return null;
+  const queued = root.querySelector("[data-queued-message-edit]");
+  if (queued && pointInRect(queued.getBoundingClientRect(), point)) {
+    return "queued";
+  }
+  return "composer";
 }

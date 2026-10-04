@@ -33,6 +33,11 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
     settled: true,
   }),
 }));
+const pickAttachments = vi.hoisted(() => vi.fn());
+vi.mock("../model/attachments", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../model/attachments")>();
+  return { ...original, pickAttachments };
+});
 
 import { Composer, ComposerAction } from "./Composer";
 import {
@@ -89,6 +94,8 @@ describe("Composer question focus", () => {
 
   beforeEach(() => {
     clearMcpSettingsCache();
+    pickAttachments.mockReset();
+    pickAttachments.mockResolvedValue([]);
     mcpInvoke.mockReset();
     mcpInvoke.mockImplementation(async (command: string) =>
       command === "mcp_discover"
@@ -1747,5 +1754,476 @@ describe("Composer question focus", () => {
     } finally {
       window.removeEventListener("monocode:open-mcp-settings", onOpen);
     }
+  });
+
+  it("grows the queued-message editor to fit the draft", async () => {
+    const scrollHeight = vi
+      .spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLTextAreaElement) {
+        return this.getAttribute("aria-label") === "Edit queued message"
+          ? 88
+          : 24;
+      });
+
+    try {
+      await act(async () =>
+        root.render(
+          createElement(Composer, {
+            focused: true,
+            harness: "claude",
+            model: "claude-sonnet",
+            runtimeMode: "supervised",
+            executionCwd: "/repo",
+            hideProjectPicker: true,
+            hideBranchPicker: true,
+            queuedMessages: [
+              {
+                id: "q1",
+                text: "line one\nline two\nline three",
+                attachments: [],
+              },
+            ],
+            onFocus: vi.fn(),
+            onCwdChange: vi.fn(),
+            onModelChange: vi.fn(),
+            onRuntimeModeChange: vi.fn(),
+            onSubmit: vi.fn(),
+          }),
+        ),
+      );
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Edit queued message"]',
+          )!
+          .click(),
+      );
+
+      const editor = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Edit queued message"]',
+      )!;
+      expect(editor.value).toBe("line one\nline two\nline three");
+      expect(editor.style.height).toBe("88px");
+    } finally {
+      scrollHeight.mockRestore();
+    }
+  });
+
+  it("shows queued images and files while editing", async () => {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+                {
+                  id: "file",
+                  name: "notes.md",
+                  mimeType: "text/markdown",
+                  kind: "file",
+                  size: 4,
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+
+    expect(container.querySelector('img[src="blob:shot"]')).toBeNull();
+    expect(container.textContent).not.toContain("notes.md");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+
+    expect(
+      container.querySelector('img[src="blob:shot"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("notes.md");
+    expect(
+      container.querySelector('[aria-label="Remove shot.png"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[aria-label="Attach files to queued message"]'),
+    ).not.toBeNull();
+  });
+
+  it("adds and removes attachments while editing a queued message", async () => {
+    const onEditQueuedMessage = vi.fn();
+    pickAttachments.mockResolvedValueOnce([
+      {
+        id: "extra",
+        name: "extra.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 8,
+        previewUrl: "blob:extra",
+      },
+    ]);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+                {
+                  id: "file",
+                  name: "notes.md",
+                  mimeType: "text/markdown",
+                  kind: "file",
+                  size: 4,
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+          onEditQueuedMessage,
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove shot.png"]')!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:shot"]')).toBeNull();
+    expect(container.textContent).toContain("notes.md");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Attach files to queued message"]',
+        )!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:extra"]')).not.toBeNull();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Save queued message"]',
+        )!
+        .click(),
+    );
+    expect(onEditQueuedMessage).toHaveBeenCalledWith("q1", "see these", [
+      expect.objectContaining({ id: "file", name: "notes.md" }),
+      expect.objectContaining({ id: "extra", name: "extra.png" }),
+    ]);
+  });
+
+  it("discards queued attachment edits on cancel", async () => {
+    const onEditQueuedMessage = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+          onEditQueuedMessage,
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove shot.png"]')!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    expect(onEditQueuedMessage).not.toHaveBeenCalled();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    expect(container.querySelector('img[src="blob:shot"]')).not.toBeNull();
+  });
+
+  it("discards in-flight queued attachments after canceling and editing the same message", async () => {
+    let finishPick: (files: Attachment[]) => void = () => undefined;
+    pickAttachments.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPick = resolve;
+        }),
+    );
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            { id: "q1", text: "see these", attachments: [] },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Attach files to queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () => {
+      finishPick([
+        {
+          id: "late",
+          name: "late.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 4,
+          previewUrl: "blob:late",
+        },
+      ]);
+    });
+
+    expect(container.querySelector('img[src="blob:late"]')).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Remove late.png"]'),
+    ).toBeNull();
+  });
+
+  it("marks queued rows as reorderable when more than one is waiting", async () => {
+    const composerProps = {
+      focused: true,
+      harness: "claude" as const,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    const onReorderQueuedMessages = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          ...composerProps,
+          queuedMessages: [
+            { id: "a", text: "first", attachments: [] },
+            { id: "b", text: "second", attachments: [] },
+          ],
+          onReorderQueuedMessages,
+        }),
+      ),
+    );
+
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>("[data-message-queue-row]"),
+    ];
+    expect(rows.map((row) => row.dataset.messageQueueRow)).toEqual(["a", "b"]);
+    expect(
+      rows.every((row) => row.classList.contains("queue-reorder-item")),
+    ).toBe(true);
+    expect(
+      container.querySelectorAll("[data-message-queue] [data-no-drag]").length,
+    ).toBeGreaterThan(0);
+
+    const media = vi.spyOn(window, "matchMedia").mockReturnValue({
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    } as MediaQueryList);
+    try {
+      rows.forEach((row, index) => {
+        vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+          x: 0,
+          y: index * 28,
+          top: index * 28,
+          left: 0,
+          bottom: (index + 1) * 28,
+          right: 300,
+          width: 300,
+          height: 28,
+          toJSON() {
+            return {};
+          },
+        } as DOMRect);
+      });
+
+      await act(async () => {
+        rows[0].dispatchEvent(
+          new PointerEvent("pointerdown", {
+            button: 0,
+            clientX: 40,
+            clientY: 14,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", {
+            clientX: 40,
+            clientY: 42,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", {
+            clientX: 40,
+            clientY: 42,
+            pointerId: 1,
+            bubbles: true,
+          }),
+        );
+      });
+      expect(onReorderQueuedMessages).toHaveBeenCalledWith(["b", "a"]);
+    } finally {
+      media.mockRestore();
+    }
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          ...composerProps,
+          queuedMessages: [{ id: "a", text: "first", attachments: [] }],
+          onReorderQueuedMessages,
+        }),
+      ),
+    );
+    expect(container.querySelector(".queue-reorder-item")).toBeNull();
   });
 });

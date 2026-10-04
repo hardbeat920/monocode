@@ -3,9 +3,11 @@ import { appendPreparingHandoff } from "./handoff";
 import {
   canDispatchQueuedHead,
   dequeueQueuedMessage,
+  editQueuedMessage,
   isEditingQueuedHead,
   queuedHead,
   queuedMessageForSubmit,
+  reorderQueuedMessages,
 } from "./messageQueue";
 import { newSession, type QueuedMessage, type Session } from "./session";
 
@@ -122,5 +124,68 @@ describe("queuedMessageForSubmit", () => {
       queuedMessageForSubmit(chat({ queueStatus: "paused" }), "a", "steer")?.id,
     ).toBe("a");
     expect(queuedMessageForSubmit(chat(), "missing", "steer")).toBeUndefined();
+  });
+});
+
+describe("reorderQueuedMessages", () => {
+  it("moves a later follow-up to the head", () => {
+    const next = reorderQueuedMessages(
+      chat({
+        queuedMessages: [queued("a"), queued("b"), queued("c")],
+      }),
+      ["c", "a", "b"],
+    );
+    expect(next.queuedMessages?.map((message) => message.id)).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
+    expect(queuedHead(next)?.id).toBe("c");
+    expect(canDispatchQueuedHead(next)).toBe(true);
+  });
+
+  it("leaves a one-item or already-ordered queue alone", () => {
+    const one = chat({ queuedMessages: [queued("a")] });
+    expect(reorderQueuedMessages(one, ["a"])).toBe(one);
+    const same = chat();
+    expect(reorderQueuedMessages(same, ["a", "b"])).toBe(same);
+  });
+
+  it("ignores a list that is not a permutation of the current ids", () => {
+    const session = chat();
+    expect(reorderQueuedMessages(session, ["b"])).toBe(session);
+    expect(reorderQueuedMessages(session, ["a", "b", "c"])).toBe(session);
+    expect(reorderQueuedMessages(session, ["a", "missing"])).toBe(session);
+    expect(reorderQueuedMessages(session, ["a", "a"])).toBe(session);
+  });
+});
+
+describe("editQueuedMessage", () => {
+  it("writes text and attachments then clears the editing mark", () => {
+    const image = {
+      id: "img",
+      name: "shot.png",
+      mimeType: "image/png",
+      kind: "image" as const,
+      size: 10,
+    };
+    const next = editQueuedMessage(
+      chat({ editingQueuedMessageId: "a" }),
+      "a",
+      "updated",
+      [image],
+    );
+    expect(next.queuedMessages?.[0]).toEqual({
+      id: "a",
+      text: "updated",
+      attachments: [image],
+    });
+    expect(next.queuedMessages?.[1]?.text).toBe("second");
+    expect(next.editingQueuedMessageId).toBeUndefined();
+  });
+
+  it("leaves a missing id unchanged", () => {
+    const session = chat();
+    expect(editQueuedMessage(session, "missing", "x", [])).toBe(session);
   });
 });
