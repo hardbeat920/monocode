@@ -338,21 +338,44 @@ export async function spawnChild(
   account?: { provider: "claude" | "codex"; id: string },
   binaryProvider?: ConfigurableBinaryProvider,
 ): Promise<void> {
+  const previousLive = livePid.get(sessionId);
+  const previousExited = exitedPid.get(sessionId);
   retireChild(sessionId);
   pendingExit.delete(sessionId);
   ownedChildren.add(sessionId);
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
-  const pid = await invoke<number>("harness_spawn", {
-    sessionId,
-    command,
-    args,
-    cwd,
-    account,
-    binaryProvider,
-    binaryPath,
-  });
+  let pid: number;
+  try {
+    pid = await invoke<number>("harness_spawn", {
+      sessionId,
+      command,
+      args,
+      cwd,
+      account,
+      binaryProvider,
+      binaryPath,
+    });
+  } catch (error) {
+    // A rejected spawn can leave the previous child running, so keep its
+    // output flowing.
+    const restored = [previousLive, previousExited];
+    const retired = retiredPids.get(sessionId);
+    if (retired) {
+      retiredPids.set(
+        sessionId,
+        retired.filter((old) => !restored.includes(old)),
+      );
+    }
+    if (previousLive != null && !livePid.has(sessionId)) {
+      livePid.set(sessionId, previousLive);
+    }
+    if (previousExited != null && !exitedPid.has(sessionId)) {
+      exitedPid.set(sessionId, previousExited);
+    }
+    throw error;
+  }
   if (typeof pid !== "number" || pid <= 0) return;
   // The OS can hand a retired child's pid to the new one.
   const retired = retiredPids.get(sessionId);

@@ -303,6 +303,34 @@ describe("child bridge", () => {
     release();
   });
 
+  it("keeps the running child's output when a replacement fails to spawn", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "harness_spawn") return 41;
+    });
+    const lines: string[] = [];
+    const exit = vi.fn();
+    child.watchChild("thread", (line) => lines.push(line), exit);
+    await child.spawnChild("thread", "/bin/claude", [], "/repo");
+
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "harness_spawn") throw new Error("bad cwd");
+    });
+    await expect(
+      child.spawnChild("thread", "/bin/claude", [], "/missing"),
+    ).rejects.toThrow("bad cwd");
+    emit("harness-stdout", { sessionId: "thread", line: "still here", pid: 41 });
+    emit("harness-exit", { sessionId: "thread", code: 0, pid: 41 });
+
+    expect(lines).toEqual(["still here"]);
+    expect(exit).toHaveBeenCalledWith(0);
+    release();
+  });
+
   it("does not hold output for children another window owns", async () => {
     installResolvedListeners();
     const child = await loadChild();
