@@ -447,6 +447,7 @@ export async function handleAgentApp(
               ? "completed"
               : "failed",
         messages: thread.messages.map(
+          /** Keep rich provider activity out of the CLI's answer payload. */
           ({ id: messageId, role, text, createdAt }) => ({
             id: messageId,
             role,

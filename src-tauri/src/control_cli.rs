@@ -528,6 +528,7 @@ mod tests {
         assert_eq!(quoted("/Users/a\\b/MonoCode"), "'/Users/a\\b/MonoCode'");
         assert_eq!(quoted("/Users/it's/MonoCode"), r"'/Users/it'\''s/MonoCode'");
     }
+    /// Keep the app CLI allowlist and generated help aligned for every action.
     #[test]
     fn app_mode_exposes_only_app_actions_and_safe_request_ids() {
         assert!(matches!(

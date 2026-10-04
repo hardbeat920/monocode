@@ -74,6 +74,7 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Provide an Operator caller and same-project peer with the CLI host mocked. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";
