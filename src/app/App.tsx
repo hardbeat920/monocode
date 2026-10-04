@@ -200,6 +200,7 @@ import {
   releaseNotesTitle,
 } from "./model/releaseNotes";
 import { mergeOrderedSubset, orderByIds } from "../shared/lib/reorder";
+import { useStateRef } from "../shared/lib/useStateRef";
 import {
   addTerminalToDock,
   applyDockGridStyle,
@@ -929,7 +930,9 @@ function Workspace({
   history: bootHistory = [],
   historyCwd: bootHistoryCwd = null,
 }: AppProps) {
-  const [projectCwd, setProjectCwd] = useState(
+  // The ref tracks the latest requested project so `followProject` right
+  // after an opener's `setProjectCwd` compares against it, not a stale render.
+  const [projectCwd, setProjectCwd, projectCwdRef] = useStateRef(
     () =>
       windowTransfer?.projectCwd ??
       resumed?.projectCwd ??
@@ -1224,9 +1227,6 @@ function Workspace({
     },
     [workspaceNavigation.cancel],
   );
-
-  const projectCwdRef = useRef(projectCwd);
-  projectCwdRef.current = projectCwd;
   const searchViewOpenRef = useRef(searchViewOpen);
   searchViewOpenRef.current = searchViewOpen;
   const inboxViewOpenRef = useRef(inboxViewOpen);
