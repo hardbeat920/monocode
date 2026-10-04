@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if command -v apt-get >/dev/null 2>&1; then
+  # GitHub's Ubuntu images ship LLVM's libunwind-14-dev, which conflicts with
+  # the libunwind-dev that libgstreamer1.0-dev needs.
+  if [[ "${GITHUB_ACTIONS:-}" == true ]] && dpkg -s libunwind-14-dev >/dev/null 2>&1; then
+    sudo apt-get remove -y libunwind-14-dev
+  fi
   sudo apt-get update
   sudo apt-get install -y build-essential clang cmake pkg-config libclang-dev \
     libasound2-dev libssl-dev libfontconfig1-dev libfreetype6-dev libdbus-1-dev \

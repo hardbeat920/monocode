@@ -84,7 +84,8 @@ it(
       await run("stop").catch(() => undefined);
       for (let i = 0; i < 50 && existsSync(join(directory, "running.json")); i++)
         await new Promise((resolve) => setTimeout(resolve, 100));
-      rmSync(directory, { recursive: true, force: true });
+      // Windows can hold the host's files briefly after it exits.
+      rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     });
     // Tests never install a login service; `--no-service` also leaves an
     // existing one alone.
