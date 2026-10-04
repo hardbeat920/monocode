@@ -1815,11 +1815,9 @@ fn set_archived(conn: &Connection, session_id: &str, archived: bool) -> rusqlite
         return Ok(true);
     }
     let exists = conn
-        .query_row(
-            "SELECT 1 FROM sessions WHERE id = ?1",
-            [session_id],
-            |_| Ok(()),
-        )
+        .query_row("SELECT 1 FROM sessions WHERE id = ?1", [session_id], |_| {
+            Ok(())
+        })
         .optional()?
         .is_some();
     if !exists {

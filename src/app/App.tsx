@@ -4664,6 +4664,7 @@ function Workspace({
               activeTabId: activeTabIdRef.current,
               dirtyFiles: dirtyFilesRef.current,
             }),
+            /** Apply removal state and return the archive result to Operator. */
             apply: (change) => {
               if (change.type === "stopped") {
                 const next = sessionsRef.current.map((session) =>
@@ -9333,15 +9334,19 @@ function Workspace({
             archive: async (id, archived) => {
               const result = await archiveOperatorSession(id, archived, {
                 callerId: source.id,
+                /** Read the newest renderer session after storage lookup. */
                 liveSession: (sessionId) =>
                   sessionsRef.current.find((session) => session.id === sessionId),
+                /** Include both UI busy state and an active orchestrator run. */
                 isBusy: (sessionId) =>
                   !!sessionsRef.current.find((session) => session.id === sessionId)?.busy ||
                   !!orchestrator.run(sessionId),
+                /** Restrict persisted-session lookup to the caller's project. */
                 persistedSession: async (sessionId) => {
                   const saved = await listSessionsByProject(source.cwd);
                   return saved.find((session) => session.id === sessionId);
                 },
+                /** Close through UI safeguards and return storage failures intact. */
                 archiveView: async (sessionId) => {
                   const outcome: { changed?: boolean; error?: unknown } = {};
                   const completed = await onRemoveHistorySession(
@@ -9358,6 +9363,7 @@ function Workspace({
                       : {}),
                   };
                 },
+                /** Persist restoration and refresh the visible history flag. */
                 setArchived: async (sessionId, value) => {
                   const changed = await setSessionArchived(sessionId, value);
                   setHistory((current) =>
