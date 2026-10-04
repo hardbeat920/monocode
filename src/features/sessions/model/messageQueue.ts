@@ -1,3 +1,4 @@
+import { orderByIds } from "../../../shared/lib/reorder";
 import { isPreparingHandoff } from "./handoff";
 import type { QueuedMessage, Session } from "./session";
 
@@ -61,4 +62,20 @@ export function queuedMessageForSubmit(
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;
+}
+
+/** Rewrite send order. Auto-dispatch always takes the new head. */
+export function reorderQueuedMessages(
+  session: Session,
+  orderedIds: string[],
+): Session {
+  const current = session.queuedMessages ?? [];
+  if (current.length < 2) return session;
+  if (orderedIds.length !== current.length) return session;
+  const currentIds = current.map((message) => message.id);
+  if (new Set(orderedIds).size !== orderedIds.length) return session;
+  const allowed = new Set(currentIds);
+  if (orderedIds.some((id) => !allowed.has(id))) return session;
+  if (orderedIds.every((id, index) => id === currentIds[index])) return session;
+  return { ...session, queuedMessages: orderByIds(current, orderedIds) };
 }

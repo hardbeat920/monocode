@@ -111,6 +111,7 @@ describe("pane to title tab dragging", () => {
       onDeleteQueuedMessage: noop,
       onEditQueuedMessage: noop,
       onQueuedMessageEditingChange: noop,
+      onReorderQueuedMessages: noop,
       onSteerQueuedMessage: noop,
       onResumeQueue: noop,
       onApproval: noop,

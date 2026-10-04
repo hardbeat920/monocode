@@ -1862,4 +1862,56 @@ describe("Composer question focus", () => {
     ).not.toBeNull();
     expect(container.textContent).toContain("notes.md");
   });
+
+  it("marks queued rows as reorderable when more than one is waiting", async () => {
+    const composerProps = {
+      focused: true,
+      harness: "claude" as const,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    const onReorderQueuedMessages = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          ...composerProps,
+          queuedMessages: [
+            { id: "a", text: "first", attachments: [] },
+            { id: "b", text: "second", attachments: [] },
+          ],
+          onReorderQueuedMessages,
+        }),
+      ),
+    );
+
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>("[data-message-queue-row]"),
+    ];
+    expect(rows.map((row) => row.dataset.messageQueueRow)).toEqual(["a", "b"]);
+    expect(
+      rows.every((row) => row.classList.contains("queue-reorder-item")),
+    ).toBe(true);
+    expect(
+      container.querySelectorAll("[data-message-queue] [data-no-drag]").length,
+    ).toBeGreaterThan(0);
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          ...composerProps,
+          queuedMessages: [{ id: "a", text: "first", attachments: [] }],
+          onReorderQueuedMessages,
+        }),
+      ),
+    );
+    expect(container.querySelector(".queue-reorder-item")).toBeNull();
+  });
 });
