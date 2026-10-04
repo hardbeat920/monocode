@@ -7,10 +7,15 @@ import type { HostProvider } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
 import { HostStore } from "./store";
 import { readAttachmentChunk, writeAttachmentChunk } from "./attachments";
+import { CONTINUE_PROMPT } from "../src/features/sessions/model/inFlight";
 import {
   USAGE_LIMIT_RESUME_GRACE_MS,
   usageLimitResumeDue,
 } from "../src/features/sessions/model/usageLimit";
+
+// A usage limit that resets well after the test, and one already past reset.
+const LATER = Date.now() + 60 * 60_000;
+const DUE = Date.now() - USAGE_LIMIT_RESUME_GRACE_MS - 1;
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -885,22 +890,22 @@ describe("headless session ownership", () => {
       });
       await vi.waitFor(() => expect(turns.at(-1)?.input.text).toBe("Work"));
       const turn = turns.pop()!;
-      turn.input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+      turn.input.onEvent({ type: "usage.limited", resetsAt: LATER });
       turn.finish();
       await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
       return store.session(id).session.usageLimit;
     };
     expect(await limit("off", false)).toEqual({
-      resetsAt: 5_000,
+      resetsAt: LATER,
       resumeAtReset: false,
     });
     expect(await limit("on", true)).toEqual({
-      resetsAt: 5_000,
+      resetsAt: LATER,
       resumeAtReset: true,
     });
     // An older desktop never sends the setting; it must not auto-resume.
     expect(await limit("older", undefined)).toEqual({
-      resetsAt: 5_000,
+      resetsAt: LATER,
       resumeAtReset: false,
     });
   });
@@ -915,14 +920,14 @@ describe("headless session ownership", () => {
       resumeAtReset: true,
     });
     await vi.waitFor(() => expect(turns).toHaveLength(1));
-    turns[0].input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+    turns[0].input.onEvent({ type: "usage.limited", resetsAt: LATER });
     turns[0].finish();
     await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
 
     engine.command({ type: "usageLimit", commandId: "cancel", sessionId: id, action: "disarm" });
-    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: 5_000, resumeAtReset: false });
+    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: LATER, resumeAtReset: false });
     engine.command({ type: "usageLimit", commandId: "arm", sessionId: id, action: "arm" });
-    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: 5_000, resumeAtReset: true });
+    expect(store.session(id).session.usageLimit).toEqual({ resetsAt: LATER, resumeAtReset: true });
     engine.command({ type: "usageLimit", commandId: "dismiss", sessionId: id, action: "dismiss" });
     expect(store.session(id).session.usageLimit).toBeUndefined();
   });
@@ -937,7 +942,7 @@ describe("headless session ownership", () => {
       resumeAtReset: true,
     });
     await vi.waitFor(() => expect(turns).toHaveLength(1));
-    turns[0].input.onEvent({ type: "usage.limited", resetsAt: 5_000 });
+    turns[0].input.onEvent({ type: "usage.limited", resetsAt: LATER });
     turns[0].finish();
     await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
     expect(store.session(id).session.usageLimit?.resumeAtReset).toBe(true);
@@ -958,6 +963,72 @@ describe("headless session ownership", () => {
     expect(store.session(id).session.usageLimit).toBeUndefined();
   });
 
+  it.each([true, false])(
+    "continues at the reset only when resume is armed (armed: %s)",
+    async (armed) => {
+      const { engine, store, turns, id } = setup();
+      engine.command({
+        type: "send",
+        commandId: "limited",
+        sessionId: id,
+        text: "Work",
+        resumeAtReset: armed,
+      });
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      turns[0].input.onEvent({ type: "usage.limited", resetsAt: DUE });
+      turns[0].finish();
+      if (armed) {
+        await vi.waitFor(() => expect(turns).toHaveLength(2));
+        expect(turns[1].input.text).toBe(CONTINUE_PROMPT);
+        expect(store.session(id).session.usageLimit).toBeUndefined();
+        turns[1].finish();
+      } else {
+        await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(turns).toHaveLength(1);
+      }
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    },
+  );
+
+  it("resumes an armed limit that reset while the host was stopped", async () => {
+    const { engine, store, provider, turns, id } = setup();
+    engine.command({
+      type: "send",
+      commandId: "limited",
+      sessionId: id,
+      text: "Work",
+      resumeAtReset: true,
+    });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].input.onEvent({ type: "usage.limited", resetsAt: LATER });
+    turns[0].finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    await engine.close();
+    const stopped = store.session(id);
+    store.save(
+      {
+        ...stopped,
+        revision: stopped.revision + 1,
+        session: {
+          ...stopped.session,
+          usageLimit: { resetsAt: DUE, resumeAtReset: true },
+        },
+      },
+      { type: "test" },
+    );
+
+    const restarted = new HostEngine(store, { codex: provider, claude: provider });
+    try {
+      await vi.waitFor(() => expect(turns).toHaveLength(2));
+      expect(turns[1].input.text).toBe(CONTINUE_PROMPT);
+      turns[1].finish();
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it.each([
     ["before", false],
     ["after", true],
@@ -973,7 +1044,7 @@ describe("headless session ownership", () => {
         resumeAtReset: true,
       });
       await vi.waitFor(() => expect(turns).toHaveLength(1));
-      const limited = { type: "usage.limited", resetsAt: 5_000 } as const;
+      const limited = { type: "usage.limited", resetsAt: DUE } as const;
       if (!lateEvent) turns[0].input.onEvent(limited);
       engine.command({
         type: "cancel",
@@ -985,11 +1056,14 @@ describe("headless session ownership", () => {
       await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
       const stopped = store.session(id).session;
       expect(stopped.usageLimit).toEqual({
-        resetsAt: 5_000,
+        resetsAt: DUE,
         resumeAtReset: false,
       });
+      // The reset has passed, so an armed limit would resume right away.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(turns).toHaveLength(1);
       expect(
-        usageLimitResumeDue(stopped, 5_000 + USAGE_LIMIT_RESUME_GRACE_MS),
+        usageLimitResumeDue(stopped, Date.now()),
       ).toBe(false);
     },
   );

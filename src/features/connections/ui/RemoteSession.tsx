@@ -22,6 +22,7 @@ import type { Worktree } from "../../source-control/model/worktrees";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import { registerRemoteSessionActions } from "../model/remoteSessionActions";
 import { loadResumeAtReset } from "../../settings/model/settings";
+import { CONTINUE_PROMPT } from "../../sessions/model/inFlight";
 import {
   clearPendingRemoteCommand,
   loadRemoteSession,
@@ -1267,7 +1268,10 @@ function ConnectedRemoteSession({
     onQueuedMessageEditingChange: noop,
     onSteerQueuedMessage: noop,
     onResumeQueue: noop,
-    onUsageLimitResume: noop,
+    onUsageLimitResume: () => {
+      // The host clears the limit when it accepts this turn.
+      if (hostSession?.usageLimit) submit(CONTINUE_PROMPT);
+    },
     onUsageLimitResumeAtReset: (_, enabled) =>
       usageLimit(enabled ? "arm" : "disarm"),
     onUsageLimitDismiss: () => usageLimit("dismiss"),

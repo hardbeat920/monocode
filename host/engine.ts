@@ -9,7 +9,12 @@ import {
 } from "../src/integrations/harness/core/apply";
 import { resolveModel } from "../src/features/sessions/model/models";
 import { isVisionImage } from "../src/features/sessions/model/attachments";
-import { disarmUsageLimit } from "../src/features/sessions/model/usageLimit";
+import { CONTINUE_PROMPT } from "../src/features/sessions/model/inFlight";
+import {
+  disarmUsageLimit,
+  USAGE_LIMIT_RESUME_GRACE_MS,
+  usageLimitResumeDue,
+} from "../src/features/sessions/model/usageLimit";
 import type {
   HarnessEvent,
   HarnessSessionInput,
@@ -285,6 +290,7 @@ export class HostEngine {
     }
   >();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private closing = false;
 
   constructor(
@@ -305,6 +311,7 @@ export class HostEngine {
           { type: "interrupted" },
         );
       }
+      this.scheduleResume(value.session.id);
       if (value.session.providerSessionId)
         this.provider(value.session.harness).bind(
           value.session.id,
@@ -352,12 +359,77 @@ export class HostEngine {
   }
 
   private save(value: HostSession, event: unknown): HostSession {
-    return this.store.transaction(() =>
+    const saved = this.store.transaction(() =>
       this.store.save(
         { ...value, revision: value.revision + 1, updatedAt: Date.now() },
         event,
       ),
     );
+    this.scheduleResume(saved.session.id);
+    return saved;
+  }
+
+  /**
+   * Send the continue turn for an armed usage limit once it resets. The host
+   * owns this so the session resumes with no desktop open, and only once.
+   */
+  private scheduleResume(id: string): void {
+    clearTimeout(this.resumeTimers.get(id));
+    this.resumeTimers.delete(id);
+    if (this.closing) return;
+    const value = this.stored(id);
+    const limit = value?.session.usageLimit;
+    if (
+      !value ||
+      value.status === "running" ||
+      !limit?.resumeAtReset ||
+      limit.resetsAt == null
+    )
+      return;
+    const wait = limit.resetsAt + USAGE_LIMIT_RESUME_GRACE_MS - Date.now();
+    // Re-check every minute at most: timers drift while the machine sleeps.
+    const timer = setTimeout(() => this.resume(id), Math.max(0, Math.min(wait, 60_000)));
+    timer.unref?.();
+    this.resumeTimers.set(id, timer);
+  }
+
+  private stored(id: string): HostSession | undefined {
+    try {
+      return this.store.session(id);
+    } catch {
+      return undefined; // Deleted since the timer was set.
+    }
+  }
+
+  private resume(id: string): void {
+    this.resumeTimers.delete(id);
+    if (this.closing) return;
+    const value = this.stored(id);
+    if (!value) return;
+    if (
+      value.status === "running" ||
+      !usageLimitResumeDue(value.session, Date.now())
+    )
+      return this.scheduleResume(id);
+    try {
+      this.command({
+        type: "send",
+        commandId: randomUUID(),
+        sessionId: id,
+        text: CONTINUE_PROMPT,
+        // The user armed this limit; a repeat limit stays armed.
+        resumeAtReset: true,
+      });
+    } catch (error) {
+      console.error(
+        "Resume at reset failed; retrying:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+      // A branch switch, for one, blocks sends for a while; try again later.
+      const timer = setTimeout(() => this.resume(id), 60_000);
+      timer.unref?.();
+      this.resumeTimers.set(id, timer);
+    }
   }
 
   updateSession(id: string, patch: Parameters<HostStore["updateSession"]>[1]) {
@@ -761,6 +833,7 @@ export class HostEngine {
     if (live) live.value = saved;
     // A receipt means durable host acceptance, not provider completion.
     effect?.(saved);
+    this.scheduleResume(saved.session.id);
     return receipt;
   }
 
@@ -981,6 +1054,8 @@ export class HostEngine {
     this.closing = true;
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
+    for (const timer of this.resumeTimers.values()) clearTimeout(timer);
+    this.resumeTimers.clear();
     await Promise.all(
       [...this.running.keys()].map((id) =>
         this.provider(this.store.session(id).session.harness).stop(id),
