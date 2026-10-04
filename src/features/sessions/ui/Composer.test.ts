@@ -2037,6 +2037,83 @@ describe("Composer question focus", () => {
     expect(container.querySelector('img[src="blob:shot"]')).not.toBeNull();
   });
 
+  it("discards in-flight queued attachments after canceling and editing the same message", async () => {
+    let finishPick: (files: Attachment[]) => void = () => undefined;
+    pickAttachments.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPick = resolve;
+        }),
+    );
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            { id: "q1", text: "see these", attachments: [] },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Attach files to queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+    await act(async () => {
+      finishPick([
+        {
+          id: "late",
+          name: "late.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 4,
+          previewUrl: "blob:late",
+        },
+      ]);
+    });
+
+    expect(container.querySelector('img[src="blob:late"]')).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Remove late.png"]'),
+    ).toBeNull();
+  });
+
   it("marks queued rows as reorderable when more than one is waiting", async () => {
     const composerProps = {
       focused: true,

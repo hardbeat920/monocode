@@ -381,11 +381,16 @@ function MessageQueue({
   onEditingChangeRef.current = onEditingChange;
   const editingIdRef = useRef(editingId);
   editingIdRef.current = editingId;
+  const editGenerationRef = useRef(0);
   const editAttachmentsRef = useRef(editAttachments);
   editAttachmentsRef.current = editAttachments;
   const editOriginalIdsRef = useRef<Set<string>>(new Set());
+  const beginEditSession = () => {
+    editGenerationRef.current += 1;
+  };
   useEffect(() => {
     return () => {
+      beginEditSession();
       if (editingIdRef.current) onEditingChangeRef.current?.();
       for (const file of editAttachmentsRef.current) {
         if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
@@ -413,6 +418,7 @@ function MessageQueue({
     }
   };
   const clearEdit = () => {
+    beginEditSession();
     setEditingId(undefined);
     setEditDraft("");
     setEditAttachments([]);
@@ -423,6 +429,7 @@ function MessageQueue({
     if (editingId && editingId !== message.id) {
       discardAddedAttachments(editAttachments);
     }
+    beginEditSession();
     setEditingId(message.id);
     setEditDraft(message.text);
     setEditAttachments(message.attachments);
@@ -448,6 +455,21 @@ function MessageQueue({
     if (incoming.length === 0) return;
     setEditAttachments((prev) => mergeAttachments(prev, incoming));
   };
+  const acceptQueuedAttachments = (
+    messageId: string,
+    generation: number,
+    files: Attachment[],
+  ) => {
+    if (
+      editingIdRef.current === messageId &&
+      editGenerationRef.current === generation
+    ) {
+      addEditAttachments(files);
+      return true;
+    }
+    files.forEach(revokeAttachment);
+    return false;
+  };
   const removeEditAttachment = (id: string) => {
     const removed = editAttachments.find((file) => file.id === id);
     if (removed && !editOriginalIdsRef.current.has(removed.id)) {
@@ -457,33 +479,24 @@ function MessageQueue({
   };
   const attachToQueued = (messageId: string) => {
     if (!attachmentsSupported) return;
+    const generation = editGenerationRef.current;
     void pickAttachments().then((files) => {
-      if (editingIdRef.current !== messageId) {
-        files.forEach(revokeAttachment);
-        return;
-      }
-      addEditAttachments(files);
+      if (!acceptQueuedAttachments(messageId, generation, files)) return;
       editRef.current?.focus();
     });
   };
   const ingestQueuedFiles = (messageId: string, files: File[]) => {
     if (!attachmentsSupported || files.length === 0) return;
+    const generation = editGenerationRef.current;
     void attachmentsFromFiles(files).then((pasted) => {
-      if (editingIdRef.current !== messageId) {
-        pasted.forEach(revokeAttachment);
-        return;
-      }
-      addEditAttachments(pasted);
+      acceptQueuedAttachments(messageId, generation, pasted);
     });
   };
   const ingestQueuedPaths = (messageId: string, paths: string[]) => {
     if (!attachmentsSupported || paths.length === 0) return;
+    const generation = editGenerationRef.current;
     void attachmentsFromPaths(paths).then((pasted) => {
-      if (editingIdRef.current !== messageId) {
-        pasted.forEach(revokeAttachment);
-        return;
-      }
-      addEditAttachments(pasted);
+      acceptQueuedAttachments(messageId, generation, pasted);
     });
   };
   useEffect(() => {
@@ -521,13 +534,10 @@ function MessageQueue({
     const text = event.clipboardData.getData("text/plain");
     if (text && !isFileReferenceText(text)) return;
     event.preventDefault();
+    const generation = editGenerationRef.current;
     void nativeClipboardAttachments(text)
       .then(({ files: pasted }) => {
-        if (editingIdRef.current !== messageId) {
-          pasted.forEach(revokeAttachment);
-          return;
-        }
-        addEditAttachments(pasted);
+        acceptQueuedAttachments(messageId, generation, pasted);
       })
       .catch(() => undefined);
   };

@@ -267,6 +267,63 @@ describe("Composer Explorer file drops", () => {
       ),
     ).toBeNull();
   });
+
+  it("discards a late Explorer drop after canceling and editing the same message", async () => {
+    let finishInspect: (value?: unknown) => void = () => undefined;
+    invoke.mockImplementation((command: string, args: { paths?: string[] }) => {
+      if (command === "inspect_paths") {
+        return new Promise((resolve) => {
+          finishInspect = resolve;
+        }).then(() =>
+          (args.paths ?? []).map((path) => ({
+            path,
+            name: path.split("/").pop() ?? path,
+            size: 12,
+            isDir: false,
+          })),
+        );
+      }
+      return Promise.resolve([]);
+    });
+
+    const session = await renderSession(true);
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      window.dispatchEvent(
+        explorerDrag({
+          type: "drop",
+          path: "/project/src/late.ts",
+          x: 100,
+          y: 40,
+        }),
+      );
+    });
+
+    await act(async () =>
+      session
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message edit"]',
+        )!
+        .click(),
+    );
+    await startQueuedEdit(session);
+
+    await act(async () => {
+      finishInspect();
+    });
+
+    expect(
+      container.querySelector(
+        '[data-queued-message-edit] [title="/project/src/late.ts"]',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[data-composer-box] [title="/project/src/late.ts"]',
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("Composer native and Tauri file drops", () => {
