@@ -1802,4 +1802,64 @@ describe("Composer question focus", () => {
       scrollHeight.mockRestore();
     }
   });
+
+  it("shows queued images and files while editing", async () => {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            {
+              id: "q1",
+              text: "see these",
+              attachments: [
+                {
+                  id: "img",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  kind: "image",
+                  size: 10,
+                  previewUrl: "blob:shot",
+                },
+                {
+                  id: "file",
+                  name: "notes.md",
+                  mimeType: "text/markdown",
+                  kind: "file",
+                  size: 4,
+                },
+              ],
+            },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+
+    expect(container.querySelector('img[src="blob:shot"]')).toBeNull();
+    expect(container.textContent).not.toContain("notes.md");
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Edit queued message"]',
+        )!
+        .click(),
+    );
+
+    expect(
+      container.querySelector('img[src="blob:shot"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("notes.md");
+  });
 });

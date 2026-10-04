@@ -425,29 +425,38 @@ function MessageQueue({
               />
               {editing ? (
                 <>
-                  <textarea
-                    ref={editRef}
-                    autoFocus
-                    aria-label="Edit queued message"
-                    value={editDraft}
-                    rows={1}
-                    onChange={(event) => {
-                      const field = event.currentTarget;
-                      setEditDraft(field.value);
-                      resizeComposer(field);
-                    }}
-                    onKeyDown={(event) => {
-                      if (isImeComposition(event.nativeEvent)) return;
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelEdit();
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        saveEdit(message);
-                      }
-                    }}
-                    className="min-h-6 max-h-40 min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] leading-4 text-content outline-none focus:border-content/30"
-                  />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <textarea
+                      ref={editRef}
+                      autoFocus
+                      aria-label="Edit queued message"
+                      value={editDraft}
+                      rows={1}
+                      onChange={(event) => {
+                        const field = event.currentTarget;
+                        setEditDraft(field.value);
+                        resizeComposer(field);
+                      }}
+                      onKeyDown={(event) => {
+                        if (isImeComposition(event.nativeEvent)) return;
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelEdit();
+                        } else if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          saveEdit(message);
+                        }
+                      }}
+                      className="min-h-6 max-h-40 w-full resize-none overflow-y-auto rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] leading-4 text-content outline-none focus:border-content/30"
+                    />
+                    {message.attachments.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {message.attachments.map((file) => (
+                          <AttachmentChip key={file.id} attachment={file} />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <button
                     type="button"
                     title="Save queued message"
