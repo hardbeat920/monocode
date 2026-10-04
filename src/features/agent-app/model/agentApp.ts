@@ -40,6 +40,7 @@ export type AppSessionListing = {
   model: string;
   busy: boolean;
   hasDraft: boolean;
+  archived: boolean;
 };
 
 export type AppSessionPlacement = {
@@ -55,6 +56,7 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
+  archive(id: string, archived: boolean): Promise<void>;
   send(
     id: string,
     prompt: string,
@@ -83,6 +85,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.archive", ["sessionId"]],
+  ["sessions.unarchive", ["sessionId"]],
   [
     "sessions.start",
     [
@@ -281,6 +285,7 @@ function startLaunch(
   };
 }
 
+/** Validate and dispatch one project-scoped operator CLI request. */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
@@ -320,6 +325,24 @@ export async function handleAgentApp(
         limit: input.limit as number | undefined,
         maxChars: input.maxChars as number | undefined,
       });
+    }
+    case "sessions.archive":
+    case "sessions.unarchive": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const archived = action === "sessions.archive";
+      if (archived && id === source.id)
+        throw new Error(
+          "The current session cannot be archived by the app CLI",
+        );
+      const target = await projectSession(source, id, host);
+      if (
+        archived &&
+        (target.busy ||
+          (await host.sessions(source.cwd)).find((row) => row.id === id)?.busy)
+      )
+        throw new Error("Session is busy; try again when it finishes");
+      await host.archive(id, archived);
+      return { sessionId: id, archived };
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);

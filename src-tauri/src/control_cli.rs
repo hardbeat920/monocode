@@ -82,12 +82,14 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 15] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
+    "sessions.archive",
+    "sessions.unarchive",
     "sessions.start",
     "worktrees.list",
     "worktrees.create",
@@ -116,6 +118,11 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
+  sessions.archive {"sessionId":"..."}
+                  Archive an idle session in this project. History and drafts
+                  are preserved; this does not stop or delete anything.
+  sessions.unarchive {"sessionId":"..."}
+                  Restore an archived session in this project. No agent runs.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
@@ -154,6 +161,7 @@ Actions:
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
 
+sessions.list includes each session's archived state and continues to include archived sessions.
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
 Keep the same --request-id when retrying a call after an uncertain result.

@@ -9290,6 +9290,7 @@ function Workspace({
                   model: session.model,
                   busy: false,
                   hasDraft: !!session.draft,
+                  archived: !!session.archived,
                 });
               }
               for (const session of sessionsRef.current) {
@@ -9305,6 +9306,7 @@ function Workspace({
                   model: session.model,
                   busy: !!session.busy,
                   hasDraft: !!sessionDraftBlock(session),
+                  archived: byId.get(session.id)?.archived ?? false,
                 });
               }
               return [...byId.values()];
@@ -9318,6 +9320,25 @@ function Workspace({
                 sameProjectPath(target.cwd, source.cwd)
                 ? target
                 : null;
+            },
+            archive: async (id, archived) => {
+              const target =
+                sessionsRef.current.find((session) => session.id === id) ??
+                (await getSession(id));
+              if (
+                !target ||
+                target.orchestrationLeadId ||
+                !sameProjectPath(target.cwd, source.cwd) ||
+                target.busy ||
+                orchestrator.run(id)
+              )
+                throw new Error("Session is unavailable or busy in this project");
+              await setSessionArchived(id, archived);
+              setHistory((current) =>
+                current.map((entry) =>
+                  entry.id === id ? { ...entry, archived } : entry,
+                ),
+              );
             },
             send: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);
