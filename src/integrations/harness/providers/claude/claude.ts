@@ -968,7 +968,11 @@ function settleInlineAgentTask(live: Live, toolUseId: string): void {
 
 function handleResult(live: Live, rec: Record<string, unknown>): void {
   if (isSubagentMessage(rec)) return;
-  if (isReplayedTaskNotificationResult(rec)) return;
+  if (isReplayedTaskNotificationResult(rec)) {
+    // A limit reported for the replay must not carry over to the real turn.
+    live.usageLimit = null;
+    return;
+  }
   // A /compact result reports the summarizer call's usage, not the rebuilt
   // conversation level. The next real turn will provide the fresh reading.
   if (!live.manualCompaction) {

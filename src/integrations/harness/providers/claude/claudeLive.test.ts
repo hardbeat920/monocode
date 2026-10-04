@@ -1438,6 +1438,36 @@ describe("claude subagents", () => {
     expect(settled).toBe(true);
   });
 
+  it("drops a usage limit reported for a replayed background task", async () => {
+    const { events, turn } = await startTurn("s1");
+
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "rate_limit_event",
+      session_id: "sess_1",
+      rate_limit_info: { status: "rejected", resetsAt: 1 },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      num_turns: 0,
+      result: "",
+      origin: { kind: "task-notification" },
+    });
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      session_id: "sess_1",
+      is_error: true,
+      num_turns: 1,
+      result: "Something else went wrong",
+    });
+
+    await turn.catch(() => {});
+    expect(events.some((event) => event.type === "usage.limited")).toBe(false);
+  });
+
   it("does not end the turn on a subagent result", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;
