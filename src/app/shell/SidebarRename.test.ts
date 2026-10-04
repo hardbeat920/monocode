@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps } from "react";
+import { act, createElement, StrictMode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
@@ -719,6 +719,66 @@ describe("sidebar reorder affordances", () => {
           .className,
       ).not.toContain("cursor-grab");
     }
+  });
+});
+
+describe("sidebar new session rows", () => {
+  it("grows in only for a session that arrives after the list has rendered", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(() => ({ cancel: vi.fn() }) as unknown as Animation);
+    const animated = (property: string) =>
+      animate.mock.calls.flatMap(([keyframes], index) =>
+        property in (keyframes as Keyframe[])[0]
+          ? [animate.mock.contexts[index] as HTMLElement]
+          : [],
+      );
+    // Dev builds replay mount effects; the row must still animate, once.
+    const render = () =>
+      root.render(createElement(StrictMode, null, createElement(Sidebar, props)));
+    act(() => render());
+    expect(animate).not.toHaveBeenCalled();
+
+    props = {
+      ...props,
+      sessions: [
+        {
+          ...props.sessions[0],
+          id: "session-2",
+          createdAt: Date.now(),
+          updatedAt: props.sessions[0].updatedAt + 1,
+        },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    // The new card fades in where it lands; the row below slides down.
+    expect(animated("opacity")).toHaveLength(1);
+    expect(
+      animated("opacity")[0].closest("li")?.querySelector(
+        '[data-session-card="session-2"]',
+      ),
+    ).not.toBeNull();
+    expect(animated("transform")).toHaveLength(1);
+    expect(
+      animated("transform")[0].querySelector('[data-session-card="session-1"]'),
+    ).not.toBeNull();
+    const calls = animate.mock.calls.length;
+
+    props = {
+      ...props,
+      sessions: [
+        { ...props.sessions[0], id: "session-old", createdAt: 1 },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
+
+    // Reordering existing rows must not replay their entrance.
+    props = { ...props, sessions: [...props.sessions].reverse() };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
   });
 });
 

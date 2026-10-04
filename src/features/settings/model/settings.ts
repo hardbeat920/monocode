@@ -250,6 +250,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "highlight bubble send button tint",
   },
   {
+    id: "diff-colors",
+    section: "appearance",
+    label: "Diff colors",
+    keywords:
+      "colorblind color blind accessibility added removed red green blue orange high contrast changes",
+  },
+  {
     id: "hue",
     section: "appearance",
     label: "Hue",
@@ -376,6 +383,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Provider accounts",
     keywords:
       "account sign in login rename remove delete credentials profile usage limit quota exhausted",
+  },
+  {
+    id: "show-remaining-usage",
+    section: "providers",
+    label: "Show remaining usage",
+    keywords: "usage limit meter bar left used quota percent",
+  },
+  {
+    id: "mask-emails",
+    section: "providers",
+    label: "Mask account emails",
+    keywords: "email privacy blur hide screenshot account",
   },
   {
     id: "claude-hooks",

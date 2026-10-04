@@ -396,9 +396,9 @@ describe("model picker", () => {
     )!;
     act(() => favoritesTab.click());
 
-    const options = [
-      ...container.querySelectorAll('[role="option"]'),
-    ].map((option) => option.getAttribute("aria-label"));
+    const options = [...container.querySelectorAll('[role="option"]')].map(
+      (option) => option.getAttribute("aria-label"),
+    );
     expect(options).toEqual([
       "Auto, Cursor",
       "Muse Spark 1.3, Cursor",
@@ -506,9 +506,7 @@ describe("model picker", () => {
       'button[aria-haspopup="dialog"]',
     )!;
     act(() => modelTrigger.click());
-    expect(
-      container.querySelector('[role="menu"]'),
-    ).toBeNull();
+    expect(container.querySelector('[role="menu"]')).toBeNull();
     expect(
       container.querySelector('[role="dialog"][aria-label="Models"]'),
     ).not.toBeNull();
@@ -519,6 +517,46 @@ describe("model picker", () => {
     expect(fastPill.getAttribute("aria-pressed")).toBe("false");
     act(() => fastPill.click());
     expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" });
+  });
+
+  it("focuses the model search when the models submenu opens", async () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:composer-2.5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => modelTrigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+
+    // Focus is deferred one frame so the popover is on screen first.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+    const search = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search models"]',
+    )!;
+    expect(document.activeElement).toBe(search);
   });
 
   it("renders the OpenCode variant as a beside-picker pill", () => {
@@ -648,6 +686,77 @@ describe("model picker", () => {
     )!;
     expect(serviceTierPill.textContent).toBe("Standard");
     expect(serviceTierPill.querySelectorAll("svg")).toHaveLength(2);
+  });
+
+  it("shimmers only Codex max and ultra effort options", () => {
+    setHarnessModels("codex", [
+      {
+        id: "codex:gpt-5.6",
+        harness: "codex",
+        name: "GPT-5.6",
+        nativeId: "gpt-5.6",
+        settings: [
+          {
+            id: "reasoningEffort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [
+              { value: "low", label: "Low" },
+              { value: "high", label: "High" },
+              { value: "max", label: "Max" },
+              { value: "ultra", label: "Ultra" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "codex",
+          model: "codex:gpt-5.6",
+          values: { reasoningEffort: "high" },
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
+        ?.click(),
+    );
+    const effortRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Reasoning"))!;
+    hover(effortRow);
+
+    expect(container.querySelectorAll('[data-effort-tone="max"]')).toHaveLength(
+      1,
+    );
+    expect(
+      container.querySelectorAll('[data-effort-tone="ultra"]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll('[data-effort-tone="max"] .codex-effort-tile'),
+    ).toHaveLength(160);
+    const filledTiles = container.querySelectorAll(
+      '[data-effort-tone="max"] .codex-effort-tile--filled',
+    );
+    expect(filledTiles.length).toBeGreaterThanOrEqual(96);
+    expect(filledTiles.length).toBeLessThanOrEqual(112);
+    const high = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitemradio"]',
+      ),
+    ].find((button) => button.textContent === "High")!;
+    expect(high.classList.contains("codex-effort-option")).toBe(false);
   });
 
   it("groups the service tier inside the effort popover", () => {
@@ -796,7 +905,7 @@ describe("model picker", () => {
     });
   });
 
-  it("opens the model list directly when settings live beside the picker", () => {
+  it("opens the model list directly when settings live beside the picker", async () => {
     setHarnessModels("cursor", [
       {
         id: "cursor:composer-2.5",
@@ -841,6 +950,12 @@ describe("model picker", () => {
     )!;
     expect(flyout).not.toBeNull();
     expect(flyout.textContent).toContain("Composer 2.5");
+
+    // Search takes focus once the flyout is on screen.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(document.activeElement).toBe(
+      flyout.querySelector('input[aria-label="Search models"]'),
+    );
 
     const selected = flyout.querySelector<HTMLButtonElement>(
       '[role="option"][aria-selected="true"]',

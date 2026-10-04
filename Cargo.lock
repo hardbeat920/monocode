@@ -4804,7 +4804,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4855,7 +4855,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "monocode-locale",
  "regex",
@@ -4867,7 +4867,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-editor"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "avif-decode",
@@ -4893,7 +4893,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-engine"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4932,7 +4932,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-git"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "monocode-platform",
@@ -4948,7 +4948,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-harness"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4973,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-host"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4998,7 +4998,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-integrations"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -5015,7 +5015,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-layout"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "monocode-core",
  "rusqlite",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-locale"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "sys-locale",
@@ -5034,7 +5034,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-markdown"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -5046,7 +5046,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-package"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -5061,7 +5061,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-platform"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "block2 0.6.2",
@@ -5090,7 +5090,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-process"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "monocode-platform",
@@ -5106,7 +5106,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-remote"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "gethostname",
@@ -5134,7 +5134,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-settings"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "log",
  "monocode-core",
@@ -5146,7 +5146,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-store"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "monocode-git",
  "monocode-platform",
@@ -5158,7 +5158,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-terminal"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "monocode-platform",
@@ -5169,7 +5169,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-terminal-view"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -5183,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-ui"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -5197,7 +5197,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-updater"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5224,7 +5224,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-composer"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "gpui",
@@ -5246,7 +5246,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-files"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-inbox"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "futures",
@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-pages"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "futures",
@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-quick"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "gpui",
@@ -5340,7 +5340,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-remote"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "futures",
  "gpui",
@@ -5360,7 +5360,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-scm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "futures",
  "gpui",
@@ -5382,7 +5382,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-settings"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "chrono",
@@ -5406,7 +5406,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-transcript"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "gpui",
@@ -5430,7 +5430,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-view-workbench"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "gpui",
  "gpui-base",

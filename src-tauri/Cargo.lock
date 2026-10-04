@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "monocode"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "monocode-git",
@@ -2530,8 +2530,9 @@ dependencies = [
 
 [[package]]
 name = "monocode-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
+ "monocode-locale",
  "regex",
  "serde",
  "serde_json",
@@ -2540,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-git"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "monocode-platform",
@@ -2555,7 +2556,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-integrations"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -2571,8 +2572,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "monocode-locale"
+version = "0.7.0"
+dependencies = [
+ "sys-locale",
+]
+
+[[package]]
 name = "monocode-platform"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "block2",
@@ -2600,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-process"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "monocode-platform",
@@ -2616,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-remote"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "gethostname",
@@ -2642,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-store"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "monocode-git",
  "monocode-platform",
@@ -2654,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "monocode-terminal"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "monocode-platform",
@@ -4399,6 +4407,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

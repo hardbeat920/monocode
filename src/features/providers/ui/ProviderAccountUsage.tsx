@@ -12,6 +12,7 @@ import type {
   AccountUsage,
 } from "../model/accountUsage";
 import { RefreshCw } from "../../../shared/ui/icons";
+import { useShowRemainingUsage } from "../../settings/model/displayPrefs";
 
 const STATUS_DOT: Record<AccountStatusTone, string> = {
   ready: "bg-emerald-400",
@@ -142,8 +143,10 @@ export function UsageMeter({
   now: number;
   className?: string;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
+  const shown = showRemaining ? remaining : pct;
   const full = pct >= 100 && (window.resetsAt == null || window.resetsAt > now);
   const reset =
     window.resetsAt == null
@@ -167,20 +170,24 @@ export function UsageMeter({
         <span
           className={`shrink-0 tabular-nums ${full ? "font-medium text-red-400" : "text-content/60"}`}
         >
-          {formatUsagePercent(remaining)} left
+          {showRemaining
+            ? `${formatUsagePercent(remaining)} left`
+            : full
+              ? "Full"
+              : formatUsagePercent(pct)}
         </span>
       </div>
       <div
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} limit remaining`}
+        aria-label={`${title} limit ${showRemaining ? "remaining" : "used"}`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(remaining)}
+        aria-valuenow={Math.round(shown)}
       >
         <span
           className={`block h-full rounded-full transition-[width] duration-300 ${barClass(pct)}`}
-          style={{ width: `${remaining}%` }}
+          style={{ width: `${shown}%` }}
         />
       </div>
     </div>
