@@ -53,6 +53,7 @@ import {
   applyChatBackgroundEmptyOpacity,
   applyChatBackgroundSessionOpacity,
   applyChatBackgroundScope,
+  applyDiffPalette,
   applyAccentColor,
   applyBodyGlass,
   applySidebarBlur,
@@ -75,6 +76,7 @@ import {
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
+  loadDiffPalette,
   loadNewThreadBackgroundEffect,
   loadThemeDarkLightness,
   loadThemePreference,
@@ -90,6 +92,7 @@ import {
   saveChatBackgroundPath,
   saveChatBackgroundSessionOpacity,
   saveChatBackgroundScope,
+  saveDiffPalette,
   setNewThreadBackgroundEffect,
   saveThemeDarkLightness,
   saveThemePreference,
@@ -122,6 +125,8 @@ import {
   THEME_SATURATION_MIN,
   type ThemePreference,
   type ChatBackgroundScope,
+  DIFF_PALETTE_DEFAULT,
+  type DiffPalette,
   NEW_THREAD_BACKGROUND_EFFECTS,
   NEW_THREAD_BACKGROUND_EFFECT_LABELS,
   NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS,
@@ -1823,6 +1828,7 @@ function useAppearanceSettings(
     useState(loadChatBackgroundSessionOpacity);
   const [chatBackgroundScope, setChatBackgroundScope] =
     useState<ChatBackgroundScope>(loadChatBackgroundScope);
+  const [diffPalette, setDiffPalette] = useState<DiffPalette>(loadDiffPalette);
   const [newThreadBackgroundEffect, setBackgroundEffect] =
     useState<NewThreadBackgroundEffect>(loadNewThreadBackgroundEffect);
   const [chatBackgroundBusy, setChatBackgroundBusy] = useState(false);
@@ -1940,6 +1946,12 @@ function useAppearanceSettings(
     setChatBackgroundScope(next);
   }, []);
 
+  const onDiffPalette = useCallback((next: DiffPalette) => {
+    applyDiffPalette(next);
+    saveDiffPalette(next);
+    setDiffPalette(next);
+  }, []);
+
   const onNewThreadBackgroundEffect = useCallback(
     (next: NewThreadBackgroundEffect) => {
       setNewThreadBackgroundEffect(next);
@@ -1979,6 +1991,7 @@ function useAppearanceSettings(
       Math.round(CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT * 100),
     );
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
+    onDiffPalette(DIFF_PALETTE_DEFAULT);
     onNewThreadBackgroundEffect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
@@ -1990,6 +2003,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onDiffPalette,
     onNewThreadBackgroundEffect,
     onClearChatBackground,
     onAccentColor,
@@ -2016,6 +2030,7 @@ function useAppearanceSettings(
     chatBackgroundEmptyOpacity,
     chatBackgroundSessionOpacity,
     chatBackgroundScope,
+    diffPalette,
     newThreadBackgroundEffect,
     chatBackgroundBusy,
     chatBackgroundError,
@@ -2034,6 +2049,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onDiffPalette,
     onNewThreadBackgroundEffect,
     onUiScale,
     onCollapsedProjectRailMode,
@@ -2075,6 +2091,22 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           <AccentColorPicker
             value={appearance.accentColor}
             onChange={appearance.onAccentColor}
+          />
+        </Row>
+        <Row
+          id="diff-colors"
+          label="Diff colors"
+          description="Colors for added and removed lines. Colorblind and High contrast use blue and orange instead of green and red; High contrast adds stronger tints and text."
+        >
+          <Segmented
+            label="Diff colors"
+            value={appearance.diffPalette}
+            options={[
+              { value: "default", label: "Default" },
+              { value: "colorblind", label: "Colorblind" },
+              { value: "high-contrast", label: "High contrast" },
+            ]}
+            onChange={appearance.onDiffPalette}
           />
         </Row>
       </Group>

@@ -578,7 +578,9 @@ function VirtualRows({
         max = Math.max(max, row.line.text.length);
       }
     }
-    return max + 8;
+    // Slack for DiffLineRow's padding and its w-7 +/− marker column; keep in
+    // sync if either changes.
+    return max + 10;
   }, [rows]);
   const [range, setRange] = useState<RowWindow>(() => ({
     start: 0,
@@ -933,16 +935,16 @@ const DiffLineRow = memo(function DiffLineRow({
   const added = line.kind === "add";
   const deleted = line.kind === "del";
   const number = deleted ? line.oldNumber : line.newNumber;
-  const row = added ? "bg-emerald-500/15" : deleted ? "bg-rose-500/15" : "";
+  const row = added ? "bg-diff-add-bg" : deleted ? "bg-diff-del-bg" : "";
   const gutterTint = added
-    ? "bg-emerald-500/25"
+    ? "bg-diff-add-gutter"
     : deleted
-      ? "bg-rose-500/25"
+      ? "bg-diff-del-gutter"
       : "";
   const gutterText = added
-    ? "text-emerald-300"
+    ? "text-diff-add-fg"
     : deleted
-      ? "text-rose-300"
+      ? "text-diff-del-fg"
       : "text-content/35";
 
   if (lane === "gutter") {
@@ -1000,8 +1002,18 @@ const DiffLineRow = memo(function DiffLineRow({
       className={`flex items-center ${row}`}
       style={{ height: UNIFIED_LINE_PX }}
     >
+      {/* Width is counted in minWidthCh. select-none keeps the glyph and the
+          screen-reader cue out of copied code. */}
       <span
-        className={`whitespace-pre px-3 font-mono text-[12px] leading-none text-content/80 ${
+        className={`w-7 shrink-0 select-none pl-3 font-mono text-[12px] leading-none font-semibold ${gutterText}`}
+      >
+        <span aria-hidden="true">{added ? "+" : deleted ? "−" : ""}</span>
+        {added || deleted ? (
+          <span className="sr-only">{added ? "Added: " : "Removed: "}</span>
+        ) : null}
+      </span>
+      <span
+        className={`whitespace-pre pr-3 font-mono text-[12px] leading-none text-content/80 ${
           line.kind === "context" ? "opacity-70" : ""
         }`}
       >
@@ -1045,10 +1057,10 @@ function DiffCounts({
   return (
     <span className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums">
       {additions > 0 ? (
-        <span className="text-emerald-400">+{formatInteger(additions)}</span>
+        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{formatInteger(deletions)}</span>
+        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
       ) : null}
     </span>
   );

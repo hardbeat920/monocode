@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Appearance → **Diff colors** offers Default, Colorblind (blue/orange) and High contrast (blue/orange with stronger tints and text) palettes. They apply to the diff view, the editor's git gutter, tool-call previews, change counts and added/deleted file status in the file tree and changes panel.
+
+### Changed
+
+- Added and removed lines show a `+`/`-` marker in the diff view and in the editor's git gutter, so they no longer depend on red/green color alone. Diff colors are now theme tokens with separate light-theme values, which also improves the contrast of light-theme gutter line numbers.
+
 ### Fixed
 
 - Remote hosts detect the Pi coding agent installed via npm. The npm bin launcher is a thin `#!/usr/bin/env node` stub with no marker strings in its first bytes, so the host now resolves the launcher's symlink and reads the enclosing package's `package.json` name to confirm the install. In #673.

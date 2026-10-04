@@ -250,6 +250,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "highlight bubble send button tint",
   },
   {
+    id: "diff-colors",
+    section: "appearance",
+    label: "Diff colors",
+    keywords:
+      "colorblind color blind accessibility added removed red green blue orange high contrast changes",
+  },
+  {
     id: "hue",
     section: "appearance",
     label: "Hue",
