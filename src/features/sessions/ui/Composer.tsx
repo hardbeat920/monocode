@@ -288,6 +288,7 @@ type Props = {
   onDeleteQueuedMessage?: (messageId: string) => void;
   onEditQueuedMessage?: (messageId: string, text: string) => void;
   onQueuedMessageEditingChange?: (messageId?: string) => void;
+  onReorderQueuedMessages?: (orderedIds: string[]) => void;
   onSteerQueuedMessage?: (messageId: string) => void;
   onResumeQueue?: () => void;
   onUsageLimitResume?: () => void;
@@ -406,6 +407,7 @@ export function Composer({
   onDeleteQueuedMessage,
   onEditQueuedMessage,
   onQueuedMessageEditingChange,
+  onReorderQueuedMessages,
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
@@ -1867,6 +1869,7 @@ export function Composer({
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}
+        onReorder={onReorderQueuedMessages}
         onSteer={onSteerQueuedMessage}
         onResume={onResumeQueue}
       />

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CornerDownRight,
@@ -10,6 +10,7 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import { resizeComposer } from "../model/composerResize";
 import type { MessageQueueStatus, QueuedMessage } from "../model/session";
 import { AttachmentChip } from "./AttachmentChip";
@@ -20,6 +21,7 @@ export function MessageQueue({
   onDelete,
   onEdit,
   onEditingChange,
+  onReorder,
   onSteer,
   onResume,
   variant = "queue",
@@ -30,6 +32,7 @@ export function MessageQueue({
   onDelete?: (messageId: string) => void;
   onEdit?: (messageId: string, text: string) => void;
   onEditingChange?: (messageId?: string) => void;
+  onReorder?: (orderedIds: string[]) => void;
   onSteer?: (messageId: string) => void;
   onResume?: () => void;
   variant?: "queue" | "messages";
@@ -50,6 +53,15 @@ export function MessageQueue({
   useLayoutEffect(() => {
     if (editRef.current) resizeComposer(editRef.current);
   }, [editingId, editDraft]);
+  const messageIds = useMemo(
+    () => messages.map((message) => message.id),
+    [messages],
+  );
+  const sortable = useAnimatedReorder(
+    messageIds,
+    (ids) => onReorder?.(ids),
+    "y",
+  );
   if (messages.length === 0) return null;
   const paused = status === "paused";
   const failed = messages.some((message) => message.error);
@@ -105,6 +117,7 @@ export function MessageQueue({
         {messages.map((message, index) => {
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
+          const canDrag = messages.length > 1 && !editing;
           const label =
             (message.monoSessionCompletion
               ? message.monoSessionCompletion.sessionCount
@@ -117,9 +130,29 @@ export function MessageQueue({
           return (
             <div
               key={message.id}
+              ref={(el) => sortable.setItemRef(message.id, el)}
+              data-message-queue-row={message.id}
               className={`flex min-h-8 gap-2.5 text-[12px] ${
                 editing ? "items-start py-1" : "items-center"
-              } ${index > 0 ? "border-t border-content/5" : ""}`}
+              } ${index > 0 ? "border-t border-content/5" : ""} ${
+                messages.length > 1
+                  ? "queue-reorder-item reorder-item relative"
+                  : ""
+              } ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
+              onPointerDown={(event) => {
+                if (!canDrag) return;
+                if (
+                  (event.target as HTMLElement | null)?.closest("[data-no-drag]")
+                ) {
+                  return;
+                }
+                sortable.onItemPointerDown(message.id, event);
+              }}
+              onClick={(event) => {
+                if (!sortable.consumeClick()) return;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
               <ListEnd
                 className={`size-3.5 shrink-0 text-content/35 ${
@@ -128,7 +161,10 @@ export function MessageQueue({
               />
               {editing ? (
                 <>
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <div
+                    data-no-drag
+                    className="flex min-w-0 flex-1 flex-col gap-1"
+                  >
                     <textarea
                       ref={editRef}
                       autoFocus
@@ -162,6 +198,7 @@ export function MessageQueue({
                   </div>
                   <button
                     type="button"
+                    data-no-drag
                     title="Save queued message"
                     aria-label="Save queued message"
                     disabled={
@@ -174,6 +211,7 @@ export function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Cancel queued message edit"
                     aria-label="Cancel queued message edit"
                     onClick={cancelEdit}
@@ -197,6 +235,7 @@ export function MessageQueue({
                   {onSteer && !message.monoSessionCompletion ? (
                     <button
                       type="button"
+                      data-no-drag
                       disabled={sending}
                       onClick={() => onSteer?.(message.id)}
                       className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-content/50 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
@@ -207,6 +246,7 @@ export function MessageQueue({
                   ) : null}
                   <button
                     type="button"
+                    data-no-drag
                     title="Edit queued message"
                     aria-label="Edit queued message"
                     disabled={sending || !!message.monoSessionCompletion}
@@ -217,6 +257,7 @@ export function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Remove queued message"
                     aria-label="Remove queued message"
                     disabled={sending}

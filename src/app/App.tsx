@@ -534,6 +534,7 @@ import {
   canSteerQueuedHead,
   dequeueQueuedMessage,
   queuedMessageForSubmit,
+  reorderQueuedMessages,
 } from "../features/sessions/model/messageQueue";
 import { deliverQueuedFollowUp } from "../features/sessions/model/queuedFollowUp";
 import {
@@ -9479,6 +9480,19 @@ function Workspace({
     [],
   );
 
+  const onReorderQueuedMessages = useCallback(
+    (sessionId: string, orderedIds: string[]) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? reorderQueuedMessages(session, orderedIds)
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
   const onQueuedMessageEditingChange = useCallback(
     (sessionId: string, messageId?: string) => {
       setSessions((prev) =>
@@ -13461,6 +13475,7 @@ function Workspace({
     onDeleteQueuedMessage,
     onEditQueuedMessage,
     onQueuedMessageEditingChange,
+    onReorderQueuedMessages,
     onSteerQueuedMessage,
     onResumeQueue,
     onUsageLimitResume,
