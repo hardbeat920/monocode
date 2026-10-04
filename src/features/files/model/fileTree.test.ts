@@ -291,6 +291,24 @@ describe("fileTree cache", () => {
     expect(await listCachedDir(collapsed)).toEqual([entry("index.ts")]);
     expect(peekDir(collapsed)).toEqual([entry("index.ts")]);
   });
+
+  it("caches the newest listing when two requests for one path race", async () => {
+    // Two explorers on one cwd both list it before either response lands.
+    const landOlder = deferListDir();
+    const landNewer = deferListDir();
+    const older = listCachedDir(root);
+    const newer = listCachedDir(root);
+
+    landNewer([entry("newest.ts")]);
+    await newer;
+    landOlder([entry("stale.ts")]);
+    // Each caller still gets its own response; only the cache defers to the newer.
+    await expect(older).resolves.toEqual([entry("stale.ts")]);
+
+    expect(peekDir(root)).toEqual([entry("newest.ts")]);
+    expect(await listCachedDir(root)).toEqual([entry("newest.ts")]);
+    expect(listDir).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("withoutSubtree", () => {

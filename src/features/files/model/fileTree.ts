@@ -11,8 +11,9 @@ const mountedRoots = new Map<string, number>();
 
 /** One open `listDir`. `retired` marks a listing the cache no longer wants. */
 type Request = { retired: boolean };
-/** Open requests by path, so a drop can reach every one of them. */
-const openRequests = new Map<string, Set<Request>>();
+/** Every request open for one path, newest first, so a drop can reach them all. */
+type OpenRequests = { latest: Request; all: Set<Request> };
+const openRequests = new Map<string, OpenRequests>();
 
 const REFRESH_MS = 150;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -55,26 +56,37 @@ export function peekDir(path: string): FsEntry[] | null {
   return dirs.get(path) ?? null;
 }
 
+/**
+ * Cached `listDir`, so a repeat read costs nothing. Only the newest open
+ * request for a path writes, and a dropped folder's requests write nothing.
+ */
 export function listCachedDir(path: string): Promise<FsEntry[]> {
   const hit = dirs.get(path);
   if (hit) return Promise.resolve(hit);
   const pending = listDir(path);
   const request: Request = { retired: false };
   const open = openRequests.get(path);
-  if (open) open.add(request);
-  else openRequests.set(path, new Set([request]));
+  if (open) {
+    open.all.add(request);
+    open.latest = request;
+  } else {
+    openRequests.set(path, { latest: request, all: new Set([request]) });
+  }
   return pending
     .then((entries) => {
-      // A response that lands after the folder was dropped describes a cache
-      // entry that no longer exists, so it must not be written back.
-      if (!request.retired) dirs.set(path, entries);
+      // Only the newest open request writes. An overtaken one carries a listing
+      // older than the one the cache already holds, and a retired one describes
+      // a folder that has since been dropped.
+      if (!request.retired && openRequests.get(path)?.latest === request) {
+        dirs.set(path, entries);
+      }
       return entries;
     })
     .finally(() => {
       const live = openRequests.get(path);
       if (!live) return;
-      live.delete(request);
-      if (live.size === 0) openRequests.delete(path);
+      live.all.delete(request);
+      if (live.all.size === 0) openRequests.delete(path);
     });
 }
 
@@ -101,7 +113,9 @@ function dropDir(path: string) {
 }
 
 function retireRequests(path: string) {
-  for (const request of openRequests.get(path) ?? []) request.retired = true;
+  const open = openRequests.get(path);
+  if (!open) return;
+  for (const request of open.all) request.retired = true;
 }
 
 /** `path` itself, or anything inside it. */
