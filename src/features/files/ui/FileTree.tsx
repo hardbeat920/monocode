@@ -41,9 +41,12 @@ import {
   notifyDirsChanged,
   peekDir,
   refreshDir,
+  registerExplorer,
   saveExpanded,
   saveSelected,
   subscribeDirsChanged,
+  unregisterExplorer,
+  withoutSubtree,
 } from "../model/fileTree";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
@@ -286,9 +289,11 @@ export const FileTree = memo(function FileTree({
 
   const toggle = (path: string) => {
     setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      // Collapsing drops the whole subtree, so the set can't accumulate
+      // descendants of folders that are no longer open.
+      const next = prev.has(path)
+        ? withoutSubtree(prev, path)
+        : new Set(prev).add(path);
       saveExpanded(cwd, next);
       return next;
     });
@@ -565,6 +570,15 @@ export const FileTree = memo(function FileTree({
         ? null
         : cur,
     );
+    // Unconditional: isDirAt reads the dir cache, which a collapsed folder may
+    // already have evicted, and skipping the prune then is what leaks the
+    // subtree. Filtering is a no-op for a file path anyway.
+    setExpanded((prev) => {
+      const next = withoutSubtree(prev, path);
+      if (next === prev) return prev;
+      saveExpanded(cwd, next);
+      return next;
+    });
     onFileDeleted?.(path);
   };
 
@@ -806,6 +820,11 @@ export const FileTree = memo(function FileTree({
       cancelled = true;
       unlisten?.();
     };
+  }, [cwd]);
+
+  useEffect(() => {
+    registerExplorer(cwd);
+    return () => unregisterExplorer(cwd);
   }, [cwd]);
 
   useEffect(() => {
