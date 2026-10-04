@@ -5963,8 +5963,13 @@ function Workspace({
       invalidateLoadedSession(sessionId);
       loadedSessionCache.current.delete(sessionId);
 
+      // The update card describes the previous link; a pending activity fetch
+      // for it must not write a card for the new one.
+      linkedWorkItemActivityFetches.current.delete(sessionId);
       const nextSessions = sessionsRef.current.map((session) =>
-        session.id === sessionId ? { ...session, linkedWorkItem } : session,
+        session.id === sessionId
+          ? { ...session, linkedWorkItem, linkedWorkItemUpdateCard: undefined }
+          : session,
       );
       sessionsRef.current = nextSessions;
       setSessions(nextSessions);
