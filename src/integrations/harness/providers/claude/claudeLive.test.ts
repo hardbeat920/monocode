@@ -1975,3 +1975,126 @@ describe("claude manual compaction", () => {
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 });
+
+describe("Claude advisor consults", () => {
+  /** Trimmed from a real Claude Code 2.1.287 stream-json run. */
+  function emitAdvisorTurn(result: Record<string, unknown>) {
+    const call = {
+      type: "server_tool_use",
+      id: "srvtoolu_1",
+      name: "advisor",
+      input: {},
+    };
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      event: { type: "content_block_start", index: 0, content_block: call },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      message: { id: "msg_1", content: [call] },
+    });
+    const block = {
+      type: "advisor_tool_result",
+      tool_use_id: "srvtoolu_1",
+      content: result,
+    };
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      event: { type: "content_block_start", index: 1, content_block: block },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      message: { id: "msg_1", content: [block] },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      event: {
+        type: "content_block_delta",
+        index: 2,
+        delta: { type: "text_delta", text: "2 + 2 = 4." },
+      },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      message: { id: "msg_1", content: [{ type: "text", text: "2 + 2 = 4." }] },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      parent_tool_use_id: null,
+      event: {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          iterations: [
+            { type: "message", input_tokens: 2, output_tokens: 26 },
+            result.type === "advisor_tool_result_error"
+              ? null
+              : {
+                  type: "advisor_message",
+                  model: "claude-fable-5-1",
+                  input_tokens: 39219,
+                  output_tokens: 128,
+                },
+            { type: "message", input_tokens: 2, output_tokens: 28 },
+          ].filter(Boolean),
+        },
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+  }
+
+  function applied(events: HarnessEvent[]) {
+    return events.reduce(applyHarnessEvent, newSession("claude", "/repo"));
+  }
+
+  it("shows the consult as an Advisor note with its model, not a tool row", async () => {
+    const { events, turn } = await startTurn("advisor-redacted");
+    emitAdvisorTurn({ type: "advisor_redacted_result", encrypted_content: "EvwD" });
+    await turn;
+
+    expect(events.some((event) => event.type === "tool.started")).toBe(false);
+    const session = applied(events);
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      [
+        "system",
+        "The provider encrypts this advisor's advice, so it can't be shown.\n\n" +
+          "Claude Code sent the full conversation to the advisor. 39,219 tokens in, 128 out.",
+      ],
+      ["assistant", "2 + 2 = 4."],
+    ]);
+    expect(session.blocks[0]).toMatchObject({
+      id: "advisor-srvtoolu_1",
+      interjection: {
+        customType: "advisor",
+        status: "completed",
+        model: "claude-fable-5-1",
+      },
+    });
+  });
+
+  it("marks a consult that hit its limit as failed", async () => {
+    const { events, turn } = await startTurn("advisor-error");
+    emitAdvisorTurn({
+      type: "advisor_tool_result_error",
+      error_code: "max_uses_exceeded",
+    });
+    await turn;
+
+    const note = applied(events).blocks.find((block) => block.interjection);
+    expect(note?.text).toMatch(/^The advisor call failed: max uses exceeded\./);
+    expect(note?.interjection).toEqual({ customType: "advisor", status: "failed" });
+  });
+});

@@ -24,6 +24,7 @@ import {
   toolCallLabel,
   turnCopyText,
   subagentModelName,
+  noteModelName,
   workKind,
   workSummaryLine,
 } from "./transcriptActivity";
@@ -1516,6 +1517,16 @@ describe("proseSummary", () => {
     expect(
       proseSummary("```ts\nconst a = 1;\n```\n\n- Ran [checks](x.md)"),
     ).toBe("Ran checks");
+  });
+});
+
+describe("note model names", () => {
+  it("shortens Claude model ids and keeps unknown ones", () => {
+    expect(noteModelName("claude-fable-5-1")).toBe("Fable 5.1");
+    expect(noteModelName("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(noteModelName("claude-fable-5")).toBe("Fable 5");
+    expect(noteModelName("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(noteModelName("custom-model-v2")).toBe("custom-model-v2");
   });
 });
 

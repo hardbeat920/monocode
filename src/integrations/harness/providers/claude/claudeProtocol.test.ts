@@ -4,7 +4,11 @@ import {
   modelsFromClaudeListModels,
 } from "./claudeCatalog";
 import {
+  advisorInterjection,
+  advisorResultsFromAssistant,
+  advisorUsageFromStreamEvent,
   applyClaudePromptEffortPrefix,
+  assistantToolUses,
   applyClaudeTaskTool,
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
@@ -983,5 +987,123 @@ describe("applyClaudeTaskTool", () => {
     expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
     expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
     expect(tasks.size).toBe(0);
+  });
+});
+
+describe("Claude advisor consults", () => {
+  const result = (content: Record<string, unknown>) => ({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "advisor_tool_result", tool_use_id: "srvtoolu_1", content },
+      ],
+    },
+  });
+
+  it("reads plaintext, encrypted, and failed advisor results", () => {
+    expect(
+      advisorResultsFromAssistant(
+        result({ type: "advisor_result", text: "Check the cache.", stop_reason: "end_turn" }),
+      ),
+    ).toEqual([
+      {
+        toolUseId: "srvtoolu_1",
+        outcome: { kind: "advice", text: "Check the cache.", stopReason: "end_turn" },
+      },
+    ]);
+    expect(
+      advisorResultsFromAssistant(
+        result({ type: "advisor_redacted_result", encrypted_content: "EvwD" }),
+      ),
+    ).toEqual([{ toolUseId: "srvtoolu_1", outcome: { kind: "redacted" } }]);
+    expect(
+      advisorResultsFromAssistant(
+        result({ type: "advisor_tool_result_error", error_code: "max_uses_exceeded" }),
+      ),
+    ).toEqual([
+      {
+        toolUseId: "srvtoolu_1",
+        outcome: { kind: "error", errorCode: "max_uses_exceeded" },
+      },
+    ]);
+  });
+
+  it("reconciles the advisor server tool call from the assistant snapshot", () => {
+    expect(
+      assistantToolUses({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_1", name: "advisor", input: {} },
+          ],
+        },
+      }),
+    ).toEqual([{ id: "srvtoolu_1", name: "advisor", input: {} }]);
+  });
+
+  it("takes the advisor model and tokens from message_delta iterations", () => {
+    expect(
+      advisorUsageFromStreamEvent({
+        type: "stream_event",
+        event: {
+          type: "message_delta",
+          usage: {
+            iterations: [
+              { type: "message", input_tokens: 2, output_tokens: 26 },
+              {
+                type: "advisor_message",
+                model: "claude-fable-5-1",
+                input_tokens: 39219,
+                output_tokens: 128,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      { model: "claude-fable-5-1", inputTokens: 39219, outputTokens: 128 },
+    ]);
+  });
+
+  it("writes the advisor note for each stage of the consult", () => {
+    const sent = "Claude Code sent the full conversation to the advisor.";
+    expect(advisorInterjection({ id: "srvtoolu_1", status: "running" })).toEqual({
+      type: "interjection",
+      id: "advisor-srvtoolu_1",
+      customType: "advisor",
+      status: "running",
+      text: sent,
+    });
+    expect(
+      advisorInterjection({
+        id: "srvtoolu_1",
+        status: "completed",
+        outcome: { kind: "redacted" },
+        usage: { model: "claude-fable-5-1", inputTokens: 39219, outputTokens: 128 },
+      }),
+    ).toMatchObject({
+      model: "claude-fable-5-1",
+      text: `The provider encrypts this advisor's advice, so it can't be shown.\n\n${sent} 39,219 tokens in, 128 out.`,
+    });
+    expect(
+      advisorInterjection({
+        id: "srvtoolu_1",
+        status: "failed",
+        outcome: { kind: "error", errorCode: "max_uses_exceeded" },
+      }).text,
+    ).toBe(`The advisor call failed: max uses exceeded.\n\n${sent}`);
+  });
+
+  it("leaves advisor runs out of the context reading", () => {
+    expect(
+      contextFromResult({
+        usage: {
+          iterations: [
+            { type: "message", input_tokens: 10, output_tokens: 5 },
+            { type: "advisor_message", input_tokens: 39219, output_tokens: 128 },
+          ],
+        },
+      }),
+    ).toMatchObject({ used: 15 });
   });
 });

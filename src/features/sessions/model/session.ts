@@ -167,6 +167,10 @@ export type InterjectionMeta = {
   customType: string;
   /** Highest severity among this interjection's retained notes, when any is known. */
   severity?: InterjectionSeverity;
+  /** The model that wrote the note, e.g. the advisor Claude Code consulted. */
+  model?: string;
+  /** Set while the note is still on its way, or when getting it failed. */
+  status?: "running" | "completed" | "failed";
 };
 
 export type ToolPreviewKind = "read" | "write" | "shell" | "search";

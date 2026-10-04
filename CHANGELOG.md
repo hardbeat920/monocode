@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Claude Code advisor consults show as an Advisor note instead of a bare `advisor` tool row. The note names the advisor model, shows the advice (or says the provider encrypted it), marks failed consults such as `max_uses_exceeded`, and says that Claude Code forwards the whole conversation. Fixes #734.
 - Settings → Appearance → **Diff colors** offers Default, Colorblind (blue/orange) and High contrast (blue/orange with stronger tints and text) palettes. They apply to the diff view, the editor's git gutter, tool-call previews, change counts and added/deleted file status in the file tree and changes panel.
 
 ### Changed

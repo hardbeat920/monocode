@@ -836,12 +836,135 @@ export function assistantToolUses(rec: Record<string, unknown>): Array<{
   if (!Array.isArray(content)) return [];
   return content.flatMap((block) => {
     const row = asRecord(block);
-    if (!row || stringField(row, "type") !== "tool_use") return [];
+    const type = stringField(row, "type");
+    if (!row || (type !== "tool_use" && type !== "server_tool_use")) return [];
     const id = stringField(row, "id");
     const name = stringField(row, "name");
     if (!id || !name) return [];
     return [{ id, name, input: asRecord(row.input) ?? {} }];
   });
+}
+
+/** Claude Code's `advisor` server tool: a second model reviews the turn. */
+export function isAdvisorToolName(name: string): boolean {
+  return name === "advisor";
+}
+
+export type AdvisorOutcome =
+  | { kind: "advice"; text: string; stopReason?: string }
+  | { kind: "redacted"; stopReason?: string }
+  | { kind: "error"; errorCode: string };
+
+/**
+ * Advisor results in an assistant message. The server runs the advisor, so its
+ * result is part of the assistant's own content, not a user `tool_result`.
+ */
+export function advisorResultsFromAssistant(
+  rec: Record<string, unknown>,
+): Array<{ toolUseId: string; outcome: AdvisorOutcome }> {
+  const content = asRecord(rec.message)?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const row = asRecord(block);
+    if (stringField(row, "type") !== "advisor_tool_result") return [];
+    const toolUseId = stringField(row, "tool_use_id");
+    if (!toolUseId) return [];
+    const result = asRecord(row?.content);
+    const stopReason = stringField(result, "stop_reason");
+    const stop = stopReason ? { stopReason } : {};
+    const type = stringField(result, "type");
+    const outcome: AdvisorOutcome =
+      type === "advisor_result"
+        ? { kind: "advice", text: stringField(result, "text") ?? "", ...stop }
+        : type === "advisor_redacted_result"
+          ? { kind: "redacted", ...stop }
+          : {
+              kind: "error",
+              errorCode: stringField(result, "error_code") ?? "unknown_error",
+            };
+    return [{ toolUseId, outcome }];
+  });
+}
+
+export type AdvisorUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+/**
+ * Advisor runs in a message's `usage.iterations`, in call order. Claude Code
+ * reports them on the `message_delta` stream event, after the advice itself.
+ */
+export function advisorUsageFromStreamEvent(
+  rec: Record<string, unknown>,
+): AdvisorUsage[] {
+  const event = asRecord(rec.event);
+  if (stringField(event, "type") !== "message_delta") return [];
+  const usage = asRecord(event?.usage);
+  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  return iterations.flatMap((entry) => {
+    const row = asRecord(entry);
+    if (stringField(row, "type") !== "advisor_message") return [];
+    const model = stringField(row, "model");
+    if (!model) return [];
+    return [
+      {
+        model,
+        inputTokens: numberField(row, "input_tokens"),
+        outputTokens: numberField(row, "output_tokens"),
+      },
+    ];
+  });
+}
+
+export type AdvisorCall = {
+  id: string;
+  status: "running" | "completed" | "failed";
+  outcome?: AdvisorOutcome;
+  usage?: AdvisorUsage;
+};
+
+const ADVISOR_FORWARD_NOTE =
+  "Claude Code sent the full conversation to the advisor.";
+
+/** The interjection that stands in for an advisor call in the transcript. */
+export function advisorInterjection(
+  call: AdvisorCall,
+): Extract<HarnessEvent, { type: "interjection" }> {
+  const tokens = call.usage
+    ? ` ${call.usage.inputTokens.toLocaleString("en-US")} tokens in, ${call.usage.outputTokens.toLocaleString("en-US")} out.`
+    : "";
+  const note = `${ADVISOR_FORWARD_NOTE}${tokens}`;
+  const body = call.outcome ? advisorOutcomeText(call.outcome) : "";
+  return {
+    type: "interjection",
+    id: `advisor-${call.id}`,
+    customType: "advisor",
+    status: call.status,
+    ...(call.usage ? { model: call.usage.model } : {}),
+    text: body ? `${body}\n\n${note}` : note,
+  };
+}
+
+function advisorOutcomeText(outcome: AdvisorOutcome): string {
+  const stop =
+    outcome.kind !== "error" && outcome.stopReason
+      ? `Stop reason: ${outcome.stopReason}.`
+      : "";
+  switch (outcome.kind) {
+    case "advice":
+      return [outcome.text.trim(), stop].filter(Boolean).join("\n\n");
+    case "redacted":
+      return [
+        "The provider encrypts this advisor's advice, so it can't be shown.",
+        stop,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    case "error":
+      return `The advisor call failed: ${outcome.errorCode.replace(/_/g, " ")}.`;
+  }
 }
 
 export function toolResultsFromUserMessage(
@@ -1175,7 +1298,10 @@ export function contextFromResult(
   rec: Record<string, unknown>,
 ): { used?: number; window?: number } | undefined {
   const usage = asRecord(rec.usage);
-  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  // Advisor runs read the transcript in their own window, not this one.
+  const iterations = (
+    Array.isArray(usage?.iterations) ? usage.iterations : []
+  ).filter((entry) => stringField(asRecord(entry), "type") !== "advisor_message");
   const last = asRecord(iterations[iterations.length - 1]);
   const used = contextUsedFromUsage(last ?? usage);
 
