@@ -148,6 +148,7 @@ export function useBtwConversation({
       };
     });
   }, [drafts, entries, optimistic, turns]);
+  /** Keep parent session closing aware of drafts held in side-question tabs. */
   useEffect(() => {
     if (!sessionId) return;
     return registerComposerCloseGuard(sessionId, () =>

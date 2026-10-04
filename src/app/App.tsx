@@ -9406,19 +9406,28 @@ function Workspace({
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
-            close: (id) =>
-              closeAgentSession(source, id, {
-                snapshot: () => ({
-                  sessions: sessionsRef.current,
-                  tabs: tabsRef.current,
-                  activeTabId: activeTabIdRef.current,
-                }),
-                unavailable: (targetId) =>
-                  removingSessionIds.current.has(targetId) ||
-                  switchingWorktrees.current.has(targetId) ||
-                  !!orchestrator.run(targetId),
+            /** Save the target, then apply its close only after live-state revalidation. */
+            async close(id) {
+              return closeAgentSession(source, id, {
+                /** Read refs so closeSession can compare state across its save await. */
+                snapshot() {
+                  return {
+                    sessions: sessionsRef.current,
+                    tabs: tabsRef.current,
+                    activeTabId: activeTabIdRef.current,
+                  };
+                },
+                /** Reject targets already being removed, switched, or orchestrated. */
+                unavailable(targetId) {
+                  return (
+                    removingSessionIds.current.has(targetId) ||
+                    switchingWorktrees.current.has(targetId) ||
+                    !!orchestrator.run(targetId)
+                  );
+                },
                 worktreeOf: tabWorktreeOf,
-                apply: (next) => {
+                /** Publish the planned layout synchronously before refreshing history. */
+                apply(next) {
                   flushSync(() => {
                     sessionsRef.current = next.sessions;
                     tabsRef.current = next.tabs;
@@ -9429,7 +9438,8 @@ function Workspace({
                   });
                   void refreshHistory(sidebarCwdRef.current);
                 },
-              }),
+              });
+            },
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>
               createWorktree(cwd, branch, base, existing),

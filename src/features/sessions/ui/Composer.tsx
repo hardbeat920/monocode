@@ -611,6 +611,7 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  /** Keep session close guards current while this composer holds unsent work. */
   useEffect(() => {
     if (!sessionId) return;
     return registerComposerCloseGuard(

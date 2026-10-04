@@ -67,10 +67,12 @@ export function registerComposerCloseGuard(
   const guards = closeGuards.get(sessionId) ?? new Set();
   guards.add(hasUnsavedWork);
   closeGuards.set(sessionId, guards);
-  return () => {
+  /** Remove this check only; other mounted composers may still guard the session. */
+  const unregister = () => {
     guards.delete(hasUnsavedWork);
     if (guards.size === 0) closeGuards.delete(sessionId);
   };
+  return unregister;
 }
 
 /**
