@@ -126,10 +126,14 @@ export function UnifiedDiffView({
   }, [fileKey, initialExpansion]);
 
   // The focused file stays pinned to the top while diffs above it load and
-  // grow, until the reader scrolls or clicks in the view themselves.
-  const followFocusRef = useRef<string | null>(null);
+  // grow, until the reader scrolls or clicks in the view themselves. The id
+  // is read when scrolling, so a followed file staged meanwhile is followed
+  // under its new entry.
+  const followFocusRef = useRef(false);
+  const focusIdRef = useRef(resolvedFocusId);
+  focusIdRef.current = resolvedFocusId;
   const scrollToFocus = useCallback(() => {
-    const id = followFocusRef.current;
+    const id = followFocusRef.current ? focusIdRef.current : undefined;
     const node = id ? fileRefs.current.get(id) : undefined;
     const scroller = scrollerRef.current;
     if (!node || !scroller) return;
@@ -143,11 +147,11 @@ export function UnifiedDiffView({
     if (Math.abs(scroller.scrollTop - top) > 1) scroller.scrollTo({ top });
   }, [fileLayout]);
   const releaseFocus = useCallback(() => {
-    followFocusRef.current = null;
+    followFocusRef.current = false;
   }, []);
 
   const revealFocus = useCallback(() => {
-    const id = followFocusRef.current;
+    const id = followFocusRef.current ? focusIdRef.current : undefined;
     const node = id ? fileRefs.current.get(id) : undefined;
     if (!id || !node) return;
     if (!scrollerRef.current) {
@@ -158,23 +162,27 @@ export function UnifiedDiffView({
         current.has(id) ? current : new Set(current).add(id),
       );
       node.scrollIntoView({ block: "start" });
-      followFocusRef.current = null;
+      followFocusRef.current = false;
       return;
     }
     scrollToFocus();
   }, [scrollToFocus]);
 
-  // Only a new selection starts following.
+  // Only a new selection starts following. The matched entry's id can change
+  // without one (staging moves a file to another section), so key on what
+  // was picked rather than on resolvedFocusId.
+  const focusTarget = focusPath ?? focusId;
   useEffect(() => {
-    followFocusRef.current = resolvedFocusId ?? null;
+    followFocusRef.current = !!focusTarget;
     revealFocus();
-  }, [resolvedFocusId, focusRequest, revealFocus]);
+  }, [focusTarget, focusRequest, revealFocus]);
 
-  // A refreshed file list re-anchors a file still being followed, but never
-  // resumes one the reader already scrolled away from.
+  // A refreshed file list, or the selection resolving to another entry,
+  // re-anchors a file still being followed, but never resumes one the reader
+  // already scrolled away from.
   useEffect(() => {
     if (followFocusRef.current) revealFocus();
-  }, [fileKey, revealFocus]);
+  }, [fileKey, resolvedFocusId, revealFocus]);
 
   const contentObserverRef = useRef<ResizeObserver | null>(null);
   const bindContent = useCallback(

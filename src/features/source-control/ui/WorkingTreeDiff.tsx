@@ -303,6 +303,7 @@ export function WorkingTreeDiff({
     <UnifiedDiffView
       files={models}
       fileCount={focusKind ? entries.length : files.length}
+      focusPath={focusPath}
       focusId={focusId}
       focusRequest={focusRequest}
       busyId={busyId}

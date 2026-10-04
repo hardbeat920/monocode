@@ -20,10 +20,15 @@ let notifyResize: () => void = () => {};
 const scrollTo = vi.fn();
 const scrollIntoView = vi.fn();
 
+/** Ids like "staged:c" are another section's entry for the same file. */
+function pathOf(id: string) {
+  return `/r/${id.split(":").pop()}.ts`;
+}
+
 function file(id: string): UnifiedDiffFileModel {
   return {
     id,
-    path: `/r/${id}.ts`,
+    path: pathOf(id),
     label: `${id}.ts`,
     additions: 1,
     deletions: 0,
@@ -35,7 +40,7 @@ function file(id: string): UnifiedDiffFileModel {
 function offsetOf(path: string | undefined): number {
   let offset = 0;
   for (const id of order) {
-    if (`/r/${id}.ts` === path) return offset;
+    if (pathOf(id) === path) return offset;
     offset += heights[id] ?? 0;
   }
   return offset;
@@ -56,6 +61,7 @@ function render(
   focusId?: string,
   focusRequest?: number,
   fill?: boolean,
+  focusPath?: string,
 ) {
   order = ids;
   act(() =>
@@ -63,6 +69,7 @@ function render(
       createElement(UnifiedDiffView, {
         files: ids.map(file),
         focusId,
+        focusPath,
         focusRequest,
         fill,
       }),
@@ -223,5 +230,31 @@ describe("UnifiedDiffView focus", () => {
     render(["z", "a", "b", "c"], "c", 1, false);
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("doesn't resume following when staging moves a released file to another entry", () => {
+    heights = { a: 20, "unstaged:c": 20, "staged:c": 20 };
+    render(["a", "unstaged:c"], "unstaged:c", undefined, true, "/r/c.ts");
+    expect(lastScroll()).toBe(20);
+
+    act(() => {
+      scroller().dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    });
+    scrollTo.mockClear();
+
+    // The same pick now resolves to the staged entry.
+    render(["staged:c", "a"], "staged:c", undefined, true, "/r/c.ts");
+    grow("a", 300);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("keeps following a file staged while it is still followed", () => {
+    heights = { a: 20, "unstaged:c": 20, "staged:c": 20 };
+    render(["a", "unstaged:c"], "unstaged:c", undefined, true, "/r/c.ts");
+    expect(lastScroll()).toBe(20);
+
+    render(["a", "b", "staged:c"], "staged:c", undefined, true, "/r/c.ts");
+    grow("b", 100);
+    expect(lastScroll()).toBe(120);
   });
 });
