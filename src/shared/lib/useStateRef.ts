@@ -1,16 +1,25 @@
-import { useCallback, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 /**
- * State whose ref tracks the latest requested value, not just the last
- * rendered one. Code that sets the value and then, in the same tick, compares
- * against the ref sees what it just asked for.
+ * State paired with a ref holding the latest committed or explicitly
+ * requested value. `set` updates the ref immediately so same-tick callers see
+ * what they just asked for; the layout effect syncs it on commit, so a render
+ * React discards never leaks into the ref.
  */
 export function useStateRef<T>(
   initial: T | (() => T),
 ): [T, (value: T) => void, RefObject<T>] {
   const [value, setState] = useState(initial);
   const ref = useRef(value);
-  ref.current = value;
+  useLayoutEffect(() => {
+    ref.current = value;
+  }, [value]);
   const set = useCallback((next: T) => {
     ref.current = next;
     setState(next);

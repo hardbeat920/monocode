@@ -62,3 +62,25 @@ it("lets a same-tick follow-up override an earlier switch", async () => {
   expect(container.textContent).toBe("/alpha");
   expect(probe.get()[2].current).toBe("/alpha");
 });
+
+it("does not write the ref during render; it syncs on commit", async () => {
+  const seenInRender: string[] = [];
+  let api!: ReturnType<typeof useStateRef<string>>;
+  function Probe() {
+    api = useStateRef(() => "/alpha");
+    seenInRender.push(api[2].current);
+    return createElement("span", null, api[0]);
+  }
+  await act(async () => root.render(createElement(Probe)));
+  const [, , ref] = api;
+
+  // A re-render with an unchanged value must leave the ref alone.
+  ref.current = "/stale";
+  await act(async () => root.render(createElement(Probe)));
+  expect(seenInRender.at(-1)).toBe("/stale");
+  expect(ref.current).toBe("/stale");
+
+  await act(async () => api[1]("/beta"));
+  expect(ref.current).toBe("/beta");
+  expect(container.textContent).toBe("/beta");
+});
