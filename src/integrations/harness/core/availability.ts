@@ -167,10 +167,12 @@ export function probeHarnessAvailability(
       const next = {} as HarnessAvailability;
       for (const [id, ok] of entries) next[id] = ok;
       setHarnessAvailability(next);
+      // Mark before notifying: subscribers read the probed flag while
+      // re-rendering, and nothing notifies them again afterwards.
+      markHarnessAvailabilityProbed();
       emitHarnessAvailability();
     })
     .finally(() => {
-      markHarnessAvailabilityProbed();
       inflight = null;
     });
   return inflight;
