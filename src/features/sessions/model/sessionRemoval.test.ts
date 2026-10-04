@@ -14,6 +14,7 @@ import { createSessionRemover } from "./sessionRemoval";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
+/** Pause a storage or confirmation wait until the test releases it. */
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -22,6 +23,7 @@ function deferred() {
   return { promise, resolve };
 }
 
+/** Build an idle archive or active delete workspace with observable effects. */
 function fixture(mode: "archive" | "delete") {
   const busy = mode === "delete";
   const closing: Session = {
@@ -105,6 +107,7 @@ function fixture(mode: "archive" | "delete") {
 
 afterEach(() => mocks.invoke.mockReset());
 
+/** Exercise shared safeguards for archive and delete operations. */
 describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   it("creates the replacement session behind the removal interface", async () => {
     const f = fixture(mode);
@@ -228,6 +231,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   });
 });
 
+/** Save the transcript and archive state without cancelling the idle worker. */
 it("archives an idle transcript without stopping or cancelling a worker", async () => {
   const f = fixture("archive");
   await f.run();
@@ -245,6 +249,7 @@ it("archives an idle transcript without stopping or cancelling a worker", async 
   ]);
 });
 
+/** Leave a newly busy target, its view, and its stored state unchanged. */
 it("rejects a busy archive before confirmation, cancellation, or storage", async () => {
   const f = fixture("archive");
   f.write({

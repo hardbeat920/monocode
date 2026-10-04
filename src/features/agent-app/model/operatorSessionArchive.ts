@@ -10,7 +10,12 @@ export type OperatorArchiveAdapter = {
   liveSession(id: string): Session | undefined;
   isBusy(id: string): boolean;
   persistedSession(id: string): Promise<OperatorArchiveSession | undefined>;
-  archiveView(id: string): Promise<{ completed: boolean; changed: boolean }>;
+  /** Close the visible view and return any original persistence failure. */
+  archiveView(id: string): Promise<{
+    completed: boolean;
+    changed: boolean;
+    error?: unknown;
+  }>;
   setArchived(id: string, archived: boolean): Promise<boolean>;
 };
 
@@ -36,6 +41,7 @@ export async function archiveOperatorSession(
     if (adapter.isBusy(id))
       throw new Error("Session is busy; try again when it finishes");
     const result = await adapter.archiveView(id);
+    if ("error" in result) throw result.error;
     if (!result.completed)
       throw new Error("Archive was cancelled or the session became busy");
     return { archived: true, changed: result.changed };

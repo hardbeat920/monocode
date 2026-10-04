@@ -4590,7 +4590,7 @@ function Workspace({
       sessionId: string,
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
-      archiveOutcome?: { changed?: boolean },
+      archiveOutcome?: { changed?: boolean; error?: unknown },
     ): Promise<boolean> => {
       if (
         removingSessionIds.current.has(sessionId) ||
@@ -4795,10 +4795,12 @@ function Workspace({
         return removed;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        void message(`Could not ${mode} this conversation.\n\n${detail}`, {
-          title: "MonoCode",
-          kind: "error",
-        });
+        if (archiveOutcome) archiveOutcome.error = error;
+        else
+          void message(`Could not ${mode} this conversation.\n\n${detail}`, {
+            title: "MonoCode",
+            kind: "error",
+          });
         return false;
       } finally {
         removingSessionIds.current.delete(sessionId);
@@ -9341,7 +9343,7 @@ function Workspace({
                   return saved.find((session) => session.id === sessionId);
                 },
                 archiveView: async (sessionId) => {
-                  const outcome: { changed?: boolean } = {};
+                  const outcome: { changed?: boolean; error?: unknown } = {};
                   const completed = await onRemoveHistorySession(
                     sessionId,
                     "archive",
@@ -9351,6 +9353,9 @@ function Workspace({
                   return {
                     completed,
                     changed: outcome.changed ?? false,
+                    ...(Object.prototype.hasOwnProperty.call(outcome, "error")
+                      ? { error: outcome.error }
+                      : {}),
                   };
                 },
                 setArchived: async (sessionId, value) => {

@@ -5,6 +5,7 @@ import {
   type OperatorArchiveAdapter,
 } from "./operatorSessionArchive";
 
+/** Build a live target backed by an in-memory archive flag. */
 function adapter() {
   const live = newSession("codex", "/tmp/project");
   live.id = "target";
@@ -29,6 +30,7 @@ function adapter() {
 }
 
 describe("Operator session archive adapter", () => {
+  /** Check repeated archives report the persisted transition once. */
   it("uses the view lifecycle and reports state changes idempotently", async () => {
     const f = adapter();
     await expect(
@@ -42,6 +44,7 @@ describe("Operator session archive adapter", () => {
     expect(f.isArchived()).toBe(true);
   });
 
+  /** Keep empty ephemeral tabs out of storage and open views. */
   it("rejects an unsaved blank tab before closing or persisting it", async () => {
     const f = adapter();
     vi.mocked(f.value.persistedSession).mockResolvedValue(undefined);
@@ -53,6 +56,7 @@ describe("Operator session archive adapter", () => {
     expect(f.value.setArchived).not.toHaveBeenCalled();
   });
 
+  /** Save real conversations through the normal archive lifecycle. */
   it("persists an unsaved conversation through the archive view lifecycle", async () => {
     const f = adapter();
     vi.mocked(f.value.persistedSession).mockResolvedValue(undefined);
@@ -63,6 +67,7 @@ describe("Operator session archive adapter", () => {
     expect(f.value.archiveView).toHaveBeenCalledOnce();
   });
 
+  /** Recheck busy state after storage I/O; allow unarchive while busy. */
   it("checks live busy state after the persisted lookup and leaves unarchive available", async () => {
     const f = adapter();
     vi.mocked(f.value.persistedSession).mockImplementation(async () => {
@@ -80,6 +85,7 @@ describe("Operator session archive adapter", () => {
     expect(f.value.setArchived).toHaveBeenCalledWith("target", false);
   });
 
+  /** Check caller and project boundaries before archive side effects. */
   it("rejects the caller and missing sessions", async () => {
     const f = adapter();
     await expect(
@@ -92,6 +98,7 @@ describe("Operator session archive adapter", () => {
     ).rejects.toThrow("not found in this project");
   });
 
+  /** Keep declined safeguards separate from persistence failures. */
   it("does not claim success when the user declines the close safeguards", async () => {
     const f = adapter();
     vi.mocked(f.value.archiveView).mockResolvedValue({
@@ -103,6 +110,21 @@ describe("Operator session archive adapter", () => {
     ).rejects.toThrow("cancelled");
   });
 
+  /** Preserve the original archive persistence failure. */
+  it("preserves archive persistence errors from the view lifecycle", async () => {
+    const f = adapter();
+    const failure = new Error("session store unavailable");
+    vi.mocked(f.value.archiveView).mockResolvedValue({
+      completed: false,
+      changed: false,
+      error: failure,
+    });
+    await expect(
+      archiveOperatorSession("target", true, f.value),
+    ).rejects.toBe(failure);
+  });
+
+  /** Propagate unarchive storage failures to the CLI. */
   it("propagates a failed unarchive write instead of returning success", async () => {
     const f = adapter();
     vi.mocked(f.value.setArchived).mockRejectedValue(

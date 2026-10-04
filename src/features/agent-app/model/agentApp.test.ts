@@ -74,6 +74,7 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Provide a project caller and idle target for dispatch tests. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";
@@ -170,6 +171,7 @@ describe("agent app commands", () => {
     expect(host.send).toHaveBeenCalledTimes(1);
   });
 
+  /** Report transitions and refuse self or busy targets. */
   it("archives and restores only another idle session in the project", async () => {
     const { source, host } = fixture();
     expect(
@@ -220,6 +222,7 @@ describe("agent app commands", () => {
     expect(host.archive).toHaveBeenCalledTimes(2);
   });
 
+  /** Require the requested ID to belong to the caller's project. */
   it("does not archive missing or cross-project sessions", async () => {
     const { source, host } = fixture();
     await expect(
@@ -248,6 +251,7 @@ describe("agent app commands", () => {
     expect(host.archive).not.toHaveBeenCalled();
   });
 
+  /** Keep archived sessions discoverable with draft state intact. */
   it("lists archived state without hiding archived sessions", async () => {
     const { source, host } = fixture();
     host.sessions = vi.fn(async () => [

@@ -2728,6 +2728,7 @@ mod tests {
         assert_eq!(restored.branch.as_deref(), Some("main"));
     }
 
+    /// Verify archive writes are idempotent and survive later upserts.
     #[test]
     fn archive_round_trips_and_survives_upsert() {
         let store = SessionStore::open_in_memory().unwrap();
