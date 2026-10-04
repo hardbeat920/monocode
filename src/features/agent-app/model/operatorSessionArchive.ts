@@ -7,15 +7,19 @@ export type OperatorArchiveResult = { changed: boolean; archived: boolean };
 
 export type OperatorArchiveAdapter = {
   callerId: string;
+  /** Read the latest renderer copy after any awaited store lookup. */
   liveSession(id: string): Session | undefined;
+  /** Include live UI activity and active orchestrator work. */
   isBusy(id: string): boolean;
+  /** Find saved history within the requesting project's scope. */
   persistedSession(id: string): Promise<OperatorArchiveSession | undefined>;
-  /** Close the visible view and return any original persistence failure. */
+  /** Close through UI safeguards and return storage failures unchanged. */
   archiveView(id: string): Promise<{
     completed: boolean;
     changed: boolean;
     error?: unknown;
   }>;
+  /** Persist the archive flag and report whether its value changed. */
   setArchived(id: string, archived: boolean): Promise<boolean>;
 };
 

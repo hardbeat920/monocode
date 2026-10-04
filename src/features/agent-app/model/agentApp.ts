@@ -56,6 +56,7 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
+  /** Persist archive visibility without starting or stopping the target. */
   archive(
     id: string,
     archived: boolean,

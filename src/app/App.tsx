@@ -922,6 +922,7 @@ export default function App(props: AppProps) {
   );
 }
 
+/** Own project session state and coordinate its panes, tabs, and actions. */
 function Workspace({
   windowTransfer = null,
   resumed = null,

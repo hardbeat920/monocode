@@ -203,6 +203,7 @@ pub fn help() -> String {
     USAGE.replace("{exe}", &exe)
 }
 
+/// Render app-access actions and session archive/unarchive help text.
 pub fn app_help() -> String {
     let exe = std::env::current_exe()
         .map(|path| quoted(&path.to_string_lossy()))
