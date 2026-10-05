@@ -611,18 +611,18 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
-  /** Keep session close guards current while this composer holds unsent work. */
-  useEffect(() => {
+  /** Read current refs for text, attachments, pending pastes, and submission. */
+  const hasUnsavedComposerWork = () =>
+    !!ref.current?.value ||
+    attachmentsRef.current.length > 0 ||
+    !!pasteFlightRef.current ||
+    submitLockRef.current;
+  /** Register this mounted composer until its session or component is replaced. */
+  const registerSessionCloseGuard = () => {
     if (!sessionId) return;
-    return registerComposerCloseGuard(
-      sessionId,
-      () =>
-        !!ref.current?.value ||
-        attachmentsRef.current.length > 0 ||
-        !!pasteFlightRef.current ||
-        submitLockRef.current,
-    );
-  }, [sessionId]);
+    return registerComposerCloseGuard(sessionId, hasUnsavedComposerWork);
+  };
+  useEffect(registerSessionCloseGuard, [sessionId]);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,

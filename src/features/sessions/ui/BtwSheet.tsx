@@ -1,4 +1,7 @@
-import { hasUnsavedComposerDraft, registerComposerCloseGuard } from "../model/draftCache";
+import {
+  hasUnsavedComposerDraft,
+  registerComposerCloseGuard,
+} from "../model/draftCache";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Plus, RefreshCw, X } from "../../../shared/ui/icons";
 
@@ -148,14 +151,16 @@ export function useBtwConversation({
       };
     });
   }, [drafts, entries, optimistic, turns]);
-  /** Keep parent session closing aware of drafts held in side-question tabs. */
-  useEffect(() => {
+  /** Report text or mounted composer work held by any side-question tab. */
+  const hasUnsavedSideQuestionWork = () =>
+    Object.values(draftTextsRef.current).some(Boolean) ||
+    tabs.some((tab) => hasUnsavedComposerDraft(tab.id));
+  /** Register the current side-question draft check for automated session close. */
+  const registerSideQuestionCloseGuard = () => {
     if (!sessionId) return;
-    return registerComposerCloseGuard(sessionId, () =>
-      Object.values(draftTextsRef.current).some(Boolean) ||
-      tabs.some((tab) => hasUnsavedComposerDraft(tab.id)),
-    );
-  }, [sessionId, tabs]);
+    return registerComposerCloseGuard(sessionId, hasUnsavedSideQuestionWork);
+  };
+  useEffect(registerSideQuestionCloseGuard, [sessionId, tabs]);
   const active =
     tabs.find((tab) => tab.id === activeId) ?? tabs[tabs.length - 1];
   const activeTabId = active?.id ?? null;
