@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
+  DAILY_WINDOW_MINUTES,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -770,7 +771,9 @@ function UsageWindowCard({
   const remaining = 100 - pct;
   const shown = showRemaining ? remaining : pct;
   const title =
-    kind === "session"
+    kind === "session" && window.windowMinutes === DAILY_WINDOW_MINUTES
+      ? "Daily limit"
+      : kind === "session"
       ? "5-hour limit"
       : kind === "weekly"
         ? "Weekly limit"

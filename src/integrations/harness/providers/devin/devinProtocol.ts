@@ -28,9 +28,14 @@ export function devinModeId(
   return "accept-edits";
 }
 
-/** `devin auth status` prints where `devin auth login` stored credentials. */
+/**
+ * `devin auth status` prints where `devin auth login` stored credentials:
+ * `Credentials path: …`, or a `Credentials:` block whose `File:` names it.
+ */
 export function devinCredentialsPathFromStatus(stdout: string): string | null {
-  const match = stdout.match(/^\s*Credentials path:\s*(.+?)\s*$/im);
+  const match =
+    stdout.match(/^\s*Credentials path:\s*(.+?)\s*$/im) ??
+    stdout.match(/^\s*Credentials:\s*\r?\n\s*File:\s*(.+?)\s*$/im);
   return match?.[1] ? match[1] : null;
 }
 

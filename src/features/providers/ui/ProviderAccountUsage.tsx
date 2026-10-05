@@ -1,5 +1,6 @@
 import {
   clampUsedPercent,
+  DAILY_WINDOW_MINUTES,
   formatResetDuration,
   formatUsagePercent,
   formatWindowLabel,
@@ -84,7 +85,13 @@ export function meterWindows(
   limits: ProviderRateLimits | undefined,
 ): { title: string; window: RateLimitWindow }[] {
   return [
-    limits?.session ? { title: "5h", window: limits.session } : null,
+    limits?.session
+      ? {
+          // Devin's short window is a day, not five hours.
+          title: limits.session.windowMinutes === DAILY_WINDOW_MINUTES ? "Daily" : "5h",
+          window: limits.session,
+        }
+      : null,
     limits?.weekly ? { title: "Weekly", window: limits.weekly } : null,
     limits?.monthly ? { title: "Monthly", window: limits.monthly } : null,
   ].filter((entry) => entry != null);

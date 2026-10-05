@@ -31,6 +31,12 @@ describe("devin auth helpers", () => {
       ),
     ).toBe("C:\\Users\\me\\AppData\\Roaming\\devin\\credentials.toml");
     expect(devinCredentialsPathFromStatus("Logged in as me")).toBeNull();
+    // Devin 3000.6.7 prints a Credentials block instead.
+    expect(
+      devinCredentialsPathFromStatus(
+        "Logged in (via Devin).\r\n\r\nCredentials:\r\n  File:              C:\\Users\\me\\AppData\\Roaming\\devin\\credentials.toml\r\n  API server:        https://server.example\r\n",
+      ),
+    ).toBe("C:\\Users\\me\\AppData\\Roaming\\devin\\credentials.toml");
   });
 
   it("handles Windows line endings and POSIX paths alike", () => {

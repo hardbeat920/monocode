@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "../../../platform/tauri/fs";
-import { supportsProviderAccounts } from "../../../features/providers/model/providerAccounts";
+import { supportsAccountProfiles } from "../../../features/providers/model/providerAccounts";
 import { HARNESS_TITLE, type HarnessId } from "../../../features/sessions/model/session";
 import * as child from "./child";
 import { harnessLoginArgs } from "./authSupport";
@@ -133,7 +133,7 @@ async function runHarnessLogin(
     }, LOGIN_TIMEOUT_MS);
 
     const account =
-      accountId && accountId !== "default" && supportsProviderAccounts(harness)
+      accountId && accountId !== "default" && supportsAccountProfiles(harness)
         ? { provider: harness, id: accountId }
         : undefined;
     const spawn = account
