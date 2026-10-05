@@ -383,67 +383,101 @@ export type RemoteProjectSessions = {
   loaded: boolean;
 };
 
-/** Lists a remote project's host sessions, keeping the last list visible
- * while the machine is unreachable. */
-export function useRemoteProjectSessions(
-  project: string,
-  enabled = true,
-): RemoteProjectSessions {
-  const remote = enabled ? remoteProjectFor(project) : undefined;
-  const { machines } = useRemoteMachines(!!remote);
-  const machine = remote
-    ? machines.find((entry) => entry.environmentId === remote.environmentId)
-    : undefined;
-  const [sessions, setSessions] = useState<HostSessionSummary[]>(() =>
-    remote ? cachedSessions(project) : [],
-  );
-  const [loaded, setLoaded] = useState(false);
+/** Lists each remote project's host sessions, keeping the last list visible
+ * while its machine is unreachable. Keyed by project path. */
+export function useRemoteProjectsSessions(
+  projects: readonly string[],
+): Record<string, RemoteProjectSessions> {
+  const remotes = projects.flatMap((project) => {
+    const remote = remoteProjectFor(project);
+    return remote ? [{ project, remote }] : [];
+  });
+  const { machines } = useRemoteMachines(remotes.length > 0);
+  const targets = remotes.map(({ project, remote }) => ({
+    project,
+    projectId: remote.projectId,
+    machine: machines.find(
+      (entry) => entry.environmentId === remote.environmentId,
+    ),
+  }));
+  const targetKey = targets
+    .map(({ project, projectId, machine }) =>
+      [project, projectId, machine?.id ?? ""].join("\u0001"),
+    )
+    .join("\u0000");
+  const [lists, setLists] = useState<
+    Record<string, { sessions: HostSessionSummary[]; loaded: boolean }>
+  >({});
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
-    if (!remote) return;
+    if (remotes.length === 0) return;
     const changed = () => setRefresh((value) => value + 1);
     window.addEventListener(REMOTE_HISTORY_CHANGE, changed);
     return () => window.removeEventListener(REMOTE_HISTORY_CHANGE, changed);
-  }, [!!remote]);
+  }, [remotes.length > 0]);
   useEffect(() => {
-    setSessions(remote ? cachedSessions(project) : []);
-    setLoaded(false);
-    if (!remote || !machine) return;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    let failures = 0;
-    const poll = async () => {
-      try {
-        const next = await remoteRequest<HostSessionSummary[]>(
-          machine.id,
-          "sessions.list",
-          { projectId: remote.projectId },
-        );
-        if (disposed) return;
-        failures = 0;
-        setSessions(next);
-        setLoaded(true);
+    setLists(
+      Object.fromEntries(
+        targets.map(({ project }) => [
+          project,
+          { sessions: cachedSessions(project), loaded: false },
+        ]),
+      ),
+    );
+    const disposers = targets.flatMap(({ project, projectId, machine }) => {
+      if (!machine) return [];
+      let disposed = false;
+      let timer: ReturnType<typeof setTimeout>;
+      let failures = 0;
+      const poll = async () => {
         try {
-          localStorage.setItem(historyKey(project), JSON.stringify(next));
-          window.dispatchEvent(new Event(REMOTE_HISTORY_UPDATED));
+          const next = await remoteRequest<HostSessionSummary[]>(
+            machine.id,
+            "sessions.list",
+            { projectId },
+          );
+          if (disposed) return;
+          failures = 0;
+          setLists((current) => ({
+            ...current,
+            [project]: { sessions: next, loaded: true },
+          }));
+          try {
+            localStorage.setItem(historyKey(project), JSON.stringify(next));
+            window.dispatchEvent(new Event(REMOTE_HISTORY_UPDATED));
+          } catch {
+            /* the list is refetched next time */
+          }
         } catch {
-          /* the list is refetched next time */
+          // Keep the cached list and back off while SSH is unavailable.
+          failures = Math.min(4, failures + 1);
         }
-      } catch {
-        // Keep the cached list and back off while SSH is unavailable.
-        failures = Math.min(4, failures + 1);
-      }
-      if (!disposed)
-        timer = setTimeout(
-          () => void poll(),
-          failures ? Math.min(30_000, 3_000 * 2 ** failures) : 3_000,
-        );
-    };
-    void poll();
+        if (!disposed)
+          timer = setTimeout(
+            () => void poll(),
+            failures ? Math.min(30_000, 3_000 * 2 ** failures) : 3_000,
+          );
+      };
+      void poll();
+      return [
+        () => {
+          disposed = true;
+          clearTimeout(timer);
+        },
+      ];
+    });
     return () => {
-      disposed = true;
-      clearTimeout(timer);
+      for (const dispose of disposers) dispose();
     };
-  }, [project, remote?.projectId, machine?.id, refresh]);
-  return { machine, sessions, loaded };
+  }, [targetKey, refresh]);
+  return Object.fromEntries(
+    targets.map(({ project, machine }) => [
+      project,
+      {
+        machine,
+        sessions: lists[project]?.sessions ?? cachedSessions(project),
+        loaded: lists[project]?.loaded ?? false,
+      },
+    ]),
+  );
 }

@@ -112,6 +112,7 @@ import { ComposerRunner } from "./ComposerRunner";
 import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
+import { MachinePicker } from "../../projects/ui/MachinePicker";
 import { WorktreePicker } from "../../source-control/ui/WorktreePicker";
 import {
   isWorkspaceModeShortcut,
@@ -230,6 +231,10 @@ type Props = {
   recents?: RecentProject[];
   hideProjectPicker?: boolean;
   hideBranchPicker?: boolean;
+  /** Moves a session that has not started to the project's folder on
+   * another machine. */
+  onMachineChange?: (path: string) => void;
+  onAddMachineLocation?: (where: "remote" | "local") => void;
   hideTopBar?: boolean;
   /** Keeps local file mentions, skills, and app modes off for host sessions. */
   remoteSession?: boolean;
@@ -522,6 +527,8 @@ export function Composer({
   recents = [],
   hideProjectPicker = false,
   hideBranchPicker = false,
+  onMachineChange,
+  onAddMachineLocation,
   hideTopBar = false,
   remoteSession = false,
   remoteFeatures,
@@ -2172,6 +2179,15 @@ export function Composer({
           ) : null}
           {hideTopBar ? null : (
             <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
+              {onMachineChange && onAddMachineLocation && !hideBranchPicker ? (
+                <MachinePicker
+                  cwd={cwd}
+                  enabled={!!draftWorkspace && enabled && !busy}
+                  onChange={onMachineChange}
+                  onAdd={onAddMachineLocation}
+                  onClose={() => ref.current?.focus()}
+                />
+              ) : null}
               {!remote && !hideProjectPicker ? (
                 <CwdPicker
                   cwd={cwd}

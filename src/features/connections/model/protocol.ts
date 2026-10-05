@@ -25,7 +25,15 @@ export type HostDescriptor = {
   capabilities: string[];
   platform?: "win32" | "darwin" | "linux";
 };
-export type HostProject = { id: string; cwd: string; name: string };
+export type HostProject = {
+  id: string;
+  cwd: string;
+  name: string;
+  /** The checkout's `origin` URL (else `upstream`, else its first remote).
+   * The desktop groups one repository's folders on different machines by it.
+   * Hosts before 0.5 omit it. */
+  remoteUrl?: string;
+};
 export type HostDirectory = {
   path: string;
   parent: string | null;

@@ -14,6 +14,7 @@ import {
 } from "../src/features/connections/model/protocol";
 import { HostEngine } from "./engine";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
+import type { HostProject } from "../src/features/connections/model/protocol";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
 import { SyncTransfers } from "./sync-transfer";
@@ -65,6 +66,23 @@ import {
 } from "../src/integrations/harness/core/child";
 
 const exec = promisify(execFile);
+
+/** The remote that names a checkout: `origin`, then `upstream`, then the
+ * first by name. Matches the desktop's `git_remote_url`. */
+async function gitRemoteUrl(cwd: string): Promise<string | undefined> {
+  const git = (args: string[]) =>
+    exec("git", ["-C", cwd, ...args], { timeout: 2_000 })
+      .then(({ stdout }) => stdout.trim())
+      .catch(() => "");
+  const names = (await git(["remote"])).split(/\r?\n/).map((name) => name.trim()).filter(Boolean).sort();
+  const name = ["origin", "upstream"].find((preferred) => names.includes(preferred)) ?? names[0];
+  return name ? (await git(["remote", "get-url", name])) || undefined : undefined;
+}
+
+async function withRemoteUrl(project: HostProject): Promise<HostProject> {
+  const remoteUrl = await gitRemoteUrl(project.cwd);
+  return remoteUrl ? { ...project, remoteUrl } : project;
+}
 // Providers also add models server-side, without a CLI update.
 const CATALOG_MAX_AGE_MS = 5 * 60_000;
 const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
@@ -292,13 +310,13 @@ export function createHostServer(
             };
             break;
           case "projects.list":
-            result = engine.store.projects();
+            result = await Promise.all(engine.store.projects().map(withRemoteUrl));
             break;
           case "projects.browse":
             result = await browseHostDirectories(params.path);
             break;
           case "projects.open":
-            result = await engine.openProject(String(params.cwd ?? ""));
+            result = await withRemoteUrl(await engine.openProject(String(params.cwd ?? "")));
             break;
           case "models.list":
             result = await models(params.projectId);

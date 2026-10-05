@@ -1,5 +1,6 @@
 import { pathKey, prettyCwd, slash } from "../../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
+import { projectHome } from "./projectMachines";
 
 const KEY = "monocode.recentProjects";
 const RAIL_ORDER_KEY = "monocode.projectRailOrder";
@@ -63,7 +64,9 @@ function save(next: RecentProject[]) {
 }
 
 export function rememberProject(path: string): RecentProject[] {
-  const normalized = normalize(path);
+  // A folder linked to a project on several machines keeps its project's
+  // place in the rail.
+  const normalized = normalize(projectHome(path));
   if (normalized === "~") return loadRecents();
   dropArchived(normalized);
   const prev = loadRecents().filter((p) => !sameProjectPath(p.path, normalized));
@@ -331,6 +334,23 @@ export function collectRailProjects(
   return map;
 }
 
+/** Rail entries: each folder linked to a project on several machines folds
+ * into that project's home. */
+export function collectRailHomes(
+  recents: RecentProject[],
+  currentCwd: string,
+): Map<string, RecentProject> {
+  const map = new Map<string, RecentProject>();
+  for (const item of collectRailProjects(recents, currentCwd).values()) {
+    const path = projectHome(item.path);
+    const key = pathKey(path);
+    const known = map.get(key);
+    if (!known || known.openedAt < item.openedAt)
+      map.set(key, { path, openedAt: item.openedAt });
+  }
+  return map;
+}
+
 /** Append new projects to the saved order without moving existing entries. */
 export function syncProjectRailOrder(
   order: string[],
@@ -358,7 +378,7 @@ export function projectRailSections(
   order: string[],
   pinnedPaths: string[],
 ): ProjectRailSections {
-  const projects = collectRailProjects(recents, currentCwd);
+  const projects = collectRailHomes(recents, currentCwd);
   const syncedOrder = syncProjectRailOrder(order, projects);
   const pinnedSet = new Set(pinnedPaths.map(pathKey));
   const pinned: RecentProject[] = [];
@@ -378,7 +398,7 @@ export function projectRailItems(
   recents: RecentProject[],
   currentCwd: string,
 ): RecentProject[] {
-  const projects = collectRailProjects(recents, currentCwd);
+  const projects = collectRailHomes(recents, currentCwd);
   const order = syncProjectRailOrder(loadProjectRailOrder(), projects);
   const { pinned, projects: unpinned } = projectRailSections(
     recents,
