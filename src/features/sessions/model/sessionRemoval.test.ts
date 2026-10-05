@@ -75,13 +75,16 @@ function fixture(mode: "archive" | "delete") {
     confirmClose,
     stop,
     commit,
+    /** Expose the changed flag reported by the removal lifecycle. */
     archiveChanged: () => archiveChanged,
+    /** Execute the remover against this fixture's tabs, sessions, and safeguards. */
     run: () => {
       const remover = createSessionRemover({
         mode,
         replacement: { cwd: "/tmp/project", harness: "cursor" },
         workspace: {
           snapshot: () => state,
+          /** Record archive results and apply lifecycle changes to fixture state. */
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {

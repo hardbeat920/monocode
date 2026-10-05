@@ -80,6 +80,7 @@ function fixture() {
   source.id = "lead";
   const host: AgentAppHost = {
     start: vi.fn(async () => {}),
+    /** List the fixture's idle target in the caller's project. */
     sessions: vi.fn(async () => [
       {
         id: "other",
@@ -94,6 +95,7 @@ function fixture() {
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
+    /** Model the fixture write as changed only for the archive request. */
     archive: vi.fn(async (_id, archived) => ({ changed: archived })),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),

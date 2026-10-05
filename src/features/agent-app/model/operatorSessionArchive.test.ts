@@ -12,21 +12,31 @@ function adapter() {
   let archived = false;
   const value: OperatorArchiveAdapter = {
     callerId: "caller",
+    /** Return the mutable renderer target used to exercise fresh-state reads. */
     liveSession: vi.fn(() => live),
+    /** Read the target's current busy flag, including test changes after awaits. */
     isBusy: vi.fn((id) => id === "target" && !!live.busy),
+    /** Supply the target's current saved archive flag to the adapter. */
     persistedSession: vi.fn(async () => ({ archived })),
+    /** Simulate a successful view close and record its archive transition. */
     archiveView: vi.fn(async () => {
       const changed = !archived;
       archived = true;
       return { completed: true, changed };
     }),
+    /** Update the saved flag and report whether this fixture changed it. */
     setArchived: vi.fn(async (_id, next) => {
       const changed = archived !== next;
       archived = next;
       return changed;
     }),
   };
-  return { value, live, isArchived: () => archived };
+  return {
+    value,
+    live,
+    /** Read the archive flag after adapter requests have updated it. */
+    isArchived: () => archived,
+  };
 }
 
 describe("Operator session archive adapter", () => {
