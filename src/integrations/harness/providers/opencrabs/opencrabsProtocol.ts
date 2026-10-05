@@ -9,7 +9,6 @@ import {
   extractToolPreview,
 } from "../../core/preview";
 import { acpAgentInfo } from "../../core/acpSubagents";
-import { statSync } from "node:fs";
 
 export type OpenCrabsPermissionRequest = {
   title: string;
@@ -324,22 +323,22 @@ function imagesFromContent(
     if (!uri.startsWith("file://")) continue;
     const path = decodeURIComponent(uri.slice("file://".length));
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
-    const mimeType = IMAGE_MIME[ext];
+    // The server stats the file before emitting the block (the renderer
+    // has no filesystem), so mimeType and size ride on the wire; the
+    // extension map is the fallback for older servers.
+    const mimeType =
+      typeof rec.mimeType === "string" && rec.mimeType
+        ? rec.mimeType
+        : IMAGE_MIME[ext];
     if (!mimeType) continue;
-    try {
-      const st = statSync(path);
-      if (!st.isFile()) continue;
-      events.push({
-        type: "image.generated",
-        itemId: `${callId}:${i}`,
-        path,
-        name: String(rec.name ?? path.split("/").pop() ?? "image"),
-        mimeType,
-        size: st.size,
-      });
-    } catch {
-      // Gone before render — the text summary still carries the path.
-    }
+    events.push({
+      type: "image.generated",
+      itemId: `${callId}:${i}`,
+      path,
+      name: String(rec.name ?? path.split("/").pop() ?? "image"),
+      mimeType,
+      size: Number(rec.size ?? 0),
+    });
   }
   return events;
 }
