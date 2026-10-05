@@ -1616,6 +1616,30 @@ function SidebarComponent({
     );
   });
 
+  const workspaceHeader = (
+    <div
+      className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
+      data-tauri-drag-region="deep"
+    >
+      <div className="flex min-w-0 flex-1 items-center">
+        {!remoteProject && cwd && cwd !== "~" ? (
+          <SidebarWorktreeSwitcher
+            cwd={cwd}
+            tabStats={worktreeTabStats}
+            onSelect={onSelectWorkspace}
+            pending={workspaceSwitchPending}
+            switchError={workspaceSwitchError}
+          />
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium leading-tight">
+            Workspace
+          </span>
+        )}
+      </div>
+      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+    </div>
+  );
+
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
@@ -1623,27 +1647,7 @@ function SidebarComponent({
     >
       {railVisible ? (
         <>
-          <div
-            className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
-            data-tauri-drag-region="deep"
-          >
-            <div className="flex min-w-0 flex-1 items-center">
-              {!remoteProject && cwd && cwd !== "~" ? (
-                <SidebarWorktreeSwitcher
-                  cwd={cwd}
-                  tabStats={worktreeTabStats}
-                  onSelect={onSelectWorkspace}
-                  pending={workspaceSwitchPending}
-                  switchError={workspaceSwitchError}
-                />
-              ) : (
-                <span className="min-w-0 truncate text-sm font-medium leading-tight">
-                  Workspace
-                </span>
-              )}
-            </div>
-            <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
-          </div>
+          {workspaceHeader}
           <div
             role="tablist"
             aria-label="Workspace"
@@ -1672,6 +1676,7 @@ function SidebarComponent({
               />
             </div>
           )}
+          {compactRailVisible ? workspaceHeader : null}
           {onSelectProject && !compactRailVisible ? (
             <SidebarProjectPicker
               cwd={cwd}
@@ -1759,7 +1764,7 @@ function SidebarComponent({
             sessionsLock(el);
             sessionsScrollRef.current = el;
           }}
-          className={`min-h-0 flex-1 overflow-y-auto overscroll-none ${
+          className={`sidebar-session-scroll min-h-0 flex-1 overflow-y-auto overscroll-none ${
             tab === "sessions" ? "" : "hidden"
           }`}
         >
@@ -1799,7 +1804,7 @@ function SidebarComponent({
                   <SessionsEmpty message="Sessions you start will show up here" />
                 )
               ) : (
-                <ul data-session-list className="flex flex-col gap-0.5 p-1.5">
+                <ul data-session-list className="flex flex-col gap-0.5 p-1.5 pb-10">
                   {sessionListEntries.map((entry, index) => {
                     if (entry.kind === "pinned" || entry.kind === "reminders") {
                       const isReminders = entry.kind === "reminders";

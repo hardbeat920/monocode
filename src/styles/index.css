@@ -623,6 +623,36 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
 }
 
+/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+.tab-label[data-overflow="true"] {
+  --tab-label-mask: linear-gradient(
+    to right,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--tab-label-mask);
+  mask-image: var(--tab-label-mask);
+}
+
+/* Fade scrolling content at the bottom viewport edge. */
+.sidebar-session-scroll,
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--scroll-bottom-mask);
+  mask-image: var(--scroll-bottom-mask);
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade. */
+.transcript-composer-fade [data-transcript-content] {
+  padding-bottom: 2.5rem;
+}
+
 .agent-transcript
   [data-transcript-search-current="true"]
   .user-message-bubble
