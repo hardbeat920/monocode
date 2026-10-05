@@ -37,6 +37,8 @@ The **Explorer** sidebar and Go to File use the normal file views for host folde
 
 The composer’s **+** menu supports file and image attachments, Plan mode, and saved drafts when the host advertises these capabilities. Attachments are copied to the host’s private data directory before the turn or draft is recorded; each file is limited to 20 MiB. Image previews are restored from the host when you reopen a conversation. A draft can be sent or removed from its transcript card. Plan mode uses the host provider and produces a reviewable plan card whose Build action continues on the host with the session’s current model. Update older hosts to enable these menu actions.
 
+Messages sent while a turn is running wait in a queue on the host, which sends each one when the turn before it finishes, also while this computer is disconnected. Queued messages can be edited or removed until they are sent. Stopping a turn pauses the queue; **Resume** continues the interrupted work first, then the queue. Host providers cannot steer a running turn. Older hosts reject messages sent during a turn; update the host to queue them.
+
 Features that read or run on this computer are not available in these projects: `@` file mentions, skills and slash commands other than `/plan` and `/compact`, operator mode, and terminals. Worktree deletion and the local worktree settings page are not available remotely yet. Plans from the transcript open normal read-only plan tabs. Source files stay on the host; this feature shares host-owned sessions, not working-directory synchronization.
 
 ## Manual connection (advanced / development)
