@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
+import { useTrafficLights } from "./useTrafficLights";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -21,6 +22,7 @@ vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
 vi.mock("../../platform/tauri/clipboard", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("./useTrafficLights", () => ({ useTrafficLights: vi.fn(() => true) }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -82,6 +84,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(copyText).mockReset().mockResolvedValue(undefined);
   vi.mocked(useProjectDiffStats).mockReturnValue(null);
+  vi.mocked(useTrafficLights).mockReturnValue(true);
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => stored.get(key) ?? null,
@@ -1408,28 +1411,82 @@ describe("collapsed rail Inbox actions", () => {
     ).not.toBeNull();
   });
 
-  it("yields its local header to the full-width title bar", async () => {
+  it("keeps the workspace header and tabs in the sidebar beside it", async () => {
     props.projectRailOpen = false;
-    props.titleBarAbove = true;
     props.onSelectProject = vi.fn();
     props.onOpenProject = vi.fn();
     props.onGoBack = vi.fn();
+    props.onGoToFile = vi.fn();
     await act(async () => render());
 
     const rail = container.querySelector<HTMLElement>(
       "[data-compact-project-rail]",
     )!;
+    const sidebar = container.querySelector("aside")!;
+    expect(
+      rail.querySelector("[data-compact-rail-divider]")?.className,
+    ).toContain("top-10");
+    expect(rail.querySelector('[role="tablist"]')).toBeNull();
+    expect(
+      Array.from(
+        sidebar.querySelectorAll(
+          '[role="tablist"][aria-label="Workspace"] [role="tab"]',
+        ),
+        (tab) => tab.textContent,
+      ),
+    ).toEqual(["Sessions", "Explorer", "Changes"]);
+    expect(
+      sidebar.querySelector('button[aria-label^="Go to File"]'),
+    ).not.toBeNull();
+    expect(sidebar.querySelector('button[aria-label^="Back"]')).toBeNull();
+  });
+
+  it("runs the full height without traffic lights", async () => {
+    // Full screen on macOS, or any other platform.
+    vi.mocked(useTrafficLights).mockReturnValue(false);
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    await act(async () => render());
+
+    const rail = container.querySelector<HTMLElement>(
+      "[data-compact-project-rail]",
+    )!;
+    expect(rail.querySelector('[data-tauri-drag-region="deep"]')).toBeNull();
     expect(
       rail.querySelector("[data-compact-rail-divider]")?.className,
     ).toContain("top-0");
-    expect(
-      rail.querySelector("[data-compact-rail-divider]")?.className,
-    ).not.toContain("top-10");
-    expect(container.textContent).not.toContain("Development");
-    expect(container.querySelector('button[aria-label^="Back"]')).toBeNull();
+    expect(rail.firstElementChild?.hasAttribute("data-compact-rail-divider"))
+      .toBe(true);
+  });
+
+  it("keeps back and forward on the compact rail", async () => {
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.canGoBack = true;
+    props.canGoForward = false;
+    props.onGoBack = vi.fn();
+    props.onGoForward = vi.fn();
+    await act(async () => render());
+
+    const rail = container.querySelector<HTMLElement>(
+      "[data-compact-project-rail]",
+    )!;
+    const back = rail.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Back"]',
+    )!;
+    const forward = rail.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Forward"]',
+    )!;
+    expect(back.disabled).toBe(false);
+    expect(forward.disabled).toBe(true);
+    act(() => back.click());
+    expect(props.onGoBack).toHaveBeenCalledOnce();
   });
 
   it("keeps project shortcuts in a compact vertical rail", async () => {
+    props.open = false;
     props.projectRailOpen = false;
     props.onSelectProject = vi.fn();
     props.onOpenProject = vi.fn();
@@ -1464,14 +1521,16 @@ describe("collapsed rail Inbox actions", () => {
       ),
     ).toEqual([
       "Expand projects",
-      "Switch project, current project project",
-      "Sessions",
-      "Explorer",
-      "Changes",
+      "Back",
+      "Forward",
       "Search",
       "Inbox",
       "Notes",
       "Automations",
+      "Switch project, current project project",
+      "Sessions",
+      "Explorer",
+      "Changes",
       "Settings",
     ]);
     const workspaceTabs = rail.querySelector<HTMLElement>(
@@ -1486,7 +1545,8 @@ describe("collapsed rail Inbox actions", () => {
     const sessionsTab = workspaceTabs.querySelector<HTMLButtonElement>(
       '[aria-label="Sessions"]',
     )!;
-    expect(sessionsTab.getAttribute("aria-selected")).toBe("true");
+    // The collapsed sidebar shows no tab until a shortcut slides it open.
+    expect(sessionsTab.getAttribute("aria-selected")).toBe("false");
     expect(sessionsTab.querySelector("span")).toBeNull();
     expect(
       container.querySelectorAll('[role="tablist"][aria-label="Workspace"]'),
@@ -1504,10 +1564,22 @@ describe("collapsed rail Inbox actions", () => {
       'button[aria-label^="Switch project"]',
     )!;
     expect(projectPicker.className).toContain("size-8");
+    // Back and forward share one row as half-width buttons.
+    const nav = rail.querySelector<HTMLElement>("[data-compact-rail-nav]")!;
     expect(
-      Array.from(rail.querySelectorAll("button")).every((button) =>
-        button.className.includes("size-8"),
+      Array.from(nav.querySelectorAll("button"), (button) =>
+        button.getAttribute("aria-label")?.replace(/ \(.+\)$/, ""),
       ),
+    ).toEqual(["Back", "Forward"]);
+    expect(
+      Array.from(nav.querySelectorAll("button")).every((button) =>
+        button.className.includes("h-8 w-5"),
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(rail.querySelectorAll("button"))
+        .filter((button) => !nav.contains(button))
+        .every((button) => button.className.includes("size-8")),
     ).toBe(true);
     expect(
       Array.from(rail.querySelectorAll("button")).every(
@@ -1771,6 +1843,7 @@ describe("collapsed rail Inbox actions", () => {
       additions: 3,
       deletions: 0,
     });
+    props.open = false;
     props.projectRailOpen = false;
     props.onSelectProject = vi.fn();
     props.onOpenProject = vi.fn();

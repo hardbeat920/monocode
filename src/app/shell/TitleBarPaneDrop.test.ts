@@ -63,49 +63,6 @@ afterEach(() => {
 });
 
 describe("title tab pane drops", () => {
-  it("joins compact navigation and tabs in one title bar", () => {
-    const onGoBack = vi.fn();
-    const onGoForward = vi.fn();
-    act(() =>
-      root.render(
-        createElement(TitleBar, {
-          tabs: [tab("first"), tab("second")],
-          activeId: "first",
-          cwd: "/project",
-          projectRailOpen: false,
-          compactRail: true,
-          canGoBack: true,
-          canGoForward: true,
-          onGoBack,
-          onGoForward,
-          onToggleSidebar: vi.fn(),
-          onNew: vi.fn(),
-          onSelect: vi.fn(),
-          onClose: vi.fn(),
-          onCloseMany: vi.fn(),
-          onReorder: vi.fn(),
-        }),
-      ),
-    );
-
-    const nav = container.querySelector<HTMLElement>(
-      "[data-compact-title-nav]",
-    )!;
-    expect(nav.closest("header")?.className).toContain("body-glass");
-    expect(nav.className).toContain("pl-[70px]");
-    expect(
-      Array.from(nav.querySelectorAll("button"), (button) =>
-        button.getAttribute("aria-label")?.replace(/ \(.+\)$/, ""),
-      ),
-    ).toEqual(["Back", "Forward"]);
-    expect(nav.nextElementSibling?.querySelector("[data-title-tab-strip]")).not
-      .toBeNull;
-    expect(container.textContent).not.toContain("Development");
-
-    act(() => nav.querySelector<HTMLButtonElement>("button")!.click());
-    expect(onGoBack).toHaveBeenCalledOnce();
-  });
-
   it("keeps the current tab visible and places the dragged tab on a pane edge", () => {
     const onSelect = vi.fn();
     const onPlaceOnPane = vi.fn();
