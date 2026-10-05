@@ -602,6 +602,11 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  // React rewrites a textarea's text node whenever defaultValue changes, and
+  // WebKit then resets the field, committing any IME composition. Parents
+  // re-render with the latest draft (remote sessions on every poll), so keep
+  // the mount-time value; the effect below applies later changes.
+  const [mountDraft] = useState(initialDraft);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,
@@ -2305,7 +2310,7 @@ export function Composer({
               style={{ textIndent: modeIndent }}
               rows={1}
               spellCheck={false}
-              defaultValue={initialDraft}
+              defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
                   ? "Select a branch or worktree to continue…"
