@@ -115,10 +115,20 @@ type SessionUpsertPayload = {
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
+    isStorableSession(session) &&
+    session.blocks.some((block) => block.role === "user")
+  );
+}
+
+/**
+ * A local conversation the store can hold, with or without a message.
+ * Reminders save blank conversations this way.
+ */
+export function isStorableSession(session: Session): boolean {
+  return (
     !session.inboxAsk &&
     !isRemoteProjectPath(session.cwd) &&
-    session.cwd !== "~" &&
-    session.blocks.some((block) => block.role === "user")
+    session.cwd !== "~"
   );
 }
 
@@ -236,8 +246,12 @@ function enqueueSessionWrite<T>(
 
 export async function upsertSession(
   session: Session,
+  options: { allowEmpty?: boolean } = {},
 ): Promise<SessionSummary | null> {
-  if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
+  const storable = options.allowEmpty
+    ? isStorableSession(session)
+    : shouldPersistSession(session);
+  if (!storable || deletedSessionIds.has(session.id)) {
     return null;
   }
   const payload = sanitizeSessionForPersist(session);

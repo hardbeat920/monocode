@@ -4270,9 +4270,12 @@ function Workspace({
         const session = sessionsRef.current.find(
           (session) => session.id === id,
         );
-        if (session && !(await upsertSession(session))) {
+        if (
+          session &&
+          !(await upsertSession(session, { allowEmpty: true }))
+        ) {
           throw new Error(
-            "Send a message in this conversation before setting a reminder.",
+            "Reminders need a conversation in a local project.",
           );
         }
       }
