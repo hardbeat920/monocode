@@ -34,6 +34,18 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
     update.sessionUpdate ?? update.session_update ?? update.type ?? "",
   );
 
+  if (kind === "user_message_chunk" || kind === "user_message") {
+    // Mirrored surfaces: user rows here were sent from ANOTHER surface
+    // (Telegram, TUI, cron) and pushed by the server's cross-surface
+    // watcher. Render them user-side as interjection blocks — which also
+    // bounds each turn's assistant streaming block naturally.
+    const text = textFromContent(
+      update.content ?? update.text,
+      kind === "user_message" ? "\n" : "",
+    );
+    return text ? [{ type: "interjection", customType: "custom", text }] : [];
+  }
+
   if (kind === "agent_message_chunk" || kind === "agent_message") {
     const text = textFromContent(
       update.content ?? update.text,
