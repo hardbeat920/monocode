@@ -5144,9 +5144,9 @@ function Workspace({
       ) {
         const moved = retarget(current);
         if (isStorableSession(moved)) {
-          void upsertSession(moved, { allowEmpty: true }).catch(
-            () => undefined,
-          );
+          void upsertSession(moved, { allowEmpty: true }).catch(() => {
+            void cancelSessionRemindersRef.current([sessionId]);
+          });
         } else {
           void cancelSessionRemindersRef.current([sessionId]);
         }
