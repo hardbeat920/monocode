@@ -87,6 +87,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -180,6 +181,9 @@ afterEach(() => {
   document.body
     .querySelectorAll("[data-popover-side]")
     .forEach((element) => element.remove());
+  // Successful mutations schedule a delayed invalidation that outlives unmount.
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -312,10 +316,14 @@ describe("GitChangesPanel folder actions", () => {
 
     expect(gitStageFile).toHaveBeenCalledExactlyOnceWith("/repo", "src/nested");
     expect(folder.getAttribute("aria-expanded")).toBe("true");
-    expect(invalidateWatchedFiles).toHaveBeenCalledWith([
+    const paths = [
       "/repo/src/nested/one.ts",
       "/repo/src/nested/deeper/two.ts",
-    ]);
+    ];
+    expect(invalidateWatchedFiles).toHaveBeenCalledExactlyOnceWith(paths);
+    await act(async () => vi.advanceTimersByTime(150));
+    expect(invalidateWatchedFiles).toHaveBeenCalledTimes(2);
+    expect(invalidateWatchedFiles).toHaveBeenLastCalledWith(paths);
   });
 
   it("unstages the staged folder including files that also have unstaged changes", async () => {
@@ -402,6 +410,7 @@ describe("GitChangesPanel folder actions", () => {
 
     expect(alert).toHaveBeenCalledWith("Git index is locked");
     expect(stage.disabled).toBe(false);
+    await act(async () => vi.advanceTimersByTime(150));
     expect(invalidateWatchedFiles).not.toHaveBeenCalled();
     alert.mockRestore();
   });

@@ -62,6 +62,11 @@ export type GitlabMrDiff = {
   files: { path: string; additions: number; deletions: number }[];
   patch: string;
   truncated: boolean;
+  diffRefs: { baseSha: string; headSha: string } | null;
+  fileChanges: Record<
+    string,
+    { old_path: string; new_file: boolean; deleted_file: boolean }
+  >;
 };
 
 export const GITLAB_CHANGE_EVENT = "monocode:gitlab-change";
@@ -256,4 +261,22 @@ export async function gitlabMrDiff(
 export function notifyGitlabChange() {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(GITLAB_CHANGE_EVENT));
+}
+
+export function gitlabMrFileDiff(
+  repo: string,
+  number: number,
+  diff: GitlabMrDiff,
+  path: string,
+) {
+  return invoke<{
+    original: string;
+    current: string;
+    binary: boolean;
+    tooLarge: boolean;
+  }>("gitlab_mr_file_diff", {
+    repo, number, path,
+    refs: diff.diffRefs,
+    change: diff.fileChanges[path] ?? null,
+  });
 }

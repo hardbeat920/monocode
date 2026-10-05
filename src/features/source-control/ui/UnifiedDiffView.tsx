@@ -75,6 +75,8 @@ type Props = {
   fileLayout?: FileLayout;
   /** Applied when a new set of files is loaded. */
   initialExpansion?: InitialExpansion;
+  /** Load missing contents when an expanded file enters the viewport. */
+  onLoadFile?: (id: string) => void;
   onStageFile?: (id: string) => void;
   onDiscardFile?: (id: string) => void;
   onStageHunk?: (id: string, pos: number) => void;
@@ -91,6 +93,7 @@ export function UnifiedDiffView({
   fill = true,
   fileLayout = "stacked",
   initialExpansion = "all",
+  onLoadFile,
   onStageFile,
   onDiscardFile,
   onStageHunk,
@@ -265,6 +268,7 @@ export function UnifiedDiffView({
               colorScheme={colorScheme}
               scrollerRef={scrollerRef}
               onToggle={toggleFile}
+              onLoadFile={onLoadFile}
               onReveal={revealFold}
               onStageFile={onStageFile}
               onDiscardFile={onDiscardFile}
@@ -288,6 +292,7 @@ type FileSectionProps = {
   colorScheme: ColorScheme;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   onToggle: (id: string) => void;
+  onLoadFile?: (id: string) => void;
   onReveal: (
     fileId: string,
     foldId: string,
@@ -310,6 +315,7 @@ const FileSection = memo(function FileSection({
   colorScheme,
   scrollerRef,
   onToggle,
+  onLoadFile,
   onReveal,
   onStageFile,
   onDiscardFile,
@@ -323,6 +329,10 @@ const FileSection = memo(function FileSection({
   const [tokens, setTokens] = useState<Map<UnifiedLine, SyntaxToken[]> | null>(
     null,
   );
+
+  useEffect(() => {
+    if (expanded && near) onLoadFile?.(file.id);
+  }, [expanded, near, file.id, onLoadFile]);
 
   useEffect(() => {
     if (!expanded || !near) return;
@@ -463,6 +473,7 @@ function equalFileSectionProps(
     previous.colorScheme === next.colorScheme &&
     previous.scrollerRef === next.scrollerRef &&
     previous.onToggle === next.onToggle &&
+    previous.onLoadFile === next.onLoadFile &&
     previous.onReveal === next.onReveal &&
     previous.onStageFile === next.onStageFile &&
     previous.onDiscardFile === next.onDiscardFile &&

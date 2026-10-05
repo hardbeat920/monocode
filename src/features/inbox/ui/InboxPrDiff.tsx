@@ -1,8 +1,19 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { GithubPrDiff } from "../model/githubTasks";
-import { mergePrDiff, parsePrPatch, type PrDiffFile } from "../../source-control/model/prDiff";
-import { blocksFromLines, type UnifiedLine } from "../../source-control/model/unifiedDiff";
-import { UnifiedDiffView, type UnifiedDiffFileModel } from "../../source-control/ui/UnifiedDiffView";
+import {
+  mergePrDiff,
+  parsePrPatch,
+  type PrDiffFile,
+} from "../../source-control/model/prDiff";
+import {
+  blocksFromLines,
+  buildUnifiedFile,
+  type UnifiedLine,
+} from "../../source-control/model/unifiedDiff";
+import {
+  UnifiedDiffView,
+  type UnifiedDiffFileModel,
+} from "../../source-control/ui/UnifiedDiffView";
 
 type Props = {
   diff: GithubPrDiff;
@@ -10,14 +21,120 @@ type Props = {
   fullFile?: boolean;
   /** File to open and scroll to, such as one picked from the summary. */
   focusPath?: string;
+  loadFile?: (path: string) => Promise<InboxDiffContents>;
 };
 
-export function InboxPrDiff({ diff, fullFile = false, focusPath }: Props) {
-  const files = useMemo(() => {
-    const parsed = mergePrDiff(diff.files, parsePrPatch(diff.patch));
+export type InboxDiffContents = {
+  original: string;
+  current: string;
+  binary: boolean;
+  tooLarge: boolean;
+};
+
+type FileLoad = {
+  status: "loading" | "loaded" | "error";
+  model: UnifiedDiffFileModel;
+};
+
+export function InboxPrDiff({
+  diff,
+  fullFile = false,
+  focusPath,
+  loadFile,
+}: Props) {
+  const preview = useMemo(() => {
     const context = fullFile ? Number.POSITIVE_INFINITY : undefined;
-    return parsed.map((file) => toModel(file, diff.truncated, context));
-  }, [diff, fullFile]);
+    const models = mergePrDiff(diff.files, parsePrPatch(diff.patch)).map(
+      (file) => toModel(file, diff.truncated, context),
+    );
+    return {
+      models: new Map(models.map((model) => [model.id, model])),
+      context,
+      loadFile,
+    };
+  }, [diff, fullFile, loadFile]);
+  const [loads, setLoads] = useState(() => ({
+    preview,
+    files: new Map<string, FileLoad>(),
+  }));
+  // Reset with the preview, before children can request its files.
+  if (loads.preview !== preview) {
+    setLoads({ preview, files: new Map() });
+  }
+  const currentLoads = useRef(loads);
+  currentLoads.current = loads;
+  const onLoadFile = useCallback(
+    (path: string) => {
+      const current = currentLoads.current;
+      const file = preview.models.get(path);
+      const cached = current.files.get(path);
+      if (
+        current.preview !== preview ||
+        !preview.loadFile ||
+        !file ||
+        file.blocks.length ||
+        file.binary ||
+        (cached && cached.status !== "error")
+      )
+        return;
+      const update = (entry: FileLoad) => {
+        const current = currentLoads.current;
+        if (current.preview !== preview) return;
+        const next = {
+          preview,
+          files: new Map(current.files).set(path, entry),
+        };
+        // Deduplicate calls even before React commits the state update.
+        currentLoads.current = next;
+        setLoads(next);
+      };
+      update({
+        status: "loading",
+        model: { ...file, emptyMessage: "Loading diff…" },
+      });
+      void preview
+        .loadFile(path)
+        .then((contents) => {
+          if (currentLoads.current.preview !== preview) return;
+          update({
+            status: "loaded",
+            model: {
+              ...file,
+              binary: contents.binary,
+              tooLarge: contents.tooLarge,
+              emptyMessage: undefined,
+              blocks:
+                contents.binary || contents.tooLarge
+                  ? []
+                  : buildUnifiedFile(
+                      contents.original,
+                      contents.current,
+                      preview.context,
+                    ).blocks,
+            },
+          });
+        })
+        .catch((error: unknown) => {
+          update({
+            status: "error",
+            model: {
+              ...file,
+              emptyMessage: `${error instanceof Error ? error.message : String(error)}. Collapse and expand to retry.`,
+            },
+          });
+        });
+    },
+    [preview],
+  );
+
+  const files = useMemo(
+    () =>
+      Array.from(
+        preview.models.values(),
+        (file) => loads.files.get(file.id)?.model ?? file,
+      ),
+    [preview, loads],
+  );
 
   return (
     <UnifiedDiffView
@@ -28,6 +145,7 @@ export function InboxPrDiff({ diff, fullFile = false, focusPath }: Props) {
       fileLayout="cards"
       initialExpansion="first"
       focusPath={focusPath}
+      onLoadFile={loadFile ? onLoadFile : undefined}
     />
   );
 }

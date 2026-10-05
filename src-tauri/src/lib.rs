@@ -353,6 +353,7 @@ pub fn run() {
             gitlab::gitlab_work_item_thread,
             gitlab::gitlab_work_item_comment,
             gitlab::gitlab_mr_diff,
+            gitlab::gitlab_mr_file_diff,
             azure_devops::azure_devops_status,
             azure_devops::azure_devops_set_config,
             azure_devops::azure_devops_repo,

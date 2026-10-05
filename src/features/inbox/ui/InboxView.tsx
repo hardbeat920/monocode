@@ -158,6 +158,7 @@ import {
   GITLAB_CHANGE_EVENT,
   gitlabConnected,
   gitlabMrDiff,
+  gitlabMrFileDiff,
   gitlabWorkItemComment,
   gitlabWorkItemDetails,
   gitlabWorkItemThread,
@@ -165,6 +166,7 @@ import {
   peekGitlabWorkItemDetails,
   peekGitlabWorkItemThread,
   type GitlabWorkItemThread,
+  type GitlabMrDiff,
 } from "../model/gitlab";
 import {
   AZUREDEVOPS_CHANGE_EVENT,
@@ -2104,7 +2106,13 @@ export function InboxDetail({
   // The panel summary lists changed files, so it shares the Code tab's fetch.
   const diffWanted = tab === "code" || (panel && tab === "summary");
   const fullFile = inboxShowsFullFileDiff(item) && diffMode === "full";
-  const [prDiff, setPrDiff] = useState<GithubPrDiff | null>(cachedDiff);
+  const [prDiff, setPrDiff] = useState<GithubPrDiff | GitlabMrDiff | null>(cachedDiff);
+  const loadDiffFile = useMemo(() => {
+    if (!gitlab || !prDiff || !("diffRefs" in prDiff) || !prDiff.diffRefs) {
+      return undefined;
+    }
+    return (path: string) => gitlabMrFileDiff(item.repo, item.number, prDiff, path);
+  }, [gitlab, prDiff, item.repo, item.number]);
   const [diffLoading, setDiffLoading] = useState(isPr && cachedDiff == null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [thread, setThread] = useState<
@@ -2973,6 +2981,7 @@ export function InboxDetail({
                   diff={prDiff}
                   fullFile={fullFile}
                   focusPath={diffFocusPath}
+                  loadFile={loadDiffFile}
                 />
               ) : (
                 <p className="text-[13px] text-content/45">No file changes</p>

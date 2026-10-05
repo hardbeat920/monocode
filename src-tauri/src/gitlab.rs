@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -95,7 +97,7 @@ pub struct GitlabWorkItemThread {
     pub head_ref_name: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitlabMrFile {
     pub path: String,
@@ -111,6 +113,49 @@ pub struct GitlabMrDiff {
     pub files: Vec<GitlabMrFile>,
     pub patch: String,
     pub truncated: bool,
+    pub diff_refs: Option<GitlabDiffRefs>,
+    pub file_changes: HashMap<String, GitlabFileChange>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitlabDiffRefs {
+    base_sha: String,
+    head_sha: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GitlabFileChange {
+    old_path: String,
+    #[serde(default)]
+    new_file: bool,
+    #[serde(default)]
+    deleted_file: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitlabFileContents {
+    original: String,
+    current: String,
+    binary: bool,
+    too_large: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitlabMrDiffStats {
+    diff_stats: Vec<GitlabMrFile>,
+    diff_stats_summary: GitlabMrDiffStatsSummary,
+    diff_refs: Option<GitlabDiffRefs>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitlabMrDiffStatsSummary {
+    additions: i64,
+    deletions: i64,
+    file_count: usize,
 }
 
 #[tauri::command(async)]
@@ -268,6 +313,148 @@ pub async fn gitlab_mr_diff(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn gitlab_mr_file_diff(
+    app: AppHandle,
+    repo: String,
+    number: i64,
+    path: String,
+    refs: GitlabDiffRefs,
+    change: Option<GitlabFileChange>,
+) -> Result<GitlabFileContents, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = require_config(&app)?;
+        let repo = validate_repo(&repo)?;
+        gitlab_mr_file_diff_for(&config, &repo, number, &path, &refs, change)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn gitlab_mr_file_diff_for(
+    config: &GitlabConfig,
+    repo: &str,
+    number: i64,
+    path: &str,
+    refs: &GitlabDiffRefs,
+    change: Option<GitlabFileChange>,
+) -> Result<GitlabFileContents, String> {
+    validate_item("pr", number)?;
+    if path.is_empty()
+        || [&refs.base_sha, &refs.head_sha].iter().any(|sha| {
+            !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err("Missing merge request file revision".into());
+    }
+    let change = match change {
+        Some(change) => change,
+        None => gitlab_file_change_for(config, repo, number, path, refs)?,
+    };
+    let mut contents = GitlabFileContents {
+        original: String::new(),
+        current: String::new(),
+        binary: false,
+        too_large: false,
+    };
+    // Apply the existing per-file text limit; the initial MR preview stays at 2 MiB.
+    for (skip, file_path, sha, target) in [
+        (
+            change.new_file,
+            change.old_path.as_str(),
+            refs.base_sha.as_str(),
+            &mut contents.original,
+        ),
+        (
+            change.deleted_file,
+            path,
+            refs.head_sha.as_str(),
+            &mut contents.current,
+        ),
+    ] {
+        if skip {
+            continue;
+        }
+        let endpoint = format!(
+            "/projects/{}/repository/files/{}/raw?ref={sha}",
+            encode_path_component(repo),
+            encode_path_component(file_path),
+        );
+        let response =
+            gitlab_get_request(config, &endpoint)
+                .call()
+                .map_err(|error| match error {
+                    ureq::Error::Status(status, response) => {
+                        gitlab_http_error(status, &response.into_string().unwrap_or_default())
+                    }
+                    _ => "Could not reach GitLab".to_string(),
+                })?;
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(crate::fs::MAX_TEXT_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "GitLab returned an unreadable file".to_string())?;
+        if bytes.len() as u64 > crate::fs::MAX_TEXT_FILE_BYTES {
+            contents.too_large = true;
+        } else if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+            contents.binary = true;
+        } else {
+            *target = String::from_utf8_lossy(&bytes).into_owned();
+        }
+    }
+    if contents.binary || contents.too_large {
+        contents.original.clear();
+        contents.current.clear();
+    }
+    Ok(contents)
+}
+
+// Modern /diffs returns one page initially. Look up rename/add/delete metadata
+// for a later-page file only when it is expanded, and reject a changed MR.
+fn gitlab_file_change_for(
+    config: &GitlabConfig,
+    repo: &str,
+    number: i64,
+    path: &str,
+    refs: &GitlabDiffRefs,
+) -> Result<GitlabFileChange, String> {
+    let item = item_path(repo, "pr", number);
+    let latest = gitlab_get(config, &item)?;
+    if latest
+        .value
+        .pointer("/diff_refs/head_sha")
+        .and_then(Value::as_str)
+        != Some(&refs.head_sha)
+        || latest
+            .value
+            .pointer("/diff_refs/base_sha")
+            .and_then(Value::as_str)
+            != Some(&refs.base_sha)
+    {
+        return Err("Merge request changed. Refresh to load this file.".into());
+    }
+    let mut page = 1;
+    loop {
+        let response = gitlab_get(config, &format!("{item}/diffs?per_page=100&page={page}"))?;
+        let rows = response
+            .value
+            .as_array()
+            .ok_or("GitLab did not return merge request diffs")?;
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.get("new_path").and_then(Value::as_str) == Some(path))
+        {
+            return serde_json::from_value(row.clone())
+                .map_err(|_| "GitLab did not return file metadata".into());
+        }
+        if !response.has_next_page || rows.is_empty() {
+            return Err("GitLab did not return this merge request file".into());
+        }
+        page += 1;
+    }
+}
+
 fn gitlab_list_work_items_for(
     config: &GitlabConfig,
     repo: &str,
@@ -380,11 +567,14 @@ fn gitlab_mr_diff_for(
         "/projects/{}/merge_requests/{number}/diffs?per_page=100",
         encode_path_component(repo)
     );
-    match gitlab_get_request(config, &path).call() {
+    let mut diff = match gitlab_get_request(config, &path).call() {
         // Older self-hosted GitLab versions expose /changes but not /diffs.
         // Match the HTTP status so permission and transport errors still surface.
         Err(ureq::Error::Status(404, _)) => {
-            let path = format!("{}/changes", item_path(repo, "pr", number));
+            let path = format!(
+                "{}/changes?access_raw_diffs=true",
+                item_path(repo, "pr", number)
+            );
             let response = gitlab_get(config, &path)?;
             let changes = response
                 .value
@@ -401,7 +591,74 @@ fn gitlab_mr_diff_for(
             let response = read_gitlab_response(result)?;
             parse_mr_diff(&response.value, response.has_next_page)
         }
+    }?;
+    let stats = gitlab_mr_diff_stats_for(config, repo, number)?;
+    // REST patches may omit files or their contents even when overflow is false.
+    // Keep their preview limits, but use GitLab's complete metadata for all counts.
+    let preview_counts: HashMap<_, _> = diff
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), (file.additions, file.deletions)))
+        .collect();
+    diff.truncated |= stats.diff_stats.iter().any(|file| {
+        preview_counts.get(file.path.as_str()) != Some(&(file.additions, file.deletions))
+    });
+    diff.additions = stats.diff_stats_summary.additions;
+    diff.deletions = stats.diff_stats_summary.deletions;
+    diff.files = stats.diff_stats;
+    diff.diff_refs = stats.diff_refs;
+    Ok(diff)
+}
+
+fn gitlab_mr_diff_stats_for(
+    config: &GitlabConfig,
+    repo: &str,
+    number: i64,
+) -> Result<GitlabMrDiffStats, String> {
+    let body = serde_json::json!({
+        "query": "query($project: ID!, $iid: String!) { project(fullPath: $project) { mergeRequest(iid: $iid) { diffRefs { baseSha headSha } diffStats { path additions deletions } diffStatsSummary { additions deletions fileCount } } } }",
+        "variables": { "project": repo, "iid": number.to_string() }
+    });
+    let response = read_gitlab_response(
+        gitlab_agent()
+            .post(&format!("{}/api/graphql", config.url.trim_end_matches('/')))
+            .set("PRIVATE-TOKEN", &config.token)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .set("User-Agent", USER_AGENT)
+            .send_string(&body.to_string()),
+    )?;
+    parse_mr_diff_stats(&response.value)
+}
+
+fn parse_mr_diff_stats(value: &Value) -> Result<GitlabMrDiffStats, String> {
+    let error = || "GitLab did not return complete merge request diff statistics".to_string();
+    if value
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        return Err(error());
     }
+    let stats: GitlabMrDiffStats = serde_json::from_value(
+        value
+            .pointer("/data/project/mergeRequest")
+            .ok_or_else(error)?
+            .clone(),
+    )
+    .map_err(|_| error())?;
+    let files = &stats.diff_stats;
+    let totals = &stats.diff_stats_summary;
+    if files.len() != totals.file_count
+        || files
+            .iter()
+            .any(|file| file.path.trim().is_empty() || file.additions < 0 || file.deletions < 0)
+        || files.iter().map(|file| file.additions).sum::<i64>() != totals.additions
+        || files.iter().map(|file| file.deletions).sum::<i64>() != totals.deletions
+    {
+        return Err(error());
+    }
+    Ok(stats)
 }
 
 fn validate_kind(kind: &str) -> Result<(), String> {
@@ -597,6 +854,7 @@ fn parse_mr_diff(value: &Value, has_next_page: bool) -> Result<GitlabMrDiff, Str
         .as_array()
         .ok_or_else(|| "GitLab did not return merge request diffs".to_string())?;
     let mut files = Vec::new();
+    let mut file_changes = HashMap::new();
     let mut patch = String::new();
     let mut total_additions = 0;
     let mut total_deletions = 0;
@@ -607,6 +865,9 @@ fn parse_mr_diff(value: &Value, has_next_page: bool) -> Result<GitlabMrDiff, Str
         let new_path = string_field(row, "new_path").unwrap_or_else(|| old_path.clone());
         if new_path.is_empty() && old_path.is_empty() {
             continue;
+        }
+        if let Ok(change) = serde_json::from_value::<GitlabFileChange>(row.clone()) {
+            file_changes.insert(new_path.clone(), change);
         }
         let diff = string_field_preserve(row, "diff").unwrap_or_default();
         let (additions, deletions) = diff_counts(&diff);
@@ -646,6 +907,8 @@ fn parse_mr_diff(value: &Value, has_next_page: bool) -> Result<GitlabMrDiff, Str
         files,
         patch,
         truncated,
+        diff_refs: None,
+        file_changes,
     })
 }
 
@@ -1144,7 +1407,7 @@ fn expand_home(input: &str) -> PathBuf {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::thread;
     use std::time::Instant;
@@ -1182,13 +1445,23 @@ mod tests {
                 let mut request = String::new();
                 reader.read_line(&mut request).unwrap();
                 requests.push(request.trim().to_string());
+                let mut content_length = 0;
                 loop {
                     let mut header = String::new();
                     if reader.read_line(&mut header).unwrap() == 0 || header == "\r\n" {
                         break;
                     }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            content_length = value.trim().parse().unwrap();
+                        }
+                    }
                 }
-                let body = body.to_string();
+                reader.read_exact(&mut vec![0; content_length]).unwrap();
+                let body = match body {
+                    Value::String(text) => text,
+                    value => value.to_string(),
+                };
                 write!(
                     stream,
                     "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1211,32 +1484,198 @@ mod tests {
     }
 
     #[test]
+    fn mr_file_diff_loads_only_needed_sides_at_the_preview_revision() {
+        let refs = GitlabDiffRefs {
+            base_sha: "b".repeat(40),
+            head_sha: "a".repeat(40),
+        };
+        for (path, old_path, new_file, deleted_file) in [
+            ("icons/new.svg", "icons/new.svg", true, false),
+            ("package.json", "package.json", false, false),
+            ("new name.ts", "old name.ts", false, false),
+            ("removed.ts", "removed.ts", false, true),
+        ] {
+            let mut responses = Vec::new();
+            let mut expected = Vec::new();
+            if !new_file {
+                responses.push((200, json!("old\n")));
+                expected.push(format!("GET /gitlab/api/v4/projects/acme%2Fweb/repository/files/{}/raw?ref={} HTTP/1.1", encode_path_component(old_path), refs.base_sha));
+            }
+            if !deleted_file {
+                responses.push((200, json!("new\n")));
+                expected.push(format!("GET /gitlab/api/v4/projects/acme%2Fweb/repository/files/{}/raw?ref={} HTTP/1.1", encode_path_component(path), refs.head_sha));
+            }
+            let (config, server) = serve_gitlab(responses);
+            let result = gitlab_mr_file_diff_for(
+                &config,
+                "acme/web",
+                9,
+                path,
+                &refs,
+                Some(GitlabFileChange {
+                    old_path: old_path.into(),
+                    new_file,
+                    deleted_file,
+                }),
+            )
+            .unwrap();
+            assert_eq!(result.original, if new_file { "" } else { "old\n" });
+            assert_eq!(result.current, if deleted_file { "" } else { "new\n" });
+            assert!(!result.binary && !result.too_large);
+            assert_eq!(server.join().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn mr_file_diff_preserves_fetch_errors_and_file_limits() {
+        let refs = GitlabDiffRefs {
+            base_sha: "b".repeat(40),
+            head_sha: "a".repeat(40),
+        };
+        let change = GitlabFileChange {
+            old_path: "file".into(),
+            new_file: true,
+            deleted_file: false,
+        };
+        for status in [403, 404] {
+            let (config, server) = serve_gitlab(vec![(status, json!({"message": "Unavailable"}))]);
+            assert!(gitlab_mr_file_diff_for(
+                &config,
+                "acme/web",
+                9,
+                "file",
+                &refs,
+                Some(change.clone())
+            )
+            .is_err());
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+        for (body, binary, too_large) in [
+            ("binary\0contents".to_string(), true, false),
+            (
+                "x".repeat(crate::fs::MAX_TEXT_FILE_BYTES as usize + 1),
+                false,
+                true,
+            ),
+        ] {
+            let (config, server) = serve_gitlab(vec![(200, json!(body))]);
+            let result = gitlab_mr_file_diff_for(
+                &config,
+                "acme/web",
+                9,
+                "file",
+                &refs,
+                Some(change.clone()),
+            )
+            .unwrap();
+            assert_eq!((result.binary, result.too_large), (binary, too_large));
+            assert!(result.current.is_empty());
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn mr_file_diff_resolves_missing_metadata_and_rejects_a_changed_snapshot() {
+        let refs = GitlabDiffRefs {
+            base_sha: "b".repeat(40),
+            head_sha: "a".repeat(40),
+        };
+        let (config, server) = serve_gitlab(vec![
+            (
+                200,
+                json!({"diff_refs": {"base_sha": refs.base_sha, "head_sha": refs.head_sha}}),
+            ),
+            (
+                200,
+                json!([{"old_path": "new.svg", "new_path": "new.svg", "new_file": true}]),
+            ),
+            (200, json!("<svg/>")),
+        ]);
+        assert_eq!(
+            gitlab_mr_file_diff_for(&config, "acme/web", 9, "new.svg", &refs, None)
+                .unwrap()
+                .current,
+            "<svg/>"
+        );
+        assert_eq!(server.join().unwrap().len(), 3);
+        let (config, server) = serve_gitlab(vec![(
+            200,
+            json!({"diff_refs": {"base_sha": refs.base_sha, "head_sha": "c".repeat(40)}}),
+        )]);
+        assert_eq!(
+            gitlab_mr_file_diff_for(&config, "acme/web", 9, "new.svg", &refs, None).unwrap_err(),
+            "Merge request changed. Refresh to load this file."
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    fn mr_stats_response(files: Value, additions: i64, deletions: i64) -> Value {
+        json!({"data": {"project": {"mergeRequest": {
+            "diffRefs": { "baseSha": "b".repeat(40), "headSha": "a".repeat(40) },
+            "diffStatsSummary": {
+                "additions": additions, "deletions": deletions,
+                "fileCount": files.as_array().unwrap().len()
+            },
+            "diffStats": files
+        }}}})
+    }
+
+    #[test]
     fn mr_diff_falls_back_to_changes_on_older_gitlab() {
+        let mut rows = mr_diff_rows();
+        rows.as_array_mut().unwrap().push(json!({
+            "old_path": "lock.yaml", "new_path": "lock.yaml", "diff": ""
+        }));
         let (config, server) = serve_gitlab(vec![
             (404, json!({"error": "404 Not Found"})),
-            (200, json!({"changes": mr_diff_rows(), "overflow": true})),
+            (200, json!({"changes": rows, "overflow": false})),
+            (
+                200,
+                mr_stats_response(
+                    json!([
+                        {"path": "src/new.ts", "additions": 1, "deletions": 1},
+                        {"path": "lock.yaml", "additions": 100, "deletions": 50}
+                    ]),
+                    101,
+                    51,
+                ),
+            ),
         ]);
         let result = gitlab_mr_diff_for(&config, "acme/platform/web", 9);
         let requests = server.join().unwrap();
         let diff = result.expect("Code tab should load diffs from older GitLab instances");
-        assert_eq!(diff.files.len(), 1);
+        assert_eq!(diff.files.len(), 2);
         assert_eq!(diff.files[0].path, "src/new.ts");
-        assert_eq!((diff.additions, diff.deletions), (1, 1));
+        assert_eq!(diff.files[1].additions, 100);
+        assert_eq!((diff.additions, diff.deletions), (101, 51));
         assert!(diff.patch.contains("rename from src/old.ts"));
         assert!(diff.truncated);
         assert_eq!(requests, [
             "GET /gitlab/api/v4/projects/acme%2Fplatform%2Fweb/merge_requests/9/diffs?per_page=100 HTTP/1.1",
-            "GET /gitlab/api/v4/projects/acme%2Fplatform%2Fweb/merge_requests/9/changes HTTP/1.1",
+            "GET /gitlab/api/v4/projects/acme%2Fplatform%2Fweb/merge_requests/9/changes?access_raw_diffs=true HTTP/1.1",
+            "POST /gitlab/api/graphql HTTP/1.1",
         ]);
     }
 
     #[test]
     fn mr_diff_prefers_modern_endpoint() {
-        let (config, server) = serve_gitlab(vec![(200, mr_diff_rows())]);
+        let (config, server) = serve_gitlab(vec![
+            (200, mr_diff_rows()),
+            (
+                200,
+                mr_stats_response(
+                    json!([
+                        {"path": "src/new.ts", "additions": 1, "deletions": 1}
+                    ]),
+                    1,
+                    1,
+                ),
+            ),
+        ]);
         let diff = gitlab_mr_diff_for(&config, "acme/web", 9).unwrap();
         assert_eq!(diff.files.len(), 1);
         assert!(!diff.truncated);
-        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[test]
@@ -1252,6 +1691,25 @@ mod tests {
             };
             assert_eq!(error, expected);
             assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn mr_diff_rejects_unavailable_or_incomplete_statistics() {
+        let mut incomplete = mr_stats_response(json!([]), 0, 0);
+        incomplete["data"]["project"]["mergeRequest"]["diffStatsSummary"]["fileCount"] = json!(2);
+        for stats in [
+            json!({"errors": [{"message": "Statistics unavailable"}]}),
+            json!({"data": {"project": null}}),
+            incomplete,
+        ] {
+            let (config, server) = serve_gitlab(vec![(200, mr_diff_rows()), (200, stats)]);
+            let error = gitlab_mr_diff_for(&config, "acme/web", 9).unwrap_err();
+            assert_eq!(
+                error,
+                "GitLab did not return complete merge request diff statistics"
+            );
+            assert_eq!(server.join().unwrap().len(), 2);
         }
     }
 
