@@ -1,4 +1,9 @@
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Check, Computer, Internet, Plus } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import { useRemoteMachines } from "../../connections/model/connections";
@@ -37,6 +42,7 @@ export function MachinePicker({
   const locations = useProjectLocations(cwd);
   const { machines } = useRemoteMachines();
   const root = useRef<HTMLDivElement>(null);
+  const menuId = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   if (locations.length < 2 && machines.length === 0) return null;
@@ -78,10 +84,15 @@ export function MachinePicker({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActive((index) => Math.max(0, index - 1));
-    } else if (event.key === "Enter") {
+    } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       const row = rows[active];
       if (row) pick(row);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      dismiss(true);
+    } else if (event.key === "Tab") {
+      dismiss(false);
     }
   };
   const Icon = isRemoteProjectPath(current) ? Internet : Computer;
@@ -99,6 +110,8 @@ export function MachinePicker({
         aria-label={`Run on ${label}`}
         aria-expanded={open}
         aria-haspopup={interactive ? "menu" : undefined}
+        aria-controls={open ? menuId : undefined}
+        aria-activedescendant={open ? `${menuId}-${active}` : undefined}
         disabled={!interactive}
         data-tauri-drag-region="false"
         onMouseDown={(event) => event.preventDefault()}
@@ -128,6 +141,7 @@ export function MachinePicker({
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="menu"
           aria-label="Run on"
+          id={menuId}
           data-machine-picker
           className="overflow-y-auto overscroll-none py-1"
         >
@@ -137,8 +151,10 @@ export function MachinePicker({
           {rows.map((row, index) => (
             <button
               key={row.kind === "location" ? row.path : `add:${row.where}`}
+              id={`${menuId}-${index}`}
               type="button"
               role="menuitem"
+              tabIndex={-1}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => setActive(index)}
               onClick={() => pick(row)}

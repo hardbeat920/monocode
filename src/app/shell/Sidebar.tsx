@@ -141,7 +141,6 @@ import { normalizeHex } from "../../shared/lib/colorUtils";
 import {
   THIS_COMPUTER,
   locationLabel,
-  projectHome,
   useProjectLocations,
 } from "../../features/projects/model/projectMachines";
 import {
@@ -441,8 +440,6 @@ function SidebarComponent({
   const remoteLists = useRemoteProjectsSessions(remoteLocations);
   const remote = remoteLists[cwd] ?? { sessions: [], loaded: !remoteProject };
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
-  // Folders belong to the project, whichever machine the open session is on.
-  const folderProject = projectHome(cwd);
   const remoteRowLocation = useMemo(() => {
     const map = new Map<string, string>();
     for (const location of remoteLocations)
@@ -669,7 +666,7 @@ function SidebarComponent({
   );
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [sessionFolders, setSessionFolders] = useState<SessionFolder[]>(() =>
-    loadSessionFolders(folderProject),
+    loadSessionFolders(cwd),
   );
   const [pinnedSessionsCollapsed, setPinnedSessionsCollapsed] = useState(() =>
     loadPinnedSessionsCollapsed(cwd),
@@ -832,7 +829,7 @@ function SidebarComponent({
       setSessionFolders((current) => {
         const next = reorderSessionFolders(current, ids);
         if (next === current) return current;
-        saveSessionFolders(folderProject, next);
+        saveSessionFolders(cwd, next);
         return next;
       });
     },
@@ -978,21 +975,22 @@ function SidebarComponent({
   }, [tab, hasMoreSessions, shownUngroupedCount]);
 
   useEffect(() => {
-    setSessionFolders(loadSessionFolders(folderProject));
+    setSessionFolders(loadSessionFolders(cwd));
     setPinnedSessionsCollapsed(loadPinnedSessionsCollapsed(cwd));
     setReminderSessionsCollapsed(loadReminderSessionsCollapsed(cwd));
     setRenamingFolderId(null);
     setFolderMenu(null);
     setSessionDrop(null);
     pendingFolderSessionIds.current.clear();
-  }, [cwd]);
+    // Folders are stored under the project's home, which changes on (un)link.
+  }, [cwd, locations[0]]);
 
   useEffect(
     () =>
       subscribeSessionFolders(cwd, () => {
-        setSessionFolders(loadSessionFolders(folderProject));
+        setSessionFolders(loadSessionFolders(cwd));
       }),
-    [cwd],
+    [cwd, locations[0]],
   );
 
   useEffect(() => {
@@ -1033,7 +1031,7 @@ function SidebarComponent({
         : current;
       const next = pruneSessionFolders(migrated, known);
       if (next === current) return current;
-      saveSessionFolders(folderProject, next);
+      saveSessionFolders(cwd, next);
       return next;
     });
   }, [activeListedSessionId, activeSessionId, cwd, hasLocalLocation, openSessions, pending, projectSessions, remoteLists, remoteLocations, sessionFolders, status]);
@@ -1093,7 +1091,7 @@ function SidebarComponent({
 
   const commitSessionFolders = (next: SessionFolder[]) => {
     setSessionFolders(next);
-    saveSessionFolders(folderProject, next);
+    saveSessionFolders(cwd, next);
   };
 
   const onNewInFolder = (folderId: string) => {
@@ -1107,7 +1105,7 @@ function SidebarComponent({
         folderId,
         false,
       );
-      saveSessionFolders(folderProject, next);
+      saveSessionFolders(cwd, next);
       return next;
     });
   };
