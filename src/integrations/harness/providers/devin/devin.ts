@@ -34,6 +34,9 @@ import {
   devinAuthMethodId,
   devinCommandsFromUpdate,
   devinEventsFromUpdate,
+  devinModelChoices,
+  devinModelFamilies,
+  devinModelValue,
   devinModeId,
   devinPermissionCommand,
   devinPromptBlocks,
@@ -41,6 +44,7 @@ import {
   devinStartupError,
   devinToolInfo,
   type DevinModeId,
+  type DevinModelFamily,
   type DevinToolInfo,
 } from "./devinProtocol";
 
@@ -51,6 +55,8 @@ type Live = {
   acpSessionId: string;
   cwd: string;
   configOptions: SessionConfigOption[];
+  /** Effort/speed variants behind each grouped picker model. */
+  modelFamilies: DevinModelFamily[];
   modeId: DevinModeId | "";
   muteUpdates: boolean;
   cancelled: boolean;
@@ -396,6 +402,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       acpSessionId,
       cwd: input.cwd,
       configOptions: readConfigOptions(asRecord(setup)?.configOptions),
+      modelFamilies: devinModelFamilies(devinModelChoices(setup)),
       modeId: "",
       muteUpdates: didLoad,
       cancelled: false,
@@ -424,9 +431,15 @@ async function applyModelSelection(
   live: Live,
   input: HarnessSessionInput,
 ): Promise<void> {
-  const modelId = nativeModelId(input.model).trim();
+  const modelId = devinModelValue(
+    live.modelFamilies,
+    nativeModelId(input.model).trim(),
+    input.modelSettings,
+  );
   if (modelId && modelId !== "default") await setConfigOption(live, "model", modelId);
   for (const [settingId, value] of Object.entries(input.modelSettings ?? {})) {
+    // Effort and speed already picked the model variant above.
+    if (settingId === "effort" || settingId === "fast") continue;
     const configId = resolveSettingConfigId(live.configOptions, settingId);
     if (configId && configId !== "model" && configId !== "mode")
       await setConfigOption(live, configId, value);
@@ -522,6 +535,8 @@ function handleUpdate(
     Array.isArray(update.configOptions)
   ) {
     live.configOptions = readConfigOptions(update.configOptions);
+    const choices = devinModelChoices(update.configOptions);
+    if (choices.length > 0) live.modelFamilies = devinModelFamilies(choices);
     return;
   }
   if (update?.sessionUpdate === "current_mode_update") {

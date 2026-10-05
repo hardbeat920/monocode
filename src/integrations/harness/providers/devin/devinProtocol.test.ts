@@ -9,6 +9,8 @@ import {
   devinCredentialsPathFromStatus,
   devinEventsFromUpdate,
   devinModeId,
+  devinModelFamilies,
+  devinModelValue,
   devinPermissionCommand,
   devinSessionTitle,
   devinStartupError,
@@ -116,6 +118,93 @@ describe("devin catalog", () => {
       { id: "devin:glm-5-2", harness: "devin", name: "GLM-5.2 High", nativeId: "glm-5-2" },
       { id: "devin:adaptive", harness: "devin", name: "Adaptive", nativeId: "adaptive" },
     ]);
+  });
+
+  // Names as Devin 3000.6.7 lists them.
+  const CHOICES = [
+    { value: "adaptive", label: "Adaptive" },
+    { value: "claude-opus-5-5-medium", label: "Claude Opus 5.5 Medium" },
+    { value: "claude-opus-5-5-low", label: "Claude Opus 5.5 Low" },
+    { value: "claude-opus-5-5-max", label: "Claude Opus 5.5 Max" },
+    { value: "claude-opus-5-5-low-fast", label: "Claude Opus 5.5 Low Fast" },
+    { value: "claude-opus-5-5-max-fast", label: "Claude Opus 5.5 Max Fast" },
+    { value: "gpt-6-sol-medium", label: "GPT-6 Sol Medium Thinking" },
+    { value: "gpt-6-sol-none", label: "GPT-6 Sol No Thinking" },
+    { value: "gpt-6-sol-none-priority", label: "GPT-6 Sol No Thinking Fast" },
+    { value: "swe-1-7-lightning", label: "SWE-1.7 Lightning Max" },
+    { value: "swe-1-7-lightning-medium", label: "SWE-1.7 Lightning Medium" },
+    { value: "glm-5-2-1m", label: "GLM-5.2 High 1M" },
+    { value: "glm-5-2-none-1m", label: "GLM-5.2 No Thinking 1M" },
+    { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { value: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 Thinking" },
+  ];
+
+  it("groups effort and speed variants into one model with settings", () => {
+    const models = modelsFromDevinSession({
+      configOptions: [
+        {
+          id: "model",
+          currentValue: "claude-opus-5-5-medium",
+          options: CHOICES.map(({ value, label }) => ({ value, name: label })),
+        },
+      ],
+    });
+    expect(models.map((model) => model.name)).toEqual([
+      "Claude Opus 5.5",
+      "Adaptive",
+      "GPT-6 Sol",
+      "SWE-1.7 Lightning",
+      "GLM-5.2 1M",
+      "Claude Opus 4.6",
+      "Claude Opus 4.6 Thinking",
+    ]);
+    expect(models[0]).toMatchObject({
+      id: "devin:claude-opus-5-5",
+      nativeId: "claude-opus-5-5",
+      settings: [
+        {
+          id: "effort",
+          kind: "select",
+          value: "medium",
+          options: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "max", label: "Max" },
+          ],
+        },
+        { id: "fast", kind: "toggle", value: "false" },
+      ],
+    });
+    expect(models[1].settings).toBeUndefined();
+    // "Thinking" without an effort is a distinct model, not a variant.
+    expect(models[6].nativeId).toBe("claude-opus-4-6-thinking");
+    expect(models[6].settings).toBeUndefined();
+  });
+
+  it("maps a model and its settings back to Devin's exact value", () => {
+    const families = devinModelFamilies(CHOICES);
+    expect(devinModelValue(families, "claude-opus-5-5")).toBe("claude-opus-5-5-medium");
+    expect(devinModelValue(families, "claude-opus-5-5", { effort: "max", fast: "true" }))
+      .toBe("claude-opus-5-5-max-fast");
+    // No fast variant at this effort: keep the effort, drop the speed.
+    expect(devinModelValue(families, "claude-opus-5-5", { effort: "medium", fast: "true" }))
+      .toBe("claude-opus-5-5-medium");
+    expect(devinModelValue(families, "gpt-6-sol", { effort: "none", fast: "true" }))
+      .toBe("gpt-6-sol-none-priority");
+    expect(devinModelValue(families, "swe-1-7-lightning", { effort: "max" }))
+      .toBe("swe-1-7-lightning");
+    expect(devinModelValue(families, "glm-5-2-1m", { effort: "none" })).toBe("glm-5-2-none-1m");
+    // Single models and older saved ids pass through untouched.
+    expect(devinModelValue(families, "adaptive", { effort: "high" })).toBe("adaptive");
+    expect(devinModelValue(families, "claude-opus-5-5-low")).toBe("claude-opus-5-5-low");
+  });
+
+  it("keeps ambiguous names as separate models", () => {
+    const families = devinModelFamilies([
+      { value: "foo", label: "Foo" },
+      { value: "foo-max", label: "Foo Max" },
+    ]);
+    expect(families.map((family) => family.key)).toEqual(["foo", "foo-max"]);
   });
 });
 

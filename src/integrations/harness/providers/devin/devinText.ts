@@ -5,7 +5,12 @@ import { JsonRpcClient } from "../../core/jsonRpc";
 import type { TextPromptInput } from "../../core/registry";
 import { asRecord, permissionOptionId, permissionRequestFromAcp, sessionIdFromResult } from "../antigravity/antigravityProtocol";
 import { startDevinAcp } from "./devin";
-import { devinAgentMessageText } from "./devinProtocol";
+import {
+  devinAgentMessageText,
+  devinModelChoices,
+  devinModelFamilies,
+  devinModelValue,
+} from "./devinProtocol";
 
 const TEXT_CHILD_PREFIX = "monocode-devin-text-";
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -107,8 +112,14 @@ async function promptOnce(input: TextPromptInput): Promise<string> {
         { sessionId, modeId: "ask" },
         REQUEST_TIMEOUT_MS,
       );
-      const model = input.model ? nativeModelId(input.model).trim() : "";
       const options = asRecord(created)?.configOptions;
+      const model = input.model
+        ? devinModelValue(
+            devinModelFamilies(devinModelChoices(created)),
+            nativeModelId(input.model).trim(),
+            input.modelSettings,
+          )
+        : "";
       const advertised =
         Array.isArray(options) &&
         options.some((option) => asRecord(option)?.id === "model");

@@ -1,5 +1,5 @@
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
-import type { AgentModel } from "../../../../features/sessions/model/models";
+import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
 import { nativeCommandInvocation, type NativeCommand } from "../../core/nativeCommands";
 import type { HarnessEvent } from "../../core/types";
@@ -95,6 +95,186 @@ export function devinStartupError(error: unknown): Error {
   return new Error(`Devin did not start. ${detail}`);
 }
 
+export type DevinModelVariant = {
+  value: string;
+  name: string;
+  effort?: string;
+  fast: boolean;
+};
+
+/**
+ * Devin lists every effort and speed as its own model ("Claude Opus 5.5
+ * High Fast"). A family is one model whose variants differ only in those.
+ */
+export type DevinModelFamily = {
+  key: string;
+  name: string;
+  variants: DevinModelVariant[];
+};
+
+const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+const EFFORT_WORDS: Record<string, string> = {
+  none: "none",
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  "x-high": "xhigh",
+  "extra high": "xhigh",
+  max: "max",
+};
+
+const EFFORT_LABELS: Record<string, string> = {
+  none: "No thinking",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+/** The `model` select's choices, from a session result or its config options. */
+export function devinModelChoices(
+  raw: unknown,
+): Array<{ value: string; label: string }> {
+  const options = Array.isArray(raw) ? raw : asRecord(raw)?.configOptions;
+  const option = (Array.isArray(options) ? options : [])
+    .map(asRecord)
+    .find((item) => item?.id === "model" || item?.category === "model");
+  return flattenChoices(option?.options);
+}
+
+/** Names are more regular than ids: `swe-1-7-lightning` is "Lightning Max". */
+function parseDevinVariant(name: string): { base: string; effort?: string; fast: boolean } {
+  let rest = name.trim();
+  let fast = false;
+  if (/\s+fast$/i.test(rest)) {
+    fast = true;
+    rest = rest.replace(/\s+fast$/i, "");
+  }
+  // A context size trails the effort ("GLM-5.2 High 1M") and names its own model.
+  const context = /\s+\d+(?:\.\d+)?[KM]$/i.exec(rest)?.[0] ?? "";
+  rest = rest.slice(0, rest.length - context.length);
+  if (/\s+no thinking$/i.test(rest)) {
+    return { base: rest.replace(/\s+no thinking$/i, "") + context, effort: "none", fast };
+  }
+  // "Medium Thinking" is an effort; a bare "Thinking" suffix is part of the name.
+  const match =
+    /^(.*\S)\s+(none|minimal|low|medium|high|xhigh|x-high|extra high|max)(\s+thinking)?$/i.exec(rest);
+  if (match) {
+    return { base: match[1] + context, effort: EFFORT_WORDS[match[2].toLowerCase()], fast };
+  }
+  return { base: rest + context, fast };
+}
+
+function familyKey(base: string): string {
+  return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+export function devinModelFamilies(
+  choices: Array<{ value: string; label: string }>,
+): DevinModelFamily[] {
+  const families = new Map<string, DevinModelFamily>();
+  const seen = new Set<string>();
+  for (const { value, label } of choices) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    const parsed = parseDevinVariant(label);
+    const key = familyKey(parsed.base) || value;
+    const family = families.get(key) ?? { key, name: parsed.base, variants: [] };
+    family.variants.push({ value, name: label, effort: parsed.effort, fast: parsed.fast });
+    families.set(key, family);
+  }
+  return [...families.values()].flatMap((family) =>
+    isCleanFamily(family)
+      ? [family]
+      : // Ambiguous names stay as separate, exactly named models.
+        family.variants.map((variant) => ({
+          key: variant.value,
+          name: variant.name,
+          variants: [{ ...variant, effort: undefined, fast: false }],
+        })),
+  );
+}
+
+/** Every variant must differ by effort/speed, and effort must be all-or-none. */
+function isCleanFamily(family: DevinModelFamily): boolean {
+  if (family.variants.length < 2) return true;
+  const withEffort = family.variants.filter((variant) => variant.effort).length;
+  if (withEffort !== 0 && withEffort !== family.variants.length) return false;
+  const pairs = new Set(family.variants.map((variant) => `${variant.effort}|${variant.fast}`));
+  return pairs.size === family.variants.length;
+}
+
+/** Devin lists a model's default variant first; Fast is opt-in. */
+function defaultVariant(family: DevinModelFamily): DevinModelVariant {
+  return family.variants.find((variant) => !variant.fast) ?? family.variants[0];
+}
+
+function familyModel(family: DevinModelFamily): AgentModel {
+  if (family.variants.length === 1) {
+    const [only] = family.variants;
+    return { id: `devin:${only.value}`, harness: "devin", name: only.name, nativeId: only.value };
+  }
+  const fallback = defaultVariant(family);
+  const efforts = EFFORT_ORDER.filter((effort) =>
+    family.variants.some((variant) => variant.effort === effort),
+  );
+  const settings: ModelSetting[] = [];
+  if (efforts.length > 1) {
+    settings.push({
+      id: "effort",
+      label: "Effort",
+      kind: "select",
+      value: fallback.effort ?? efforts[0],
+      options: efforts.map((value) => ({ value, label: EFFORT_LABELS[value] ?? value })),
+    });
+  }
+  if (family.variants.some((variant) => variant.fast)) {
+    settings.push({
+      id: "fast",
+      label: "Fast",
+      kind: "toggle",
+      value: "false",
+      options: [
+        { value: "false", label: "Off" },
+        { value: "true", label: "Fast" },
+      ],
+    });
+  }
+  return {
+    id: `devin:${family.key}`,
+    harness: "devin",
+    name: family.name,
+    nativeId: family.key,
+    settings: settings.length > 0 ? settings : undefined,
+  };
+}
+
+/**
+ * The exact Devin model value for a family and the picker's settings.
+ * Ids that are not a family (single models, older saved ids) pass through.
+ */
+export function devinModelValue(
+  families: DevinModelFamily[],
+  nativeId: string,
+  settings: Record<string, string> = {},
+): string {
+  const family = families.find((item) => item.key === nativeId);
+  if (!family || family.variants.length < 2) return nativeId;
+  const fallback = defaultVariant(family);
+  const effort = settings.effort ?? fallback.effort;
+  const fast = settings.fast != null ? settings.fast === "true" : fallback.fast;
+  return (
+    family.variants.find((variant) => variant.effort === effort && variant.fast === fast) ??
+    family.variants.find((variant) => variant.effort === effort && !variant.fast) ??
+    fallback
+  ).value;
+}
+
 /** Models come from the `model` select in Devin's session config options. */
 export function modelsFromDevinSession(raw: unknown): AgentModel[] {
   const rec = asRecord(raw);
@@ -102,20 +282,16 @@ export function modelsFromDevinSession(raw: unknown): AgentModel[] {
   const option = options
     .map(asRecord)
     .find((item) => item?.id === "model" || item?.category === "model");
-  const choices = flattenChoices(option?.options);
   const current =
     typeof option?.currentValue === "string" ? option.currentValue : "";
-  const seen = new Set<string>();
-  const models: AgentModel[] = choices.flatMap(({ value, label }) => {
-    if (seen.has(value)) return [];
-    seen.add(value);
-    return [{ id: `devin:${value}`, harness: "devin" as const, name: label, nativeId: value }];
-  });
+  const families = devinModelFamilies(devinModelChoices(raw));
   // setHarnessModels defaults to the first entry, so lead with the model the
   // account is already configured to use.
-  const index = models.findIndex((model) => model.nativeId === current);
-  if (index > 0) models.unshift(...models.splice(index, 1));
-  return models;
+  const index = families.findIndex((family) =>
+    family.variants.some((variant) => variant.value === current),
+  );
+  if (index > 0) families.unshift(...families.splice(index, 1));
+  return families.map(familyModel);
 }
 
 function flattenChoices(raw: unknown): Array<{ value: string; label: string }> {
