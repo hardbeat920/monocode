@@ -14,6 +14,11 @@ import {
   macTerminalShortcutData,
 } from "../model/terminalKeys";
 import {
+  loadTerminalFont,
+  subscribeTerminalFont,
+  terminalFontFamily,
+} from "../model/terminalFont";
+import {
   defaultTerminalTitle,
   scanOscCwd,
   type TerminalMetaPatch,
@@ -117,7 +122,7 @@ function monoFont(): string {
   const fromCss = getComputedStyle(document.documentElement)
     .getPropertyValue("--font-mono")
     .trim();
-  return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
+  return terminalFontFamily(loadTerminalFont(), fromCss);
 }
 
 /**
@@ -303,6 +308,15 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       term.options.theme = terminalTheme(isLightScheme());
     };
     window.addEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+    const unsubscribeFont = subscribeTerminalFont(() => {
+      const next = monoFont();
+      if (term.options.fontFamily === next) return;
+      // Cell metrics change with the font, so refit cols/rows afterwards.
+      term.options.fontFamily = next;
+      lastCols = 0;
+      lastRows = 0;
+      schedule();
+    });
 
     term.attachCustomWheelEventHandler(() => {
       if (term.element?.classList.contains("enable-mouse-events")) return true;
@@ -372,6 +386,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste);
       window.removeEventListener(SCHEME_CHANGE_EVENT, onSchemeChange);
+      unsubscribeFont();
       dataSub.dispose();
       oscFg.dispose();
       oscBg.dispose();

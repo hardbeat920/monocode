@@ -311,6 +311,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "explorer gitignore ignored hidden files tree",
   },
   {
+    id: "terminal-font",
+    section: "appearance",
+    label: "Terminal font",
+    keywords: "nerd font powerline icons glyphs zsh prompt theme monospace",
+  },
+  {
     id: "chat-background",
     section: "appearance",
     label: "Chat background",

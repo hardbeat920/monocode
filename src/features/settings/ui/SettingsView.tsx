@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import {
+  saveTerminalFont,
+  useTerminalFont,
+} from "../../terminal/model/terminalFont";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -2263,7 +2267,43 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           />
         </Row>
       </Group>
+
+      <Group title="Terminal">
+        <Row
+          id="terminal-font"
+          label="Terminal font"
+          description="Font family for the integrated terminal, e.g. MesloLGS NF or JetBrainsMono Nerd Font Mono. Installed Nerd Fonts are always used as a fallback for prompt theme icons."
+        >
+          <TerminalFontInput />
+        </Row>
+      </Group>
     </>
+  );
+}
+
+function TerminalFontInput() {
+  const saved = useTerminalFont();
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  const commit = () => {
+    if (draft.trim() !== saved) saveTerminalFont(draft);
+  };
+
+  return (
+    <input
+      type="text"
+      aria-label="Terminal font"
+      value={draft}
+      placeholder="Default monospace"
+      spellCheck={false}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") commit();
+        if (event.key === "Escape") setDraft(saved);
+      }}
+      className="h-7 w-56 rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45"
+    />
   );
 }
 
