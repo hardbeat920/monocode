@@ -174,6 +174,7 @@ import {
   defaultModelId,
   firstEnabledHarness,
   getModelSnapshot,
+  hasLiveCatalog,
   loadDefaultModels,
   loadHiddenPickerProviders,
   loadLastModelChoice,
@@ -3698,6 +3699,12 @@ function ProviderRow({
     void refreshHarnessCatalogs([harness]);
   }, [available, harness, models.length]);
 
+  // Most providers ship a fallback model, so the effect above skips them.
+  // Opening the menu asks for the live list; mount must not spawn every CLI.
+  const loadLiveCatalog = () => {
+    if (available && !hasLiveCatalog(harness)) void refreshHarnessCatalogs([harness]);
+  };
+
   return (
     <Row
       label={
@@ -3719,15 +3726,21 @@ function ProviderRow({
       }
     >
       {current ? (
-        <Select
-          label={`${HARNESS_TITLE[harness]} model`}
-          value={current.id}
-          onChange={(next) => onModelChange(harness, next)}
-          options={models.map((item) => ({
-            value: item.id,
-            label: item.name,
-          }))}
-        />
+        <span
+          className="contents"
+          onPointerDownCapture={loadLiveCatalog}
+          onFocusCapture={loadLiveCatalog}
+        >
+          <Select
+            label={`${HARNESS_TITLE[harness]} model`}
+            value={current.id}
+            onChange={(next) => onModelChange(harness, next)}
+            options={models.map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+          />
+        </span>
       ) : null}
       <SecondaryButton
         onClick={() => current && onDefault(harness, current.id)}

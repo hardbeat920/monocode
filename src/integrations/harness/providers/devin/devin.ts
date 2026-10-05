@@ -81,6 +81,8 @@ export const DEVIN_CLIENT_CAPABILITIES = {
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+// Threads whose child is still starting; only these record a no-live cancel.
+const startingThreads = new Set<string>();
 const commandsByThread = new Map<string, NativeCommand[]>();
 const commandListeners = new Set<(threadId: string, commands: NativeCommand[]) => void>();
 const titleWaiters = new Map<string, Set<(title: string) => void>>();
@@ -109,11 +111,14 @@ async function runTurn(
   body: (live: Live) => Promise<void>,
 ): Promise<void> {
   let live: Live;
+  startingThreads.add(input.sessionId);
   try {
     live = await ensureLive(input);
   } catch (error) {
     cancelledThreads.delete(input.sessionId);
     throw error;
+  } finally {
+    startingThreads.delete(input.sessionId);
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
@@ -158,7 +163,8 @@ export function respondDevinApproval(
 export async function cancelDevinTurn(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (!live) {
-    cancelledThreads.add(sessionId);
+    // An idle thread has nothing to cancel; a stale marker would drop the next prompt.
+    if (startingThreads.has(sessionId)) cancelledThreads.add(sessionId);
     return;
   }
   live.cancelled = true;
@@ -558,7 +564,7 @@ async function handlePermission(
   if (live.cancelled || live.muteUpdates || request.optionIds.length === 0) {
     optionId = null;
   } else if (live.planning) {
-    optionId = permissionOptionId(
+    optionId = oneTimeOptionId(
       kind === "read" || kind === "search" ? "allow" : "deny",
       request.optionIds,
       request.optionKinds,
@@ -583,11 +589,29 @@ async function handlePermission(
     live.onEvent({ type: "approval.resolved", requestId, decision });
     optionId = live.cancelled
       ? null
-      : permissionOptionId(decision, request.optionIds, request.optionKinds);
+      : oneTimeOptionId(decision, request.optionIds, request.optionKinds);
   }
   await live.rpc.respond(id, {
     outcome: optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" },
   });
+}
+
+/**
+ * A single approval must never grant standing access: Devin's `allow_always`
+ * option is `switch_bypass`, which flips the session into bypass mode. With no
+ * one-time allow on offer the request is cancelled instead.
+ */
+function oneTimeOptionId(
+  decision: ApprovalDecision,
+  optionIds: string[],
+  optionKinds: Record<string, string>,
+): string | null {
+  if (decision !== "allow") return permissionOptionId(decision, optionIds, optionKinds);
+  return (
+    optionIds.find((id) => optionKinds[id] === "allow_once") ??
+    optionIds.find((id) => !optionKinds[id] && (id === "allow_once" || id === "allow-once")) ??
+    null
+  );
 }
 
 function resolveApprovals(live: Live): void {

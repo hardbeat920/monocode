@@ -30,6 +30,7 @@ vi.mock("../../../../platform/tauri/fs", () => ({
 
 const {
   bindDevinSession,
+  cancelDevinTurn,
   forgetDevinSession,
   respondDevinApproval,
   sendDevinTurn,
@@ -211,6 +212,91 @@ describe("Devin live ACP sequence", () => {
 
     reply(request("session/prompt")!.id, { stopReason: "end_turn" });
     await turn;
+  });
+
+  it("never answers a supervised allow with a persistent option", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "supervised",
+      text: "list files",
+      onEvent: (event) => events.push(event),
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await waitFor(() => !!request("session/prompt"), "session/prompt");
+
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "perm-no-once",
+        method: "session/request_permission",
+        params: {
+          sessionId: "devin-1",
+          toolCall: { toolCallId: "call-2" },
+          options: [
+            { optionId: "switch_bypass", name: "Bypass", kind: "allow_always" },
+            { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+          ],
+        },
+      }),
+    );
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "approval.requested",
+    );
+    const asked = events.find((event) => event.type === "approval.requested");
+    respondDevinApproval(
+      "devin-thread",
+      (asked as { requestId: number }).requestId,
+      "allow",
+    );
+    await waitFor(
+      () => parse().some((message) => message.id === "perm-no-once"),
+      "permission reply",
+    );
+    expect(parse().find((message) => message.id === "perm-no-once")!.result).toEqual({
+      outcome: { outcome: "cancelled" },
+    });
+
+    reply(request("session/prompt")!.id, { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("ignores a cancel on an idle thread", async () => {
+    await cancelDevinTurn("devin-thread");
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => undefined,
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await waitFor(() => !!request("session/prompt"), "session/prompt");
+    reply(request("session/prompt")!.id, { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("honours a cancel that arrives while the child is starting", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => undefined,
+    });
+    await waitFor(() => !!request("initialize"), "initialize");
+    await cancelDevinTurn("devin-thread");
+    await startSession();
+    await turn;
+    expect(request("session/set_mode")).toBeUndefined();
+    expect(request("session/prompt")).toBeUndefined();
   });
 
   it("resumes with session/load and reports Devin's own title", async () => {

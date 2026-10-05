@@ -92,11 +92,12 @@ export function HarnessIcon({
         <span
           className={`block ${harness === "hermes" ? "size-[72%]" : "size-[88%]"} bg-current`}
           style={{
-            maskImage: `url(${mark})`,
+            // Quoted: Vite inlines small SVGs as data URIs that contain spaces.
+            maskImage: `url("${mark}")`,
             maskPosition: "center",
             maskRepeat: "no-repeat",
             maskSize: "contain",
-            WebkitMaskImage: `url(${mark})`,
+            WebkitMaskImage: `url("${mark}")`,
             WebkitMaskPosition: "center",
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskSize: "contain",
