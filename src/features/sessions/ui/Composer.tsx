@@ -464,14 +464,16 @@ function MessageQueue({
                   <span className="min-w-0 flex-1 truncate text-content/80">
                     {label}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => onSteer?.(message.id)}
-                    className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
-                  >
-                    <CornerDownRight className="size-3.5" />
-                    Steer
-                  </button>
+                  {onSteer ? (
+                    <button
+                      type="button"
+                      onClick={() => onSteer(message.id)}
+                      className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
+                    >
+                      <CornerDownRight className="size-3.5" />
+                      Steer
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     title="Edit queued message"

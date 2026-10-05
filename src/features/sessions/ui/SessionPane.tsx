@@ -151,7 +151,8 @@ export type SessionPaneProps = {
     text: string,
   ) => void;
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
-  onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
+  /** Omitted where a running turn cannot take a follow-up. */
+  onSteerQueuedMessage?: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onUsageLimitResume: (sessionId: string) => void;
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
@@ -665,8 +666,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onQueuedMessageEditingChange={(messageId) =>
         onQueuedMessageEditingChange(session.id, messageId)
       }
-      onSteerQueuedMessage={(messageId) =>
-        onSteerQueuedMessage(session.id, messageId)
+      onSteerQueuedMessage={
+        onSteerQueuedMessage
+          ? (messageId) => onSteerQueuedMessage(session.id, messageId)
+          : undefined
       }
       onResumeQueue={() => onResumeQueue(session.id)}
       usageLimit={session.usageLimit}

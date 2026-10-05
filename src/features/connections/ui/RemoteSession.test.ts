@@ -163,7 +163,7 @@ beforeEach(() => {
         environmentId: "env",
         name: "home",
         providers,
-        capabilities: ["attachments.upload", "sessions.plan", "sessions.draft"],
+        capabilities: ["attachments.upload", "sessions.plan", "sessions.draft", "sessions.queue"],
       };
     if (method === "models.list") {
       if (catalog instanceof Error) throw catalog.message;
@@ -326,6 +326,32 @@ function dispatch(command: HostCommand) {
             draft: true,
           },
         ],
+      },
+    };
+  } else if (host && command.type === "enqueue") {
+    host = {
+      ...host,
+      revision: host.revision + 1,
+      session: {
+        ...host.session,
+        queuedMessages: [
+          ...(host.session.queuedMessages ?? []),
+          { id: command.commandId, text: command.text, attachments: [] },
+        ],
+        queueStatus: host.session.queueStatus ?? "active",
+      },
+    };
+  } else if (host && command.type === "dequeue") {
+    const queuedMessages = host.session.queuedMessages?.filter(
+      (message) => message.id !== command.messageId,
+    );
+    host = {
+      ...host,
+      revision: host.revision + 1,
+      session: {
+        ...host.session,
+        queuedMessages: queuedMessages?.length ? queuedMessages : undefined,
+        queueStatus: queuedMessages?.length ? host.session.queueStatus : undefined,
       },
     };
   } else if (host && command.type === "removeDraft") {
@@ -1027,6 +1053,64 @@ it("holds a settings change during a running turn and applies it afterwards", as
       }),
     { timeout: 4_000 },
   );
+});
+
+it("queues a message sent during a running turn on the host", async () => {
+  await render();
+  await send("First");
+  host = {
+    ...host!,
+    revision: host!.revision + 1,
+    status: "running",
+    runId: "run",
+    session: { ...host!.session, busy: true },
+  };
+  await vi.waitFor(() => expect(byLabel("Stop")).not.toBeNull(), {
+    timeout: 4_000,
+  });
+  await send("Second");
+  expect(commands.at(-1)).toMatchObject({
+    type: "enqueue",
+    sessionId: "host-session",
+    text: "Second",
+  });
+  await vi.waitFor(
+    () => expect(byLabel("Remove queued message")).not.toBeNull(),
+    { timeout: 4_000 },
+  );
+  expect(container.querySelector("[data-message-queue]")?.textContent).toContain("Second");
+  // Host providers cannot steer a running turn.
+  expect(container.querySelector("[data-message-queue]")?.textContent).not.toContain("Steer");
+
+  const queued = commands.at(-1)!.commandId;
+  await act(async () => byLabel("Remove queued message")!.click());
+  await settle();
+  expect(commands.at(-1)).toMatchObject({ type: "dequeue", messageId: queued });
+});
+
+it("resumes a queue the host paused after a stop", async () => {
+  await render();
+  await send("First");
+  host = {
+    ...host!,
+    revision: host!.revision + 1,
+    session: {
+      ...host!.session,
+      queuedMessages: [{ id: "next", text: "Next", attachments: [] }],
+      queueStatus: "paused",
+    },
+  };
+  const resume = () =>
+    [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Resume",
+    );
+  await vi.waitFor(() => expect(resume()).toBeTruthy(), { timeout: 4_000 });
+  await act(async () => resume()!.click());
+  await settle();
+  expect(commands.at(-1)).toMatchObject({
+    type: "resumeQueue",
+    sessionId: "host-session",
+  });
 });
 
 it.each([false, true])("retries a lost create response without duplicating the first turn (remount: %s)", async (remount) => {

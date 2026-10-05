@@ -184,6 +184,31 @@ export type HostCommand =
       sessionId: string;
       draftBlockId: string;
     }
+  /** Follow-ups wait on the host, which sends each when the turn before it
+   * finishes, so they still go out while this computer is disconnected. */
+  | {
+      type: "enqueue";
+      commandId: string;
+      sessionId: string;
+      text: string;
+      attachments?: RemoteAttachment[];
+      intent?: "default" | "plan" | "build";
+    }
+  | {
+      type: "dequeue";
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+    }
+  | {
+      type: "editQueued";
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+      text: string;
+    }
+  /** Continues the interrupted turn, then the paused queue. */
+  | { type: "resumeQueue"; commandId: string; sessionId: string }
   | { type: "cancel"; commandId: string; sessionId: string; runId: string }
   | {
       type: "approve";

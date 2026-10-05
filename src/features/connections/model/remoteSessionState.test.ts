@@ -20,6 +20,8 @@ it("keeps a host transcript in normal session state under its local tab ID", () 
         { id: "turn", role: "user", text: "Fix it" },
         { id: "plan", role: "plan", text: "Build the fix" },
       ],
+      queuedMessages: [{ id: "next", text: "Then test", attachments: [] }],
+      queueStatus: "active",
     },
   } as HostSession;
   const session = remoteSessionState(shell, snapshot, {
@@ -35,5 +37,7 @@ it("keeps a host transcript in normal session state under its local tab ID", () 
     title: "Fix the build",
     blocks: snapshot.session.blocks,
   });
+  expect(session.queuedMessages).toBeUndefined();
+  expect(session.queueStatus).toBeUndefined();
   expect(shouldPersistSession(session)).toBe(false);
 });
