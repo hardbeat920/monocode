@@ -1319,6 +1319,40 @@ html.has-native-glass.glass-body:not(.theme-light) .body-glass {
   );
 }
 
+/* One shared canvas keeps the custom wallpaper aligned across window chrome. */
+html.extend-chat-background.has-chat-background .workspace-background {
+  background: var(--color-background-base);
+}
+
+html:not(.extend-chat-background) .workspace-background::before,
+html:not(.extend-chat-background)
+  .workspace-background
+  > .gradient-blur-background {
+  display: none;
+}
+
+html.extend-chat-background.has-chat-background
+  .workspace-background
+  .chat-pane-background[data-project-chat-background="false"]::before,
+html.extend-chat-background.has-chat-background
+  .workspace-background
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background {
+  display: none;
+}
+
+html.extend-chat-background.has-chat-background
+  .workspace-background
+  .sidebar-glass,
+html.extend-chat-background.has-chat-background
+  .workspace-background
+  .body-glass {
+  background: hsl(
+    var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
+      var(--sidebar-opacity)
+  );
+}
+
 textarea,
 input,
 .agent-transcript,

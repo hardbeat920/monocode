@@ -114,6 +114,31 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("keeps extending the wallpaper opt-in, persists it, and restores the default", async () => {
+    localStorage.setItem("monocode.chatBackgroundPath", "/background.png");
+    await render("appearance");
+    const toggle = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Extend background behind sidebars"]',
+      )!;
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle().click());
+    expect(localStorage.getItem("monocode.extendChatBackground")).toBe("1");
+    expect(
+      document.documentElement.classList.contains("extend-chat-background"),
+    ).toBe(true);
+    await render("general");
+    await render("appearance");
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    const restore = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Restore defaults"),
+    )!;
+    await act(async () => restore.click());
+    expect(localStorage.getItem("monocode.extendChatBackground")).toBe("0");
+    expect(
+      document.documentElement.classList.contains("extend-chat-background"),
+    ).toBe(false);
+  });
   it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
     saveMaskEmails(true);
     vi.mocked(invoke).mockImplementation(async (command, args) => {

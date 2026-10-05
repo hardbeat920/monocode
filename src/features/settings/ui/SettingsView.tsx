@@ -56,6 +56,10 @@ import {
   applyDiffPalette,
   applyAccentColor,
   applyBodyGlass,
+  applyExtendChatBackground,
+  loadExtendChatBackground,
+  saveExtendChatBackground,
+  EXTEND_CHAT_BACKGROUND_DEFAULT,
   applySidebarBlur,
   applySidebarOpacity,
   applyThemeDarkLightness,
@@ -1814,6 +1818,9 @@ function useAppearanceSettings(
   const [themeDarkLightness, setThemeDarkLightness] = useState(
     loadThemeDarkLightness,
   );
+  const [extendChatBackground, setExtendChatBackground] = useState(
+    loadExtendChatBackground,
+  );
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
   const [showExcludedFiles, setShowExcludedFiles] = useState(
     loadShowExcludedFiles,
@@ -1879,6 +1886,12 @@ function useAppearanceSettings(
     const next = applyThemeDarkLightness(value);
     saveThemeDarkLightness(next);
     setThemeDarkLightness(next);
+  }, []);
+
+  const onExtendChatBackground = useCallback((next: boolean) => {
+    applyExtendChatBackground(next);
+    saveExtendChatBackground(next);
+    setExtendChatBackground(next);
   }, []);
 
   const onBodyGlass = useCallback((next: boolean) => {
@@ -1983,6 +1996,7 @@ function useAppearanceSettings(
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onDarkLightness(THEME_DARK_LIGHTNESS_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
+    onExtendChatBackground(EXTEND_CHAT_BACKGROUND_DEFAULT);
     onShowExcludedFiles(SHOW_EXCLUDED_FILES_DEFAULT);
     onChatBackgroundEmptyOpacity(
       Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
@@ -2000,6 +2014,7 @@ function useAppearanceSettings(
     chatBackgroundPath,
     onBlur,
     onBodyGlass,
+    onExtendChatBackground,
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
@@ -2025,6 +2040,7 @@ function useAppearanceSettings(
     themeSaturation,
     themeDarkLightness,
     bodyGlass,
+    extendChatBackground,
     showExcludedFiles,
     chatBackgroundPath,
     chatBackgroundEmptyOpacity,
@@ -2043,6 +2059,7 @@ function useAppearanceSettings(
     onTint,
     onDarkLightness,
     onBodyGlass,
+    onExtendChatBackground,
     onShowExcludedFiles,
     onChooseChatBackground,
     onClearChatBackground,
@@ -2355,6 +2372,18 @@ function ChatBackgroundCard({
           </p>
         ) : null}
       </div>
+      <Row
+        id="extend-chat-background"
+        label="Extend background behind sidebars"
+        description="Use the global chat image across the window. Project images stay inside their chat panes."
+      >
+        <Toggle
+          label="Extend background behind sidebars"
+          disabled={!hasImage}
+          on={appearance.extendChatBackground}
+          onChange={appearance.onExtendChatBackground}
+        />
+      </Row>
       {hasImage ? (
         <>
           <Row

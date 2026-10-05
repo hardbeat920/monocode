@@ -311,6 +311,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "explorer gitignore ignored hidden files tree",
   },
   {
+    id: "extend-chat-background",
+    section: "appearance",
+    label: "Extend background behind sidebars",
+    keywords: "wallpaper image window sidebar background",
+  },
+  {
     id: "chat-background",
     section: "appearance",
     label: "Chat background",
