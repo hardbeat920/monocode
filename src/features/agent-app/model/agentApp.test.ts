@@ -207,7 +207,7 @@ describe("agent app commands", () => {
     expect(host.draft).toHaveBeenCalledTimes(1);
   });
 
-  it("asks a side question on a busy session and returns its thread ID", async () => {
+  it("asks a side question on a busy session and returns its thread ID" /** Ensure the side callback leaves the target's active main turn untouched. */, async () => {
     const { source, host } = fixture();
     const target = newSession("codex", source.cwd, "codex:test");
     target.id = "other";
@@ -248,7 +248,7 @@ describe("agent app commands", () => {
     expect(target.blocks[1]?.text).toBe("It is complete.");
   });
 
-  it("deduplicates a retried side question by request ID", async () => {
+  it("deduplicates a retried side question by request ID" /** A retry reuses the original thread while a changed question is rejected. */, async () => {
     const { source, host } = fixture();
     const target = newSession("codex", source.cwd, "codex:test");
     target.id = "other";
@@ -301,7 +301,7 @@ describe("agent app commands", () => {
     ).rejects.toThrow("already used with another question");
   });
 
-  it("returns side answers and maps deleted threads to closed", async () => {
+  it("returns side answers and maps deleted threads to closed" /** Check running/completed/failed status, answer messages, errors, and deletion. */, async () => {
     const { source, host } = fixture();
     const target = newSession("codex", source.cwd, "codex:test");
     target.id = "other";
@@ -379,7 +379,7 @@ describe("agent app commands", () => {
     ).toMatchObject({ error: "Provider unavailable" });
   });
 
-  it("keeps side questions inside the calling project and reports unsupported context", async () => {
+  it("keeps side questions inside the calling project and reports unsupported context" /** Reject foreign projects and providers or targets without a completed turn. */, async () => {
     const { source, host } = fixture();
     await expect(
       handleAgentApp(

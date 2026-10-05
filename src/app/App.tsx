@@ -8010,6 +8010,10 @@ function Workspace({
     [persistSession],
   );
 
+  /**
+   * Run a persisted side-thread request through its existing provider lifecycle.
+   * Ignore aborted work and record streamed activity, a final answer, or failure.
+   */
   const runBtwRequest = useCallback(
     (input: {
       sessionId: string;
