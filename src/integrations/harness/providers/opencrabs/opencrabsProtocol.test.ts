@@ -149,3 +149,45 @@ describe("eventsFromAcpUpdate subagent classification", () => {
     expect((events[0] as { kind?: string }).kind).toBe("execute");
   });
 });
+
+/**
+ * Cross-surface mirror: the opencrabs server pushes rows written by OTHER
+ * surfaces (Telegram, TUI, cron) as standard session/update frames —
+ * `{ sessionUpdate, content: { type: "text", text } }`. User rows must
+ * render user-side (interjection), and each turn's user row must arrive
+ * BEFORE its agent rows so the interjection block bounds the assistant
+ * streaming block per turn (no cross-turn blob merging).
+ */
+describe("eventsFromAcpUpdate cross-surface mirror", () => {
+  const chunk = (kind: string, text: string) => ({
+    update: { sessionUpdate: kind, content: { type: "text", text } },
+  });
+
+  it("renders user_message_chunk as a user-side interjection", () => {
+    const events = eventsFromAcpUpdate(chunk("user_message_chunk", "from telegram"));
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("interjection");
+    expect((events[0] as { text: string }).text).toBe("from telegram");
+    expect((events[0] as { customType: string }).customType).toBe("custom");
+  });
+
+  it("maps a mirrored turn in order: interjection, thought, message", () => {
+    const stream = [
+      ...eventsFromAcpUpdate(chunk("user_message_chunk", "do the thing")),
+      ...eventsFromAcpUpdate(chunk("agent_thought_chunk", "pondering")),
+      ...eventsFromAcpUpdate(chunk("agent_message_chunk", "done")),
+    ];
+    expect(stream.map((e) => e.type)).toEqual([
+      "interjection",
+      "reasoning.delta",
+      "message.delta",
+    ]);
+  });
+
+  it("maps the batched user_message variant too", () => {
+    const events = eventsFromAcpUpdate(chunk("user_message", "whole row"));
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("interjection");
+    expect((events[0] as { text: string }).text).toBe("whole row");
+  });
+});

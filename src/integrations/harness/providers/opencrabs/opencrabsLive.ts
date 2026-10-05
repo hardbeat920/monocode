@@ -174,7 +174,6 @@ export async function ensureLive(input: SendTurnInput): Promise<Live> {
 
     let setup: unknown;
     let acpSessionId: string | undefined;
-    let didLoad = false;
     let resumeFailureReason: string | undefined;
 
     if (canLoad && resume) {
@@ -190,7 +189,6 @@ export async function ensureLive(input: SendTurnInput): Promise<Live> {
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
-        didLoad = true;
       } catch (error) {
         // Context loss must be visible: MonoCode renders the old transcript
         // locally, but a fresh opencrabs session has no memory of it. The
@@ -200,7 +198,6 @@ export async function ensureLive(input: SendTurnInput): Promise<Live> {
         resumeFailureReason = error instanceof Error ? error.message : String(error);
         setup = undefined;
         acpSessionId = undefined;
-        didLoad = false;
       } finally {
         muteGate.current = false;
       }
@@ -244,7 +241,11 @@ export async function ensureLive(input: SendTurnInput): Promise<Live> {
       acpSessionId,
       threadId: input.sessionId,
       cwd: input.cwd,
-      muteUpdates: didLoad,
+      // Never mute a resumed session: the load-window replay is already
+      // dropped (live is null and muteGate is closed until the response
+      // resolves; NDJSON ordering guarantees no stragglers). Unsolicited
+      // pushes after load are the cross-surface mirror — the whole point.
+      muteUpdates: false,
       cancelled: false,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
