@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { writeFileSync, rmSync } from "node:fs";
 
 import { eventsFromAcpUpdate } from "./opencrabsProtocol";
 
@@ -73,43 +72,65 @@ describe("acpSizeField validation (CodeRabbit: spec is unsigned integer)", () =>
 });
 
 describe("eventsFromAcpUpdate image resource_links", () => {
-  it("emits image.generated for a disk-backed image resource_link", () => {
-    const path = "/tmp/acp-adapter-img-test.png";
-    writeFileSync(path, Buffer.from("png"));
-    try {
-      const events = eventsFromAcpUpdate({
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "call-img-1",
-          status: "completed",
-          rawOutput: "chart saved",
-          content: [
-            { type: "text", text: "chart saved" },
-            { type: "resource_link", uri: `file://${path}`, name: "chart.png" },
-          ],
-        },
-      });
-      const img = events.find((e) => e.type === "image.generated");
-      expect(img).toMatchObject({
-        type: "image.generated",
-        itemId: "call-img-1:1",
-        path,
-        name: "chart.png",
-        mimeType: "image/png",
-      });
-      expect(events.some((e) => e.type === "tool.updated")).toBe(true);
-    } finally {
-      rmSync(path);
-    }
+  /**
+   * The renderer has no filesystem (vite externalizes node:fs — a statSync
+   * import here fails the production build), so the server stats image
+   * files as it emits and sends mimeType + size on the block. The adapter
+   * is pure JSON in, events out.
+   */
+  it("emits image.generated carrying the server's wire metadata", () => {
+    const events = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-img-1",
+        status: "completed",
+        rawOutput: "chart saved",
+        content: [
+          { type: "text", text: "chart saved" },
+          {
+            type: "resource_link",
+            uri: "file:///tmp/acp-adapter-img-test.png",
+            name: "chart.png",
+            mimeType: "image/png",
+            size: 1234,
+          },
+        ],
+      },
+    });
+    const img = events.find((e) => e.type === "image.generated");
+    expect(img).toMatchObject({
+      type: "image.generated",
+      itemId: "call-img-1:1",
+      path: "/tmp/acp-adapter-img-test.png",
+      name: "chart.png",
+      mimeType: "image/png",
+      size: 1234,
+    });
+    expect(events.some((e) => e.type === "tool.updated")).toBe(true);
   });
 
-  it("ignores missing files, non-images, and non-file uris", () => {
+  it("falls back to the extension map for blocks without metadata", () => {
     const events = eventsFromAcpUpdate({
       update: {
         sessionUpdate: "tool_call_update",
         toolCallId: "call-img-2",
         content: [
-          { type: "resource_link", uri: "file:///nonexistent/nope.png" },
+          { type: "resource_link", uri: "file:///x/y.jpg", name: "y.jpg" },
+        ],
+      },
+    });
+    expect(events.find((e) => e.type === "image.generated")).toMatchObject({
+      mimeType: "image/jpeg",
+      size: 0,
+    });
+  });
+
+  it("ignores non-image extensions and non-file uris", () => {
+    const events = eventsFromAcpUpdate({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-img-3",
+        content: [
           { type: "resource_link", uri: "file:///etc/hosts" },
           { type: "resource_link", uri: "https://example.com/x.png" },
         ],
