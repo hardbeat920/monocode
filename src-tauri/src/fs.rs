@@ -4168,17 +4168,37 @@ fn git_cmd() -> Command {
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
     let mut cmd = git_cmd();
+    let action = args.iter().copied().find(|arg| !arg.starts_with('-'));
     if matches!(
-        args.first().copied(),
-        Some("commit" | "push" | "pull" | "fetch" | "clone")
+        action,
+        Some(
+            "commit"
+                | "push"
+                | "pull"
+                | "fetch"
+                | "clone"
+                | "add"
+                | "checkout"
+                | "switch"
+                | "restore"
+                | "reset"
+                | "stash"
+                | "merge"
+                | "rebase"
+                | "cherry-pick"
+                | "revert"
+                | "worktree"
+        )
     ) {
         // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
+        // Anything that writes the work tree runs LFS filters and the post-checkout hook,
+        // which fail when a Finder-launched app cannot find `git-lfs`.
         cmd.env("PATH", gui_path());
     }
     cmd
 }
 
-fn git_cmd_for_args(args: &[&str]) -> Command {
+pub(crate) fn git_cmd_for_args(args: &[&str]) -> Command {
     git_cmd_for_args_with_path(args, crate::harness::gui_search_path)
 }
 
@@ -8493,8 +8513,18 @@ mod tests {
 
     #[test]
     fn git_actions_that_need_helpers_use_login_shell_path() {
-        for action in ["commit", "push", "pull", "fetch", "clone"] {
-            let cmd = git_cmd_for_args_with_path(&[action], || "gui-git-path".into());
+        for args in [
+            &["commit"][..],
+            &["push"],
+            &["pull"],
+            &["fetch"],
+            &["clone"],
+            &["checkout", "-b", "feature"],
+            &["switch", "main"],
+            &["worktree", "add", "../wt"],
+            &["--literal-pathspecs", "add", "--", "a.txt"],
+        ] {
+            let cmd = git_cmd_for_args_with_path(args, || "gui-git-path".into());
             assert!(cmd.get_envs().any(|(key, value)| {
                 key == std::ffi::OsStr::new("PATH")
                     && value == Some(std::ffi::OsStr::new("gui-git-path"))

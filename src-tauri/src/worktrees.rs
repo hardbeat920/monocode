@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -30,8 +29,7 @@ pub struct Worktrees {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
-    crate::hide_window_console(&mut command);
+    let mut command = crate::fs::git_cmd_for_args(args);
     let output = command
         .arg("-C")
         .arg(root)
