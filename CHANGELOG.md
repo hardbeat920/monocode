@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - In the editor's diff view, the `+`/`-` marker sits between the line numbers and the code instead of at the far left of the gutter. Changed rows tint their line numbers, removed lines show their old line number, and each changed line has one color cue instead of two bars, matching the unified diff view.
+- The Inbox pull request overview's change counts and per-file bars follow the selected diff color palette instead of fixed red and green.
 
 ## [0.7.1] - 2026-10-05
 
