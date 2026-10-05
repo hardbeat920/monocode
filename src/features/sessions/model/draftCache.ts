@@ -51,3 +51,37 @@ export function clearComposerDraft(sessionId: string): void {
   drafts.delete(sessionId);
   mcpTags.delete(sessionId);
 }
+
+// A session can have more than one mounted composer (shared panes or draft edits).
+const closeGuards = new Map<string, Set<() => boolean>>();
+
+/**
+ * Register a live unsaved-work check for one mounted composer or side-question hook.
+ * Multiple checks may share a session; the returned cleanup removes only this one.
+ * Checks must read current UI state without changing it or calling back on the same session.
+ */
+export function registerComposerCloseGuard(
+  sessionId: string,
+  hasUnsavedWork: () => boolean,
+): () => void {
+  const guards = closeGuards.get(sessionId) ?? new Set();
+  guards.add(hasUnsavedWork);
+  closeGuards.set(sessionId, guards);
+  /** Remove this check only; other mounted composers may still guard the session. */
+  const unregister = () => {
+    guards.delete(hasUnsavedWork);
+    if (guards.size === 0) closeGuards.delete(sessionId);
+  };
+  return unregister;
+}
+
+/**
+ * Check cached text and mounted UI guards without saving or clearing input.
+ * True means automated closing must refuse; saved transcript drafts are separate.
+ */
+export function hasUnsavedComposerDraft(sessionId: string): boolean {
+  return (
+    !!getComposerDraft(sessionId) ||
+    [...(closeGuards.get(sessionId) ?? [])].some((guard) => guard())
+  );
+}

@@ -199,7 +199,11 @@ import {
   taggedMcpServers,
   type McpTag,
 } from "../model/mcpPicker";
-import { getComposerMcpTags, setComposerMcpTags } from "../model/draftCache";
+import {
+  getComposerMcpTags,
+  setComposerMcpTags,
+  registerComposerCloseGuard,
+} from "../model/draftCache";
 import { type McpConnection } from "../../settings/model/mcp";
 import {
   getCachedMcpSettings,
@@ -501,6 +505,11 @@ function MessageQueue({
   );
 }
 
+/**
+ * Compose turns and unsent drafts, including asynchronous attachment preparation.
+ * While mounted with a session ID, register a close guard for live text,
+ * attachments, pending pastes, and submission; unregister it on cleanup.
+ */
 export function Composer({
   enabled = true,
   focused,
@@ -603,6 +612,18 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  /** Read current refs for text, attachments, pending pastes, and submission. */
+  const hasUnsavedComposerWork = () =>
+    !!ref.current?.value ||
+    attachmentsRef.current.length > 0 ||
+    !!pasteFlightRef.current ||
+    submitLockRef.current;
+  /** Register this mounted composer until its session or component is replaced. */
+  const registerSessionCloseGuard = () => {
+    if (!sessionId) return;
+    return registerComposerCloseGuard(sessionId, hasUnsavedComposerWork);
+  };
+  useEffect(registerSessionCloseGuard, [sessionId]);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,

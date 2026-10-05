@@ -1,3 +1,7 @@
+import {
+  hasUnsavedComposerDraft,
+  registerComposerCloseGuard,
+} from "../model/draftCache";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Plus, RefreshCw, X } from "../../../shared/ui/icons";
 
@@ -23,6 +27,7 @@ import {
 } from "../model/session";
 
 type Options = {
+  sessionId?: string;
   /** False when this session cannot take side questions right now. */
   available: boolean;
   blocks: Block[];
@@ -82,8 +87,11 @@ function reducedMotion() {
 /**
  * State for `/btw` side conversations. The session's own composer asks the
  * questions while this is open; the sheet shows one tab per side thread.
+ * With a session ID, register a parent close guard for all side-tab drafts and
+ * mounted composers, removing that registration when tabs change or on unmount.
  */
 export function useBtwConversation({
+  sessionId,
   available,
   blocks,
   harness,
@@ -143,6 +151,16 @@ export function useBtwConversation({
       };
     });
   }, [drafts, entries, optimistic, turns]);
+  /** Report text or mounted composer work held by any side-question tab. */
+  const hasUnsavedSideQuestionWork = () =>
+    Object.values(draftTextsRef.current).some(Boolean) ||
+    tabs.some((tab) => hasUnsavedComposerDraft(tab.id));
+  /** Register the current side-question draft check for automated session close. */
+  const registerSideQuestionCloseGuard = () => {
+    if (!sessionId) return;
+    return registerComposerCloseGuard(sessionId, hasUnsavedSideQuestionWork);
+  };
+  useEffect(registerSideQuestionCloseGuard, [sessionId, tabs]);
   const active =
     tabs.find((tab) => tab.id === activeId) ?? tabs[tabs.length - 1];
   const activeTabId = active?.id ?? null;

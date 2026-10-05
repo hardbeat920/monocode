@@ -1,3 +1,4 @@
+import { closeAgentSession } from "../features/agent-app/model/closeSession";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
@@ -921,6 +922,11 @@ export default function App(props: AppProps) {
   );
 }
 
+/**
+ * Own this window's sessions, layouts, persistence, and provider lifecycles.
+ * App CLI handlers read live refs and commit layout changes synchronously;
+ * sessions removed from view remain eligible for ordinary idle detachment.
+ */
 function Workspace({
   windowTransfer = null,
   resumed = null,
@@ -9383,6 +9389,40 @@ function Workspace({
               );
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
+            },
+            /** Save the target, then apply its close only after live-state revalidation. */
+            async close(id) {
+              return closeAgentSession(source, id, {
+                /** Read refs so closeSession can compare state across its save await. */
+                snapshot() {
+                  return {
+                    sessions: sessionsRef.current,
+                    tabs: tabsRef.current,
+                    activeTabId: activeTabIdRef.current,
+                  };
+                },
+                /** Reject targets already being removed, switched, or orchestrated. */
+                unavailable(targetId) {
+                  return (
+                    removingSessionIds.current.has(targetId) ||
+                    switchingWorktrees.current.has(targetId) ||
+                    !!orchestrator.run(targetId)
+                  );
+                },
+                worktreeOf: tabWorktreeOf,
+                /** Publish the planned layout synchronously before refreshing history. */
+                apply(next) {
+                  flushSync(() => {
+                    sessionsRef.current = next.sessions;
+                    tabsRef.current = next.tabs;
+                    activeTabIdRef.current = next.activeTabId;
+                    setSessions(next.sessions);
+                    setTabs(next.tabs);
+                    activateTab(next.activeTabId);
+                  });
+                  void refreshHistory(sidebarCwdRef.current);
+                },
+              });
             },
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>
