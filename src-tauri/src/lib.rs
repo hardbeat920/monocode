@@ -6,7 +6,7 @@ mod azure_devops;
 mod chat_background;
 mod checkpoint;
 mod control;
-pub mod control_cli;
+pub use monocode_process::control_cli;
 mod cursor_store;
 mod external_editor;
 mod fs;
@@ -20,7 +20,7 @@ mod link_preview;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-mod macos_background;
+use monocode_platform::macos_background;
 mod mcp;
 mod menu;
 mod notes;
@@ -34,18 +34,16 @@ mod quick_composer;
 mod rate_limits;
 mod reminders;
 mod remote;
-mod remote_ssh;
 mod search;
 mod session_store;
 mod skills;
-pub mod ssh_askpass;
+pub use monocode_remote::ssh_askpass;
 #[cfg(target_os = "windows")]
 mod tray;
 mod window;
 mod window_transfer;
 #[cfg(windows)]
-mod windows;
-mod worktree_lifecycle;
+use monocode_platform::windows;
 mod worktrees;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
@@ -55,120 +53,25 @@ mod worktrees;
 #[tauri::command]
 fn default_cwd() -> String {
     if let Ok(cwd) = std::env::current_dir() {
-        return fs::path_to_js(&cwd);
+        return monocode_platform::path_to_js(&cwd);
     }
     dirs_home()
-        .map(|home| fs::path_to_js(std::path::Path::new(&home)))
+        .map(|home| monocode_platform::path_to_js(std::path::Path::new(&home)))
         .unwrap_or_else(|| "~".into())
 }
 
 #[tauri::command]
 fn home_dir() -> String {
     dirs_home()
-        .map(|home| fs::path_to_js(std::path::Path::new(&home)))
+        .map(|home| monocode_platform::path_to_js(std::path::Path::new(&home)))
         .unwrap_or_else(|| "~".into())
 }
 
-pub(crate) struct PasswdIdentity {
-    pub home: String,
-    pub user: String,
-    pub shell: String,
-}
+pub(crate) use monocode_platform::dirs_home;
 
-pub(crate) fn dirs_home() -> Option<String> {
-    #[cfg(windows)]
-    let keys = ["USERPROFILE", "HOME"];
-    #[cfg(not(windows))]
-    let keys = ["HOME", "USERPROFILE"];
-    for key in keys {
-        if let Some(home) = std::env::var_os(key) {
-            let home = home.to_string_lossy().into_owned();
-            if !home.is_empty() {
-                return Some(home);
-            }
-        }
-    }
-    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        (Ok(drive), Ok(path)) if !drive.is_empty() && !path.is_empty() => {
-            Some(format!("{drive}{path}"))
-        }
-        _ => passwd_identity().map(|id| id.home),
-    }
-}
-
-/// Hide the console window that Windows allocates for GUI-spawned children.
-pub(crate) fn hide_window_console(cmd: &mut std::process::Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(WINDOWS_BACKGROUND_CREATION_FLAGS);
-    }
-    let _ = cmd;
-}
-
-#[cfg(windows)]
-const WINDOWS_BACKGROUND_CREATION_FLAGS: u32 = 0x0800_0000; // CREATE_NO_WINDOW
-
-#[cfg(all(test, windows))]
-mod background_command_tests {
-    use super::*;
-
-    #[test]
-    fn background_commands_keep_piped_output_and_exit_status() {
-        assert_eq!(WINDOWS_BACKGROUND_CREATION_FLAGS, 0x0800_0000);
-
-        let mut cmd = std::process::Command::new("cmd.exe");
-        cmd.args(["/D", "/C", "(echo stdout)&(echo stderr 1>&2)&exit /b 7"]);
-        hide_window_console(&mut cmd);
-
-        let output = cmd.output().expect("background command should run");
-        assert_eq!(output.status.code(), Some(7));
-        assert!(String::from_utf8_lossy(&output.stdout).contains("stdout"));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("stderr"));
-    }
-}
-
-/// Finder-launched .app bundles often omit HOME/USER/SHELL. Fall back to the
-/// passwd database so harness CLIs still find `~/.fx` and the login keychain.
-pub(crate) fn passwd_identity() -> Option<PasswdIdentity> {
-    #[cfg(unix)]
-    {
-        let uid = unsafe { libc::getuid() };
-        let mut buf = vec![0u8; 4096];
-        let mut pwd = unsafe { std::mem::zeroed::<libc::passwd>() };
-        let mut result = std::ptr::null_mut::<libc::passwd>();
-        let rc = unsafe {
-            libc::getpwuid_r(
-                uid,
-                &mut pwd,
-                buf.as_mut_ptr() as *mut libc::c_char,
-                buf.len(),
-                &mut result,
-            )
-        };
-        if rc != 0 || result.is_null() {
-            return None;
-        }
-        unsafe {
-            let user = std::ffi::CStr::from_ptr(pwd.pw_name)
-                .to_string_lossy()
-                .into_owned();
-            let home = std::ffi::CStr::from_ptr(pwd.pw_dir)
-                .to_string_lossy()
-                .into_owned();
-            let shell = std::ffi::CStr::from_ptr(pwd.pw_shell)
-                .to_string_lossy()
-                .into_owned();
-            if user.is_empty() || home.is_empty() {
-                return None;
-            }
-            Some(PasswdIdentity { home, user, shell })
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
+/// The app data directory that the crates take in place of an `AppHandle`.
+pub(crate) fn app_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -224,11 +127,15 @@ pub fn run() {
                 ])
                 .build(),
         )
-        .manage(harness::HarnessHost::new())
-        .manage(pty::PtyHost::new())
-        .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
+            app.manage(harness::HarnessHost::new(std::sync::Arc::new(
+                harness::TauriHarnessEvents(app.handle().clone()),
+            )));
+            app.manage(pty::PtyHost::new(std::sync::Arc::new(pty::TauriPtyEvents(
+                app.handle().clone(),
+            ))));
+            app.manage(remote::Remote::new(app_data_dir(app.handle())?));
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
@@ -259,8 +166,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             remote::remote_machines,
-            remote::remote_connect,
+            remote::remote_pair,
             remote::remote_disconnect,
+            remote::remote_retry,
             remote::remote_request,
             remote::remote_ssh_begin,
             remote::remote_ssh_reconnect,
@@ -434,6 +342,7 @@ pub fn run() {
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
+            harness::harness_resolve_droid,
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
@@ -452,6 +361,7 @@ pub fn run() {
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
             rate_limits::fetch_opencode_go_usage,
+            rate_limits::fetch_droid_usage,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -589,7 +499,9 @@ pub fn run() {
             window::request_quit(handle);
         }
         tauri::RunEvent::Exit => {
-            handle.state::<remote::RemoteConnections>().shutdown();
+            if let Some(remote) = handle.try_state::<remote::Remote>() {
+                remote.shutdown();
+            }
             reap_harness_children(handle);
         }
         _ => {}

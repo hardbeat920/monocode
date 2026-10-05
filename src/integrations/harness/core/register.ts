@@ -4,6 +4,7 @@ import { ensureCursorRegistered } from "../providers/cursor/cursorAdapter";
 import { ensureFxRegistered } from "../providers/fx/fxAdapter";
 import { ensureGrokRegistered } from "../providers/grok/grokAdapter";
 import { ensureHermesRegistered } from "../providers/hermes/hermesAdapter";
+import { ensureDroidRegistered } from "../providers/droid/droidAdapter";
 import { ensureOpenCodeRegistered } from "../providers/opencode/opencodeAdapter";
 import { ensureOmpRegistered } from "../providers/omp/ompAdapter";
 import { ensurePiRegistered } from "../providers/pi/piAdapter";
@@ -20,5 +21,6 @@ export function registerBuiltinHarnesses(): void {
   ensureOmpRegistered();
   ensureFxRegistered();
   ensureHermesRegistered();
+  ensureDroidRegistered();
   ensureAntigravityRegistered();
 }

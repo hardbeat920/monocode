@@ -1,0 +1,18 @@
+[package]
+name = "monocode-core"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+monocode-locale.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Block ids for the transcript reducer, `crypto.randomUUID()` in TypeScript.
+uuid.workspace = true
+
+[dev-dependencies]
+# Only the golden round-trip test reads SQLite, from a copy of a real monocode.db.
+rusqlite = { version = "0.40.2", features = ["bundled"] }

@@ -1,0 +1,47 @@
+[package]
+name = "monocode-view-pages"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Secondary pages: automations, notes, search, MCP settings, skills, and the date and time picker"
+
+[dependencies]
+monocode-locale.workspace = true
+monocode-platform.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+# Text fields style gpui-base's unframed inputs themselves (InputEditorStyle),
+# and the note source editor installs its own highlighter.
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-engine = { path = "../engine", default-features = false, features = ["inbox"] }
+monocode-ui.workspace = true
+monocode-markdown.workspace = true
+# `Note` and `NoteImageAsset` are the store's types, as in the engine.
+monocode-store.workspace = true
+# pretty_cwd, project_name, project_key, and same_project_path.
+monocode-layout.workspace = true
+# SearchableSelect, ModelPicker, AccessPicker, ModelControlPills,
+# SkillPromptField, CreateSkillForm, SkillDocumentPreview, and MatchText.
+monocode-view-composer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+regex.workspace = true
+# Local time for schedules, run times, and the calendar.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+monocode-locale = { workspace = true, features = ["test-support"] }
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Oneshot channels hold data calls open in the view tests.
+futures.workspace = true
+
+[[example]]
+name = "pages_gallery"
+path = "examples/pages_gallery.rs"

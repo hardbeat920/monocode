@@ -1,0 +1,32 @@
+{
+  "linux-source-fresh-workspace.log": {
+    "targets": 33,
+    "passed": 5380,
+    "failed": 0,
+    "ignored": 44
+  },
+  "linux-source-fresh-core.log": {
+    "targets": 3,
+    "passed": 414,
+    "failed": 0,
+    "ignored": 1
+  },
+  "linux-source-fresh-recovery.log": {
+    "targets": 1,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  },
+  "linux-source-fresh-http.log": {
+    "targets": 1,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0
+  },
+  "linux-source-fresh-shortcut.log": {
+    "targets": 1,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  }
+}

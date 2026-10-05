@@ -11,6 +11,7 @@ import {
 } from "../model/protocol";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "1.2.3" }));
 let container: HTMLDivElement;
 let root: Root;
 let state: SshSetup;
@@ -21,6 +22,14 @@ const machine: RemoteMachine = {
   environmentId: "env",
   endpoint: "ssh://me@home",
   ssh: { target: "me@home", remotePort: 3774 },
+};
+const direct: RemoteMachine = {
+  id: "direct",
+  name: "Studio",
+  environmentId: "env-2",
+  endpoint: "10.0.0.2:3774",
+  endpoints: ["https://10.0.0.2:3774", "https://100.64.0.9:3774"],
+  ssh: null,
 };
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -41,6 +50,8 @@ beforeEach(() => {
     }
     if (command === "remote_ssh_cancel" || command === "remote_ssh_answer")
       return;
+    if (command === "remote_pair") return direct;
+    if (command === "remote_retry") return;
     throw new Error(`Unexpected command ${command}`);
   });
   container = document.createElement("div");
@@ -73,11 +84,12 @@ async function fill(selector: string, value: string) {
 async function start() {
   await render();
   await act(async () => button("Add machine").click());
+  await act(async () => button("SSH").click());
   await fill(
     'input[placeholder="user@my-mac-mini or an SSH alias"]',
     "me@home",
   );
-  await act(async () => button("Connect").click());
+  await act(async () => button("Set up over SSH").click());
 }
 async function poll() {
   await act(async () => {
@@ -154,7 +166,7 @@ it("keeps the SSH address after a failed install and cancels active setup when S
     )!.value,
   ).toBe("me@home");
   state = { id: "setup", message: "Connecting…", done: false };
-  await act(async () => button("Connect").click());
+  await act(async () => button("Set up over SSH").click());
   await act(async () => root.unmount());
   root = createRoot(container);
   expect(invoke).toHaveBeenCalledWith("remote_ssh_cancel", { jobId: "setup" });
@@ -170,12 +182,10 @@ async function openRemove() {
   );
 }
 
-it("offers an explicit host update for an SSH machine missing workspace methods", async () => {
+it("offers an explicit host update for an SSH machine without pushed changes", async () => {
   machines = [machine];
   await render();
-  expect(container.textContent).toContain(
-    "host update needed for Explorer and Changes",
-  );
+  expect(container.textContent).toContain("host older than 0.5 · update available");
   expect(container.textContent).toContain("interrupts active agent turns");
   await act(async () => button("Update Host").click());
   expect(invoke).toHaveBeenCalledWith("remote_ssh_reconnect", {
@@ -262,6 +272,43 @@ it("keeps the connection when the host cannot revoke its credential", async () =
   });
   expect(container.textContent).toContain("Could not revoke access");
   expect(button("Remove from this desktop only")).toBeTruthy();
+});
+
+it("pairs a machine from the link that connect prints", async () => {
+  await render();
+  await act(async () => button("Add machine").click());
+  expect(container.textContent).toContain("npx monocode-host@1.2.3 connect");
+  const link = "monocode://pair?v=1&id=env-2";
+  await fill('input[aria-label="Pairing link"]', link);
+  await act(async () => button("Pair").click());
+  expect(invoke).toHaveBeenCalledWith("remote_pair", { link, name: "" });
+  expect(container.textContent).toContain("Studio is connected");
+  expect(container.querySelector('input[aria-label="Pairing link"]')).toBeNull();
+});
+
+it("shows a paired machine's address and retries every route when it is offline", async () => {
+  machines = [direct];
+  const fallback = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, params) => {
+    if (command === "remote_request")
+      throw "Machine is unreachable. 10.0.0.2:3774 did not answer";
+    return fallback(command, params);
+  });
+  await render();
+  expect(container.textContent).toContain("10.0.0.2:3774 (+1)");
+  expect(container.textContent).toContain("Offline · Machine is unreachable");
+  expect(button("Reconnect")).toBeUndefined();
+  vi.mocked(invoke).mockImplementation(async (command, params) =>
+    command === "remote_request"
+      ? { environmentId: "env-2", providers: ["codex"] }
+      : fallback(command, params),
+  );
+  await act(async () => button("Retry").click());
+  await poll();
+  expect(invoke).toHaveBeenCalledWith("remote_retry", { machineId: "direct" });
+  expect(container.textContent).toContain("Connected · host older than 0.5");
+  // Without SSH, updating happens on the machine itself.
+  expect(container.textContent).toContain("npx monocode-host@1.2.3 connect");
 });
 
 it("does not spellcheck or autocorrect the machine name", async () => {

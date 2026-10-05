@@ -1,0 +1,51 @@
+[package]
+name = "monocode-updater"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Self-update for the native app over the existing release feed"
+
+[features]
+# Builds `monocode-updater-sign`, the release signer that replaces
+# `tauri signer`. The app does not need it.
+sign = ["dep:minisign"]
+
+[[bin]]
+name = "monocode-updater-sign"
+path = "src/bin/monocode-updater-sign.rs"
+required-features = ["sign"]
+
+[dependencies]
+monocode-layout.workspace = true
+monocode-settings.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+base64.workspace = true
+url = { workspace = true, features = ["serde"] }
+time.workspace = true
+regex.workspace = true
+async-channel.workspace = true
+ureq.workspace = true
+semver = "1"
+# MIT. The same verifier tauri-plugin-updater uses.
+minisign-verify = "0.2"
+tar = "0.4"
+flate2 = "1"
+tempfile = "3"
+# MIT. Signs release packages in the format tauri-plugin-updater verifies.
+minisign = { version = "0.10", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+futures.workspace = true
+minisign = "0.10"

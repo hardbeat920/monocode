@@ -384,10 +384,8 @@ import {
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
-import {
-  ADD_TO_CHAT_EVENT,
-  type AddToChatRequest,
-} from "../features/sessions/model/quoteDraft";
+import { ADD_TO_CHAT_EVENT } from "../features/sessions/model/quoteDraft";
+import type { ChatContextItem } from "../features/sessions/model/chatContext";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
@@ -566,6 +564,7 @@ import {
 } from "../features/connections/model/connections";
 import { buildRemotePlan, remoteSessionActions } from "../features/connections/model/remoteSessionActions";
 import { remoteSessionState } from "../features/connections/model/remoteSessionState";
+import { useRemoteTurnUpdates } from "../features/connections/model/remoteTurns";
 import { remotePath, remoteProjectFor } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
@@ -1559,8 +1558,8 @@ function Workspace({
 
   useEffect(() => {
     const openSessionForAddToChat = (event: Event) => {
-      const detail = (event as CustomEvent<AddToChatRequest>).detail;
-      if (!detail?.text) return;
+      const item = (event as CustomEvent<ChatContextItem>).detail;
+      if (!item) return;
 
       const result = applyAddToChatRequest({
         sessions: sessionsRef.current,
@@ -1569,8 +1568,7 @@ function Workspace({
         projectCwd: projectCwdRef.current,
         fallbackCwd: sessionDefaults?.cwd,
         defaultRuntimeMode: sessionDefaults?.runtimeMode,
-        text: detail.text,
-        mode: detail.mode,
+        item,
       });
       if (!result) return;
 
@@ -1691,7 +1689,9 @@ function Workspace({
     if (
       active?.harness === "claude" ||
       active?.harness === "codex" ||
-      active?.harness === "opencode"
+      active?.harness === "opencode" ||
+      active?.harness === "droid" ||
+      active?.harness === "grok"
     ) {
       return [active.harness];
     }
@@ -10647,6 +10647,11 @@ function Workspace({
     }
     if (lastRemoteSnapshot.current.get(shellId) === snapshot) return;
     lastRemoteSnapshot.current.set(shellId, snapshot);
+    // A host turn that ends is announced like a local one, whether or not
+    // its tab is showing.
+    const finished =
+      !!sessionsRef.current.find((entry) => entry.id === shellId)?.busy &&
+      !snapshot.session.busy;
     setSessions((current) => {
       const shell = current.find((entry) => entry.id === shellId);
       if (!shell) return current;
@@ -10656,7 +10661,25 @@ function Workspace({
         ? remoteSessionState(entry, snapshot, project)
         : entry);
     });
+    if (finished)
+      window.setTimeout(() => {
+        const session = sessionsRef.current.find((entry) => entry.id === shellId);
+        if (session)
+          void announceSessionFinished(
+            session,
+            shellId === activeSessionIdRef.current,
+          );
+      }, 0);
   }, []);
+  const markRemoteBusy = useCallback((shellId: string) => {
+    setSessions((current) => current.map((entry) =>
+      entry.id === shellId && !entry.busy ? { ...entry, busy: true } : entry));
+  }, []);
+  useRemoteTurnUpdates(sessions, {
+    onBusy: markRemoteBusy,
+    onSnapshot: onRemoteSnapshot,
+    known: (shellId) => lastRemoteSnapshot.current.get(shellId),
+  });
 
   const onManageWorktrees = useCallback(
     () => openSettings("worktrees"),

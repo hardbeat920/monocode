@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri"]
-exclude = ["vendor/portable-pty"]
+members = ["crates/*", "apps/*"]
+exclude = ["src-tauri", "vendor/portable-pty"]
 
 [workspace.package]
 version = "0.7.0"
@@ -9,6 +9,69 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
+anyhow = "1"
+log = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+sha2 = "0.10"
+url = "2.5"
+toml = "0.9.12"
+time = { version = "0.3", features = ["parsing", "formatting"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
+ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+futures = "0.3"
+async-channel = "2"
+smol = "2"
+parking_lot = "0.12"
+regex = "1"
+regress = { version = "=0.12.0", default-features = false, features = ["std"] }
+unicode-normalization = "0.1"
+once_cell = "1"
+libc = "0.2"
+
+# Native crates.
+monocode-core = { path = "crates/core" }
+monocode-store = { path = "crates/store" }
+monocode-git = { path = "crates/git" }
+monocode-integrations = { path = "crates/integrations" }
+monocode-process = { path = "crates/process" }
+monocode-terminal = { path = "crates/terminal" }
+monocode-remote = { path = "crates/remote" }
+monocode-platform = { path = "crates/platform" }
+monocode-locale = { path = "crates/locale" }
+monocode-harness = { path = "crates/harness" }
+monocode-engine = { path = "crates/engine" }
+monocode-ui = { path = "crates/ui" }
+monocode-markdown = { path = "crates/markdown" }
+monocode-terminal-view = { path = "crates/terminal-view" }
+monocode-editor = { path = "crates/editor" }
+monocode-layout = { path = "crates/layout" }
+monocode-settings = { path = "crates/settings" }
+monocode-view-transcript = { path = "crates/view-transcript" }
+monocode-view-composer = { path = "crates/view-composer" }
+monocode-view-files = { path = "crates/view-files" }
+monocode-view-scm = { path = "crates/view-scm" }
+monocode-view-settings = { path = "crates/view-settings" }
+monocode-view-pages = { path = "crates/view-pages" }
+monocode-view-inbox = { path = "crates/view-inbox" }
+monocode-host = { path = "crates/host" }
+monocode-view-workbench = { path = "crates/view-workbench" }
+monocode-view-remote = { path = "crates/view-remote" }
+monocode-view-quick = { path = "crates/view-quick" }
+monocode-updater = { path = "crates/updater" }
+
+# GPUI: zeronsh/zui plus its gpui-component fork. Bump both revs together,
+# following the pair that zeronsh/comet pins.
+gpui = { git = "https://github.com/zeronsh/zui", rev = "667d0aaf9531d2d1b2d0674a5e55f977df1b09f6" }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "667d0aaf9531d2d1b2d0674a5e55f977df1b09f6", features = ["wayland", "x11", "font-kit", "runtime_shaders"] }
+gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "667d0aaf9531d2d1b2d0674a5e55f977df1b09f6" }
+gpui-component = { git = "https://github.com/zeronsh/gpui-component", rev = "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70" }
+gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70" }
+
+# GPUI is slow without optimization, so dependencies build at opt-level 2 in dev.
+[profile.dev.package."*"]
+opt-level = 2

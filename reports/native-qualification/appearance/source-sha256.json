@@ -1,0 +1,15 @@
+{
+  "crates/editor/Cargo.toml": "b833cd603e21cb46db67707b295f476aed2f824d8f918898566e1be9cf4f5692",
+  "crates/editor/src/image_view.rs": "8d063f7115def91d1b0ccfe3365d7c91bdaf78be8fa6c6fb71cef27f172f559f",
+  "crates/editor/src/pdf_view.rs": "6914c9c11b997b1a0122a038f4032598d411cead8f16e8f5a4c92462be3a0b4e",
+  "crates/editor/src/diff_view.rs": "cf56330266be156f6475ce647b84174ffb649e06c7910616bbfbfa65f10104ea",
+  "crates/view-files/Cargo.toml": "80d65bd1aeee67e3916ef9e05495e46afb0164fcd3c9835fcdd3ffb2cbfe7043",
+  "crates/view-files/src/binary_view.rs": "be099191cca90167844549bc6cdbe2a882c8522dd85eeb77d533b0fcc6370e0d",
+  "crates/view-scm/Cargo.toml": "2b73eab4c8a15340f6e566418facc3dc94245ef9e0681be64f656c32df51d805",
+  "crates/view-scm/src/ui/diffs.rs": "fc7fb13e3f18c08e00f13c000d187dbd96b16760aef1ae3a6b5009c3542184b5",
+  "apps/monocode-app/src/file_pane.rs": "279c0c76ada6b28d93d37fb2825ecff883603427af3d74ee067046fb4125a230",
+  "crates/view-inbox/Cargo.toml": "6c3855f4afbdd2682bfae68c9949188bcce68399d33316103489084828ff7aaa",
+  "crates/view-inbox/src/pr/detail.rs": "71190b0798d7c3044d418eb5308902e5f1b02b19b6ca257012cfda49f7e2bc38",
+  "crates/view-inbox/src/pr/detail_appearance_tests.rs": "8b6761c90cc83c52a4125abf7f69396144081b780ffb6ccbc364589f385f0ab2",
+  "crates/view-inbox/src/pr/diff.rs": "1bc4098b64a71c5dad8feafa760aab95d0dc15b47b1f466ddc29eef00a962cc9"
+}

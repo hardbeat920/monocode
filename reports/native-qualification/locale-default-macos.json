@@ -1,0 +1,90 @@
+{
+  "platform": "darwin",
+  "probe_sha256": "7301e96554caed4311d0390c67653a5c44bed567b72d94b18cd0dff11f6ac525",
+  "passed": true,
+  "cases": [
+    {
+      "case": "host-default",
+      "child_locale": null,
+      "child_language": null,
+      "native": {
+        "icu_locale": "en_US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago",
+        "system_locale": "en-US"
+      },
+      "node": {
+        "node_version": "v23.11.0",
+        "icu_version": "77.1",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "pairs": [
+          {
+            "a": "_a",
+            "b": ".a",
+            "order": -1
+          },
+          {
+            "a": "ä",
+            "b": "z",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "f",
+            "order": -1
+          },
+          {
+            "a": "é",
+            "b": "é",
+            "order": 0
+          },
+          {
+            "a": "9",
+            "b": "10",
+            "order": 1
+          },
+          {
+            "a": "a",
+            "b": "B",
+            "order": -1
+          }
+        ],
+        "relative": "2 hours ago"
+      },
+      "collation_equal": true,
+      "relative_equal": true
+    }
+  ]
+}

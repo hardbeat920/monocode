@@ -11,6 +11,8 @@ import {
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseDroidUsage,
+  parseGrokBilling,
   parseOpencodeGoUsage,
   parseResetTimestamp,
   rateLimitWindowTooltip,
@@ -267,6 +269,101 @@ describe("parseCodexRateLimits", () => {
     });
     expect(limits.session?.usedPercent).toBe(10);
     expect(limits.weekly?.usedPercent).toBe(20);
+  });
+});
+
+describe("parseDroidUsage", () => {
+  it("maps the standard pool and ignores the core pool", () => {
+    const limits = parseDroidUsage({
+      usesTokenRateLimitsBilling: true,
+      limits: {
+        standard: {
+          fiveHour: {
+            usedPercent: 100,
+            windowEnd: "2026-09-26T03:58:50.537Z",
+            secondsRemaining: 9651,
+          },
+          weekly: { usedPercent: 66, windowEnd: "2026-09-26T21:31:37.350Z" },
+          monthly: { usedPercent: 37, windowEnd: "2026-10-10T03:36:42.309Z" },
+        },
+        core: {
+          fiveHour: { usedPercent: 0, windowEnd: null },
+          weekly: { usedPercent: 100, windowEnd: "2026-09-29T02:14:45.325Z" },
+        },
+      },
+    });
+    expect(limits.provider).toBe("droid");
+    expect(limits.session).toEqual({
+      usedPercent: 100,
+      windowMinutes: 300,
+      resetsAt: Date.parse("2026-09-26T03:58:50.537Z"),
+    });
+    expect(limits.weekly?.usedPercent).toBe(66);
+    expect(limits.monthly?.usedPercent).toBe(37);
+    expect(limits.monthly?.windowMinutes).toBe(43_200);
+  });
+
+  it("keeps a window with no reset time and drops missing ones", () => {
+    const limits = parseDroidUsage({
+      limits: { standard: { fiveHour: { usedPercent: 0, windowEnd: null } } },
+    });
+    expect(limits.session).toEqual({
+      usedPercent: 0,
+      windowMinutes: 300,
+      resetsAt: null,
+    });
+    expect(limits.weekly).toBeNull();
+    expect(parseDroidUsage({}).session).toBeNull();
+  });
+});
+
+describe("parseGrokBilling", () => {
+  it("maps a weekly credit period", () => {
+    const limits = parseGrokBilling({
+      config: {
+        creditUsagePercent: 14,
+        currentPeriod: {
+          type: "USAGE_PERIOD_TYPE_WEEKLY",
+          start: "2026-09-22T13:17:43.196638+00:00",
+          end: "2026-09-29T13:17:43.196638+00:00",
+        },
+      },
+      subscription_tier: "SuperGrok Heavy",
+    });
+    expect(limits.provider).toBe("grok");
+    expect(limits.session).toBeNull();
+    expect(limits.monthly).toBeNull();
+    expect(limits.weekly).toEqual({
+      usedPercent: 14,
+      windowMinutes: 10_080,
+      resetsAt: Date.parse("2026-09-29T13:17:43.196638+00:00"),
+    });
+  });
+
+  it("maps a monthly period, by type or by length", () => {
+    expect(
+      parseGrokBilling({
+        config: {
+          creditUsagePercent: 40,
+          currentPeriod: { type: "USAGE_PERIOD_TYPE_MONTHLY" },
+        },
+      }).monthly?.usedPercent,
+    ).toBe(40);
+    const byLength = parseGrokBilling({
+      config: {
+        creditUsagePercent: 5,
+        billingPeriodStart: "2026-09-01T00:00:00Z",
+        billingPeriodEnd: "2026-10-01T00:00:00Z",
+      },
+    });
+    expect(byLength.weekly).toBeNull();
+    expect(byLength.monthly?.resetsAt).toBe(Date.parse("2026-10-01T00:00:00Z"));
+  });
+
+  it("returns no window without a usage percent", () => {
+    const limits = parseGrokBilling({ config: { currentPeriod: {} } });
+    expect(limits.weekly).toBeNull();
+    expect(limits.monthly).toBeNull();
   });
 });
 

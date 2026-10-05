@@ -9,11 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MonoCode Connect: run `npx monocode-host connect` on a Windows, Linux, or macOS machine to install the remote host as a login service and print a one-time pairing link. Paste it in Settings → Connections → Add machine. The desktop reaches the host directly over TLS with a pinned certificate, on the LAN or a tailnet, and falls back to an SSH forward for machines set up over SSH.
+- Remote sessions and session lists update as soon as the host writes them. The desktop holds one `changes.wait` request per machine instead of polling each session every 0.75 s.
+- Factory Droid is available as an ACP harness (`droid exec --output-format acp`) with live model discovery, per-model reasoning levels, image and file attachments, permission prompts mapped onto Droid autonomy levels, spec mode for plan turns, `.factory/skills` discovery, and persisted session resume. Install Droid, sign in with `droid`, and MonoCode will add it to the model picker.
+- MonoCode Host runs Factory Droid sessions. The host finds `droid` on its PATH or in `~/.factory/bin`, and lists Droid's models with each model's reasoning levels.
 - Settings → Appearance → **Diff colors** offers Default, Colorblind (blue/orange) and High contrast (blue/orange with stronger tints and text) palettes. They apply to the diff view, the editor's git gutter, tool-call previews, change counts and added/deleted file status in the file tree and changes panel.
 
 ### Changed
 
+- SSH setup runs the same `connect` command through npx, so it no longer needs host archives on the GitHub release. The host machine needs Node.js 22.13 or newer.
 - Added and removed lines show a `+`/`-` marker in the diff view and in the editor's git gutter, so they no longer depend on red/green color alone. Diff colors are now theme tokens with separate light-theme values, which also improves the contrast of light-theme gutter line numbers.
+
+### Removed
+
+- The standalone host archives with a bundled Node runtime, the release-download bootstrap scripts, and pairing by host URL and device token. The `monocode-host` npm package replaces them.
 
 ### Fixed
 

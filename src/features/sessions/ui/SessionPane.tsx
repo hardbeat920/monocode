@@ -58,11 +58,13 @@ import { EmptySession } from "./EmptySession";
 import { useComposerDockMotion } from "./useComposerDockMotion";
 import { MOD } from "../../../platform/tauri/platform";
 import {
-  acknowledgeQuoteRequest,
+  acknowledgeComposerInsert,
   ADD_TO_CHAT_EVENT,
-  type AddToChatRequest,
-  type QuoteRequest,
+  type ComposerInsert,
+  type ComposerInsertRequest,
 } from "../model/quoteDraft";
+import { quoteContext, type ChatContextItem } from "../model/chatContext";
+import type { OpenFileFn } from "../../search/model/search";
 import { createNote, noteTitle } from "../../notes";
 import {
   loadNotesEnabled,
@@ -174,7 +176,7 @@ export type SessionPaneProps = {
     reply: UserQuestionReply,
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onOpenDiff: (
     path?: string,
     session?: { sessionId: string; cwd: string },
@@ -392,7 +394,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     () => onFocus(session.id),
     [onFocus, session.id],
   );
-  const quoteRequestId = useRef(0);
+  const insertRequestId = useRef(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [editingLastTurn, setEditingLastTurn] = useState(false);
   useEffect(() => {
@@ -412,7 +414,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     if (!remote && !session.inboxAsk && !session.worktreeRemoved)
       void orchestrator.hydrate(session.id).catch(console.error);
   }, [remote, session.id, session.inboxAsk, session.worktreeRemoved]);
-  const [quoteRequest, setQuoteRequest] = useState<QuoteRequest>();
+  const [insertRequest, setInsertRequest] = useState<ComposerInsertRequest>();
   const btw = useBtwConversation({
     available:
       !remote &&
@@ -486,15 +488,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
     });
     return () => cancelAnimationFrame(frame);
   }, [visible, navigatorReady, jumpRequest, navigateBlock, session.id]);
+  const insertIntoComposer = useCallback((insert: ComposerInsert) => {
+    insertRequestId.current += 1;
+    setInsertRequest({ ...insert, id: insertRequestId.current });
+  }, []);
   const addSelectionToChat = useCallback(
-    (text: string, mode?: QuoteRequest["mode"]) => {
-      quoteRequestId.current += 1;
-      setQuoteRequest({ id: quoteRequestId.current, text, mode });
+    (text: string) => {
+      const item = quoteContext(text);
+      if (item) insertIntoComposer({ kind: "context", item });
     },
-    [],
+    [insertIntoComposer],
   );
-  const acknowledgeQuote = useCallback((handledId: number) => {
-    setQuoteRequest((current) => acknowledgeQuoteRequest(current, handledId));
+  const acknowledgeInsert = useCallback((handledId: number) => {
+    setInsertRequest((current) => acknowledgeComposerInsert(current, handledId));
   }, []);
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
@@ -531,13 +537,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
   useEffect(() => {
     if (!addToChatTarget) return;
     const onAdd = (event: Event) => {
-      const detail = (event as CustomEvent<AddToChatRequest>).detail;
-      if (!detail?.text) return;
-      addSelectionToChat(detail.text, detail.mode);
+      const item = (event as CustomEvent<ChatContextItem>).detail;
+      if (item) insertIntoComposer({ kind: "context", item });
     };
     window.addEventListener(ADD_TO_CHAT_EVENT, onAdd);
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
-  }, [addSelectionToChat, addToChatTarget]);
+  }, [addToChatTarget, insertIntoComposer]);
   const workCwd = sessionWorkCwd(session);
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   const dockComposer =
@@ -573,7 +578,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       hideBranchPicker={!!session.inboxAsk || managed}
       hideTopBar={!!session.inboxAsk}
       context={session.context}
-      quoteRequest={quoteRequest}
+      insertRequest={insertRequest}
       initialDraft={
         draftRef.current ??
         (session.inboxCard || session.noteCard || session.handoffCard
@@ -588,7 +593,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
       question={session.pendingQuestion}
-      onQuoteRequestConsumed={acknowledgeQuote}
+      onInsertRequestConsumed={acknowledgeInsert}
       onInboxCardDismiss={() => onInboxCardDismiss?.(session.id)}
       onNoteCardDismiss={() => onNoteCardDismiss?.(session.id)}
       onHandoffCardDismiss={() => onHandoffCardDismiss?.(session.id)}
@@ -778,7 +783,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   onOpenLinkedWorkItem?.(session.linkedWorkItem, session.id);
                 }
               }}
-              onAddToChat={(text) => addSelectionToChat(text, "plain")}
+              onAddToChat={(text) => insertIntoComposer({ kind: "text", text })}
               onArchiveSession={
                 onArchiveSession
                   ? () => onArchiveSession(session.id, true)

@@ -161,13 +161,13 @@ try {
 );
 
 it.skipIf(process.platform !== "win32")(
-  "parses the Windows bootstrap with Windows PowerShell",
+  "parses the Windows connect script with Windows PowerShell",
   () => {
-    const script = readFileSync("src-tauri/src/remote_bootstrap.ps1", "utf8")
-      .replace("@@VERSION@@", "'test'")
-      .replace("@@RELEASE@@", "'https://example.invalid'")
-      .replace("@@ACL@@", readFileSync("host/windows-acl.ps1", "utf8"));
-    const file = join(temporary(), "bootstrap.ps1");
+    const script = readFileSync("crates/remote/src/remote_connect.ps1", "utf8")
+      .replace("@@PACKAGE@@", "'https://example.com/releases/1.0.0'")
+      .replace("@@VERSION@@", "'1.0.0'")
+      .replace("@@FLAGS@@", " --yes");
+    const file = join(temporary(), "connect.ps1");
     writeFileSync(file, script);
     const result = execFileSync(
       powershell(),

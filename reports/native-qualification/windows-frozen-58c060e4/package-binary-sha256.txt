@@ -1,0 +1,9 @@
+
+Algorithm Hash                                                             Path                                                                                                                                          
+--------- ----                                                             ----                                                                                                                                          
+SHA256    989633110F73174E33B6982472484F695F7961FEF6DA9519ACBD6E77C9C2B9CB C:\Users\niost\AppData\Local\monocode-gpui-build\artifacts\windows-frozen-qualification-20261003T194258Z\package-binaries\monocode-app.exe    
+SHA256    DB89B80D79972C51E5EC03EA76B3074BF9B900304EDB37110A7F643C73D494CB C:\Users\niost\AppData\Local\monocode-gpui-build\artifacts\windows-frozen-qualification-20261003T194258Z\package-binaries\monocode-host.exe   
+SHA256    FB954D78A3349C37501C961B4B5374CC1ADE4145D64912E74B215E44B233D86B C:\Users\niost\AppData\Local\monocode-gpui-build\artifacts\windows-frozen-qualification-20261003T194258Z\package-binaries\monocode-package.exe
+
+
+

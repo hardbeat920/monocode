@@ -9,6 +9,8 @@ import {
 import {
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
+  fetchDroidRateLimits,
+  fetchGrokRateLimits,
   fetchOpencodeGoRateLimits,
 } from "./rateLimitsFetch";
 
@@ -48,6 +50,8 @@ const idle: Record<RateLimitProvider, ProviderRateLimits> = {
   claude: idleRateLimits("claude"),
   codex: idleRateLimits("codex"),
   opencode: idleRateLimits("opencode"),
+  droid: idleRateLimits("droid"),
+  grok: idleRateLimits("grok"),
 };
 
 export function useCachedRateLimits(
@@ -94,12 +98,7 @@ export function loadRateLimits(
   publish(key, fetchingRateLimits(provider, cached));
   const run = (async () => {
     try {
-      const result =
-        provider === "claude"
-          ? await fetchClaudeRateLimits(accountId)
-          : provider === "codex"
-            ? await fetchCodexRateLimits(accountId)
-            : await fetchOpencodeGoRateLimits();
+      const result = await fetchProviderRateLimits(provider, accountId);
       publish(key, result);
       return result;
     } catch (error) {
@@ -116,6 +115,24 @@ export function loadRateLimits(
   })();
   pending.set(key, run);
   return run;
+}
+
+function fetchProviderRateLimits(
+  provider: RateLimitProvider,
+  accountId: string,
+): Promise<ProviderRateLimits> {
+  switch (provider) {
+    case "claude":
+      return fetchClaudeRateLimits(accountId);
+    case "codex":
+      return fetchCodexRateLimits(accountId);
+    case "opencode":
+      return fetchOpencodeGoRateLimits();
+    case "droid":
+      return fetchDroidRateLimits();
+    case "grok":
+      return fetchGrokRateLimits();
+  }
 }
 
 /** Also used when an account is removed and by tests that need a clean cache. */

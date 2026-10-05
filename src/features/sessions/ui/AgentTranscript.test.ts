@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { composeChatContext } from "../model/chatContext";
 
 function tool(id: string, approval?: Block["approval"]): Block {
   return {
@@ -250,6 +251,42 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("user-message-with-link");
     expect(markup).toContain("user-message-bubble");
     expect(markup).not.toContain("text-ellipsis");
+  });
+
+  it("renders attached context as chips instead of the raw block", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: composeChatContext("Why does this fail?", [
+          { kind: "quote", text: "The cookie is missing." },
+          {
+            kind: "code",
+            path: "src/auth.ts",
+            startLine: 3,
+            endLine: 9,
+          },
+          {
+            kind: "comment",
+            path: "src/auth.ts",
+            line: 42,
+            change: "added",
+            code: "readCookie();",
+            comment: "Handle null here.",
+          },
+        ]),
+      },
+    ]);
+
+    expect(markup).toContain("Why does this fail?");
+    expect(markup).toContain('data-chat-context-chip="quote"');
+    expect(markup).toContain('data-chat-context-chip="code"');
+    expect(markup).toContain('data-chat-context-chip="comment"');
+    expect(markup).toContain("The cookie is missing.");
+    expect(markup).toContain("L3-9");
+    expect(markup).toContain("Handle null here.");
+    expect(markup).not.toContain("attached_context");
+    expect(markup).not.toContain("title=\"Remove\"");
   });
 
   it("renders an unsent turn with send and remove controls", () => {

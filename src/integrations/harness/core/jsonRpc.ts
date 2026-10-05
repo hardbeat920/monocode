@@ -198,9 +198,14 @@ export class JsonRpcClient {
       if (!pending) return;
       this.pending.delete(key);
       if (msg.error) {
+        // Keep the structured code/data: some agents (Factory Droid) put the
+        // user-facing detail in `data` behind a generic `message`.
         pending.reject(
-          new Error(
-            msg.error.message || `${this.label} error ${msg.error.code ?? ""}`,
+          Object.assign(
+            new Error(
+              msg.error.message || `${this.label} error ${msg.error.code ?? ""}`,
+            ),
+            { code: msg.error.code, data: msg.error.data },
           ),
         );
         return;

@@ -1,0 +1,5 @@
+{
+  "crates/harness/Cargo.toml": "bf9b563a9d53df33b98d4cd61944c371f9c22b797b078b903c8102de9fb4563c",
+  "crates/harness/src/providers/opencode/protocol.rs": "fbab3342a97ac683b07e94ef74be74f63ffce0413d87dd5d82a66d2c950ccc8b",
+  "crates/harness/src/providers/pi/protocol.rs": "d83a4b7f78268130214ec6fe25644a7fd473da46c9775de7957d2cd5c3f9ad23"
+}

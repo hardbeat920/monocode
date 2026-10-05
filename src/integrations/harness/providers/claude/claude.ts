@@ -151,6 +151,11 @@ type Live = {
   backgroundRows: Map<string, string>;
   /** A task finished after Claude yielded; its follow-up turn is on the way. */
   awaitingResume: ReturnType<typeof setTimeout> | null;
+  /**
+   * A task finished before Claude yielded and no tool result has carried the
+   * notice yet, so Claude will take another turn to read it.
+   */
+  resumeExpected: boolean;
   /** Last background list sent to the UI, to skip repeats. */
   backgroundKey: string;
   /** Finished-subagent notes held until Claude picks the thread back up. */
@@ -492,6 +497,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     backgroundTasks: new Map(),
     backgroundRows: new Map(),
     awaitingResume: null,
+    resumeExpected: false,
     backgroundKey: "",
     taskNotes: [],
     claudeTasks,
@@ -590,6 +596,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundTasks.clear();
   live.backgroundRows.clear();
   clearAwaitingResume(live);
+  live.resumeExpected = false;
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
@@ -903,7 +910,11 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
     noteSubagentResults(live, rec);
     return;
   }
-  for (const result of toolResultsFromUserMessage(rec)) {
+  const results = toolResultsFromUserMessage(rec);
+  // Claude Code hands finished-task notices over with the next tool result, so
+  // Claude has read them and no extra turn is coming for them.
+  if (results.length > 0) live.resumeExpected = false;
+  for (const result of results) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
     if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
@@ -990,6 +1001,10 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     live.onEvent({ type: "usage.limited", ...usageLimit });
   }
   live.turnResultSeen = true;
+  if (live.resumeExpected) {
+    live.resumeExpected = false;
+    if (live.activeTurn) awaitResume(live);
+  }
   maybeFinishTurn(live);
   showBackgroundRows(live);
   syncBackgroundWait(live);
@@ -1568,15 +1583,24 @@ function completeAgentTask(
  */
 function finishBackgroundTask(live: Live, taskId: string): void {
   if (!live.backgroundTasks.delete(taskId)) return;
-  if (live.turnResultSeen && live.activeTurn && !live.awaitingResume) {
-    live.awaitingResume = setTimeout(() => {
-      live.awaitingResume = null;
-      maybeFinishTurn(live);
-      syncBackgroundWait(live);
-    }, RESUME_GRACE_MS);
+  if (live.activeTurn && !live.turnResultSeen) {
+    // Claude is still working. The notice reaches it with its next tool
+    // result, or starts another turn once this one yields.
+    live.resumeExpected = true;
+  } else if (live.activeTurn) {
+    awaitResume(live);
   }
   maybeFinishTurn(live);
   syncBackgroundWait(live);
+}
+
+function awaitResume(live: Live): void {
+  if (live.awaitingResume) return;
+  live.awaitingResume = setTimeout(() => {
+    live.awaitingResume = null;
+    maybeFinishTurn(live);
+    syncBackgroundWait(live);
+  }, RESUME_GRACE_MS);
 }
 
 /**
@@ -1707,6 +1731,7 @@ function maybeFinishTurn(live: Live): void {
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearAwaitingResume(live);
+  live.resumeExpected = false;
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);

@@ -1,4 +1,5 @@
-import { composerSeedForAddToChat, type AddToChatMode } from "./quoteDraft";
+import type { ChatContextItem } from "./chatContext";
+import { composerSeedForAddToChat } from "./quoteDraft";
 import { newDefaultSession, newSessionLike, type Session } from "./session";
 import {
   focusedFileTab,
@@ -30,7 +31,7 @@ export type AddChatToWorkspaceResult = {
  * flow bails (null) when the target tab already shows a session.
  *
  * Zero-tab path (issue #311): every workspace tab is closed, so build one
- * session seeded with the quoted text and open it as the replacement tab.
+ * session seeded with the context chip and open it as the replacement tab.
  * PR #325 review: the helper's tab already hosts the new session, so it is
  * used directly — no second split beside itself, no duplicate panes. The
  * cwd is always the project directory (never another project's session
@@ -44,8 +45,7 @@ export function applyAddToChatRequest({
   projectCwd,
   fallbackCwd,
   defaultRuntimeMode,
-  text,
-  mode = "quote",
+  item,
 }: {
   sessions: readonly Session[];
   tabs: readonly WorkspaceTab[];
@@ -54,11 +54,9 @@ export function applyAddToChatRequest({
   /** cwd fallback for the normal path (App's sessionDefaults?.cwd). */
   fallbackCwd?: string;
   defaultRuntimeMode?: Session["runtimeMode"];
-  text: string;
-  mode?: AddToChatMode;
+  item: ChatContextItem;
 }): AddChatToWorkspaceResult | null {
-  const composerSeed = composerSeedForAddToChat(text, mode);
-  if (!composerSeed) return null;
+  const composerSeed = composerSeedForAddToChat(item);
 
   let currentSessions = sessions;
   let currentTabs = tabs;

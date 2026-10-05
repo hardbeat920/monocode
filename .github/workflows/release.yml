@@ -157,11 +157,11 @@ jobs:
           name: windows-packages
           path: target/release/bundle/nsis
 
-      - name: Download host packages
+      - name: Download the host npm package
         uses: actions/download-artifact@v4
         with:
-          name: host-packages
-          path: build/host-packages
+          name: host-npm
+          path: build
 
       - name: Upload updater packages to R2
         env:
@@ -319,23 +319,15 @@ jobs:
           cp "$ARM_SIG" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
           cp "$INTEL_TAR" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz"
           cp "$INTEL_SIG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-          HOST_ARCHIVES=(build/host-packages/*.tar.gz build/host-packages/*.zip)
-          if (( ${#HOST_ARCHIVES[@]} != 6 )); then
-            echo "Expected six host archives" >&2
+          HOST_PACKAGES=(build/monocode-host-*.tgz)
+          if (( ${#HOST_PACKAGES[@]} != 1 )); then
+            echo "Expected exactly one monocode-host package" >&2
             exit 1
           fi
-          HOST_FILES=("${HOST_ARCHIVES[@]}")
-          for archive in "${HOST_ARCHIVES[@]}"; do
-            if [[ ! -f "$archive.sha256" ]]; then
-              echo "Missing host checksum: $archive.sha256" >&2
-              exit 1
-            fi
-            HOST_FILES+=("$archive.sha256")
-          done
           RELEASE_FILES=(
             "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
             "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_FILES[@]}"
+            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_PACKAGES[@]}"
           )
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
@@ -377,6 +369,17 @@ jobs:
           fi
           verify_release false
 
+      # Desktops run `npx monocode-host@<version> connect` on hosts, so
+      # publish the matching package before the updater feed points desktops
+      # at this version. Skipped when no npm token is set.
+      - name: Publish monocode-host to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: env.NPM_TOKEN != ''
+        run: |
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" npm publish build/monocode-host-*.tgz --access public
+
       - name: Publish updater feed
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -393,7 +396,7 @@ jobs:
             --endpoint-url "$ENDPOINT"
 
   host:
-    name: Standalone host packages
+    name: Host npm package
     strategy:
       fail-fast: false
       matrix:
@@ -407,18 +410,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:host
-      - run: npm run host:package -- --all
-        if: runner.os == 'Linux'
-      - run: npm run host:package
-        if: runner.os != 'Linux'
+      - run: npm run host:npm
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
-          name: host-packages
-          path: |
-            build/host-packages/*.tar.gz
-            build/host-packages/*.zip
-            build/host-packages/*.sha256
+          name: host-npm
+          path: build/monocode-host-*.tgz
           if-no-files-found: error
 
   linux:

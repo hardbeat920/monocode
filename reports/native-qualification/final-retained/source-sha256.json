@@ -1,0 +1,306 @@
+{
+  "src-tauri/.gitignore": {
+    "sha256": "88707cda7ba4226eda3ffa91d8284f1a0d12b827f06fb9bc48425cc0d4af04af",
+    "size": 166
+  },
+  "src-tauri/Cargo.lock": {
+    "sha256": "92286fbedc0dfda0ab49e3e48d87e0a818dc88040790b650438ad8d93ae08bfd",
+    "size": 161757
+  },
+  "src-tauri/Cargo.toml": {
+    "sha256": "00eb70d3a695b3a1d3c2232190390436cb6c02278d9b0fd59f9500ccb9abab6a",
+    "size": 2438
+  },
+  "src-tauri/Entitlements.plist": {
+    "sha256": "d3caf7b18ce9d0f5cec8282c4d25866d5829ec636b09a1e248e858bc9d39dbc3",
+    "size": 317
+  },
+  "src-tauri/Info.plist": {
+    "sha256": "f6fc946844abf8998f22f1242bb62fda31d8f10acff07dde259ab8cc6dcb0efc",
+    "size": 623
+  },
+  "src-tauri/build.rs": {
+    "sha256": "4af58b4aebd3aa1fb65bee85d33216782bc4746e5cf63294dd16f8e44ccd5947",
+    "size": 624
+  },
+  "src-tauri/capabilities/default.json": {
+    "sha256": "5960065a338828b10d2c0a579255469a3a1b3ba7bad63a22c2fa89f1a9ec7c16",
+    "size": 757
+  },
+  "src-tauri/gen/schemas/acl-manifests.json": {
+    "sha256": "00bf8eab8bc9e0946e0305d35beeb9ed87193d353ba250103beddee73d89c175",
+    "size": 78387
+  },
+  "src-tauri/gen/schemas/capabilities.json": {
+    "sha256": "da253debe3fa1de5758b33c259b5facc85ce0c1ae2f7ccb75d9f80ec963968d8",
+    "size": 615
+  },
+  "src-tauri/gen/schemas/desktop-schema.json": {
+    "sha256": "5bd136aa59718a638d56d2dd6ff76085a4ba3c51420f4f3372e55aada8391a7d",
+    "size": 144174
+  },
+  "src-tauri/gen/schemas/macOS-schema.json": {
+    "sha256": "5bd136aa59718a638d56d2dd6ff76085a4ba3c51420f4f3372e55aada8391a7d",
+    "size": 144174
+  },
+  "src-tauri/icons/128x128.png": {
+    "sha256": "0a9649da2210087b088d6dc2004589ee1e486a8589115938c273636546f7a846",
+    "size": 5973
+  },
+  "src-tauri/icons/128x128@2x.png": {
+    "sha256": "e01d85b8514589b2258a73ade17d5593ae898e521472a5f381bc85a81b644748",
+    "size": 16284
+  },
+  "src-tauri/icons/32x32.png": {
+    "sha256": "55270b98c7f28130d58f69b042bbd74fa59aee4d6d76b3f3a9d8c83127d0f411",
+    "size": 1329
+  },
+  "src-tauri/icons/Square107x107Logo.png": {
+    "sha256": "88a91a6d7abb2b5a15426676883663a3ff72af049c8d66907cbeaadca8474720",
+    "size": 4657
+  },
+  "src-tauri/icons/Square142x142Logo.png": {
+    "sha256": "59a2f375d786da3bc83e45f7bb90e1cebd7d4676b2b23c5049c97d8866e28889",
+    "size": 6646
+  },
+  "src-tauri/icons/Square150x150Logo.png": {
+    "sha256": "e39d071698f8f371cdab782866543cb77a6943a5c4b683b6aee3fed06e97dc66",
+    "size": 7257
+  },
+  "src-tauri/icons/Square284x284Logo.png": {
+    "sha256": "12a54f85bf16fdf7421781cd8d019a5a4548c73188089448268b0e2bda6d5ae5",
+    "size": 16561
+  },
+  "src-tauri/icons/Square30x30Logo.png": {
+    "sha256": "01838958250ab8f79cfecd05c65573e4f41fa5e34d58c6311b3c5192d805c839",
+    "size": 1431
+  },
+  "src-tauri/icons/Square310x310Logo.png": {
+    "sha256": "7e47eed2a4bcfacdb93b4692dedbca58a4ead213c21171d66be90121eaf10e7c",
+    "size": 18788
+  },
+  "src-tauri/icons/Square44x44Logo.png": {
+    "sha256": "bb4bf94dc70c1e622d532891b044d2cbbfa385b7ee53951023e02371247c2b35",
+    "size": 1868
+  },
+  "src-tauri/icons/Square71x71Logo.png": {
+    "sha256": "79a4dbf9fded7fde01586c157aa4b23ce76cab0fdfe6cfbad6521d23d7eb377f",
+    "size": 3102
+  },
+  "src-tauri/icons/Square89x89Logo.png": {
+    "sha256": "013175324eb3ae8744221c2339b53cf5d745424697d23310aab0a271c89bfd0e",
+    "size": 4009
+  },
+  "src-tauri/icons/StoreLogo.png": {
+    "sha256": "8f5846518c4ba08a4d03b4c039467d9bd63b25975ac6f95814885e8770fbd328",
+    "size": 2224
+  },
+  "src-tauri/icons/icon.icns": {
+    "sha256": "5a6cd932e18c9729c705168e8f8deb8624a68454074e079a7198e3d3432482f7",
+    "size": 24391
+  },
+  "src-tauri/icons/icon.ico": {
+    "sha256": "0d30416b3843e40973a083504a2bc87f1c7301b5aaf9efc4e0ba79c03ab77bb8",
+    "size": 22715
+  },
+  "src-tauri/icons/icon.png": {
+    "sha256": "e01d85b8514589b2258a73ade17d5593ae898e521472a5f381bc85a81b644748",
+    "size": 16284
+  },
+  "src-tauri/icons/installer-sidebar.bmp": {
+    "sha256": "a61a5c9478f678a931fce71d575efcd7e660d44c399094773da5631869af65a5",
+    "size": 154542
+  },
+  "src-tauri/macos/AppIcon.icon/Assets/icon.png": {
+    "sha256": "33900edd600c6dd40e2dec8799ef0bf4cb2218c702b57714c6bcf9138580cab1",
+    "size": 7273
+  },
+  "src-tauri/macos/AppIcon.icon/icon.json": {
+    "sha256": "3639062dc6934e26f61b9062b42e83db0f6c3e4177c899a5fb9ed487e3371d67",
+    "size": 725
+  },
+  "src-tauri/macos/Assets.car": {
+    "sha256": "a9f261d3f0d42e18945aae8a83cd31dbf19d2b18afa2ee20f5072e020e7bed90",
+    "size": 1116360
+  },
+  "src-tauri/src/account_identity.rs": {
+    "sha256": "a55187f9c5772d5f8baf04a90ffbb5b888727b95aa8cd89aaf95bfbffcbe9baa",
+    "size": 747
+  },
+  "src-tauri/src/automations.rs": {
+    "sha256": "d2100b4c08f040d37b39748d3e7f8d63bc7fb2e5c1c60a84a2ba95250860e461",
+    "size": 3142
+  },
+  "src-tauri/src/azure_devops.rs": {
+    "sha256": "6f9fafb90ebbb0489faa77c5eccfd0dba65d8a655bb8e34ebf43a96727f9a795",
+    "size": 3805
+  },
+  "src-tauri/src/chat_background.rs": {
+    "sha256": "e8b068d7f10a9c8732d7887a4e0abf78fbf74640f0760077aab2eef4d7c1023e",
+    "size": 1522
+  },
+  "src-tauri/src/checkpoint.rs": {
+    "sha256": "d511fbc51b9e0451f3444121d2d452f561fa02b19ee743cda53dfb406bce2ecb",
+    "size": 4421
+  },
+  "src-tauri/src/control.rs": {
+    "sha256": "26ee847926eafcd49f24bfd9d92b44886eecb22371b88a6c5b85cdb0b53691dd",
+    "size": 3506
+  },
+  "src-tauri/src/cursor_store.rs": {
+    "sha256": "bdd5729d3ed1ba61f9beaf7964b252b3643b2cf62cb92cdb2ffa007fc164e2bf",
+    "size": 1270
+  },
+  "src-tauri/src/external_editor.rs": {
+    "sha256": "67e264a6b5f6f7ae9df861d0078a67e5ec38aa44d00a20311927d49842d73c52",
+    "size": 666
+  },
+  "src-tauri/src/fs.rs": {
+    "sha256": "2f1b8a22149a57f41a4c2b58a66d0cc73f2a89feef4665048f8e0b43cfcbd152",
+    "size": 21425
+  },
+  "src-tauri/src/gitlab.rs": {
+    "sha256": "710d45cb8864f0b68be34d0f8a7360a9dc037730dbc906e4251f5313bcbccc47",
+    "size": 3460
+  },
+  "src-tauri/src/harness.rs": {
+    "sha256": "93f5c17463f5d91bf66b249952614c4ee8b94a2535312b80dbdd3d2aa13b1cdd",
+    "size": 10299
+  },
+  "src-tauri/src/harness_updates.rs": {
+    "sha256": "7b428e195cb4945d56110126e680d8f98f8d79cc6f40c775c448202731c4d0fd",
+    "size": 1111
+  },
+  "src-tauri/src/inbox_media.rs": {
+    "sha256": "c35f8c0418c24bd7377f89250f37bcd27ce83240fb987b441c780290f98a0faa",
+    "size": 560
+  },
+  "src-tauri/src/jira.rs": {
+    "sha256": "bc2ffddda6f73e1ebd72a574471904fdec73e30858d34ba9706a6d233a8c1607",
+    "size": 2478
+  },
+  "src-tauri/src/lib.rs": {
+    "sha256": "2f0ce6972bc679d7767769b9380530f2de406878b14ecd66226e2cb32772e149",
+    "size": 19611
+  },
+  "src-tauri/src/linear.rs": {
+    "sha256": "224ba67f57fa6e45e76c33baba02b844d1511de33394272ca03de54f7e8ed9be",
+    "size": 2504
+  },
+  "src-tauri/src/link_preview.rs": {
+    "sha256": "f9e632dcb83c49326507cfb2878b246391347ae12047db83e40b608fa96df720",
+    "size": 537
+  },
+  "src-tauri/src/macos.rs": {
+    "sha256": "59bf86d49fa1998fb46db69f4299dec0e123ab3b9261df6084fe72ee887e7da9",
+    "size": 11699
+  },
+  "src-tauri/src/main.rs": {
+    "sha256": "b1be2b141cc47d0d05c0d83d925a5747a05d77ccbc528b41af327181623f151e",
+    "size": 687
+  },
+  "src-tauri/src/mcp.rs": {
+    "sha256": "26f9a2a15174c9b39638205b6b627291726342d95d13d3c9f8d21f86ce71eee5",
+    "size": 761
+  },
+  "src-tauri/src/menu.rs": {
+    "sha256": "99e4f08fb3fa6fdcee8dd2f43982831484e29b244911c75bb6f06c191e7d8e98",
+    "size": 15589
+  },
+  "src-tauri/src/notes.rs": {
+    "sha256": "179fb47a5d1cf9803e3e49935fce2a269ef445f0da6a4d4c2f08a3a6ff870625",
+    "size": 1462
+  },
+  "src-tauri/src/notifications.rs": {
+    "sha256": "6689f06be12c865837e0a5db2040ac02da9b50b90343c6b857270652f43ef07f",
+    "size": 3269
+  },
+  "src-tauri/src/pasteboard.rs": {
+    "sha256": "1a641f38b82e784c90a9b73e0894965239a96bfdd6fda9aebc38e898a339345f",
+    "size": 799
+  },
+  "src-tauri/src/pi_usage.rs": {
+    "sha256": "e6eabc4671f3a27c01a7f9baa1bbf93af18733d47f627fe064c22d2d0bd57294",
+    "size": 394
+  },
+  "src-tauri/src/project_logo.rs": {
+    "sha256": "7fb41461a9c6ab0b5e06586d37f5c46a9e5769b4d5a308f0844f509ddb571c2a",
+    "size": 1121
+  },
+  "src-tauri/src/pty.rs": {
+    "sha256": "b7d1ca345bcfcbd553726950ca1c74d98933bc94e635d19ee22757eae818bb6c",
+    "size": 2366
+  },
+  "src-tauri/src/quick_composer.rs": {
+    "sha256": "6bc713e779d97ce5b951077e42b64b9acfbf1005bfe2d9b14f855f2de992fd62",
+    "size": 28815
+  },
+  "src-tauri/src/quick_composer/delivery.rs": {
+    "sha256": "1d13ffb1d54154387ef02a1070a5c9fe741ff984e1d66bb6256f6a5b99b32dba",
+    "size": 3783
+  },
+  "src-tauri/src/quick_composer/git_popup.rs": {
+    "sha256": "c077667596edc94d918c7e02d0c25701f4ca223ce60a8cbd202bd365bb879f92",
+    "size": 13750
+  },
+  "src-tauri/src/quick_composer/screenshots.rs": {
+    "sha256": "9a56f248f9805494d5adbc91ce45fd0886344386efce4c5bead91a6e36d90ffc",
+    "size": 1186
+  },
+  "src-tauri/src/rate_limits.rs": {
+    "sha256": "b652b09d1a1c32443a56a6f4b7243eafbfd683eb363fe5596f6e151c463801a3",
+    "size": 1464
+  },
+  "src-tauri/src/reminders.rs": {
+    "sha256": "d3b4783d0ae59d4487c53a47edd282d34c3b5f937850bc2718ea1329c1a1d619",
+    "size": 5444
+  },
+  "src-tauri/src/remote.rs": {
+    "sha256": "2db1775cfdfbbe9a9cd0bd3f0a9c340f707d8fa49f7e2183f618e4ba8424fcdb",
+    "size": 2775
+  },
+  "src-tauri/src/search.rs": {
+    "sha256": "cf7af3afeb1a4eb7daf3fa69579924b6645712348bf8f7c291f82709b6bc9469",
+    "size": 1251
+  },
+  "src-tauri/src/session_store.rs": {
+    "sha256": "e19d8d368a3f05369c5c02ebbd0e7d55ee4d6c6e1daaac7c59f18fb8c4b1bb61",
+    "size": 4605
+  },
+  "src-tauri/src/skills.rs": {
+    "sha256": "3c5c2a9ab5f5af7ee0fb38623690084466b21682bf0952b3f687c543a3e243f6",
+    "size": 415
+  },
+  "src-tauri/src/tray.rs": {
+    "sha256": "566e9c6df20875b97c12a9fb7f367829e241c76a89545876dda4141f938a3abe",
+    "size": 1687
+  },
+  "src-tauri/src/window.rs": {
+    "sha256": "f3a8edf4a69c2784a40b929f37da99000f7c6f3b3d88a78b4abb2c5fe22008ee",
+    "size": 23999
+  },
+  "src-tauri/src/window_transfer.rs": {
+    "sha256": "470b8062f9724f884cfd1ddf27853a7ed26a4915514531947d3e68f4b4b81cfb",
+    "size": 706
+  },
+  "src-tauri/src/worktrees.rs": {
+    "sha256": "061f10ab1606cfb5edb28b195f7beb41036f0696829492d724519ffffb606a67",
+    "size": 3163
+  },
+  "src-tauri/tauri.conf.json": {
+    "sha256": "e82c81307dcf93114882c1a28543f431697ff7cca4467b8fc68642bc2921f943",
+    "size": 2816
+  },
+  "src-tauri/tauri.linux.conf.json": {
+    "sha256": "79f612caa17d09cef8efaf284e1735f8eb18aed1458e707a1f6ee7073f4c55ad",
+    "size": 676
+  },
+  "src-tauri/tauri.stable.conf.json": {
+    "sha256": "3c42b3a757754086eb0f4638668f066e3c748607aa39e8ccc9743c5b00be0015",
+    "size": 66
+  },
+  "src-tauri/tauri.windows.conf.json": {
+    "sha256": "c1e6283af42d7a1f501c990fd13f2be106f8b608b0f14a3c6daadf1636b8bcdd",
+    "size": 754
+  }
+}

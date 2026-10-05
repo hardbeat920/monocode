@@ -1,0 +1,216 @@
+name: Native release packages
+
+# This remains manual until the native application passes the cutover
+# checks. The legacy release workflow still owns tag publication.
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Sign update packages and notarize macOS using release secrets
+        type: boolean
+        default: false
+      draft:
+        description: Upload a draft GitHub release after all packages pass
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      TAURI_UPDATER_PUBKEY: ${{ inputs.signed && secrets.TAURI_UPDATER_PUBKEY || '' }}
+      TAURI_UPDATER_ENDPOINT: ${{ inputs.signed && secrets.TAURI_UPDATER_ENDPOINT || '' }}
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/install-native-linux-deps.sh
+      - name: Install AppImage tooling
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --location https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage --output "$RUNNER_TEMP/linuxdeploy"
+          chmod +x "$RUNNER_TEMP/linuxdeploy"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis nasm --no-progress -y
+          'C:\Program Files (x86)\NSIS' >> $env:GITHUB_PATH
+          'C:\Program Files\NASM' >> $env:GITHUB_PATH
+      - name: Install Intel macOS AVIF decoder assembly tools
+        if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
+        run: brew install nasm
+      - uses: Swatinem/rust-cache@v2
+      - name: Require updater configuration for signed builds
+        if: inputs.signed
+        shell: bash
+        run: |
+          test -n "$TAURI_UPDATER_PUBKEY"
+          test -n "$TAURI_UPDATER_ENDPOINT"
+      - run: cargo build -p monocode-app -p monocode-host --bins --release --target ${{ matrix.target }} --locked
+      - name: Prepare macOS release identity and notarization
+        if: runner.os == 'macOS' && inputs.signed
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_SIGNING_IDENTITY"
+          test "$APPLE_SIGNING_IDENTITY" != '-'
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN="$RUNNER_TEMP/native-release.keychain-db"
+          security create-keychain -p temporary "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p temporary "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temporary "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool store-credentials monocode-native --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --keychain "$KEYCHAIN"
+          echo "NATIVE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+      - name: Bundle macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          args=()
+          if [[ '${{ inputs.signed }}' == 'true' ]]; then
+            args+=(--signing-identity "$NATIVE_SIGNING_IDENTITY" --notary-profile monocode-native)
+          fi
+          cargo run -p monocode-package --locked -- bundle --target '${{ matrix.target }}' "${args[@]}"
+      - name: Bundle Linux and Windows
+        if: runner.os != 'macOS'
+        run: cargo run -p monocode-package --locked -- bundle --target ${{ matrix.target }}
+      - name: Sign updater packages
+        if: inputs.signed
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(build/native/*.app.tar.gz build/native/*-setup.exe build/native/*.deb build/native/*.rpm build/native/*.AppImage)
+          cargo run -p monocode-updater --features sign --bin monocode-updater-sign --locked -- sign "${packages[@]}"
+          for package in "${packages[@]}"; do
+            cargo run -p monocode-updater --features sign --bin monocode-updater-sign --locked -- verify "$package"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-packages-${{ matrix.target }}
+          path: |
+            build/native/*.tar.gz
+            build/native/*.dmg
+            build/native/*.deb
+            build/native/*.rpm
+            build/native/*.AppImage
+            build/native/*-setup.exe
+            build/native/*.sig
+          if-no-files-found: error
+      - name: Remove temporary macOS signing material
+        if: always() && runner.os == 'macOS' && inputs.signed
+        run: |
+          security delete-keychain "$RUNNER_TEMP/native-release.keychain-db"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+  host-arm64:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/install-native-linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p monocode-host --bin monocode-host --release --target ${{ matrix.target }} --locked
+      - run: cargo run -p monocode-package --locked -- bundle --target ${{ matrix.target }} --formats host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-packages-host-${{ matrix.target }}
+          path: build/native/monocode-host_*.tar.gz
+          if-no-files-found: error
+
+  collect:
+    needs: [package, host-arm64]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-packages-*
+          merge-multiple: true
+          path: build/native
+      - run: cargo run -p monocode-package --locked -- checksums
+      - name: Generate the complete updater manifest
+        if: inputs.signed
+        run: |
+          VERSION=$(awk '/^\[workspace.package\]/{f=1} f && /^version = /{gsub(/"/, "", $3); print $3; exit}' Cargo.toml)
+          cargo run -p monocode-package --locked -- manifest --base-url "https://github.com/hardbeat920/monocode/releases/download/v$VERSION" --require-targets darwin-aarch64,darwin-x86_64,windows-x86_64,linux-x86_64-deb,linux-x86_64-rpm,linux-x86_64-appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release
+          path: build/native/
+      - name: Upload a reviewable draft release
+        if: inputs.draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ '${{ inputs.signed }}' != 'true' ]]; then
+            echo 'Draft releases require signed packages.' >&2
+            exit 1
+          fi
+          VERSION=$(awk '/^\[workspace.package\]/{f=1} f && /^version = /{gsub(/"/, "", $3); print $3; exit}' Cargo.toml)
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            test "$(gh release view "v$VERSION" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "MonoCode $VERSION" --notes 'Native Rust packages. See CHANGELOG.md for release notes.'
+          fi
+          gh release upload "v$VERSION" build/native/* --clobber

@@ -1,0 +1,706 @@
+{
+  "node": "v25.9.0",
+  "v8": "14.1.146.11-node.25",
+  "editorFlags": [
+    "gmu",
+    "gmui"
+  ],
+  "previewFlags": [
+    "gu",
+    "gui"
+  ],
+  "cases": [
+    {
+      "pattern": "foo(?=bar)",
+      "text": "foobar foofoo",
+      "flags": "gmu",
+      "ranges": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=foo)bar",
+      "text": "foobar foofoo",
+      "flags": "gmu",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(foo)\\1",
+      "text": "foobar foofoo",
+      "flags": "gmu",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=a+)b",
+      "text": "aaab ab",
+      "flags": "gmu",
+      "ranges": [
+        [
+          3,
+          4
+        ],
+        [
+          6,
+          7
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=f+)oo",
+      "text": "foobar foofoo",
+      "flags": "gmu",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=prefix:)(\\w+)\\1",
+      "text": "prefix:foofoo suffix:barbar",
+      "flags": "gmu",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": "foo [foofoo]"
+    },
+    {
+      "pattern": "\\w+",
+      "text": "é foo ٣",
+      "flags": "gmu",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\d+",
+      "text": "٣ 3",
+      "flags": "gmu",
+      "ranges": [
+        [
+          3,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\s",
+      "text": "a﻿bc",
+      "flags": "gmu",
+      "ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?i)foo",
+      "flags": "gmu",
+      "invalid": true
+    },
+    {
+      "pattern": "foo(?=bar)",
+      "text": "foobar foofoo",
+      "flags": "gmui",
+      "ranges": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=foo)bar",
+      "text": "foobar foofoo",
+      "flags": "gmui",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(foo)\\1",
+      "text": "foobar foofoo",
+      "flags": "gmui",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=a+)b",
+      "text": "aaab ab",
+      "flags": "gmui",
+      "ranges": [
+        [
+          3,
+          4
+        ],
+        [
+          6,
+          7
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=f+)oo",
+      "text": "foobar foofoo",
+      "flags": "gmui",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=prefix:)(\\w+)\\1",
+      "text": "prefix:foofoo suffix:barbar",
+      "flags": "gmui",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": "foo [foofoo]"
+    },
+    {
+      "pattern": "\\w+",
+      "text": "é foo ٣",
+      "flags": "gmui",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\d+",
+      "text": "٣ 3",
+      "flags": "gmui",
+      "ranges": [
+        [
+          3,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\s",
+      "text": "a﻿bc",
+      "flags": "gmui",
+      "ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?i)foo",
+      "flags": "gmui",
+      "invalid": true
+    },
+    {
+      "pattern": "foo(?=bar)",
+      "text": "foobar foofoo",
+      "flags": "gu",
+      "ranges": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=foo)bar",
+      "text": "foobar foofoo",
+      "flags": "gu",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(foo)\\1",
+      "text": "foobar foofoo",
+      "flags": "gu",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=a+)b",
+      "text": "aaab ab",
+      "flags": "gu",
+      "ranges": [
+        [
+          3,
+          4
+        ],
+        [
+          6,
+          7
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=f+)oo",
+      "text": "foobar foofoo",
+      "flags": "gu",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=prefix:)(\\w+)\\1",
+      "text": "prefix:foofoo suffix:barbar",
+      "flags": "gu",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": "foo [foofoo]"
+    },
+    {
+      "pattern": "\\w+",
+      "text": "é foo ٣",
+      "flags": "gu",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\d+",
+      "text": "٣ 3",
+      "flags": "gu",
+      "ranges": [
+        [
+          3,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\s",
+      "text": "a﻿bc",
+      "flags": "gu",
+      "ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?i)foo",
+      "flags": "gu",
+      "invalid": true
+    },
+    {
+      "pattern": "foo(?=bar)",
+      "text": "foobar foofoo",
+      "flags": "gui",
+      "ranges": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=foo)bar",
+      "text": "foobar foofoo",
+      "flags": "gui",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(foo)\\1",
+      "text": "foobar foofoo",
+      "flags": "gui",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=a+)b",
+      "text": "aaab ab",
+      "flags": "gui",
+      "ranges": [
+        [
+          3,
+          4
+        ],
+        [
+          6,
+          7
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=f+)oo",
+      "text": "foobar foofoo",
+      "flags": "gui",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=prefix:)(\\w+)\\1",
+      "text": "prefix:foofoo suffix:barbar",
+      "flags": "gui",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": "foo [foofoo]"
+    },
+    {
+      "pattern": "\\w+",
+      "text": "é foo ٣",
+      "flags": "gui",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\d+",
+      "text": "٣ 3",
+      "flags": "gui",
+      "ranges": [
+        [
+          3,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\s",
+      "text": "a﻿bc",
+      "flags": "gui",
+      "ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?i)foo",
+      "flags": "gui",
+      "invalid": true
+    }
+  ],
+  "retainedEditor": [
+    {
+      "pattern": "foo(?=bar)",
+      "text": "foobar foofoo",
+      "ranges": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=foo)bar",
+      "text": "foobar foofoo",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(foo)\\1",
+      "text": "foobar foofoo",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=a+)b",
+      "text": "aaab ab",
+      "ranges": [
+        [
+          3,
+          4
+        ],
+        [
+          6,
+          7
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=f+)oo",
+      "text": "foobar foofoo",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          11,
+          13
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "(?<=prefix:)(\\w+)\\1",
+      "text": "prefix:foofoo suffix:barbar",
+      "ranges": [
+        [
+          7,
+          13
+        ]
+      ],
+      "expanded": "foo [foofoo]"
+    },
+    {
+      "pattern": "\\w+",
+      "text": "é foo ٣",
+      "ranges": [
+        [
+          3,
+          6
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\d+",
+      "text": "٣ 3",
+      "ranges": [
+        [
+          3,
+          4
+        ]
+      ],
+      "expanded": null
+    },
+    {
+      "pattern": "\\s",
+      "text": "a﻿bc",
+      "ranges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "expanded": null
+    }
+  ],
+  "retainedLiteral": [
+    {
+      "search": "café",
+      "text": "café café",
+      "ranges": [
+        [
+          0,
+          5
+        ],
+        [
+          6,
+          12
+        ]
+      ],
+      "precise": [
+        true,
+        true
+      ]
+    },
+    {
+      "search": "ff",
+      "text": "ﬀ ff",
+      "ranges": [
+        [
+          0,
+          3
+        ],
+        [
+          4,
+          6
+        ]
+      ],
+      "precise": [
+        true,
+        true
+      ]
+    },
+    {
+      "search": "A",
+      "text": "Ａ A",
+      "ranges": [
+        [
+          0,
+          3
+        ],
+        [
+          4,
+          5
+        ]
+      ],
+      "precise": [
+        true,
+        true
+      ]
+    },
+    {
+      "search": "f",
+      "text": "ﬀ ff",
+      "ranges": [
+        [
+          0,
+          3
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          5,
+          6
+        ]
+      ],
+      "precise": [
+        false,
+        true,
+        true
+      ]
+    }
+  ]
+}

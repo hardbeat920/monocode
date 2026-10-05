@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, useEffect, useState } from "react";
+import { act, createElement, StrictMode, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -143,6 +143,38 @@ describe("transcript pool", () => {
 
     expect(unmounts).toEqual(["a", "b"]);
     expect(pool.getSnapshot().map((entry) => entry.id)).toEqual(["c", "d"]);
+  });
+
+  it("keeps transcripts in place when panes show them in a new order", () => {
+    // A moved transcript re-runs its effects under StrictMode, which replays
+    // its entrance animations on every render of a busy pane.
+    const pool = new TranscriptPool();
+    const hosts = {
+      a: document.createElement("div"),
+      b: document.createElement("div"),
+    };
+    const show = (id: "a" | "b") =>
+      act(() =>
+        pool.show(id, hosts[id], createElement(Probe, { id, visible: true })),
+      );
+    act(() =>
+      root.render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(TranscriptPoolOutlet, { pool }),
+        ),
+      ),
+    );
+    show("a");
+    show("b");
+    const settled = mounts.length;
+
+    show("a");
+    show("b");
+    show("a");
+    expect(mounts).toHaveLength(settled);
+    expect(pool.getSnapshot().map((entry) => entry.id)).toEqual(["a", "b"]);
   });
 
   it("forwards mouse down from the transcript to its pane", () => {

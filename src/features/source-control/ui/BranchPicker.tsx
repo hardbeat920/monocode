@@ -13,6 +13,7 @@ import {
   gitStageAll,
   gitStash,
   isCheckoutBlockedByChanges,
+  isSwitchBlockedByRunningSessions,
   notifyGitChanged,
   type GitBranchInfo,
 } from "../../../platform/tauri/fs";
@@ -22,6 +23,7 @@ import { CreateBranchDialog } from "./CreateBranchDialog";
 import { GitPickerTrigger } from "./GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
 import { SwitchBranchDialog } from "./SwitchBranchDialog";
+import { SwitchWhileRunningDialog } from "./SwitchWhileRunningDialog";
 
 type Props = {
   cwd: string;
@@ -42,9 +44,11 @@ type CreateRow = { kind: "create"; name: string };
 type BranchRow = { kind: "branch"; branch: GitBranchInfo };
 type Row = CreateRow | BranchRow;
 
-type PendingSwitch =
+/** `force` is set once the user agreed to switch under running sessions. */
+type PendingSwitch = (
   | { kind: "create"; name: string }
-  | { kind: "checkout"; name: string; remote: string | null };
+  | { kind: "checkout"; name: string; remote: string | null }
+) & { force?: boolean };
 
 const MENU_MIN_HEIGHT = 180;
 const MENU_MAX_HEIGHT = 280;
@@ -72,6 +76,13 @@ export function BranchPicker({
   const [blockedBusy, setBlockedBusy] = useState<"stash" | "commit" | null>(
     null,
   );
+  // A connected machine refused because sessions are running there.
+  const [running, setRunning] = useState<{
+    pending: PendingSwitch;
+    message: string;
+  } | null>(null);
+  const [runningBusy, setRunningBusy] = useState(false);
+  const [runningError, setRunningError] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
@@ -79,7 +90,7 @@ export function BranchPicker({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  const surfaceOpen = open || creating || blocked !== null;
+  const surfaceOpen = open || creating || blocked !== null || running !== null;
   useEffect(() => {
     onOpenChange?.(surfaceOpen);
   }, [surfaceOpen, onOpenChange]);
@@ -101,6 +112,9 @@ export function BranchPicker({
     setBlocked(null);
     setBlockedError(null);
     setBlockedBusy(null);
+    setRunning(null);
+    setRunningBusy(false);
+    setRunningError(null);
     onDismiss?.();
     if (restore) onCloseRef.current?.();
   };
@@ -131,6 +145,9 @@ export function BranchPicker({
     setBlocked(null);
     setBlockedError(null);
     setBlockedBusy(null);
+    setRunning(null);
+    setRunningBusy(false);
+    setRunningError(null);
   }, [enabled]);
 
   const createName = query.trim();
@@ -167,10 +184,29 @@ export function BranchPicker({
     setActive((i) => (rows.length === 0 ? 0 : Math.min(i, rows.length - 1)));
   }, [rows.length]);
 
-  const applySwitch = (pending: PendingSwitch) =>
-    pending.kind === "create"
-      ? gitCreateBranch(cwd, pending.name)
+  const applySwitch = (pending: PendingSwitch) => {
+    if (pending.kind === "create")
+      return pending.force
+        ? gitCreateBranch(cwd, pending.name, true)
+        : gitCreateBranch(cwd, pending.name);
+    return pending.force
+      ? gitCheckout(cwd, pending.name, pending.remote, true)
       : gitCheckout(cwd, pending.name, pending.remote);
+  };
+
+  const blockOnChanges = (pending: PendingSwitch) => {
+    setOpen(false);
+    setCreating(false);
+    setQuery("");
+    setError(null);
+    setBusy(false);
+    setRunning(null);
+    setRunningBusy(false);
+    setRunningError(null);
+    setBlockedError(null);
+    setBlockedBusy(null);
+    setBlocked(pending);
+  };
 
   const finishSwitch = () => {
     notifyGitChanged();
@@ -185,7 +221,7 @@ export function BranchPicker({
     pending: PendingSwitch,
     source: "picker" | "dialog" = "picker",
   ) => {
-    if (busy || blocked) return;
+    if (busy || blocked || running) return;
     setBusy(true);
     setError(null);
     try {
@@ -193,20 +229,43 @@ export function BranchPicker({
       finishSwitch();
     } catch (err) {
       const message = failMessage(err);
-      if (isCheckoutBlockedByChanges(message)) {
+      if (isSwitchBlockedByRunningSessions(message)) {
         setOpen(false);
         setCreating(false);
         setQuery("");
         setError(null);
         setBusy(false);
-        setBlockedError(null);
-        setBlockedBusy(null);
-        setBlocked(pending);
+        setRunningError(null);
+        setRunningBusy(false);
+        setRunning({ pending, message });
+        return;
+      }
+      if (isCheckoutBlockedByChanges(message)) {
+        blockOnChanges(pending);
         return;
       }
       setError(message);
       setBusy(false);
       if (source === "picker") search.current?.focus();
+    }
+  };
+
+  const confirmRunning = async () => {
+    if (!running || runningBusy) return;
+    const pending = { ...running.pending, force: true };
+    setRunningBusy(true);
+    setRunningError(null);
+    try {
+      await applySwitch(pending);
+      finishSwitch();
+    } catch (err) {
+      const message = failMessage(err);
+      if (isCheckoutBlockedByChanges(message)) {
+        blockOnChanges(pending);
+        return;
+      }
+      setRunningError(message);
+      setRunningBusy(false);
     }
   };
 
@@ -318,6 +377,22 @@ export function BranchPicker({
         loading={awaitingBranch}
         worktree={worktree}
       />
+      {running ? (
+        <SwitchWhileRunningDialog
+          branch={running.pending.name}
+          creating={running.pending.kind === "create"}
+          message={running.message}
+          busy={runningBusy}
+          error={runningError}
+          onConfirm={() => void confirmRunning()}
+          onCancel={() => {
+            if (runningBusy) return;
+            setRunning(null);
+            setRunningError(null);
+            onCloseRef.current?.();
+          }}
+        />
+      ) : null}
       {blocked ? (
         <SwitchBranchDialog
           cwd={cwd}

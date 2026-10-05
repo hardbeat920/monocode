@@ -1,0 +1,230 @@
+{
+  "source_archive_sha256": "28edc3c50ac009dc747833e9cfa8e54dc88545a913b5bf6e3f9ebc3841a73941",
+  "records": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "a1cc289a4521fb6b7d29a948cbdde1a26c1e2d0f2e871936daea4799035c5610",
+      "size": 283898
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "c386b43110dd8ad421bec71d42bc2e1eae8c89ac8ea724329001302b89892bb0",
+      "size": 3198
+    },
+    {
+      "path": "apps/monocode-app/Cargo.toml",
+      "sha256": "82c614779f1e8d73e156c14c9b5ccc0b0966204d634753466e5e2a433e35f9f8",
+      "size": 3043
+    },
+    {
+      "path": "crates/core/Cargo.toml",
+      "sha256": "58ebe1c6fdcb26ede76ff5b0cce97292fffa50897d54655a9567474b39a8c5fa",
+      "size": 499
+    },
+    {
+      "path": "crates/editor/Cargo.toml",
+      "sha256": "b833cd603e21cb46db67707b295f476aed2f824d8f918898566e1be9cf4f5692",
+      "size": 1517
+    },
+    {
+      "path": "crates/engine/Cargo.toml",
+      "sha256": "edd71a774e9b6f7167feb1e3b1c48b0183a6bea19036acb3121b80faa826d331",
+      "size": 4195
+    },
+    {
+      "path": "crates/git/Cargo.toml",
+      "sha256": "3afdefaefebdbc8257cc4527453dd9ba8c8478d592e61e530581a7a90d584adc",
+      "size": 609
+    },
+    {
+      "path": "crates/harness/Cargo.toml",
+      "sha256": "bf9b563a9d53df33b98d4cd61944c371f9c22b797b078b903c8102de9fb4563c",
+      "size": 1190
+    },
+    {
+      "path": "crates/harness/src/providers/opencode/protocol.rs",
+      "sha256": "fbab3342a97ac683b07e94ef74be74f63ffce0413d87dd5d82a66d2c950ccc8b",
+      "size": 48579
+    },
+    {
+      "path": "crates/harness/src/providers/pi/protocol.rs",
+      "sha256": "d83a4b7f78268130214ec6fe25644a7fd473da46c9775de7957d2cd5c3f9ad23",
+      "size": 67158
+    },
+    {
+      "path": "crates/host/Cargo.toml",
+      "sha256": "7c2ead5709ae675a72089cf6ed3dac4bd4e1ed538b526656179b05017acaea0d",
+      "size": 738
+    },
+    {
+      "path": "crates/integrations/Cargo.toml",
+      "sha256": "f6d1307accf130349157b61456f34c60813133b1dec90f864d2952804284e4ad",
+      "size": 442
+    },
+    {
+      "path": "crates/layout/Cargo.toml",
+      "sha256": "ab68c052e1174738a79445e4e3d7d1f72f748805a2033c4d5e35a797de8bb787",
+      "size": 483
+    },
+    {
+      "path": "crates/locale/Cargo.toml",
+      "sha256": "b0da17780d7dce2ece2ef5ce52c959abfd4cc86bff914e5764b850c6b2282b75",
+      "size": 225
+    },
+    {
+      "path": "crates/locale/build.rs",
+      "sha256": "acd5b7b80582bde8eae95b19b091689da2e4f6dcbd88e048bd79d76c6372df88",
+      "size": 4321
+    },
+    {
+      "path": "crates/locale/examples/locale_probe.rs",
+      "sha256": "abf012a0ff0ee473b0a2106ddb5fc8da2948e962a9f290027a38780d56383b28",
+      "size": 726
+    },
+    {
+      "path": "crates/locale/icu_build.rs",
+      "sha256": "c435d20ec21f50ed9cb1b062a7d625154d16fcff32095fc705b6e43c87546c13",
+      "size": 2402
+    },
+    {
+      "path": "crates/locale/src/api.rs",
+      "sha256": "8d36605c22ef917c8db677abb71794dd792f45baec54072878590b732984f93a",
+      "size": 4579
+    },
+    {
+      "path": "crates/locale/src/api/windows.rs",
+      "sha256": "d095a7237bb2981e9d4c311f0197d5dc28fc0b1c07de02929c893aece6d446a9",
+      "size": 4707
+    },
+    {
+      "path": "crates/locale/src/lib.rs",
+      "sha256": "2ee2af92a13a56df5f63904c8b688391da410bb024e51368135e230c112737fd",
+      "size": 10608
+    },
+    {
+      "path": "crates/locale/src/locale.rs",
+      "sha256": "ceab77647d58ac9674f64fa61a60b143fa49dbf8eadf68c4c674aee85a345e1d",
+      "size": 12208
+    },
+    {
+      "path": "crates/locale/src/tests.rs",
+      "sha256": "052fc8bc26bcdbe3dba170219357b1c47bd7bd5b64bdb468eeadff2994ce7a54",
+      "size": 6628
+    },
+    {
+      "path": "crates/markdown/Cargo.toml",
+      "sha256": "10588740f92f720c6b1e37c3b3b6b1e260dbc2ff46375c44fb68b9f8b4bcda76",
+      "size": 771
+    },
+    {
+      "path": "crates/packaging/Cargo.toml",
+      "sha256": "63574f2fe4f2fc3484a189b3560aec8374f3929525118da999ddb976eeb63eaf",
+      "size": 520
+    },
+    {
+      "path": "crates/platform/Cargo.toml",
+      "sha256": "d46ffbba2e7a26e234b6447e010a2867e68435bf7f34926b6f9b999a88f88d22",
+      "size": 2794
+    },
+    {
+      "path": "crates/platform/build.rs",
+      "sha256": "f2f8e55f29eb4f9539c6615df7567857003832e238666fcc302e230ae00c40c5",
+      "size": 1848
+    },
+    {
+      "path": "crates/process/Cargo.toml",
+      "sha256": "59c0562a15145904595fd95046664ad86698f9a2031aff695f0dc8752fbe1ae9",
+      "size": 477
+    },
+    {
+      "path": "crates/remote/Cargo.toml",
+      "sha256": "cd6f1d6695126768c0b3ec7810566886164ec545dd15bda13d93143d2cfca0f1",
+      "size": 948
+    },
+    {
+      "path": "crates/settings/Cargo.toml",
+      "sha256": "c28b72a8b03736c37dd5c7f721116f0ec5ab7f9a772fc32e5b00db2fc7d05a24",
+      "size": 582
+    },
+    {
+      "path": "crates/store/Cargo.toml",
+      "sha256": "c412d51de3b1a8fa59f92ba92c98196619c44f9a96fe870ec8d7787b034ee952",
+      "size": 312
+    },
+    {
+      "path": "crates/terminal-view/Cargo.toml",
+      "sha256": "b2052a6d2ee2cea995a2a12c55eb46dc6cfa9942ebfa62516af83f6ac8399421",
+      "size": 859
+    },
+    {
+      "path": "crates/terminal/Cargo.toml",
+      "sha256": "c1b8fbe9cfe31622a3ac59facc1580ab9004c74b46e17e6771d1c1fa66503694",
+      "size": 413
+    },
+    {
+      "path": "crates/ui/Cargo.toml",
+      "sha256": "1dd7a539f28d8a80bba53dee372cd3e3d18bfd06dd74bc4926727da0f164e3f3",
+      "size": 492
+    },
+    {
+      "path": "crates/updater/Cargo.toml",
+      "sha256": "68cfdf226ec97eed921852fbfd59580e3662d13ff58257e4af5c71cc38aca9a9",
+      "size": 1314
+    },
+    {
+      "path": "crates/view-composer/Cargo.toml",
+      "sha256": "6a1805f0a8bc69fbc95f1302c4b3775eb8520a60be3774dc892804bd89c9841b",
+      "size": 1238
+    },
+    {
+      "path": "crates/view-files/Cargo.toml",
+      "sha256": "80d65bd1aeee67e3916ef9e05495e46afb0164fcd3c9835fcdd3ffb2cbfe7043",
+      "size": 1261
+    },
+    {
+      "path": "crates/view-inbox/Cargo.toml",
+      "sha256": "c36eaad706b2f1e16a52daeb435f8830758b43ae27e34099c2d2ee5e2fb85a6d",
+      "size": 1478
+    },
+    {
+      "path": "crates/view-pages/Cargo.toml",
+      "sha256": "8908c1eb9a3b91c6a9e34d775a6b917950fb03c6d8c2c79d73570db16ece05e0",
+      "size": 1897
+    },
+    {
+      "path": "crates/view-quick/Cargo.toml",
+      "sha256": "5c1cbaeeee46afa3619e55b02f2c30574b094d80d0f4c696e944dce78b34daf3",
+      "size": 1097
+    },
+    {
+      "path": "crates/view-remote/Cargo.toml",
+      "sha256": "8f4b4487ca495630b92f8b8eeec66c0a0d630234f363afe88187912f86f93a9b",
+      "size": 1215
+    },
+    {
+      "path": "crates/view-scm/Cargo.toml",
+      "sha256": "b301e15658f958e5e796fdc4b4a4883b136580425863871d4f9e380519f9f791",
+      "size": 1565
+    },
+    {
+      "path": "crates/view-settings/Cargo.toml",
+      "sha256": "3ce702b2ca2fe7e31868981677b03e7d60388377b55b308927de803497a84cff",
+      "size": 1958
+    },
+    {
+      "path": "crates/view-transcript/Cargo.toml",
+      "sha256": "4565609543f5030edb5b077a195a942a92bec5fb0cde65c9d6b8ff58b07015d6",
+      "size": 1425
+    },
+    {
+      "path": "crates/view-workbench/Cargo.toml",
+      "sha256": "59048c2d8b6e3b0ba7e3207bfcab9b443afa8668743f3fc2333686600eab153b",
+      "size": 1107
+    },
+    {
+      "path": "vendor/portable-pty/Cargo.toml",
+      "sha256": "e1a7320efbb4b088352f5ac87c805e2ad96df571b994ac1397e6d6ffdf981c61",
+      "size": 2217
+    }
+  ]
+}

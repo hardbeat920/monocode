@@ -1,0 +1,42 @@
+[package]
+name = "monocode-view-scm"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Source control views: changes panel, history graph, branch and worktree pickers, diffs, dialogs"
+
+[dependencies]
+monocode-locale.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+# The unstyled multi-line input, sized by its parent.
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-editor.workspace = true
+monocode-git.workspace = true
+monocode-store.workspace = true
+# Only the runtime and the projects package: git status polling and the
+# checkpoint review signal.
+monocode-engine = { path = "../engine", default-features = false, features = ["projects"] }
+serde.workspace = true
+serde_json.workspace = true
+# `LocalGit` lists worktrees without a session database through an empty
+# in-memory `sessions` table.
+rusqlite.workspace = true
+# Loads diffs four at a time.
+futures.workspace = true
+
+[dev-dependencies]
+monocode-editor = { workspace = true, features = ["test-support"] }
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+monocode-engine = { path = "../engine", default-features = false, features = ["projects", "test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "scm_gallery"
+path = "examples/scm_gallery.rs"

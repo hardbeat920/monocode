@@ -1,0 +1,14 @@
+{
+  "checked_at_utc": "2026-10-03T16:15:35.303220+00:00",
+  "host": "hometop",
+  "source": "ioreg IOConsoleUsers and ps for observed foreground PID",
+  "console_sessions": [
+    {
+      "kCGSSessionOnConsoleKey": true,
+      "CGSSessionScreenIsLocked": true,
+      "kCGSSessionUserIDKey": 501
+    }
+  ],
+  "foreground_process": "915 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
+  "changes": "No unlocking, input synthesis, service, preference, permission, or production configuration changes."
+}

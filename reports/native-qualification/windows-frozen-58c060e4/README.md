@@ -1,0 +1,9 @@
+# Windows frozen baseline
+
+The source-before and source-after checks exactly match 2629 files at digest `58c060e4687dc6bf600d89ce6423f2682e25355ea2867406ef3d996bb544a4c0`. The runner forced recompilation of owned source inputs and recorded the emitted test inventory. All 19 required regressions and both early HTTP rejection fixtures registered and passed in the full run.
+
+The workspace library and binary suite passed 5373 tests with 42 ignored tests across 33 targets. Core integrations passed 414 tests with one ignored across three targets. Remote recovery and SSH askpass each passed once. Formatting and strict whole-workspace Clippy passed. Fresh application, host, and package binaries built. [summary.json](summary.json) records exact commands, totals, timings, and binary hashes. [test-inventory.json](test-inventory.json) records the compiled test names.
+
+The subsequent GUI application build and optimized static-CRT host build also passed. The application has PE subsystem 2. Its redirected `--list-views` and `host --version` commands passed. Import inspection found no redistributable C++ runtime dependency in either executable. Source verification still matched the frozen digest after these builds. The GUI application SHA256 is `989633110f73174e33b6982472484f695f7961fef6da9519acbd6e77c9c2b9cb`, and the optimized host SHA256 is `db89b80d79972c51e5ec03ea76b3074bf9b900304edb37110a7f643c73d494cb`.
+
+The immutable binary copies remain in `C:\Users\niost\AppData\Local\monocode-gpui-build\artifacts\windows-frozen-qualification-20261003T194258Z`, under `base-binaries` and `package-binaries`. This baseline precedes the listener fixture correction and remaining localization repairs. It does not claim interactive video, installer execution, or regenerated packages. Later runs retain this evidence instead of replacing it.

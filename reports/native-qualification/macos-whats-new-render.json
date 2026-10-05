@@ -1,0 +1,16 @@
+{
+  "dimensions": [
+    2560,
+    1600
+  ],
+  "exit_code": 0,
+  "screenshot_sha256": "50bb75c54ed6c6ecf88643efa3664ee7530b396fe644375f201eeffdcea40b44",
+  "binary_sha256": "ba465db89a48b42309e5be32e8da75d851890b56e56487ee5f966811ae44257d",
+  "profile": "owned isolated qualification clone",
+  "checked": [
+    "full-window scrim",
+    "bounded release-note card",
+    "installed-update sidebar notice"
+  ],
+  "interaction": "renderer only, no GUI input"
+}

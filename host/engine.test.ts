@@ -472,6 +472,44 @@ describe("headless session ownership", () => {
     turns[0].finish();
   });
 
+  it("clears a usage limit when the next turn starts", async () => {
+    const { engine, store, id, turns } = setup();
+    const value = store.session(id);
+    store.save(
+      {
+        ...value,
+        revision: value.revision + 1,
+        session: { ...value.session, usageLimit: { resetsAt: 1 } },
+      },
+      { type: "test" },
+    );
+    engine.command({ type: "send", commandId: "retry", sessionId: id, text: "Go on" });
+    expect(store.session(id).session.usageLimit).toBeUndefined();
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].finish();
+  });
+
+  it("names running sessions before a branch switch and switches when forced", async () => {
+    const { engine, store, project, id, turns } = setup();
+    engine.command({
+      type: "send",
+      commandId: "running",
+      sessionId: id,
+      text: "Work",
+    });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    const title = store.session(id).session.title;
+    await expect(
+      engine.withIdleProject(project.id, async () => "switched"),
+    ).rejects.toThrow(
+      `"${title}" is running on the host. Switching branches changes the files it is working on.`,
+    );
+    await expect(
+      engine.withIdleProject(project.id, async () => "switched", true),
+    ).resolves.toBe("switched");
+    turns[0].finish();
+  });
+
   it("runs provider context compaction once and persists its transcript marker", async () => {
     const { engine, store, provider, id } = setup();
     let finishCompact = () => {};

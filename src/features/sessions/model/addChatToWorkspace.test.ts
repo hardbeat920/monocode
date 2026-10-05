@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { leafIds, newFileTab, newTab, type WorkspaceTab } from "../../workspace/model/layout";
 import type { Session } from "./session";
 import { applyAddToChatRequest } from "./addChatToWorkspace";
+import { splitChatContext, type ChatContextItem } from "./chatContext";
+
+const item: ChatContextItem = {
+  kind: "code",
+  path: "src/value.ts",
+  startLine: 3,
+  endLine: 5,
+};
 
 function session(id: string, cwd: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -40,7 +48,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       sessions: [donor],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(result).not.toBeNull();
@@ -52,16 +60,18 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     expect(result!.activeTabId).toBe(result!.tabs[0].id);
   });
 
-  it("seeds the composer with the quoted text", () => {
+  it("seeds the composer with the context chip", () => {
     const result = applyAddToChatRequest({
       sessions: [],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
-    expect(newChat(result!).composerSeed).toContain("selected code");
-    expect(newChat(result!).composerSeed).toMatch(/^>/);
+    expect(splitChatContext(newChat(result!).composerSeed!)).toEqual({
+      text: "",
+      items: [item],
+    });
   });
 
   it("keeps the donor session's harness, model and runtime mode", () => {
@@ -74,7 +84,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       sessions: [donor],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(newChat(result!).harness).toBe("claude");
@@ -88,7 +98,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       sessions: [donor],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(newChat(result!).cwd).toBe("/current/project");
@@ -109,7 +119,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       sessions: [first, last],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(newChat(result!).harness).toBe("claude");
@@ -122,22 +132,11 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       sessions: [],
       tabs: [],
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(newChat(result!).harness).toBe("claude");
     expect(newChat(result!).cwd).toBe("/current/project");
-  });
-
-  it("returns null for whitespace-only text", () => {
-    expect(
-      applyAddToChatRequest({
-        sessions: [],
-        tabs: [],
-        projectCwd: "/current/project",
-        text: "   \n  ",
-      }),
-    ).toBeNull();
   });
 });
 
@@ -149,7 +148,7 @@ describe("applyAddToChatRequest: file-only tab", () => {
       tabs: [tab],
       activeTabId: "tab1",
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(result).not.toBeNull();
@@ -169,7 +168,7 @@ describe("applyAddToChatRequest: file-only tab", () => {
       tabs: [tab],
       activeTabId: tab.id,
       projectCwd: "/current/project",
-      text: "selected code",
+      item,
     });
 
     expect(result).toBeNull();

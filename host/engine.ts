@@ -297,20 +297,22 @@ export class HostEngine {
     return this.store.addProject(cwd, basename(cwd));
   }
 
+  /**
+   * Runs a branch change while no session in the project is running. With
+   * `force`, the change goes ahead anyway, after the desktop has asked; the
+   * running agents then see their files change, as they would locally.
+   */
   async withIdleProject<T>(
     projectId: string,
     action: () => Promise<T>,
+    force = false,
   ): Promise<T> {
     if (this.switchingProjects.has(projectId))
       throw new Error("A branch switch is already in progress");
-    if (
-      this.store
-        .summaries(projectId)
-        .some((session) => session.status === "running")
-    )
-      throw new Error(
-        "Wait for running host sessions before switching branches",
-      );
+    const running = this.store
+      .summaries(projectId)
+      .filter((session) => session.status === "running");
+    if (running.length && !force) throw new Error(runningSessionsMessage(running));
     this.switchingProjects.add(projectId);
     try {
       return await action();
@@ -581,6 +583,8 @@ export class HostEngine {
               ...value.session,
               busy: true,
               pendingQuestion: undefined,
+              // A new turn retries after a usage limit, as it does locally.
+              usageLimit: undefined,
               title:
                 firstTurn && placeholderTitle
                   ? titleFromPrompt(
@@ -923,4 +927,19 @@ export class HostEngine {
     );
     await Promise.all([...this.running.values()].map((active) => active.done));
   }
+}
+
+/** Names the running sessions a branch change would disturb. The desktop
+ * recognizes the last sentence and asks before retrying with `force`. */
+export function runningSessionsMessage(
+  sessions: readonly { title: string }[],
+): string {
+  const names = sessions
+    .slice(0, 3)
+    .map((session) => `"${session.title}"`)
+    .join(", ");
+  const more = sessions.length > 3 ? ` and ${sessions.length - 3} more` : "";
+  return sessions.length === 1
+    ? `${names} is running on the host. Switching branches changes the files it is working on.`
+    : `${sessions.length} sessions are running on the host: ${names}${more}. Switching branches changes the files they are working on.`;
 }

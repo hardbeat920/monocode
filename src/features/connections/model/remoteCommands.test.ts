@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeLocal }));
 
 import { runRemoteCommand } from "./remoteCommands";
 import { parseRemotePath, remotePath } from "./remoteProjects";
-import { listDir, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
+import { listDir, listSkills, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
 
 beforeEach(() => {
   remoteRequest.mockReset();
@@ -120,6 +120,28 @@ it("routes project search through the host and maps match paths", async () => {
   expect(remoteRequest).toHaveBeenCalledWith("machine", "workspace.run", {
     command: "search_project",
     args: { options: { cwd: "/home/me/repo", query: "hello" } },
+  });
+});
+
+it("lists the skills installed on the machine with remote paths", async () => {
+  remoteRequest.mockResolvedValueOnce([
+    {
+      name: "quick-plan",
+      description: "Plan",
+      path: "/home/me/.claude/skills/quick-plan/SKILL.md",
+      scope: "user",
+      source: "claude",
+    },
+  ]);
+  expect(await listSkills("remote://env/home/me/repo", [])).toEqual([
+    expect.objectContaining({
+      name: "quick-plan",
+      path: "remote://env/home/me/.claude/skills/quick-plan/SKILL.md",
+    }),
+  ]);
+  expect(remoteRequest).toHaveBeenCalledWith("machine", "workspace.run", {
+    command: "list_skills",
+    args: { cwd: "/home/me/repo", disabledPaths: [] },
   });
 });
 

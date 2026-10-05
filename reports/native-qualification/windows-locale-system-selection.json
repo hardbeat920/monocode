@@ -1,0 +1,21 @@
+{
+  "platform": "win32",
+  "hostname": "QRK-GLUON",
+  "cases": [
+    {
+      "case": "inherited",
+      "node": {
+        "node": "v25.4.0",
+        "icu": "77.1",
+        "collator_locale": "en-US",
+        "relative_locale": "en-US",
+        "relative": "2 hours ago"
+      }
+    }
+  ],
+  "GetUserPreferredUILanguages": [
+    "en-US"
+  ],
+  "GetUserPreferredUILanguages_count": 1,
+  "GetUserDefaultLocaleName": "en-US"
+}

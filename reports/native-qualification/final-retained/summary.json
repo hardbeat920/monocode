@@ -1,0 +1,39 @@
+{
+  "architecture": "aarch64-apple-darwin",
+  "binary_tests": 0,
+  "cargo_home": "~/Library/Caches/monocode-gpui-build/retained-cargo",
+  "cargo_target_dir": "~/Library/Caches/monocode-gpui-build/retained-target",
+  "compiler": "rustc1.98.1",
+  "dependency_fetch": false,
+  "documentation_tests": 0,
+  "format": "passed",
+  "library_tests": {
+    "failed": 0,
+    "ignored": 0,
+    "passed": 35
+  },
+  "native_file_count": 2629,
+  "native_manifest_sha256": "58c060e4687dc6bf600d89ce6423f2682e25355ea2867406ef3d996bb544a4c0",
+  "result": "passed for frozen checkpoint",
+  "retained_excluded_directories": [
+    "target",
+    ".git"
+  ],
+  "retained_excluded_metadata": [
+    ".DS_Store"
+  ],
+  "retained_lock_sha256_after": "92286fbedc0dfda0ab49e3e48d87e0a818dc88040790b650438ad8d93ae08bfd",
+  "retained_lock_sha256_before": "92286fbedc0dfda0ab49e3e48d87e0a818dc88040790b650438ad8d93ae08bfd",
+  "retained_source_file_count": 76,
+  "source_before_after": {
+    "native_changed": 0,
+    "native_extra": 0,
+    "native_missing": 0,
+    "retained_changed": 0,
+    "retained_extra": 0,
+    "retained_missing": 0
+  },
+  "source_or_lock_changes_by_runner": false,
+  "source_root": "~/Library/Caches/monocode-gpui-build/source",
+  "strict_clippy_all_targets_locked_offline": "passed"
+}

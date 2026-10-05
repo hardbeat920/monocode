@@ -167,7 +167,7 @@ function emitInlineSubagent(taskId = "t1") {
   });
 }
 
-function emitBackgroundBash(taskId = "b1") {
+function emitBackgroundBashLaunch(taskId = "b1") {
   emit({
     type: "assistant",
     session_id: "sess_1",
@@ -214,6 +214,10 @@ function emitBackgroundBash(taskId = "b1") {
       ],
     },
   });
+}
+
+function emitBackgroundBash(taskId = "b1") {
+  emitBackgroundBashLaunch(taskId);
   emit({
     type: "stream_event",
     session_id: "sess_1",
@@ -1241,7 +1245,15 @@ describe("claude subagents", () => {
         status: "completed",
         summary: "Second agent finished",
       });
-      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      // Both agents finished before the result, so the turn waits for the
+      // follow-up Claude takes to read them, which this fixture never sends.
+      vi.useFakeTimers();
+      try {
+        emit({ type: "result", subtype: "success", session_id: "sess_1" });
+        await vi.advanceTimersByTimeAsync(20_000);
+      } finally {
+        vi.useRealTimers();
+      }
       await turn;
     },
   );
@@ -1292,7 +1304,15 @@ describe("claude subagents", () => {
       status: "completed",
       summary: "Found the auth entry points",
     });
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    // The task finished before the result, so the turn waits for the
+    // follow-up Claude takes to read it, which this fixture never sends.
+    vi.useFakeTimers();
+    try {
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await vi.advanceTimersByTimeAsync(20_000);
+    } finally {
+      vi.useRealTimers();
+    }
     await turn;
 
     const finished = events.reduce(
@@ -1795,6 +1815,74 @@ describe("claude background tasks", () => {
     vi.useFakeTimers();
     try {
       emitBashFinished();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for Claude's follow-up when a command finishes before the result", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    emitBackgroundBashLaunch();
+    emitBashFinished();
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+
+    emitFollowUpTurn("It finished and printed done.");
+    await turn;
+  });
+
+  it("ends at the result when a later tool result already carried the notice", async () => {
+    const { turn } = await startTurn("s1");
+
+    emitBackgroundBashLaunch();
+    emitBashFinished();
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_ls",
+            name: "Bash",
+            input: { command: "ls" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "toolu_ls", content: "" }],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("lets the turn go if a command finished before the result never wakes Claude", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBashLaunch();
+
+    vi.useFakeTimers();
+    try {
+      emitBashFinished();
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
       await vi.advanceTimersByTimeAsync(10_000);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(10_000);

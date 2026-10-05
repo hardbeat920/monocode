@@ -86,6 +86,8 @@ export function UsageFooter({
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
+  const wantDroid = providers.includes("droid");
+  const wantGrok = providers.includes("grok");
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [, setAccountsVersion] = useState(0);
@@ -108,6 +110,8 @@ export function UsageFooter({
   const cachedClaude = useCachedRateLimits("claude", claudeAccountId);
   const cachedCodex = useCachedRateLimits("codex", codexAccountId);
   const opencode = useCachedRateLimits("opencode");
+  const droid = useCachedRateLimits("droid");
+  const grok = useCachedRateLimits("grok");
   const claude = claudeAccountAvailable
     ? cachedClaude
     : unavailableRateLimits(
@@ -135,6 +139,8 @@ export function UsageFooter({
     if (wantCodex && codexAccountAvailable)
       void loadRateLimits("codex", codexAccountId);
     if (wantOpencode) void loadRateLimits("opencode");
+    if (wantDroid) void loadRateLimits("droid");
+    if (wantGrok) void loadRateLimits("grok");
   }, [
     claudeAccountAvailable,
     claudeAccountId,
@@ -142,6 +148,8 @@ export function UsageFooter({
     codexAccountId,
     wantClaude,
     wantCodex,
+    wantDroid,
+    wantGrok,
     wantOpencode,
   ]);
 
@@ -154,6 +162,8 @@ export function UsageFooter({
     if (wantCodex && codexAccountAvailable)
       jobs.push(loadRateLimits("codex", codexAccountId, true));
     if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
+    if (wantDroid) jobs.push(loadRateLimits("droid", "default", true));
+    if (wantGrok) jobs.push(loadRateLimits("grok", "default", true));
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
@@ -169,6 +179,8 @@ export function UsageFooter({
     codexAccountId,
     wantClaude,
     wantCodex,
+    wantDroid,
+    wantGrok,
     wantOpencode,
   ]);
 
@@ -270,6 +282,11 @@ export function UsageFooter({
     [codexAccountId, reconnectProvider],
   );
 
+  const reconnectGrok = useCallback(
+    () => reconnectProvider("grok", "default"),
+    [reconnectProvider],
+  );
+
   const selectAccount = useCallback(
     (provider: ProviderAccountProvider, accountId: string) => {
       selectProviderAccount(provider, project, accountId);
@@ -290,7 +307,8 @@ export function UsageFooter({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip;
+  const showUsage =
+    wantClaude || wantCodex || showOpencodeChip || wantDroid || wantGrok;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -350,6 +368,17 @@ export function UsageFooter({
           ) : null}
           {showOpencodeChip ? (
             <UsageProviderChip limits={opencode} now={now} project={project} />
+          ) : null}
+          {wantDroid ? (
+            <UsageProviderChip limits={droid} now={now} project={project} />
+          ) : null}
+          {wantGrok ? (
+            <UsageProviderChip
+              limits={grok}
+              now={now}
+              project={project}
+              onReconnect={reconnectGrok}
+            />
           ) : null}
           <button
             type="button"

@@ -1,0 +1,54 @@
+[package]
+name = "monocode-platform"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+arboard = { version = "3.6", features = ["wayland-data-control"] }
+png = "0.18"
+serde.workspace = true
+url.workspace = true
+raw-window-handle = "0.6"
+# The quick composer's global shortcut (MIT or Apache-2.0; the Tauri plugin wrapped it).
+global-hotkey = "0.8"
+
+[dev-dependencies]
+# The pasteboard tests check that a copied path resolves through `inspect_paths`.
+monocode-git = { path = "../git" }
+
+# Panel and hotkey checks that AppKit and Carbon only allow on the main thread.
+[[test]]
+name = "panel_and_hotkey"
+harness = false
+
+[[test]]
+name = "inline_video"
+harness = false
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+portable-pty = { version = "0.9", path = "../../vendor/portable-pty" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
+tauri-winrt-notification = "0.8"
+# WinRT toast settings (Windows.UI.Notifications) to read the per-app block.
+windows = { version = "0.62", features = ["UI_Notifications", "Globalization_DateTimeFormatting", "Win32_Foundation", "Win32_System_Com", "Win32_System_WinRT", "Win32_Media_MediaFoundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Graphics_Gdi"] }
+windows-collections = "0.3.2"
+windows-core = "0.62.2"
+# The tray icon (MIT or Apache-2.0; Tauri wrapped it). Windows only, as before.
+tray-icon = { version = "0.24", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6"
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime", "objc2"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSGraphics", "NSImage", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSError", "NSString", "NSDate", "NSDateFormatter", "NSLocale", "NSTimeZone"] }
+objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotification", "UNNotificationAction", "UNNotificationCategory", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "block2"] }
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4.18"

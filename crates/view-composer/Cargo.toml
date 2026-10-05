@@ -1,0 +1,40 @@
+[package]
+name = "monocode-view-composer"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "The session composer, its prompt input, and the pickers it opens"
+
+[dependencies]
+monocode-locale.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+# The pickers style gpui-base's unframed inputs themselves (InputEditorStyle).
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-markdown.workspace = true
+monocode-editor.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Pasteboard reads the GPUI clipboard cannot do: copied file paths and images.
+monocode-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+base64.workspace = true
+unicode-segmentation = "1.12"
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+
+[[example]]
+name = "composer"
+path = "examples/composer.rs"
+
+[[example]]
+name = "pickers"
+path = "examples/pickers.rs"

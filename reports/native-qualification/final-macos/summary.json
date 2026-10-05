@@ -1,0 +1,254 @@
+{
+  "platform": "darwin",
+  "source": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+  "commands": {
+    "source-before": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.py",
+        "verify",
+        "--root",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+        "--manifest",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.207,
+      "log": "source-before.log"
+    },
+    "fmt": {
+      "arguments": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 4.155,
+      "log": "fmt.log"
+    },
+    "compile": {
+      "arguments": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j",
+        "2",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 104.474,
+      "log": "compile.log"
+    },
+    "workspace": {
+      "arguments": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--lib",
+        "--bins",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 51.492,
+      "log": "workspace.log",
+      "tests": {
+        "targets": 33,
+        "passed": 5439,
+        "failed": 0,
+        "ignored": 45
+      }
+    },
+    "clippy": {
+      "arguments": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j",
+        "2",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 38.543,
+      "log": "clippy.log"
+    },
+    "core": {
+      "arguments": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-core",
+        "--tests",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 5.676,
+      "log": "core.log",
+      "tests": {
+        "targets": 3,
+        "passed": 414,
+        "failed": 0,
+        "ignored": 1
+      }
+    },
+    "recovery": {
+      "arguments": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-host",
+        "--test",
+        "remote_recovery",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 12.353,
+      "log": "recovery.log",
+      "tests": {
+        "targets": 1,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "askpass": {
+      "arguments": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-app",
+        "--test",
+        "ssh_askpass",
+        "--all-features",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 49.105,
+      "log": "askpass.log",
+      "tests": {
+        "targets": 1,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "video": {
+      "arguments": [
+        "cargo",
+        "test",
+        "-p",
+        "monocode-platform",
+        "--test",
+        "inline_video",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 3.115,
+      "log": "video.log",
+      "tests": {
+        "targets": 0,
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "build": {
+      "arguments": [
+        "cargo",
+        "build",
+        "-p",
+        "monocode-app",
+        "-p",
+        "monocode-host",
+        "-p",
+        "monocode-package",
+        "--bins",
+        "--features",
+        "monocode-app/screenshot",
+        "--locked",
+        "--offline",
+        "-j",
+        "2"
+      ],
+      "exit_code": 0,
+      "seconds": 34.038,
+      "log": "build.log"
+    },
+    "source-after": {
+      "arguments": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.py",
+        "verify",
+        "--root",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/source",
+        "--manifest",
+        "/Users/gianvillarini/Library/Caches/monocode-gpui-build/final-source-manifest.json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.234,
+      "log": "source-after.log"
+    }
+  },
+  "registered_regressions": {
+    "removes_a_draft_and_discards_a_draft_only_session": "submit::pipeline::tests::removes_a_draft_and_discards_a_draft_only_session",
+    "releasing_a_lead_invalidates_a_pending_worker_read": "history::history::tests::releasing_a_lead_invalidates_a_pending_worker_read",
+    "missing_worker_models_fail_before_sending_a_planning_turn": "submit::pipeline::tests::missing_worker_models_fail_before_sending_a_planning_turn",
+    "restored_typescript_receipt_reuses_the_delegation_without_dispatching_again": "orchestration::orchestrator_tests::restored_typescript_receipt_reuses_the_delegation_without_dispatching_again",
+    "restored_typescript_approval_receipt_accepts_ordinary_integral_spelling": "orchestration::orchestrator_tests::restored_typescript_approval_receipt_accepts_ordinary_integral_spelling",
+    "object_order_does_not_change_a_persisted_request": "orchestration::orchestrator::receipt_signature_tests::object_order_does_not_change_a_persisted_request",
+    "integral_spelling_preserves_safe_values_without_rounding_large_integers": "orchestration::orchestrator::receipt_signature_tests::integral_spelling_preserves_safe_values_without_rounding_large_integers",
+    "corrupt_receipts_and_different_value_types_do_not_match": "orchestration::orchestrator::receipt_signature_tests::corrupt_receipts_and_different_value_types_do_not_match",
+    "decimal_and_exponent_comparisons_are_exact_and_fail_closed_on_overflow": "orchestration::orchestrator::receipt_signature_tests::decimal_and_exponent_comparisons_are_exact_and_fail_closed_on_overflow",
+    "unexpected_host_exit_stops_the_provider_group": "child_backend::tests::provider_guard_tests::unexpected_host_exit_stops_the_provider_group",
+    "cached_image_follows_appearance_without_resetting_zoom": "binary_view::tests::cached_image_follows_appearance_without_resetting_zoom",
+    "cached_pdf_follows_appearance_without_reopening_the_document": "binary_view::tests::cached_pdf_follows_appearance_without_reopening_the_document",
+    "cached_terminal_follows_appearance_without_restarting_the_pty": "file_pane::tests::cached_terminal_follows_appearance_without_restarting_the_pty",
+    "cached_diff_follows_appearance_without_resetting_content_or_expansion": "ui::diffs::tests::cached_diff_follows_appearance_without_resetting_content_or_expansion",
+    "cached_inbox_pr_diff_follows_appearance_without_reloading_or_resetting_expansion": "pr::detail::appearance_tests::cached_inbox_pr_diff_follows_appearance_without_reloading_or_resetting_expansion",
+    "pending_highlight_cannot_restore_the_previous_theme": "diff_view::tests::pending_highlight_cannot_restore_the_previous_theme",
+    "steering_honors_changed_model_settings_and_rejects_an_idle_session": "providers::opencode::v2::adapter::tests::steering_honors_changed_model_settings_and_rejects_an_idle_session",
+    "step_usage_reports_catalog_capacity_and_aggregates_reasoning_and_cache": "providers::opencode::v2::events::tests::step_usage_reports_catalog_capacity_and_aggregates_reasoning_and_cache",
+    "remote_workspace_shortcut_preserves_selection_and_creates_the_host_worktree_before_sending": "panes::workspace::remote_tests::remote_workspace_shortcut_preserves_selection_and_creates_the_host_worktree_before_sending",
+    "ordinary_provider_exit_reaps_the_descendant_and_guard": "child_backend::tests::provider_guard_tests::ordinary_provider_exit_reaps_the_descendant_and_guard",
+    "failed_spawn_releases_the_native_guard": "provider_guard::tests::failed_spawn_releases_the_native_guard"
+  },
+  "registered_http_regressions": [
+    "host::http::tests::early_rejection_closes_without_waiting_for_a_stalled_upload",
+    "host::http::tests::early_rejection_preserves_its_response_with_an_unread_request_body"
+  ],
+  "test_executables": 33,
+  "binary_sha256": {
+    "monocode-app": "762196d597c41eaafdc5ea9c960c8fefa1033fcc0c9677ca652081aca280deea",
+    "monocode-host": "ef66ca90842f04705254a2f2c2b6391e7bfe874634c71bbf644a4c21e3c4ddf7",
+    "monocode-package": "05f4e78345752fad6eff186453f4c8b58967ab0eac6ac67a99cd1cf34791fd4b"
+  },
+  "complete": true
+}

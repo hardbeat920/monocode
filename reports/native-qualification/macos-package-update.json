@@ -1,0 +1,21 @@
+{
+  "package": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/macos-cutover-package-20261003T161631Z/packages/MonoCode_0.6.0_aarch64-apple-darwin.app.tar.gz",
+  "package_sha256": "e0c65d0181d806b3cf0a33a2781b4feda200bf6ebd6881c9fbc9b0b5d86a2837",
+  "installed_app_sha256": "e93cbac648bbe6b6abfadba4314a220b7e5760f57233d5c766df64d3b3c42335",
+  "version": "0.6.0",
+  "tampered_package_rejected": true,
+  "original_bundle_preserved_on_rejection": true,
+  "signed_package_installed": true,
+  "installed_cli_help_and_views": true,
+  "bundled_host_version": true,
+  "installed_bundle_signature_verified": true,
+  "source_package_unchanged": true,
+  "http_requests": [
+    "/latest.json",
+    "/package",
+    "/latest.json",
+    "/package"
+  ],
+  "keys": "disposable fixture keys, removed with owned scratch directory",
+  "scope": "owned temporary bundle only, no GUI launch or relaunch"
+}

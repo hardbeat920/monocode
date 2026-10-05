@@ -1,0 +1,13 @@
+{
+  "created_at": "2026-10-03T15:05:16.508368+00:00",
+  "method": "Apple sqlite3 -readonly online .backup, then DELETE journal mode applied only to owned backup for read-only portability",
+  "copy_size_bytes": 63614976,
+  "copy_sha256": "37aa3b11321068debeb380b75c793792cb816fab9f9baa76ef2fb994dbf192a7",
+  "quick_check": "ok",
+  "sessions": 126,
+  "workspace_snapshots": 1,
+  "original_profile_imported": false,
+  "user_data_uploaded": false,
+  "schema_version": 0,
+  "schema_version_kind": "SQLite PRAGMA user_version; not MonoCode migration version"
+}

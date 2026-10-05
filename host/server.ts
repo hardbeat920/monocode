@@ -49,13 +49,18 @@ import { discoverOpenCodeModels } from "../src/integrations/harness/providers/op
 import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
 import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
 import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
+import { discoverDroidModels } from "../src/integrations/harness/providers/droid/droidCatalog";
 import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
 import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
+import { MAX_WAIT_MS } from "./changes";
+import { isLoopback } from "./listener";
+import { version as hostVersion } from "../package.json";
 import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
+  resolveDroidBinary,
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
@@ -77,11 +82,17 @@ const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
   omp: () => resolveOmpBinary(),
   fx: () => resolveFxBinary(),
   hermes: () => resolveHermesBinary(),
+  droid: () => resolveDroidBinary(),
   antigravity: () => resolveAntigravityBinary(),
 };
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
 const MAX_BODY = 16 * 1024 * 1024;
+// Requests without a device credential can only redeem a pairing code.
+const MAX_PAIRING_BODY = 4 * 1024;
+// Pairing codes carry 256 bits, so this limit is not what protects them. It
+// keeps an unauthenticated caller from spending the host's time and disk.
+const MAX_PAIRING_FAILURES_PER_MINUTE = 30;
 const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel[]>> = {
   codex: discoverCodexModels,
   claude: discoverClaudeModels,
@@ -92,17 +103,19 @@ const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel
   omp: discoverOmpModels,
   fx: discoverFxModels,
   hermes: discoverHermesModels,
+  droid: discoverDroidModels,
   antigravity: discoverAntigravityModels,
 };
 
 async function body(
   request: IncomingMessage,
+  limit = MAX_BODY,
 ): Promise<Record<string, unknown>> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new Error("Request is too large");
+    if (size > limit) throw new Error("Request is too large");
     chunks.push(chunk);
   }
   const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -127,11 +140,64 @@ async function providerBinaries(providers: RemoteProvider[]): Promise<string> {
   return binaries.join("\n");
 }
 
+export type HostServerOptions = {
+  /** Network addresses advertised to paired desktops. */
+  endpoints?: () => string[];
+};
+
 export function createHostServer(
   engine: HostEngine,
   providers: RemoteProvider[],
   lifecycle?: (request: IncomingMessage, response: ServerResponse) => void,
+  options: HostServerOptions = {},
 ) {
+  let pairingFailures: number[] = [];
+  const pair = async (request: IncomingMessage, response: ServerResponse) => {
+    const now = Date.now();
+    pairingFailures = pairingFailures.filter((time) => now - time < 60_000);
+    if (pairingFailures.length >= MAX_PAIRING_FAILURES_PER_MINUTE) {
+      response.writeHead(429).end(
+        JSON.stringify({ error: "Too many pairing attempts. Wait a minute and try again." }),
+      );
+      return;
+    }
+    const input = await body(request, MAX_PAIRING_BODY);
+    const params =
+      input.params && typeof input.params === "object"
+        ? (input.params as Record<string, unknown>)
+        : {};
+    const name =
+      typeof params.name === "string" && params.name.trim()
+        ? params.name.trim().slice(0, 100)
+        : "Desktop";
+    const device =
+      input.version === HOST_PROTOCOL_VERSION &&
+      input.method === "pair.exchange" &&
+      typeof params.code === "string" &&
+      /^[\w-]{43}$/.test(params.code)
+        ? engine.store.redeemPairing(params.code, name)
+        : undefined;
+    if (!device) {
+      pairingFailures.push(now);
+      response.writeHead(401).end(
+        JSON.stringify({
+          error:
+            "This pairing link is invalid, expired, or already used. Run connect on the machine again for a new link.",
+        }),
+      );
+      return;
+    }
+    response.end(
+      JSON.stringify({
+        result: {
+          deviceId: device.id,
+          token: device.token,
+          environmentId: engine.store.environmentId,
+          name: hostname(),
+        },
+      }),
+    );
+  };
   const catalogs = new Map<
     string,
     { binaries: string; probed: number; catalog: Promise<HostModelCatalog> }
@@ -139,7 +205,7 @@ export function createHostServer(
   const transfers = new SyncTransfers();
   const workspace = new WorkspaceCommands(
     engine.store,
-    (projectId, action) => engine.withIdleProject(projectId, action),
+    (projectId, action, force) => engine.withIdleProject(projectId, action, force),
   );
   const models = async (projectId?: unknown) => {
     const cwd =
@@ -191,7 +257,8 @@ export function createHostServer(
     { requestTimeout: 20_000, headersTimeout: 10_000, maxHeaderSize: 8192 },
     async (request, response) => {
       if (request.url === "/lifecycle" && lifecycle) {
-        lifecycle(request, response);
+        if (isLoopback(request.socket.remoteAddress)) lifecycle(request, response);
+        else response.writeHead(403).end();
         return;
       }
       response.setHeader("Content-Type", "application/json");
@@ -212,7 +279,11 @@ export function createHostServer(
             );
           return;
         }
-        const token = request.headers.authorization?.match(
+        if (!request.headers.authorization) {
+          await pair(request, response);
+          return;
+        }
+        const token = request.headers.authorization.match(
           /^Bearer ([A-Za-z0-9_-]{43})$/,
         )?.[1];
         if (!token || !engine.store.authenticated(token)) {
@@ -261,7 +332,10 @@ export function createHostServer(
                   ? params.supportedProviders.includes(provider)
                   : provider === "codex" || provider === "claude"
               ),
+              hostVersion,
+              endpoints: options.endpoints?.() ?? [],
               capabilities: [
+                "changes.wait",
                 "sessions",
                 "projects.browse",
                 "models.list",
@@ -394,6 +468,20 @@ export function createHostServer(
             result = value.revision === params.revision ? null : value;
             break;
           }
+          case "changes.wait": {
+            // A desktop that leaves stops waiting at once.
+            const left = new AbortController();
+            response.once("close", () => left.abort());
+            result = await engine.store.changes.wait(
+              params.boot,
+              params.after,
+              Number.isSafeInteger(params.timeoutMs)
+                ? Number(params.timeoutMs)
+                : MAX_WAIT_MS,
+              left.signal,
+            );
+            break;
+          }
           case "events.read": {
             if (!Number.isSafeInteger(params.after) || Number(params.after) < 0)
               throw new Error("Invalid event cursor");
@@ -455,8 +543,10 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
-            result = await engine.withIdleProject(project.id, () =>
-              switchHostBranch(cwd, params.branch, params.remote),
+            result = await engine.withIdleProject(
+              project.id,
+              () => switchHostBranch(cwd, params.branch, params.remote),
+              params.force === true,
             );
             break;
           }
@@ -465,8 +555,10 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
-            result = await engine.withIdleProject(project.id, () =>
-              createHostBranch(cwd, params.branch),
+            result = await engine.withIdleProject(
+              project.id,
+              () => createHostBranch(cwd, params.branch),
+              params.force === true,
             );
             break;
           }

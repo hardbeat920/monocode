@@ -1,0 +1,19 @@
+{
+  "recorded_at": "2026-10-03T16:45:31Z",
+  "method": "cua.getState",
+  "apps": [],
+  "browsers": [],
+  "errors": [
+    "Native apps: Error: Sky Computer Use native pipe startup failed"
+  ],
+  "latest_retry": {
+    "recorded_at": "2026-10-03T20:06:12Z",
+    "method": "cua.rewriteDocumentation followed by cua.getState",
+    "apps": [],
+    "browsers": [],
+    "errors": [
+      "Native apps: Error: Sky Computer Use native pipe startup failed"
+    ]
+  },
+  "scope": "Inventory only. No app input or permissions changed."
+}

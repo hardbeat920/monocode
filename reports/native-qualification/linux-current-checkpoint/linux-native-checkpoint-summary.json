@@ -1,0 +1,26 @@
+{
+  "linux-native-workspace-tests-node.log": {
+    "targets": 33,
+    "passed": 5378,
+    "failed": 0,
+    "ignored": 44
+  },
+  "linux-native-files-tests.log": {
+    "targets": 1,
+    "passed": 94,
+    "failed": 0,
+    "ignored": 0
+  },
+  "linux-native-core-final.log": {
+    "targets": 3,
+    "passed": 414,
+    "failed": 0,
+    "ignored": 1
+  },
+  "linux-native-recovery-final.log": {
+    "targets": 1,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  }
+}

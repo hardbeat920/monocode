@@ -1,0 +1,112 @@
+name: Native CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', '.cargo/**', 'crates/**', 'apps/**', 'vendor/**', 'packaging/**', 'scripts/*native*', 'scripts/test-remote-ssh.py', '.github/workflows/native-*.yml']
+  push:
+    branches: [gpui-native]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Node for provider protocol test fixtures
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/install-native-linux-deps.sh
+      - name: Install AVIF decoder assembly tools
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            choco install nasm --no-progress -y
+            echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+          elif [[ "$(uname -m)" == 'x86_64' ]]; then
+            brew install nasm
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --lib --bins --all-features --locked
+      - run: cargo test -p monocode-host -p monocode-remote -p monocode-package --tests --locked
+      - run: cargo test -p monocode-core --tests --locked
+      - run: cargo test -p monocode-app --test ssh_askpass --all-features --locked
+      - name: Test native video
+        if: runner.os != 'Windows'
+        run: cargo test -p monocode-platform --test inline_video --locked
+      - name: Test Windows video in an interactive session
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ((Get-Process -Id $PID).SessionId -eq 0) {
+            $reason = 'Windows native video was not tested because this job runs in Session 0. Run cargo test -p monocode-platform --test inline_video --locked from an interactive desktop before release.'
+            Write-Output "::notice::$reason"
+            $reason >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          cargo test -p monocode-platform --test inline_video --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: cargo build -p monocode-app -p monocode-host --bins --locked
+      - run: cargo run -p monocode-host --bin monocode-host -- --version
+
+  portable-host:
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+      CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/install-native-linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p monocode-host --bin monocode-host --release --target ${{ matrix.target }} --locked
+      - run: cargo run -p monocode-package --locked -- bundle --target ${{ matrix.target }} --formats host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-host-${{ matrix.target }}
+          path: build/native/monocode-host_*.tar.gz
+          if-no-files-found: error

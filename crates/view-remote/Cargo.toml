@@ -1,0 +1,35 @@
+[package]
+name = "monocode-view-remote"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "MonoCode Connect views: remote sessions, connections settings, remote projects"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+# Fields style gpui-base's unframed inputs themselves (InputEditorStyle).
+gpui-base.workspace = true
+monocode-core.workspace = true
+monocode-ui.workspace = true
+monocode-remote.workspace = true
+# remote_path and parse_remote_path for files a host session opens.
+monocode-layout.workspace = true
+# A remote session pane reuses the session transcript and composer.
+monocode-view-transcript.workspace = true
+monocode-view-composer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# `test-support` turns on `Window::render_to_image` for the gallery's
+# screenshots and the headless test windows.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+futures.workspace = true
+
+[[example]]
+name = "remote_gallery"
+path = "examples/remote_gallery.rs"

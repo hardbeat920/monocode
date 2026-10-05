@@ -1,0 +1,10 @@
+{
+  "provider": "claude",
+  "test": "providers::claude::live_tests::live_turn_replies_ok_in_a_temp_directory",
+  "binary_sha256": "75ee8a2407c58fd89e7e797170f73d8d875141b83f247b01bf48b6c9c57af2f0",
+  "started_at": "2026-10-03T14:55:11.452338+00:00",
+  "outer_timeout_seconds": 240,
+  "exit": 101,
+  "elapsed_seconds": 1.351,
+  "log": "/private/tmp/mc/native-qa/live-harness/claude.log"
+}

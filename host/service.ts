@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
+import { lifecycle } from "./control";
 import {
   runPowerShell,
   windowsTaskScript,
@@ -33,13 +34,9 @@ export async function connectionInfo(
   ) {
     throw new Error("Invalid host state");
   }
-  const response = await fetch(`http://127.0.0.1:${state.port}/lifecycle`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${state.secret}` },
-    body: JSON.stringify({ action: "status" }),
-    signal: AbortSignal.timeout(2000),
+  await lifecycle(state, "status").catch(() => {
+    throw new Error("Host is not ready");
   });
-  if (!response.ok) throw new Error("Host is not ready");
   return { port: state.port, pid: state.pid };
 }
 
@@ -140,10 +137,19 @@ export async function uninstallService(
       exec(command, args, { env, timeout: 30_000, maxBuffer: 128 * 1024 }));
   const ignore = () => undefined;
   if (platform === "darwin") {
-    await run("launchctl", [
-      "bootout",
-      `gui/${process.getuid!()}/${LABEL}`,
-    ]).catch(ignore);
+    const service = `gui/${process.getuid!()}/${LABEL}`;
+    await run("launchctl", ["bootout", service]).catch(ignore);
+    // `bootout` returns while launchd is still stopping the host, and a
+    // reinstall in that window finds the old job and never starts a new one.
+    // Wait until it is gone; launchd kills a job after 20 seconds.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const listed = await run("launchctl", ["print", service]).then(
+        () => true,
+        () => false,
+      );
+      if (!listed) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
     await rm(join(home, "Library/LaunchAgents", `${LABEL}.plist`), {
       force: true,
     });
@@ -218,7 +224,17 @@ export async function installService(
       await run("launchctl", ["kickstart", `${domain}/${LABEL}`]);
     } else {
       await writeFile(file, launchAgent(options, path), { mode: 0o600 });
-      await run("launchctl", ["bootstrap", domain, file]);
+      // Right after `bootout`, as when connect replaces an older host,
+      // launchd can refuse the same label until it finishes removing it.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await run("launchctl", ["bootstrap", domain, file]);
+          break;
+        } catch (error) {
+          if (attempt >= 10) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
     }
   } else if (process.platform === "linux") {
     const user = userInfo();
@@ -259,7 +275,12 @@ export async function installService(
   } else {
     throw new Error("MonoCode Host supports Windows, Linux and macOS");
   }
-  for (let attempt = 0; attempt < 50; attempt++) {
+  // launchd waits up to its 10-second ThrottleInterval before starting a job
+  // whose previous instance just exited, as when connect replaces a host.
+  // One deadline bounds the wait, since each status check can itself take
+  // 5 seconds to time out.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     try {
       return await connectionInfo(options.directory);
     } catch {

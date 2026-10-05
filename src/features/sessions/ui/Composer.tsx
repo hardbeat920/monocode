@@ -130,7 +130,19 @@ import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
-import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
+import {
+  consumeComposerInsert,
+  type ComposerInsertRequest,
+} from "../model/quoteDraft";
+import {
+  chatContextKey,
+  chatContextSummary,
+  composeChatContext,
+  splitChatContext,
+  type ChatContextItem,
+} from "../model/chatContext";
+import { ChatContextChip } from "./ChatContextChip";
+import type { OpenFileFn } from "../../search/model/search";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import {
@@ -236,7 +248,8 @@ type Props = {
   remoteFeatures?: { attachments: boolean; plan: boolean; draft: boolean };
   context?: ContextUsage;
   compactSupported?: boolean;
-  quoteRequest?: QuoteRequest;
+  insertRequest?: ComposerInsertRequest;
+  /** Draft text. A trailing context block becomes chips. */
   initialDraft?: string;
   draftResetToken?: number;
   inboxCard?: InboxComposerCard;
@@ -267,7 +280,7 @@ type Props = {
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange?: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
-  onQuoteRequestConsumed?: (id: number) => void;
+  onInsertRequestConsumed?: (id: number) => void;
   onInboxCardDismiss?: () => void;
   onNoteCardDismiss?: () => void;
   onHandoffCardDismiss?: () => void;
@@ -296,7 +309,8 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: OpenFileFn;
+  /** Receives the draft with its context chips appended as a context block. */
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
   onEditingLastTurnChange?: (editing: boolean) => void;
@@ -367,7 +381,7 @@ function MessageQueue({
 
   const startEdit = (message: QueuedMessage) => {
     setEditingId(message.id);
-    setEditDraft(message.text);
+    setEditDraft(splitChatContext(message.text).text);
     onEditingChange?.(message.id);
   };
   const cancelEdit = () => {
@@ -375,9 +389,12 @@ function MessageQueue({
     setEditDraft("");
     onEditingChange?.();
   };
+  // The editor only holds the typed text; the message keeps its context chips.
   const saveEdit = (message: QueuedMessage) => {
-    if (!editDraft.trim() && message.attachments.length === 0) return;
-    onEdit?.(message.id, editDraft);
+    const { items } = splitChatContext(message.text);
+    if (!editDraft.trim() && message.attachments.length === 0 && !items.length)
+      return;
+    onEdit?.(message.id, composeChatContext(editDraft, items));
     setEditingId(undefined);
     setEditDraft("");
   };
@@ -406,8 +423,10 @@ function MessageQueue({
         ) : null}
         {messages.map((message, index) => {
           const editing = editingId === message.id;
+          const { text, items } = splitChatContext(message.text);
           const label =
-            message.text.trim() ||
+            text.trim() ||
+            chatContextSummary(items) ||
             `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
           return (
             <div
@@ -442,7 +461,9 @@ function MessageQueue({
                     title="Save queued message"
                     aria-label="Save queued message"
                     disabled={
-                      !editDraft.trim() && message.attachments.length === 0
+                      !editDraft.trim() &&
+                      message.attachments.length === 0 &&
+                      !items.length
                     }
                     onClick={() => saveEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
@@ -527,7 +548,7 @@ export function Composer({
   remoteFeatures,
   context,
   compactSupported = false,
-  quoteRequest,
+  insertRequest,
   initialDraft,
   draftResetToken,
   inboxCard,
@@ -556,7 +577,7 @@ export function Composer({
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
-  onQuoteRequestConsumed,
+  onInsertRequestConsumed,
   onInboxCardDismiss,
   onBtwCommand,
   onNoteCardDismiss,
@@ -590,7 +611,7 @@ export function Composer({
   const attachmentsRef = useRef<Attachment[]>([]);
   const borrowedAttachmentIdsRef = useRef(new Set<string>());
   const attachmentLifecycleRef = useRef(0);
-  const consumedQuoteId = useRef<number | null>(null);
+  const consumedInsertId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
   const draftResetTokenRef = useRef(draftResetToken);
   /** Bumped when the draft is cleared, so a late paste cannot land on the next one. */
@@ -601,7 +622,17 @@ export function Composer({
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
-  const [draft, setDraft] = useState(initialDraft ?? "");
+  const initialMessage = useMemo(
+    () => (initialDraft == null ? undefined : splitChatContext(initialDraft)),
+    [initialDraft],
+  );
+  const initialText = initialMessage?.text;
+  const [draft, setDraft] = useState(initialText ?? "");
+  const [contextItems, setContextItems] = useState<ChatContextItem[]>(
+    () => initialMessage?.items ?? [],
+  );
+  const contextItemsRef = useRef(contextItems);
+  contextItemsRef.current = contextItems;
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,
@@ -696,6 +727,7 @@ export function Composer({
   const navigationEmpty =
     draft.length === 0 &&
     attachments.length === 0 &&
+    contextItems.length === 0 &&
     !inboxCard &&
     !noteCard &&
     !handoffCard;
@@ -789,17 +821,19 @@ export function Composer({
     return [...noteHits, ...fileHits.filter((file) => !seen.has(file.path))];
   }, [executionCwd, files, mention?.query, mentionOpen, notes, notesEnabled]);
 
+  const hasContext = contextItems.length > 0;
   const syncHasValue = useCallback(
     (text: string, files: Attachment[]) => {
       setHasValue(
         text.trim().length > 0 ||
           files.length > 0 ||
+          hasContext ||
           !!inboxCard ||
           !!noteCard ||
           !!handoffCard,
       );
     },
-    [inboxCard, noteCard, handoffCard],
+    [hasContext, inboxCard, noteCard, handoffCard],
   );
 
   // A leading mode command in the text shows the same pill as picking the mode.
@@ -1000,15 +1034,15 @@ export function Composer({
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || !initialDraft) return;
-    if (el.value !== initialDraft) el.value = initialDraft;
+    if (!el || !initialText) return;
+    if (el.value !== initialText) el.value = initialText;
     if (!positionedInitialDraft.current) {
       const end = el.value.length;
       el.setSelectionRange(end, end);
       positionedInitialDraft.current = true;
     }
     resizeComposer(el);
-  }, [initialDraft]);
+  }, [initialText]);
 
   // Drafts changed while hidden could not be measured. Inbox panes are portaled
   // into place by a parent effect that runs after this one, so the first pass
@@ -1025,8 +1059,8 @@ export function Composer({
   }, [enabled]);
 
   useEffect(() => {
-    onDraftChange?.(draft);
-  }, [draft, onDraftChange]);
+    onDraftChange?.(composeChatContext(draft, contextItems));
+  }, [contextItems, draft, onDraftChange]);
   useEffect(() => {
     if (
       draftResetToken == null ||
@@ -1042,6 +1076,8 @@ export function Composer({
       ref.current.style.height = "auto";
     }
     setDraft("");
+    contextItemsRef.current = [];
+    setContextItems([]);
     onDraftChange?.("");
     setDraftSelected(false);
     setPlanSelected(false);
@@ -1094,28 +1130,45 @@ export function Composer({
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || !quoteRequest) return;
+    if (!el || !insertRequest) return;
 
-    const result = consumeQuoteRequest(
+    const fresh = insertRequest.id !== consumedInsertId.current;
+    const result = consumeComposerInsert(
       el.value,
-      consumedQuoteId.current,
-      quoteRequest,
+      contextItemsRef.current,
+      consumedInsertId.current,
+      insertRequest,
     );
-    consumedQuoteId.current = result.consumedId;
+    consumedInsertId.current = result.consumedId;
     if (result.changed) {
       el.value = result.draft;
       resizeComposer(el);
       setDraft(result.draft);
+      contextItemsRef.current = result.context;
+      setContextItems(result.context);
       syncHasValue(result.draft, attachmentsRef.current);
       setSlash(null);
       setMention(null);
       setCreatingSkill(false);
       setCreateError(null);
       el.setSelectionRange(result.draft.length, result.draft.length);
-      el.focus();
     }
-    onQuoteRequestConsumed?.(quoteRequest.id);
-  }, [onQuoteRequestConsumed, quoteRequest, syncHasValue]);
+    // Adding the same chip twice changes nothing, but the user still expects
+    // to land in the composer.
+    if (fresh) el.focus();
+    onInsertRequestConsumed?.(insertRequest.id);
+  }, [onInsertRequestConsumed, insertRequest, syncHasValue]);
+
+  const removeContextItem = useCallback((item: ChatContextItem) => {
+    const key = chatContextKey(item);
+    const next = contextItemsRef.current.filter(
+      (entry) => chatContextKey(entry) !== key,
+    );
+    contextItemsRef.current = next;
+    draftRevisionRef.current += 1;
+    setContextItems(next);
+    ref.current?.focus();
+  }, []);
 
   // `/btw ` opens the side conversation as soon as it is typed, carrying any
   // text after it over as the unsent side question.
@@ -1403,10 +1456,13 @@ export function Composer({
       nextAttachments: Attachment[],
       borrowedIds: ReadonlySet<string> = borrowedAttachmentIdsRef.current,
     ) => {
-      setDraft(text);
+      const message = splitChatContext(text);
+      setDraft(message.text);
+      contextItemsRef.current = message.items;
+      setContextItems(message.items);
       onDraftChange?.(text);
       if (ref.current) {
-        ref.current.value = text;
+        ref.current.value = message.text;
         ref.current.style.height = "auto";
         ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
       }
@@ -1428,7 +1484,7 @@ export function Composer({
       );
       attachmentsRef.current = nextAttachments;
       setAttachments(nextAttachments);
-      syncHasValue(text, nextAttachments);
+      syncHasValue(message.text, nextAttachments);
       ref.current?.focus();
     },
     [onDraftChange, syncHasValue],
@@ -1442,6 +1498,8 @@ export function Composer({
       ref.current.style.height = "auto";
     }
     setDraft("");
+    contextItemsRef.current = [];
+    setContextItems([]);
     onDraftChange?.("");
     const previous = attachmentsRef.current;
     for (const file of previous) {
@@ -1544,15 +1602,19 @@ export function Composer({
       openMcpPicker();
       return;
     }
+    const context = contextItemsRef.current;
     const draftCommand = canSaveDraft
       ? consumeDraftCommand(value)
       : { text: value, matched: false };
     if ((draftSelected || draftCommand.matched) && onSaveDraft) {
       const files = attachmentsRef.current;
       const text = draftCommand.text;
-      if (!text.trim() && files.length === 0) return;
+      if (!text.trim() && files.length === 0 && context.length === 0) return;
       const accepted = onSaveDraft(
-        mcpContextText(taggedMcpServers(text, selectedMcp), text),
+        mcpContextText(
+          taggedMcpServers(text, selectedMcp),
+          composeChatContext(text, context),
+        ),
         files,
       );
       if (accepted === false || !ref.current) return;
@@ -1560,6 +1622,8 @@ export function Composer({
       ref.current.value = "";
       ref.current.style.height = "auto";
       setDraft("");
+      contextItemsRef.current = [];
+      setContextItems([]);
       onDraftChange?.("");
       setAttachments([]);
       setDraftSelected(false);
@@ -1630,9 +1694,12 @@ export function Composer({
       !remote && !hideTopBar && !command.planning
         ? consumeOrchestratorCommand(command.text)
         : { text: command.text, matched: false };
-    const text = isNativeCommandPrompt(orchestratorCommand.text, harness)
-      ? orchestratorCommand.text
-      : composeInboxMessage(inboxCard, orchestratorCommand.text);
+    const text = composeChatContext(
+      isNativeCommandPrompt(orchestratorCommand.text, harness)
+        ? orchestratorCommand.text
+        : composeInboxMessage(inboxCard, orchestratorCommand.text),
+      context,
+    );
     const submittedText =
       operatorSelected && !consumeOperatorCommand(text).matched
         ? `/operator ${text}`
@@ -1689,6 +1756,8 @@ export function Composer({
       ref.current.style.height = "auto";
     }
     setDraft("");
+    contextItemsRef.current = [];
+    setContextItems([]);
     onDraftChange?.("");
     borrowedAttachmentIdsRef.current.clear();
     attachmentsRef.current = [];
@@ -2249,8 +2318,20 @@ export function Composer({
             </div>
           )}
 
-          {attachments.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+          {contextItems.length > 0 || attachments.length > 0 ? (
+            <div
+              data-composer-context
+              className="flex flex-wrap items-center gap-1.5 px-3 pt-2"
+            >
+              {contextItems.map((item) => (
+                <ChatContextChip
+                  key={chatContextKey(item)}
+                  item={item}
+                  animate
+                  onOpenFile={onOpenFile}
+                  onRemove={() => removeContextItem(item)}
+                />
+              ))}
               {attachments.map((file) => (
                 <AttachmentChip
                   key={file.id}
@@ -2305,13 +2386,13 @@ export function Composer({
               style={{ textIndent: modeIndent }}
               rows={1}
               spellCheck={false}
-              defaultValue={initialDraft}
+              defaultValue={initialText}
               placeholder={
                 worktreeRemoved
                   ? "Select a branch or worktree to continue…"
                   : inboxCard
                     ? "Add a note, or send to start…"
-                    : noteCard
+                    : noteCard || contextItems.length > 0
                       ? "Add a message, or send…"
                       : handoffCard
                         ? "Add context, or send to continue…"

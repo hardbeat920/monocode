@@ -1,0 +1,46 @@
+[package]
+name = "monocode-harness"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Agent provider adapters ported from src/integrations/harness"
+
+[features]
+# One feature per provider so an agent can build its provider alone with
+# --no-default-features --features <name>. The framework in src/core is always on.
+default = ["claude", "codex", "cursor", "grok", "opencode", "pi", "fx", "hermes", "droid", "antigravity"]
+claude = []
+codex = []
+cursor = []
+grok = []
+opencode = []
+pi = []
+fx = []
+hermes = ["grok"]
+droid = ["grok"]
+antigravity = []
+
+[dependencies]
+monocode-core.workspace = true
+monocode-locale.workspace = true
+monocode-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+async-channel.workspace = true
+smol.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+base64.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+log.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+url.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+monocode-locale = { workspace = true, features = ["test-support"] }

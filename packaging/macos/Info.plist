@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>MonoCode</string>
+<key>CFBundleDisplayName</key><string>MonoCode</string>
+<key>CFBundleIdentifier</key><string>com.monocode.desktop</string>
+<key>CFBundleExecutable</key><string>monocode-app</string>
+<key>CFBundleShortVersionString</key><string>@@VERSION@@</string>
+<key>CFBundleVersion</key><string>@@VERSION@@</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>icon.icns</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
+<key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSDesktopFolderUsageDescription</key><string>MonoCode opens project folders you choose, including Desktop.</string>
+<key>NSDocumentsFolderUsageDescription</key><string>MonoCode opens project folders you choose, including Documents.</string>
+<key>NSDownloadsFolderUsageDescription</key><string>MonoCode opens project folders you choose, including Downloads.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>MonoCode pairing</string><key>CFBundleURLSchemes</key><array><string>monocode</string></array></dict></array>
+</dict></plist>

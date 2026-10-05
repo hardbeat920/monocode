@@ -53,3 +53,14 @@ lerna-debug.log*
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+AGENTS.md
+CLAUDE.md
+
+# Agent working notes during the GPUI port
+crates/**/PROGRESS.md
+crates/**/DONE
+crates/PROGRESS-backend.md
+crates/DONE-backend
+apps/**/PROGRESS.md
+apps/**/DONE

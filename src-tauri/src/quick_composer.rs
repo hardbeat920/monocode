@@ -379,7 +379,7 @@ pub async fn quick_composer_capture(
         state.capturing.store(false, Ordering::SeqCst);
         return Err(err.to_string());
     }
-    let result = tauri::async_runtime::spawn_blocking(capture_screenshot)
+    let result = tauri::async_runtime::spawn_blocking(screenshots::capture_screenshot)
         .await
         .map_err(|err| err.to_string())
         .and_then(|result| result);
@@ -396,27 +396,6 @@ pub async fn quick_composer_capture(
         return Err(err.to_string());
     }
     result
-}
-
-fn capture_screenshot() -> Result<Option<String>, String> {
-    let path = screenshots::new_path()?;
-    let dir = path.parent().ok_or("Missing capture directory")?;
-    // Let WindowServer remove the panel before the system capture overlay appears.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let result = std::process::Command::new("/usr/sbin/screencapture")
-        .args(["-i", "-x", "-t", "png"])
-        .arg(&path)
-        .output();
-    if path.is_file() {
-        return Ok(Some(path.to_string_lossy().into_owned()));
-    }
-    let _ = std::fs::remove_dir(dir);
-    let output = result.map_err(|err| format!("Could not take a screenshot: {err}"))?;
-    let error = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() && !error.trim().is_empty() {
-        return Err(format!("Could not take a screenshot: {}", error.trim()));
-    }
-    Ok(None)
 }
 
 /// Reading claims a launch without removing it. Failed parsing or handoff can

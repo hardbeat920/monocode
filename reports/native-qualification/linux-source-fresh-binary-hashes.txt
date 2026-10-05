@@ -1,0 +1,3 @@
+d7059558b13a3bfd62bc96577185158d8850133f5b7d99251dde98c951189a2f  target/debug/monocode-app
+69ff1a8104526487a2a0c0fcb17c6fbecddcc885d94a93a6c563d4a00fd523cc  target/debug/monocode-host
+48d3695a4695c05cb1afe57edb34957345336f01b78368f8bf8dadab3e4ca3af  target/debug/monocode-package

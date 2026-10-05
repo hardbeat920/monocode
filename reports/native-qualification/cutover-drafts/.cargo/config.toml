@@ -1,0 +1,6 @@
+# Native build artifacts use the repository's target directory.
+[build]
+target-dir = "target"
+
+# Keep incremental caches bounded across the native crates.
+incremental = false

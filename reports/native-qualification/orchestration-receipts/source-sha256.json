@@ -1,0 +1,6 @@
+{
+  "crates/engine/Cargo.toml": "fab92d0a20cc9be415c53c04ae322ce88b98d0a50723a1de885f20bf87b8b413",
+  "crates/engine/src/orchestration/NEEDS.md": "7fd12a206de06f1a81a10a909925c328e4566f7e6f2343b0dde18aedd4addeea",
+  "crates/engine/src/orchestration/orchestrator.rs": "448ac0c9bdd5fbb4edb0cd0db7ab0a9bed8863a679624532b750eb5cf83e6110",
+  "crates/engine/src/orchestration/orchestrator_tests.rs": "74ea999b47aac1aaf216102c439e548dbc7bb6bd6cf0a26220416d176a5b4e32"
+}

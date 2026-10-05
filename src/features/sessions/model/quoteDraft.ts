@@ -1,41 +1,34 @@
+import {
+  addChatContext,
+  composeChatContext,
+  type ChatContextItem,
+} from "./chatContext";
+
 export const ADD_TO_CHAT_EVENT = "monocode:add-to-chat";
 
-export type AddToChatMode = "quote" | "plain";
+/** Something to put in a composer: text for the draft, or a context chip. */
+export type ComposerInsert =
+  | { kind: "text"; text: string }
+  | { kind: "context"; item: ChatContextItem };
 
-export type AddToChatRequest = {
-  text: string;
-  mode: AddToChatMode;
-};
+export type ComposerInsertRequest = ComposerInsert & { id: number };
 
-export type QuoteRequest = {
-  id: number;
-  text: string;
-  mode?: AddToChatMode;
-};
-
-export function requestAddToChat(text: string, mode: AddToChatMode = "quote") {
+/** Sends a context chip to the focused session, or to a new one. */
+export function requestAddToChat(item: ChatContextItem) {
   if (typeof window === "undefined") return;
-  const value = text.replace(/\r\n?/g, "\n").trim();
-  if (!value) return;
   window.dispatchEvent(
-    new CustomEvent<AddToChatRequest>(ADD_TO_CHAT_EVENT, {
-      detail: { text: value, mode },
-    }),
+    new CustomEvent<ChatContextItem>(ADD_TO_CHAT_EVENT, { detail: item }),
   );
 }
 
-/** Initial composer text for an add-to-chat request that opens a new session. */
-export function composerSeedForAddToChat(
-  text: string,
-  mode: AddToChatMode = "quote",
-): string {
-  return mode === "plain"
-    ? appendComposerInsert("", text)
-    : appendSelectionQuote("", text);
+/** Initial composer draft for an add-to-chat request that opens a new session. */
+export function composerSeedForAddToChat(item: ChatContextItem): string {
+  return composeChatContext("", [item]);
 }
 
-export type QuoteConsumption = {
+export type ComposerInsertConsumption = {
   draft: string;
+  context: ChatContextItem[];
   consumedId: number | null;
   changed: boolean;
 };
@@ -49,47 +42,45 @@ export function isMarkdownBlockquotePosition(
   return /^ {0,3}>/.test(text.slice(lineStart, index));
 }
 
-export function appendSelectionQuote(draft: string, text: string): string {
-  const selected = text.replace(/\r\n?/g, "\n").trim();
-  if (!selected) return draft;
-
-  const quote = selected
-    .split("\n")
-    .map((line) => (line ? `> ${line}` : ">"))
-    .join("\n");
-  return joinComposerInsert(draft, quote);
-}
-
 export function appendComposerInsert(draft: string, text: string): string {
   const selected = text.replace(/\r\n?/g, "\n").trim();
   if (!selected) return draft;
   return joinComposerInsert(draft, selected);
 }
 
-export function consumeQuoteRequest(
+export function consumeComposerInsert(
   draft: string,
+  context: ChatContextItem[],
   consumedId: number | null,
-  request: QuoteRequest | undefined,
-): QuoteConsumption {
+  request: ComposerInsertRequest | undefined,
+): ComposerInsertConsumption {
   if (!request || request.id === consumedId) {
-    return { draft, consumedId, changed: false };
+    return { draft, context, consumedId, changed: false };
   }
 
-  const next =
-    request.mode === "plain"
-      ? appendComposerInsert(draft, request.text)
-      : appendSelectionQuote(draft, request.text);
+  if (request.kind === "context") {
+    const next = addChatContext(context, request.item);
+    return {
+      draft,
+      context: next,
+      consumedId: request.id,
+      changed: next.length !== context.length,
+    };
+  }
+
+  const next = appendComposerInsert(draft, request.text);
   return {
     draft: next,
+    context,
     consumedId: request.id,
     changed: next !== draft,
   };
 }
 
-export function acknowledgeQuoteRequest(
-  current: QuoteRequest | undefined,
+export function acknowledgeComposerInsert(
+  current: ComposerInsertRequest | undefined,
   handledId: number,
-): QuoteRequest | undefined {
+): ComposerInsertRequest | undefined {
   return current?.id === handledId ? undefined : current;
 }
 

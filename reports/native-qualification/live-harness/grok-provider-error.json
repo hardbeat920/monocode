@@ -1,0 +1,27 @@
+[
+  {
+    "ts": "2026-10-03T14:55:49.126Z",
+    "src": "shell",
+    "lvl": "error",
+    "msg": "shell.turn.inference_failed",
+    "ctx": {
+      "kind": "api",
+      "status_code": 402,
+      "is_retryable": false,
+      "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+    }
+  },
+  {
+    "ts": "2026-10-03T14:55:49.126Z",
+    "src": "shell",
+    "lvl": "warn",
+    "msg": "turn.terminal_failure",
+    "ctx": {
+      "status_code": 402,
+      "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",
+      "error_type": "api",
+      "reauthable": false,
+      "auth_mode": "Oidc"
+    }
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "output": "/Users/gianvillarini/Library/Caches/monocode-gpui-build/artifacts/final-macos-package-l41jg_7z/packages",
+  "version": "0.6.0",
+  "target": "aarch64-apple-darwin",
+  "signing": "ad hoc",
+  "notarization": "not performed",
+  "profile": "qualified development binaries, no optimized release claim",
+  "app_cli": "list-views passed",
+  "uuid": {
+    "monocode-app": "C8093A29-162F-3E53-956D-E1A03FB637B3",
+    "monocode-host": "EF14D3AC-10FE-368C-9589-FC842710F78D"
+  },
+  "input_sha256": {
+    "monocode-app": "762196d597c41eaafdc5ea9c960c8fefa1033fcc0c9677ca652081aca280deea",
+    "monocode-host": "ef66ca90842f04705254a2f2c2b6391e7bfe874634c71bbf644a4c21e3c4ddf7",
+    "monocode-package": "05f4e78345752fad6eff186453f4c8b58967ab0eac6ac67a99cd1cf34791fd4b"
+  },
+  "artifact_sha256": {
+    "MonoCode_0.6.0_aarch64-apple-darwin.app.tar.gz": "76339b33d7062437da4792198140caeb2d05530f36a9e0be7a89a640cf0e78eb",
+    "MonoCode_0.6.0_aarch64-apple-darwin.dmg": "fa8b7b20b03541f99c91f596ea125c05f5011c5f46d659d6d589085846e38cb5",
+    "monocode-host_0.6.0_aarch64-apple-darwin.tar.gz": "0cfa5937cb08554f48fa296e88f215c9ac0377a84078b8927b9ed641d82ead49",
+    "SHA256SUMS": "b569070deba36567d1a48597ffbe0ed0f15d1c13562439e393b0225ce69e37e6"
+  }
+}

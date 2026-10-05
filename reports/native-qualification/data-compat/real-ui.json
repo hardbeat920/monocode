@@ -1,0 +1,21 @@
+{
+  "profile": "/tmp/mc/native-qa/real-data-ui",
+  "source_copy_sha256": "37aa3b11321068debeb380b75c793792cb816fab9f9baa76ef2fb994dbf192a7",
+  "session_count": 126,
+  "original_profile_changed": false,
+  "settings_imported": false,
+  "scheduled_agents_enabled": false,
+  "workspace_snapshot_removed_from_owned_ui_copy": true,
+  "in_flight_markers_removed_from_owned_ui_copy": true,
+  "render_exit_code": 0,
+  "image_dimensions": [
+    2560,
+    1600
+  ],
+  "expected_visible_project_sessions": 6,
+  "visually_verified_sidebar_rows": 6,
+  "original_session_rows_changed_in_ui_copy": 0,
+  "session_count_after_render": 126,
+  "screenshot_private_local_path": "/tmp/mc/native-qa/shots/real-sessions.png",
+  "app_binary_sha256": "bb7b48c366b196ed85bb47d228e9931f8e817094030d204336567b599a7a1947"
+}

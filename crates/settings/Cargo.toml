@@ -1,0 +1,17 @@
+[package]
+name = "monocode-settings"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Settings key-value store that replaces localStorage, and the one-time WebKit import"
+
+[dependencies]
+monocode-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+log.workspace = true
+# Pure-Rust LevelDB (MIT) for reading WebView2's localStorage on Windows. The
+# database is opened in its in-memory environment, so the disk env is off.
+rusty-leveldb = { version = "4.0.1", default-features = false }

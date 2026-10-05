@@ -1,0 +1,111 @@
+{
+  "source_sha256": {
+    "Cargo.toml": "8323514c635ac67a1bf99b7f72034e822d8f147e5fb0c9724c9c243c71101643",
+    "Cargo.lock": "f4825bffcbad2f712d61fdf8344d2e9fda9b95503bae02e1afddb4b63377f909",
+    "crates/editor/Cargo.toml": "c786f3f7703569bb64cd9ffa96bca09ff75e31c27a4ff705b5fc272577ad3d9f",
+    "crates/editor/src/search.rs": "42d92ce0cc5dee8a3c65b2e70edf6297da62f4133e3772428daee147f6a0aa7b",
+    "crates/view-files/Cargo.toml": "a920f89ae435839c2234272c338777d2117b945220bdc2334d0d362347ddb3a3",
+    "crates/view-files/src/preview_search.rs": "6fd4de354f58cea2c6b5706ec7f66672ce700eb508c030b53f1b0f4a111610cd",
+    "crates/view-files/src/preview_search_tests.rs": "d8b19d810efeecdf1ae6e9823254a2dcc27faa7aa208b18a2a1a158a093cbed5"
+  },
+  "tests": [
+    {
+      "name": "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe",
+        "search::tests::javascript_regex_search_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe",
+        "search::tests::javascript_regex_replacement_keeps_lookbehind_and_capture_groups",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe",
+        "search::tests::javascript_regex_classes_keep_word_digit_and_whitespace_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_view_files-9556a94c752b547f.exe",
+        "preview_search::tests::javascript_preview_regex_accepts_lookaround_and_backreferences",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_view_files-9556a94c752b547f.exe",
+        "preview_search::tests::javascript_preview_regex_keeps_unicode_character_class_rules",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe",
+        "search::tests::codemirror_literal_search_normalizes_canonical_and_compatibility_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe",
+        "search::tests::codemirror_literal_replacement_skips_partial_normalized_characters",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "suites": [
+    {
+      "name": "editor",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "view-files",
+      "command": [
+        "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_view_files-9556a94c752b547f.exe"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "test_binary_sha256": {
+    "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_editor-97ab43dbb666f204.exe": "865ec5f80e9c284082f14f862db46843b77023e232508f53fac4d735e053e3ec",
+    "C:\\Users\\niost\\AppData\\Local\\monocode-gpui-build\\source\\target\\debug\\deps\\monocode_view_files-9556a94c752b547f.exe": "b9eb884bb26e25a9c5a933d8c5ad24f61d2fc57a43da543c97daa8aa891ee186"
+  },
+  "complete": true
+}

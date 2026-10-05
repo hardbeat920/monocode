@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+APPDIR=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+export APPDIR
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GST_PLUGIN_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SCANNER_1_0="$APPDIR/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+exec "$APPDIR/usr/bin/monocode" "$@"

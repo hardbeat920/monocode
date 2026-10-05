@@ -1,0 +1,17 @@
+[package]
+name = "monocode-terminal"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+monocode-platform = { path = "../platform" }
+monocode-process = { path = "../process" }
+serde.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+portable-pty = { version = "0.9", path = "../../vendor/portable-pty" }

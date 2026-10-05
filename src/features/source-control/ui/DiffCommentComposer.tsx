@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { MessageSquarePlus, X } from "../../../shared/ui/icons";
 import { Popover, type PopoverAnchor } from "../../../shared/ui/Popover";
-import { diffCommentLocation, formatDiffComment } from "../model/diffComment";
+import { diffCommentContext, diffCommentLocation } from "../model/diffComment";
 import { MOD } from "../../../platform/tauri/platform";
 import { requestAddToChat } from "../../sessions/model/quoteDraft";
 import type { UnifiedLine } from "../model/unifiedDiff";
@@ -23,9 +23,9 @@ export function DiffCommentComposer({
   const [comment, setComment] = useState("");
   const location = diffCommentLocation({ path, line: target.line });
   const addToChat = () => {
-    const text = formatDiffComment({ path, line: target.line }, comment);
-    if (!text) return;
-    requestAddToChat(text, "plain");
+    const item = diffCommentContext({ path, line: target.line }, comment);
+    if (!item) return;
+    requestAddToChat(item);
     onDismiss();
   };
 

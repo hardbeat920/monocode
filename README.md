@@ -12,7 +12,7 @@
   <img width="1680" height="1050" alt="Screenshot 2026-09-04 at 06 34 00" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
 </p>
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, and Hermes Agent. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Factory Droid. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
 
 ## Install
 
@@ -28,6 +28,7 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 > - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 > - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
 > - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - macOS/Linux: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; Windows PowerShell: `iex (irm https://hermes-agent.nousresearch.com/install.ps1)`; then run `hermes model`
+> - [Factory Droid](https://docs.factory.ai/cli/getting-started/overview) - `curl -fsSL https://app.factory.ai/cli | sh`, then run `droid` once to sign in (or set `FACTORY_API_KEY`)
 
 macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg), open it, drag MonoCode to Applications.
 
@@ -39,7 +40,7 @@ Windows (x86_64): download the NSIS installer from [GitHub Releases](https://git
 
 ## Some notes
 
-Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. See [remote access setup and current limitations](docs/remote-access.md).
+Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. Run `npx monocode-host connect` on that machine, then paste the pairing link it prints in Settings → Connections. See [remote access setup and current limitations](docs/remote-access.md).
 
 This is very early and you should expect bugs.
 

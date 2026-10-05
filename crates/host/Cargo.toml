@@ -1,0 +1,30 @@
+[package]
+name = "monocode-host"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "The remote host's engine: agent turns, files, and Git behind monocode_remote::host"
+
+[dependencies]
+monocode-core.workspace = true
+monocode-harness.workspace = true
+monocode-process.workspace = true
+monocode-remote.workspace = true
+monocode-git.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+smol.workspace = true
+async-channel.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+base64.workspace = true
+regex.workspace = true
+dunce = "1.0.5"
+
+[dev-dependencies]
+tempfile = "3"

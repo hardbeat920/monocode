@@ -1,0 +1,39 @@
+[package]
+name = "monocode-remote"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[features]
+# A stand-in HostBackend for tests in other crates.
+test-backend = []
+
+[dependencies]
+monocode-platform = { path = "../platform" }
+base64.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2.workspace = true
+ureq.workspace = true
+url.workspace = true
+uuid.workspace = true
+# The host server (src/host).
+monocode-core.workspace = true
+gethostname = "1.1"
+libc.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+ring = "0.17"
+rusqlite.workspace = true
+time.workspace = true
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+if-addrs = "0.13"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+x509-parser = { version = "0.18", features = ["verify"] }

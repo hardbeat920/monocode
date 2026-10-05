@@ -1,6 +1,7 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex" | "opencode";
+export type RateLimitProvider =
+  "claude" | "codex" | "opencode" | "droid" | "grok";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -344,6 +345,94 @@ export function parseOpencodeGoUsage(result: unknown): ProviderRateLimits {
     error: null,
     status: "ok",
   };
+}
+
+/**
+ * Parse Factory's `/api/billing/limits` payload:
+ * { limits: { standard: { fiveHour: { usedPercent, windowEnd }, weekly, monthly },
+ *             core: {...} } }
+ * Only the standard pool is shown; it is the one Droid gates models on.
+ */
+export function parseDroidUsage(result: unknown): ProviderRateLimits {
+  const standard = asRecord(asRecord(asRecord(result)?.limits)?.standard);
+  return {
+    provider: "droid",
+    session: mapDroidWindow(standard?.fiveHour, SESSION_WINDOW_MINUTES),
+    weekly: mapDroidWindow(standard?.weekly, WEEKLY_WINDOW_MINUTES),
+    monthly: mapDroidWindow(standard?.monthly, MONTHLY_WINDOW_MINUTES),
+    resetCredits: null,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+function mapDroidWindow(
+  raw: unknown,
+  windowMinutes: number,
+): RateLimitWindow | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const usedPercent = numberField(rec, "usedPercent");
+  if (usedPercent == null) return null;
+  return {
+    usedPercent: clampUsedPercent(usedPercent),
+    windowMinutes,
+    resetsAt: parseResetTimestamp(rec.windowEnd),
+  };
+}
+
+/**
+ * Parse Grok Build's `_x.ai/billing` ACP result:
+ * { config: { creditUsagePercent, currentPeriod: { type, start, end } } }
+ * Grok reports one credit allowance per billing period, weekly or monthly.
+ */
+export function parseGrokBilling(result: unknown): ProviderRateLimits {
+  const config = asRecord(asRecord(result)?.config);
+  const usedPercent = config ? numberField(config, "creditUsagePercent") : null;
+  const period = asRecord(config?.currentPeriod);
+  const resetsAt =
+    parseResetTimestamp(period?.end) ??
+    parseResetTimestamp(config?.billingPeriodEnd);
+  const monthly = grokPeriodIsMonthly(period, config);
+  const window: RateLimitWindow | null =
+    usedPercent == null
+      ? null
+      : {
+          usedPercent: clampUsedPercent(usedPercent),
+          windowMinutes: monthly
+            ? MONTHLY_WINDOW_MINUTES
+            : WEEKLY_WINDOW_MINUTES,
+          resetsAt,
+        };
+  return {
+    provider: "grok",
+    session: null,
+    weekly: monthly ? null : window,
+    monthly: monthly ? window : null,
+    resetCredits: null,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+function grokPeriodIsMonthly(
+  period: Record<string, unknown> | null,
+  config: Record<string, unknown> | null,
+): boolean {
+  const type = typeof period?.type === "string" ? period.type : "";
+  if (/MONTHLY/i.test(type)) return true;
+  if (/WEEKLY/i.test(type)) return false;
+  const start =
+    parseResetTimestamp(period?.start) ??
+    parseResetTimestamp(config?.billingPeriodStart);
+  const end =
+    parseResetTimestamp(period?.end) ??
+    parseResetTimestamp(config?.billingPeriodEnd);
+  if (start == null || end == null) return false;
+  // Anything longer than two weeks reads as a monthly allowance.
+  return end - start > 2 * WEEKLY_WINDOW_MINUTES * 60_000;
 }
 
 function mapOpencodeGoWindow(

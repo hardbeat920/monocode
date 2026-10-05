@@ -1,0 +1,22 @@
+[package]
+name = "monocode-package"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+description = "Native desktop and host release packaging"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+time.workspace = true
+tar = "0.4"
+flate2 = "1"
+tempfile = "3"
+object = { version = "0.37.3", default-features = false, features = ["read_core", "elf", "macho", "pe", "std"] }
+
+[[bin]]
+name = "monocode-package"
+path = "src/main.rs"
