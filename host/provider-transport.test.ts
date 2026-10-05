@@ -29,10 +29,16 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // applied between turns reach the provider.
 const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify(value) + '\\n');
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
+// Devin reports where \`devin auth login\` saved its key.
+if (process.argv.slice(2).join(' ') === 'auth status') {
+  process.stdout.write('Logged in.\\n  Credentials path: ' + require('node:path').join(__dirname, 'credentials.toml') + '\\n');
+  process.exit(0);
+}
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   if (request.jsonrpc === '2.0') {
     if (request.id == null) return;
+    if (request.method === 'authenticate') record({authenticate: request.params});
     if (request.method === 'session/prompt') {
       send({jsonrpc: '2.0', method: 'session/update', params: {sessionId: 'fixture_acp', update: {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'Headless ACP completed'}}}});
       setTimeout(() => send({jsonrpc: '2.0', id: request.id, result: {stopReason: 'end_turn'}}), 30);
@@ -87,6 +93,10 @@ describe("existing providers over headless process I/O", () => {
     );
     const binary = join(directory, "provider.cjs");
     writeFileSync(binary, fixture, { mode: 0o700 });
+    writeFileSync(
+      join(directory, "credentials.toml"),
+      'windsurf_api_key = "fixture-devin-key"\n',
+    );
     backend = new HostChildBackend({
       codex: binary,
       claude: binary,
@@ -97,6 +107,7 @@ describe("existing providers over headless process I/O", () => {
       fx: binary,
       hermes: binary,
       antigravity: binary,
+      devin: binary,
     });
     configureChildBackend(backend);
     release = await acquireHarnessBridge();
@@ -198,7 +209,7 @@ describe("existing providers over headless process I/O", () => {
     },
   );
 
-  it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
+  it.each(["cursor", "grok", "fx", "hermes", "antigravity", "devin"] as const)(
     "completes a %s turn over the headless ACP transport",
     async (harness) => {
       const project = await engine.openProject(directory);
@@ -223,6 +234,17 @@ describe("existing providers over headless process I/O", () => {
       const state = store.session(sessionId).session;
       expect(state.blocks.at(-1)?.text).toContain("Headless ACP completed");
       expect(state.providerSessionId).toBe("fixture_acp");
+      if (harness === "devin") {
+        // The host reuses the key `devin auth login` left on its own disk.
+        expect(readFileSync(join(directory, "calls.log"), "utf8")).toContain(
+          JSON.stringify({
+            authenticate: {
+              methodId: "devin-browser",
+              _meta: { api_key: "fixture-devin-key" },
+            },
+          }),
+        );
+      }
     },
   );
 

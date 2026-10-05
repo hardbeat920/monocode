@@ -794,6 +794,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Cognition's Devin CLI (`devin`).
+#[tauri::command(async)]
+pub fn harness_resolve_devin() -> Result<CursorBinary, String> {
+    resolve_devin()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Devin CLI not found. Install it with `curl -fsSL https://cli.devin.ai/install.sh | bash` (Windows: `irm https://static.devin.ai/cli/setup.ps1 | iex`) and run `devin auth login`, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -1275,6 +1288,7 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["models"],
     &["status", "--json"],
     &["agent", "list"],
+    &["auth", "status"],
 ];
 
 fn exec_args_allowed(args: &[String]) -> bool {
@@ -1676,6 +1690,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "devin"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -1916,6 +1931,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
         "antigravity" => resolve_antigravity(),
+        "devin" => resolve_devin(),
         _ => None,
     }
 }
@@ -1961,6 +1977,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "fx" => &["fx"],
         "hermes" => &["hermes"],
         "antigravity" => &["agy_acp_server.par"],
+        "devin" => &["devin"],
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
@@ -2033,6 +2050,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
+        "devin" => lower.contains("devin"),
         _ => true,
     };
     if has_version && provider_marker {
@@ -2319,6 +2337,30 @@ fn resolve_hermes() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/bin/hermes"));
     candidates.push(PathBuf::from("/snap/bin/hermes"));
     if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
+}
+
+fn resolve_devin() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official installer target on macOS and Linux.
+        candidates.push(home.join(".local/bin/devin"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // The Windows installer keeps its launcher beside versioned builds.
+        candidates.push(local_app_data.join("devin/cli/bin/devin"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/devin"));
+    candidates.push(PathBuf::from("/usr/local/bin/devin"));
+    candidates.push(PathBuf::from("/usr/bin/devin"));
+    if let Some(from_shell) = which_via_login_shell("devin") {
         candidates.push(from_shell);
     }
 
@@ -3916,6 +3958,7 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv("/Users/n/.local/bin/devin acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

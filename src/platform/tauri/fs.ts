@@ -155,6 +155,7 @@ export type DiscoveredSkill = {
     | "grok"
     | "hermes"
     | "antigravity"
+    | "devin"
     | "monocode";
 };
 

@@ -369,7 +369,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "agent-clis",
     section: "providers",
     label: "Agent CLIs",
-    keywords: "codex opencode cursor grok pi omp fx hermes antigravity binary path",
+    keywords: "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
   },
   {
     id: "provider-accounts",

@@ -25,6 +25,7 @@ const ALLOWED_EXEC_ARGS = new Set([
   "models",
   "status --json",
   "agent list",
+  "auth status",
 ]);
 
 function loopbackUrl(value: unknown): string {
