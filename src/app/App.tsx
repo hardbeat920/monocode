@@ -456,6 +456,7 @@ import {
   setSessionArchived,
   setSessionLinkedWorkItem,
   setSessionPinned,
+  isStorableSession,
   shouldPersistSession,
   upsertSession,
   flushSessionWrites,
@@ -4290,6 +4291,12 @@ function Workspace({
       .filter((session) => !session.inboxAsk)
       .map((session) => session.id),
   );
+  const reminderSessionIdsRef = useRef(new Set<string>());
+  reminderSessionIdsRef.current = new Set(
+    sessionReminders.reminders.map((reminder) => reminder.sessionId),
+  );
+  const cancelSessionRemindersRef = useRef(sessionReminders.cancel);
+  cancelSessionRemindersRef.current = sessionReminders.cancel;
 
   const dismissNoticesForContinuedSession = useCallback(
     (sessionId: string) => {
@@ -5108,25 +5115,42 @@ function Workspace({
       }
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
+      const retarget = (s: Session): Session => {
+        // A blank session moving into a project adopts its provider defaults;
+        // a conversation keeps its own provider.
+        const base = isBlankSession(s)
+          ? retargetSessionToProject(s, normalized)
+          : s;
+        return {
+          ...base,
+          cwd: normalized,
+          branch: undefined,
+          worktreeCwd: undefined,
+          worktreeRemoved: undefined,
+          workspaceMode: undefined,
+          worktreeBase: undefined,
+        };
+      };
       setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          // A blank session moving into a project adopts its provider defaults;
-          // a conversation keeps its own provider.
-          const base = isBlankSession(s)
-            ? retargetSessionToProject(s, normalized)
-            : s;
-          return {
-            ...base,
-            cwd: normalized,
-            branch: undefined,
-            worktreeCwd: undefined,
-            worktreeRemoved: undefined,
-            workspaceMode: undefined,
-            worktreeBase: undefined,
-          };
-        }),
+        prev.map((s) => (s.id === sessionId ? retarget(s) : s)),
       );
+      // Regular saves skip blank sessions, so one saved only to hold a
+      // reminder would keep its old project. Save it again, or drop the
+      // reminder when the new place cannot be stored.
+      if (
+        current &&
+        !shouldPersistSession(current) &&
+        reminderSessionIdsRef.current.has(sessionId)
+      ) {
+        const moved = retarget(current);
+        if (isStorableSession(moved)) {
+          void upsertSession(moved, { allowEmpty: true }).catch(
+            () => undefined,
+          );
+        } else {
+          void cancelSessionRemindersRef.current([sessionId]);
+        }
+      }
       // The session's project just moved in place; a group only holds tabs that
       // share one project, so drop this tab out if it no longer matches.
       setTabs((prev) => {
