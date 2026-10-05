@@ -37,6 +37,8 @@ export type ProviderRateLimits = {
   monthly: RateLimitWindow | null;
   /** Codex-only banked rate-limit reset rewards, when supplied by app-server. */
   resetCredits: RateLimitResetCredits | null;
+  /** Devin-only extra (overage) usage balance in US dollars; negative once billed. */
+  extraUsageBalance?: number | null;
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
@@ -335,7 +337,13 @@ export type DevinUsage = {
   dailyResetsAt?: number | null;
   weeklyRemainingPercent?: number | null;
   weeklyResetsAt?: number | null;
+  extraUsageBalanceMicros?: number | null;
 };
+
+/** "$-1.67", the way Devin's own plan panel writes the balance. */
+export function formatExtraUsageBalance(dollars: number): string {
+  return `$${dollars.toFixed(2)}`;
+}
 
 /** Devin reports remaining quota; MonoCode meters show the share used. */
 export function parseDevinUsage(usage: DevinUsage): ProviderRateLimits {
@@ -357,6 +365,10 @@ export function parseDevinUsage(usage: DevinUsage): ProviderRateLimits {
     weekly: window(usage.weeklyRemainingPercent, usage.weeklyResetsAt, WEEKLY_WINDOW_MINUTES),
     monthly: null,
     resetCredits: null,
+    extraUsageBalance:
+      usage.extraUsageBalanceMicros == null || !Number.isFinite(usage.extraUsageBalanceMicros)
+        ? null
+        : usage.extraUsageBalanceMicros / 1_000_000,
     updatedAt: Date.now(),
     error: null,
     status: "ok",

@@ -77,6 +77,7 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
 
 type DevinUsageFetch = {
   status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
   usage?: DevinUsage | null;
   error?: string | null;
 };
@@ -122,6 +123,9 @@ export async function fetchDevinRateLimits(): Promise<ProviderRateLimits> {
     devinIdentity = null;
     return unavailableRateLimits("devin", result.error?.trim() || "Devin not signed in");
   }
+  // A rejected key means that account is no longer signed in; a network
+  // failure keeps the identity beside the last usage snapshot.
+  if (result.httpStatus === 401 || result.httpStatus === 403) devinIdentity = null;
   return errorRateLimits("devin", result.error?.trim() || "Devin usage unavailable");
 }
 

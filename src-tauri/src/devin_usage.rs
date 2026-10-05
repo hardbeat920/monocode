@@ -22,6 +22,9 @@ pub struct DevinUsage {
     pub daily_resets_at: Option<i64>,
     pub weekly_remaining_percent: Option<f64>,
     pub weekly_resets_at: Option<i64>,
+    /// Extra (overage) usage balance in millionths of a US dollar; negative
+    /// once usage beyond the quota has been billed.
+    pub extra_usage_balance_micros: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -89,7 +92,11 @@ fn fetch_sync(app_version: &str, cli_version: &str) -> Result<DevinUsageFetch, S
             "extensionVersion": cli_version,
         }
     });
-    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+    // The key rides in the body: refuse any redirect that drops to plain HTTP.
+    let agent = ureq::AgentBuilder::new()
+        .timeout(HTTP_TIMEOUT)
+        .https_only(true)
+        .build();
     let response = agent
         .post(&format!("{}{USER_STATUS_PATH}", credentials.api_server))
         .set("Content-Type", "application/json")
@@ -243,7 +250,19 @@ fn parse_user_status(body: &Value) -> Option<DevinUsage> {
         daily_resets_at,
         weekly_remaining_percent,
         weekly_resets_at,
+        extra_usage_balance_micros: extra_usage_balance(plan, info),
     })
+}
+
+/// Quota plans always carry a balance, so an omitted one is proto3's zero;
+/// plans billed another way have none to show.
+fn extra_usage_balance(plan: &Value, info: &Value) -> Option<i64> {
+    match plan.get("overageBalanceMicros") {
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        Some(Value::Number(number)) => number.as_i64(),
+        _ if text(info, "billingStrategy").as_deref() == Some("BILLING_STRATEGY_QUOTA") => Some(0),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -259,6 +278,7 @@ mod tests {
                 "planStatus": {
                     "planInfo": { "planName": "Pro", "billingStrategy": "BILLING_STRATEGY_QUOTA" },
                     "weeklyQuotaRemainingPercent": 42,
+                    "overageBalanceMicros": "-1673099",
                     "dailyQuotaResetAtUnix": "1791273600",
                     "weeklyQuotaResetAtUnix": "1791705600"
                 }
@@ -275,8 +295,19 @@ mod tests {
                 daily_resets_at: Some(1_791_273_600),
                 weekly_remaining_percent: Some(42.0),
                 weekly_resets_at: Some(1_791_705_600),
+                extra_usage_balance_micros: Some(-1_673_099),
             })
         );
+    }
+
+    #[test]
+    fn extra_usage_balance_defaults_to_zero_only_on_quota_plans() {
+        let quota = json!({ "planInfo": { "billingStrategy": "BILLING_STRATEGY_QUOTA" } });
+        assert_eq!(extra_usage_balance(&quota, &quota["planInfo"]), Some(0));
+        let other = json!({ "planInfo": {} });
+        assert_eq!(extra_usage_balance(&other, &other["planInfo"]), None);
+        let paid = json!({ "overageBalanceMicros": 2_500_000 });
+        assert_eq!(extra_usage_balance(&paid, &Value::Null), Some(2_500_000));
     }
 
     #[test]

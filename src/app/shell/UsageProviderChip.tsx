@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
   DAILY_WINDOW_MINUTES,
+  formatExtraUsageBalance,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
@@ -413,6 +414,17 @@ export function UsageProviderChip({
               ) : (
                 <EmptyUsageState limits={limits} loading={loading} />
               )}
+
+              {limits.extraUsageBalance != null ? (
+                <section className="mt-1.5 flex items-baseline justify-between gap-3 rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
+                  <h3 className="text-[11px] font-medium text-content/65">
+                    Extra usage balance
+                  </h3>
+                  <span className="shrink-0 text-[11px] font-medium tabular-nums">
+                    {formatExtraUsageBalance(limits.extraUsageBalance)}
+                  </span>
+                </section>
+              ) : null}
 
               {suggestion && onSelectAccount ? (
                 <SwitchSuggestion

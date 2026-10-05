@@ -11,6 +11,7 @@ import {
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  formatExtraUsageBalance,
   parseDevinUsage,
   parseOpencodeGoUsage,
   parseResetTimestamp,
@@ -25,7 +26,9 @@ describe("parseDevinUsage", () => {
       dailyResetsAt: 1_791_273_600,
       weeklyRemainingPercent: 42,
       weeklyResetsAt: 1_791_705_600,
+      extraUsageBalanceMicros: -1_673_099,
     });
+    expect(formatExtraUsageBalance(limits.extraUsageBalance!)).toBe("$-1.67");
     expect(limits).toMatchObject({
       provider: "devin",
       status: "ok",
@@ -39,6 +42,7 @@ describe("parseDevinUsage", () => {
     const limits = parseDevinUsage({ weeklyRemainingPercent: 80, weeklyResetsAt: null });
     expect(limits.session).toBeNull();
     expect(limits.weekly).toEqual({ usedPercent: 20, windowMinutes: 10_080, resetsAt: null });
+    expect(limits.extraUsageBalance).toBeNull();
   });
 });
 
