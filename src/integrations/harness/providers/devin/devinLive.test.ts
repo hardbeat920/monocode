@@ -326,4 +326,82 @@ describe("Devin live ACP sequence", () => {
     await turn;
     await expect(title).resolves.toBe("Resume repo work");
   });
+
+  it("starts a new session when session/load fails", async () => {
+    bindDevinSession("devin-thread", "gone-1", "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "continue",
+      onEvent: (event) => events.push(event),
+    });
+    await answer("initialize", {
+      protocolVersion: 1,
+      authMethods: [{ id: "devin-browser" }],
+    });
+    await answer("authenticate", {});
+    await waitFor(() => !!request("session/load"), "session/load");
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: request("session/load")!.id,
+        error: { code: -32002, message: "Session not found" },
+      }),
+    );
+    await answer("session/new", { sessionId: "devin-2", configOptions: CONFIG });
+    await answer("session/set_mode", {});
+    await waitFor(() => !!request("session/prompt"), "session/prompt");
+    expect(request("session/prompt")!.params.sessionId).toBe("devin-2");
+    expect(events).toContainEqual({
+      type: "session.providerBound",
+      providerSessionId: "devin-2",
+    });
+    expect(events.some((event) => event.type === "status")).toBe(true);
+    reply(request("session/prompt")!.id, { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("cancels a permission request that arrives between turns", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "supervised",
+      text: "hello",
+      onEvent: (event) => events.push(event),
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await waitFor(() => !!request("session/prompt"), "session/prompt");
+    reply(request("session/prompt")!.id, { stopReason: "end_turn" });
+    await turn;
+
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "perm-stray",
+        method: "session/request_permission",
+        params: {
+          sessionId: "devin-1",
+          toolCall: { toolCallId: "call-3" },
+          options: [
+            { optionId: "allow_once", name: "Allow", kind: "allow_once" },
+            { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+          ],
+        },
+      }),
+    );
+    await waitFor(
+      () => parse().some((message) => message.id === "perm-stray"),
+      "permission reply",
+    );
+    expect(parse().find((message) => message.id === "perm-stray")!.result).toEqual({
+      outcome: { outcome: "cancelled" },
+    });
+    expect(events.some((event) => event.type === "approval.requested")).toBe(false);
+  });
 });

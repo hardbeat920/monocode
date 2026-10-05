@@ -39,12 +39,15 @@ export function devinCredentialsPathFromStatus(stdout: string): string | null {
   return match?.[1] ? match[1] : null;
 }
 
-/** Default credential locations when `devin auth status` is unavailable. */
+/**
+ * Default credential locations when `devin auth status` is unavailable, in
+ * the order the usage fetch in `devin_usage.rs` reads them.
+ */
 export function devinCredentialsCandidates(home: string): string[] {
   const base = home.replace(/[\\/]+$/, "");
   return [
-    `${base}/.config/devin/credentials.toml`,
     `${base}/AppData/Roaming/devin/credentials.toml`,
+    `${base}/.config/devin/credentials.toml`,
   ];
 }
 
@@ -89,15 +92,39 @@ export function devinPromptBlocks(
 }
 
 export function devinStartupError(error: unknown): Error {
-  const detail = (error instanceof Error ? error.message : String(error)).trim();
-  if (detail.includes(DEVIN_AUTH_HELP)) return new Error(detail);
-  if (/auth|credential|api key|log ?in|sign.in/i.test(detail)) {
-    return new Error(`${detail}\n\n${DEVIN_AUTH_HELP}`);
-  }
+  const detail = errorDetail(error);
+  const auth = withAuthHelp(detail);
+  if (auth) return new Error(auth);
   if (/timed out/i.test(detail)) {
     return new Error(`Devin did not start. ${DEVIN_AUTH_HELP}`);
   }
   return new Error(`Devin did not start. ${detail}`);
+}
+
+/**
+ * A failure inside a running session. Unlike startup, a timeout here means
+ * the turn stalled, not that the login is missing.
+ */
+export function devinTurnError(error: unknown): Error {
+  const detail = errorDetail(error);
+  const auth = withAuthHelp(detail);
+  if (auth) return new Error(auth);
+  if (/timed out/i.test(detail)) {
+    return new Error("Devin stopped responding before the turn finished.");
+  }
+  return new Error(detail);
+}
+
+function errorDetail(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).trim();
+}
+
+function withAuthHelp(detail: string): string | null {
+  if (detail.includes(DEVIN_AUTH_HELP)) return detail;
+  if (/auth|credential|api key|log ?in|sign.in/i.test(detail)) {
+    return `${detail}\n\n${DEVIN_AUTH_HELP}`;
+  }
+  return null;
 }
 
 export type DevinModelVariant = {

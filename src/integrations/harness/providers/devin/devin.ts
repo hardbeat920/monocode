@@ -43,6 +43,7 @@ import {
   devinSessionTitle,
   devinStartupError,
   devinToolInfo,
+  devinTurnError,
   type DevinModeId,
   type DevinModelFamily,
   type DevinToolInfo,
@@ -60,6 +61,8 @@ type Live = {
   modeId: DevinModeId | "";
   muteUpdates: boolean;
   cancelled: boolean;
+  /** Permission requests are only answered while a prompt is running. */
+  promptInFlight: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -406,6 +409,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       modeId: "",
       muteUpdates: didLoad,
       cancelled: false,
+      promptInFlight: false,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
@@ -484,6 +488,7 @@ async function prompt(
   blocks: ReturnType<typeof devinPromptBlocks>,
 ): Promise<void> {
   if (blocks.length === 0) return;
+  live.promptInFlight = true;
   try {
     const result = await live.rpc.request(
       "session/prompt",
@@ -503,10 +508,11 @@ async function prompt(
     live.onEvent({ type: "reasoning.completed" });
   } catch (error) {
     if (live.cancelled) return;
-    const failure = devinStartupError(error);
-    const message = failure.message.replace(/^Devin did not start\. /, "");
-    live.onEvent({ type: "session.error", message });
-    throw new Error(message);
+    const failure = devinTurnError(error);
+    live.onEvent({ type: "session.error", message: failure.message });
+    throw failure;
+  } finally {
+    live.promptInFlight = false;
   }
 }
 
@@ -576,7 +582,12 @@ async function handlePermission(
   const preview = request.preview ?? known?.preview;
 
   let optionId: string | null;
-  if (live.cancelled || live.muteUpdates || request.optionIds.length === 0) {
+  if (
+    !live.promptInFlight ||
+    live.cancelled ||
+    live.muteUpdates ||
+    request.optionIds.length === 0
+  ) {
     optionId = null;
   } else if (live.planning) {
     optionId = oneTimeOptionId(

@@ -14,6 +14,7 @@ import {
   devinPermissionCommand,
   devinSessionTitle,
   devinStartupError,
+  devinTurnError,
   modelsFromDevinSession,
   stripAnsi,
 } from "./devinProtocol";
@@ -54,8 +55,8 @@ describe("devin auth helpers", () => {
       devinApiKeyFromCredentials('windsurf_api_key = "devin-key"\r\napi_server_url = "x"\r\n'),
     ).toBe("devin-key");
     expect(devinCredentialsCandidates("C:\\Users\\me\\")).toEqual([
-      "C:\\Users\\me/.config/devin/credentials.toml",
       "C:\\Users\\me/AppData/Roaming/devin/credentials.toml",
+      "C:\\Users\\me/.config/devin/credentials.toml",
     ]);
   });
 
@@ -88,6 +89,16 @@ describe("devin auth helpers", () => {
       .toContain(DEVIN_AUTH_HELP);
     expect(devinStartupError(new Error("boom")).message).toBe(
       "Devin did not start. boom",
+    );
+  });
+
+  it("does not blame the login when a running turn times out", () => {
+    expect(devinTurnError(new Error("session/prompt timed out")).message).toBe(
+      "Devin stopped responding before the turn finished.",
+    );
+    expect(devinTurnError(new Error("boom")).message).toBe("boom");
+    expect(devinTurnError(new Error("api key expired")).message).toContain(
+      DEVIN_AUTH_HELP,
     );
   });
 });
