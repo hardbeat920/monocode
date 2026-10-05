@@ -290,6 +290,7 @@ import {
   wrapHandoffPrompt,
 } from "../features/sessions/model/handoff";
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
+import { moveChatToProject } from "../features/sessions/model/chatMove";
 import {
   applyBtwHarnessEvent,
   btwTurnHarness,
@@ -644,6 +645,11 @@ import {
   reconcileProjectReturn,
   type ProjectReturnMemory,
 } from "../features/projects/model/projectReturn";
+import {
+  CHATS_CWD,
+  isChatSession,
+  setChatWorkspaceDir,
+} from "../features/sessions/model/chatSession";
 import {
   planProjectOpenRun,
   type ProjectOpenStep,
@@ -1622,8 +1628,8 @@ function Workspace({
       tab: tab === "inbox" ? "sessions" : tab,
     });
   }, []);
-  const sidebarCwdKey =
-    sidebarCwd && sidebarCwd !== "~" ? normalizeProjectPath(sidebarCwd) : null;
+  // Projectless chats are listed under `~`, like one more project.
+  const sidebarCwdKey = sidebarCwd ? normalizeProjectPath(sidebarCwd) : null;
   const historyFailed =
     sidebarCwdKey != null && historyErrorCwd === sidebarCwdKey;
   // True from the very first frame that shows a project we have never listed,
@@ -1926,7 +1932,7 @@ function Workspace({
   }, [flushHarnessEvents, keepWorkspaceTab, readProjectReturnMemory]);
 
   const refreshHistory = useCallback(async (cwd: string) => {
-    if (!cwd || cwd === "~") return;
+    if (!cwd) return;
     // `history` holds every visited project's rows and the sidebar filters it
     // by cwd, so a project loaded once paints from cache on the way back and
     // revalidates quietly underneath the cards already on screen. Whether the
@@ -2130,10 +2136,20 @@ function Workspace({
         if (!looksLikeProject(cwd)) return;
         setProjectCwd(cwd);
         setRecents((prev) => (prev.length > 0 ? prev : rememberProject(cwd)));
+        // Only the untouched boot tab adopts the folder. A restored chat with
+        // a conversation stays projectless.
         setSessions((prev) =>
-          prev.map((s) => (s.cwd === "~" ? { ...s, cwd } : s)),
+          prev.map((s) =>
+            isChatSession(s) && isBlankSession(s) ? { ...s, cwd } : s,
+          ),
         );
       })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    void invoke<string>("chat_workspace_dir")
+      .then(setChatWorkspaceDir)
       .catch(() => {});
   }, []);
 
@@ -2357,6 +2373,71 @@ function Workspace({
     sessionDefaults?.runtimeMode,
     projectCwd,
   ]);
+
+  /** Land on a projectless chat: an untouched one if any is open, else new. */
+  const openChat = useCallback(
+    (preferOpen: boolean) => {
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      workspaceNavigation.cancel();
+      setProjectCwd(CHATS_CWD);
+      const sessions = sessionsRef.current;
+      const chatIn = (tab: WorkspaceTab, blankOnly: boolean) =>
+        leafIds(tab.layout).find((id) => {
+          const session = sessions.find((entry) => entry.id === id);
+          return (
+            !!session &&
+            isChatSession(session) &&
+            !session.inboxAsk &&
+            (!blankOnly || isBlankSession(session))
+          );
+        });
+      const tabs = tabsRef.current;
+      const current = tabs.find((tab) => tab.id === activeTabIdRef.current);
+      // The rail returns to the chat already on screen; New Chat wants a
+      // fresh composer.
+      const candidates: [WorkspaceTab, boolean][] = [
+        ...(preferOpen && current
+          ? ([[current, false]] as [WorkspaceTab, boolean][])
+          : []),
+        ...tabs.map((tab): [WorkspaceTab, boolean] => [tab, true]),
+        ...(preferOpen
+          ? tabs.map((tab): [WorkspaceTab, boolean] => [tab, false])
+          : []),
+      ];
+      for (const [tab, blankOnly] of candidates) {
+        const paneId = chatIn(tab, blankOnly);
+        if (!paneId) continue;
+        activateTab(tab.id, paneId);
+        setComposerFocused(true);
+        return paneId;
+      }
+      const session = newDefaultSession(
+        CHATS_CWD,
+        sessionDefaults?.runtimeMode,
+      );
+      const tab = newTab(session.id);
+      setSessions((prev) => [...prev, session]);
+      appendTab(tab, CHATS_CWD);
+      setActiveTabId(tab.id);
+      setComposerFocused(true);
+      return session.id;
+    },
+    [
+      activateTab,
+      appendTab,
+      sessionDefaults?.runtimeMode,
+      workspaceNavigation.cancel,
+    ],
+  );
+  const onOpenChats = useCallback(() => {
+    openChat(true);
+  }, [openChat]);
+  const onNewChat = useCallback(() => {
+    openChat(false);
+  }, [openChat]);
 
   const onSelectRemoteSession = useCallback(
     (project: string, remoteSessionId: string) => {
@@ -3538,10 +3619,11 @@ function Workspace({
     return stats;
   }, [tabs, sessions, sidebarCwd, tabWorkspace, workspaceNavigation.revision]);
   const deckProjectTabs = useMemo(() => {
-    // A projectless session belongs to no project, so it stands on its own
-    // rather than trailing the last project's tabs.
+    // A projectless chat belongs to no project, so chats share the strip with
+    // each other rather than trailing the last project's tabs.
     const active = tabs.find((tab) => tab.id === activeTabId);
-    if (active && !workspaceTabCwd(active, sessions)) return [active];
+    if (active && !workspaceTabCwd(active, sessions))
+      return tabs.filter((tab) => !workspaceTabCwd(tab, sessions));
     // Each worktree keeps its own tabs; the others stay open, just hidden.
     const worktree = projectWorktree?.path ?? projectCwd;
     return filterTabsForProject(tabs, sessions, projectCwd).filter((tab) => {
@@ -5103,11 +5185,40 @@ function Workspace({
       ) {
         void keepSessionChanges(sessionId, previous).catch(() => undefined);
       }
+      // A chat with a conversation is promoted into the project. Its provider
+      // thread belongs to the chats folder, so it cannot move mid-turn, and
+      // the child is dropped so the next turn starts in the project.
+      const promoted =
+        current &&
+        isChatSession(current) &&
+        !isBlankSession(current) &&
+        looksLikeProject(normalized);
+      let moved: Session | undefined;
+      if (promoted) {
+        if (current.busy) return;
+        for (const id of sessionChildHarnesses(current)) {
+          void forgetHarnessSession(id, sessionId);
+        }
+        const next = moveChatToProject(current, normalized);
+        moved = next;
+        sessionsRef.current = sessionsRef.current.map((s) =>
+          s.id === sessionId ? next : s,
+        );
+        persistSession(next);
+        setHistory((history) =>
+          history.map((entry) =>
+            entry.id === sessionId
+              ? { ...entry, cwd: normalized, providerSessionId: undefined }
+              : entry,
+          ),
+        );
+      }
       setProjectCwd(normalized);
       setRecents(rememberProject(normalized));
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
+          if (moved) return moved;
           // A blank session moving into a project adopts its provider defaults;
           // a conversation keeps its own provider.
           const base = isBlankSession(s)
@@ -5144,7 +5255,7 @@ function Workspace({
       });
       notifyReviewChanged(sessionId);
     },
-    [appendTab, projectOfTab],
+    [appendTab, persistSession, projectOfTab],
   );
 
   const onBranchChange = useCallback(
@@ -10222,6 +10333,7 @@ function Workspace({
 
   const actions = useRef({
     onNew,
+    onNewChat,
     onArchiveFocusedSession,
     onCloseOtherTabs,
     onCloseAllTabs,
@@ -10253,6 +10365,7 @@ function Workspace({
   });
   actions.current = {
     onNew,
+    onNewChat,
     onArchiveFocusedSession,
     onCloseOtherTabs,
     onCloseAllTabs,
@@ -10458,8 +10571,9 @@ function Workspace({
       }
       const shortcut = resolveAppShortcut(e);
       if (shortcut) {
+        // Ctrl+K and Ctrl+N are readline keys; a terminal keeps them.
         if (
-          shortcut === "App: Search" &&
+          (shortcut === "App: Search" || shortcut === "Chat: New") &&
           e.target instanceof Element &&
           e.target.closest(".monocode-terminal") &&
           e.ctrlKey &&
@@ -10470,7 +10584,8 @@ function Workspace({
         e.preventDefault();
         e.stopPropagation();
         const a = actions.current;
-        if (shortcut === "App: New Window")
+        if (shortcut === "Chat: New") run("new_chat", a.onNewChat);
+        else if (shortcut === "App: New Window")
           run("new_window", () => void invoke("open_new_window"));
         else if (shortcut === "App: Open Project")
           run("open_project", () => void a.pickProject());
@@ -10498,6 +10613,7 @@ function Workspace({
   useEffect(() => {
     const unlisten: Array<Promise<() => void>> = [
       listen("new_tab", () => run("new", actions.current.onNew)),
+      listen("new_chat", () => run("new_chat", actions.current.onNewChat)),
       listen("close_other_tabs", () =>
         run("close-others", actions.current.onCloseOtherTabs),
       ),
@@ -10858,6 +10974,7 @@ function Workspace({
               onOpenInboxItem={onOpenLinkedWorkItem}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
+              onOpenChats={onOpenChats}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen}
@@ -10912,6 +11029,7 @@ function Workspace({
                 {!IS_MAC ? (
                   <MenuBar
                     onNew={onNew}
+                    onNewChat={onNewChat}
                     onNewTerminal={onNewTerminal}
                     onToggleTerminal={onToggleProjectTerminal}
                     onGoToFile={onGoToFile}

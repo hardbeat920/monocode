@@ -19,6 +19,7 @@ type MenuKey = "file" | "view" | "terminal";
 
 type Props = {
   onNew: () => void;
+  onNewChat?: () => void;
   onNewTerminal?: () => void;
   onToggleTerminal?: () => void;
   onGoToFile?: () => void;
@@ -40,6 +41,7 @@ type Props = {
 
 export function MenuBar({
   onNew,
+  onNewChat,
   onNewTerminal,
   onToggleTerminal,
   onGoToFile,
@@ -141,6 +143,9 @@ export function MenuBar({
         case "new_tab":
           onNew();
           break;
+        case "new_chat":
+          onNewChat?.();
+          break;
         case "new_terminal":
           onNewTerminal?.();
           break;
@@ -217,6 +222,7 @@ export function MenuBar({
       onFindInProject,
       onGoToFile,
       onNew,
+      onNewChat,
       onNewTerminal,
       onToggleTerminal,
       onPickProject,
@@ -241,6 +247,12 @@ export function MenuBar({
             id: "new_tab",
             label: "New Tab",
             shortcut: shortcut("Tab: New", `${MOD}T`),
+          },
+          {
+            kind: "item",
+            id: "new_chat",
+            label: "New Chat",
+            shortcut: shortcut("Chat: New", `${MOD}N`),
           },
           {
             kind: "item",

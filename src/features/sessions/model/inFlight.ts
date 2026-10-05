@@ -150,7 +150,6 @@ export function shouldWriteInFlightSnapshot(
 function canResumeAfterQuit(session: Session): boolean {
   return (
     !session.worktreeRemoved &&
-    session.cwd !== "~" &&
     session.blocks.some((block) => block.role === "user")
   );
 }

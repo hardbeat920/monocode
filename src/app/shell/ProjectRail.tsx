@@ -5,6 +5,7 @@ import {
   FolderPlus,
   Internet,
   Inbox,
+  MessageSquare,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -109,6 +110,8 @@ type Props = {
   notesActive?: boolean;
   onOpenAutomations?: () => void;
   automationsActive?: boolean;
+  onOpenChats?: () => void;
+  chatsActive?: boolean;
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
   onOpenProject: () => void;
@@ -146,6 +149,8 @@ export function ProjectRail({
   notesActive = false,
   onOpenAutomations,
   automationsActive = false,
+  onOpenChats,
+  chatsActive = false,
   onTogglePanel,
   onSelectProject,
   onOpenProject,
@@ -401,6 +406,15 @@ export function ProjectRail({
               active={automationsActive}
               ariaLabel="Automations"
             />
+            {onOpenChats ? (
+              <RailAction
+                label="Chats"
+                icon={MessageSquare}
+                onClick={onOpenChats}
+                active={chatsActive}
+                ariaLabel="Chats"
+              />
+            ) : null}
           </div>
 
           <div

@@ -539,7 +539,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
-  const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
+  // A projectless chat keeps the picker after its first turn, so it can be
+  // moved into a project once it grows into real work.
+  const showDeckProjectPicker =
+    !looksLikeProject(session.cwd) && (isEmpty || !session.busy);
   const dockComposer =
     remoteSessionLoading ||
     (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk));

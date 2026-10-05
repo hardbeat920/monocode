@@ -23,6 +23,13 @@ it("keeps host-owned transcripts out of local session storage", () => {
   expect(shouldPersistSession(session)).toBe(false);
 });
 
+it("saves a projectless chat once it has a user turn", () => {
+  const chat = newSession("codex", "~");
+  expect(shouldPersistSession(chat)).toBe(false);
+  chat.blocks = [{ id: "turn", role: "user", text: "Quick question" }];
+  expect(shouldPersistSession(chat)).toBe(true);
+});
+
 describe("Claude Shell row recovery", () => {
   it("restores only matching placeholder rows and preserves tool output", () => {
     const blocks: Block[] = [

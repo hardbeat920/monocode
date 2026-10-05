@@ -21,6 +21,7 @@ import {
   type HarnessAdapter,
 } from "./registry";
 import type { SendTurnInput, SteerTurnInput } from "./types";
+import { setChatWorkspaceDir } from "../../../features/sessions/model/chatSession";
 import { registerBuiltinHarnesses } from "./register";
 
 function stub(
@@ -45,6 +46,7 @@ describe("harness registry", () => {
   afterEach(() => {
     resetHarnessModelOverlays();
     resetHarnessIdlePark();
+    setChatWorkspaceDir(null);
     vi.useRealTimers();
   });
 
@@ -353,6 +355,44 @@ describe("harness registry", () => {
       "start:s1",
       "end:s1",
     ]);
+  });
+
+  it("runs projectless chats in the chats folder", async () => {
+    setChatWorkspaceDir("/data/chats");
+    const sendTurn = vi.fn(async (_input: SendTurnInput) => undefined);
+    const bindSession = vi.fn();
+    registerHarness(stub("claude", { sendTurn, bindSession }));
+
+    await sendHarnessTurn({
+      harness: "claude",
+      sessionId: "chat",
+      cwd: "~",
+      model: "claude:sonnet",
+      text: "hi",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    await sendHarnessTurn({
+      harness: "claude",
+      sessionId: "project",
+      cwd: "/repo",
+      model: "claude:sonnet",
+      text: "hi",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+    bindHarnessSession("claude", "chat", "sess_1", "~");
+
+    expect(sendTurn.mock.calls.map(([input]) => input.cwd)).toEqual([
+      "/data/chats",
+      "/repo",
+    ]);
+    expect(bindSession).toHaveBeenCalledWith(
+      "chat",
+      "sess_1",
+      "/data/chats",
+      undefined,
+    );
   });
 
   it("binds a restored session and forwards its task panels", () => {
