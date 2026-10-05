@@ -187,7 +187,7 @@ export function createHostServer(
     }
     return catalog;
   };
-  return createServer(
+  const server = createServer(
     { requestTimeout: 20_000, headersTimeout: 10_000, maxHeaderSize: 8192 },
     async (request, response) => {
       if (request.url === "/lifecycle" && lifecycle) {
@@ -623,4 +623,6 @@ export function createHostServer(
       }
     },
   );
+  server.on("close", () => workspace.close());
+  return server;
 }

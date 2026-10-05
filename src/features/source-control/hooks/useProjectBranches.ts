@@ -92,7 +92,7 @@ function start(entry: Entry) {
   };
   window.addEventListener("focus", entry.onResume);
   document.addEventListener("visibilitychange", entry.onResume);
-  entry.unsubscribeGit = subscribeGitChanged(entry.onResume);
+  entry.unsubscribeGit = subscribeGitChanged(entry.onResume, entry.cwd);
 }
 
 function stop(entry: Entry) {

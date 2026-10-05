@@ -424,13 +424,20 @@ export function isCheckoutBlockedByChanges(message: string): boolean {
 const GIT_CHANGED = "monocode-git-changed";
 
 /** Tell git UIs (diff pane, branch picker) to reload after a local git mutation. */
-export function notifyGitChanged() {
-  window.dispatchEvent(new Event(GIT_CHANGED));
+export function notifyGitChanged(cwd?: string) {
+  window.dispatchEvent(new CustomEvent(GIT_CHANGED, { detail: cwd }));
 }
 
-export function subscribeGitChanged(listener: () => void): () => void {
-  window.addEventListener(GIT_CHANGED, listener);
-  return () => window.removeEventListener(GIT_CHANGED, listener);
+export function subscribeGitChanged(
+  listener: () => void,
+  cwd?: string,
+): () => void {
+  const changed = (event: Event) => {
+    const affected = (event as CustomEvent<string | undefined>).detail;
+    if (!cwd || !affected || affected === cwd) listener();
+  };
+  window.addEventListener(GIT_CHANGED, changed);
+  return () => window.removeEventListener(GIT_CHANGED, changed);
 }
 
 export function createPath(

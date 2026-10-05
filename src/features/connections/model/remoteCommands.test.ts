@@ -21,6 +21,23 @@ beforeEach(() => {
   invokeLocal.mockReset();
 });
 
+it.each(["watch_git_changes", "wait_git_changes", "unwatch_git_changes"])(
+  "routes %s to the repository's machine",
+  async (command) => {
+    remoteRequest.mockResolvedValue(true);
+    expect(
+      await runRemoteCommand(command, {
+        cwd: "remote://env/home/me/repo",
+        id: "watch-id",
+      }),
+    ).toBe(true);
+    expect(remoteRequest).toHaveBeenCalledWith("machine", "workspace.run", {
+      command,
+      args: { cwd: "/home/me/repo", id: "watch-id" },
+    });
+  },
+);
+
 it("keeps local writes local when their content mentions a remote path", async () => {
   await writeTextFile("/home/me/note.txt", "remote://env/home/me/repo");
   expect(invokeLocal).toHaveBeenCalledWith("write_text_file", {

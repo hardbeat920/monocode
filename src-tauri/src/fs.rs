@@ -4217,7 +4217,7 @@ fn git_run(root: &Path, args: &[&str]) -> Option<String> {
     git_output(root, args).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
+pub(crate) fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let output = git_cmd_for_args(args)
         .arg("--no-pager")
         .arg("-C")

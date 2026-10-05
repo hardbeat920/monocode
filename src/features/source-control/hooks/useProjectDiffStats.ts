@@ -102,7 +102,7 @@ function start(entry: Entry) {
   entry.onGitChanged = () => void load(entry, true);
   window.addEventListener("focus", entry.onResume);
   document.addEventListener("visibilitychange", entry.onResume);
-  entry.unsubscribeGit = subscribeGitChanged(entry.onGitChanged);
+  entry.unsubscribeGit = subscribeGitChanged(entry.onGitChanged, entry.cwd);
 }
 
 function stop(entry: Entry) {
