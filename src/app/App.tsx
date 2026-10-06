@@ -7,6 +7,7 @@ import {
   type AppSessionListing,
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
+import { archiveOperatorSession } from "../features/agent-app/model/operatorSessionArchive";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
   submitAfterProjectSync,
@@ -918,6 +919,7 @@ export default function App(props: AppProps) {
   );
 }
 
+/** Own project session state and coordinate its panes, tabs, and actions. */
 function Workspace({
   windowTransfer = null,
   resumed = null,
@@ -4538,11 +4540,13 @@ function Workspace({
     ],
   );
 
+  /** Close a session through the shared archive/delete safeguards. */
   const onRemoveHistorySession = useCallback(
     async (
       sessionId: string,
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
+      archiveOutcome?: { changed?: boolean; error?: unknown },
     ): Promise<boolean> => {
       if (
         removingSessionIds.current.has(sessionId) ||
@@ -4553,6 +4557,7 @@ function Workspace({
       const open = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
+      if (mode === "archive" && open?.busy) return false;
       const summary = history.find((entry) => entry.id === sessionId);
       const seed = open ?? summary;
       const label = seed
@@ -4597,8 +4602,6 @@ function Workspace({
           if (choice.deleteWorktree) deleteWorktreePath = unusedWorktree;
         }
       }
-      invalidateLoadedSession(sessionId);
-      pendingPersist.current.delete(sessionId);
       try {
         const remover = createSessionRemover({
           mode,
@@ -4617,6 +4620,7 @@ function Workspace({
               activeTabId: activeTabIdRef.current,
               dirtyFiles: dirtyFilesRef.current,
             }),
+            /** Apply removal state and return the archive result to Operator. */
             apply: (change) => {
               if (change.type === "stopped") {
                 const next = sessionsRef.current.map((session) =>
@@ -4661,6 +4665,9 @@ function Workspace({
               }
 
               const { removal } = change;
+              if (change.mode === "archive" && archiveOutcome)
+                archiveOutcome.changed = change.archivedChanged ?? false;
+              invalidateLoadedSession(sessionId);
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -4745,10 +4752,12 @@ function Workspace({
         return removed;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        void message(`Could not ${mode} this conversation.\n\n${detail}`, {
-          title: "MonoCode",
-          kind: "error",
-        });
+        if (archiveOutcome) archiveOutcome.error = error;
+        else
+          void message(`Could not ${mode} this conversation.\n\n${detail}`, {
+            title: "MonoCode",
+            kind: "error",
+          });
         return false;
       } finally {
         removingSessionIds.current.delete(sessionId);
@@ -9233,6 +9242,7 @@ function Workspace({
                 throw new Error("Session ID already has a different draft");
               await launchQuickSessionRef.current(launch, id, placement);
             },
+            /** Include stored archive state while preferring live busy/draft data. */
             sessions: async (cwd): Promise<AppSessionListing[]> => {
               const stored = await listSessionsByProject(cwd);
               const byId = new Map<string, AppSessionListing>();
@@ -9245,6 +9255,7 @@ function Workspace({
                   model: session.model,
                   busy: false,
                   hasDraft: !!session.draft,
+                  archived: !!session.archived,
                 });
               }
               for (const session of sessionsRef.current) {
@@ -9260,6 +9271,7 @@ function Workspace({
                   model: session.model,
                   busy: !!session.busy,
                   hasDraft: !!sessionDraftBlock(session),
+                  archived: byId.get(session.id)?.archived ?? false,
                 });
               }
               return [...byId.values()];
@@ -9273,6 +9285,54 @@ function Workspace({
                 sameProjectPath(target.cwd, source.cwd)
                 ? target
                 : null;
+            },
+            /** Route archive through the workspace lifecycle; restore only changes storage. */
+            archive: async (id, archived) => {
+              const result = await archiveOperatorSession(id, archived, {
+                callerId: source.id,
+                /** Read the newest renderer session after storage lookup. */
+                liveSession: (sessionId) =>
+                  sessionsRef.current.find((session) => session.id === sessionId),
+                /** Include both UI busy state and an active orchestrator run. */
+                isBusy: (sessionId) =>
+                  !!sessionsRef.current.find((session) => session.id === sessionId)?.busy ||
+                  !!orchestrator.run(sessionId),
+                /** Restrict persisted-session lookup to the caller's project. */
+                persistedSession: async (sessionId) => {
+                  const saved = await listSessionsByProject(source.cwd);
+                  return saved.find((session) => session.id === sessionId);
+                },
+                /** Close through UI safeguards and return storage failures intact. */
+                archiveView: async (sessionId) => {
+                  const outcome: { changed?: boolean; error?: unknown } = {};
+                  const completed = await onRemoveHistorySession(
+                    sessionId,
+                    "archive",
+                    false,
+                    outcome,
+                  );
+                  return {
+                    completed,
+                    changed: outcome.changed ?? false,
+                    ...(Object.prototype.hasOwnProperty.call(outcome, "error")
+                      ? { error: outcome.error }
+                      : {}),
+                  };
+                },
+                /** Persist restoration and refresh the visible history flag. */
+                setArchived: async (sessionId, value) => {
+                  const changed = await setSessionArchived(sessionId, value);
+                  setHistory((current) =>
+                    current.map((entry) =>
+                      entry.id === sessionId
+                        ? { ...entry, archived: value }
+                        : entry,
+                    ),
+                  );
+                  return changed;
+                },
+              });
+              return { changed: result.changed };
             },
             send: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);

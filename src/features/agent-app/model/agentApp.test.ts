@@ -74,11 +74,13 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Provide a project caller and idle target for dispatch tests. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";
   const host: AgentAppHost = {
     start: vi.fn(async () => {}),
+    /** List the fixture's idle target in the caller's project. */
     sessions: vi.fn(async () => [
       {
         id: "other",
@@ -87,11 +89,14 @@ function fixture() {
         model: "codex:test",
         busy: false,
         hasDraft: false,
+        archived: false,
       },
     ]),
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
+    /** Model the fixture write as changed only for the archive request. */
+    archive: vi.fn(async (_id, archived) => ({ changed: archived })),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     worktrees: vi.fn(async () => ({
@@ -166,6 +171,107 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.send).toHaveBeenCalledTimes(1);
+  });
+
+  /** Report transitions and refuse self or busy targets. */
+  it("archives and restores only another idle session in the project", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(
+        source,
+        "archive-1",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: true, changed: true });
+    expect(host.archive).toHaveBeenCalledWith("other", true);
+    expect(
+      await handleAgentApp(
+        source,
+        "restore-1",
+        "sessions.unarchive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: false, changed: false });
+    expect(host.archive).toHaveBeenLastCalledWith("other", false);
+    await expect(
+      handleAgentApp(
+        source,
+        "self",
+        "sessions.archive",
+        { sessionId: source.id },
+        host,
+      ),
+    ).rejects.toThrow("current session");
+    await expect(
+      handleAgentApp(
+        source,
+        "busy",
+        "sessions.archive",
+        { sessionId: "other" },
+        {
+          ...host,
+          session: vi.fn(async () => ({
+            ...newSession("codex", source.cwd),
+            id: "other",
+            busy: true,
+          })),
+        },
+      ),
+    ).rejects.toThrow("busy");
+    expect(host.archive).toHaveBeenCalledTimes(2);
+  });
+
+  /** Require the requested ID to belong to the caller's project. */
+  it("does not archive missing or cross-project sessions", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.archive",
+        { sessionId: "missing" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    host.session = vi.fn(async (id) =>
+      id === "other"
+        ? { ...newSession("codex", "/tmp/another-project"), id }
+        : null,
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "cross-project",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.archive).not.toHaveBeenCalled();
+  });
+
+  /** Keep archived sessions discoverable with draft state intact. */
+  it("lists archived state without hiding archived sessions", async () => {
+    const { source, host } = fixture();
+    host.sessions = vi.fn(async () => [
+      {
+        id: "other",
+        title: "Other",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: true,
+        archived: true,
+      },
+    ]);
+    expect(
+      await handleAgentApp(source, "list", "sessions.list", {}, host),
+    ).toMatchObject({
+      sessions: [{ id: "other", archived: true, hasDraft: true }],
+    });
   });
 
   it("saves an unsent draft in another listed project session", async () => {
@@ -506,6 +612,7 @@ describe("agent app commands", () => {
         model: "codex:test",
         busy: false,
         hasDraft: true,
+        archived: false,
       },
     ]);
     const moved = await handleAgentApp(

@@ -14,6 +14,7 @@ import { createSessionRemover } from "./sessionRemoval";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
+/** Pause a storage or confirmation wait until the test releases it. */
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -22,16 +23,27 @@ function deferred() {
   return { promise, resolve };
 }
 
+/** Build an idle archive or active delete workspace with observable effects. */
 function fixture(mode: "archive" | "delete") {
+  const busy = mode === "delete";
   const closing: Session = {
     ...newSession("cursor", "/tmp/project"),
-    busy: true,
+    busy,
     blocks: [
       { id: "user", role: "user", text: "hello" },
-      { id: "answer", role: "assistant", text: "partial", streaming: true },
+      {
+        id: "answer",
+        role: "assistant",
+        text: busy ? "partial" : "finished",
+        ...(busy ? { streaming: true } : {}),
+      },
     ],
-    queuedMessages: [{ id: "queued", text: "next", attachments: [] }],
-    queueStatus: "active",
+    ...(busy
+      ? {
+          queuedMessages: [{ id: "queued", text: "next", attachments: [] }],
+          queueStatus: "active" as const,
+        }
+      : {}),
   };
   const other = newSession("cursor", "/tmp/project");
   let state = {
@@ -43,10 +55,12 @@ function fixture(mode: "archive" | "delete") {
   state.activeTabId = state.tabs[0].id;
   const confirmClose = vi.fn(async () => true);
   const stop = vi.fn(async () => {});
+  let archiveChanged: boolean | undefined;
   const commit = vi.fn((removal: SessionWorkspaceRemoval) => {
     state = { ...state, ...removal };
   });
   mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_set_archived") return true;
     if (command === "session_upsert") {
       return { ...args.session, createdAt: 1, updatedAt: 1 };
     }
@@ -61,15 +75,20 @@ function fixture(mode: "archive" | "delete") {
     confirmClose,
     stop,
     commit,
+    /** Expose the changed flag reported by the removal lifecycle. */
+    archiveChanged: () => archiveChanged,
+    /** Execute the remover against this fixture's tabs, sessions, and safeguards. */
     run: () => {
       const remover = createSessionRemover({
         mode,
         replacement: { cwd: "/tmp/project", harness: "cursor" },
         workspace: {
           snapshot: () => state,
+          /** Record archive results and apply lifecycle changes to fixture state. */
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {
+              archiveChanged = change.archivedChanged;
               commit(change.removal);
               return;
             }
@@ -91,6 +110,7 @@ function fixture(mode: "archive" | "delete") {
 
 afterEach(() => mocks.invoke.mockReset());
 
+/** Exercise shared safeguards for archive and delete operations. */
 describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   it("creates the replacement session behind the removal interface", async () => {
     const f = fixture(mode);
@@ -155,13 +175,14 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     const f = fixture(mode);
     mocks.invoke.mockRejectedValue(new Error("disk unavailable"));
     await expect(f.run()).rejects.toThrow("disk unavailable");
-    expect(f.stop).toHaveBeenCalledOnce();
+    expect(f.stop).toHaveBeenCalledTimes(mode === "delete" ? 1 : 0);
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.read().sessions[0]).toMatchObject({
       busy: false,
-      queueStatus: "paused",
+      ...(mode === "delete" ? { queueStatus: "paused" } : {}),
     });
-    expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
+    if (mode === "delete")
+      expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
     expect(f.read().tabs).toHaveLength(2);
   });
 
@@ -171,7 +192,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     expect(await f.run()).toBe(false);
     expect(f.stop).not.toHaveBeenCalled();
     expect(mocks.invoke).not.toHaveBeenCalled();
-    expect(f.read().sessions[0].busy).toBe(true);
+    expect(f.read().sessions[0].busy).toBe(mode === "delete");
   });
 
   it("keeps files that become dirty while storage is pending", async () => {
@@ -213,38 +234,36 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   });
 });
 
-it("archives the flushed transcript after cancellation, with streaming stopped", async () => {
+/** Save the transcript and archive state without cancelling the idle worker. */
+it("archives an idle transcript without stopping or cancelling a worker", async () => {
   const f = fixture("archive");
-  f.stop.mockImplementation(async () => {
-    f.write({
-      ...f.read(),
-      sessions: f.read().sessions.map((s) =>
-        s.id === f.closing.id
-          ? {
-              ...s,
-              blocks: [
-                ...s.blocks,
-                {
-                  id: "buffered",
-                  role: "assistant",
-                  text: "last buffered output",
-                  streaming: true,
-                },
-              ],
-            }
-          : s,
-      ),
-    });
-  });
   await f.run();
   const [command, args] = mocks.invoke.mock.calls[0];
   expect(command).toBe("session_upsert");
   expect(args.session.blocks.at(-1)).toMatchObject({
-    text: "last buffered output",
+    text: "finished",
   });
   expect(args.session.blocks.at(-1).streaming).toBeFalsy();
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(f.archiveChanged()).toBe(true);
   expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
     "session_upsert",
     "session_set_archived",
   ]);
+});
+
+/** Leave a newly busy target, its view, and its stored state unchanged. */
+it("rejects a busy archive before confirmation, cancellation, or storage", async () => {
+  const f = fixture("archive");
+  f.write({
+    ...f.read(),
+    sessions: f.read().sessions.map((session) =>
+      session.id === f.closing.id ? { ...session, busy: true } : session,
+    ),
+  });
+  expect(await f.run()).toBe(false);
+  expect(f.confirmClose).not.toHaveBeenCalled();
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  expect(f.read().sessions[0].busy).toBe(true);
 });

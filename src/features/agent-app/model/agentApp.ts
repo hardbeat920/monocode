@@ -40,6 +40,7 @@ export type AppSessionListing = {
   model: string;
   busy: boolean;
   hasDraft: boolean;
+  archived: boolean;
 };
 
 export type AppSessionPlacement = {
@@ -55,6 +56,11 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
+  /** Persist archive visibility without starting or stopping the target. */
+  archive(
+    id: string,
+    archived: boolean,
+  ): Promise<{ changed: boolean }>;
   send(
     id: string,
     prompt: string,
@@ -83,6 +89,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars"]],
   ["sessions.send", ["sessionId", "prompt"]],
   ["sessions.draft", ["sessionId", "prompt"]],
+  ["sessions.archive", ["sessionId"]],
+  ["sessions.unarchive", ["sessionId"]],
   [
     "sessions.start",
     [
@@ -165,6 +173,7 @@ function requireProject(source: Session): string {
   return source.cwd;
 }
 
+/** Resolve a target only when both its listing and stored project path agree. */
 async function projectSession(
   source: Session,
   id: string,
@@ -174,7 +183,8 @@ async function projectSession(
   if (!(await host.sessions(cwd)).some((session) => session.id === id))
     throw new Error("Session was not found in this project");
   const target = await host.session(id);
-  if (!target) throw new Error("Session was not found in this project");
+  if (!target || pathKey(target.cwd) !== pathKey(cwd))
+    throw new Error("Session was not found in this project");
   return target;
 }
 
@@ -281,6 +291,7 @@ function startLaunch(
   };
 }
 
+/** Validate and dispatch one project-scoped operator CLI request. */
 export async function handleAgentApp(
   source: Session,
   requestId: string,
@@ -320,6 +331,24 @@ export async function handleAgentApp(
         limit: input.limit as number | undefined,
         maxChars: input.maxChars as number | undefined,
       });
+    }
+    case "sessions.archive":
+    case "sessions.unarchive": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const archived = action === "sessions.archive";
+      if (archived && id === source.id)
+        throw new Error(
+          "The current session cannot be archived by the app CLI",
+        );
+      const target = await projectSession(source, id, host);
+      if (
+        archived &&
+        (target.busy ||
+          (await host.sessions(source.cwd)).find((row) => row.id === id)?.busy)
+      )
+        throw new Error("Session is busy; try again when it finishes");
+      const result = await host.archive(id, archived);
+      return { sessionId: id, archived, changed: result.changed };
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
