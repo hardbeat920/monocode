@@ -104,6 +104,18 @@ describe("Sidebar chats", () => {
     expect(props.onOpenChats).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the collapsed rail whole while in chats", () => {
+    render({ projectRailOpen: false, compactProjectRail: true });
+
+    const rail = container.querySelector('[aria-label="Project shortcuts"]')!;
+    expect(rail).not.toBeNull();
+    // No empty workspace tab list, and the project picker still shows an icon.
+    expect(rail.querySelector('[role="tablist"]')).toBeNull();
+    const picker = rail.querySelector('button[aria-haspopup="dialog"]')!;
+    expect(picker.querySelector("svg")).not.toBeNull();
+    expect(button("Chats")).toBeDefined();
+  });
+
   it("says where new chats will appear when there are none", () => {
     render({ sessions: [], activeSessionId: undefined });
 

@@ -2587,24 +2587,29 @@ function CompactProjectRail({
             onOpenNotificationSettings={onOpenNotificationSettings}
           />
         ) : null}
-        <div
-          role="tablist"
-          aria-label="Workspace"
-          aria-orientation="vertical"
-          className="flex flex-col items-center gap-1.5"
-        >
-          {tabs.map((itemId) => (
-            <CompactRailAction
-              key={itemId}
-              tab
-              label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
-              icon={COMPACT_TAB_ICONS[itemId]}
-              active={workspaceActive && tabShown && activeTab === itemId}
-              dot={itemId === "changes" && hasChanges}
-              onClick={() => openWorkspaceTab(itemId)}
-            />
-          ))}
-        </div>
+        {/* Chats have no workspace tabs; an empty list would leave a gap. */}
+        {tabs.length > 0 ? (
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            aria-orientation="vertical"
+            className="flex flex-col items-center gap-1.5"
+          >
+            {tabs.map((itemId) => (
+              <CompactRailAction
+                key={itemId}
+                tab
+                label={
+                  itemId === "changes" ? changesLabel : TAB_LABELS[itemId]
+                }
+                icon={COMPACT_TAB_ICONS[itemId]}
+                active={workspaceActive && tabShown && activeTab === itemId}
+                dot={itemId === "changes" && hasChanges}
+                onClick={() => openWorkspaceTab(itemId)}
+              />
+            ))}
+          </div>
+        ) : null}
         <CompactRailAction
           label={`Search (${MOD}K)`}
           icon={Search}

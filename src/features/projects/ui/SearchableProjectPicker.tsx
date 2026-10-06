@@ -24,7 +24,13 @@ import {
   resolveTabGroupLogo,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { Check, ChevronDown, Plus, Search } from "../../../shared/ui/icons";
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  Plus,
+  Search,
+} from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
@@ -226,7 +232,12 @@ export function SearchableProjectPicker({
               : "text-content/50 hover:bg-content/5 hover:text-content"
         }${buttonClassName ? ` ${buttonClassName}` : ""}`}
       >
-        {!inProject ? null : logoPath ? (
+        {!inProject ? (
+          // With no project the compact trigger is icon-only, so it needs one.
+          compact ? (
+            <Folder className="size-3.5 shrink-0" strokeWidth={1.75} />
+          ) : null
+        ) : logoPath ? (
           <ProjectLogoIcon
             path={logoPath}
             className={`${compact ? "size-4" : "size-3.5"} shrink-0 rounded-sm`}
