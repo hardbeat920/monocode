@@ -168,6 +168,18 @@ export function updateProjectGroup(
   );
 }
 
+/** Reorders groups to match `ids`; groups missing from `ids` keep their place after it. */
+export function reorderProjectGroups(ids: string[]): void {
+  const current = loadProjectGroups();
+  const byId = new Map(current.map((group) => [group.id, group]));
+  const ordered = ids.flatMap((id) => {
+    const group = byId.get(id);
+    byId.delete(id);
+    return group ? [group] : [];
+  });
+  saveProjectGroups([...ordered, ...byId.values()]);
+}
+
 /** Removes the group; its projects become ungrouped. */
 export function deleteProjectGroup(id: string): boolean {
   const nextGroups = loadProjectGroups().filter((group) => group.id !== id);

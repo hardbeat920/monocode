@@ -8,7 +8,13 @@ import {
 
 const ids = ["sessions", "changes", "explorer"];
 
-function tabAt(left: number, top: number, parentElement: HTMLElement) {
+type Row = { top: number; height: number; marginBottom?: number };
+
+function tabAt(
+  left: number,
+  { top, height, marginBottom = 0 }: Row,
+  parentElement: HTMLElement,
+) {
   const captured = new Set<number>();
   return {
     parentElement,
@@ -17,9 +23,15 @@ function tabAt(left: number, top: number, parentElement: HTMLElement) {
       right: left + 100,
       width: 100,
       top,
-      bottom: top + 32,
-      height: 32,
+      bottom: top + height,
+      height,
     }),
+    computedStyle: {
+      marginTop: "0px",
+      marginRight: "0px",
+      marginBottom: `${marginBottom}px`,
+      marginLeft: "0px",
+    },
     style: {
       transform: "",
       transition: "",
@@ -42,35 +54,37 @@ function pointer(type: string, clientX: number, pointerId = 1) {
   );
 }
 
+const equalRows: Row[] = [0, 33, 66].map((top) => ({ top, height: 32 }));
+
 function setup(
   reducedMotion = false,
   axis: "x" | "y" = "x",
   externalDrop?: ReorderExternalDrop<string>,
+  rows = equalRows,
 ) {
   Object.assign(browser, { matchMedia: () => ({ matches: reducedMotion }) });
   const onReorder = vi.fn();
+  const itemIds = ids.slice(0, rows.length);
   let reorder!: ReturnType<typeof useAnimatedReorder<string>>;
   // Render the real hook to obtain its gesture interface without mocking React.
   // Mount/unmount effects and native click targeting need a browser check.
   function Probe() {
-    reorder = useAnimatedReorder(ids, onReorder, axis, externalDrop);
+    reorder = useAnimatedReorder(itemIds, onReorder, axis, externalDrop);
     return null;
   }
   renderToString(createElement(Probe));
   const scroller = { scrollLeft: 0, scrollTop: 0, parentElement: null };
-  const tabs = [
-    [0, 0],
-    [100, 33],
-    [200, 66],
-  ].map(([left, top]) => tabAt(left, top, scroller as unknown as HTMLElement));
+  const tabs = rows.map((row, index) =>
+    tabAt(index * 100, row, scroller as unknown as HTMLElement),
+  );
   tabs.forEach((tab, index) =>
-    reorder.setItemRef(ids[index], tab as unknown as HTMLElement),
+    reorder.setItemRef(itemIds[index], tab as unknown as HTMLElement),
   );
   const press = (index = 0, pointerId = 1) =>
-    reorder.onItemPointerDown(ids[index], {
+    reorder.onItemPointerDown(itemIds[index], {
       button: 0,
       clientX: index * 100 + 50,
-      clientY: index * 33 + 16,
+      clientY: rows[index].top + 16,
       pointerId,
     } as ReactPointerEvent);
   return { reorder, tabs, onReorder, press, scroller };
@@ -79,7 +93,8 @@ function setup(
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   browser = Object.assign(new EventTarget(), {
-    getComputedStyle: () => ({
+    getComputedStyle: (element?: { computedStyle?: object }) => ({
+      ...element?.computedStyle,
       getPropertyValue: (name: string) =>
         name === "--motion-reorder-duration"
           ? "160ms"
@@ -166,6 +181,99 @@ describe("workspace tab gestures", () => {
     expect(onReorder).toHaveBeenCalledExactlyOnceWith(
       ["changes", "explorer", "sessions"],
       "sessions",
+    );
+  });
+
+  it("lays out items of different sizes without overlap or gaps", () => {
+    const { press, tabs, onReorder } = setup(false, "y", undefined, [
+      { top: 0, height: 32 },
+      { top: 38, height: 100 },
+      { top: 144, height: 32 },
+    ]);
+    press();
+    pointer("pointermove", 170);
+    vi.advanceTimersByTime(16);
+    expect(tabs[1].style.transform).toBe("translate3d(0, -38px, 0)");
+    expect(tabs[2].style.transform).toBe("translate3d(0, -38px, 0)");
+    expect(tabs[0].style.transform).toBe("translate3d(0, 144px, 0)");
+    pointer("pointerup", 170);
+    expect(tabs[0].style.transform).toBe("translate3d(0, 144px, 0)");
+    vi.runAllTimers();
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "explorer", "sessions"],
+      "sessions",
+    );
+  });
+
+  it("moves a tall first item after a short last item", () => {
+    // A 140px item cannot travel far enough for its center to pass a 32px
+    // neighbor's center, so destinations must come from the slots it can fill.
+    const { press, tabs, onReorder } = setup(false, "y", undefined, [
+      { top: 0, height: 140 },
+      { top: 141, height: 32 },
+    ]);
+    press();
+    pointer("pointermove", 400);
+    vi.advanceTimersByTime(16);
+    expect(tabs[0].style.transform).toBe("translate3d(0, 33px, 0)");
+    expect(tabs[1].style.transform).toBe("translate3d(0, -141px, 0)");
+    pointer("pointerup", 400);
+    expect(tabs[0].style.transform).toBe("translate3d(0, 33px, 0)");
+    vi.runAllTimers();
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "sessions"],
+      "sessions",
+    );
+  });
+
+  it("moves a tall last item before a short first item", () => {
+    const { press, tabs, onReorder } = setup(false, "y", undefined, [
+      { top: 0, height: 32 },
+      { top: 33, height: 140 },
+    ]);
+    press(1);
+    pointer("pointermove", -400);
+    vi.advanceTimersByTime(16);
+    expect(tabs[1].style.transform).toBe("translate3d(0, -33px, 0)");
+    expect(tabs[0].style.transform).toBe("translate3d(0, 141px, 0)");
+    pointer("pointerup", -400);
+    expect(tabs[1].style.transform).toBe("translate3d(0, -33px, 0)");
+    vi.runAllTimers();
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "sessions"],
+      "changes",
+    );
+  });
+
+  it("keeps each item's own trailing margin when the last item moves earlier", () => {
+    // A 1px container gap plus a 6px margin on the first item only. After the
+    // move, the committed layout puts the short item at 0 and the tall one at
+    // 32 + 1 = 33; the previous slot's 7px spacing must not follow the move.
+    const rows = [
+      { top: 0, height: 140, marginBottom: 6 },
+      { top: 147, height: 32 },
+    ];
+    const committedTops = { sessions: 33, changes: 0 };
+    const { press, tabs, onReorder } = setup(false, "y", undefined, rows);
+    const expectCommittedLayout = () =>
+      (["sessions", "changes"] as const).forEach((id, index) =>
+        expect(tabs[index].style.transform).toBe(
+          `translate3d(0, ${committedTops[id] - rows[index].top}px, 0)`,
+        ),
+      );
+    press(1);
+    pointer("pointermove", -400);
+    vi.advanceTimersByTime(16);
+    expectCommittedLayout();
+    // Pausing does not shift the preview.
+    vi.advanceTimersByTime(500);
+    expectCommittedLayout();
+    pointer("pointerup", -400);
+    expectCommittedLayout();
+    vi.runAllTimers();
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "sessions"],
+      "changes",
     );
   });
 
