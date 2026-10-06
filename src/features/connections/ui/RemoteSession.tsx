@@ -23,6 +23,7 @@ import { useProjectBranchesState } from "../../source-control/hooks/useProjectBr
 import { registerRemoteSessionActions } from "../model/remoteSessionActions";
 import {
   clearPendingRemoteCommand,
+  hasPendingRemoteCommand,
   loadRemoteSession,
   OPEN_CONNECTIONS_EVENT,
   pendingRemoteCommand,
@@ -323,6 +324,7 @@ function ConnectedRemoteSession({
     !hasHostBlock(pending.commandId);
   const busy =
     !!hostSession?.busy || unseenActive || (startingActive && !starting?.draft) || pendingSendActive;
+  const queueSupported = !!descriptor?.capabilities.includes("sessions.queue");
   // An accepted turn stays on screen until a sync shows the host's copy, so
   // the transcript never drops it for a moment in between.
   useEffect(() => {
@@ -815,6 +817,64 @@ function ConnectedRemoteSession({
     }
   };
 
+  // The host holds follow-ups sent during a turn and sends each in order.
+  const enqueue = (
+    id: string,
+    text: string,
+    attachments: Attachment[],
+    intent: "default" | "plan" | "build",
+    onRejected?: () => void,
+  ): boolean => {
+    const version = bindingVersion.current;
+    const commandId = crypto.randomUUID();
+    preparingRef.current = true;
+    void uploadRemoteAttachments(machine.id, attachments)
+      .then((refs) => {
+        if (!alive.current || version !== bindingVersion.current) return;
+        return run({
+          type: "enqueue",
+          commandId,
+          sessionId: id,
+          text,
+          attachments: refs,
+          intent,
+        });
+      })
+      .catch((reason) => {
+        if (alive.current && version === bindingVersion.current)
+          setError(String(reason));
+      })
+      .then((receipt) => {
+        // An unconfirmed send stays pending for Retry; anything else that
+        // did not reach the queue goes back to the composer, unless the tab
+        // now shows another conversation.
+        if (
+          !receipt &&
+          alive.current &&
+          version === bindingVersion.current &&
+          !hasPendingRemoteCommand(project.key, machine.environmentId, commandId)
+        )
+          onRejected?.();
+      })
+      .finally(() => {
+        if (version === bindingVersion.current) preparingRef.current = false;
+      });
+    return true;
+  };
+  const queueCommand = (
+    command:
+      | { type: "dequeue"; messageId: string }
+      | { type: "editQueued"; messageId: string; text: string }
+      | { type: "resumeQueue" },
+  ) => {
+    if (!hostSession || !online || pending) return;
+    void run({
+      ...command,
+      commandId: crypto.randomUUID(),
+      sessionId: hostSession.id,
+    });
+  };
+
   const message = (
     id: string,
     text: string,
@@ -852,7 +912,6 @@ function ConnectedRemoteSession({
       sending ||
       preparingRef.current ||
       pending ||
-      busy ||
       (!text.trim() && !attachments.length)
     )
       return false;
@@ -860,6 +919,16 @@ function ConnectedRemoteSession({
       options?.intent === "plan" || options?.intent === "build"
         ? options.intent
         : "default";
+    if (busy)
+      return (
+        !!hostSession &&
+        queueSupported &&
+        !asDraft &&
+        !planBlockId &&
+        !options?.draftBlockId &&
+        message(hostSession.id, text, undefined, [], intent).type === "send" &&
+        enqueue(hostSession.id, text, attachments, intent, options?.onRejected)
+      );
     const turn = optimisticTurn(
       text,
       attachments,
@@ -1245,11 +1314,15 @@ function ConnectedRemoteSession({
       return true;
     },
     onPlaceSessionInFolder: noop,
-    onDeleteQueuedMessage: noop,
-    onEditQueuedMessage: noop,
+    onDeleteQueuedMessage: (_, messageId) =>
+      queueCommand({ type: "dequeue", messageId }),
+    onEditQueuedMessage: (_, messageId, text) =>
+      queueCommand({ type: "editQueued", messageId, text }),
+    // The host may send the message being edited; saving then reports that.
     onQueuedMessageEditingChange: noop,
-    onSteerQueuedMessage: noop,
-    onResumeQueue: noop,
+    // Host providers cannot add to a running turn.
+    onSteerQueuedMessage: undefined,
+    onResumeQueue: () => queueCommand({ type: "resumeQueue" }),
     onUsageLimitResume: noop,
     onUsageLimitResumeAtReset: noop,
     onUsageLimitDismiss: noop,

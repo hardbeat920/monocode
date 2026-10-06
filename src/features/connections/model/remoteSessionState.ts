@@ -9,7 +9,10 @@ export function remoteSessionState(
   snapshot: HostSession,
   project: RemoteProject,
 ): Session {
-  const host = snapshot.session;
+  // The host sends its own queued follow-ups; copied here, this app would send
+  // them a second time.
+  const { queuedMessages: _queued, queueStatus: _status, ...host } =
+    snapshot.session;
   return {
     ...shell,
     ...host,

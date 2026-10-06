@@ -82,6 +82,8 @@ export type ComposerTurnOptions = {
   resendEdited?: boolean;
   /** Restore an edited prompt when the resend rejects asynchronously. */
   onResendRejected?: (recovery: EditedResendRejection) => void;
+  /** Restore the prompt when an accepted turn is dropped before it is recorded. */
+  onRejected?: () => void;
   /** Promote an existing unsent transcript block instead of appending a turn. */
   draftBlockId?: string;
 };

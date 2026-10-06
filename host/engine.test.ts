@@ -698,6 +698,108 @@ describe("headless session ownership", () => {
     expect(provider.answer).toHaveBeenCalledTimes(1);
   });
 
+  it("queues follow-ups during a turn and sends them in order as each turn ends", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({ type: "send", commandId: "send", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    engine.command({ type: "enqueue", commandId: "q1", sessionId: id, text: "Next", intent: "plan" });
+    engine.command({ type: "enqueue", commandId: "q2", sessionId: id, text: "Then" });
+    expect(store.session(id).session).toMatchObject({
+      queuedMessages: [{ id: "q1", text: "Next" }, { id: "q2", text: "Then" }],
+      queueStatus: "active",
+    });
+    expect(turns).toHaveLength(1);
+
+    turns[0].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    expect(turns[1].input).toMatchObject({ text: "Next", intent: "plan" });
+    expect(store.session(id).session.blocks.at(-1)).toMatchObject({ id: "q1", role: "user" });
+    expect(store.session(id).session.queuedMessages).toEqual([
+      expect.objectContaining({ id: "q2" }),
+    ]);
+
+    turns[1].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(turns[2].input.text).toBe("Then");
+    expect(store.session(id).session.queuedMessages).toBeUndefined();
+    expect(store.session(id).session.queueStatus).toBeUndefined();
+    turns[2].finish();
+  });
+
+  it("sends a follow-up at once when it reaches the host after the turn ended", async () => {
+    const { engine, turns, id } = setup();
+    engine.command({ type: "enqueue", commandId: "late", sessionId: id, text: "Next" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(turns[0].input.text).toBe("Next");
+    turns[0].finish();
+  });
+
+  it("edits and removes queued follow-ups until they are sent", async () => {
+    const { engine, turns, id } = setup();
+    engine.command({ type: "send", commandId: "send", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    engine.command({ type: "enqueue", commandId: "q1", sessionId: id, text: "Next" });
+    engine.command({ type: "enqueue", commandId: "q2", sessionId: id, text: "Then" });
+    engine.command({ type: "editQueued", commandId: "edit", sessionId: id, messageId: "q1", text: "Edited" });
+    expect(() =>
+      engine.command({ type: "editQueued", commandId: "blank", sessionId: id, messageId: "q1", text: " " }),
+    ).toThrow("Invalid prompt");
+    engine.command({ type: "dequeue", commandId: "drop", sessionId: id, messageId: "q2" });
+
+    turns[0].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    expect(turns[1].input.text).toBe("Edited");
+    expect(() =>
+      engine.command({ type: "dequeue", commandId: "late-drop", sessionId: id, messageId: "q1" }),
+    ).toThrow("no longer waiting");
+    turns[1].finish();
+  });
+
+  it("pauses the queue when the turn is stopped and resumes the work before it", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({ type: "send", commandId: "send", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    engine.command({ type: "enqueue", commandId: "q1", sessionId: id, text: "Next" });
+    expect(() =>
+      engine.command({ type: "resumeQueue", commandId: "early", sessionId: id }),
+    ).toThrow("not paused");
+    engine.command({ type: "cancel", commandId: "stop", sessionId: id, runId: store.session(id).runId });
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    expect(store.session(id).session.queueStatus).toBe("paused");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(turns).toHaveLength(1);
+
+    engine.command({ type: "resumeQueue", commandId: "resume", sessionId: id });
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    expect(turns[1].input.text).toBe("Continue from where you left off.");
+    expect(store.session(id).session.queueStatus).toBe("resuming");
+
+    turns[1].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(turns[2].input.text).toBe("Next");
+    turns[2].finish();
+  });
+
+  it("keeps a draft saved while the queue is paused through the queued turns", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({ type: "send", commandId: "send", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    engine.command({ type: "enqueue", commandId: "q1", sessionId: id, text: "Next" });
+    engine.command({ type: "cancel", commandId: "stop", sessionId: id, runId: store.session(id).runId });
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    engine.command({ type: "draft", commandId: "draft", sessionId: id, text: "Later" });
+
+    engine.command({ type: "resumeQueue", commandId: "resume", sessionId: id });
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    turns[1].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(turns[2].input.text).toBe("Next");
+    expect(store.session(id).session.blocks).toContainEqual(
+      expect.objectContaining({ id: "draft", text: "Later", draft: true }),
+    );
+    turns[2].finish();
+  });
+
   it("recovers interrupted durable state without replaying an uncertain provider send", async () => {
     const { store, provider, id } = setup();
     const value = store.session(id);
@@ -712,6 +814,8 @@ describe("headless session ownership", () => {
             ...value.session,
             busy: true,
             providerSessionId: "retained",
+            queuedMessages: [{ id: "queued", text: "Next", attachments: [] }],
+            queueStatus: "active",
             blocks: [
               {
                 id: "interrupted-turn",
@@ -729,6 +833,8 @@ describe("headless session ownership", () => {
     expect(store.session(id).status).toBe("interrupted");
     expect(store.session(id).session.busy).toBe(false);
     expect(store.session(id).session.blocks[0].durationMs).toBe(2_000);
+    // Queued follow-ups wait for the user to inspect the interrupted turn.
+    expect(store.session(id).session.queueStatus).toBe("paused");
     expect(provider.send).not.toHaveBeenCalled();
     expect(provider.bind).toHaveBeenCalledWith(
       id,
@@ -893,5 +999,11 @@ describe("headless session ownership", () => {
         reply: { kind: "answered", answers: { a: [42] } },
       }),
     ).toThrow();
+    expect(() =>
+      parseCommand({ type: "enqueue", commandId: "x", sessionId: "y", text: " " }),
+    ).toThrow("Invalid prompt");
+    expect(() =>
+      parseCommand({ type: "dequeue", commandId: "x", sessionId: "y" }),
+    ).toThrow("queued message ID");
   });
 });
