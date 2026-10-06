@@ -846,10 +846,12 @@ function ConnectedRemoteSession({
       })
       .then((receipt) => {
         // An unconfirmed send stays pending for Retry; anything else that
-        // did not reach the queue goes back to the composer.
+        // did not reach the queue goes back to the composer, unless the tab
+        // now shows another conversation.
         if (
           !receipt &&
           alive.current &&
+          version === bindingVersion.current &&
           !hasPendingRemoteCommand(project.key, machine.environmentId, commandId)
         )
           onRejected?.();
