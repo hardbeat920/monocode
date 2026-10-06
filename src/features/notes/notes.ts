@@ -28,6 +28,8 @@ export type NoteUpsert = {
   sourceSessionId?: string;
   /** Omit on update to keep the saved project directory. */
   sourceCwd?: string;
+  /** Replace a placeholder slug ("untitled-2") from the title. Set once the title is done being typed. */
+  finalizeSlug?: boolean;
 };
 
 /** Note chip shown in the composer and on the user turn in the thread. */

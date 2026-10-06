@@ -44,6 +44,10 @@ pub struct NoteUpsert {
     pub source_session_id: Option<String>,
     #[serde(default)]
     pub source_cwd: Option<String>,
+    /// Set once the title is done being typed (blur/close), not on debounced
+    /// saves, so a half-typed title doesn't become the permanent slug.
+    #[serde(default)]
+    pub finalize_slug: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,16 +322,27 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
             } else {
                 now
             };
+        // A placeholder slug ("untitled", "untitled-2") is replaced the first
+        // time the note gets a real title; real slugs stay stable so existing
+        // @note/ references keep working.
+        let slug = if note.finalize_slug
+            && is_placeholder_slug(&existing.slug)
+            && !is_placeholder_slug(&slugify(&title))
+        {
+            unique_slug(conn, &title)?
+        } else {
+            existing.slug
+        };
         conn.execute(
             "UPDATE notes
              SET title = ?1, body = ?2, tags_json = ?3, updated_at = ?4,
-                 source_cwd = ?6
+                 source_cwd = ?6, slug = ?7
              WHERE id = ?5",
-            params![title, body, tags_json, updated_at, note.id, project_cwd],
+            params![title, body, tags_json, updated_at, note.id, project_cwd, slug],
         )?;
         Ok(Note {
             id: note.id.clone(),
-            slug: existing.slug,
+            slug,
             title,
             body,
             tags,
@@ -448,6 +463,16 @@ fn slugify(title: &str) -> String {
     }
 }
 
+fn is_placeholder_slug(slug: &str) -> bool {
+    match slug.strip_prefix("untitled") {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())),
+        None => false,
+    }
+}
+
 fn unique_slug(conn: &Connection, title: &str) -> rusqlite::Result<String> {
     let base = slugify(title);
     for index in 0..1000 {
@@ -484,6 +509,7 @@ mod tests {
                 tags: Vec::new(),
                 source_session_id: None,
                 source_cwd: None,
+                finalize_slug: true,
             },
         )
         .unwrap()
@@ -569,6 +595,7 @@ mod tests {
                 tags: vec!["Ideas".into(), "project docs".into(), "ideas".into()],
                 source_session_id: Some("sess-1".into()),
                 source_cwd: Some("/tmp/a".into()),
+                finalize_slug: false,
             },
         )
         .unwrap();
@@ -606,6 +633,7 @@ mod tests {
             tags: vec!["ideas".into()],
             source_session_id: Some("original-session".into()),
             source_cwd: Some("/work/Edefyn".into()),
+            finalize_slug: false,
         };
         let original = upsert_note(&conn, &input).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -618,6 +646,7 @@ mod tests {
                 tags: vec![],
                 source_session_id: None,
                 source_cwd: None,
+                finalize_slug: true,
             },
         )
         .unwrap();
@@ -651,6 +680,75 @@ mod tests {
         let second = upsert(&store, "n2", "Auth approach", "b");
         assert_eq!(first.slug, "auth-approach");
         assert_eq!(second.slug, "auth-approach-2");
+    }
+
+    #[test]
+    fn placeholder_slug_updates_on_first_real_title_only() {
+        let store = SessionStore::open_in_memory().unwrap();
+        upsert(&store, "n0", "Untitled", "");
+        let first = upsert(&store, "n1", "Untitled", "");
+        assert_eq!(first.slug, "untitled-2");
+        let named = upsert(&store, "n1", "Auth approach", "");
+        assert_eq!(named.slug, "auth-approach");
+        let renamed = upsert(&store, "n1", "Something else", "");
+        assert_eq!(renamed.slug, "auth-approach");
+    }
+
+    #[test]
+    fn debounced_saves_do_not_finalize_the_slug() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut input = NoteUpsert {
+            id: "n1".into(),
+            title: "Untitled".into(),
+            body: String::new(),
+            tags: Vec::new(),
+            source_session_id: None,
+            source_cwd: None,
+            finalize_slug: false,
+        };
+        upsert_note(&conn, &input).unwrap();
+        input.title = "This i".into();
+        assert_eq!(upsert_note(&conn, &input).unwrap().slug, "untitled");
+        input.title = "This is my first note".into();
+        assert_eq!(upsert_note(&conn, &input).unwrap().slug, "untitled");
+        input.finalize_slug = true;
+        assert_eq!(
+            upsert_note(&conn, &input).unwrap().slug,
+            "this-is-my-first-note"
+        );
+    }
+
+    #[test]
+    fn placeholder_slug_survives_while_title_stays_placeholder() {
+        let store = SessionStore::open_in_memory().unwrap();
+        upsert(&store, "n1", "Untitled", "");
+        let edited = upsert(&store, "n1", "Untitled", "some body");
+        assert_eq!(edited.slug, "untitled");
+        let blank = upsert(&store, "n1", "   ", "some body");
+        assert_eq!(blank.slug, "untitled");
+        let numbered = upsert(&store, "n1", "Untitled 2", "some body");
+        assert_eq!(numbered.slug, "untitled");
+    }
+
+    #[test]
+    fn placeholder_rename_avoids_slug_collisions() {
+        let store = SessionStore::open_in_memory().unwrap();
+        upsert(&store, "n1", "Plan", "");
+        upsert(&store, "n2", "Untitled", "");
+        let renamed = upsert(&store, "n2", "Plan", "");
+        assert_eq!(renamed.slug, "plan-2");
+    }
+
+    #[test]
+    fn placeholder_slug_detection() {
+        assert!(is_placeholder_slug("untitled"));
+        assert!(is_placeholder_slug("untitled-2"));
+        assert!(is_placeholder_slug("untitled-137"));
+        assert!(!is_placeholder_slug("untitled-"));
+        assert!(!is_placeholder_slug("untitled-draft"));
+        assert!(!is_placeholder_slug("untitled2"));
+        assert!(!is_placeholder_slug("my-untitled"));
     }
 
     #[test]

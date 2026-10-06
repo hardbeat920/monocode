@@ -584,6 +584,8 @@ function NoteEditor({
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  // Title the user finished typing (blur/close); cleared only once saved.
+  const finalizeTitleRef = useRef<string | null>(null);
   const onSavedRef = useRef(onSaved);
   bodyRef.current = body;
   noteRef.current = note;
@@ -638,7 +640,10 @@ function NoteEditor({
       }
       setSaveError(null);
     };
+    // Bound to the finished title so a newer partial edit never finalizes.
+    const finalizeSlug = finalizeTitleRef.current === nextTitle;
     if (
+      !finalizeSlug &&
       nextTitle === current.title &&
       nextBody === current.body &&
       sameTags(nextTags, current.tags) &&
@@ -653,8 +658,12 @@ function NoteEditor({
         title: nextTitle,
         body: nextBody,
         tags: nextTags,
+        ...(finalizeSlug ? { finalizeSlug } : {}),
         ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
+      if (finalizeSlug && finalizeTitleRef.current === nextTitle) {
+        finalizeTitleRef.current = null;
+      }
       acceptSaved(saved);
       onSavedRef.current(saved);
       return saved;
@@ -784,6 +793,12 @@ function NoteEditor({
 
   useEffect(() => {
     return () => {
+      // Only notes still on a placeholder slug need a finalizing save.
+      if (/^untitled(-\d+)?$/.test(noteRef.current.slug)) {
+        finalizeTitleRef.current =
+          (editsRef.current.title ?? noteRef.current.title).trim() ||
+          noteTitle(bodyRef.current);
+      }
       void saveNow();
     };
   }, [saveNow]);
@@ -840,6 +855,7 @@ function NoteEditor({
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
               if (next !== title) editNote({ title: next });
+              finalizeTitleRef.current = next;
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}

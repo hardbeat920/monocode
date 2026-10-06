@@ -652,3 +652,167 @@ it("clears a failed move error when the saved project is selected again", async 
   expect(projectButton()?.textContent).toContain("Edefyn");
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
+
+// Models the backend: a placeholder slug is replaced only on a finalizing save
+// with a real title; real slugs stay stable afterwards.
+const upserts = () =>
+  invoke.mock.calls
+    .filter(([command]) => command === "notes_upsert")
+    .map(([, args]) => (args as { note: NoteUpsert }).note);
+
+function useSlugBackend(upsertHook?: (note: NoteUpsert) => Promise<void>) {
+  const slugify = (title: string) =>
+    title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "untitled";
+  const placeholder = (slug: string) => /^untitled(-\d+)?$/.test(slug);
+  invoke.mockImplementation(async (command: string, args?: { note: NoteUpsert }) => {
+    if (command === "notes_list") return [{ ...stored }];
+    if (command !== "notes_upsert") throw new Error(`Unexpected command: ${command}`);
+    const { finalizeSlug, ...note } = args!.note;
+    await upsertHook?.(args!.note);
+    const slug =
+      finalizeSlug && placeholder(stored.slug) && !placeholder(slugify(note.title))
+        ? slugify(note.title)
+        : stored.slug;
+    stored = { ...stored, ...note, slug, updatedAt: stored.updatedAt + 1 };
+    return { ...stored };
+  });
+}
+
+async function renderUntitled(id: string) {
+  vi.useFakeTimers();
+  stored = { ...stored, id, slug: "untitled", title: "Untitled", body: "" };
+  useSlugBackend();
+  await render();
+  return container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+}
+
+it("keeps the placeholder slug while typing with pauses, then finalizes on blur", async () => {
+  const title = await renderUntitled("note-slug-typing");
+  act(() => {
+    title.focus();
+    typeInto(title, "This i");
+  });
+  await act(async () => vi.advanceTimersByTime(400));
+  act(() => typeInto(title, "This is my first note"));
+  await act(async () => vi.advanceTimersByTime(400));
+  expect(stored.title).toBe("This is my first note");
+  expect(stored.slug).toBe("untitled");
+  expect(upserts().every((note) => !note.finalizeSlug)).toBe(true);
+
+  await act(async () => title.blur());
+  expect(upserts().at(-1)).toMatchObject({ finalizeSlug: true });
+  expect(stored.slug).toBe("this-is-my-first-note");
+
+  act(() => {
+    title.focus();
+    typeInto(title, "Renamed");
+  });
+  await act(async () => title.blur());
+  expect(stored.title).toBe("Renamed");
+  expect(stored.slug).toBe("this-is-my-first-note");
+});
+
+it("finalizes the slug when Notes closes without blurring the title", async () => {
+  const title = await renderUntitled("note-slug-unmount");
+  act(() => {
+    title.focus();
+    typeInto(title, "Closing note");
+  });
+  await act(async () => vi.advanceTimersByTime(400));
+  expect(stored.slug).toBe("untitled");
+  await act(async () => root.unmount());
+  expect(upserts().at(-1)).toMatchObject({ finalizeSlug: true });
+  expect(stored.slug).toBe("closing-note");
+  root = createRoot(container);
+});
+
+it("keeps the finalization request when it fails so Retry still finalizes", async () => {
+  const title = await renderUntitled("note-slug-retry");
+  act(() => {
+    title.focus();
+    typeInto(title, "Retry note");
+  });
+  await act(async () => vi.advanceTimersByTime(400));
+  expect(stored.title).toBe("Retry note");
+  expect(stored.slug).toBe("untitled");
+
+  const ok = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (command: string, args?: { note: NoteUpsert }) => {
+    if (command === "notes_upsert") throw new Error("Disk full");
+    return ok(command, args);
+  });
+  await act(async () => title.blur());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Disk full");
+  expect(stored.slug).toBe("untitled");
+
+  invoke.mockImplementation(ok);
+  const retry = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent === "Retry")!;
+  await act(async () => retry.click());
+  expect(upserts().at(-1)).toMatchObject({ title: "Retry note", finalizeSlug: true });
+  expect(stored.slug).toBe("retry-note");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("does not let a queued blur finalize a newer partial title", async () => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: "note-slug-queued", slug: "untitled", title: "Untitled", body: "" };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let hold = false;
+  useSlugBackend(async () => {
+    if (hold) {
+      hold = false;
+      await gate;
+    }
+  });
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  act(() => {
+    title.focus();
+    typeInto(title, "Full title");
+  });
+  hold = true;
+  await act(async () => vi.advanceTimersByTime(400)); // in-flight save
+  await act(async () => title.blur()); // queued, finalizing "Full title"
+  act(() => {
+    title.focus();
+    typeInto(title, "Full title ext");
+  });
+  await act(async () => release());
+
+  expect(stored.slug).toBe("untitled");
+  expect(upserts().some((note) => note.finalizeSlug && note.title !== "Full title")).toBe(false);
+
+  await act(async () => title.blur());
+  expect(stored.slug).toBe("full-title-ext");
+});
+
+it("keeps a newer finalization request when an older finalizing save completes", async () => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: "note-slug-stale", slug: "untitled", title: "Untitled", body: "" };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let hold = true;
+  useSlugBackend(async () => {
+    if (hold) {
+      hold = false;
+      await gate;
+    }
+  });
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  await act(async () => {
+    title.focus();
+    title.blur(); // finalizing save for "Untitled" held in flight
+  });
+  act(() => {
+    title.focus();
+    typeInto(title, "Real title");
+  });
+  await act(async () => title.blur()); // queued, finalizing "Real title"
+  await act(async () => release());
+
+  expect(upserts().at(-1)).toMatchObject({ title: "Real title", finalizeSlug: true });
+  expect(stored.slug).toBe("real-title");
+});
