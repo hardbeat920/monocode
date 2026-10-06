@@ -141,7 +141,7 @@ const {
   sendOpenCodeTurn,
   stopOpenCodeSession,
 } = await import("./opencode");
-import type { HarnessEvent } from "../../core/types";
+import { TurnNotReadyError, type HarnessEvent } from "../../core/types";
 
 const waitFor = async (predicate: () => boolean, label: string) => {
   for (let index = 0; index < 200; index += 1) {
@@ -287,6 +287,40 @@ describe("OpenCode subagent trails", () => {
         metadata: { sessionId: child },
       },
     });
+
+  it("preserves completed child text when a late delta arrives", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    task("a", "child");
+    sessionCreated("child", "session_1");
+    message("child", "child_message");
+    part("child", {
+      id: "child_text",
+      messageID: "child_message",
+      type: "text",
+      text: "Final answer",
+      time: { start: 1, end: 2 },
+    });
+    onSseEvent?.({
+      type: "message.part.delta",
+      properties: {
+        sessionID: "child",
+        partID: "child_text",
+        field: "text",
+        delta: " stale suffix",
+      },
+    });
+    idle();
+    await done;
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("opencode", "/repo"),
+    );
+    expect(
+      session.blocks.find((block) => block.tool?.callId === "a")?.agentRun
+        ?.steps,
+    ).toEqual([expect.objectContaining({ text: "Final answer" })]);
+  });
 
   it("pairs concurrent children by metadata and replays their latest parts after creating the row", async () => {
     const events: HarnessEvent[] = [];
@@ -1686,7 +1720,7 @@ describe("OpenCode review regressions", () => {
     await expect(turn([])).rejects.toThrow("Prompt rejected");
     await expect(
       steerOpenCodeTurn({ ...sessionInput(), text: "Follow-up" }),
-    ).rejects.toThrow("No active turn");
+    ).rejects.toBeInstanceOf(TurnNotReadyError);
     await expect(rewindOpenCodeLastTurn(sessionInput())).resolves.toEqual({
       submitted: false,
     });

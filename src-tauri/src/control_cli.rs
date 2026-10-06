@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 13] = [
+const APP_ACTIONS: [&str; 26] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -96,10 +96,27 @@ const APP_ACTIONS: [&str; 13] = [
     "notes.list",
     "notes.read",
     "notes.write",
+    "soul.read",
+    "soul.update",
+    "memory.read",
+    "memory.search",
+    "memory.add",
+    "memory.replace",
+    "memory.remove",
+    "habits.list",
+    "habits.add",
+    "habits.update",
+    "habits.run",
+    "habits.remove",
+    "chat.card",
 ];
 const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
+
+A Mono works on several projects: add "project":"<path or name>" to the
+sessions.*, worktrees.* and folders.* actions to choose which one. It may be
+left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
@@ -109,9 +126,11 @@ Actions:
                   reasoning are omitted. Omit before for the newest page;
                   pass nextBefore from a result for older exchanges. maxChars
                   caps each message (200-6000, default 1200).
-  sessions.send  {"sessionId":"...","prompt":"..."}
+  sessions.send  {"sessionId":"...","prompt":"...","notifyOnComplete":true}
                   Submit a follow-up to an idle session in this project.
                   A busy session is rejected. Reuse --request-id on retries.
+                  Optional notifyOnComplete:true asks for a completion report
+                  in the calling Mono's chat. It waits until that Mono is idle.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
@@ -127,6 +146,14 @@ Actions:
                   session in this project, including one just created. Set
                   draft:true to save the prompt unsent; no agent turn runs.
                   Otherwise the turn is submitted.
+                  Submitted sessions notify the calling Mono by default when
+                  this turn completes, fails or is cancelled. The Mono reviews
+                  it and reports back once idle. Set notifyOnComplete:false
+                  when the user asks not to receive a report. Drafts do not
+                  notify; notifyOnComplete:true cannot be combined with draft:true.
+                  Sessions monitored during the same Mono turn form one group:
+                  their results arrive together after every session stops.
+                  The Mono reviews the whole group and gives one combined report.
                   Returns after creation/acceptance, not agent completion;
                   use its ID with folders.move immediately. Optional model,
                   effort, modelSettings, permission mode and workspace choice
@@ -153,6 +180,47 @@ Actions:
                   to derive it from the body. Use {"id":"...","body":"..."}
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
+  soul.read      {}  Mono's own conversation only. Current SOUL.md text and hash.
+  soul.update    {"text":"<complete Markdown>","expectedHash":"<hash from soul.read>"}
+                  Update your standing instructions only when the user asks.
+                  Preserve the other instructions. If the file changed since
+                  soul.read, read it again and reapply the requested changes.
+                  Habit runs and other sessions cannot change a Mono's soul.
+  memory.read    {"topic":"releases"}  Mono only. Without topic:
+                  MEMORY.md, how much of it loads, and the topic names.
+  memory.search  {"query":"release tags","since":"7d"}
+                  Entries across MEMORY.md, topic notes and the archive that
+                  share words with query, best first. since is a date or a
+                  span (24h, 7d, 2w) and keeps dated entries from then on.
+  memory.add     {"fact":"...","topic":"releases","until":"2026-11-01"}
+                  Add one dated entry to MEMORY.md, or to a topic file when
+                  topic is set. until is optional, for facts that expire.
+                  Oldest entries move to the archive when MEMORY.md is full.
+  memory.replace {"find":"text of the old entry","fact":"...","topic":"..."}
+                  Strike the one entry containing find through and add fact.
+  memory.remove  {"find":"text of the entry","topic":"..."}
+                  Delete the one entry containing find, for a wrong entry.
+  habits.list    {}  Mono only. Your habits: what each does, when it runs
+                  next, and how its last run went.
+  habits.add     {"name":"Morning CI check","instructions":"...",
+                  "schedule":{"kind":"weekdays","time":"09:00"}}
+                  Add only after the user agreed to it in this chat. kind is
+                  hourly (with "minute"), daily, weekdays or weekly (with
+                  "dayOfWeek", 0 = Sunday); time is local 24-hour HH:MM.
+                  Each run is a hidden session that posts to this chat only
+                  when it has something worth saying.
+  habits.update  {"id":"...","name":"...","instructions":"...",
+                  "schedule":{...},"enabled":false}  Change or pause one.
+  habits.run     {"id":"..."}  Run one within a minute, to try it out.
+  habits.remove  {"id":"..."}
+  chat.card      Mono or habit only. Post a card to the Mono's chat:
+                  {"type":"pr","repo":"owner/repo","number":123,"note":"..."}
+                  {"type":"session","sessionId":"...","note":"..."}
+                  {"type":"choices","options":["First choice","Second choice"]}
+                  {"type":"habit","name":"...","instructions":"...",
+                   "schedule":{"kind":"daily","time":"09:00"}}
+                  choices accepts 1–4 options. A habit card is a suggestion;
+                  the user must start it before it is scheduled.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
@@ -556,5 +624,51 @@ mod tests {
         assert!(denied.get("requestId").is_none());
         let uncertain = with_retry_hint(json!({"ok":false,"error":"timeout"}), "id-1");
         assert_eq!(uncertain["retryWith"], "--request-id id-1");
+    }
+
+    #[test]
+    fn app_mode_accepts_chat_cards_and_documents_every_type() {
+        for input in [
+            r#"{"type":"pr","repo":"owner/repo","number":123}"#,
+            r#"{"type":"session","sessionId":"other"}"#,
+            r#"{"type":"choices","options":["Review","Ship"]}"#,
+            r#"{"type":"habit","name":"Check CI","instructions":"Check CI","schedule":{"kind":"daily","time":"09:00"}}"#,
+        ] {
+            assert!(matches!(
+                parse_args_for(&args(&["chat.card", "--json", input]), true),
+                Ok(Parsed::Call(action, parsed_input, _))
+                    if action == "chat.card"
+                        && parsed_input == serde_json::from_str::<Value>(input).unwrap()
+            ));
+        }
+        assert!(parse_args_for(&args(&["chat.card"]), false).is_err());
+        let help = app_help();
+        assert!(help.contains("chat.card"));
+        for kind in ["pr", "session", "choices", "habit"] {
+            assert!(help.contains(&format!(r#""type":"{kind}""#)));
+        }
+    }
+
+    #[test]
+    fn app_mode_exposes_soul_actions_and_documents_requested_updates() {
+        for (action, input) in [
+            ("soul.read", r#"{}"#),
+            (
+                "soul.update",
+                r##"{"text":"# Soul\n","expectedHash":"old-hash"}"##,
+            ),
+        ] {
+            assert!(matches!(
+                parse_args_for(&args(&[action, "--json", input]), true),
+                Ok(Parsed::Call(parsed_action, parsed_input, _))
+                    if parsed_action == action
+                        && parsed_input == serde_json::from_str::<Value>(input).unwrap()
+            ));
+            assert!(parse_args_for(&args(&[action]), false).is_err());
+            assert!(app_help().contains(action));
+        }
+        assert!(app_help().contains("only when the user asks"));
+        assert!(app_help().contains("expectedHash"));
+        assert!(app_help().contains("Habit runs and other sessions cannot change"));
     }
 }

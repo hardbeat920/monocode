@@ -11,7 +11,7 @@ import {
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
 import type { Worktree } from "../../source-control/model/worktrees";
-import { handleAgentApp, notePreview, type AgentAppHost } from "./agentApp";
+import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
 vi.mock("../../../integrations/harness/core/availability", () => ({
   isHarnessAvailable: (id: string) => id === "codex",
@@ -105,11 +105,238 @@ function fixture() {
     notes: vi.fn(async () => [note]),
     note: vi.fn(async (id) => (id === note.id ? note : null)),
     saveNote: vi.fn(async (input) => ({ ...note, ...input })),
+    isMono: () => false,
   };
   return { source, host };
 }
 
 describe("agent app commands", () => {
+  it("allows session inspection in a Mono's projects when its chat lives at home", () => {
+    const { source } = fixture();
+    source.cwd = "/home/user";
+    const projects = ["/code/app", "/code/site"];
+    expect(canAccessAgentAppProject(source, "/code/app/", projects)).toBe(true);
+    expect(canAccessAgentAppProject(source, "/code/site", projects)).toBe(true);
+    expect(canAccessAgentAppProject(source, source.cwd, projects)).toBe(false);
+    expect(canAccessAgentAppProject(source, "/code/other", projects)).toBe(
+      false,
+    );
+    expect(canAccessAgentAppProject(source, "/code/app", [])).toBe(false);
+    expect(canAccessAgentAppProject(source, source.cwd)).toBe(true);
+    expect(canAccessAgentAppProject(source, "/code/app")).toBe(false);
+  });
+
+  it.each([undefined, true])("reports completion of Mono launches with notifyOnComplete=%s", async (notifyOnComplete) => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    expect(
+      await handleAgentApp(
+        source,
+        "monitored",
+        "sessions.start",
+        {
+          prompt: "Review the API",
+          ...(notifyOnComplete === undefined ? {} : { notifyOnComplete }),
+        },
+        host,
+      ),
+    ).toMatchObject({
+      id: "app-lead-monitored",
+      submitted: true,
+      notifyOnComplete: true,
+    });
+    expect(host.start).toHaveBeenLastCalledWith(
+      expect.objectContaining({ prompt: "Review the API" }),
+      "app-lead-monitored",
+      undefined,
+      "lead",
+    );
+    const optedOut = await handleAgentApp(
+      source,
+      "ordinary",
+      "sessions.start",
+      { prompt: "Review", notifyOnComplete: false },
+      host,
+    );
+    expect(optedOut).not.toHaveProperty("notifyOnComplete");
+    expect(host.start).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "app-lead-ordinary",
+    );
+  });
+
+  it("does not monitor a Mono's unsent draft by default", async () => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    const result = await handleAgentApp(
+      source,
+      "draft",
+      "sessions.start",
+      { prompt: "Review the API", draft: true },
+      host,
+    );
+    expect(result).toMatchObject({ submitted: false, draft: true });
+    expect(result).not.toHaveProperty("notifyOnComplete");
+    expect(host.start).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: true }),
+      "app-lead-draft",
+    );
+  });
+
+  it.each([false, true])("leaves non-Mono launches unmonitored when habitRun=%s", async (habitRun) => {
+    const { source, host } = fixture();
+    host.isHabitRun = () => habitRun;
+    const result = await handleAgentApp(
+      source,
+      "ordinary",
+      "sessions.start",
+      { prompt: "Review the API" },
+      host,
+    );
+    expect(result).not.toHaveProperty("notifyOnComplete");
+    expect(host.start).toHaveBeenCalledWith(
+      expect.anything(),
+      "app-lead-ordinary",
+    );
+  });
+
+  it("reports completion of a sent follow-up to its calling Mono", async () => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    expect(
+      await handleAgentApp(
+        source,
+        "monitored-send",
+        "sessions.send",
+        {
+          sessionId: "other",
+          prompt: "Fix the findings",
+          notifyOnComplete: true,
+        },
+        host,
+      ),
+    ).toMatchObject({ submitted: true, notifyOnComplete: true });
+    expect(host.send).toHaveBeenCalledWith(
+      "other",
+      "Fix the findings",
+      "app-lead-monitored-send",
+      "lead",
+    );
+  });
+
+  it.each([
+    { reveal: undefined },
+    { reveal: true },
+    { reveal: true, notifyOnComplete: true },
+    { reveal: true, draft: true },
+    { reveal: true, placement: "right", besideSessionId: "other" },
+  ])("keeps Mono-launched sessions in the background for %j", async (options) => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    await handleAgentApp(
+      source,
+      "background",
+      "sessions.start",
+      { prompt: "Review the API", ...options },
+      host,
+    );
+    expect(vi.mocked(host.start).mock.calls[0][0]).toMatchObject({
+      prompt: "Review the API",
+      reveal: false,
+    });
+  });
+
+  it("reports completion by default through split placement", async () => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    await handleAgentApp(
+      source,
+      "monitored-split",
+      "sessions.start",
+      {
+        prompt: "Review",
+        placement: "right",
+      },
+      host,
+    );
+    expect(host.start).toHaveBeenCalledWith(
+      expect.anything(),
+      "app-lead-monitored-split",
+      {
+        direction: "right",
+        besideSessionId: "lead",
+      },
+      "lead",
+    );
+  });
+
+  it.each(["sessions.start", "sessions.send"])(
+    "validates completion notification options for %s before submission",
+    async (action) => {
+      const { source, host } = fixture();
+      const input = {
+        prompt: "Review",
+        ...(action === "sessions.send" ? { sessionId: "other" } : {}),
+      };
+      await expect(
+        handleAgentApp(
+          source,
+          "wrong-type",
+          action,
+          { ...input, notifyOnComplete: "yes" },
+          host,
+        ),
+      ).rejects.toThrow("must be a boolean");
+      await expect(
+        handleAgentApp(
+          source,
+          "not-mono",
+          action,
+          { ...input, notifyOnComplete: true },
+          host,
+        ),
+      ).rejects.toThrow("only available in a Mono");
+      expect(host.start).not.toHaveBeenCalled();
+      expect(host.send).not.toHaveBeenCalled();
+      await handleAgentApp(
+        source,
+        "disabled",
+        action,
+        { ...input, notifyOnComplete: false },
+        host,
+      );
+    },
+  );
+
+  it("rejects completion reports for an unsent draft", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    await expect(
+      handleAgentApp(
+        source,
+        "draft-notify",
+        "sessions.start",
+        {
+          prompt: "Review",
+          draft: true,
+          notifyOnComplete: true,
+        },
+        host,
+      ),
+    ).rejects.toThrow("unsent draft");
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("lets a Mono page its own chat without requiring a project", async () => {
+    const { source, host } = fixture();
+    host.isMono = (id) => id === source.id;
+    host.readConversation = vi.fn(async () => ({ sessionId: source.id, title: "Mono", busy: false, hasDraft: false, turns: [], nextBefore: "older" }));
+    const options = { before: "cursor", limit: 3, maxChars: 1200 };
+    expect(await handleAgentApp(source, "own-chat", "sessions.read", { sessionId: source.id, ...options }, host)).toMatchObject({ nextBefore: "older" });
+    expect(host.readConversation).toHaveBeenCalledWith(source, options);
+    expect(host.sessions).not.toHaveBeenCalled();
+  });
+
   it("reads a listed project session in bounded pages", async () => {
     const { source, host } = fixture();
     const result = await handleAgentApp(
@@ -349,6 +576,47 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("unavailable in this project");
     expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["/tmp/project", "/tmp/project-worktrees/source"],
+    ["/tmp/other", undefined],
+  ])("inherits a worktree only when launching in the source project: %s", async (project, expectedWorktree) => {
+    const { source, host } = fixture();
+    source.worktreeCwd = "/tmp/project-worktrees/source";
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: "mono", projects: [source.cwd, "/tmp/other"] });
+    await handleAgentApp(source, "launch", "sessions.start", {
+      prompt: "Review the project",
+      project,
+      notifyOnComplete: false,
+    }, host);
+    const launch = vi.mocked(host.start).mock.calls[0][0];
+    expect(launch.cwd).toBe(project);
+    expect(launch.worktreeCwd).toBe(expectedWorktree);
+  });
+
+  it("validates an explicit worktree in the Mono's selected project", async () => {
+    const { source, host } = fixture();
+    source.worktreeCwd = "/tmp/project-worktrees/source";
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: "mono", projects: [source.cwd, "/tmp/other"] });
+    const chosen = "/tmp/other-worktrees/feature";
+    vi.mocked(host.worktrees).mockResolvedValue({
+      worktrees: [{ ...featureWorktree, path: chosen }],
+      defaultRoot: "/tmp/other-worktrees",
+    });
+    await handleAgentApp(source, "launch", "sessions.start", {
+      prompt: "Review the feature",
+      project: "/tmp/other",
+      worktreeCwd: chosen,
+      notifyOnComplete: false,
+    }, host);
+    expect(host.worktrees).toHaveBeenCalledWith("/tmp/other");
+    expect(host.start).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/other", worktreeCwd: chosen }),
+      "app-lead-launch",
+    );
   });
 
   it("creates a worktree on a named new or existing branch", async () => {

@@ -65,6 +65,12 @@ type Props = {
   /** Limit provider tabs for surfaces that only support one harness. */
   allowedHarnesses?: readonly HarnessId[];
   hotkeys?: boolean;
+  /** Which way the menus open; the composer sits low, so they open up. */
+  side?: "top" | "bottom";
+  /** `plain` drops the pill for rows like a details panel's property list. */
+  variant?: "pill" | "plain";
+  /** Action label for recovery surfaces that open the same model chooser. */
+  triggerLabel?: string;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
@@ -267,6 +273,9 @@ export function ModelPicker({
   hideSettings = false,
   allowedHarnesses,
   hotkeys = false,
+  side = "top",
+  variant = "pill",
+  triggerLabel,
   onChange,
   onSettingsChange,
   onClose,
@@ -676,8 +685,12 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
-        title={`${triggerTitle} · Recent models: right-click or ${MOD}.`}
-        aria-label={`${HARNESS_TITLE[current.harness]}${
+        title={
+          triggerLabel
+            ? `${triggerLabel} · ${triggerTitle}`
+            : `${triggerTitle} · Recent models: right-click or ${MOD}.`
+        }
+        aria-label={triggerLabel ?? `${HARNESS_TITLE[current.harness]}${
           current.provider ? `, ${current.provider.name},` : ""
         } ${current.name}${
           triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
@@ -692,16 +705,31 @@ export function ModelPicker({
           openRecentMenu();
         }}
         onClick={() => togglePicker()}
-        className={`flex h-6.5 max-w-40 items-center gap-1 rounded-md px-1.5 ${
-          open
-            ? "bg-selection text-content"
-            : "bg-selection text-content hover:bg-selection-hover"
-        }`}
+        className={
+          variant === "plain"
+            ? `-mx-1.5 flex h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
+                open ? "bg-content/8" : "hover:bg-content/6"
+              }`
+            : `flex h-6.5 shrink-0 items-center gap-1 rounded-md px-1.5 ${
+                open
+                  ? "bg-selection text-content"
+                  : "bg-selection text-content hover:bg-selection-hover"
+              }`
+        }
       >
-        <HarnessIcon harness={current.harness} className="size-4 shrink-0" />
-        <span className="min-w-0 truncate text-[11px]">{current.name}</span>
-        {triggerEffortLabel ? (
-          <span className="shrink-0 text-[11px] text-content/50">
+        <HarnessIcon
+          harness={current.harness}
+          className={`${variant === "plain" ? "size-3.5" : "size-4"} shrink-0`}
+        />
+        <span
+          className={`whitespace-nowrap ${variant === "plain" ? "" : "text-[11px]"}`}
+        >
+          {triggerLabel ?? current.name}
+        </span>
+        {!triggerLabel && triggerEffortLabel ? (
+          <span
+            className={`shrink-0 text-content/50 ${variant === "plain" ? "" : "text-[11px]"}`}
+          >
             {triggerEffortLabel}
           </span>
         ) : null}
@@ -714,7 +742,7 @@ export function ModelPicker({
       {open && hideSettings ? (
         <ModelFlyout
           anchor={button}
-          side="top"
+          side={side}
           autoFocusSearch
           onDismiss={(reason) => dismiss(reason === "escape")}
           harnesses={pickerHarnesses}
@@ -737,7 +765,7 @@ export function ModelPicker({
         <>
           <Popover
             anchor={button}
-            side="top"
+            side={side}
             width={MENU_WIDTH}
             autoFocus
             dismissOnEscape={false}
@@ -916,6 +944,7 @@ export function ModelPicker({
           {showSubmenu && submenu.kind === "models" ? (
             <ModelFlyout
               anchor={activeRow}
+              autoFocusSearch
               harnesses={pickerHarnesses}
               tab={visibleTab}
               models={visibleModels}
@@ -937,7 +966,7 @@ export function ModelPicker({
       {recentMenu ? (
         <Popover
           anchor={button}
-          side="top"
+          side={side}
           width={MENU_WIDTH}
           autoFocus
           onDismiss={() => setRecentMenu(null)}
@@ -1062,16 +1091,114 @@ export function ModelControlPills({
   );
 }
 
+/** Trigger classes for a setting control in the pill or plain look. */
+function controlClass(variant: "pill" | "plain", open = false): string {
+  return variant === "plain"
+    ? `-mx-1.5 flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
+        open ? "bg-content/8" : "hover:bg-content/6"
+      }`
+    : `flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
+        open
+          ? "bg-selection text-content"
+          : "bg-selection text-content hover:bg-selection-hover"
+      }`;
+}
+
+/**
+ * Each model setting as its own labelled row, for property lists like a
+ * details panel. `row` lays out one label and its control.
+ */
+export function ModelSettingRows({
+  harness,
+  model,
+  values,
+  side = "top",
+  onSettingsChange,
+  row,
+}: Pick<Props, "harness" | "model" | "values" | "side" | "onSettingsChange"> & {
+  row: (setting: {
+    id: string;
+    label: string;
+    control: ReactNode;
+  }) => ReactNode;
+}) {
+  const catalogVersion = useSyncExternalStore(
+    subscribeModels,
+    getModelSnapshot,
+    getModelSnapshot,
+  );
+  void catalogVersion;
+  const current = useModelSource().resolve(harness, model);
+  return (
+    <>
+      {pillSettings(current).map((setting) => (
+        <Fragment key={setting.id}>
+          {row({
+            id: setting.id,
+            label: settingLabel(setting),
+            control:
+              setting.kind === "toggle" ? (
+                <TogglePill
+                  setting={setting}
+                  values={values}
+                  variant="plain"
+                  onSettingsChange={onSettingsChange}
+                />
+              ) : (
+                <SelectPill
+                  setting={setting}
+                  values={values}
+                  variant="plain"
+                  side={side}
+                  harness={harness}
+                  onSettingsChange={onSettingsChange}
+                />
+              ),
+          })}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 function TogglePill({
   setting,
   values,
+  variant = "pill",
   onSettingsChange,
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
+  variant?: "pill" | "plain";
   onSettingsChange: (settings: Record<string, string>) => void;
 }) {
   const on = settingValue(setting, values) === "true";
+  const toggle = () =>
+    onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" });
+  if (variant === "plain") {
+    // A compact switch, short enough to keep its row the height of the rest.
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-label={setting.label}
+        aria-checked={on}
+        title={`${setting.label}: ${on ? "On" : "Off"}`}
+        data-model-control
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={toggle}
+        className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${
+          on ? "bg-accent" : "bg-content/20"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 size-3 rounded-full bg-white transition-[left] ${
+            on ? "left-3.5" : "left-0.5"
+          }`}
+        />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -1080,10 +1207,8 @@ function TogglePill({
       aria-pressed={on}
       data-model-control
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() =>
-        onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" })
-      }
-      className="flex h-6.5 max-w-28 items-center gap-1 rounded-md bg-selection px-1.5 text-content hover:bg-selection-hover"
+      onClick={toggle}
+      className={controlClass(variant)}
     >
       <span
         className={`min-w-0 truncate text-[11px] ${on ? "" : "text-content/50"}`}
@@ -1097,6 +1222,8 @@ function TogglePill({
 function SelectPill({
   setting,
   values,
+  variant = "pill",
+  side = "top",
   onSettingsChange,
   onClose,
   harness,
@@ -1104,6 +1231,8 @@ function SelectPill({
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
+  variant?: "pill" | "plain";
+  side?: "top" | "bottom";
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
   harness: HarnessId;
@@ -1155,18 +1284,18 @@ function SelectPill({
         data-model-control
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => (open ? dismiss(true) : openPicker())}
-        className={`flex h-6.5 max-w-28 items-center gap-1 rounded-md px-1.5 ${
-          open
-            ? "bg-selection text-content"
-            : "bg-selection text-content hover:bg-selection-hover"
-        }`}
+        className={controlClass(variant, open)}
       >
         {isEffortSetting(setting) ? (
           <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : setting.id === "serviceTier" ? (
           <Zap className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : null}
-        <span className="min-w-0 truncate text-[11px]">{valueLabel}</span>
+        <span
+          className={`min-w-0 truncate ${variant === "plain" ? "" : "text-[11px]"}`}
+        >
+          {valueLabel}
+        </span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
@@ -1176,7 +1305,7 @@ function SelectPill({
       {open ? (
         <Popover
           anchor={button}
-          side="top"
+          side={side}
           width={SETTING_MENU_WIDTH}
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}
@@ -1287,7 +1416,7 @@ function ModelFlyout({
   onToggleFavorite,
 }: {
   anchor: HTMLButtonElement | { current: HTMLButtonElement | null };
-  side?: "right" | "top";
+  side?: "right" | "top" | "bottom";
   autoFocusSearch?: boolean;
   onDismiss?: (reason: "outside" | "escape") => void;
   harnesses: HarnessId[];
@@ -1312,6 +1441,18 @@ function ModelFlyout({
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  // The popover frame starts hidden until its layout effect measures the
+  // anchor, and browsers silently drop focus() on a hidden element. React's
+  // autoFocus fires during that first commit, so defer one frame to focus
+  // once the flyout is on screen.
+  useEffect(() => {
+    if (!autoFocusSearch) return;
+    const frame = requestAnimationFrame(() => {
+      searchRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocusSearch, searchRef]);
 
   const onSearchKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
@@ -1426,7 +1567,6 @@ function ModelFlyout({
             value={query}
             placeholder="Search models"
             aria-label="Search models"
-            autoFocus={autoFocusSearch}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={onSearchKey}

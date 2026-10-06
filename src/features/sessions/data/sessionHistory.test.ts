@@ -54,6 +54,18 @@ describe("historyWithLiveSessions", () => {
     })),
   };
 
+  it("never lists an ephemeral session, even while it is working", () => {
+    const run = {
+      ...newSession("codex", "/tmp/project-a"),
+      id: "habit-run",
+      title: "Skull · Daily useful PR check",
+      ephemeral: true,
+      busy: true,
+      blocks: [{ id: "u", role: "user" as const, text: "check PRs" }],
+    };
+    expect(historyWithLiveSessions([], [run], "/tmp/project-a")).toEqual([]);
+  });
+
   it("groups live and already-saved workers under their lead before adoption effects run", () => {
     const sessions = ["lead", "worker-a", "worker-b"].map((id) => ({
       ...newSession("codex", run.cwd),
