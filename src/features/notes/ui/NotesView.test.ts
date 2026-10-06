@@ -816,3 +816,20 @@ it("keeps a newer finalization request when an older finalizing save completes",
   expect(upserts().at(-1)).toMatchObject({ title: "Real title", finalizeSlug: true });
   expect(stored.slug).toBe("real-title");
 });
+
+it("does not save or request finalization when blurring an unchanged note with a real slug", async () => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: "note-real-slug", slug: "real-slug", title: "Real slug", body: "" };
+  useSlugBackend();
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  const before = upserts().length;
+
+  await act(async () => {
+    title.focus();
+    title.blur();
+  });
+
+  expect(upserts().length).toBe(before);
+  expect(upserts().some((note) => note.finalizeSlug)).toBe(false);
+});

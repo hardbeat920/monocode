@@ -794,7 +794,7 @@ function NoteEditor({
   useEffect(() => {
     return () => {
       // Only notes still on a placeholder slug need a finalizing save.
-      if (/^untitled(-\d+)?$/.test(noteRef.current.slug)) {
+      if (hasPlaceholderSlug(noteRef.current)) {
         finalizeTitleRef.current =
           (editsRef.current.title ?? noteRef.current.title).trim() ||
           noteTitle(bodyRef.current);
@@ -855,7 +855,9 @@ function NoteEditor({
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
               if (next !== title) editNote({ title: next });
-              finalizeTitleRef.current = next;
+              if (hasPlaceholderSlug(noteRef.current)) {
+                finalizeTitleRef.current = next;
+              }
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}
@@ -1057,6 +1059,10 @@ function NoteTagsEditor({
       ) : null}
     </div>
   );
+}
+
+function hasPlaceholderSlug(note: { slug: string }): boolean {
+  return /^untitled(-\d+)?$/.test(note.slug);
 }
 
 function sameTags(left: readonly string[], right: readonly string[]): boolean {
