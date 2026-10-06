@@ -71,7 +71,7 @@
      Private Use Area glyphs (powerline arrows, git/folder icons) because
      WebKit's fallback never reaches user-installed icon fonts on its own. */
   --font-terminal:
-    "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrainsMono Nerd Font Mono",
+    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Mono", "JetBrainsMono NF",
     ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Mono",
     "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
     "FiraCode Nerd Font Mono", "Hack Nerd Font Mono",
