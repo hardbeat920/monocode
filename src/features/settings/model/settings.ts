@@ -61,8 +61,10 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "connections",
     group: "app",
     label: "Connections",
-    description: "Connect your machines and run agents remotely through SSH.",
-    keywords: "ssh remote host machine server environment always on",
+    description:
+      "Connect your machines over SSH and pair Figma Desktop with MonoCode.",
+    keywords:
+      "ssh remote host machine server environment always on figma design plugin",
   },
   {
     id: "appearance",
@@ -163,6 +165,12 @@ export type SettingsEntry = {
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   { id: "remote-machines", section: "connections", label: "Your machines", keywords: "ssh remote connect host server environment" },
+  {
+    id: "figma",
+    section: "connections",
+    label: "Figma",
+    keywords: "figma design plugin bridge desktop component selection generate",
+  },
   {
     id: "mcp-servers",
     section: "mcp",
@@ -748,6 +756,35 @@ export function subscribeNotesEnabled(onStoreChange: () => void) {
   window.addEventListener(NOTES_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(NOTES_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const FIGMA_PANEL_ENABLED_KEY = "monocode.figmaPanelEnabled";
+
+export const FIGMA_PANEL_ENABLED_DEFAULT = false;
+
+export const FIGMA_PANEL_ENABLED_CHANGE_EVENT =
+  "monocode:figma-panel-enabled-change";
+
+export function loadFigmaPanelEnabled(): boolean {
+  return readFlag(FIGMA_PANEL_ENABLED_KEY) ?? FIGMA_PANEL_ENABLED_DEFAULT;
+}
+
+export function saveFigmaPanelEnabled(value: boolean) {
+  if (loadFigmaPanelEnabled() === value) return;
+  writeFlag(FIGMA_PANEL_ENABLED_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(FIGMA_PANEL_ENABLED_CHANGE_EVENT, {
+      detail: value,
+    }),
+  );
+}
+
+export function subscribeFigmaPanelEnabled(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(FIGMA_PANEL_ENABLED_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(FIGMA_PANEL_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
 const QUICK_COMPOSER_ENABLED_KEY = "monocode.quickComposerEnabled";

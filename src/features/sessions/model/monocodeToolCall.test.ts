@@ -43,6 +43,15 @@ describe("MonoCode CLI tool calls", () => {
       monoCodeToolCall(shell("monocode app notes.write --input -"))?.label,
     ).toBe("Write a note");
     expect(
+      monoCodeToolCall(shell("monocode app figma.selection --json '{}'"))
+        ?.label,
+    ).toBe("Read the Figma selection");
+    expect(
+      monoCodeToolCall(
+        shell(`monocode app figma.capture --json '{"nodeId":"12-34"}'`),
+      )?.label,
+    ).toBe("Export a Figma layer");
+    expect(
       monoCodeToolCall({
         id: "generic",
         role: "tool",

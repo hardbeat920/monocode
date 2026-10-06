@@ -1,0 +1,16 @@
+{
+  "name": "MonoCode Figma Bridge",
+  "id": "monocode-figma-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma", "dev"],
+  "capabilities": ["inspect"],
+  "permissions": [],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["ws://localhost:3056"],
+    "devAllowedDomains": ["ws://localhost:3056"],
+    "reasoning": "Connects only to the MonoCode app running on this computer so it can show the current selection and generate components from it."
+  }
+}

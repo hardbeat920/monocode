@@ -5,6 +5,7 @@ import {
   rebaseProjectSidebarTab,
   saveProjectSidebarTab,
 } from "./projectSidebarTab";
+import { saveFigmaPanelEnabled } from "./settings";
 
 const KEY = "monocode.projectSidebarTabs.v1";
 
@@ -44,6 +45,21 @@ describe("project Workspace tab", () => {
       JSON.stringify(["inbox", "files", "sessions", "changes"]),
     );
     expect(loadProjectSidebarTab("/work/new")).toBe("files");
+  });
+
+  it("opens the Figma tab only while the Figma bridge shows it", () => {
+    localStorage.setItem(
+      "monocode.sidebarTabOrder",
+      JSON.stringify(["figma", "files", "sessions", "changes"]),
+    );
+    saveProjectSidebarTab("/work/one", "figma");
+
+    expect(loadProjectSidebarTab("/work/one")).toBe("files");
+    expect(loadProjectSidebarTab("/work/new")).toBe("files");
+
+    saveFigmaPanelEnabled(true);
+    expect(loadProjectSidebarTab("/work/one")).toBe("figma");
+    expect(loadProjectSidebarTab("/work/new")).toBe("figma");
   });
 
   it("follows a project rename and clears a deleted project's choice", () => {

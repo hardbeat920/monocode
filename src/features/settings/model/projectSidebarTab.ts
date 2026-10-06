@@ -1,5 +1,6 @@
 import { pathKey } from "../../../shared/lib/paths";
 import { loadSidebarTabOrder, type SidebarTabId } from "./appearance";
+import { loadFigmaPanelEnabled } from "./settings";
 
 const KEY = "monocode.projectSidebarTabs.v1";
 
@@ -7,7 +8,12 @@ type ProjectSidebarTab = Exclude<SidebarTabId, "inbox">;
 type StoredTabs = Record<string, ProjectSidebarTab>;
 
 function isProjectSidebarTab(value: unknown): value is ProjectSidebarTab {
-  return value === "sessions" || value === "files" || value === "changes";
+  return (
+    value === "sessions" ||
+    value === "files" ||
+    value === "changes" ||
+    value === "figma"
+  );
 }
 
 function readAll(): StoredTabs {
@@ -33,9 +39,16 @@ function writeAll(tabs: StoredTabs): void {
   }
 }
 
+function isOpenableTab(value: unknown): value is ProjectSidebarTab {
+  return (
+    isProjectSidebarTab(value) && (value !== "figma" || loadFigmaPanelEnabled())
+  );
+}
+
 export function loadProjectSidebarTab(project: string): ProjectSidebarTab {
   const saved = readAll()[pathKey(project)];
-  return saved ?? loadSidebarTabOrder().find(isProjectSidebarTab) ?? "sessions";
+  if (isOpenableTab(saved)) return saved;
+  return loadSidebarTabOrder().find(isOpenableTab) ?? "sessions";
 }
 
 export function saveProjectSidebarTab(

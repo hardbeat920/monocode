@@ -9,6 +9,7 @@ mod control;
 pub mod control_cli;
 mod cursor_store;
 mod external_editor;
+mod figma;
 mod fs;
 mod gitlab;
 mod harness;
@@ -232,6 +233,7 @@ pub fn run() {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
+            figma::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
@@ -376,6 +378,13 @@ pub fn run() {
             jira::jira_issue_details,
             jira::jira_issue_thread,
             jira::jira_issue_comment,
+            figma::figma_bridge_status,
+            figma::figma_bridge_set_enabled,
+            figma::figma_bridge_reset_pairing,
+            figma::figma_plugin_install,
+            figma::figma_selection_preview,
+            figma::figma_prepare_preview,
+            figma::figma_generate,
             link_preview::fetch_link_preview,
             fs::git_branches,
             fs::git_checkout,

@@ -1,4 +1,15 @@
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
+import {
+  figmaProjectError,
+  type FigmaBridgeStatus,
+} from "../../figma/model/figma";
+import {
+  figmaAgentCapture,
+  figmaAgentConnection,
+  figmaAgentFiles,
+  figmaAgentNodeId,
+  type FigmaCapture,
+} from "../../figma/model/figmaAgent";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
   mergeModelSettings,
@@ -12,6 +23,7 @@ import {
   RUNTIME_MODE_HINT,
   RUNTIME_MODE_LABEL,
   RUNTIME_MODES,
+  sessionWorkCwd,
   type HarnessId,
   type Session,
 } from "../../sessions/model/session";
@@ -75,6 +87,12 @@ export type AgentAppHost = {
   notes(): Promise<Note[]>;
   note(id: string): Promise<Note | null>;
   saveNote(note: NoteUpsert): Promise<Note>;
+  figmaStatus(): Promise<FigmaBridgeStatus>;
+  figmaCapture(
+    connectionId: string,
+    nodeId: string | undefined,
+    cwd: string,
+  ): Promise<FigmaCapture>;
 };
 
 const FIELDS = new Map<string, readonly string[]>([
@@ -108,6 +126,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["notes.list", ["limit", "offset"]],
   ["notes.read", ["id"]],
   ["notes.write", ["id", "title", "body", "tags"]],
+  ["figma.selection", []],
+  ["figma.capture", ["connectionId", "nodeId"]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -530,6 +550,25 @@ export async function handleAgentApp(
         sourceSessionId: source.id,
         ...(looksLikeProject(source.cwd) ? { sourceCwd: source.cwd } : {}),
       });
+    }
+    case "figma.selection":
+      requireProject(source);
+      return figmaAgentFiles(await host.figmaStatus());
+    case "figma.capture": {
+      const projectError = figmaProjectError(requireProject(source));
+      if (projectError) throw new Error(projectError);
+      const connection = figmaAgentConnection(
+        await host.figmaStatus(),
+        optionalString(input.connectionId, "connectionId", 128),
+      );
+      const nodeId = optionalString(input.nodeId, "nodeId", 128);
+      return figmaAgentCapture(
+        await host.figmaCapture(
+          connection.id,
+          nodeId === undefined ? undefined : figmaAgentNodeId(nodeId),
+          sessionWorkCwd(source),
+        ),
+      );
     }
   }
 }

@@ -18,6 +18,8 @@ const ACTION_LABELS: Record<string, string> = {
   "notes.list": "List notes",
   "notes.read": "Read a note",
   "notes.write": "Write a note",
+  "figma.selection": "Read the Figma selection",
+  "figma.capture": "Export a Figma layer",
 };
 
 /** Conservatively parse one shell invocation; compound commands use the shell row. */

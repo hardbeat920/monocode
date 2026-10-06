@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import { FigmaSettings } from "../../figma/ui/FigmaSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -552,7 +553,18 @@ export function SettingsView({
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
               ) : null}
-              {section === "connections" ? <ConnectionsSettings /> : null}
+              {section === "connections" ? (
+                <>
+                  <ConnectionsSettings />
+                  <Group
+                    id="figma"
+                    title="Figma"
+                    description="Pair the MonoCode plugin in Figma Desktop to inspect the live selection and generate components from it."
+                  >
+                    <FigmaSettings />
+                  </Group>
+                </>
+              ) : null}
               {section === "appearance" ? (
                 <AppearancePage appearance={appearance} />
               ) : null}

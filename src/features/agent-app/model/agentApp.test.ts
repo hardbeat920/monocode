@@ -9,6 +9,7 @@ import {
   loadSessionFolders,
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
+import type { FigmaBridgeStatus } from "../../figma/model/figma";
 import type { Note } from "../../notes";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, type AgentAppHost } from "./agentApp";
@@ -38,6 +39,46 @@ const featureWorktree: Worktree = {
   unpushed: 0,
   sessionIds: [],
 };
+
+const figmaDocument = {
+  id: "0:0",
+  name: "Acme Website",
+  fileKey: null,
+  pageId: "0:1",
+  pageName: "Pricing",
+};
+const figmaCard = {
+  nodeId: "4102:1032",
+  name: "Pricing card",
+  type: "COMPONENT",
+  width: 360,
+  height: 467,
+};
+
+function figmaStatus(
+  changes: Partial<FigmaBridgeStatus> = {},
+): FigmaBridgeStatus {
+  return {
+    enabled: true,
+    listening: true,
+    port: 3056,
+    error: null,
+    pluginDirectory: "/data/figma-plugin",
+    pluginInstalled: true,
+    connections: [
+      {
+        id: "figma-1",
+        connectedAt: 1,
+        selection: {
+          selectionCount: 1,
+          document: figmaDocument,
+          source: figmaCard,
+        },
+      },
+    ],
+    ...changes,
+  };
+}
 
 const storedValues = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -105,6 +146,21 @@ function fixture() {
     notes: vi.fn(async () => [note]),
     note: vi.fn(async (id) => (id === note.id ? note : null)),
     saveNote: vi.fn(async (input) => ({ ...note, ...input })),
+    figmaStatus: vi.fn(async () => figmaStatus()),
+    figmaCapture: vi.fn(async (_connectionId, _nodeId, cwd) => ({
+      generation: {
+        id: "1790881167649-6bf7c906",
+        previewBytes: 2048,
+        source: { ...figmaCard, nodeId: "12:34", name: "Checkout button" },
+        document: { ...figmaDocument, pageName: "Checkout" },
+        diagnostics: ["effects: 12:34"],
+      },
+      preview: {
+        directory: `${cwd}/.monocode/figma/1790881167649-6bf7c906`,
+        relativeDirectory: ".monocode/figma/1790881167649-6bf7c906",
+        previewPath: `${cwd}/.monocode/figma/1790881167649-6bf7c906/design/preview.png`,
+      },
+    })),
   };
   return { source, host };
 }
@@ -738,5 +794,85 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("body is required");
+  });
+
+  it("lists connected Figma files with their page and selected layer", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(source, "figma-list", "figma.selection", {}, host),
+    ).toEqual({
+      files: [
+        {
+          connectionId: "figma-1",
+          file: "Acme Website",
+          page: "Pricing",
+          selectionCount: 1,
+          selected: figmaCard,
+        },
+      ],
+    });
+  });
+
+  it("exports a Figma layer read-only into the caller's working folder", async () => {
+    const { source, host } = fixture();
+    source.worktreeCwd = featureWorktree.path;
+    expect(
+      await handleAgentApp(
+        source,
+        "figma-capture",
+        "figma.capture",
+        { nodeId: "12-34" },
+        host,
+      ),
+    ).toEqual({
+      file: "Acme Website",
+      page: "Checkout",
+      layer: { ...figmaCard, nodeId: "12:34", name: "Checkout button" },
+      directory: ".monocode/figma/1790881167649-6bf7c906/design",
+      files: {
+        bundle:
+          ".monocode/figma/1790881167649-6bf7c906/design/source-bundle.json",
+        assets:
+          ".monocode/figma/1790881167649-6bf7c906/design/assets/manifest.json",
+        preview: ".monocode/figma/1790881167649-6bf7c906/design/preview.png",
+      },
+      diagnostics: ["effects: 12:34"],
+    });
+    expect(host.figmaCapture).toHaveBeenCalledWith(
+      "figma-1",
+      "12:34",
+      featureWorktree.path,
+    );
+    await handleAgentApp(source, "figma-again", "figma.capture", {}, host);
+    expect(host.figmaCapture).toHaveBeenLastCalledWith(
+      "figma-1",
+      undefined,
+      featureWorktree.path,
+    );
+  });
+
+  it("says how to reach Figma before it captures anything", async () => {
+    const { source, host } = fixture();
+    const capture = (input: Record<string, unknown>) =>
+      handleAgentApp(source, "figma-fail", "figma.capture", input, host);
+    vi.mocked(host.figmaStatus).mockResolvedValueOnce(
+      figmaStatus({ enabled: false }),
+    );
+    await expect(capture({})).rejects.toThrow("The Figma bridge is off");
+    vi.mocked(host.figmaStatus).mockResolvedValueOnce(
+      figmaStatus({ connections: [] }),
+    );
+    await expect(capture({})).rejects.toThrow("No Figma file is connected");
+    const two = figmaStatus();
+    two.connections.push({ ...two.connections[0]!, id: "figma-2" });
+    vi.mocked(host.figmaStatus).mockResolvedValueOnce(two);
+    await expect(capture({})).rejects.toThrow("pass connectionId");
+    await expect(capture({ connectionId: "figma-9" })).rejects.toThrow(
+      "not connected",
+    );
+    await expect(capture({ layer: "12:34" })).rejects.toThrow(
+      "Unknown figma.capture fields: layer",
+    );
+    expect(host.figmaCapture).not.toHaveBeenCalled();
   });
 });

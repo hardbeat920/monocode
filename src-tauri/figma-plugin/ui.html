@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 12px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--figma-color-text, #1e1e1e); background: var(--figma-color-bg, #ffffff); }
+      main { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      h1 { margin: 0; font-size: 13px; font-weight: 600; }
+      .pill { border-radius: 999px; padding: 2px 8px; font-size: 11px; background: var(--figma-color-bg-secondary, #f5f5f5); color: var(--figma-color-text-secondary, #6b6b6b); }
+      .pill.connected { background: var(--figma-color-bg-success-tertiary, #dcfce7); color: var(--figma-color-text-success, #15803d); }
+      .pill.connecting { background: var(--figma-color-bg-warning-tertiary, #fef3c7); color: var(--figma-color-text-warning, #b45309); }
+      .muted { margin: 0; color: var(--figma-color-text-secondary, #6b6b6b); }
+      .card { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--figma-color-border, #e6e6e6); border-radius: 8px; padding: 10px; min-height: 52px; justify-content: center; }
+      .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      button { height: 32px; border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #ffffff); }
+      button:disabled { cursor: default; opacity: 0.45; }
+      .error { color: var(--figma-color-text-danger, #dc2626); }
+      .success { color: var(--figma-color-text-success, #15803d); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>MonoCode</h1>
+        <span id="status" class="pill">Offline</span>
+      </header>
+      <p id="connection" class="muted">Open MonoCode and turn on the Figma bridge in Settings → Connections.</p>
+      <section class="card" aria-live="polite">
+        <span id="selection-name" class="name">Select one layer</span>
+        <span id="selection-meta" class="muted">The selection appears live in MonoCode.</span>
+      </section>
+      <button id="generate" type="button" disabled>Generate in MonoCode</button>
+      <p id="result" class="muted" role="status"></p>
+    </main>
+    <script>
+      const BRIDGE_PORT = __MONOCODE_FIGMA_BRIDGE_PORT__;
+      const BRIDGE_TOKEN = "__MONOCODE_FIGMA_BRIDGE_TOKEN__";
+      const RECONNECT_DELAY_MS = 2400;
+      const RELAY_MESSAGE_LIMIT_BYTES = 28 * 1024 * 1024;
+      const ASSET_RELAY_BUDGET_BYTES = 8 * 1024 * 1024;
+      const OPTIMIZED_ASSET_TARGET_BYTES = 6 * 1024 * 1024;
+      const MAX_IMAGE_EDGE = 4096;
+      const RELAYED_COMMANDS = new Set(["get_selection", "export_selection_preview", "get_codegen_bundle"]);
+
+      const state = {
+        socket: null,
+        connected: false,
+        channel: null,
+        sessionToken: null,
+        retryTimer: null,
+        selectionTimer: null,
+        selection: null,
+        generating: false,
+        sequence: 0,
+        pending: new Map(),
+        local: new Map(),
+      };
+
+      const statusElement = document.getElementById("status");
+      const connectionElement = document.getElementById("connection");
+      const selectionName = document.getElementById("selection-name");
+      const selectionMeta = document.getElementById("selection-meta");
+      const generateButton = document.getElementById("generate");
+      const resultElement = document.getElementById("result");
+
+      function requestId() {
+        state.sequence += 1;
+        return `${Date.now().toString(36)}-${state.sequence.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      }
+
+      function postPluginMessage(message) {
+        parent.postMessage({ pluginMessage: message }, "*");
+      }
+
+      function setStatus(status, message) {
+        statusElement.className = `pill ${status === "connected" ? "connected" : status === "connecting" ? "connecting" : ""}`;
+        statusElement.textContent = status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : "Offline";
+        connectionElement.textContent = message;
+        connectionElement.className = status === "error" ? "muted error" : "muted";
+        updateGenerateButton();
+      }
+
+      function setResult(message, tone) {
+        resultElement.textContent = message;
+        resultElement.className = tone === "error" ? "muted error" : tone === "success" ? "muted success" : "muted";
+      }
+
+      function updateGenerateButton() {
+        generateButton.disabled = !state.connected || !state.selection?.source || state.generating;
+      }
+
+      function renderSelection(selection) {
+        state.selection = selection && typeof selection === "object" ? selection : null;
+        const source = state.selection?.source;
+        if (source) {
+          selectionName.textContent = source.name;
+          selectionMeta.textContent = `${source.type} · ${Math.round(source.width)} × ${Math.round(source.height)}`;
+        } else {
+          const count = state.selection?.selectionCount ?? 0;
+          selectionName.textContent = count > 1 ? `${count} layers selected` : "Select one layer";
+          selectionMeta.textContent = count > 1 ? "Select exactly one layer to generate a component." : "The selection appears live in MonoCode.";
+        }
+        updateGenerateButton();
+      }
+
+      function executeLocal(command, params, timeoutMs) {
+        return new Promise((resolve, reject) => {
+          const id = requestId();
+          const timer = setTimeout(() => {
+            state.local.delete(id);
+            reject(new Error("Figma did not answer in time"));
+          }, timeoutMs);
+          state.local.set(id, { resolve, reject, timer });
+          postPluginMessage({ type: "execute-command", id, command, params });
+        });
+      }
+
+      function sendCommand(command, params, timeoutMs) {
+        return new Promise((resolve, reject) => {
+          if (!state.connected || !state.socket) {
+            reject(new Error("MonoCode is offline"));
+            return;
+          }
+          const id = requestId();
+          const serialized = JSON.stringify({ v: 1, id, type: "message", channel: state.channel, message: { id, command, params } });
+          if (new TextEncoder().encode(serialized).byteLength > RELAY_MESSAGE_LIMIT_BYTES) {
+            reject(new Error("The selection is still too large after optimizing its images"));
+            return;
+          }
+          const timer = setTimeout(() => {
+            state.pending.delete(id);
+            reject(new Error("MonoCode did not answer in time"));
+          }, timeoutMs);
+          state.pending.set(id, { resolve, reject, timer });
+          state.socket.send(serialized);
+        });
+      }
+
+      function sendResponse(id, result, error) {
+        if (!state.connected || !state.socket) return;
+        const frame = (message) => JSON.stringify({ v: 1, id, type: "message", channel: state.channel, message });
+        let serialized = frame(error ? { id, error } : { id, result });
+        if (new TextEncoder().encode(serialized).byteLength > RELAY_MESSAGE_LIMIT_BYTES) {
+          serialized = frame({ id, error: "The selection is too large to send to MonoCode" });
+        }
+        state.socket.send(serialized);
+      }
+
+      function publishSelection(selection) {
+        renderSelection(selection);
+        if (!state.connected) return;
+        clearTimeout(state.selectionTimer);
+        state.selectionTimer = setTimeout(() => {
+          sendCommand("selection_changed", { selection: state.selection }, 10000).catch(() => undefined);
+        }, 120);
+      }
+
+      async function refreshSelection() {
+        try {
+          publishSelection(await executeLocal("get_selection", {}, 10000));
+        } catch (error) {
+          renderSelection(null);
+          setResult(error instanceof Error ? error.message : String(error), "error");
+        }
+      }
+
+      function base64Bytes(value) {
+        const binary = atob(value);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        return bytes;
+      }
+
+      function bytesBase64(bytes) {
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        return btoa(binary);
+      }
+
+      function assetBytes(assets) {
+        return assets.reduce((total, asset) => total + (typeof asset.imageData === "string" ? base64Bytes(asset.imageData).byteLength : 0), 0);
+      }
+
+      function assetUsage(node, usage = new Map()) {
+        if (!node || node.visible === false) return usage;
+        const edge = Math.max(Number(node.width) || 0, Number(node.height) || 0);
+        for (const imageRef of Array.isArray(node.imageRefs) ? node.imageRefs : []) {
+          usage.set(imageRef, Math.max(usage.get(imageRef) || 0, edge));
+        }
+        for (const child of Array.isArray(node.children) ? node.children : []) assetUsage(child, usage);
+        return usage;
+      }
+
+      async function decodeImage(bytes, mimeType) {
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: mimeType }));
+        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      }
+
+      function encodeCanvas(canvas, type, quality) {
+        return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+      }
+
+      async function optimizeAsset(asset, renderedEdge, scaleFactor, quality) {
+        const inputBytes = base64Bytes(asset.imageData);
+        const decoded = await decodeImage(inputBytes, asset.mimeType || "application/octet-stream");
+        try {
+          const sourceEdge = Math.max(decoded.width, decoded.height);
+          const requestedEdge = renderedEdge > 0 ? Math.ceil(renderedEdge * 2 * scaleFactor) : Math.ceil(2048 * scaleFactor);
+          const targetEdge = Math.max(1, Math.min(MAX_IMAGE_EDGE, sourceEdge, requestedEdge));
+          const ratio = Math.min(1, targetEdge / sourceEdge);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(decoded.width * ratio));
+          canvas.height = Math.max(1, Math.round(decoded.height * ratio));
+          const context = canvas.getContext("2d", { alpha: true });
+          if (!context) throw new Error("Figma did not provide an image encoder");
+          context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+          let blob = await encodeCanvas(canvas, "image/webp", quality);
+          if (!blob || blob.size === 0 || blob.type !== "image/webp") blob = await encodeCanvas(canvas, "image/png");
+          if (!blob || blob.size === 0) throw new Error(`Image ${asset.hash} could not be optimized`);
+          const outputBytes = new Uint8Array(await blob.arrayBuffer());
+          return { ...asset, mimeType: blob.type, bytes: outputBytes.byteLength, imageData: bytesBase64(outputBytes), optimized: true, originalBytes: asset.bytes };
+        } finally {
+          decoded.close();
+        }
+      }
+
+      async function optimizeBundle(bundle) {
+        const sourceAssets = Array.isArray(bundle?.assets) ? bundle.assets : [];
+        const originalBytes = assetBytes(sourceAssets);
+        if (bundle?.transport?.assetOptimizationRequired !== true && originalBytes <= ASSET_RELAY_BUDGET_BYTES) return bundle;
+        const usage = assetUsage(bundle.root);
+        let optimizedAssets = sourceAssets;
+        let optimizedBytes = originalBytes;
+        let scaleFactor = 1;
+        let quality = 0.88;
+        for (let pass = 1; pass <= 4; pass += 1) {
+          optimizedAssets = [];
+          for (const asset of sourceAssets) {
+            optimizedAssets.push(await optimizeAsset(asset, usage.get(asset.hash) || 0, scaleFactor, quality));
+          }
+          optimizedBytes = assetBytes(optimizedAssets);
+          if (optimizedBytes <= OPTIMIZED_ASSET_TARGET_BYTES) break;
+          scaleFactor *= Math.max(0.55, Math.min(0.82, Math.sqrt(OPTIMIZED_ASSET_TARGET_BYTES / optimizedBytes)));
+          quality = Math.max(0.72, quality - 0.05 * pass);
+        }
+        if (optimizedBytes > ASSET_RELAY_BUDGET_BYTES) {
+          throw new Error(`The selection images stay above 8 MB after optimization (${(optimizedBytes / 1024 / 1024).toFixed(1)} MB)`);
+        }
+        return {
+          ...bundle,
+          assets: optimizedAssets,
+          transport: { ...(bundle.transport || {}), originalAssetBytes: originalBytes, assetBytes: optimizedBytes, assetOptimizationRequired: false, assetsOptimized: true },
+        };
+      }
+
+      async function captureBundle(params) {
+        return optimizeBundle(await executeLocal("get_codegen_bundle", params || {}, 120000));
+      }
+
+      async function generate() {
+        if (!state.connected || !state.selection?.source || state.generating) return;
+        state.generating = true;
+        updateGenerateButton();
+        setResult("Capturing the selection…");
+        try {
+          const output = await sendCommand("generate_code_from_selection", { bundle: await captureBundle() }, 120000);
+          if (output?.accepted !== true) throw new Error("MonoCode did not accept the selection");
+          setResult(output.message || "MonoCode is generating this component.", "success");
+        } catch (error) {
+          setResult(error instanceof Error ? error.message : String(error), "error");
+        } finally {
+          state.generating = false;
+          updateGenerateButton();
+        }
+      }
+
+      async function answerBridgeCommand(id, command, params) {
+        if (!RELAYED_COMMANDS.has(command)) {
+          sendResponse(id, null, `Unsupported command: ${command}`);
+          return;
+        }
+        try {
+          const result = command === "get_codegen_bundle" ? await captureBundle(params) : await executeLocal(command, params || {}, 30000);
+          sendResponse(id, result);
+        } catch (error) {
+          sendResponse(id, null, error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      function handleSocketMessage(payload) {
+        if (payload.type === "hello" && typeof payload.sessionToken === "string") {
+          state.sessionToken = payload.sessionToken;
+          state.channel = `monocode-${requestId().replace(/-/g, "").slice(0, 16)}`;
+          state.socket.send(JSON.stringify({ v: 1, type: "join", role: "figma-plugin", channel: state.channel, sessionToken: state.sessionToken }));
+          return;
+        }
+        if (payload.v === 1 && payload.type === "system" && payload.message?.result === true) {
+          state.connected = true;
+          setStatus("connected", "Connected to MonoCode. Select a layer to inspect it there.");
+          void refreshSelection();
+          return;
+        }
+        if (payload.type === "error") {
+          setStatus("error", typeof payload.message === "string" ? payload.message : "MonoCode refused the connection.");
+          state.socket?.close();
+          return;
+        }
+        const data = payload.message;
+        if (payload.type !== "message" || !data || typeof data.id !== "string") return;
+        if (typeof data.command === "string") {
+          void answerBridgeCommand(data.id, data.command, data.params);
+          return;
+        }
+        const pending = state.pending.get(data.id);
+        if (!pending) return;
+        state.pending.delete(data.id);
+        clearTimeout(pending.timer);
+        if (data.error) pending.reject(new Error(data.error));
+        else pending.resolve(data.result);
+      }
+
+      function disconnect(message) {
+        for (const pending of state.pending.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error("The connection to MonoCode closed"));
+        }
+        state.pending.clear();
+        state.socket = null;
+        state.connected = false;
+        state.channel = null;
+        state.sessionToken = null;
+        setStatus("offline", message);
+      }
+
+      function scheduleReconnect() {
+        if (state.retryTimer || state.socket) return;
+        state.retryTimer = setTimeout(() => {
+          state.retryTimer = null;
+          connect();
+        }, RECONNECT_DELAY_MS);
+      }
+
+      function connect() {
+        if (state.socket) return;
+        setStatus("connecting", "Connecting to MonoCode…");
+        const socket = new WebSocket(`ws://localhost:${BRIDGE_PORT}/?token=${encodeURIComponent(BRIDGE_TOKEN)}`);
+        state.socket = socket;
+        socket.onmessage = (event) => {
+          try {
+            handleSocketMessage(JSON.parse(event.data));
+          } catch (error) {
+            setStatus("error", error instanceof Error ? error.message : "MonoCode sent an invalid message.");
+          }
+        };
+        socket.onclose = () => {
+          if (state.socket !== socket) return;
+          disconnect("Open MonoCode and turn on the Figma bridge in Settings → Connections.");
+          scheduleReconnect();
+        };
+      }
+
+      window.onmessage = (event) => {
+        const message = event.data && event.data.pluginMessage;
+        if (!message) return;
+        if (message.type === "selection-changed") {
+          publishSelection(message.selection);
+          return;
+        }
+        if (message.type !== "command-result" && message.type !== "command-error") return;
+        const local = state.local.get(message.id);
+        if (local) {
+          state.local.delete(message.id);
+          clearTimeout(local.timer);
+          if (message.type === "command-result") local.resolve(message.result);
+          else local.reject(new Error(message.error || "Figma refused the command"));
+        }
+      };
+
+      generateButton.addEventListener("click", () => void generate());
+      connect();
+      void refreshSelection();
+    </script>
+  </body>
+</html>
