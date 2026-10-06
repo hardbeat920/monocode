@@ -614,7 +614,11 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     if let Some((app, app_name)) = existing_bundle_root_from_exe(&exe) {
-        write_dev_bundle_icons(&app, &app_name)?;
+        // Packaged dev builds already have their resources and signature.
+        // Rewriting a signed bundle during launch can block in macOS open().
+        if !app.join("Contents/_CodeSignature").exists() {
+            write_dev_bundle_icons(&app, &app_name)?;
+        }
         return Ok(());
     }
     let app_name = dev_bundle_name_from_env(DEV_BUNDLE_DEFAULT_NAME);

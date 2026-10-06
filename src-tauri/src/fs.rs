@@ -5464,9 +5464,9 @@ fn save_generated_image_sync(
             MAX_GENERATED_IMAGE_BYTES / 1024 / 1024
         ));
     }
-    if !is_png(&bytes) {
-        return Err("Generated image data is not a PNG image.".into());
-    }
+    let Some((extension, mime_type)) = generated_image_kind(&bytes) else {
+        return Err("Generated image data is not a PNG or JPEG image.".into());
+    };
     let dir = app
         .path()
         .app_data_dir()
@@ -5474,7 +5474,7 @@ fn save_generated_image_sync(
         .join(GENERATED_IMAGE_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let safe_name = safe_attachment_name(name);
-    let destination = dir.join(format!("{}-{}.png", Uuid::new_v4(), safe_name));
+    let destination = dir.join(format!("{}-{}.{extension}", Uuid::new_v4(), safe_name));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -5486,7 +5486,7 @@ fn save_generated_image_sync(
     }
     Ok(GeneratedImageAsset {
         path: destination.to_string_lossy().into_owned(),
-        mime_type: "image/png".into(),
+        mime_type: mime_type.into(),
         size: bytes.len() as u64,
     })
 }
@@ -5523,8 +5523,15 @@ pub(crate) fn delete_generated_images_sync(
     Ok(())
 }
 
-fn is_png(bytes: &[u8]) -> bool {
-    bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+/// Codex image generation returns PNG; Claude computer-use screenshots are JPEG.
+fn generated_image_kind(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some(("png", "image/png"))
+    } else if bytes.len() >= 4 && bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some(("jpg", "image/jpeg"))
+    } else {
+        None
+    }
 }
 
 fn safe_attachment_name(name: &str) -> String {
@@ -6071,11 +6078,17 @@ mod tests {
     }
 
     #[test]
-    fn generated_image_validation_accepts_png_only() {
-        assert!(is_png(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-        assert!(!is_png(&[0xff, 0xd8, 0xff, 0x00]));
-        assert!(!is_png(b"<html>"));
-        assert!(!is_png(&[]));
+    fn generated_image_validation_accepts_png_and_jpeg_only() {
+        assert_eq!(
+            generated_image_kind(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            Some(("png", "image/png"))
+        );
+        assert_eq!(
+            generated_image_kind(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some(("jpg", "image/jpeg"))
+        );
+        assert_eq!(generated_image_kind(b"<html>"), None);
+        assert_eq!(generated_image_kind(&[]), None);
     }
 
     #[test]

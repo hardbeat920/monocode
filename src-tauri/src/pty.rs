@@ -45,6 +45,8 @@ struct LivePty {
     #[cfg(windows)]
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     pid: u32,
+    #[cfg(target_os = "macos")]
+    screen: Option<Arc<Mutex<vt100::Parser>>>,
 }
 
 pub struct PtyHost {
@@ -94,6 +96,18 @@ impl PtyHost {
             return None;
         }
         sessions.remove(id)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn captured_screen(&self, id: &str) -> Option<String> {
+        let live = self.get(id)?;
+        let screen = live.screen.as_ref()?;
+        let text = screen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .screen()
+            .contents();
+        Some(text)
     }
 
     pub(crate) fn kill_all(&self) {
@@ -250,17 +264,33 @@ fn spawn_unix(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    use std::fs::File;
-    use std::os::unix::io::FromRawFd;
-    use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let (shell, args) = default_shell();
-    let (master, slave) = open_pty(cols, rows)?;
-
     let mut cmd = Command::new(&shell);
-    cmd.args(&args)
-        .current_dir(&workdir)
+    cmd.args(&args);
+    spawn_unix_command(app, host, id, workdir, cols, rows, cmd, false)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_unix_command(
+    app: AppHandle,
+    host: State<PtyHost>,
+    id: String,
+    workdir: std::path::PathBuf,
+    cols: u16,
+    rows: u16,
+    mut cmd: std::process::Command,
+    capture_screen: bool,
+) -> Result<(), String> {
+    use std::fs::File;
+    use std::os::unix::io::FromRawFd;
+    use std::os::unix::process::CommandExt;
+
+    let (master, slave) = open_pty(cols, rows)?;
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    cmd.current_dir(&workdir)
         .stdin(dup_stdio(slave)?)
         .stdout(dup_stdio(slave)?)
         .stderr(dup_stdio(slave)?)
@@ -273,6 +303,10 @@ fn spawn_unix(
         cmd.env("HOME", &home);
     }
     cmd.env("PWD", &workdir);
+    #[cfg(target_os = "macos")]
+    let screen = capture_screen.then(|| Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0))));
+    #[cfg(not(target_os = "macos"))]
+    let _ = capture_screen;
 
     // setsid() already creates a new session and process group. Calling
     // process_group(0) first makes the child a group leader, so setsid()
@@ -294,7 +328,7 @@ fn spawn_unix(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to start {shell}: {e}"))?;
+        .map_err(|e| format!("Failed to start {program}: {e}"))?;
     close_fd(slave);
     let pid = child.id();
 
@@ -307,12 +341,26 @@ fn spawn_unix(
         writer: Mutex::new(Box::new(writer)),
         master_fd: master,
         pid,
+        #[cfg(target_os = "macos")]
+        screen: screen.clone(),
     });
     host.insert(id.clone(), live);
 
     let data_app = app.clone();
     let data_id = id.clone();
     thread::spawn(move || {
+        // A hidden PTY (computer use) feeds its screen model instead of the UI.
+        let flush = |bytes: &[u8]| {
+            #[cfg(target_os = "macos")]
+            if let Some(screen) = &screen {
+                screen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .process(bytes);
+                return;
+            }
+            emit_pty_data(&data_app, &data_id, bytes);
+        };
         let mut file = reader;
         let fd = file.as_raw_fd();
         let mut buf = vec![0_u8; READ_CHUNK];
@@ -331,7 +379,7 @@ fn spawn_unix(
             } else if pty_should_flush(acc.len(), last_emit.elapsed())
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
-                emit_pty_data(&data_app, &data_id, &acc);
+                flush(&acc);
                 acc.clear();
                 last_emit = Instant::now();
             } else {
@@ -342,7 +390,7 @@ fn spawn_unix(
                 }
             }
         }
-        emit_pty_data(&data_app, &data_id, &acc);
+        flush(&acc);
     });
 
     let wait_app = app;
@@ -824,6 +872,8 @@ mod tests {
                 writer: Mutex::new(Box::new(std::io::sink())),
                 master_fd: -1,
                 pid: 42,
+                #[cfg(target_os = "macos")]
+                screen: None,
             }),
         );
         assert!(host.remove_if_pid("term", 7).is_none());

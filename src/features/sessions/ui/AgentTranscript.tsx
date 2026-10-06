@@ -5,6 +5,7 @@ import {
   CircleDashed,
   Copy,
   FilePlusCorner,
+  ImageIcon,
   Minus,
   Pencil,
   PenLine,
@@ -3872,6 +3873,7 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const [imagesOpen, setImagesOpen] = useState(false);
   const appCall = monoCodeToolCall(block);
   if (appCall) {
     return (
@@ -3881,6 +3883,7 @@ function ActivityToolRow({
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
+  const images = block.tool?.images ?? [];
   const errorDetail =
     !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
   const summary = (
@@ -3932,8 +3935,32 @@ function ActivityToolRow({
           {bare ? null : <ActivityToolIcon state={state} live={live} />}
           {summary}
           {pending ? null : <ToolCallStatusIcon state={state} />}
+          {images.length ? (
+            <button
+              type="button"
+              aria-expanded={imagesOpen}
+              aria-label={`${imagesOpen ? "Hide" : "Show"} ${images.length === 1 ? "screenshot" : `${images.length} screenshots`} for ${label}`}
+              onClick={() => setImagesOpen((value) => !value)}
+              className="-m-1 flex shrink-0 items-center gap-1 rounded p-1 text-content/40 hover:text-content/70"
+            >
+              <ImageIcon className="size-3.5" strokeWidth={1.75} />
+              <ChevronRight
+                className={`size-3.5 transition-transform ${imagesOpen ? "rotate-90" : ""}`}
+                strokeWidth={1.75}
+              />
+            </button>
+          ) : null}
         </div>
       )}
+      {imagesOpen
+        ? images.map((image, index) => (
+            <GeneratedImage
+              key={`${image.path}:${index}`}
+              image={image}
+              inline
+            />
+          ))
+        : null}
       {pending ? (
         <ApprovalControls block={block} onApproval={onApproval} />
       ) : null}

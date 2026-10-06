@@ -63,7 +63,7 @@ export function applyHarnessEvent(
       return finishRole(session, "assistant");
     case "image.generated":
       if (!("path" in event)) return session;
-      return appendImage(session, event);
+      return attachToolImage(session, event) ?? appendImage(session, event);
     case "reasoning.delta":
       return patchStreaming(session, "reasoning", event.text, true);
     case "reasoning.completed":
@@ -768,6 +768,36 @@ function upsertKeyedStatus(
   const blocks = session.blocks.slice();
   if (trimmed) blocks[index] = { ...blocks[index], text: trimmed };
   else blocks.splice(index, 1);
+  return { ...session, blocks };
+}
+
+function attachToolImage(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "image.generated"; path: string }>,
+): Session | null {
+  if (!event.callId) return null;
+  let index = -1;
+  for (let i = session.blocks.length - 1; i >= 0; i--) {
+    if (session.blocks[i].tool?.callId === event.callId) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) return null;
+  const block = session.blocks[index];
+  const tool = block.tool!;
+  const image = {
+    path: event.path,
+    name: event.name,
+    mimeType: event.mimeType,
+    size: event.size,
+    ...(event.alt ? { alt: event.alt } : {}),
+  };
+  const blocks = session.blocks.slice();
+  blocks[index] = {
+    ...block,
+    tool: { ...tool, images: [...(tool.images ?? []), image] },
+  };
   return { ...session, blocks };
 }
 

@@ -336,6 +336,8 @@ export type Block = {
     preview?: ToolPreview;
     /** Left running by the agent when it yielded; the turn waits on it. */
     background?: boolean;
+    /** Screenshots the call took while working, shown inside its row. */
+    images?: GeneratedImageMeta[];
   };
   approval?: {
     requestId: number;
@@ -701,6 +703,14 @@ export function canReplaceSessionTitle(
     current === HARNESS_LABEL[harness] ||
     current === HARNESS_TITLE[harness]
   );
+}
+
+/** Every generated image file a transcript owns, in image blocks or tool rows. */
+export function generatedImagePaths(blocks: Block[]): string[] {
+  return blocks.flatMap((block) => [
+    ...(block.role === "image" && block.image ? [block.image.path] : []),
+    ...(block.tool?.images?.map((image) => image.path) ?? []),
+  ]);
 }
 
 export function hasPendingApproval(blocks: Block[]): boolean {

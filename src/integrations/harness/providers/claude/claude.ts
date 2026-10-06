@@ -1,4 +1,17 @@
 import { TurnNotReadyError } from "../../core/types";
+import {
+  COMPUTER_USE_TOOL,
+  COMPUTER_USE_ROUTING,
+  ComputerUseRun,
+  SHOW_SCREENSHOT_ROUTING,
+  SHOW_SCREENSHOT_TOOL,
+  computerUseConfig,
+  interactiveComputerUseConfig,
+} from "./claudeComputerUse";
+import {
+  saveGeneratedImage,
+  deleteGeneratedImages,
+} from "../../../../platform/tauri/fs";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
@@ -170,11 +183,16 @@ type Live = {
   activeTurn: boolean;
   initDone: (() => void) | null;
   initialized: boolean;
+  exited: boolean;
+  stderrTail: string;
   emittedAssistant: string;
   emittedReasoning: string;
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  computerUseConfig: Record<string, unknown> | null;
+  computerUseTask: string | null;
+  computerUseRun: ComputerUseRun | null;
 };
 
 type Resume = {
@@ -293,6 +311,18 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
+  if (live.computerUseRun) {
+    const content = (
+      message.message as { content: Array<Record<string, unknown>> }
+    ).content;
+    await live.computerUseRun.steer(
+      content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n"),
+    );
+    return;
+  }
   await writeJson(input.sessionId, message);
 }
 
@@ -331,6 +361,14 @@ export async function cancelClaudeTurn(sessionId: string): Promise<void> {
   for (const [, pending] of live.questions)
     pending.resolve({ kind: "skipped" });
   live.questions.clear();
+  if (live.computerUseRun) {
+    await live.computerUseRun.cancel();
+    finishActiveTurn(live, [
+      { type: "message.completed" },
+      { type: "reasoning.completed" },
+    ]);
+    return;
+  }
   // Stop means the whole run, including what Claude left going in the
   // background. Otherwise it finishes later and wakes Claude up again.
   for (const taskId of live.backgroundTasks.keys()) {
@@ -363,6 +401,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
     for (const [, pending] of live.questions)
       pending.resolve({ kind: "skipped" });
     live.questions.clear();
+    await live.computerUseRun?.cancel();
     live.activeTurn = false;
     live.turnDone?.();
     live.turnDone = null;
@@ -468,6 +507,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     providerSessionId: claudeSessionId,
     tasks: claudeTasks,
   });
+  const cuConfig = await computerUseConfig();
   const launch = launchOptions(
     input,
     canResume ? resume?.sessionId : undefined,
@@ -507,11 +547,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     activeTurn: false,
     initDone: null,
     initialized: false,
+    exited: false,
+    stderrTail: "",
     emittedAssistant: "",
     emittedReasoning: "",
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    computerUseConfig: cuConfig,
+    computerUseTask: null,
+    computerUseRun: null,
   };
   liveRef.current = live;
 
@@ -528,7 +573,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       if (!current?.muteUpdates) {
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
-      current?.turnFailed?.(new Error("Claude Code exited"));
+      if (current) current.exited = true;
+      current?.turnFailed?.(
+        new Error(current.stderrTail || "Claude Code exited"),
+      );
       current?.initDone?.();
       if (current) {
         current.turnDone = null;
@@ -536,12 +584,31 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         current.initDone = null;
       }
     },
+    (line) => {
+      const current = liveRef.current;
+      if (current)
+        current.stderrTail = `${current.stderrTail}\n${line}`
+          .trim()
+          .slice(-4000);
+    },
   );
 
   await spawnChild(
     input.sessionId,
     path,
-    buildClaudeSpawnArgs(launch),
+    [
+      ...buildClaudeSpawnArgs(launch),
+      ...(cuConfig
+        ? [
+            "--mcp-config",
+            JSON.stringify(cuConfig),
+            "--allowedTools",
+            COMPUTER_USE_TOOL,
+            "--append-system-prompt",
+            COMPUTER_USE_ROUTING,
+          ]
+        : []),
+    ],
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
     "claude",
@@ -560,6 +627,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    if (live.exited) throw new Error(live.stderrTail || "Claude Code exited");
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -568,6 +636,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return live;
   } catch (error) {
     await stopClaudeSession(input.sessionId);
+    // Only a CLI that died says why on stderr; otherwise keep the real error.
+    if (live.exited && live.stderrTail) throw new Error(live.stderrTail);
     throw error;
   }
 }
@@ -594,6 +664,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  live.computerUseTask = null;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -607,6 +678,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     input.onAccepted?.();
     settlePendingTurn(live);
     await turnPromise;
+    if (live.computerUseTask && !live.cancelled && !live.planning) {
+      await runComputerUse(live, input, live.computerUseTask);
+    }
   } catch (error) {
     if (live.cancelled) return;
     live.onEvent({
@@ -617,6 +691,206 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   } finally {
     live.turnDone = null;
     live.turnFailed = null;
+  }
+}
+
+async function runComputerUse(
+  live: Live,
+  input: SendTurnInput,
+  task: string,
+): Promise<void> {
+  const runner = new ComputerUseRun();
+  live.computerUseRun = runner;
+  live.activeTurn = true;
+  live.pendingAssistantBoundary = false;
+  live.emittedAssistant = "";
+  live.emittedReasoning = "";
+  live.onEvent({
+    type: "status",
+    text: "Using Claude's native computer-use tools",
+  });
+  try {
+    await killChild(input.sessionId);
+    if (live.cancelled || live.muteUpdates) return;
+    const { path } = await resolveClaudeBinaryImpl();
+    const launch = launchOptions(
+      input,
+      live.claudeSessionId,
+      live.claudeSessionId,
+    );
+    const args = ["--permission-mode", launch.permissionMode ?? "default"];
+    if (launch.model) args.push("--model", launch.model);
+    if (launch.effort) args.push("--effort", launch.effort);
+    if (launch.permissionMode === "bypassPermissions")
+      args.push("--allow-dangerously-skip-permissions");
+    // Keep hooks off when the user disabled them, but keep our completion hook.
+    args.push(
+      `--setting-sources=${loadClaudeHooks() ? "user,project,local" : ""}`,
+    );
+    args.push("--disallowedTools", "Bash");
+    const showConfig = live.computerUseConfig
+      ? interactiveComputerUseConfig(live.computerUseConfig)
+      : null;
+    if (showConfig)
+      args.push(
+        "--mcp-config",
+        JSON.stringify(showConfig),
+        "--allowedTools",
+        SHOW_SCREENSHOT_TOOL,
+      );
+    args.push(
+      "--append-system-prompt",
+      "You are continuing the same MonoCode conversation interactively. Use the real built-in mcp__computer-use__ tools directly. Ignore any instructions to use screen, shell automation, AppleScript or another Claude session, or to grant yourself app access. App access must be approved by the user in MonoCode. Finish the requested task and stop." +
+        (showConfig ? ` ${SHOW_SCREENSHOT_ROUTING}` : ""),
+    );
+    // The newest screenshot, for show_screenshot to put beside the answer.
+    let lastShot: Awaited<ReturnType<typeof saveGeneratedImage>> | null = null;
+    await runner.run({
+      threadId: input.sessionId,
+      command: path,
+      cwd: input.cwd,
+      providerSessionId: live.claudeSessionId,
+      accountId: input.providerAccountId,
+      args,
+      settings: { ...launch.settings },
+      task: `Continue the user's task using your native computer-use tools. The previous request and attachments are in this conversation. Remaining task: ${task}`,
+      onLine: async (line) => {
+        if (live.cancelled || live.muteUpdates) return;
+        const rec = parseJsonLine(line);
+        if (!rec) return;
+        if (rec.type === "assistant") {
+          handleAssistant(live, rec);
+          const content = asRecord(rec.message)?.content;
+          for (const raw of Array.isArray(content) ? content : []) {
+            const call = asRecord(raw);
+            if (
+              call?.type === "tool_use" &&
+              call.name === SHOW_SCREENSHOT_TOOL &&
+              lastShot
+            ) {
+              // No callId: it stands outside the fold, ahead of the reply.
+              live.onEvent({
+                type: "image.generated",
+                itemId: `${String(call.id)}:shown`,
+                ...lastShot,
+                name: "Claude computer-use screenshot",
+              });
+            }
+          }
+        } else if (rec.type === "user") {
+          handleUser(live, rec);
+          const message = asRecord(rec.message);
+          if (Array.isArray(message?.content)) {
+            for (const raw of message.content) {
+              const result = asRecord(raw);
+              if (
+                result?.type !== "tool_result" ||
+                !Array.isArray(result.content)
+              )
+                continue;
+              for (const [index, rawBlock] of result.content.entries()) {
+                const block = asRecord(rawBlock);
+                const source = asRecord(block?.source);
+                if (
+                  block?.type === "image" &&
+                  source?.type === "base64" &&
+                  typeof source.data === "string"
+                ) {
+                  // A screenshot that cannot be shown must never end the run,
+                  // and show_screenshot must never fall back to an older one.
+                  lastShot = null;
+                  const asset = await saveGeneratedImage({
+                    data: source.data,
+                    name: "Claude computer-use screenshot",
+                  }).catch(() => null);
+                  if (!asset) continue;
+                  if (live.cancelled || live.muteUpdates) {
+                    await deleteGeneratedImages([asset.path]).catch(
+                      () => undefined,
+                    );
+                  } else {
+                    lastShot = asset;
+                    live.onEvent({
+                      type: "image.generated",
+                      itemId: `${String(result.tool_use_id)}:${index}`,
+                      // Working screenshots live inside the call that took them.
+                      callId: String(result.tool_use_id),
+                      ...asset,
+                      name: "Claude computer-use screenshot",
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      approve: async (title, screen) => {
+        const uiId = live.nextApprovalUiId++;
+        const decision = waitApproval(live, uiId, `cu_${uiId}`, { screen });
+        live.onEvent({
+          type: "approval.requested",
+          requestId: uiId,
+          title,
+          kind: "computer-use",
+          preview: { kind: "read", output: screen },
+        });
+        const outcome = await decision;
+        live.onEvent({
+          type: "approval.resolved",
+          requestId: uiId,
+          decision: outcome,
+        });
+        return outcome === "allow" ? "allow" : "deny";
+      },
+      question: async (screen, choices) => {
+        const uiId = live.nextApprovalUiId++;
+        const question = waitQuestion(live, uiId, `cu_${uiId}`, {
+          type: "question.asked",
+          requestId: uiId,
+          title: /needs macOS permissions/i.test(screen)
+            ? "Computer use needs macOS permissions"
+            : "Claude computer use",
+          questions: [
+            {
+              id: "cli",
+              prompt: screen,
+              multiSelect: false,
+              allowCustom: false,
+              options: choices.map((choice, index) => ({
+                id: String(index),
+                label: choice.label,
+              })),
+            },
+          ],
+        });
+        showNextQuestion(live);
+        const reply = await question;
+        live.onEvent({
+          type: "question.resolved",
+          requestId: uiId,
+          decision:
+            reply === "cancelled"
+              ? "cancelled"
+              : reply.kind === "answered"
+                ? "answered"
+                : "skipped",
+        });
+        showNextQuestion(live);
+        return reply === "cancelled" ? { kind: "skipped" } : reply;
+      },
+    });
+  } finally {
+    live.computerUseRun = null;
+    live.activeTurn = false;
+    live.computerUseTask = null;
+    // Next send spawns stream-json with --resume, preserving the conversation.
+    if (liveByThread.get(input.sessionId) === live)
+      liveByThread.delete(input.sessionId);
+    if (!live.muteUpdates) {
+      live.onEvent({ type: "message.completed" });
+      live.onEvent({ type: "reasoning.completed" });
+    }
   }
 }
 
@@ -908,6 +1182,14 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
+    if (
+      tool.name === COMPUTER_USE_TOOL &&
+      !result.isError &&
+      live.computerUseConfig &&
+      !live.planning
+    ) {
+      live.computerUseTask = stringField(tool.input, "task") ?? null;
+    }
     if (isAgentToolName(tool.name) && isBackgroundedAgentTool(live, tool.id)) {
       continue;
     }
@@ -1017,6 +1299,21 @@ async function handleControlRequest(
         toClaudePermissionResult("deny", input),
       ),
     ).catch(() => undefined);
+    return;
+  }
+
+  if (
+    toolName === COMPUTER_USE_TOOL &&
+    live.computerUseConfig &&
+    !live.planning
+  ) {
+    await writeJson(
+      sessionId,
+      buildControlResponse(
+        control.requestId,
+        toClaudePermissionResult("allow", input),
+      ),
+    );
     return;
   }
 

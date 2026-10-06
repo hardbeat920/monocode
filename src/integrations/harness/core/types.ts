@@ -43,6 +43,8 @@ export type HarnessEvent =
   | {
       type: "image.generated";
       itemId: string;
+      /** A tool call's working screenshot: kept inside that call's row. */
+      callId?: string;
       path: string;
       name: string;
       mimeType: string;

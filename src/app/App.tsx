@@ -420,6 +420,7 @@ import {
   type ProviderAccountProvider,
 } from "../features/providers/model/providerAccounts";
 import {
+  generatedImagePaths,
   HARNESSES,
   HARNESS_LABEL,
   HARNESS_TITLE,
@@ -4377,9 +4378,7 @@ function Workspace({
             forgetHarnessSession(harness, id),
           ),
         );
-        const imagePaths = stopped.blocks.flatMap((block) =>
-          block.role === "image" && block.image ? [block.image.path] : [],
-        );
+        const imagePaths = generatedImagePaths(stopped.blocks);
         await deleteSession(id, imagePaths);
         const fresh = {
           ...newSession(
