@@ -143,12 +143,17 @@ impl Rgb {
 
 /// Desktop blur goes on after the first UI paint and only in dark mode.
 #[tauri::command]
-pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool, background: Rgb) {
+pub fn set_window_glass_enabled(
+    window: WebviewWindow,
+    enabled: bool,
+    background: Rgb,
+    opacity: Option<f64>,
+) -> bool {
     #[cfg(target_os = "macos")]
     {
         if enabled {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 3)));
-            crate::macos::enable_glass(&window);
+            return crate::macos::enable_glass(&window, background, opacity);
         } else {
             crate::macos::disable_glass(&window, background.r, background.g, background.b);
         }
@@ -177,6 +182,11 @@ pub fn set_window_glass_enabled(window: WebviewWindow, enabled: bool, background
     {
         let _ = (window, enabled, background);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = opacity;
+    // Only macOS paints the shared glass tint natively. Other platforms and
+    // callers without an opacity keep their existing CSS backgrounds.
+    false
 }
 
 /// Close with a running chat hides the webview so the harness child keeps going.
