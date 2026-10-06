@@ -10743,7 +10743,6 @@ function Workspace({
       onToggleSidebar={onToggleSidebar}
       onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
-      onNew={onNew}
       onNewTerminal={onNewTerminal}
       onOpenSettings={onOpenSettings}
       onOpenInbox={onOpenInbox}
@@ -10754,7 +10753,6 @@ function Workspace({
       onDeleteTab={onDeleteTitleTab}
       onReorder={onReorderTabs}
       onPlaceOnPane={onPlaceTabOnPane}
-      onGoToFile={onGoToFile}
       onPinFile={onPinFile}
       recents={recents}
       onSelectProject={onSelectProject}
@@ -10765,8 +10763,10 @@ function Workspace({
     <OrchestrationActions.Provider value={orchestrationActions}>
       <OrchestrationWorkers.Provider value={orchestrationWorkers}>
         <div
-          className={`flex h-full flex-col text-content ${
-            HAS_NATIVE_GLASS ? "bg-background-base/40" : "bg-background-base"
+          className={`workspace-background flex h-full flex-col text-content ${
+            HAS_NATIVE_GLASS
+              ? "bg-background-base/[var(--window-background-opacity)]"
+              : "bg-background-base"
           }`}
         >
           {compactTitleBar ? workspaceTitleBar : null}

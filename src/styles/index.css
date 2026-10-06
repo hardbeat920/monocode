@@ -109,6 +109,7 @@
   --theme-saturation: 0%;
   --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
+  --window-background-opacity: 0.4;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
   --selection-subtle-strength: 8%;
@@ -366,6 +367,15 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   );
 }
 
+/* AppKit fills the shared tint as the window grows. Painting it here too
+   would compound the opacity; wait for the native host's acknowledgement. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .workspace-background,
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .sidebar-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
+}
+
 /* The activity dot sits at (23px, 9px) in a 32px button. Its icon is
    centered at (8px, 8px), so this cuts a 2px gap around the 6px dot. */
 .compact-rail-icon-with-dot {
@@ -621,6 +631,36 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
 
 ::highlight(monocode-transcript-search-current) {
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+.tab-label[data-overflow="true"] {
+  --tab-label-mask: linear-gradient(
+    to right,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--tab-label-mask);
+  mask-image: var(--tab-label-mask);
+}
+
+/* Fade scrolling content at the bottom viewport edge. */
+.sidebar-session-scroll,
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--scroll-bottom-mask);
+  mask-image: var(--scroll-bottom-mask);
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade. */
+.transcript-composer-fade [data-transcript-content] {
+  padding-bottom: 2.5rem;
 }
 
 .agent-transcript
@@ -1317,6 +1357,11 @@ html.has-native-glass.glass-body:not(.theme-light) .body-glass {
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
     transparent
   );
+}
+
+html.is-mac.has-native-glass.has-native-glass-tint.glass-body:not(.theme-light)
+  .body-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 textarea,
