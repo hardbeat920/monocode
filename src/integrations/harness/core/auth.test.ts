@@ -11,6 +11,10 @@ const child = vi.hoisted(() => ({
   resolveGrokBinary: vi.fn(async () => ({ path: "/bin/grok" })),
   resolveFxBinary: vi.fn(async () => ({ path: "/bin/fx" })),
 }));
+const antigravityLogin = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../providers/antigravity/antigravityAuth", () => ({
+  loginAntigravity: antigravityLogin,
+}));
 
 vi.mock("./child", () => child);
 vi.mock("../../../platform/tauri/fs", () => ({ homeDir: vi.fn(async () => "/home/alice") }));
@@ -42,6 +46,8 @@ describe("harness login", () => {
     expect(supportsHarnessLogin("opencode")).toBe(false);
     expect(supportsHarnessLogin("pi")).toBe(false);
     expect(supportsHarnessLogin("omp")).toBe(false);
+    expect(supportsHarnessLogin("antigravity")).toBe(true);
+    expect(harnessLoginArgs("antigravity")).toBeNull();
   });
 
   it("recognizes provider authentication failures without matching unrelated errors", () => {
@@ -122,6 +128,14 @@ describe("harness login", () => {
   it("does not invent one login flow for multi-provider harnesses", async () => {
     await expect(loginHarness("opencode")).rejects.toThrow(
       "does not offer a single browser sign-in flow",
+    );
+    expect(child.spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("routes Antigravity sign-in through ACP instead of the interactive CLI", async () => {
+    await loginHarness("antigravity");
+    expect(antigravityLogin).toHaveBeenCalledWith(
+      "monocode-provider-login-test-window-antigravity",
     );
     expect(child.spawnChild).not.toHaveBeenCalled();
   });

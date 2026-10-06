@@ -94,7 +94,7 @@ const providers = [
   { id: "antigravity", send: agy.sendAntigravityTurn, cancel: agy.cancelAntigravityTurn,
     stop: agy.stopAntigravitySession, forget: agy.forgetAntigravitySession,
     bind: agy.bindAntigravitySession, respond: agy.respondAntigravityApproval,
-    refresh: refreshAntigravityCatalog, path: "/fake/agy_acp_server.par", args: ["--uid="] as string[], plan: "default", auth: "agy` once" },
+    refresh: refreshAntigravityCatalog, path: "/fake/agy_acp_server.par", args: ["--uid="] as string[], plan: "default", auth: "Sign in to Antigravity" },
 ] as const;
 
 // Each spawned generation registers under a scoped child key `thread#n`.
