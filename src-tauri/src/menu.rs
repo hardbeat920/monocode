@@ -145,16 +145,16 @@ pub fn dispatch(app: &AppHandle, id: &str) {
             let _ = app.emit("toggle_autosave", enabled);
         }
         "quit" => crate::window::request_quit(app),
-        "new_tab" | "new_chat" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab"
-        | "back_tab" | "forward_tab" | "split_right" | "split_down" | "focus_left"
-        | "focus_right" | "focus_up" | "focus_down" | "sidebar_opacity" | "open_project"
-        | "go_to_file" | "open_search" | "open_inbox" | "open_notes" | "find_in_project"
-        | "find" | "new_terminal" | "new_terminal_tab" | "toggle_terminal"
-        | "open_model_picker" | "open_settings" | "check_for_updates" => {
+        "new_tab" | "close_tab" | "close_other_tabs" | "next_tab" | "prev_tab" | "back_tab"
+        | "forward_tab" | "split_right" | "split_down" | "focus_left" | "focus_right"
+        | "focus_up" | "focus_down" | "sidebar_opacity" | "open_project" | "go_to_file"
+        | "open_search" | "open_inbox" | "open_notes" | "find_in_project" | "find"
+        | "new_terminal" | "new_terminal_tab" | "toggle_terminal" | "open_model_picker"
+        | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
-        // Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
-        // make every window act on a single menu click.
+        // Sidebar, Zoom, Reload, Command Palette, Close All Tabs, and New Chat target one window: a
+        // broadcast would make every window act on a single menu click.
         "toggle_sidebar"
         | "toggle_session_sidebar"
         | "zoom_in"
@@ -162,7 +162,8 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "zoom_reset"
         | "reload"
         | "open_command_palette"
-        | "close_all_tabs" => emit_to_focused(app, id),
+        | "close_all_tabs"
+        | "new_chat" => emit_to_focused(app, id),
         _ => {}
     }
 }

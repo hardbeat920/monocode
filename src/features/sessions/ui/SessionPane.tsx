@@ -29,6 +29,7 @@ import {
   looksLikeProject,
   type RecentProject,
 } from "../../projects/model/recents";
+import { isChatSession } from "../model/chatSession";
 import {
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -573,7 +574,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
         !!session.inboxAsk ||
         (hideProjectPicker ? !showDeckProjectPicker : false)
       }
-      hideBranchPicker={!!session.inboxAsk || managed}
+      // A projectless chat has no checkout or branch to pick.
+      hideBranchPicker={
+        !!session.inboxAsk || managed || isChatSession(session)
+      }
       hideTopBar={!!session.inboxAsk}
       context={session.context}
       quoteRequest={quoteRequest}
