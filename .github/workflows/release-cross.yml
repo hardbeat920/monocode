@@ -26,6 +26,9 @@ jobs:
       - name: Install Linux system dependencies
         run: bash scripts/install-linux-deps-debian.sh
 
+      - name: Install rpm packaging tooling
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       - run: npm ci
 
       - name: Build Linux packages
@@ -41,6 +44,7 @@ jobs:
           mkdir -p release-artifacts
           cp target/release/bundle/deb/*.deb release-artifacts/
           cp target/release/bundle/appimage/*.AppImage release-artifacts/
+          cp target/release/bundle/rpm/*.rpm release-artifacts/
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
