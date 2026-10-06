@@ -1088,6 +1088,33 @@ it("queues a message sent during a running turn on the host", async () => {
   expect(commands.at(-1)).toMatchObject({ type: "dequeue", messageId: queued });
 });
 
+it("returns a queued message the host refused to the composer", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "enqueue")
+      throw new Error("Host rejected request: The queue is full");
+    return original(command, input);
+  });
+  await render();
+  await send("First");
+  host = {
+    ...host!,
+    revision: host!.revision + 1,
+    status: "running",
+    runId: "run",
+    session: { ...host!.session, busy: true },
+  };
+  await vi.waitFor(() => expect(byLabel("Stop")).not.toBeNull(), {
+    timeout: 4_000,
+  });
+  await send("Second");
+  await vi.waitFor(() =>
+    expect(container.querySelector("textarea")!.value).toBe("Second"),
+  );
+  expect(container.textContent).toContain("The queue is full");
+});
+
 it("resumes a queue the host paused after a stop", async () => {
   await render();
   await send("First");

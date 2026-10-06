@@ -1688,11 +1688,11 @@ export function Composer({
     // the composer when the first message leaves an empty session (EmptySession →
     // docked layout). If draftRef still holds the sent text, the new instance
     // resurrects it as initialDraft.
-    const resendDraftRevision = draftRevisionRef.current;
-    const resendBorrowedAttachmentIds = new Set(
+    const submittedDraftRevision = draftRevisionRef.current;
+    const submittedBorrowedAttachmentIds = new Set(
       borrowedAttachmentIdsRef.current,
     );
-    const resendSelectedMcp = selectedMcp;
+    const submittedSelectedMcp = selectedMcp;
     onDraftChange?.("");
     const accepted = onSubmit(
       mcpContextText(
@@ -1707,13 +1707,24 @@ export function Composer({
             : orchestrationSelected || orchestratorCommand.matched
               ? "orchestrate"
               : "default",
+        // A remote follow-up can still fail after the composer clears. Leave
+        // newer composer text alone; only an untouched composer gets it back.
+        ...(remote
+          ? {
+              onRejected: () => {
+                if (draftRevisionRef.current !== submittedDraftRevision) return;
+                restoreDraft(text, files, submittedBorrowedAttachmentIds);
+                setSelectedMcp(submittedSelectedMcp);
+              },
+            }
+          : {}),
         ...(resendEdited
           ? {
               resendEdited: true,
               onResendRejected: ({ providerRewound }) => {
-                if (draftRevisionRef.current !== resendDraftRevision) return;
-                restoreDraft(text, files, resendBorrowedAttachmentIds);
-                setSelectedMcp(resendSelectedMcp);
+                if (draftRevisionRef.current !== submittedDraftRevision) return;
+                restoreDraft(text, files, submittedBorrowedAttachmentIds);
+                setSelectedMcp(submittedSelectedMcp);
                 setResendEdited(!providerRewound);
                 onEditingLastTurnChange?.(!providerRewound);
               },

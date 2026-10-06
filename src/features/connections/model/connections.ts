@@ -94,6 +94,9 @@ export const pendingRemoteFollowup = (project: string, environment: string, id: 
   return value ? readPendingEntry(value).followup : undefined;
 };
 
+export const hasPendingRemoteCommand = (project: string, environment: string, id: string) =>
+  localStorage.getItem(`${pendingPrefix(project, environment)}${id}`) !== null;
+
 export const pendingRemoteCommand = (
   project: string,
   environment: string,

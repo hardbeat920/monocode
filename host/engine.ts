@@ -660,7 +660,11 @@ export class HostEngine {
               ...value,
               session: { ...value.session, queueStatus: "resuming" },
             },
-            { blockId: command.commandId, prompt: CONTINUE_PROMPT },
+            {
+              blockId: command.commandId,
+              prompt: CONTINUE_PROMPT,
+              keepDrafts: true,
+            },
           ));
         } else {
           if (value.runId !== command.runId || value.status !== "running")
@@ -747,9 +751,12 @@ export class HostEngine {
       intent?: "default" | "plan" | "build";
       attachments?: Attachment[];
       plan?: Block;
+      /** A queued turn starts on its own, so it leaves the user's draft. */
+      keepDrafts?: boolean;
     },
   ): { value: HostSession; effect: (saved: HostSession) => void } {
-    const { blockId, prompt, intent, attachments = [], plan } = turn;
+    const { blockId, prompt, intent, attachments = [], plan, keepDrafts } =
+      turn;
     const runId = randomUUID();
     const firstTurn =
       prompt !== null && !value.session.blocks.some((block) => !block.draft);
@@ -776,7 +783,7 @@ export class HostEngine {
               : value.session.title,
           blocks: [
             ...value.session.blocks
-              .filter((block) => !block.draft)
+              .filter((block) => keepDrafts || !block.draft)
               .map((block) =>
                 block === plan
                   ? {
@@ -845,6 +852,7 @@ export class HostEngine {
           prompt: head.text,
           intent: head.intent === "orchestrate" ? undefined : head.intent,
           attachments: head.attachments,
+          keepDrafts: true,
         },
       );
       effect(this.save(started, { type: "queue.dispatched", messageId: head.id }));

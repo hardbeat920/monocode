@@ -23,6 +23,7 @@ import { useProjectBranchesState } from "../../source-control/hooks/useProjectBr
 import { registerRemoteSessionActions } from "../model/remoteSessionActions";
 import {
   clearPendingRemoteCommand,
+  hasPendingRemoteCommand,
   loadRemoteSession,
   OPEN_CONNECTIONS_EVENT,
   pendingRemoteCommand,
@@ -822,15 +823,17 @@ function ConnectedRemoteSession({
     text: string,
     attachments: Attachment[],
     intent: "default" | "plan" | "build",
+    onRejected?: () => void,
   ): boolean => {
     const version = bindingVersion.current;
+    const commandId = crypto.randomUUID();
     preparingRef.current = true;
     void uploadRemoteAttachments(machine.id, attachments)
       .then((refs) => {
         if (!alive.current || version !== bindingVersion.current) return;
         return run({
           type: "enqueue",
-          commandId: crypto.randomUUID(),
+          commandId,
           sessionId: id,
           text,
           attachments: refs,
@@ -841,8 +844,18 @@ function ConnectedRemoteSession({
         if (alive.current && version === bindingVersion.current)
           setError(String(reason));
       })
+      .then((receipt) => {
+        // An unconfirmed send stays pending for Retry; anything else that
+        // did not reach the queue goes back to the composer.
+        if (
+          !receipt &&
+          alive.current &&
+          !hasPendingRemoteCommand(project.key, machine.environmentId, commandId)
+        )
+          onRejected?.();
+      })
       .finally(() => {
-        preparingRef.current = false;
+        if (version === bindingVersion.current) preparingRef.current = false;
       });
     return true;
   };
@@ -912,7 +925,7 @@ function ConnectedRemoteSession({
         !planBlockId &&
         !options?.draftBlockId &&
         message(hostSession.id, text, undefined, [], intent).type === "send" &&
-        enqueue(hostSession.id, text, attachments, intent)
+        enqueue(hostSession.id, text, attachments, intent, options?.onRejected)
       );
     const turn = optimisticTurn(
       text,

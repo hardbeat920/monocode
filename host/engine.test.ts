@@ -780,6 +780,26 @@ describe("headless session ownership", () => {
     turns[2].finish();
   });
 
+  it("keeps a draft saved while the queue is paused through the queued turns", async () => {
+    const { engine, store, turns, id } = setup();
+    engine.command({ type: "send", commandId: "send", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    engine.command({ type: "enqueue", commandId: "q1", sessionId: id, text: "Next" });
+    engine.command({ type: "cancel", commandId: "stop", sessionId: id, runId: store.session(id).runId });
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    engine.command({ type: "draft", commandId: "draft", sessionId: id, text: "Later" });
+
+    engine.command({ type: "resumeQueue", commandId: "resume", sessionId: id });
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    turns[1].finish();
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(turns[2].input.text).toBe("Next");
+    expect(store.session(id).session.blocks).toContainEqual(
+      expect.objectContaining({ id: "draft", text: "Later", draft: true }),
+    );
+    turns[2].finish();
+  });
+
   it("recovers interrupted durable state without replaying an uncertain provider send", async () => {
     const { store, provider, id } = setup();
     const value = store.session(id);
