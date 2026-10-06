@@ -130,6 +130,8 @@ import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
+import { SavedPromptMenu } from "../../prompts/ui/SavedPromptMenu";
+import { useSavedPromptMenu } from "../../prompts/ui/useSavedPromptMenu";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
@@ -1140,12 +1142,29 @@ export function Composer({
     return () => cancelAnimationFrame(frame);
   }, [draft, syncHighlightScroll]);
 
+  // `!` inserts a saved prompt (Settings → Prompts) at the caret.
+  const promptMenu = useSavedPromptMenu({
+    apply: (next, cursor) => {
+      const el = ref.current;
+      if (!el) return;
+      el.value = next;
+      resizeComposer(el);
+      el.setSelectionRange(cursor, cursor);
+      draftRevisionRef.current += 1;
+      setDraft(next);
+      onDraftChange?.(next);
+      syncHasValue(next, attachmentsRef.current);
+      el.focus();
+    },
+  });
+
   const syncTokensFromTextarea = (el: HTMLTextAreaElement) => {
     if (creatingSkill) return;
     const cursor = el.selectionStart ?? 0;
     const token = slashTokenAt(el.value, cursor, hasNativeCommands(harness));
     setSlash(token);
     setMention(token ? null : mentionTokenAt(el.value, cursor));
+    promptMenu.sync(el);
   };
 
   const openSessionFolderPicker = useCallback(() => {
@@ -1761,6 +1780,7 @@ export function Composer({
     if (disabled) return;
     if (isImeComposition(e.nativeEvent)) return;
     if (creatingSkill) return;
+    if (promptMenu.onKeyDown(e)) return;
     if (
       e.key === "Enter" &&
       !e.shiftKey &&
@@ -2122,6 +2142,10 @@ export function Composer({
                 ref.current?.focus();
               }}
             />
+          </div>
+        ) : promptMenu.open ? (
+          <div className="absolute inset-x-0 bottom-full z-30 mb-1">
+            <SavedPromptMenu state={promptMenu} />
           </div>
         ) : skillPickerOpen ? (
           <div className="absolute inset-x-0 bottom-full z-30 mb-1">

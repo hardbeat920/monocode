@@ -26,6 +26,7 @@ export type SettingsSectionId =
   | "providers"
   | "mcp"
   | "skills"
+  | "prompts"
   | "inbox"
   | "worktrees"
   | "archive";
@@ -113,6 +114,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description:
       "Discover and manage file skills from project, personal, and harness folders.",
     keywords: "skill instructions prompt",
+  },
+  {
+    id: "prompts",
+    group: "agents",
+    label: "Prompts",
+    description:
+      "Save keywords, phrases and prompts you reuse. Type ! in any composer to insert one.",
+    keywords: "saved prompt snippet template phrase keyword reuse insert",
   },
   {
     id: "inbox",

@@ -52,6 +52,8 @@ import { quickLaunchAttachments } from "../model/quickAttachments";
 import { useQuickAttachments } from "./useQuickAttachments";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { QuickModelSelector } from "./QuickModelSelector";
+import { SavedPromptMenu } from "../../prompts/ui/SavedPromptMenu";
+import { useSavedPromptMenu } from "../../prompts/ui/useSavedPromptMenu";
 import { QuickPermissionIcon, QuickPermissions } from "./QuickPermissions";
 import { useQuickPickerMotion } from "./useQuickPickerMotion";
 import { OPERATOR_COMMAND } from "../../sessions/model/operatorCommand";
@@ -328,7 +330,21 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
     closePicker();
   };
 
+  // `!` inserts a saved prompt (Settings → Prompts) at the caret.
+  const promptMenu = useSavedPromptMenu({
+    apply: (next, cursor) => {
+      setPrompt(next);
+      requestAnimationFrame(() => {
+        const field = promptRef.current;
+        if (!field) return;
+        field.focus({ preventScroll: true });
+        field.setSelectionRange(cursor, cursor);
+      });
+    },
+  });
+
   const syncPromptCommand = (field: HTMLTextAreaElement) => {
+    promptMenu.sync(field);
     const token =
       field.selectionStart === field.selectionEnd
         ? slashTokenAt(field.value, field.selectionStart)
@@ -399,6 +415,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
 
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
+    if (promptMenu.onKeyDown(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       if (picker) closePicker();
@@ -752,6 +769,11 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
             Take screenshot…
           </button>
         </Popover>
+      ) : null}
+      {promptMenu.open && !picker ? (
+        <div className="p-1.5 pt-0">
+          <SavedPromptMenu state={promptMenu} floating={false} />
+        </div>
       ) : null}
       {picker && picker !== "attachments" ? (
         <div ref={pickerRef} key={picker} className="flex min-h-0 flex-col">

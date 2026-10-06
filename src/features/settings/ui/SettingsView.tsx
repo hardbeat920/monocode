@@ -368,6 +368,7 @@ import {
 } from "../../../app/model/updater";
 
 import { SkillsPage } from "../../skills/ui/SkillsPage";
+import { PromptsPage } from "../../prompts/ui/PromptsPage";
 import { ProjectNotificationSettings } from "../../notifications/ui/ProjectNotificationSettings";
 import { WorktreesPage } from "../../source-control/ui/WorktreesPage";
 import {
@@ -531,6 +532,15 @@ export function SettingsView({
         <SkillsPage
           key={cwd}
           cwd={cwd}
+          header={
+            <PageHeader
+              title={settingsSectionLabel(section)}
+              description={settingsSectionDescription(section)}
+            />
+          }
+        />
+      ) : section === "prompts" ? (
+        <PromptsPage
           header={
             <PageHeader
               title={settingsSectionLabel(section)}
