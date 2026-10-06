@@ -72,6 +72,14 @@ type PendingApproval = {
   resolve: (decision: ApprovalDecision) => void;
 };
 
+type PendingQuestion = {
+  uiId: number;
+  id: string;
+  event: Extract<HarnessEvent, { type: "question.asked" }>;
+  resolve: (reply: UserQuestionReply) => void;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
 type InFlightTool = {
   id: string;
   name: string;
@@ -94,10 +102,7 @@ type Live = {
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
-  questions: Map<
-    number,
-    { id: string; resolve: (reply: UserQuestionReply) => void }
-  >;
+  questions: PendingQuestion[];
   availableCommands?: NativeCommand[];
   promptId: string | null;
   nextApprovalUiId: number;
@@ -356,10 +361,9 @@ export function respondQuestion(
   requestId: number,
   reply: UserQuestionReply,
 ): void {
-  stateFor(flavor)
-    .liveByThread.get(sessionId)
-    ?.questions.get(requestId)
-    ?.resolve(reply);
+  const live = stateFor(flavor).liveByThread.get(sessionId);
+  if (live?.questions[0]?.uiId === requestId)
+    live.questions[0].resolve(reply);
 }
 
 export async function cancelTurn(
@@ -377,9 +381,10 @@ export async function cancelTurn(
   live.settleToken += 1;
   for (const [, pending] of live.approvals) pending.resolve("deny");
   live.approvals.clear();
-  for (const question of live.questions.values())
+  for (const question of live.questions) {
+    if (question.timer) clearTimeout(question.timer);
     question.resolve({ kind: "skipped" });
-  live.questions.clear();
+  }
   await live.rpc.request({ type: "abort" }, 5_000).catch(() => undefined);
   finishActiveTurn(live, [
     { type: "message.completed" },
@@ -400,9 +405,10 @@ export async function stopSession(
     live.settleToken += 1;
     for (const [, pending] of live.approvals) pending.resolve("deny");
     live.approvals.clear();
-    for (const question of live.questions.values())
+    for (const question of live.questions) {
+      if (question.timer) clearTimeout(question.timer);
       question.resolve({ kind: "skipped" });
-    live.questions.clear();
+    }
     live.activeTurn = false;
     live.turnDone?.();
     live.turnDone = null;
@@ -506,7 +512,7 @@ async function startLive(
     planning: input.intent === "plan",
     onEvent: input.onEvent,
     approvals: new Map(),
-    questions: new Map(),
+    questions: [],
     promptId: null,
     nextApprovalUiId: 1,
     toolsByIndex: new Map(),
@@ -539,8 +545,10 @@ async function startLive(
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
       if (current) {
-        for (const question of current.questions.values())
+        for (const question of current.questions) {
+          if (question.timer) clearTimeout(question.timer);
           question.resolve({ kind: "skipped" });
+        }
         for (const approval of current.approvals.values())
           approval.resolve("deny");
       }
@@ -739,14 +747,14 @@ function handleFrame(
     rec.type === "extension_ui_request" &&
     rec.method === "cancel"
   ) {
-    for (const question of live.questions.values()) {
+    for (const question of live.questions) {
       if (question.id === rec.id) question.resolve({ kind: "skipped" });
     }
     return;
   }
   const ui = parseExtensionUiRequest(rec);
   if (ui) {
-    void handleExtensionUi(flavor, sessionId, live, ui);
+    void handleExtensionUi(sessionId, live, ui);
     return;
   }
   if (live.muteUpdates) return;
@@ -1010,7 +1018,6 @@ async function settleTurn(live: Live): Promise<void> {
 }
 
 async function handleExtensionUi(
-  flavor: PiFlavor,
   sessionId: string,
   live: Live,
   request: PiExtensionUiRequest,
@@ -1030,16 +1037,12 @@ async function handleExtensionUi(
   }
 
   if (
-    flavor.id === "omp" &&
-    (request.method === "select" ||
-      request.method === "input" ||
-      request.method === "editor")
+    request.method === "select" ||
+    request.method === "input" ||
+    request.method === "editor"
   ) {
     const uiId = live.nextApprovalUiId++;
-    const replyPromise = new Promise<UserQuestionReply>((resolve) => {
-      live.questions.set(uiId, { id: request.id, resolve });
-    });
-    live.onEvent({
+    const event: PendingQuestion["event"] = {
       type: "question.asked",
       requestId: uiId,
       title: extensionUiTitle(request),
@@ -1060,11 +1063,31 @@ async function handleExtensionUi(
                   }),
                 }))
               : [],
+          ...(request.method !== "select" && {
+            placeholder: request.placeholder,
+            defaultText: request.prefill,
+            multiline: request.method === "editor",
+            allowEmpty: true,
+          }),
         },
       ],
+    };
+    const replyPromise = new Promise<UserQuestionReply>((resolve) => {
+      const pending: PendingQuestion = { uiId, id: request.id, event, resolve };
+      if (request.timeout)
+        pending.timer = setTimeout(
+          () => resolve({ kind: "skipped" }),
+          request.timeout,
+        );
+      live.questions.push(pending);
     });
+    if (live.questions.length === 1) live.onEvent(event);
     const reply = await replyPromise;
-    live.questions.delete(uiId);
+    const index = live.questions.findIndex((question) => question.uiId === uiId);
+    const pending = live.questions[index];
+    if (pending?.timer) clearTimeout(pending.timer);
+    const wasVisible = index === 0;
+    if (index >= 0) live.questions.splice(index, 1);
     let value: string | undefined;
     if (reply.kind === "answered") {
       if (request.method === "select") {
@@ -1075,11 +1098,17 @@ async function handleExtensionUi(
         value = reply.custom?.[request.id];
       }
     }
-    live.onEvent({
-      type: "question.resolved",
-      requestId: uiId,
-      decision: value === undefined ? "skipped" : "answered",
-    });
+    if (wasVisible) {
+      live.onEvent({
+        type: "question.resolved",
+        requestId: uiId,
+        decision: value === undefined ? "skipped" : "answered",
+      });
+      if (!live.muteUpdates) {
+        const next = live.questions[0];
+        if (next) live.onEvent(next.event);
+      }
+    }
     await writeChild(
       sessionId,
       JSON.stringify({
