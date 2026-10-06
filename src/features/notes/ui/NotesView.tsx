@@ -195,8 +195,9 @@ export function NotesView({
     if (creating) return;
     setCreating(true);
     try {
+      // A blank title marks the note's generated slug as pending.
       const note = await createNote({
-        title: "Untitled",
+        title: "",
         body: "",
         ...(cwd && looksLikeProject(cwd) ? { sourceCwd: cwd } : {}),
       });
@@ -584,8 +585,9 @@ function NoteEditor({
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
-  // Title the user finished typing (blur/close); cleared only once saved.
-  const finalizeTitleRef = useRef<string | null>(null);
+  // Title the user finished typing (blur/close). Any later title edit drops
+  // it; a save clears it only if the same request is still current.
+  const finalizeRef = useRef<{ title: string } | null>(null);
   const onSavedRef = useRef(onSaved);
   bodyRef.current = body;
   noteRef.current = note;
@@ -641,7 +643,8 @@ function NoteEditor({
       setSaveError(null);
     };
     // Bound to the finished title so a newer partial edit never finalizes.
-    const finalizeSlug = finalizeTitleRef.current === nextTitle;
+    const finalizeRequest = finalizeRef.current;
+    const finalizeSlug = finalizeRequest?.title === nextTitle;
     if (
       !finalizeSlug &&
       nextTitle === current.title &&
@@ -661,8 +664,8 @@ function NoteEditor({
         ...(finalizeSlug ? { finalizeSlug } : {}),
         ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
-      if (finalizeSlug && finalizeTitleRef.current === nextTitle) {
-        finalizeTitleRef.current = null;
+      if (finalizeSlug && finalizeRef.current === finalizeRequest) {
+        finalizeRef.current = null;
       }
       acceptSaved(saved);
       onSavedRef.current(saved);
@@ -793,11 +796,13 @@ function NoteEditor({
 
   useEffect(() => {
     return () => {
-      // Only notes still on a placeholder slug need a finalizing save.
-      if (hasPlaceholderSlug(noteRef.current)) {
-        finalizeTitleRef.current =
-          (editsRef.current.title ?? noteRef.current.title).trim() ||
-          noteTitle(bodyRef.current);
+      // Only notes whose slug is still pending need a finalizing save.
+      if (noteRef.current.slugPending) {
+        finalizeRef.current = {
+          title:
+            (editsRef.current.title ?? noteRef.current.title).trim() ||
+            noteTitle(bodyRef.current),
+        };
       }
       void saveNow();
     };
@@ -849,14 +854,15 @@ function NoteEditor({
             ref={titleFieldRef}
             value={title}
             onChange={(event) => {
+              finalizeRef.current = null;
               editNote({ title: event.target.value });
               scheduleSave();
             }}
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
               if (next !== title) editNote({ title: next });
-              if (hasPlaceholderSlug(noteRef.current)) {
-                finalizeTitleRef.current = next;
+              if (noteRef.current.slugPending) {
+                finalizeRef.current = { title: next };
               }
               void saveNow();
             }}
@@ -1059,10 +1065,6 @@ function NoteTagsEditor({
       ) : null}
     </div>
   );
-}
-
-function hasPlaceholderSlug(note: { slug: string }): boolean {
-  return /^untitled(-\d+)?$/.test(note.slug);
 }
 
 function sameTags(left: readonly string[], right: readonly string[]): boolean {

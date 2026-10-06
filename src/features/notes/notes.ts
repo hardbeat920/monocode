@@ -16,6 +16,8 @@ export type Note = {
   tags: string[];
   sourceSessionId?: string;
   sourceCwd?: string;
+  /** Slug generated for a note created without a title; replaced once from its first real title. */
+  slugPending: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -28,7 +30,7 @@ export type NoteUpsert = {
   sourceSessionId?: string;
   /** Omit on update to keep the saved project directory. */
   sourceCwd?: string;
-  /** Replace a placeholder slug ("untitled-2") from the title. Set once the title is done being typed. */
+  /** Replace a pending slug from the title. Set once the title is done being typed; ignored unless the slug is pending. */
   finalizeSlug?: boolean;
 };
 
@@ -354,6 +356,7 @@ export function composeNoteMessage(
       title: card.title,
       body: card.body,
       tags: [],
+      slugPending: false,
       createdAt: 0,
       updatedAt: 0,
     },
