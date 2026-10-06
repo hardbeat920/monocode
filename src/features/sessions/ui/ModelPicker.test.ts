@@ -338,6 +338,73 @@ describe("model picker", () => {
     expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
   });
 
+  it("groups omp models by provider in keyboard order", () => {
+    // omp sorts by model name, so providers arrive interleaved.
+    setHarnessModels("omp", [
+      {
+        id: "omp:anthropic/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "anthropic/claude-sonnet-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+      {
+        id: "omp:github-copilot/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "github-copilot/claude-sonnet-5",
+        provider: { id: "github-copilot", name: "GitHub Copilot" },
+      },
+      {
+        id: "omp:anthropic/claude-opus-5",
+        harness: "omp",
+        name: "Claude Opus 5",
+        nativeId: "anthropic/claude-opus-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+    ]);
+    const onChange = vi.fn();
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "omp",
+          model: "omp:anthropic/claude-sonnet-5",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    expect(
+      [...container.querySelectorAll('[role="group"]')].map((group) =>
+        group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Anthropic", "GitHub Copilot"]);
+    const options = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual(
+      [
+        "Claude Sonnet 5, Anthropic",
+        "Claude Opus 5, Anthropic",
+        "Claude Sonnet 5, GitHub Copilot",
+      ],
+    );
+    // The next row down is the next visible row, not the next catalog entry.
+    options[0].focus();
+    keyDown(options[0], "ArrowDown");
+    keyDown(options[0], "Enter");
+    expect(onChange).toHaveBeenCalledWith("omp", "omp:anthropic/claude-opus-5");
+  });
+
   it("names the source of same-name favorites from different providers", () => {
     setHarnessModels("cursor", [
       {

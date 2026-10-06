@@ -234,8 +234,36 @@ function recentMenuModels(
   return models.slice(0, 6);
 }
 
+/** Harness tabs whose catalog names upstream providers list models under them. */
+function groupsByProvider(tab: ModelPickerTab, models: AgentModel[]): boolean {
+  return tab !== "favorites" && models.some((item) => item.provider);
+}
+
+function modelProvider(item: AgentModel): { id: string; name: string } {
+  return item.provider ?? { id: item.harness, name: HARNESS_TITLE[item.harness] };
+}
+
+/**
+ * Keeps each provider's models contiguous (in first-seen provider order) so
+ * keyboard navigation, which walks this list, matches the grouped headings.
+ */
+function inProviderOrder(
+  tab: ModelPickerTab,
+  models: AgentModel[],
+): AgentModel[] {
+  if (!groupsByProvider(tab, models)) return models;
+  const groups = new Map<string, AgentModel[]>();
+  for (const item of models) {
+    const id = modelProvider(item).id;
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
+  }
+  return [...groups.values()].flat();
+}
+
 function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
-  if (tab !== "opencode") {
+  if (!groupsByProvider(tab, models)) {
     return [
       {
         id: "models",
@@ -246,7 +274,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
 
   const groups = new Map<string, ModelGroup>();
   models.forEach((item, index) => {
-    const provider = item.provider ?? { id: "opencode", name: "OpenCode" };
+    const provider = modelProvider(item);
     let group = groups.get(provider.id);
     if (!group) {
       group = { id: provider.id, name: provider.name, models: [] };
@@ -381,12 +409,14 @@ export function ModelPicker({
                 item != null && pickerHarnesses.includes(item.harness),
             )
         : source.modelsFor(visibleTab);
-    if (!needle) return pool;
-    return pool.filter((item) =>
-      `${item.name} ${HARNESS_TITLE[item.harness]} ${item.provider?.name ?? ""} ${item.provider?.id ?? ""}`
-        .toLowerCase()
-        .includes(needle),
-    );
+    const matches = needle
+      ? pool.filter((item) =>
+          `${item.name} ${HARNESS_TITLE[item.harness]} ${item.provider?.name ?? ""} ${item.provider?.id ?? ""}`
+            .toLowerCase()
+            .includes(needle),
+        )
+      : pool;
+    return inProviderOrder(visibleTab, matches);
   }, [source, catalogVersion, favorites, providerKey, query, visibleTab]);
 
   const dismiss = (restore: boolean) => {
