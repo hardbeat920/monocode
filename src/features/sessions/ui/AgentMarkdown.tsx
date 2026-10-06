@@ -1,4 +1,3 @@
-import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -30,6 +29,7 @@ import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { boundedCode } from "../../files/editor/codeHighlightPlugin";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
   displayPath,
@@ -63,7 +63,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-const MARKDOWN_PLUGINS = { code, mermaid };
+const MARKDOWN_PLUGINS = { code: boundedCode, mermaid };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,

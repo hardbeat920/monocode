@@ -724,3 +724,24 @@ describe("hydrateWorkspaceSnapshot", () => {
     expect(workspace?.lastDockSide).toBe("left");
   });
 });
+
+describe("worktree tab cleanup", () => {
+  it("drops tabs the caller leaves out, with sessions only they showed", () => {
+    const main = chat("main", "/repo");
+    const feature = { ...chat("feature", "/repo"), worktreeCwd: "/trees/a" };
+    const mainTab = { ...newTab("main"), id: "tab-main" };
+    const featureTab = { ...newTab("feature"), id: "tab-feature" };
+    const snapshot = collectWorkspaceSnapshot(
+      [mainTab, featureTab],
+      [main, feature],
+      "tab-feature",
+      "/repo",
+      new Map(),
+      [],
+      undefined,
+      (tab) => tab.id !== "tab-feature",
+    );
+    expect(snapshot.tabs.map((tab) => tab.id)).toEqual(["tab-main"]);
+    expect(snapshot.sessions.map((stub) => stub.id)).toEqual(["main"]);
+  });
+});

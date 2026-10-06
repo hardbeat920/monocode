@@ -519,6 +519,46 @@ describe("model picker", () => {
     expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" });
   });
 
+  it("focuses the model search when the models submenu opens", async () => {
+    setHarnessModels("cursor", [
+      {
+        id: "cursor:composer-2.5",
+        harness: "cursor",
+        name: "Composer 2.5",
+        nativeId: "composer-2.5",
+        settings: [],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "cursor",
+          model: "cursor:composer-2.5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const modelTrigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    act(() => modelTrigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"))!;
+    hover(modelRow);
+
+    // Focus is deferred one frame so the popover is on screen first.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+    const search = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search models"]',
+    )!;
+    expect(document.activeElement).toBe(search);
+  });
+
   it("renders the OpenCode variant as a beside-picker pill", () => {
     setHarnessModels("opencode", [
       {
@@ -865,7 +905,7 @@ describe("model picker", () => {
     });
   });
 
-  it("opens the model list directly when settings live beside the picker", () => {
+  it("opens the model list directly when settings live beside the picker", async () => {
     setHarnessModels("cursor", [
       {
         id: "cursor:composer-2.5",
@@ -910,6 +950,12 @@ describe("model picker", () => {
     )!;
     expect(flyout).not.toBeNull();
     expect(flyout.textContent).toContain("Composer 2.5");
+
+    // Search takes focus once the flyout is on screen.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(document.activeElement).toBe(
+      flyout.querySelector('input[aria-label="Search models"]'),
+    );
 
     const selected = flyout.querySelector<HTMLButtonElement>(
       '[role="option"][aria-selected="true"]',
