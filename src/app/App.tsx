@@ -1,3 +1,4 @@
+import { renameSession } from "./model/renameSession";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
@@ -404,6 +405,7 @@ import {
   newDefaultSession,
   newSession,
   retargetSessionToProject,
+  withHarnessChoice,
   removeSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -439,7 +441,6 @@ import {
   fetchCodexRateLimits,
 } from "../features/providers/model/rateLimitsFetch";
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
-import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   discardDraftSessionRecord,
   deleteSession,
@@ -785,33 +786,6 @@ function userTurnCards(
   };
 }
 
-function withHarnessChoice(
-  session: Session,
-  harness: HarnessId,
-  model: string,
-  modelSettings: Record<string, string>,
-): Session {
-  return {
-    ...session,
-    harness,
-    model,
-    modelSettings,
-    title:
-      session.blocks.length === 0
-        ? HARNESS_LABEL[harness]
-        : formatSessionTitle(
-            harness,
-            sessionDisplayTitle(session.title, session.harness),
-          ),
-    ...(session.model === model
-      ? {}
-      : { context: dropContextWindow(session.context) }),
-    ...(session.harness === harness
-      ? {}
-      : { providerSessionId: undefined, providerAccountId: undefined }),
-  };
-}
-
 function withPlanBuildTarget(
   session: Session,
   target: PlanBuildTarget,
@@ -918,6 +892,10 @@ export default function App(props: AppProps) {
   );
 }
 
+/**
+ * Owns a window's live sessions, layout, and project history, coordinating
+ * harness events and persistence with UI actions and operator requests.
+ */
 function Workspace({
   windowTransfer = null,
   resumed = null,
@@ -4353,43 +4331,39 @@ function Workspace({
     [],
   );
 
+  /**
+   * Applies a project-scoped rename, then refreshes cached history after saving.
+   * Rejects storage failures for the caller to display or return to the operator.
+   */
   const onRenameHistorySession = useCallback(
-    async (sessionId: string, displayTitle: string) => {
-      const trimmed = displayTitle.trim();
-      if (!trimmed) return;
+    async (
+      sessionId: string,
+      displayTitle: string,
+      expectedCwd = sidebarCwd,
+    ) => {
       invalidateLoadedSession(sessionId);
-
-      const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
+      const updated = await renameSession(
+        sessionId,
+        displayTitle,
+        () => sessionsRef.current,
+        (update) => {
+          // Drop a delayed autosave of the pre-rename title.
+          pendingPersist.current.delete(sessionId);
+          sessionsRef.current = update(sessionsRef.current);
+          setSessions(update);
+        },
+        expectedCwd,
       );
-      if (open) {
-        const title = formatSessionTitle(open.harness, trimmed);
-        const updated = { ...open, title };
-        setSessions((prev) =>
-          prev.map((session) => (session.id === sessionId ? updated : session)),
-        );
-        loadedSessionCache.current.delete(sessionId);
-        persistSession(updated);
-      } else {
-        const restored = await getSession(sessionId).catch(() => null);
-        if (!restored) {
-          void refreshHistory(sidebarCwd);
-          return;
-        }
-        const updated = {
-          ...restored,
-          title: formatSessionTitle(restored.harness, trimmed),
-        };
-        const saved = await upsertSession(updated).catch(() => null);
-        if (saved) {
-          rememberLoadedSession(loadedSessionCache.current, updated);
-          lastPersisted.current.set(sessionId, persistFingerprint(updated));
-        }
-      }
+      if (!sessionsRef.current.some((session) => session.id === sessionId))
+        rememberLoadedSession(loadedSessionCache.current, updated);
+      lastPersisted.current.set(sessionId, persistFingerprint(updated));
       void refreshHistory(sidebarCwd);
     },
-    [invalidateLoadedSession, persistSession, refreshHistory, sidebarCwd],
+    [invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
+
+  const renameHistorySessionRef = useRef(onRenameHistorySession);
+  renameHistorySessionRef.current = onRenameHistorySession;
 
   const checkOpenWorktreeFiles = useCallback((path: string) => {
     assertWorktreeFilesClosed(path, [
@@ -5914,6 +5888,10 @@ function Workspace({
     [],
   );
 
+  /**
+   * Accepts one unsent draft without running a turn; false means not accepted.
+   * Local title/block updates use the workspace's normal persistence path.
+   */
   const onSaveDraft = useCallback(
     (
       sessionId: string,
@@ -5937,8 +5915,7 @@ function Workspace({
         return false;
       }
       const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
+        current,
         HARNESS_LABEL[current.harness],
       );
       const title = placeholderTitle
@@ -6005,6 +5982,10 @@ function Workspace({
     [invalidateLoadedSession],
   );
 
+  /**
+   * Accepts or rejects a user turn, including draft promotion and provider handoff.
+   * Acceptance is separate from completion, reported through settlement callbacks.
+   */
   const submitSession = useCallback(
     (
       sessionId: string,
@@ -6403,12 +6384,16 @@ function Workspace({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle =
-        canReplaceSessionTitle(
-          current.title,
-          current.harness,
-          HARNESS_LABEL[current.harness],
-        ) || !!draftBlock;
+      const placeholderTitle = canReplaceSessionTitle(
+        current,
+        draftBlock
+          ? titleFromPrompt(
+              draftBlock.text,
+              current.harness,
+              draftBlock.attachments,
+            )
+          : HARNESS_LABEL[current.harness],
+      );
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -6449,6 +6434,7 @@ function Workspace({
       }
 
       dismissNoticesForContinuedSession(sessionId);
+      /** Update the latest transcript and promote its draft without replacing an explicit title. */
       const commitSubmittedTurn = () => {
         setSessions((prev) =>
           prev.map((s) => {
@@ -6464,7 +6450,10 @@ function Workspace({
             const selected = options?.buildTarget
               ? withPlanBuildTarget(draftRemoved, options.buildTarget)
               : draftRemoved;
-            const titled = isFirstTurn ? titleSeed : selected.title;
+            const titled =
+              isFirstTurn && !selected.titleIsExplicit
+                ? titleSeed
+                : selected.title;
             let next: Session = {
               ...selected,
               providerAccountId,
@@ -6556,9 +6545,14 @@ function Workspace({
         flushSync(commitSubmittedTurn);
       }
 
+      /**
+       * Starts best-effort naming and work-item linking for eligible turns.
+       * Rechecks title ownership when delayed results reach the live session.
+       */
       const launchTitleGeneration = (workCwd: string) => {
         if (
           !live ||
+          current.titleIsExplicit ||
           !shouldGenerateSessionTitle(
             isFirstTurn,
             placeholderTitle,
@@ -6595,8 +6589,9 @@ function Workspace({
                 let next = s;
                 if (
                   generated &&
+                  !s.titleIsExplicit &&
                   (options?.refreshTitle ||
-                    canReplaceSessionTitle(s.title, s.harness, titleSeed))
+                    canReplaceSessionTitle(s, titleSeed))
                 ) {
                   next = {
                     ...next,
@@ -9169,6 +9164,10 @@ function Workspace({
       action: string;
       input: Record<string, unknown>;
     }>("monocode-control-request", ({ payload }) => {
+      /**
+       * Dispatches control requests and reuses matching app request receipts.
+       * Changed retry inputs reject; failed app receipts are evicted for retry.
+       */
       const handle = async () => {
         if (payload.namespace === "control") {
           return orchestrator.handle(
@@ -9273,6 +9272,10 @@ function Workspace({
                 sameProjectPath(target.cwd, source.cwd)
                 ? target
                 : null;
+            },
+            /** Revalidates the caller's project during rename and propagates save errors. */
+            rename: async (id, title) => {
+              await renameHistorySessionRef.current(id, title, source.cwd);
             },
             send: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);
@@ -10759,7 +10762,14 @@ function Workspace({
               onPrefetchSession={onPrefetchHistorySession}
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
-              onRenameSession={onRenameHistorySession}
+              onRenameSession={(id, title) => {
+                void onRenameHistorySession(id, title).catch((error) => {
+                  void message(
+                    `Could not rename this conversation. Please retry.\n\n${String(error)}`,
+                    { title: "MonoCode", kind: "error" },
+                  );
+                });
+              }}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}

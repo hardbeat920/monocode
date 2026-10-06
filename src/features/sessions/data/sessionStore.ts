@@ -78,6 +78,7 @@ type SessionRecord = {
   modelSettings: Record<string, string>;
   runtimeMode: string;
   title: string;
+  titleIsExplicit?: boolean;
   providerSessionId?: string | null;
   providerAccountId?: string | null;
   blocks: Block[];
@@ -100,6 +101,7 @@ type SessionUpsertPayload = {
   modelSettings: Record<string, string>;
   runtimeMode: string;
   title: string;
+  titleIsExplicit?: boolean;
   providerSessionId?: string;
   providerAccountId?: string;
   blocks: Block[];
@@ -127,6 +129,10 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+/**
+ * Builds the shared metadata for storage payloads and dirty-state fingerprints.
+ * Normalizes the project path and omits invalid provider IDs and work-item data.
+ */
 function persistableMeta(
   session: Session,
 ): Omit<SessionUpsertPayload, "blocks"> {
@@ -139,6 +145,7 @@ function persistableMeta(
     modelSettings: session.modelSettings,
     runtimeMode: session.runtimeMode,
     title: session.title,
+    ...(session.titleIsExplicit ? { titleIsExplicit: true } : {}),
     ...(session.providerSessionId && isPersistableId(session.providerSessionId)
       ? { providerSessionId: session.providerSessionId }
       : {}),
@@ -1106,6 +1113,10 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
   };
 }
 
+/**
+ * Hydrates sanitized blocks and saved metadata into an idle session.
+ * Retains explicit-title ownership; active harness state is not restored here.
+ */
 function recordToSession(record: SessionRecord): Session {
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
@@ -1124,6 +1135,7 @@ function recordToSession(record: SessionRecord): Session {
         : {},
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
+    ...(record.titleIsExplicit ? { titleIsExplicit: true } : {}),
     blocks,
     busy: false,
     orchestrationLeadId:

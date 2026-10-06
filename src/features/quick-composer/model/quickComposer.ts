@@ -53,6 +53,8 @@ export type QuickChoice = { harness: HarnessId; model: string };
 
 export type QuickLaunch = {
   prompt: string;
+  /** Explicit display title, using the same format as a manual rename. */
+  title?: string;
   /** Create an unsent user draft instead of starting an agent turn. */
   draft?: boolean;
   /** Turn mode picked with a leading composer command. */

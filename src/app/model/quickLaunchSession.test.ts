@@ -6,6 +6,9 @@ import { launchReceiver } from "../../features/quick-composer/model/launchDelive
 import type { QuickLaunch } from "../../features/quick-composer/model/quickComposer";
 import {
   newSession,
+  canReplaceSessionTitle,
+  formatSessionTitle,
+  titleFromPrompt,
   type Attachment,
   type Session,
 } from "../../features/sessions/model/session";
@@ -16,6 +19,7 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { filterTabsForProject } from "../../features/workspace/model/workspaceTabGroups";
+import { sanitizeSessionForPersist } from "../../features/sessions/data/sessionStore";
 import { acceptQuickLaunch } from "./quickLaunchSession";
 import {
   submitAfterProjectSync,
@@ -442,3 +446,63 @@ it("does not submit an accepted prompt again after a lost ACK", async () => {
   expect(workspace.submit).toHaveBeenCalledOnce();
   expect(queue).toHaveLength(0);
 });
+
+it.each([false, true])(
+  "keeps an explicit launch title through acceptance and persistence (draft=%s)",
+  async (draft) => {
+    const { request, state, workspace } = setup();
+    const title = "#123 — Fix local tracking";
+    await acceptQuickLaunch(
+      { ...request, title, draft },
+      "named-session",
+      workspace,
+    );
+    const session = state.sessions.find(
+      (entry) => entry.id === "named-session",
+    )!;
+    expect(session.title).toBe(formatSessionTitle("codex", title));
+    expect(sanitizeSessionForPersist(session)).toMatchObject({
+      title: session.title,
+      titleIsExplicit: true,
+    });
+    expect(
+      canReplaceSessionTitle(
+        session,
+        titleFromPrompt(request.prompt, session.harness),
+      ),
+    ).toBe(false);
+    expect(session.blocks[0].text).toBe(request.prompt);
+    expect(workspace.submit).toHaveBeenCalledTimes(draft ? 0 : 1);
+    expect(workspace.saveDraft).toHaveBeenCalledTimes(draft ? 1 : 0);
+  },
+);
+
+it("does not restore a launch title over a later rename when delivery is retried", async () => {
+  const { request, state, workspace } = setup();
+  const launch = { ...request, title: "First title", draft: true };
+  await acceptQuickLaunch(launch, "retry-title", workspace);
+  const session = state.sessions.find((entry) => entry.id === "retry-title")!;
+  session.title = formatSessionTitle(session.harness, "Later title");
+  await acceptQuickLaunch(launch, "retry-title", workspace);
+  expect(session.title).toBe("codex · Later title");
+  expect(workspace.saveDraft).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "protects explicit titles equal to the prompt seed (draft=%s)",
+  async (draft) => {
+    const { request, state, workspace } = setup();
+    await acceptQuickLaunch(
+      { ...request, title: request.prompt, draft },
+      "seed-title",
+      workspace,
+    );
+    const session = state.sessions.find((entry) => entry.id === "seed-title")!;
+    expect(
+      canReplaceSessionTitle(
+        session,
+        titleFromPrompt(request.prompt, session.harness),
+      ),
+    ).toBe(false);
+  },
+);
