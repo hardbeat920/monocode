@@ -67,6 +67,8 @@ type Props = {
   fileCount?: number;
   focusPath?: string;
   focusId?: string;
+  /** Bumped each time the focused file is picked again, to scroll back to it. */
+  focusRequest?: number;
   busyId?: string | null;
   totals?: { additions: number; deletions: number };
   /** Fill the parent pane and scroll inside. Off when the parent already scrolls. */
@@ -86,6 +88,7 @@ export function UnifiedDiffView({
   fileCount,
   focusPath,
   focusId,
+  focusRequest,
   busyId,
   totals,
   fill = true,
@@ -122,25 +125,77 @@ export function UnifiedDiffView({
     setReveals({});
   }, [fileKey, initialExpansion]);
 
-  useEffect(() => {
-    if (!resolvedFocusId) return;
-    const node = fileRefs.current.get(resolvedFocusId);
-    if (!node) return;
+  // The focused file stays pinned to the top while diffs above it load and
+  // grow, until the reader scrolls or clicks in the view themselves. The id
+  // is read when scrolling, so a followed file staged meanwhile is followed
+  // under its new entry.
+  const followFocusRef = useRef(false);
+  const focusIdRef = useRef(resolvedFocusId);
+  focusIdRef.current = resolvedFocusId;
+  const scrollToFocus = useCallback(() => {
+    const id = followFocusRef.current ? focusIdRef.current : undefined;
+    const node = id ? fileRefs.current.get(id) : undefined;
     const scroller = scrollerRef.current;
-    if (!scroller) {
+    if (!node || !scroller) return;
+    // Measure against the scroller itself: it isn't the section's offsetParent,
+    // so offsetTop would also count the toolbar above it.
+    const offset =
+      node.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top +
+      scroller.scrollTop;
+    const top = Math.max(0, offset - (fileLayout === "cards" ? 8 : 0));
+    if (Math.abs(scroller.scrollTop - top) > 1) scroller.scrollTo({ top });
+  }, [fileLayout]);
+  const releaseFocus = useCallback(() => {
+    followFocusRef.current = false;
+  }, []);
+
+  const revealFocus = useCallback(() => {
+    const id = followFocusRef.current ? focusIdRef.current : undefined;
+    const node = id ? fileRefs.current.get(id) : undefined;
+    if (!id || !node) return;
+    if (!scrollerRef.current) {
       // Embedded review surfaces jump in from a file list, so open the file
-      // and let the ancestor that owns scrolling bring it up.
+      // and let the ancestor that owns scrolling bring it up once. That
+      // ancestor's scrolling is the reader's, so stop following here.
       setOpen((current) =>
-        current.has(resolvedFocusId)
-          ? current
-          : new Set(current).add(resolvedFocusId),
+        current.has(id) ? current : new Set(current).add(id),
       );
       node.scrollIntoView({ block: "start" });
+      followFocusRef.current = false;
       return;
     }
-    const top = node.offsetTop - 8;
-    scroller.scrollTo({ top: Math.max(0, top) });
-  }, [resolvedFocusId, fileKey]);
+    scrollToFocus();
+  }, [scrollToFocus]);
+
+  // Only a new selection starts following. The matched entry's id can change
+  // without one (staging moves a file to another section), so key on what
+  // was picked rather than on resolvedFocusId.
+  const focusTarget = focusPath ?? focusId;
+  useEffect(() => {
+    followFocusRef.current = !!focusTarget;
+    revealFocus();
+  }, [focusTarget, focusRequest, revealFocus]);
+
+  // A refreshed file list, or the selection resolving to another entry,
+  // re-anchors a file still being followed, but never resumes one the reader
+  // already scrolled away from.
+  useEffect(() => {
+    if (followFocusRef.current) revealFocus();
+  }, [fileKey, resolvedFocusId, revealFocus]);
+
+  const contentObserverRef = useRef<ResizeObserver | null>(null);
+  const bindContent = useCallback(
+    (el: HTMLDivElement | null) => {
+      contentObserverRef.current?.disconnect();
+      contentObserverRef.current = null;
+      if (!el || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(scrollToFocus);
+      observer.observe(el);
+      contentObserverRef.current = observer;
+    },
+    [scrollToFocus],
+  );
 
   const bindScroller = useCallback(
     (el: HTMLDivElement | null) => {
@@ -234,6 +289,10 @@ export function UnifiedDiffView({
       </div>
       <div
         ref={bindScroller}
+        onWheel={releaseFocus}
+        onTouchStart={releaseFocus}
+        onPointerDown={releaseFocus}
+        onKeyDown={releaseFocus}
         className={
           fill
             ? "unified-diff min-h-0 flex-1 overflow-y-auto overscroll-none"
@@ -247,6 +306,7 @@ export function UnifiedDiffView({
           </p>
         ) : null}
         <div
+          ref={bindContent}
           className={
             fileLayout === "cards"
               ? "flex flex-col gap-2 pt-2"

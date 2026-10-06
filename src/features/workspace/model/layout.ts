@@ -68,6 +68,8 @@ export type FilePaneTab = {
   changes?: boolean;
   /** Which side of a staged/unstaged path was selected in source control. */
   changeKind?: GitFileDiffKind;
+  /** Bumped when source control picks this file again. Live only — not persisted. */
+  focusRequest?: number;
   /** Read-only diff built from one session's captured before/after snapshots. */
   sessionChanges?: SessionChangesSource;
   /** Historical commit review (unified diff, read-only). */
@@ -689,7 +691,12 @@ export function openChangesTab(
     const { changeKind: _previousKind, ...rest } = existingFile;
     const updated = {
       ...rest,
-      ...(focusPath ? { path: focusPath } : {}),
+      ...(focusPath
+        ? {
+            path: focusPath,
+            focusRequest: (existingFile.focusRequest ?? 0) + 1,
+          }
+        : {}),
       ...(focusKind ? { changeKind: focusKind } : {}),
     };
     return {

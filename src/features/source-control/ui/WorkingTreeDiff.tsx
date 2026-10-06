@@ -27,6 +27,7 @@ type Props = {
   cwd: string;
   focusPath?: string;
   focusKind?: GitFileDiffKind;
+  focusRequest?: number;
 };
 
 type LoadedDiff = {
@@ -40,7 +41,12 @@ type LoadedDiff = {
 
 const DIFF_LOAD_CONCURRENCY = 4;
 
-export function WorkingTreeDiff({ cwd, focusPath, focusKind }: Props) {
+export function WorkingTreeDiff({
+  cwd,
+  focusPath,
+  focusKind,
+  focusRequest,
+}: Props) {
   const [files, setFiles] = useState<GitChangedFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
@@ -297,7 +303,9 @@ export function WorkingTreeDiff({ cwd, focusPath, focusKind }: Props) {
     <UnifiedDiffView
       files={models}
       fileCount={focusKind ? entries.length : files.length}
+      focusPath={focusPath}
       focusId={focusId}
+      focusRequest={focusRequest}
       busyId={busyId}
       totals={totals}
       onStageFile={onStageFile}
