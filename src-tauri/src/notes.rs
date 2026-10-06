@@ -338,7 +338,15 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
              SET title = ?1, body = ?2, tags_json = ?3, updated_at = ?4,
                  source_cwd = ?6, slug = ?7
              WHERE id = ?5",
-            params![title, body, tags_json, updated_at, note.id, project_cwd, slug],
+            params![
+                title,
+                body,
+                tags_json,
+                updated_at,
+                note.id,
+                project_cwd,
+                slug
+            ],
         )?;
         Ok(Note {
             id: note.id.clone(),
