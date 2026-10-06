@@ -36,6 +36,8 @@ type Props = {
   buttonClassName?: string;
   /** Chevron on the trailing edge; flips when the menu is open. */
   chevron?: boolean;
+  /** Text for the trigger while there is no project, instead of the path. */
+  emptyLabel?: string;
   children?: ReactNode;
   onCwdChange: (path: string) => void;
   onNewTerminal?: () => void;
@@ -68,6 +70,7 @@ export function CwdPicker({
   className,
   buttonClassName,
   chevron = false,
+  emptyLabel,
   children,
   onCwdChange,
   onNewTerminal,
@@ -86,6 +89,7 @@ export function CwdPicker({
 
   const inProject = looksLikeProject(cwd);
   const label = prettyCwd(cwd);
+  const triggerLabel = !inProject && emptyLabel ? emptyLabel : null;
   // Read the saved rail order on opening, including changes made while Notes is open.
   const projects =
     mode === "move" ? projectRailItems(recents, activeCwd ?? "") : recents;
@@ -205,7 +209,7 @@ export function CwdPicker({
       <button
         type="button"
         title={cwd}
-        aria-label={`Project ${label}`}
+        aria-label={triggerLabel ?? `Project ${label}`}
         aria-expanded={open}
         aria-haspopup="menu"
         disabled={!enabled}
@@ -233,7 +237,11 @@ export function CwdPicker({
         {children ?? (
           <>
             <ProjectLogoIcon path={projectLogoPath} fallbackStrokeWidth={1.5} />
-            <span className="truncate font-mono text-[12px]">{label}</span>
+            {triggerLabel ? (
+              <span className="truncate text-[12px]">{triggerLabel}</span>
+            ) : (
+              <span className="truncate font-mono text-[12px]">{label}</span>
+            )}
           </>
         )}
         {chevron ? (

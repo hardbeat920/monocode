@@ -121,6 +121,7 @@ import {
 } from "../../workspace/ui/WorkspacePicker";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { CwdPicker } from "../../projects/ui/CwdPicker";
+import { isChatCwd } from "../model/chatSession";
 import { FileMentionPicker } from "./FileMentionPicker";
 import { McpServerPicker } from "./McpServerPicker";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
@@ -2218,6 +2219,14 @@ export function Composer({
               {!remote && !hideProjectPicker ? (
                 <CwdPicker
                   cwd={cwd}
+                  // A chat has no folder to name, so say what the picker does.
+                  emptyLabel={
+                    isChatCwd(cwd)
+                      ? shell
+                        ? "Choose project"
+                        : "Move to project"
+                      : undefined
+                  }
                   recents={recents}
                   projectLogoPath={projectLogoPath}
                   enabled={enabled}
