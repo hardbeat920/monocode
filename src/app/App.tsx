@@ -12522,10 +12522,18 @@ function Workspace({
                       ? onShowProjectTerminal
                       : undefined
                   }
+                  onToggleProjectTerminal={
+                    !monoCovers && isLocalProject(projectCwd)
+                      ? onToggleProjectTerminal
+                      : undefined
+                  }
                   projectTerminalActive={
                     !monoCovers &&
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
+                  }
+                  projectTerminalOpen={
+                    !monoCovers && !!currentProjectDock?.open
                   }
                 />
               )}
