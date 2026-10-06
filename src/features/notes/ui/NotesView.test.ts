@@ -86,6 +86,124 @@ async function render(projects = recents, cwd = "/work/Edefyn") {
   );
 }
 
+function typeInto(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const prototype = field instanceof HTMLInputElement
+    ? HTMLInputElement.prototype
+    : HTMLTextAreaElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(field, value);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// https://github.com/hardbeat920/monocode/issues/768
+it.each([
+  { title: "Untitled", body: "This is the note body.", fallback: "This is the note body." },
+  { title: "Custom title", body: "Intro\n# Generated title\nBody", fallback: "Generated title" },
+])("keeps a cleared $title draft until the title field blurs", async (note) => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: `note-title-${note.title}`, title: note.title, body: note.body };
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  act(() => {
+    title.focus();
+    typeInto(title, "");
+  });
+  await act(async () => vi.advanceTimersByTime(800));
+
+  expect(document.activeElement).toBe(title);
+  expect(title.value).toBe("");
+  expect(stored.title).toBe(note.title);
+
+  await act(async () => title.blur());
+  expect(title.value).toBe(note.fallback);
+  expect(stored.title).toBe(note.fallback);
+});
+
+it("autosaves a replacement title without trimming the focused draft", async () => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: "note-title-replacement" };
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  act(() => {
+    title.focus();
+    typeInto(title, " Replacement title ");
+  });
+  await act(async () => vi.advanceTimersByTime(400));
+
+  expect(stored.title).toBe("Replacement title");
+  expect(title.value).toBe(" Replacement title ");
+  await act(async () => title.blur());
+  expect(title.value).toBe("Replacement title");
+});
+
+it.each(["refocus", "unmount"] as const)(
+  "retains a cleared title when a body save completes after %s",
+  async (action) => {
+    vi.useFakeTimers();
+    stored = { ...stored, id: `note-title-body-save-${action}` };
+    await render();
+    const source = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find((button) => button.textContent === "Source")!;
+    await act(async () => source.click());
+    const body = container.querySelector<HTMLTextAreaElement>("textarea.markdown-source-field")!;
+    const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+    const save = invoke.getMockImplementation()!;
+    let finishSave!: () => void;
+    const saving = new Promise<void>((resolve) => { finishSave = resolve; });
+    let holdSave = true;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "notes_upsert" && holdSave) {
+        holdSave = false;
+        await saving;
+      }
+      return save(command, args);
+    });
+    act(() => {
+      typeInto(body, "Updated body.");
+      title.focus();
+      typeInto(title, "");
+    });
+    await act(async () => vi.advanceTimersByTime(400));
+    expect(invoke).toHaveBeenCalledWith("notes_upsert", {
+      note: expect.objectContaining({ body: "Updated body." }),
+    });
+    if (action === "refocus") {
+      // Blur queues a commit, then a new edit begins before the save finishes.
+      await act(async () => title.blur());
+      act(() => {
+        title.focus();
+        typeInto(title, "");
+      });
+    } else {
+      await act(async () => root.unmount());
+      root = createRoot(container);
+    }
+    await act(async () => finishSave());
+
+    expect(stored.body).toBe("Updated body.");
+    if (action === "refocus") {
+      expect(document.activeElement).toBe(title);
+      expect(title.value).toBe("");
+      await act(async () => title.blur());
+    }
+    expect(stored.title).toBe("Updated body.");
+  },
+);
+
+it("commits a cleared title when its focused editor unmounts", async () => {
+  vi.useFakeTimers();
+  stored = { ...stored, id: "note-title-unmount" };
+  await render();
+  const title = container.querySelector<HTMLInputElement>('[aria-label="Note title"]')!;
+  act(() => {
+    title.focus();
+    typeInto(title, "");
+  });
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  expect(stored.title).toBe("Keep this text.");
+  expect(stored.body).toBe("Keep this text.");
+});
+
 it("shows a preloaded note immediately while refreshing in the background", async () => {
   await loadNotes();
   let finish!: (notes: Note[]) => void;

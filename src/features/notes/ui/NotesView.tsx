@@ -579,6 +579,7 @@ function NoteEditor({
   const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const titleFieldRef = useRef<HTMLInputElement>(null);
   const sourceFieldRef = useRef<HTMLTextAreaElement>(null);
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
@@ -607,15 +608,25 @@ function NoteEditor({
     const current = latest ?? noteRef.current;
     const changes = editsRef.current;
     const nextBody = changes.body ?? current.body;
+    const titleFocused = document.activeElement === titleFieldRef.current;
     const nextTitle =
-      (changes.title ?? current.title).trim() || noteTitle(nextBody);
+      (changes.title ?? current.title).trim() ||
+      (titleFocused ? current.title : noteTitle(nextBody));
     const nextTags = changes.tags ?? current.tags;
     const nextProject = projectChangeRef.current;
     const acceptSaved = (saved: Note) => {
       noteRef.current = saved;
       // A completed save only clears the edits included in that request.
       const remaining = { ...editsRef.current };
-      if (remaining.title === changes.title) delete remaining.title;
+      // Keep the focused draft, including blanks and spaces, until blur.
+      // Leave the draft for a queued blur or unmount save to commit as well.
+      if (
+        remaining.title === changes.title &&
+        !titleFocused &&
+        document.activeElement !== titleFieldRef.current
+      ) {
+        delete remaining.title;
+      }
       if (remaining.body === changes.body) delete remaining.body;
       if (remaining.tags === changes.tags) delete remaining.tags;
       editsRef.current = remaining;
@@ -820,6 +831,7 @@ function NoteEditor({
             />
           </div>
           <input
+            ref={titleFieldRef}
             value={title}
             onChange={(event) => {
               editNote({ title: event.target.value });
