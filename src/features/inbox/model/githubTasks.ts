@@ -154,10 +154,19 @@ export type GithubWorkItemQuery = {
   search: string;
 };
 
+export type InboxSourceQuery = Pick<GithubWorkItemQuery, "assignedToMe" | "state">;
+
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
   linearHiddenTeamIds?: string[];
   jiraHiddenProjectIds?: string[];
+  /** Per-source overrides of `assignedToMe` and `state`. */
+  sources?: Partial<Record<InboxProvider, InboxSourceQuery>>;
 };
+
+function providerQuery(query: InboxQuery, provider: InboxProvider): InboxQuery {
+  const override = query.sources?.[provider];
+  return override ? { ...query, ...override } : query;
+}
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
 
@@ -165,6 +174,8 @@ export type GithubStatus = {
   connected: boolean;
   installed: boolean;
   authenticated: boolean;
+  /** `github.com` or the GitHub Enterprise Server host `gh` is pointed at. */
+  host?: string;
 };
 
 export type GithubStarStatus = "starred" | "notStarred" | "unavailable";
@@ -240,7 +251,15 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  const sources = (
+    ["github", "linear", "jira", "gitlab", "azuredevops"] as const
+  )
+    .map((provider) => {
+      const { assignedToMe, state } = providerQuery(query, provider);
+      return `${provider}=${assignedToMe ? 1 : 0}${state}`;
+    })
+    .join(",");
+  return `${sources}:${paths}:${teams}:${jiraProjects}`;
 }
 
 export function peekInboxList(
@@ -759,7 +778,7 @@ async function fetchInboxItems(
   const githubJobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listGithubWorkItems(project.path, project.repo, {
-        ...query,
+        ...providerQuery(query, "github"),
         kind,
       });
       return items.map((item) => ({
@@ -783,7 +802,7 @@ async function fetchInboxItems(
   let linearItems: InboxItem[] = [];
   if ((await linearConnected()).connected) {
     try {
-      linearItems = await fetchLinearInboxItems(query);
+      linearItems = await fetchLinearInboxItems(providerQuery(query, "linear"));
     } catch (error) {
       errors.linear = inboxErrorMessage(error);
     }
@@ -792,7 +811,7 @@ async function fetchInboxItems(
   let jiraItems: InboxItem[] = [];
   try {
     if ((await jiraConnected()).connected) {
-      jiraItems = await fetchJiraInboxItems(query);
+      jiraItems = await fetchJiraInboxItems(providerQuery(query, "jira"));
     }
   } catch (error) {
     errors.jira = inboxErrorMessage(error);
@@ -803,7 +822,7 @@ async function fetchInboxItems(
     const gitlab = await fetchRepositoryInboxItems(
       "gitlab",
       unique,
-      query,
+      providerQuery(query, "gitlab"),
       preferredPaths,
     );
     gitlabItems = gitlab.items;
@@ -815,7 +834,7 @@ async function fetchInboxItems(
     const azuredevops = await fetchRepositoryInboxItems(
       "azuredevops",
       unique,
-      query,
+      providerQuery(query, "azuredevops"),
       preferredPaths,
     );
     azureDevOpsItems = azuredevops.items;

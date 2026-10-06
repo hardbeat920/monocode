@@ -226,7 +226,9 @@ fn is_github_attachment_path(path: &str) -> bool {
 }
 
 fn is_github_site(host: &str) -> bool {
-    host == "github.com" || host == "www.github.com"
+    host == "github.com"
+        || host == "www.github.com"
+        || (crate::github_host::is_enterprise() && host == crate::github_host::host())
 }
 
 fn is_github_media_cdn(host: &str) -> bool {
@@ -246,8 +248,14 @@ fn is_github_asset_s3(host: &str) -> bool {
 }
 
 fn github_auth_host(host: &str) -> bool {
-    // JWT-signed githubusercontent URLs reject an extra Authorization header.
-    is_github_site(host)
+    // JWT-signed githubusercontent URLs reject an extra Authorization header,
+    // and the `gh` token only belongs to the configured host.
+    let configured = crate::github_host::host();
+    if configured == crate::github_host::DEFAULT_HOST {
+        host == "github.com" || host == "www.github.com"
+    } else {
+        host == configured
+    }
 }
 
 fn is_redirect(status: u16) -> bool {
@@ -264,9 +272,10 @@ fn path_has_dotdot(path: &str) -> bool {
 fn github_auth_token() -> Option<String> {
     let program = crate::harness::resolve_gui_binary("gh")?;
     let home = dirs_home()?;
+    let host = crate::github_host::host();
     let mut cmd = Command::new(program);
     cmd.current_dir(&home)
-        .args(["auth", "token"])
+        .args(["auth", "token", "--hostname", host.as_str()])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);

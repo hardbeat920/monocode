@@ -259,6 +259,12 @@ import {
   type GithubStatus,
 } from "../../inbox/model/githubTasks";
 import {
+  DEFAULT_GITHUB_HOST,
+  githubHost,
+  saveGithubHost,
+  setGithubHost,
+} from "../../inbox/model/githubHost";
+import {
   disconnectGitlab,
   gitlabConnected,
   saveGitlabConfig,
@@ -1242,6 +1248,9 @@ function GithubSettings() {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [host, setHost] = useState(githubHost);
+  const [savedHost, setSavedHost] = useState(githubHost);
+  const [savingHost, setSavingHost] = useState(false);
   const request = useRef(0);
 
   const checkStatus = useCallback(async () => {
@@ -1250,7 +1259,14 @@ function GithubSettings() {
     setError(null);
     try {
       const next = await githubStatus();
-      if (generation === request.current) setStatus(next);
+      if (generation === request.current) {
+        setStatus(next);
+        if (next.host) {
+          // Only the latest status response may update the shared host.
+          setGithubHost(next.host);
+          setSavedHost(next.host);
+        }
+      }
     } catch (err: unknown) {
       if (generation === request.current) {
         setError(err instanceof Error ? err.message : String(err));
@@ -1267,11 +1283,32 @@ function GithubSettings() {
     };
   }, [checkStatus]);
 
+  const saveHost = async () => {
+    if (savingHost) return;
+    setSavingHost(true);
+    setError(null);
+    try {
+      const next = await saveGithubHost(host);
+      setHost(next);
+      setSavedHost(next);
+      clearInboxCache();
+      await checkStatus();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingHost(false);
+    }
+  };
+
+  const loginCommand =
+    savedHost === DEFAULT_GITHUB_HOST
+      ? "gh auth login"
+      : `gh auth login --hostname ${savedHost}`;
   const description = status?.connected
-    ? "GitHub CLI is installed and authenticated. MonoCode uses it for GitHub inbox items."
+    ? `GitHub CLI is installed and authenticated on ${savedHost}. MonoCode uses it for GitHub inbox items.`
     : status?.installed
-      ? "Run gh auth login in a terminal, complete the sign-in flow, then check again."
-      : "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.";
+      ? `Run ${loginCommand} in a terminal, complete the sign-in flow, then check again.`
+      : `Install GitHub CLI from cli.github.com, run ${loginCommand} in a terminal, then check again.`;
   const label = checking
     ? "Checking"
     : status?.connected
@@ -1296,6 +1333,38 @@ function GithubSettings() {
         <SecondaryButton onClick={() => void checkStatus()} disabled={checking}>
           {checking ? "Checking" : "Check again"}
         </SecondaryButton>
+      </Row>
+      <Row
+        label="Host"
+        description="github.com, or your GitHub Enterprise Server host (e.g. github.example.com)."
+      >
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveHost();
+          }}
+        >
+          <input
+            aria-label="GitHub host"
+            value={host}
+            onChange={(event) => setHost(event.target.value)}
+            placeholder={DEFAULT_GITHUB_HOST}
+            disabled={savingHost}
+            autoComplete="off"
+            spellCheck={false}
+            className="h-8 w-56 rounded-md border border-content/10 bg-transparent px-2 text-[12px] text-content outline-none focus:border-content/20"
+          />
+          <SecondaryButton
+            type="submit"
+            disabled={
+              savingHost ||
+              (host.trim() || DEFAULT_GITHUB_HOST).toLowerCase() === savedHost
+            }
+          >
+            {savingHost ? "Saving" : "Save"}
+          </SecondaryButton>
+        </form>
       </Row>
       {error ? (
         <p className="border-b border-content/5 px-4 pb-3 text-[12px] text-red-400/90 last:border-b-0">

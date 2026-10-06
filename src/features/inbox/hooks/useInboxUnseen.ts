@@ -18,10 +18,10 @@ import {
   type InboxProvider,
 } from "../model/githubTasks";
 import {
-  applyInboxFilters,
-  inboxFetchState,
-  loadInboxFilters,
-  pruneInboxFilters,
+  applyInboxFiltersBySource,
+  inboxSourceQueries,
+  loadInboxFiltersBySource,
+  pruneInboxFiltersBySource,
 } from "../model/inboxFilters";
 import {
   inboxHasUnseenItems,
@@ -216,10 +216,14 @@ export function useInboxActivity(
       }
       pulling = true;
       const projectPaths = projects.map((project) => project.path);
-      const filters = pruneInboxFilters(loadInboxFilters(), projectPaths);
+      const filters = pruneInboxFiltersBySource(
+        loadInboxFiltersBySource(),
+        projectPaths,
+      );
+      const sources = inboxSourceQueries(filters);
       const query: InboxQuery = {
-        assignedToMe: filters.assignedToMe,
-        state: inboxFetchState(filters),
+        ...sources.github,
+        sources,
         search: "",
         linearHiddenTeamIds: loadHiddenLinearTeamIds(),
         jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
@@ -227,7 +231,7 @@ export function useInboxActivity(
       try {
         const listed = await listInboxItems(projects, query, { force });
         if (cancelled) return;
-        const visible = applyInboxFilters(listed.items, filters, "");
+        const visible = applyInboxFiltersBySource(listed.items, filters, "");
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
         );

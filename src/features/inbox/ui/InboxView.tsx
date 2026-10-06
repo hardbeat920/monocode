@@ -85,11 +85,12 @@ import {
   hasActiveInboxFilters,
   loadInboxConnections,
   linearProjectOptions,
-  inboxFetchState,
-  loadInboxFilters,
+  inboxSourceQueries,
+  loadInboxFiltersBySource,
   loadInboxSource,
   pruneInboxFilters,
-  saveInboxFilters,
+  pruneInboxFiltersBySource,
+  saveInboxFiltersBySource,
   resolveInboxSource,
   saveInboxConnections,
   saveInboxSource,
@@ -280,13 +281,15 @@ function InboxProjectMark({
 
 function peekInboxForRail(recents: RecentProject[], cwd: string) {
   const projects = inboxProjectsForRail(recents, cwd);
-  const filters = pruneInboxFilters(
-    loadInboxFilters(),
-    projects.map((project) => project.path),
+  const sources = inboxSourceQueries(
+    pruneInboxFiltersBySource(
+      loadInboxFiltersBySource(),
+      projects.map((project) => project.path),
+    ),
   );
   return peekInboxList(projects, {
-    assignedToMe: filters.assignedToMe,
-    state: inboxFetchState(filters),
+    ...sources.github,
+    sources,
     search: "",
     linearHiddenTeamIds: loadHiddenLinearTeamIds(),
     jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
@@ -445,7 +448,9 @@ export function InboxView({
     targetSelectionKey,
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
-  const [filters, setFilters] = useState(loadInboxFilters);
+  const [filtersBySource, setFiltersBySource] = useState(
+    loadInboxFiltersBySource,
+  );
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
     resolveInboxSource(loadInboxSource(), connections),
@@ -474,36 +479,34 @@ export function InboxView({
     [logos, projects],
   );
   const linearProjects = useMemo(() => linearProjectOptions(items), [items]);
-  const activeFilters = useMemo(
+  const activeFiltersBySource = useMemo(
     () =>
-      pruneInboxFilters(
-        filters,
+      pruneInboxFiltersBySource(
+        filtersBySource,
         projects.map((project) => project.path),
       ),
-    [filters, projects],
+    [filtersBySource, projects],
   );
+  const activeFilters = activeFiltersBySource[source];
   const filtersActive = hasActiveInboxFilters(
     activeFilters,
     source,
     linearHiddenTeamIds,
     jiraHiddenProjectIds,
   );
-  const fetchState = inboxFetchState(activeFilters);
-  const fetchQuery = useMemo<InboxQuery>(
-    () => ({
-      assignedToMe: activeFilters.assignedToMe,
-      state: fetchState,
+  const sourceQueries = inboxSourceQueries(activeFiltersBySource);
+  // Only the per-source values matter, so the memo keys on their text form.
+  const sourceQueriesKey = JSON.stringify(sourceQueries);
+  const fetchQuery = useMemo<InboxQuery>(() => {
+    const sources = JSON.parse(sourceQueriesKey) as typeof sourceQueries;
+    return {
+      ...sources.github,
+      sources,
       search: "",
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
-    }),
-    [
-      activeFilters.assignedToMe,
-      fetchState,
-      linearHiddenTeamIds,
-      jiraHiddenProjectIds,
-    ],
-  );
+    };
+  }, [sourceQueriesKey, linearHiddenTeamIds, jiraHiddenProjectIds]);
 
   const resize = useDragResize({
     min: MIN_WIDTH,
@@ -881,8 +884,9 @@ export function InboxView({
       next,
       projects.map((project) => project.path),
     );
-    setFilters(pruned);
-    saveInboxFilters(pruned);
+    const nextBySource = { ...filtersBySource, [source]: pruned };
+    setFiltersBySource(nextBySource);
+    saveInboxFiltersBySource(nextBySource);
   };
 
   const onSourceChange = (next: InboxSource) => {
