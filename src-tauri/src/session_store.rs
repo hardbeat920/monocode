@@ -1145,13 +1145,13 @@ pub(crate) fn upsert_session(
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
-    let git = crate::fs::git_info_for(&crate::fs::expand_home(
+    let git = git_info_for_cwd(
         session
             .worktree_cwd
             .as_deref()
             .filter(|cwd| !cwd.is_empty())
             .unwrap_or(&session.cwd),
-    ));
+    );
     let branch = if session.worktree_removed {
         None
     } else {
@@ -1627,8 +1627,17 @@ fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
+/// Projectless chats are stored under `~`. They have no repository, and asking
+/// git about the home directory would only walk it for nothing.
+fn git_info_for_cwd(cwd: &str) -> crate::fs::GitInfo {
+    if cwd == "~" {
+        return crate::fs::GitInfo::default();
+    }
+    crate::fs::git_info_for(&crate::fs::expand_home(cwd))
+}
+
 fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<SessionSummary>> {
-    let git = crate::fs::git_info_for(&crate::fs::expand_home(cwd));
+    let git = git_info_for_cwd(cwd);
     let mut statement = conn.prepare(
         "SELECT id, cwd, harness, model, runtime_mode, title, provider_session_id,
                 created_at, updated_at, branch, archived, pinned,
@@ -2686,6 +2695,25 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, "s2");
         assert_eq!(listed[1].id, "s1");
+    }
+
+    #[test]
+    fn list_by_project_lists_projectless_chats() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        upsert_session(&conn, &sample("chat", "~", "Chat")).unwrap();
+        upsert_session(&conn, &sample("s1", "/tmp/a", "A1")).unwrap();
+        let chats = list_by_project(&conn, "~").unwrap();
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].id, "chat");
+        assert_eq!(chats[0].cwd, "~");
+        assert!(chats[0].branch.is_none());
+        assert!(chats[0].repo.is_none());
+
+        // Moving the chat into a project takes it out of the chats list.
+        upsert_session(&conn, &sample("chat", "/tmp/a", "Chat")).unwrap();
+        assert!(list_by_project(&conn, "~").unwrap().is_empty());
+        assert_eq!(list_by_project(&conn, "/tmp/a").unwrap().len(), 2);
     }
 
     #[test]

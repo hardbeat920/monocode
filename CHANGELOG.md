@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Chats: start a session without a project from **Chats** in the project rail or **File → New Chat** (`⌘N` / `Ctrl+N`). Chats are saved and listed in their own sidebar section, where they can be renamed, pinned, archived, searched and deleted like project sessions, and they run in a folder MonoCode keeps for them instead of the home directory. A chat can be moved into a project later from the project picker in its composer: the conversation is carried over as a brief on the next turn, and files the agent wrote in the chats folder stay there. In #757.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added

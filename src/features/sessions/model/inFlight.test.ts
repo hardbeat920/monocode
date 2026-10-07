@@ -87,6 +87,13 @@ describe("inFlightRefs", () => {
     expect(hasInFlightSessions([blank])).toBe(true);
   });
 
+  it("resumes a projectless chat like any saved session", () => {
+    const projectless = chat("~", { busy: true });
+    expect(inFlightRefs([projectless], [newTab(projectless.id)])).toEqual([
+      { sessionId: projectless.id, cwd: "~" },
+    ]);
+  });
+
   it("does not resume a session whose worktree was removed", () => {
     const removed = chat("/tmp/a", {
       busy: true,

@@ -24,6 +24,7 @@ import {
 } from "react";
 import { basename } from "../../platform/tauri/fs";
 import { looksLikeProject } from "../../features/projects/model/recents";
+import { isChatCwd } from "../../features/sessions/model/chatSession";
 import type { HarnessId } from "../../features/sessions/model/session";
 import { CwdPicker } from "../../features/projects/ui/CwdPicker";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
@@ -857,9 +858,10 @@ function TitleBarComponent({
 
   const railClosed = !projectRailOpen;
   const showCurrentProject = looksLikeProject(cwd);
-  // Until a project is picked, the rail and the sidebar hide, so nothing
-  // project-scoped is actionable and the window controls need room.
-  const projectless = !showCurrentProject;
+  // With neither a project nor the chats list, the rail and the sidebar hide,
+  // so nothing project-scoped is actionable and the window controls need room.
+  // Projectless chats keep the sidebar for their list, like a project does.
+  const projectless = !showCurrentProject && !isChatCwd(cwd);
   // An open project is labeled in the sidebar, above Sessions / Explorer /
   // Changes. Without a project that sidebar is gone, so the picker stays here.
   const showProjectButton =

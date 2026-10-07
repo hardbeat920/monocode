@@ -73,6 +73,19 @@ fn home_dir() -> String {
         .unwrap_or_else(|| "~".into())
 }
 
+/// Folder projectless chats run in, so an agent with no project is not turned
+/// loose on the whole home directory.
+#[tauri::command]
+fn chat_workspace_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("chats");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(fs::path_to_js(&dir))
+}
+
 pub(crate) struct PasswdIdentity {
     pub home: String,
     pub user: String,
@@ -282,6 +295,7 @@ pub fn run() {
             control::app_cli_path,
             default_cwd,
             home_dir,
+            chat_workspace_dir,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,

@@ -23,6 +23,7 @@ import {
   GitPullRequest,
   Inbox,
   ListFilter,
+  MessageSquare,
   PanelLeft,
   Pin,
   Plus,
@@ -32,6 +33,7 @@ import {
   StickyNote,
   Zap,
 } from "../../shared/ui/icons";
+import { isChatCwd } from "../../features/sessions/model/chatSession";
 import {
   memo,
   useEffect,
@@ -313,6 +315,8 @@ type Props = {
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
+  /** Show projectless chats: the open one if any, else a new one. */
+  onOpenChats?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
@@ -409,6 +413,7 @@ function SidebarComponent({
   onOpenInboxItem,
   onOpenNotes,
   onOpenAutomations,
+  onOpenChats,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
@@ -435,7 +440,9 @@ function SidebarComponent({
   monoViewActive = false,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
-  const tab: SidebarTabId = requestedTab;
+  // Projectless chats have no folder, so the sidebar is just their list.
+  const chatsMode = isChatCwd(cwd);
+  const tab: SidebarTabId = chatsMode ? "sessions" : requestedTab;
   const remote = useRemoteProjectSessions(cwd, remoteProject);
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
   const remoteChange = async (
@@ -789,10 +796,10 @@ function SidebarComponent({
   const railMonos = monos
     ? { ...monos, activeId: otherViewActive ? undefined : monos.activeId }
     : undefined;
-  // A blank session has no project to browse, so the shell stands alone until
-  // one is picked — whether or not the rail is open.
+  // The sidebar lists a project's sessions or, with no project, the chats.
   const sidebarAvailable =
-    !otherViewActive && !monoViewActive && inProject;
+    !otherViewActive && !monoViewActive && (inProject || chatsMode);
+  const chatsActive = chatsMode && !otherViewActive && !monoViewActive;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
   // open the sidebar temporarily until the user clicks away.
@@ -1170,8 +1177,13 @@ function SidebarComponent({
       disabled: !onSetReminders,
       submenu: sessionReminderPresets(),
     },
-    { kind: "sep" as const },
-    { kind: "item" as const, id: "folder-new", label: "New folder" },
+    // Folders are kept per project, and a chat has none.
+    ...(chatsMode
+      ? []
+      : [
+          { kind: "sep" as const },
+          { kind: "item" as const, id: "folder-new", label: "New folder" },
+        ]),
     ...(sessionFolders.length > 0 ? [{ kind: "sep" as const }] : []),
     ...sessionFolders.map((folder) => ({
       kind: "item" as const,
@@ -1665,11 +1677,15 @@ function SidebarComponent({
           />
         ) : (
           <span className="min-w-0 truncate text-sm font-medium leading-tight">
-            Workspace
+            {chatsMode ? "Chats" : "Workspace"}
           </span>
         )}
       </div>
-      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+      <WorkspaceTitleActions
+        onSearch={chatsMode ? undefined : onGoToFile}
+        onNew={onNew}
+        newLabel={chatsMode ? "New chat" : undefined}
+      />
     </div>
   );
 
@@ -1681,13 +1697,15 @@ function SidebarComponent({
       {railVisible ? (
         <>
           {workspaceHeader}
-          <div
-            role="tablist"
-            aria-label="Workspace"
-            className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2"
-          >
-            {workspaceTabItems}
-          </div>
+          {chatsMode ? null : (
+            <div
+              role="tablist"
+              aria-label="Workspace"
+              className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2"
+            >
+              {workspaceTabItems}
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -1724,6 +1742,8 @@ function SidebarComponent({
               onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
+              onOpenChats={onOpenChats}
+              chatsActive={chatsActive}
               searchActive={searchActive}
               inboxActive={inboxActive}
               notesActive={notesActive}
@@ -1731,7 +1751,7 @@ function SidebarComponent({
               inboxUnseen={inboxUnseen}
             />
           ) : null}
-          {!compactRailVisible ? (
+          {!compactRailVisible && !chatsMode ? (
             <div
               role="tablist"
               aria-label="Workspace"
@@ -1771,13 +1791,13 @@ function SidebarComponent({
                 />
               ) : null}
             </div>
-          ) : (
+          ) : chatsMode ? null : (
             <p className="px-3 py-2 text-[12px] text-content/50">
               No project folder
             </p>
           )}
         </div>
-        {tab === "sessions" && cwd && cwd !== "~" ? (
+        {tab === "sessions" && cwd ? (
           <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
             <div className="relative flex h-7 min-w-0 flex-1 items-center">
               <Search className="pointer-events-none absolute left-2 size-3 shrink-0 opacity-50" />
@@ -1803,7 +1823,7 @@ function SidebarComponent({
             tab === "sessions" ? "" : "hidden"
           }`}
         >
-          {!cwd || cwd === "~" ? (
+          {!cwd ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
               No project folder
             </p>
@@ -1836,7 +1856,13 @@ function SidebarComponent({
                     This project’s machine isn’t connected on this computer.
                   </p>
                 ) : (
-                  <SessionsEmpty message="Sessions you start will show up here" />
+                  <SessionsEmpty
+                    message={
+                      chatsMode
+                        ? "Chats you start will show up here"
+                        : "Sessions you start will show up here"
+                    }
+                  />
                 )
               ) : (
                 <ul data-session-list className="flex flex-col gap-0.5 p-1.5 pb-10">
@@ -2228,7 +2254,7 @@ function SidebarComponent({
           cwd={cwd}
           recents={recents}
           busy={projectPathBusy(busyProjectPaths, cwd)}
-          tabs={visibleTabs}
+          tabs={chatsMode ? [] : visibleTabs}
           activeTab={tab}
           tabShown={panelOpen}
           changesLabel={changesLabel}
@@ -2247,6 +2273,8 @@ function SidebarComponent({
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
+          onOpenChats={onOpenChats}
+          chatsActive={chatsActive}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -2278,6 +2306,8 @@ function SidebarComponent({
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
+          onOpenChats={onOpenChats}
+          chatsActive={chatsActive}
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
@@ -2355,6 +2385,8 @@ function SidebarProjectPicker({
   onOpenNotificationSettings,
   onOpenNotes,
   onOpenAutomations,
+  onOpenChats,
+  chatsActive = false,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
@@ -2364,6 +2396,8 @@ function SidebarProjectPicker({
   cwd: string;
   recents: RecentProject[];
   busy: boolean;
+  onOpenChats?: () => void;
+  chatsActive?: boolean;
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: Props["onRemoveProject"];
@@ -2451,6 +2485,11 @@ function SidebarProjectPicker({
             <Zap className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
+        {onOpenChats ? (
+          <IconButton label="Chats" active={chatsActive} onClick={onOpenChats}>
+            <MessageSquare className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
       </div>
       {inboxMenu ? (
         <InboxNotificationMenu
@@ -2490,6 +2529,8 @@ function CompactProjectRail({
   notesActive,
   onOpenAutomations,
   automationsActive,
+  onOpenChats,
+  chatsActive = false,
   onOpenSettings,
   onTogglePanel,
   onLeaveActive,
@@ -2497,6 +2538,8 @@ function CompactProjectRail({
   monos,
   monoViewActive = false,
 }: {
+  onOpenChats?: () => void;
+  chatsActive?: boolean;
   cwd: string;
   recents: RecentProject[];
   busy: boolean;
@@ -2602,24 +2645,29 @@ function CompactProjectRail({
             monos={pickerMonos}
           />
         ) : null}
-        <div
-          role="tablist"
-          aria-label="Workspace"
-          aria-orientation="vertical"
-          className="flex flex-col items-center gap-1.5"
-        >
-          {tabs.map((itemId) => (
-            <CompactRailAction
-              key={itemId}
-              tab
-              label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
-              icon={COMPACT_TAB_ICONS[itemId]}
-              active={workspaceActive && tabShown && activeTab === itemId}
-              dot={itemId === "changes" && hasChanges}
-              onClick={() => openWorkspaceTab(itemId)}
-            />
-          ))}
-        </div>
+        {/* Chats have no workspace tabs; an empty list would leave a gap. */}
+        {tabs.length > 0 ? (
+          <div
+            role="tablist"
+            aria-label="Workspace"
+            aria-orientation="vertical"
+            className="flex flex-col items-center gap-1.5"
+          >
+            {tabs.map((itemId) => (
+              <CompactRailAction
+                key={itemId}
+                tab
+                label={
+                  itemId === "changes" ? changesLabel : TAB_LABELS[itemId]
+                }
+                icon={COMPACT_TAB_ICONS[itemId]}
+                active={workspaceActive && tabShown && activeTab === itemId}
+                dot={itemId === "changes" && hasChanges}
+                onClick={() => openWorkspaceTab(itemId)}
+              />
+            ))}
+          </div>
+        ) : null}
         <CompactRailAction
           label={`Search (${MOD}K)`}
           icon={Search}
@@ -2654,6 +2702,14 @@ function CompactProjectRail({
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
         />
+        {onOpenChats ? (
+          <CompactRailAction
+            label="Chats"
+            icon={MessageSquare}
+            active={chatsActive}
+            onClick={onOpenChats}
+          />
+        ) : null}
       </div>
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">
@@ -2754,9 +2810,11 @@ function CompactRailAction({
 function WorkspaceTitleActions({
   onSearch,
   onNew,
+  newLabel = "New session",
 }: {
   onSearch?: () => void;
   onNew?: () => void;
+  newLabel?: string;
 }) {
   if (!onSearch && !onNew) return null;
   return (
@@ -2770,7 +2828,7 @@ function WorkspaceTitleActions({
         </IconButton>
       ) : null}
       {onNew ? (
-        <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+        <IconButton label={`${newLabel} (${MOD}T)`} onClick={onNew}>
           <Plus className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}

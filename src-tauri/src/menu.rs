@@ -153,8 +153,8 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "open_settings" | "check_for_updates" => {
             let _ = app.emit(id, ());
         }
-        // Sidebar, Zoom, Reload, Command Palette, and Close All Tabs target one window: a broadcast would
-        // make every window act on a single menu click.
+        // Sidebar, Zoom, Reload, Command Palette, Close All Tabs, and New Chat target one window: a
+        // broadcast would make every window act on a single menu click.
         "toggle_sidebar"
         | "toggle_session_sidebar"
         | "zoom_in"
@@ -162,7 +162,8 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "zoom_reset"
         | "reload"
         | "open_command_palette"
-        | "close_all_tabs" => emit_to_focused(app, id),
+        | "close_all_tabs"
+        | "new_chat" => emit_to_focused(app, id),
         _ => {}
     }
 }
@@ -252,6 +253,14 @@ fn build(
         "New Tab",
         "CmdOrCtrl+T",
         "Tab: New",
+        overrides,
+    )?;
+    let new_chat = menu_item(
+        app,
+        "new_chat",
+        "New Chat",
+        "CmdOrCtrl+N",
+        "Chat: New",
         overrides,
     )?;
     let new_terminal = menu_item(
@@ -461,6 +470,7 @@ fn build(
         .item(&autosave)
         .separator()
         .item(&new_tab)
+        .item(&new_chat)
         .item(&new_terminal)
         .item(&new_terminal_tab)
         .item(&split_right)

@@ -127,13 +127,15 @@ type SessionUpsertPayload = {
   automationId?: string;
 };
 
-/** Only real chats belong in project history — blank tabs stay ephemeral. */
+/**
+ * Only real conversations belong in history — blank tabs stay ephemeral. A
+ * projectless chat counts once it has a user turn, and is filed under `~`.
+ */
 export function shouldPersistSession(session: Session): boolean {
   return (
     !session.ephemeral &&
     !session.inboxAsk &&
     !isRemoteProjectPath(session.cwd) &&
-    session.cwd !== "~" &&
     (session.blocks.some((block) => block.role === "user") ||
       (isMonoSession(session.id) &&
         (session.blocks.length > 0 || !!session.monoTranscript)))
@@ -483,7 +485,8 @@ export function persistFingerprint(session: Session): string {
 export async function listSessionsByProject(
   cwd: string,
 ): Promise<SessionSummary[]> {
-  if (!cwd || cwd === "~") return [];
+  if (!cwd) return [];
+  // Projectless chats are listed under `~`, which normalizes to itself.
   const rows = await invoke<SessionSummary[]>("session_list_by_project", {
     cwd: normalizeProjectPath(cwd),
   });

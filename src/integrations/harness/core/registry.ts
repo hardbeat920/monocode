@@ -8,6 +8,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
+import { chatWorkCwd } from "../../../features/sessions/model/chatSession";
 import type { UserQuestionReply } from "../../../features/sessions/model/userQuestion";
 import type { NativeCommandProvider } from "./nativeCommands";
 import type {
@@ -210,7 +211,10 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
-export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
+export function sendHarnessTurn(
+  turn: SendTurnInput & { harness: HarnessId },
+) {
+  const input = { ...turn, cwd: chatWorkCwd(turn.cwd) };
   return queueSessionOperation(input.sessionId, async () => {
     const adapter = requireHarness(input.harness);
     if (!adapter.live) {
@@ -260,7 +264,7 @@ export function compactHarnessContext(
     }
     cancelIdlePark(input.sessionId);
     try {
-      await adapter.compactContext(input);
+      await adapter.compactContext({ ...input, cwd: chatWorkCwd(input.cwd) });
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }
@@ -306,7 +310,7 @@ export function steerHarnessTurn(
       throw new Error(`${input.harness} is not connected yet`);
     }
     cancelIdlePark(input.sessionId);
-    await adapter.steerTurn(input);
+    await adapter.steerTurn({ ...input, cwd: chatWorkCwd(input.cwd) });
   });
 }
 
@@ -377,7 +381,12 @@ export function bindHarnessSession(
   blocks?: Block[],
 ): void {
   const adapter = getHarness(harness);
-  adapter?.bindSession(threadId, providerSessionId, cwd, providerAccountId);
+  adapter?.bindSession(
+    threadId,
+    providerSessionId,
+    chatWorkCwd(cwd),
+    providerAccountId,
+  );
   if (!blocks || !adapter?.restoreTaskLists) return;
   const lists = blocks.flatMap((block) =>
     block.role === "tasks" && block.taskList ? [block.taskList] : [],
@@ -416,7 +425,7 @@ export async function generateHarnessTitle(
 ): Promise<GeneratedSessionTitle | null> {
   const adapter = getHarness(harness);
   if (!adapter?.generateTitle) return null;
-  return adapter.generateTitle(input);
+  return adapter.generateTitle({ ...input, cwd: chatWorkCwd(input.cwd) });
 }
 
 export async function generateHarnessCommitMessage(

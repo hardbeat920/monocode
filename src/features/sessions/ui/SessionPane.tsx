@@ -30,6 +30,7 @@ import {
   looksLikeProject,
   type RecentProject,
 } from "../../projects/model/recents";
+import { isChatSession } from "../model/chatSession";
 import {
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -609,7 +610,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
-  const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
+  // A projectless chat keeps the picker after its first turn, so it can be
+  // moved into a project once it grows into real work.
+  const showDeckProjectPicker =
+    !looksLikeProject(session.cwd) && (isEmpty || !session.busy);
   // The agent's input always sits at the bottom, like a chat.
   const dockComposer =
     remoteSessionLoading ||
@@ -641,7 +645,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
         !!session.inboxAsk ||
         (hideProjectPicker ? !showDeckProjectPicker : false)
       }
-      hideBranchPicker={!!session.inboxAsk || managed}
+      // A projectless chat has no checkout or branch to pick.
+      hideBranchPicker={
+        !!session.inboxAsk || managed || isChatSession(session)
+      }
       hideTopBar={!!session.inboxAsk}
       context={session.context}
       quoteRequest={quoteRequest}

@@ -52,6 +52,15 @@ describe("resolveAppShortcut", () => {
     ).toBe("App: Toggle Session Sidebar");
   });
 
+  it("tells New Chat from New Window by Shift", () => {
+    expect(resolveAppShortcut(key({ key: "n", metaKey: true }))).toBe(
+      "Chat: New",
+    );
+    expect(
+      resolveAppShortcut(key({ key: "N", metaKey: true, shiftKey: true })),
+    ).toBe("App: New Window");
+  });
+
   it("ignores a chord while an IME is composing", () => {
     // The maintainer's blocker: these used to fire mid-composition.
     for (const chord of [
