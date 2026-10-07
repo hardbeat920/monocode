@@ -196,6 +196,7 @@ function hermesModelProvider(
   };
 }
 
+/** Remove a matching provider label now shown by the picker's group heading. */
 function stripProviderPrefix(name: string, provider: string): string {
   const prefix = `${provider} · `;
   return name.startsWith(prefix) ? name.slice(prefix.length).trim() : name;

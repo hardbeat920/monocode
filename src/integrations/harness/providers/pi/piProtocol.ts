@@ -740,6 +740,7 @@ export function isHiddenCopilotModel(provider: string, modelId: string) {
   );
 }
 
+/** Build the Pi/omp picker catalog with provider labels, sorted by model name. */
 export function modelsFromRpcData(
   flavor: PiFlavor,
   data: unknown,

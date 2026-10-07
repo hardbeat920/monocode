@@ -214,6 +214,7 @@ export function flattenOpenCodeModels(
   return models.sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/** Resolve OpenCode provider slugs using the shared upstream display names. */
 export function openCodeProviderName(providerID: string): string {
   return upstreamProviderName(providerID);
 }

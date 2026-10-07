@@ -244,6 +244,7 @@ function groupsByProvider(tab: ModelPickerTab, models: AgentModel[]): boolean {
   return tab !== "favorites" && models.some((item) => item.provider);
 }
 
+/** Use the upstream provider when present, otherwise the model's harness. */
 function modelProvider(item: AgentModel): { id: string; name: string } {
   return item.provider ?? { id: item.harness, name: HARNESS_TITLE[item.harness] };
 }
@@ -267,6 +268,7 @@ function inProviderOrder(
   return [...groups.values()].flat();
 }
 
+/** Build provider headings while retaining each model's keyboard navigation index. */
 function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
   if (!groupsByProvider(tab, models)) {
     return [
@@ -290,6 +292,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
   return [...groups.values()];
 }
 
+/** Choose a harness model and its settings, with favorites and provider groups. */
 export function ModelPicker({
   harness,
   model,

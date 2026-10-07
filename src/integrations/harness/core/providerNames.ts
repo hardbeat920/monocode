@@ -16,10 +16,12 @@ const PROVIDER_NAMES: Record<string, string> = {
   xai: "xAI",
 };
 
+/** Resolve a provider slug to its display name, title-casing unknown providers. */
 export function upstreamProviderName(providerID: string): string {
   return PROVIDER_NAMES[providerID] ?? titleCaseSlug(providerID);
 }
 
+/** Capitalize slug segments separated by hyphens, underscores, or slashes. */
 export function titleCaseSlug(value: string): string {
   const segments: string[] = [];
   for (const segment of value.split(/[-_/]+/)) {
