@@ -106,3 +106,33 @@ it("offers no summary toggle when the harness shared none", () => {
   render("recent");
   expect(container.querySelector("[data-context-boundary] button")).toBeNull();
 });
+
+it("names a Mono's fresh session and what it carried", () => {
+  const blocks: Block[] = [
+    { id: "u1", role: "user", text: "First prompt" },
+    { id: "a1", role: "assistant", text: "First answer" },
+    {
+      id: "r1",
+      role: "system",
+      text: "Fresh session started",
+      contextBoundary: {
+        kind: "rotation",
+        trigger: "auto",
+        reason: "idle",
+        at: 1,
+        kept: "recent",
+        keptFromBlockId: "u1",
+      },
+    },
+    { id: "u2", role: "user", text: "Second prompt" },
+  ];
+  act(() => root.render(createElement(AgentTranscript, { blocks })));
+  const divider = container.querySelector('[role="separator"]');
+  expect(divider?.textContent).toContain(
+    "Fresh session started · after a break",
+  );
+  expect(divider?.textContent).toContain(
+    "Earlier exchanges carried as one line each; the latest word for word",
+  );
+  expect(divider?.textContent).not.toContain("automatic");
+});

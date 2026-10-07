@@ -4602,6 +4602,12 @@ function ApprovalControls({
   );
 }
 
+/** Why a Mono moved to a fresh provider session. */
+const ROTATION_REASON = {
+  context: "context grew",
+  idle: "after a break",
+} as const;
+
 /** What survived, in the reader's terms; silent when the harness never said. */
 const CONTEXT_KEPT_NOTE: Record<ContextKept, string | undefined> = {
   none: "Earlier messages were summarized",
@@ -4634,14 +4640,23 @@ function ContextBoundaryDivider({
         ? `${formatTokens(meta.preTokens)} → ${formatTokens(meta.postTokens)} tokens`
         : `${formatTokens(meta.preTokens)} tokens`
       : undefined;
+  const rotation = meta.kind === "rotation";
   const label = [
     block.text,
-    meta.trigger === "auto" ? "automatic" : undefined,
+    rotation
+      ? meta.reason && ROTATION_REASON[meta.reason]
+      : meta.trigger === "auto"
+        ? "automatic"
+        : undefined,
     tokens,
   ]
     .filter(Boolean)
     .join(" · ");
-  const note = CONTEXT_KEPT_NOTE[meta.kept];
+  const note = rotation
+    ? meta.kept === "none"
+      ? "Earlier exchanges carried as one line each"
+      : "Earlier exchanges carried as one line each; the latest word for word"
+    : CONTEXT_KEPT_NOTE[meta.kept];
 
   return (
     <div className="px-4 py-5" data-context-boundary>
