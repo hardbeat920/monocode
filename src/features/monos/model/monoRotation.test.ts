@@ -143,6 +143,68 @@ it("carries earlier lines across rotations, briefing only what came since", () =
   expect(text).toContain("four\n\nYou:\n4");
 });
 
+it("marks where the fresh session's word-for-word part starts", () => {
+  const blocks = [
+    ...turn("set up the release checklist", "Done", T0),
+    ...turn("what is CI doing", "Two jobs are red", T0 + HOUR),
+    ...turn("fix the lint job", "Fixed in #712", T0 + 2 * HOUR),
+  ];
+  const { boundary } = planRotation(blocks, undefined, "idle", T0 + 3 * HOUR);
+  expect(boundary).toMatchObject({
+    kind: "rotation",
+    trigger: "auto",
+    reason: "idle",
+    at: T0 + 3 * HOUR,
+    kept: "recent",
+    // The second-to-last exchange is the first one carried word for word.
+    keptFromBlockId: blocks.find((block) => block.text === "what is CI doing")!
+      .id,
+  });
+  expect(boundary.summary).toMatch(
+    /^- .*User: set up the release checklist → You: Done$/,
+  );
+});
+
+it("keeps nothing word for word when nothing happened since the last rotation", () => {
+  const blocks = [...turn("one", "1", T0), ...turn("two", "2", T0 + HOUR)];
+  const first = planRotation(blocks, undefined, "context", T0 + 2 * HOUR);
+  const { boundary } = planRotation(
+    blocks,
+    first.rotation,
+    "idle",
+    T0 + 9 * HOUR,
+  );
+  expect(boundary.kept).toBe("none");
+  expect(boundary.keptFromBlockId).toBeUndefined();
+  expect(boundary.summary).toContain("User: two → You: 2");
+});
+
+it("reads past an earlier boundary in the chat", () => {
+  const blocks: Block[] = [
+    ...turn("one", "1", T0),
+    {
+      id: "compacted",
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: {
+        kind: "compaction",
+        trigger: "auto",
+        at: T0,
+        kept: "none",
+      },
+    },
+    ...turn("two", "2", T0 + HOUR),
+  ];
+  const { boundary, brief } = planRotation(
+    blocks,
+    undefined,
+    "context",
+    T0 + 2 * HOUR,
+  );
+  expect(boundary.keptFromBlockId).toBe(blocks[0].id);
+  expect(brief("m")).not.toContain("Context compacted");
+});
+
 it("keeps long messages bounded", () => {
   const blocks = turn("x".repeat(10_000), "y".repeat(10_000), T0);
   const text = planRotation(blocks, undefined, "context", T0 + HOUR).brief("m");

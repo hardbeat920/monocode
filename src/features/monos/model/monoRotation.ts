@@ -1,4 +1,8 @@
-import type { Block, Session } from "../../sessions/model/session";
+import type {
+  Block,
+  ContextBoundaryMeta,
+  Session,
+} from "../../sessions/model/session";
 
 /**
  * A Mono's chat never ends, but the provider session behind it does. Every
@@ -199,14 +203,19 @@ function newestWithin(lines: string[], budget: number): string[] {
 
 /**
  * Plan a rotation before the turn that triggers it, from the chat as it stands
- * (without that turn): what the fresh session is told about the conversation.
+ * (without that turn): what the fresh session is told about the conversation,
+ * and the boundary that marks it in the chat.
  */
 export function planRotation(
   blocks: readonly Block[],
   previous: MonoRotation | undefined,
   reason: RotationReason,
   now: number,
-): { rotation: MonoRotation; brief: (sessionId: string) => string } {
+): {
+  rotation: MonoRotation;
+  brief: (sessionId: string) => string;
+  boundary: ContextBoundaryMeta;
+} {
   const segment = exchanges(blocks, previous?.afterBlockId);
   const verbatim = segment.slice(-VERBATIM_EXCHANGES);
   const lines = segment
@@ -225,6 +234,17 @@ export function planRotation(
     ...(blocks.length ? { afterBlockId: blocks[blocks.length - 1].id } : {}),
     // The next rotation sees these turns as earlier ones.
     earlier: newestWithin(carried, EARLIER_CHARS),
+  };
+  // The fresh session holds the newest exchanges word for word and a line for
+  // each earlier one; the brief's instructions are for the agent, not the chat.
+  const boundary: ContextBoundaryMeta = {
+    kind: "rotation",
+    trigger: "auto",
+    reason,
+    at: now,
+    kept: verbatim.length ? "recent" : "none",
+    ...(verbatim[0] ? { keptFromBlockId: verbatim[0].id } : {}),
+    ...(earlier.length ? { summary: earlier.join("\n") } : {}),
   };
   const brief = (sessionId: string) => {
     const parts = [
@@ -250,7 +270,7 @@ export function planRotation(
       );
     return `<previous_conversation>\n${parts.join("\n\n")}\n</previous_conversation>`;
   };
-  return { rotation, brief };
+  return { rotation, brief, boundary };
 }
 
 const ROTATIONS_KEY = "monocode:mono-rotations";
