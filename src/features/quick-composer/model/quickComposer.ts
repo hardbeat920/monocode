@@ -52,9 +52,13 @@ export type QuickCatalog = {
 export type QuickChoice = { harness: HarnessId; model: string };
 
 export type QuickLaunch = {
+  /** Mono's visibility preference, captured before creating the session. */
+  sidebarHidden?: boolean;
   prompt: string;
   /** Create an unsent user draft instead of starting an agent turn. */
   draft?: boolean;
+  /** Turn mode picked with a leading composer command. */
+  intent?: "plan" | "orchestrate";
   cwd: string;
   harness: HarnessId;
   /** Missing means the harness default, resolved by the workspace. */

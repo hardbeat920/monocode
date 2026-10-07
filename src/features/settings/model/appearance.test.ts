@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ACCENT_COLOR_DEFAULT,
@@ -30,6 +31,10 @@ import {
   THEME_PREFERENCE_DEFAULT,
   THEME_DARK_LIGHTNESS_DEFAULT,
   NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
+  DIFF_PALETTE_DEFAULT,
+  applyDiffPalette,
+  loadDiffPalette,
+  saveDiffPalette,
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
@@ -42,6 +47,7 @@ const CHAT_BACKGROUND_OPACITY_KEY = "monocode.chatBackgroundOpacity";
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
 const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const THEME_DARK_LIGHTNESS_KEY = "monocode.themeDarkLightness";
+const DIFF_PALETTE_KEY = "monocode.diffPalette";
 
 function mockLocalStorage() {
   const data = new Map<string, string>();
@@ -152,6 +158,58 @@ describe("show excluded files setting", () => {
     expect(loadShowExcludedFiles()).toBe(true);
     saveShowExcludedFiles(false);
     expect(loadShowExcludedFiles()).toBe(false);
+  });
+});
+
+describe("diff palette setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(DIFF_PALETTE_KEY);
+  });
+
+  it("defaults, persists, and validates the palette", () => {
+    expect(DIFF_PALETTE_DEFAULT).toBe("default");
+    expect(loadDiffPalette()).toBe("default");
+    saveDiffPalette("colorblind");
+    expect(loadDiffPalette()).toBe("colorblind");
+    saveDiffPalette("high-contrast");
+    expect(loadDiffPalette()).toBe("high-contrast");
+    saveDiffPalette("default");
+    expect(localStorage.getItem(DIFF_PALETTE_KEY)).toBe("default");
+    localStorage.setItem(DIFF_PALETTE_KEY, "rainbow");
+    expect(loadDiffPalette()).toBe(DIFF_PALETTE_DEFAULT);
+  });
+});
+
+describe("diff palette classes", () => {
+  const COLORBLIND = "diff-palette-colorblind";
+  const HIGH_CONTRAST = "diff-palette-high-contrast";
+  const classes = () => document.documentElement.classList;
+
+  beforeEach(() => {
+    document.documentElement.className = "";
+  });
+
+  it("sets only the colorblind class", () => {
+    classes().add(HIGH_CONTRAST);
+    applyDiffPalette("colorblind");
+    expect(classes().contains(COLORBLIND)).toBe(true);
+    expect(classes().contains(HIGH_CONTRAST)).toBe(false);
+  });
+
+  it("sets only the high-contrast class", () => {
+    classes().add(COLORBLIND);
+    applyDiffPalette("high-contrast");
+    expect(classes().contains(HIGH_CONTRAST)).toBe(true);
+    expect(classes().contains(COLORBLIND)).toBe(false);
+  });
+
+  it("clears both classes for the default palette", () => {
+    classes().add(COLORBLIND, HIGH_CONTRAST, "theme-light");
+    applyDiffPalette("default");
+    expect(classes().contains(COLORBLIND)).toBe(false);
+    expect(classes().contains(HIGH_CONTRAST)).toBe(false);
+    expect(classes().contains("theme-light")).toBe(true);
   });
 });
 

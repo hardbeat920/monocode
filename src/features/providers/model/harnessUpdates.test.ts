@@ -1,6 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HarnessId } from "../../sessions/model/session";
-import { findHarnessUpdates } from "./harnessUpdates";
+import {
+  announceHarnessUpdated,
+  findHarnessUpdates,
+  onHarnessUpdated,
+} from "./harnessUpdates";
+
+const events = vi.hoisted(() => {
+  const listeners = new Map<
+    string,
+    Set<(event: { payload: unknown }) => void>
+  >();
+  return {
+    emit: vi.fn(async (name: string, payload: unknown) => {
+      listeners.get(name)?.forEach((listener) => listener({ payload }));
+    }),
+    listen: vi.fn(
+      async (name: string, listener: (event: { payload: unknown }) => void) => {
+        const handlers = listeners.get(name) ?? new Set();
+        handlers.add(listener);
+        listeners.set(name, handlers);
+        return () => {
+          handlers.delete(listener);
+        };
+      },
+    ),
+  };
+});
+vi.mock("@tauri-apps/api/event", () => events);
 
 const INSTALLED: Partial<Record<HarnessId, string>> = {
   claude: "2.1.284 (Claude Code)",
@@ -59,4 +86,31 @@ describe("harness update check", () => {
       LATEST.claude = "2.1.285";
     }
   });
+});
+
+it("delivers updates to other windows while skipping the sender and respecting cleanup", async () => {
+  // A fresh module instance represents another window's separate JS runtime.
+  vi.resetModules();
+  const otherWindow = await import("./harnessUpdates");
+  const localRefresh = vi.fn();
+  const remoteRefresh = vi.fn();
+  const stopLocal = await onHarnessUpdated(localRefresh);
+  const stopRemote = await otherWindow.onHarnessUpdated(remoteRefresh);
+  try {
+    await announceHarnessUpdated("claude");
+    expect(localRefresh).not.toHaveBeenCalled();
+    expect(remoteRefresh).toHaveBeenCalledExactlyOnceWith("claude");
+
+    await otherWindow.announceHarnessUpdated("codex");
+    expect(localRefresh).toHaveBeenCalledExactlyOnceWith("codex");
+    expect(remoteRefresh).toHaveBeenCalledTimes(1);
+
+    stopLocal();
+    await otherWindow.announceHarnessUpdated("opencode");
+    expect(localRefresh).toHaveBeenCalledTimes(1);
+    expect(remoteRefresh).toHaveBeenCalledTimes(1);
+  } finally {
+    stopLocal();
+    stopRemote();
+  }
 });

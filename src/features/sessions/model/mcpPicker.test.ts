@@ -58,6 +58,19 @@ it("adds only selected server names to outgoing context", () => {
   expect(mcpContextText([], "Find the docs")).toBe("Find the docs");
 });
 
+it("makes disabled provider entries unselectable even when health says Connected", () => {
+  for (const provider of ["claude", "codex", "opencode"] as const) {
+    const [server] = mcpPickerServers(
+      [{ ...servers[2], provider, enabled: false }],
+      provider,
+      new Map([["docs", "Connected"]]),
+      "",
+    );
+    expect(server.availability).toBe("unavailable");
+    expect(server.detail).toBe("Disabled in provider configuration");
+  }
+});
+
 it("keeps MCP references inline and only uses tags still in the draft", () => {
   const docs = newMcpTag(servers[2], []);
   const anotherDocs = newMcpTag({ ...servers[2], provider: "cursor" }, [docs]);

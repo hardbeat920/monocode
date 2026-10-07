@@ -35,6 +35,10 @@ vi.mock("../../source-control/hooks/useProjectBranches", () => ({
 }));
 
 import { Composer, ComposerAction } from "./Composer";
+import {
+  clearMcpSettingsCache,
+  loadMcpSettings,
+} from "../../settings/model/mcpSettingsCache";
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import {
   clearComposerDraft,
@@ -84,6 +88,7 @@ describe("Composer question focus", () => {
   let root: Root;
 
   beforeEach(() => {
+    clearMcpSettingsCache();
     mcpInvoke.mockReset();
     mcpInvoke.mockImplementation(async (command: string) =>
       command === "mcp_discover"
@@ -316,6 +321,56 @@ describe("Composer question focus", () => {
     }
   });
 
+  it("reuses MCP discovery on reopen and applies shared settings refreshes", async () => {
+    await renderComposer(undefined, vi.fn(), false, 0, "/mcp");
+    const textarea = container.querySelector("textarea")!;
+    const enter = () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    await act(async () => enter());
+    expect(mcpInvoke).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      container
+        .querySelector('[aria-label="Search MCP servers"]')!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+    );
+    await typeInto(textarea, "/mcp");
+    await act(async () => enter());
+    expect(container.querySelector("[data-mcp-picker]")).not.toBeNull();
+    expect(mcpInvoke).toHaveBeenCalledTimes(2);
+
+    mcpInvoke.mockImplementation(async (command: string) =>
+      command === "mcp_discover"
+        ? [
+            {
+              provider: "claude",
+              name: "docs",
+              scope: "project",
+              configPath: "/repo/.mcp.json",
+              transport: "stdio",
+              enabled: false,
+            },
+          ]
+        : "docs: local - Connected",
+    );
+    await act(async () => {
+      await loadMcpSettings("/repo", true);
+    });
+    const docs = container.querySelector<HTMLButtonElement>(
+      '[data-mcp-picker] [role="option"]',
+    )!;
+    expect(docs.disabled).toBe(true);
+    expect(docs.textContent).toContain("Disabled in provider configuration");
+    expect(mcpInvoke).toHaveBeenCalledTimes(4);
+  });
+
   it("shows four MCP rows at a time and dismisses on outside click or Escape", async () => {
     mcpInvoke.mockImplementation(async (command: string) =>
       command === "mcp_discover"
@@ -521,6 +576,10 @@ describe("Composer question focus", () => {
       const docs = container.querySelector<HTMLButtonElement>(
         '[data-mcp-picker] [role="option"]',
       )!;
+      expect(mcpInvoke).not.toHaveBeenCalledWith(
+        "claude_mcp_list",
+        expect.anything(),
+      );
       await act(async () => docs.click());
       expect(textarea.value).toContain("@mcp/docs");
       expect(container.querySelector("[data-mcp-tag] svg")).toBeNull();
@@ -722,6 +781,9 @@ describe("Composer question focus", () => {
     expect(command).toBeDefined();
     await act(async () => command!.click());
     expect(textarea.value).toBe("/operator ");
+    expect(
+      container.querySelector('[aria-label="Turn off Operator"]'),
+    ).not.toBeNull();
     await act(async () => {
       textarea.value += "list my notes";
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -733,6 +795,157 @@ describe("Composer question focus", () => {
     );
     expect(onSubmit).toHaveBeenCalledWith("/operator list my notes", [], {
       intent: "default",
+    });
+  });
+
+  it("keeps /plan in the text beside its pill and submits with the plan intent", async () => {
+    const onSubmit = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/pla",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/plan"));
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/plan ");
+    expect(
+      container.querySelector('[aria-label="Turn off Plan mode"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      textarea.value += "sketch the refactor";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
+    );
+    expect(onSubmit).toHaveBeenLastCalledWith("sketch the refactor", [], {
+      intent: "plan",
+    });
+  });
+
+  it("keeps a picked /plan in the text beside its pill and submits with the plan intent", async () => {
+    const onSubmit = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/pla",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/plan"));
+    expect(command).toBeDefined();
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/plan ");
+    expect(
+      container.querySelector('[aria-label="Turn off Plan mode"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      textarea.value += "sketch the refactor";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Send"]')!
+        .click(),
+    );
+    expect(onSubmit).toHaveBeenLastCalledWith("sketch the refactor", [], {
+      intent: "plan",
+    });
+  });
+
+  it("offers /orchestrator in the slash picker and submits with the orchestrate intent", async () => {
+    const onSubmit = vi.fn(() => true);
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/orch",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/orchestrator"));
+    expect(command).toBeDefined();
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/orchestrator ");
+    expect(
+      container.querySelector('[aria-label="Turn off Orchestrator mode"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      textarea.value += "ship the release";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const send = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Send"]',
+    )!;
+    await act(async () => send.click());
+    expect(onSubmit).toHaveBeenLastCalledWith("ship the release", [], {
+      intent: "orchestrate",
+    });
+
+    await act(async () => {
+      textarea.value = "/orchestrator fix the build";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => send.click());
+    expect(onSubmit).toHaveBeenLastCalledWith("fix the build", [], {
+      intent: "orchestrate",
     });
   });
 
@@ -1147,6 +1360,61 @@ describe("Composer question focus", () => {
       '[aria-label="Save draft"]',
     );
     expect(save?.disabled).toBe(false);
+    await act(async () => save!.click());
+
+    expect(onSaveDraft).toHaveBeenCalledWith(
+      "Explore a quieter empty state",
+      [],
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("saves a /draft message as a draft and keeps the command in the text", async () => {
+    const onSubmit = vi.fn();
+    const onSaveDraft = vi.fn();
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          initialDraft: "/dra",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          canSaveDraft: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit,
+          onSaveDraft,
+        }),
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    await act(async () =>
+      textarea.dispatchEvent(new Event("input", { bubbles: true })),
+    );
+    const command = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((button) => button.textContent?.includes("/draft"));
+    expect(command).toBeDefined();
+    await act(async () => command!.click());
+    expect(textarea.value).toBe("/draft ");
+    expect(
+      container.querySelector('[title="Turn off Draft mode"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      textarea.value += "Explore a quieter empty state";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const save = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Save draft"]',
+    );
+    expect(save).not.toBeNull();
     await act(async () => save!.click());
 
     expect(onSaveDraft).toHaveBeenCalledWith(

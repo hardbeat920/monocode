@@ -96,6 +96,7 @@ export function mcpPickerServers(
           ? claudeStatus.get(server.name)
           : undefined;
       const matches = server.provider === harness;
+      const disabled = server.enabled === false;
       const authentication =
         matches &&
         status != null &&
@@ -107,16 +108,18 @@ export function mcpPickerServers(
       return {
         ...server,
         availability:
-          !matches || failed
+          !matches || disabled || failed
             ? ("unavailable" as const)
             : authentication
               ? ("authentication" as const)
               : ("available" as const),
         detail: !matches
           ? "Different provider"
-          : failed
-            ? "Connection unavailable"
-            : "Configured for this provider",
+          : disabled
+            ? "Disabled in provider configuration"
+            : failed
+              ? "Connection unavailable"
+              : "Configured for this provider",
       };
     })
     .sort(

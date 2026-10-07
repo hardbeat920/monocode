@@ -9,6 +9,8 @@ import {
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
+  groupMonoTurnItems,
+  groupMonoTurns,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
@@ -106,6 +108,238 @@ function irc(id: string, text = "new message in #general"): Block {
     interjection: { customType: "irc:incoming" },
   };
 }
+
+describe("groupMonoTurnItems", () => {
+  it("keeps a queued message promoted to a new turn separate and hides its process", () => {
+    const blocks: Block[] = [
+      { id: "first", role: "user", text: "First request", startedAt: 1 },
+      note("first-answer", "Done."),
+      {
+        id: "queued",
+        role: "user",
+        text: "Next request",
+        sentAt: 10,
+        startedAt: 20,
+      },
+      note("intro", "Checking the next request."),
+      shell("next-work", "in_progress"),
+    ];
+    const turns = groupMonoTurns(blocks);
+    expect(turns).toHaveLength(2);
+    expect(groupMonoTurnItems(turns[1], { live: true })).toMatchObject([
+      { type: "block", block: { id: "queued" } },
+      {
+        type: "activity",
+        blocks: [{ id: "intro" }, { id: "next-work" }],
+      },
+    ]);
+  });
+
+  it("keeps replies after mid-turn follow-ups visible while tools continue", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Review the PR" },
+      note("intro", "I will inspect the files."),
+      shell("first"),
+      { id: "status", role: "user", text: "What are you doing?", sentAt: 10 },
+      note("status-reply", "I am checking browser security."),
+      shell("second", "in_progress"),
+      { id: "stop", role: "user", text: "You can stop", sentAt: 20 },
+      note("stop-reply", "Stopping the background review now."),
+      shell("cancel", "in_progress"),
+    ];
+    for (const live of [true, false]) {
+      const items = groupMonoTurnItems(blocks, { live });
+      expect(
+        items.flatMap((item) =>
+          item.type === "block" && item.block.role === "assistant"
+            ? [item.block.text]
+            : [],
+        ),
+      ).toEqual([
+        "I am checking browser security.",
+        "Stopping the background review now.",
+      ]);
+    }
+  });
+
+  it("keeps live narration compact until the turn settles", () => {
+    const blocks = [
+      note("intro", "Checking."),
+      shell("first"),
+      note("reply", "The result."),
+    ];
+    expect(groupMonoTurnItems(blocks, { live: true })).toMatchObject([
+      {
+        type: "activity",
+        blocks: [{ id: "intro" }, { id: "first" }, { id: "reply" }],
+      },
+    ]);
+    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+      type: "block",
+      block: { id: "reply" },
+    });
+  });
+
+  it("keeps the opening in the chronological work group and reveals only the trailing reply", () => {
+    const items = groupMonoTurnItems([
+      { id: "user", role: "user", text: "Inspect" },
+      note("intro", "I will inspect the files."),
+      shell("first"),
+      note("progress", "Now checking the result."),
+      shell("second"),
+      note("answer", "Everything passed."),
+      note("answer-more", "Here are the details."),
+    ]);
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "user" } },
+      {
+        type: "activity",
+        blocks: [
+          { id: "intro" },
+          { id: "first" },
+          { id: "progress" },
+          { id: "second" },
+        ],
+      },
+      { type: "block", block: { id: "answer" } },
+      { type: "block", block: { id: "answer-more" } },
+    ]);
+  });
+
+  it("groups a tool-first turn without promoting its first progress note to an opening", () => {
+    expect(
+      groupMonoTurnItems([
+        shell("first"),
+        note("progress", "Trying another approach."),
+        shell("second"),
+        note("answer", "Done."),
+      ]),
+    ).toMatchObject([
+      {
+        type: "activity",
+        blocks: [{ id: "first" }, { id: "progress" }, { id: "second" }],
+      },
+      { type: "block", block: { id: "answer" } },
+    ]);
+  });
+
+  it("absorbs the latest narration when more tools arrive", () => {
+    const blocks = [
+      note("intro", "Checking."),
+      shell("first"),
+      note("progress", "Checking more."),
+    ];
+    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+      type: "block",
+      block: { id: "progress" },
+    });
+    expect(
+      groupMonoTurnItems([...blocks, shell("second", "in_progress")]).at(-1),
+    ).toMatchObject({
+      type: "activity",
+      blocks: [
+        { id: "intro" },
+        { id: "first" },
+        { id: "progress" },
+        { id: "second" },
+      ],
+    });
+  });
+
+  it("keeps notices, cards and interjections outside the work", () => {
+    const notice: Block = {
+      id: "error",
+      role: "system",
+      notice: "error",
+      text: "A command failed.",
+    };
+    const card: Block = { id: "plan", role: "plan", text: "The plan" };
+    const incoming = irc("incoming");
+    const items = groupMonoTurnItems([
+      shell("first"),
+      notice,
+      card,
+      incoming,
+      shell("second"),
+      note("answer", "Done."),
+    ]);
+    expect(items).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "error" } },
+      { type: "block", block: { id: "plan" } },
+      { type: "block", block: { id: "incoming" } },
+      { type: "activity", blocks: [{ id: "second" }] },
+      { type: "block", block: { id: "answer" } },
+    ]);
+  });
+
+  it("preserves a yielded reply when background work resumes", () => {
+    const background: Block = {
+      ...shell("background"),
+      tool: { kind: "shell", status: "completed", background: true },
+    };
+    expect(
+      groupMonoTurnItems([
+        shell("first"),
+        note("yielded", "The task is still running."),
+        background,
+        note("update", "It finished."),
+      ]),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "yielded" } },
+      { type: "activity", blocks: [{ id: "background" }] },
+      { type: "block", block: { id: "update" } },
+    ]);
+  });
+
+  it("keeps direct replies and empty turns intact", () => {
+    expect(groupMonoTurnItems([])).toEqual([]);
+    expect(groupMonoTurnItems([note("answer", "Hello.")])).toMatchObject([
+      { type: "block", block: { id: "answer" } },
+    ]);
+    expect(
+      groupMonoTurnItems([note("answer", "Hello.")], { live: true }),
+    ).toMatchObject([{ type: "activity", blocks: [{ id: "answer" }] }]);
+  });
+
+  it("keeps a final answer visible when a status ping arrives after it", () => {
+    expect(
+      groupMonoTurnItems([
+        note("intro", "Checking."),
+        shell("first"),
+        note("answer", "Everything passed."),
+        status("reviewed"),
+      ]),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "intro" }, { id: "first" }] },
+      { type: "block", block: { id: "answer" } },
+      { type: "activity", blocks: [{ id: "reviewed" }] },
+    ]);
+  });
+
+  it("hides new streamed narration after a previously delivered background reply", () => {
+    const background: Block = {
+      ...shell("background"),
+      tool: { kind: "shell", status: "completed", background: true },
+    };
+    expect(
+      groupMonoTurnItems(
+        [
+          shell("first"),
+          note("yielded", "The task is still running."),
+          background,
+          note("update", "It finished."),
+        ],
+        { live: true },
+      ),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "yielded" } },
+      { type: "activity", blocks: [{ id: "background" }, { id: "update" }] },
+    ]);
+  });
+});
 
 describe("groupTurnItems", () => {
   it("keeps consecutive shell calls in one activity stack", () => {
@@ -349,6 +583,25 @@ describe("turnCopyText", () => {
 });
 
 describe("groupTurns", () => {
+  it("keeps habit reports and relayed approvals outside conversation turns", () => {
+    const monoHabit = { id: "habit", name: "Morning check", at: 1_000 };
+    const turns = groupTurns([
+      { id: "user", role: "user", text: "Review" },
+      { id: "answer", role: "assistant", text: "Reviewed." },
+      { id: "report", role: "assistant", text: "CI failed.", monoHabit },
+      { id: "approval", role: "approval", text: "Allow command", monoHabit },
+      { id: "next-report", role: "assistant", text: "CI passed.", monoHabit },
+      { id: "next-user", role: "user", text: "Thanks" },
+    ]);
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["user", "answer"],
+      ["report"],
+      ["approval"],
+      ["next-report"],
+      ["next-user"],
+    ]);
+  });
+
   it("folds an orchestration turn the app wrote into the turn above", () => {
     const turns = groupTurns([
       { id: "u1", role: "user", text: "Review the changes" },
@@ -843,11 +1096,7 @@ describe("the settled work trail", () => {
     const items = groupTurnItems(turn, { settled: true });
     expect(items).toHaveLength(1);
     if (items[0]?.type !== "activity") throw new Error("expected activity");
-    expect(items[0].blocks.map((block) => block.id)).toEqual([
-      "a",
-      "ag",
-      "b",
-    ]);
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "ag", "b"]);
     expect(workSummaryLine(items[0].blocks)).toBe(
       "Ran 2 commands · Ran a subagent",
     );
@@ -1352,13 +1601,21 @@ describe("resolveToolCallDisplay", () => {
       path: "/Users/dev/project/src/App.tsx",
       fileName: "App.tsx",
     };
-    const result = resolveToolCallDisplay("Read", preview, "/Users/dev/project");
+    const result = resolveToolCallDisplay(
+      "Read",
+      preview,
+      "/Users/dev/project",
+    );
     expect(result.target).toBe("src/App.tsx");
     expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
   });
 
   it("falls back to the raw label when there is no recognisable action", () => {
-    const result = resolveToolCallDisplay("Thinking", undefined, "/Users/dev/project");
+    const result = resolveToolCallDisplay(
+      "Thinking",
+      undefined,
+      "/Users/dev/project",
+    );
     expect(result.action).toBeUndefined();
     expect(result.target).toBeUndefined();
   });
@@ -1396,7 +1653,11 @@ describe("resolveToolCallDisplay", () => {
       path: "/Users/dev/project/src/App.tsx",
       fileName: "App.tsx",
     };
-    const result = resolveToolCallDisplay("Write", preview, "/Users/dev/project");
+    const result = resolveToolCallDisplay(
+      "Write",
+      preview,
+      "/Users/dev/project",
+    );
     expect(result.previewMatchesFile).toBe(true);
   });
 

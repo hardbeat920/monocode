@@ -22,6 +22,7 @@ export const MarkdownDocumentPreview = memo(function MarkdownDocumentPreview({
       text={document.body}
       cwd={cwd}
       onOpenFile={onOpenFile}
+      hardBreaks
       header={
         document.metadata !== null ? (
           <details className="group/metadata mb-6 rounded-lg border border-content/10 bg-content/[0.03]">

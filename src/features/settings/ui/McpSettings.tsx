@@ -11,6 +11,8 @@ import {
 } from "react";
 import { revealPath } from "../../../platform/tauri/fs";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
+import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
+import type { RecentProject } from "../../projects/model/recents";
 import { Modal } from "../../../shared/ui/Modal";
 import { Popover } from "../../../shared/ui/Popover";
 import { LAYER } from "../../../shared/lib/layers";
@@ -22,14 +24,17 @@ import {
   ListFilter,
   Check,
 } from "../../../shared/ui/icons";
+import { MCP_PROVIDER_LABELS, type McpConnection } from "../model/mcp";
 import {
-  MCP_PROVIDER_LABELS,
-  parseClaudeMcpList,
-  type McpConnection,
-} from "../model/mcp";
+  getCachedMcpSettings,
+  loadMcpSettings,
+  subscribeMcpSettings,
+  type McpServerRow,
+  type McpSettingsSnapshot,
+} from "../model/mcpSettingsCache";
 
 type Scope = McpConnection["scope"];
-type ServerRow = McpConnection & { status: string };
+type ServerRow = McpServerRow;
 type Filter = "all" | McpConnection["provider"];
 type Provider = McpConnection["provider"];
 const PROVIDERS: Provider[] = [
@@ -236,7 +241,7 @@ function AddServerModal({
           </span>
           <input
             value={name}
-            pattern="[A-Za-z0-9_-]*"
+            pattern={provider === "opencode" ? undefined : "[A-Za-z0-9_-]*"}
             onChange={(event) => setName(event.target.value)}
             className="mt-1 block w-full rounded-md border border-stroke bg-background-base px-2 py-1.5 text-sm text-content"
             placeholder="my-server"
@@ -289,77 +294,86 @@ function AddServerModal({
   );
 }
 
-export function McpSettings({ cwd }: { cwd: string }) {
-  const [servers, setServers] = useState<ServerRow[]>([]);
+export function McpSettings({
+  cwd,
+  recents = [],
+}: {
+  cwd: string;
+  recents?: RecentProject[];
+}) {
+  const [selection, setSelection] = useState({ initialCwd: cwd, project: cwd });
+  const project = selection.initialCwd === cwd ? selection.project : cwd;
+  return (
+    <McpConnections
+      key={project}
+      cwd={project}
+      projectPicker={
+        <SearchableProjectPicker
+          cwd={project}
+          railCwd={cwd}
+          recents={recents}
+          className="w-fit max-w-full shrink-0"
+          buttonClassName="h-7.5 max-w-full gap-2 bg-content/5 px-2.5 text-[13px] hover:bg-content/12 active:scale-[0.98]"
+          onSelectProject={(path) =>
+            setSelection({ initialCwd: cwd, project: path })
+          }
+        />
+      }
+    />
+  );
+}
+
+function McpConnections({
+  cwd,
+  projectPicker,
+}: {
+  cwd: string;
+  projectPicker: ReactNode;
+}) {
+  const cached = getCachedMcpSettings(cwd);
+  const [servers, setServers] = useState<ServerRow[]>(cached?.servers ?? []);
   const [filter, setFilter] = useState<Filter>("all");
   const [showAllProviders, setShowAllProviders] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cached);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [claudeError, setClaudeError] = useState("");
+  const [error, setError] = useState(cached?.error ?? "");
+  const [claudeError, setClaudeError] = useState(cached?.claudeError ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [removeScopes, setRemoveScopes] = useState<Record<string, Scope>>({});
   const refreshGeneration = useRef(0);
 
-  const refresh = useCallback(async () => {
-    const generation = ++refreshGeneration.current;
-    setLoading(true);
-    try {
-      const configured = await invoke<McpConnection[]>("mcp_discover", { cwd });
-      let health = new Map<string, string>();
-      try {
-        const output = await invoke<string>("claude_mcp_list", { cwd });
-        health = new Map(
-          parseClaudeMcpList(output).map((server) => [
-            server.name,
-            server.status,
-          ]),
-        );
-        if (generation === refreshGeneration.current) setClaudeError("");
-      } catch (cause) {
-        if (generation === refreshGeneration.current)
-          setClaudeError(String(cause));
+  const applySnapshot = useCallback((snapshot: McpSettingsSnapshot) => {
+    setServers(snapshot.servers);
+    setError(snapshot.error);
+    setClaudeError(snapshot.claudeError);
+    setLoading(false);
+  }, []);
+
+  useEffect(
+    () => subscribeMcpSettings(cwd, applySnapshot),
+    [cwd, applySnapshot],
+  );
+
+  const refresh = useCallback(
+    async (force = true) => {
+      const generation = ++refreshGeneration.current;
+      const previous = getCachedMcpSettings(cwd);
+      if (!force) {
+        setServers(previous?.servers ?? []);
+        setError(previous?.error ?? "");
+        setClaudeError(previous?.claudeError ?? "");
       }
-      const rows: ServerRow[] = configured.map((server) => ({
-        ...server,
-        status:
-          server.provider === "claude"
-            ? (health.get(server.name) ?? "Configured")
-            : "Configured",
-      }));
-      // Claude can supply connections that are not stored in a local config file.
-      for (const [serverName, status] of health) {
-        if (
-          rows.some(
-            (row) => row.provider === "claude" && row.name === serverName,
-          )
-        )
-          continue;
-        rows.push({
-          provider: "claude",
-          name: serverName,
-          scope: "local",
-          configPath: "",
-          transport: "",
-          status,
-        });
-      }
+      setLoading(force || !previous);
+      const snapshot = await loadMcpSettings(cwd, force);
       if (generation === refreshGeneration.current) {
-        setServers(rows);
-        setError("");
+        applySnapshot(getCachedMcpSettings(cwd) ?? snapshot);
       }
-    } catch (cause) {
-      if (generation === refreshGeneration.current) {
-        setServers([]);
-        setError(String(cause));
-      }
-    } finally {
-      if (generation === refreshGeneration.current) setLoading(false);
-    }
-  }, [cwd]);
+    },
+    [cwd, applySnapshot],
+  );
 
   useEffect(() => {
-    void refresh();
+    void refresh(false);
     return () => {
       refreshGeneration.current += 1;
     };
@@ -433,9 +447,13 @@ export function McpSettings({ cwd }: { cwd: string }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">MCP connections</h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-sm font-semibold">MCP connections</h2>
+            {projectPicker}
+          </div>
           <p className="mt-1 text-xs text-content/55">
-            Configured servers for this project and your provider accounts.
+            Configured servers for the selected project and your provider
+            accounts.
           </p>
         </div>
         <div className="flex items-center gap-2">

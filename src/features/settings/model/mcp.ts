@@ -6,6 +6,7 @@ export type McpConnection = {
   scope: "local" | "project" | "user";
   configPath: string;
   transport: string;
+  enabled?: boolean;
 };
 
 export const MCP_PROVIDER_LABELS: Record<McpConnection["provider"], string> = {

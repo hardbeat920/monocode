@@ -1,7 +1,6 @@
 import { LoaderCircle, Plus, Search, File, Trash2, X } from "../../../shared/ui/icons";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -30,6 +29,7 @@ import {
   notePreview,
   noteSourceProject,
   noteTitle,
+  peekNotes,
   upsertNote,
   requestAddNoteToChat,
   type Note,
@@ -51,7 +51,8 @@ import {
   resolveTabGroupLogo,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { AgentMarkdown, MarkdownSourceHighlight } from "../../sessions/ui/AgentMarkdown";
+import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { MarkdownSourceEditor } from "../../sessions/ui/MarkdownSourceEditor";
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -112,11 +113,18 @@ export function NotesView({
       rememberedWidth = width;
     },
   });
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
+  const [loading, setLoading] = useState(() => peekNotes() === null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(rememberedNoteId);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    const cached = peekNotes();
+    return (
+      cached?.find((note) => note.id === rememberedNoteId)?.id ??
+      cached?.[0]?.id ??
+      rememberedNoteId
+    );
+  });
   const [creating, setCreating] = useState(false);
   const logos = useTabGroupLogos();
   const [groupMascots] = useState(loadTabGroupMascots);
@@ -571,6 +579,7 @@ function NoteEditor({
   const projectChangeRef = useRef(projectChange);
   const noteRef = useRef(note);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const titleFieldRef = useRef<HTMLInputElement>(null);
   const sourceFieldRef = useRef<HTMLTextAreaElement>(null);
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
@@ -599,15 +608,25 @@ function NoteEditor({
     const current = latest ?? noteRef.current;
     const changes = editsRef.current;
     const nextBody = changes.body ?? current.body;
+    const titleFocused = document.activeElement === titleFieldRef.current;
     const nextTitle =
-      (changes.title ?? current.title).trim() || noteTitle(nextBody);
+      (changes.title ?? current.title).trim() ||
+      (titleFocused ? current.title : noteTitle(nextBody));
     const nextTags = changes.tags ?? current.tags;
     const nextProject = projectChangeRef.current;
     const acceptSaved = (saved: Note) => {
       noteRef.current = saved;
       // A completed save only clears the edits included in that request.
       const remaining = { ...editsRef.current };
-      if (remaining.title === changes.title) delete remaining.title;
+      // Keep the focused draft, including blanks and spaces, until blur.
+      // Leave the draft for a queued blur or unmount save to commit as well.
+      if (
+        remaining.title === changes.title &&
+        !titleFocused &&
+        document.activeElement !== titleFieldRef.current
+      ) {
+        delete remaining.title;
+      }
       if (remaining.body === changes.body) delete remaining.body;
       if (remaining.tags === changes.tags) delete remaining.tags;
       editsRef.current = remaining;
@@ -812,6 +831,7 @@ function NoteEditor({
             />
           </div>
           <input
+            ref={titleFieldRef}
             value={title}
             onChange={(event) => {
               editNote({ title: event.target.value });
@@ -933,7 +953,7 @@ function NoteEditor({
             </div>
           ) : null}
           {mode === "source" ? (
-            <NoteSource
+            <MarkdownSourceEditor
               textareaRef={sourceFieldRef}
               autoFocus={blank}
               value={body}
@@ -943,66 +963,12 @@ function NoteEditor({
               }}
             />
           ) : body.trim() ? (
-            <AgentMarkdown text={body} cwd={sourceCwd} />
+            <AgentMarkdown text={body} cwd={sourceCwd} hardBreaks />
           ) : (
             <p className="text-[13px] text-content/45">No description</p>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function NoteSource({
-  value,
-  onChange,
-  textareaRef,
-  autoFocus = false,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  textareaRef: { current: HTMLTextAreaElement | null };
-  autoFocus?: boolean;
-}) {
-  const lines = value.split("\n");
-  const gutterWidth = `calc(${Math.max(String(lines.length).length, 2)}ch + 0.75rem)`;
-  const textOffset = `calc(${gutterWidth} + 0.75rem)`;
-
-  return (
-    <div className="relative min-h-[448px]">
-      <div
-        aria-hidden
-        className="pointer-events-none grid font-mono text-[13px] leading-5 text-content/85"
-        style={{
-          gridTemplateColumns: `${gutterWidth} minmax(0, 1fr)`,
-        }}
-      >
-        {lines.map((line, index) => (
-          <Fragment key={index}>
-            <div className="select-none pr-2 text-right tabular-nums whitespace-nowrap text-content/40">
-              {index + 1}
-            </div>
-            <div className="min-h-5 min-w-0 pl-3 whitespace-pre-wrap wrap-break-word">
-              {line ? <MarkdownSourceHighlight text={line} /> : "\u00a0"}
-            </div>
-          </Fragment>
-        ))}
-      </div>
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 w-px bg-content/10"
-        style={{ left: gutterWidth }}
-      />
-      <textarea
-        ref={textareaRef}
-        value={value}
-        autoFocus={autoFocus}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        placeholder="Write markdown…"
-        className="markdown-source-field absolute inset-0 h-full w-full resize-none overflow-hidden border-0 bg-transparent py-0 pr-0 font-mono text-[13px] leading-5 whitespace-pre-wrap wrap-break-word outline-none"
-        style={{ paddingLeft: textOffset }}
-      />
     </div>
   );
 }
