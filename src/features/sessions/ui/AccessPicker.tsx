@@ -24,6 +24,8 @@ type Props = {
   onChange: (mode: RuntimeMode) => void;
   onClose?: () => void;
   busy?: boolean;
+  side?: "top" | "bottom";
+  variant?: "pill" | "plain";
 };
 
 const MENU_WIDTH = 288;
@@ -40,6 +42,8 @@ export function AccessPicker({
   onChange,
   onClose,
   busy = false,
+  side = "top",
+  variant = "pill",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -100,17 +104,25 @@ export function AccessPicker({
           }
           setOpen(true);
         }}
-        className={`flex h-6.5 max-w-52 items-center gap-1 rounded-md px-1.5 ${
-          open
-            ? "bg-selection text-content"
-            : "bg-selection text-content hover:bg-selection-hover"
-        }`}
+        className={
+          variant === "plain"
+            ? `-mx-1.5 flex h-7 max-w-52 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
+                open ? "bg-content/8" : "hover:bg-content/6"
+              }`
+            : `flex h-6.5 max-w-52 items-center gap-1 rounded-md px-1.5 ${
+                open
+                  ? "bg-selection text-content"
+                  : "bg-selection text-content hover:bg-selection-hover"
+              }`
+        }
       >
         <Icon
           className={`size-3.5 shrink-0 ${value === "full-access" ? "text-amber-400/90" : ""}`}
           strokeWidth={1.75}
         />
-        <span className="min-w-0 truncate text-[11px]">
+        <span
+          className={`min-w-0 truncate ${variant === "plain" ? "" : "text-[11px]"}`}
+        >
           {RUNTIME_MODE_LABEL[value]}
         </span>
         <ChevronDown
@@ -121,7 +133,7 @@ export function AccessPicker({
       {open ? (
         <Popover
           anchor={root}
-          side="top"
+          side={side}
           width={MENU_WIDTH}
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}

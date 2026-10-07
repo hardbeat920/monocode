@@ -2342,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "monocode"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2352,6 +2352,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-quartz-core",
  "objc2-user-notifications",
  "open",
  "png 0.18.1",
@@ -2695,6 +2696,7 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 
