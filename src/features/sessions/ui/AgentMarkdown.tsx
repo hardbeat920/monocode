@@ -1,4 +1,3 @@
-import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -30,6 +29,7 @@ import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { boundedCode } from "../../files/editor/codeHighlightPlugin";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
   displayPath,
@@ -63,7 +63,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-const MARKDOWN_PLUGINS = { code, mermaid };
+const MARKDOWN_PLUGINS = { code: boundedCode, mermaid };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,
@@ -505,6 +505,7 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
   streaming,
+  revealOnMount,
   className,
   cwd,
   onOpenFile,
@@ -513,6 +514,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
 }: {
   text: string;
   streaming?: boolean;
+  /** Pace newly arrived output even if it finished before its first paint. */
+  revealOnMount?: boolean;
   className?: string;
   cwd?: string;
   onOpenFile?: OpenFileFn;
@@ -542,7 +545,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
-  const paced = usePacedText(text, !!streaming);
+  const paced = usePacedText(text, !!streaming, revealOnMount);
   const fading = useWordFading(!!streaming || paced.revealing);
   // Spans stay while words are fading so a word already on screen keeps its
   // element. Dropping one mid-fade would remount it and fade it again. Once
