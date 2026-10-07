@@ -16,6 +16,8 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
+import { isMonoSession } from "../../features/monos/model/mono";
+import { isHabitRun } from "../../features/monos/model/monoHabits";
 
 const SESSION_DETACH_DELAY_MS = 250;
 
@@ -60,10 +62,16 @@ export function useIdleSessionDetach({
     const visibleIds = new Set(
       tabsRef.current.flatMap((tab) => leafIds(tab.layout)),
     );
-    // Inbox owns these panes independently of project tabs. Keep their drafts
-    // and attachments mounted when the panel closes or switches items.
+    // Inbox and resident agents own panes independently of project tabs. Keep
+    // their drafts and attachments mounted when the user switches views.
     for (const session of sessions) {
-      if (session.inboxAsk) visibleIds.add(session.id);
+      // A habit's hidden run is removed by its scheduler when it ends.
+      if (
+        session.inboxAsk ||
+        isMonoSession(session.id) ||
+        isHabitRun(session.id)
+      )
+        visibleIds.add(session.id);
     }
     // Internal workers stay attached to the lead, even while idle between
     // turns. They must not be discarded merely because they have no tab.

@@ -7,6 +7,39 @@ function conversation(blocks: Block[]) {
 }
 
 describe("sessionConversationPage", () => {
+  it.each([undefined, 3])(
+    "keeps an app completion report separate from the preceding user exchange with sessionCount=%s",
+    (sessionCount) => {
+      const session = conversation([
+        { id: "u", role: "user", text: "Explain the design" },
+        { id: "a", role: "assistant", text: "It uses a queue." },
+        {
+          id: "notification",
+          role: "user",
+          text: "Hidden app instructions",
+          internal: true,
+          monoSessionCompletion: {
+            sessionId: "worker",
+            title: "API fix",
+            status: "completed",
+            ...(sessionCount ? { sessionCount } : {}),
+          },
+        },
+        { id: "report", role: "assistant", text: "The API fix passed tests." },
+      ]);
+      const page = sessionConversationPage(session);
+      expect(page.turns).toHaveLength(2);
+      expect(page.turns[0].assistant?.text).toBe("It uses a queue.");
+      expect(page.turns[1].user.text).toBe(
+        sessionCount
+          ? "MonoCode: results from 3 sessions"
+          : "MonoCode: session completed: API fix",
+      );
+      expect(page.turns[1].assistant?.text).toBe("The API fix passed tests.");
+      expect(JSON.stringify(page)).not.toContain("Hidden app instructions");
+    },
+  );
+
   it("returns the newest three exchanges without tools or reasoning, then older pages", () => {
     const blocks: Block[] = [];
     for (let i = 1; i <= 5; i += 1) {
