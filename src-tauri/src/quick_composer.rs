@@ -435,9 +435,7 @@ pub fn quick_composer_take(
         .pending
         .lock()
         .map_err(|err| err.to_string())?
-        .claim(window.label(), |label| {
-            app.get_window(label).is_some()
-        }))
+        .claim(window.label(), |label| app.get_window(label).is_some()))
 }
 
 #[tauri::command]
