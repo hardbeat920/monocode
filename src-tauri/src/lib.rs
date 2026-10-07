@@ -374,6 +374,8 @@ pub fn run() {
             bitbucket::bitbucket_work_item_thread,
             bitbucket::bitbucket_work_item_comment,
             bitbucket::bitbucket_pr_diff,
+            bitbucket::bitbucket_pr_checks,
+            bitbucket::bitbucket_build_details,
             linear::linear_status,
             linear::linear_set_token,
             linear::linear_list_teams,

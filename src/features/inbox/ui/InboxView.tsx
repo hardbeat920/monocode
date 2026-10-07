@@ -169,6 +169,7 @@ import {
 import {
   BITBUCKET_CHANGE_EVENT,
   bitbucketConnected,
+  fetchBitbucketPrChecks,
   bitbucketPrDiff,
   bitbucketWorkItemComment,
   bitbucketWorkItemDetails,
@@ -2212,8 +2213,10 @@ export function InboxDetail({
 
   // Checks load as soon as a GitHub PR is open, whatever tab is active. The
   // panel passes revision 0, so its loads ride on mount and the identity key.
-  const prChecksEnabled = githubKind === "pr";
+  const prChecksEnabled = githubKind === "pr" || bitbucketKind === "pr";
   const prChecksView = useGithubPrChecks({
+    source: bitbucket ? "bitbucket" : "github",
+    fetchChecks: bitbucket ? fetchBitbucketPrChecks : undefined,
     cwd: item.projectPath || cwd,
     repo: item.repo,
     number: item.number,
@@ -2227,6 +2230,7 @@ export function InboxDetail({
         loading: prChecksView.loading,
         error: prChecksView.error,
         checks: prChecksView.checks?.checks ?? null,
+        provider: bitbucket ? "bitbucket" : "github",
       })
     : null;
 
@@ -3008,6 +3012,7 @@ export function InboxDetail({
                   />
                   {prChecksOverall ? (
                     <PrChecksTab
+                      provider={bitbucket ? "bitbucket" : "github"}
                       overall={prChecksOverall}
                       selected={tab === "checks"}
                       onSelect={() => setTab("checks")}
@@ -3093,6 +3098,7 @@ export function InboxDetail({
               )
             ) : isPr && tab === "checks" ? (
               <InboxPrChecks
+                provider={bitbucket ? "bitbucket" : "github"}
                 view={prChecksView}
                 onRefresh={prChecksView.refresh}
                 cwd={item.projectPath || cwd}

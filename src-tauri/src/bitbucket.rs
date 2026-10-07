@@ -133,6 +133,43 @@ pub struct BitbucketPrDiff {
     pub truncated: bool,
 }
 
+/// Same shape as the GitHub checks payload so the Checks tab is shared.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPrCheck {
+    pub name: String,
+    pub workflow: String,
+    pub state: String,
+    pub url: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketPrChecks {
+    pub head_oid: String,
+    pub checks: Vec<BitbucketPrCheck>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketBuildStep {
+    pub name: String,
+    pub state: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+/// Same shape as the GitHub check details so the expanded row is shared.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BitbucketBuildDetails {
+    pub steps: Vec<BitbucketBuildStep>,
+    pub annotations: Vec<Value>,
+    pub notice: Option<String>,
+}
+
 #[tauri::command(async)]
 pub fn bitbucket_status(app: AppHandle) -> Result<BitbucketStatus, String> {
     let config = read_config(&app)?;
@@ -280,6 +317,36 @@ pub async fn bitbucket_pr_diff(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn bitbucket_pr_checks(
+    app: AppHandle,
+    repo: String,
+    number: i64,
+) -> Result<BitbucketPrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = require_config(&app)?;
+        let repo = validate_repo(&repo)?;
+        bitbucket_pr_checks_for(&config, &repo, number)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn bitbucket_build_details(
+    app: AppHandle,
+    repo: String,
+    build: String,
+) -> Result<BitbucketBuildDetails, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = require_config(&app)?;
+        let repo = validate_repo(&repo)?;
+        bitbucket_build_details_for(&config, &repo, &build)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn bitbucket_list_work_items_for(
     config: &BitbucketConfig,
     repo: &str,
@@ -378,6 +445,197 @@ fn bitbucket_pr_diff_for(
     let stat = bitbucket_get(config, &format!("{base}/diffstat?pagelen=100"))?;
     let (patch, patch_truncated) = bitbucket_get_text(config, &format!("{base}/diff"))?;
     parse_pr_diff(&stat.value, &patch, stat.has_next_page || patch_truncated)
+}
+
+/// Build and CI results Bitbucket attaches to the pull request's head commit:
+/// Pipelines and third-party builds such as SonarCloud.
+fn bitbucket_pr_checks_for(
+    config: &BitbucketConfig,
+    repo: &str,
+    number: i64,
+) -> Result<BitbucketPrChecks, String> {
+    validate_item("pr", number)?;
+    let base = item_path(repo, number);
+    let pr = bitbucket_get(config, &base)?;
+    let head_oid = pr
+        .value
+        .pointer("/source/commit/hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let statuses = bitbucket_get(
+        config,
+        &format!("{base}/statuses?pagelen=100&sort=-updated_on"),
+    )?;
+    parse_pr_checks(&statuses.value, head_oid)
+}
+
+const PIPELINES_SCOPE: &str = "read:pipeline:bitbucket";
+
+fn missing_pipelines_scope_notice() -> String {
+    format!(
+        "Build steps need the {PIPELINES_SCOPE} scope. Atlassian API tokens cannot be changed after they are created, so create a new token that includes it, then reconnect in Settings."
+    )
+}
+
+/// Both 403 shapes from `read_response` mean the token cannot do this.
+fn is_scope_error(message: &str) -> bool {
+    message.starts_with("Bitbucket API token is missing a required scope")
+        || message.starts_with("Bitbucket denied access")
+}
+
+/// Steps of one Pipelines build, found from the build number in its status
+/// URL. A token without the Pipelines scope is not an error: the row still
+/// expands and says what to add.
+fn bitbucket_build_details_for(
+    config: &BitbucketConfig,
+    repo: &str,
+    build: &str,
+) -> Result<BitbucketBuildDetails, String> {
+    let number: i64 = build
+        .parse()
+        .ok()
+        .filter(|number| *number > 0)
+        .ok_or_else(|| "Invalid Bitbucket build number".to_string())?;
+    let notice = |text: String| BitbucketBuildDetails {
+        steps: Vec::new(),
+        annotations: Vec::new(),
+        notice: Some(text),
+    };
+    let uuid = match find_pipeline_uuid(config, repo, number) {
+        Ok(Some(uuid)) => uuid,
+        Ok(None) => return Ok(notice("Bitbucket has no steps for this build.".into())),
+        Err(error) if is_scope_error(&error) => {
+            return Ok(notice(missing_pipelines_scope_notice()))
+        }
+        Err(error) => return Err(error),
+    };
+    let path = format!(
+        "/repositories/{}/pipelines/{}/steps/?pagelen=100",
+        repo_path(repo),
+        encode_component(&uuid)
+    );
+    match bitbucket_get(config, &path) {
+        Ok(response) => parse_build_steps(&response.value),
+        Err(error) if is_scope_error(&error) => Ok(notice(missing_pipelines_scope_notice())),
+        Err(error) => Err(error),
+    }
+}
+
+/// Bitbucket identifies pipelines by UUID, but status URLs only carry the
+/// build number. Try the number directly, then look through recent pipelines.
+fn find_pipeline_uuid(
+    config: &BitbucketConfig,
+    repo: &str,
+    number: i64,
+) -> Result<Option<String>, String> {
+    let base = format!("/repositories/{}/pipelines", repo_path(repo));
+    match bitbucket_get(config, &format!("{base}/{number}")) {
+        Ok(response) => {
+            if let Some(uuid) = pipeline_uuid_for(&response.value, number) {
+                return Ok(Some(uuid));
+            }
+        }
+        Err(error) if is_scope_error(&error) => return Err(error),
+        // Not addressable by number here; fall through to the list.
+        Err(_) => {}
+    }
+    let list = bitbucket_get(config, &format!("{base}/?sort=-created_on&pagelen=100"))?;
+    Ok(list
+        .value
+        .get("values")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find_map(|row| pipeline_uuid_for(row, number))))
+}
+
+fn pipeline_uuid_for(row: &Value, number: i64) -> Option<String> {
+    if row.get("build_number").and_then(Value::as_i64) != Some(number) {
+        return None;
+    }
+    string_field(row, "uuid").filter(|uuid| !uuid.is_empty())
+}
+
+fn parse_build_steps(value: &Value) -> Result<BitbucketBuildDetails, String> {
+    let rows = value
+        .get("values")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Bitbucket did not return build steps".to_string())?;
+    let steps = rows
+        .iter()
+        .filter_map(|row| {
+            let name = string_field(row, "name").filter(|name| !name.is_empty())?;
+            let phase = row
+                .pointer("/state/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let result = row
+                .pointer("/state/result/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let state = match (phase, result) {
+                (_, "SUCCESSFUL") => "pass",
+                (_, "FAILED" | "ERROR") => "fail",
+                (_, "STOPPED" | "EXPIRED") => "cancel",
+                (_, "NOT_RUN") => "skipping",
+                ("PENDING" | "IN_PROGRESS" | "PAUSED", _) => "pending",
+                _ => "unknown",
+            };
+            Some(BitbucketBuildStep {
+                name,
+                state: state.into(),
+                started_at: string_field(row, "started_on"),
+                completed_at: string_field(row, "completed_on"),
+            })
+        })
+        .collect();
+    Ok(BitbucketBuildDetails {
+        steps,
+        annotations: Vec::new(),
+        notice: None,
+    })
+}
+
+fn parse_pr_checks(value: &Value, head_oid: String) -> Result<BitbucketPrChecks, String> {
+    let rows = value
+        .get("values")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Bitbucket did not return build statuses".to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    let mut checks = Vec::new();
+    // Newest first, so the first row per key is the current result.
+    for row in rows {
+        let name = string_field(row, "name")
+            .filter(|name| !name.is_empty())
+            .or_else(|| string_field(row, "key"))
+            .unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let key = string_field(row, "key").unwrap_or_else(|| name.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        let state = match string_field(row, "state").unwrap_or_default().as_str() {
+            "SUCCESSFUL" => "pass",
+            "FAILED" => "fail",
+            "INPROGRESS" => "pending",
+            "STOPPED" => "cancel",
+            _ => "unknown",
+        };
+        checks.push(BitbucketPrCheck {
+            name,
+            workflow: String::new(),
+            state: state.into(),
+            url: string_field(row, "url").filter(|url| !url.is_empty()),
+            started_at: string_field(row, "created_on"),
+            completed_at: if state == "pending" {
+                None
+            } else {
+                string_field(row, "updated_on")
+            },
+        });
+    }
+    Ok(BitbucketPrChecks { head_oid, checks })
 }
 
 fn validate_kind(kind: &str) -> Result<(), String> {
@@ -1434,5 +1692,232 @@ mod tests {
 
         assert_eq!(server.join().unwrap().len(), 1);
         assert_eq!(error, "Bitbucket request failed (302)");
+    }
+
+    #[test]
+    fn maps_build_statuses_to_checks_keeping_the_newest_per_key() {
+        let value = json!({ "values": [
+            { "key": "pipeline", "name": "Pipeline - pullrequests: **", "state": "SUCCESSFUL",
+              "url": "https://bitbucket.org/acme/app/pipelines/results/9",
+              "created_on": "2026-10-07T22:40:00Z", "updated_on": "2026-10-07T22:48:29Z" },
+            { "key": "sonar", "name": "", "state": "INPROGRESS",
+              "created_on": "2026-10-07T22:41:00Z", "updated_on": "2026-10-07T22:42:00Z" },
+            { "key": "pipeline", "name": "Pipeline - pullrequests: **", "state": "FAILED",
+              "created_on": "2026-10-07T20:00:00Z", "updated_on": "2026-10-07T20:05:00Z" },
+            { "key": "lint", "name": "Lint", "state": "STOPPED" },
+            { "key": "odd", "name": "Odd", "state": "SOMETHING_NEW", "url": "" },
+            { "key": "", "name": "" }
+        ]});
+
+        let checks = parse_pr_checks(&value, "abc123".into()).unwrap();
+
+        assert_eq!(checks.head_oid, "abc123");
+        let summary: Vec<_> = checks
+            .checks
+            .iter()
+            .map(|c| (c.name.as_str(), c.state.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("Pipeline - pullrequests: **", "pass"),
+                ("sonar", "pending"),
+                ("Lint", "cancel"),
+                ("Odd", "unknown"),
+            ]
+        );
+        let pipeline = &checks.checks[0];
+        assert_eq!(
+            pipeline.url.as_deref(),
+            Some("https://bitbucket.org/acme/app/pipelines/results/9")
+        );
+        assert_eq!(
+            pipeline.completed_at.as_deref(),
+            Some("2026-10-07T22:48:29Z")
+        );
+        // A running build has not completed, even though it has an update time.
+        assert_eq!(checks.checks[1].completed_at, None);
+        assert_eq!(checks.checks[3].url, None);
+    }
+
+    #[test]
+    fn pr_checks_read_the_head_commit_then_the_statuses() {
+        let (config, server) = serve(vec![
+            ok(json!({ "source": { "commit": { "hash": "deadbeef" } } })),
+            ok(json!({ "values": [
+                { "key": "ci", "name": "CI", "state": "FAILED", "updated_on": "2026-10-07T00:00:00Z" }
+            ]})),
+        ]);
+
+        let checks = bitbucket_pr_checks_for(&config, "acme/app", 7).unwrap();
+
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("GET /repositories/acme/app/pullrequests/7 "));
+        assert!(
+            requests[1].starts_with("GET /repositories/acme/app/pullrequests/7/statuses?"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests[1].contains("pagelen=100"));
+        assert_eq!(checks.head_oid, "deadbeef");
+        assert_eq!(checks.checks[0].state, "fail");
+    }
+
+    #[test]
+    fn pr_checks_reject_a_malformed_status_payload() {
+        let error = parse_pr_checks(&json!({ "oops": [] }), String::new()).unwrap_err();
+        assert_eq!(error, "Bitbucket did not return build statuses");
+    }
+
+    #[test]
+    fn maps_pipeline_steps_to_check_states() {
+        let value = json!({ "values": [
+            { "name": "Build", "state": { "name": "COMPLETED", "result": { "name": "SUCCESSFUL" } },
+              "started_on": "2026-10-07T10:00:00Z", "completed_on": "2026-10-07T10:02:00Z" },
+            { "name": "Test", "state": { "name": "COMPLETED", "result": { "name": "FAILED" } } },
+            { "name": "Lint", "state": { "name": "COMPLETED", "result": { "name": "ERROR" } } },
+            { "name": "Deploy", "state": { "name": "COMPLETED", "result": { "name": "STOPPED" } } },
+            { "name": "Docs", "state": { "name": "COMPLETED", "result": { "name": "NOT_RUN" } } },
+            { "name": "Smoke", "state": { "name": "IN_PROGRESS" } },
+            { "name": "Queue", "state": { "name": "PENDING" } },
+            { "name": "Mystery", "state": { "name": "SOMETHING" } },
+            { "name": "", "state": { "name": "COMPLETED" } }
+        ]});
+
+        let details = parse_build_steps(&value).unwrap();
+
+        let states: Vec<_> = details
+            .steps
+            .iter()
+            .map(|s| (s.name.as_str(), s.state.as_str()))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("Build", "pass"),
+                ("Test", "fail"),
+                ("Lint", "fail"),
+                ("Deploy", "cancel"),
+                ("Docs", "skipping"),
+                ("Smoke", "pending"),
+                ("Queue", "pending"),
+                ("Mystery", "unknown"),
+            ]
+        );
+        assert_eq!(
+            details.steps[0].completed_at.as_deref(),
+            Some("2026-10-07T10:02:00Z")
+        );
+        assert_eq!(details.notice, None);
+        assert!(details.annotations.is_empty());
+    }
+
+    #[test]
+    fn build_details_resolve_a_pipeline_by_number_then_list_steps() {
+        let (config, server) = serve(vec![
+            ok(json!({ "build_number": 42, "uuid": "{abc-123}" })),
+            ok(json!({ "values": [
+                { "name": "Build", "state": { "name": "COMPLETED", "result": { "name": "SUCCESSFUL" } } }
+            ]})),
+        ]);
+
+        let details = bitbucket_build_details_for(&config, "acme/app", "42").unwrap();
+
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("GET /repositories/acme/app/pipelines/42 "));
+        assert!(
+            requests[1].starts_with("GET /repositories/acme/app/pipelines/%7Babc-123%7D/steps/?"),
+            "{}",
+            requests[1]
+        );
+        assert_eq!(details.steps.len(), 1);
+        assert_eq!(details.notice, None);
+    }
+
+    #[test]
+    fn build_details_fall_back_to_the_pipeline_list_when_the_number_is_not_addressable() {
+        let (config, server) = serve(vec![
+            (
+                404,
+                Vec::new(),
+                json!({ "error": { "message": "nope" } }).to_string(),
+            ),
+            ok(json!({ "values": [
+                { "build_number": 43, "uuid": "{other}" },
+                { "build_number": 42, "uuid": "{abc-123}" }
+            ]})),
+            ok(json!({ "values": [] })),
+        ]);
+
+        let details = bitbucket_build_details_for(&config, "acme/app", "42").unwrap();
+
+        let requests = server.join().unwrap();
+        assert!(requests[1].contains("/pipelines/?sort=-created_on&pagelen=100"));
+        assert!(requests[2].contains("/pipelines/%7Babc-123%7D/steps/"));
+        assert!(details.steps.is_empty());
+        assert_eq!(details.notice, None);
+    }
+
+    #[test]
+    fn build_details_say_what_scope_is_missing_instead_of_failing() {
+        let body = json!({ "type": "error", "error": {
+            "message": "Your credentials lack one or more required privilege scopes.",
+            "detail": { "granted": ["pullrequest"], "required": ["pipeline"] } } });
+        let (config, server) = serve(vec![(403, Vec::new(), body.to_string())]);
+
+        let details = bitbucket_build_details_for(&config, "acme/app", "42").unwrap();
+
+        server.join().unwrap();
+        assert!(details.steps.is_empty());
+        let notice = details.notice.unwrap();
+        assert!(notice.contains("read:pipeline:bitbucket"), "{notice}");
+        assert!(notice.contains("Settings"), "{notice}");
+        // A token's scopes are fixed at creation, so "add it" would mislead.
+        assert!(notice.contains("create a new token"), "{notice}");
+        assert!(!notice.contains("Add it"), "{notice}");
+    }
+
+    #[test]
+    fn build_details_report_a_missing_pipeline_without_erroring() {
+        let (config, server) = serve(vec![
+            (404, Vec::new(), "{}".to_string()),
+            ok(json!({ "values": [ { "build_number": 7, "uuid": "{x}" } ] })),
+        ]);
+
+        let details = bitbucket_build_details_for(&config, "acme/app", "42").unwrap();
+
+        server.join().unwrap();
+        assert_eq!(
+            details.notice.as_deref(),
+            Some("Bitbucket has no steps for this build.")
+        );
+    }
+
+    #[test]
+    fn build_details_reject_a_bad_build_number_and_surface_real_errors() {
+        let config = BitbucketConfig {
+            email: "e".into(),
+            token: "t".into(),
+            account_id: "a".into(),
+            api_base: "http://127.0.0.1:1".into(),
+        };
+        for bad in ["", "0", "-3", "abc", "1; DROP"] {
+            assert_eq!(
+                bitbucket_build_details_for(&config, "acme/app", bad).unwrap_err(),
+                "Invalid Bitbucket build number",
+                "{bad:?}"
+            );
+        }
+        let (config, server) = serve(vec![
+            ok(json!({ "build_number": 42, "uuid": "{u}" })),
+            (
+                500,
+                Vec::new(),
+                json!({ "error": { "message": "boom" } }).to_string(),
+            ),
+        ]);
+        let error = bitbucket_build_details_for(&config, "acme/app", "42").unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error, "boom");
     }
 }

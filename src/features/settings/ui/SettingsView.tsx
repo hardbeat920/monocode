@@ -1656,7 +1656,7 @@ function BitbucketSettings() {
     <>
       <Row
         label="Connection"
-        description="Connect Bitbucket Cloud with your Atlassian account email and an API token with the scopes read:user:bitbucket, read:repository:bitbucket, read:pullrequest:bitbucket and write:pullrequest:bitbucket. The token is stored locally and Disconnect deletes it."
+        description="Connect Bitbucket Cloud with your Atlassian account email and an API token with the scopes read:user:bitbucket, read:repository:bitbucket, read:pullrequest:bitbucket and write:pullrequest:bitbucket. Optional: include read:pipeline:bitbucket to see build steps. Scopes are fixed when a token is created, so choose them up front. The token is stored locally and Disconnect deletes it."
       >
         {connected ? (
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">

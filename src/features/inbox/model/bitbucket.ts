@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { GithubCheckDetails, GithubPrChecks } from "./githubPrChecks";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
 import { normalizeProjectPath } from "../../projects/model/recents";
 
@@ -246,6 +247,59 @@ export async function bitbucketPrDiff(
     });
   diffInflight.set(key, pending);
   return pending;
+}
+
+/**
+ * Build and CI results for a pull request's head commit, in the same shape as
+ * GitHub checks so the Checks tab renders both.
+ */
+export function fetchBitbucketPrChecks(
+  _cwd: string,
+  repo: string,
+  number: number,
+): Promise<GithubPrChecks> {
+  return invoke<GithubPrChecks>("bitbucket_pr_checks", { repo, number });
+}
+
+/**
+ * The Pipelines build number in a build's status URL, which is what the
+ * details lookup needs. Other builds (SonarCloud and the like) have none.
+ */
+export function bitbucketBuildId(
+  url: string | null,
+  repo: string,
+): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.origin !== "https://bitbucket.org") return null;
+    const prefix = `/${repo}/`.toLowerCase();
+    if (!parsed.pathname.toLowerCase().startsWith(prefix)) return null;
+    const path = parsed.pathname.slice(prefix.length);
+    return (
+      /^pipelines\/results\/([1-9]\d*)\/?$/.exec(path)?.[1] ??
+      (/^addon\/pipelines\/home\/?$/.test(path)
+        ? /^#!\/results\/([1-9]\d*)\/?$/.exec(parsed.hash)?.[1]
+        : undefined) ??
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Steps of a Pipelines build. Without the optional pipeline scope the result
+ * carries a notice saying so rather than failing.
+ */
+export function fetchBitbucketBuildDetails(
+  repo: string,
+  build: string,
+): Promise<GithubCheckDetails> {
+  return invoke<GithubCheckDetails>("bitbucket_build_details", {
+    repo,
+    build,
+  });
 }
 
 export function notifyBitbucketChange() {

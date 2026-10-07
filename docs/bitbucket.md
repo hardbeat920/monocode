@@ -14,6 +14,21 @@ the same way as GitLab and ADO. Select the Bitbucket source in Inbox to browse
 pull requests, read descriptions, comments and diffs, post comments,
 ask about an item, or start work in a local project.
 
+The **Builds** tab on a pull request lists the builds Bitbucket reports for its
+head commit: Pipelines and third-party builds such as SonarCloud. It is called
+Builds rather than Checks because Bitbucket's own merge checks (such as "no
+commits behind") are a different thing, and they are not available through the
+API. Each row shows its result and duration and opens the build on Bitbucket.
+This uses the same `read:pullrequest:bitbucket` scope, and it refreshes every 30
+seconds while the tab is open.
+
+Pipelines builds can be expanded to show their steps. That needs one more,
+optional, scope: `read:pipeline:bitbucket`. Atlassian API tokens cannot be
+changed after they are created, so include it when you create the token. Without
+it the build still expands and says which scope is missing; to turn steps on,
+create a new token with the scope and reconnect. Builds from other services
+(SonarCloud and the like) have no steps and just link out.
+
 **Needs attention** shows open pull requests where you are a reviewer or the
 author. Bitbucket has no cross-repository to-do feed, so this is answered per
 repository for the projects you have open.
