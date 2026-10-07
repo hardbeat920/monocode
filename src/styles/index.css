@@ -69,6 +69,49 @@
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  /* Diff colors. `diff-add`/`diff-del` are the solid marker hues, `-fg` is
+     readable text on the theme background, `-bg`/`-gutter` are row tints.
+     Palettes below swap them; diff UI must also show a +/- glyph so color is
+     never the only cue. */
+  --color-diff-add: #10b981;
+  --color-diff-add-fg: #6ee7b7;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 15%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 25%,
+    transparent
+  );
+  --color-diff-del: #f43f5e;
+  --color-diff-del-fg: #fda4af;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 15%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 25%,
+    transparent
+  );
+}
+
+/* Static so Tailwind always emits it: only xterm reads it, via JS. */
+@theme static {
+  /* Terminal-only stack. JetBrains Mono Nerd Font leads so prompt text and
+     icons share one face; the Nerd Font families after the system monos fill
+     Private Use Area glyphs (powerline arrows, git/folder icons) because
+     WebKit's fallback never reaches user-installed icon fonts on its own. */
+  --font-terminal:
+    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Mono", "JetBrainsMono NF",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Mono",
+    "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
+    "FiraCode Nerd Font Mono", "Hack Nerd Font Mono",
+    "CaskaydiaCove Nerd Font Mono", Consolas, "Liberation Mono", "Courier New",
+    monospace;
 }
 
 :root {
@@ -81,6 +124,7 @@
   --theme-saturation: 0%;
   --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
+  --window-background-opacity: 0.4;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
   --selection-subtle-strength: 8%;
@@ -112,7 +156,60 @@ html.theme-light {
   --selection-strong-strength: 7%;
   --selection-hover-strength: 10%;
   --selection-emphasis-strength: 14%;
+  --color-diff-add-fg: #047857;
+  --color-diff-del-fg: #be123c;
   color-scheme: light;
+}
+
+/* Blue/orange stays distinguishable for protanopia, deuteranopia and
+   tritanopia (same pairing as GitHub's colorblind themes). */
+html.diff-palette-colorblind {
+  --color-diff-add: #388bfd;
+  --color-diff-add-fg: #79c0ff;
+  --color-diff-del: #db6d28;
+  --color-diff-del-fg: #ffa657;
+}
+
+html.diff-palette-colorblind.theme-light {
+  --color-diff-add: #0969da;
+  --color-diff-add-fg: #0550ae;
+  --color-diff-del: #bc4c00;
+  --color-diff-del-fg: #953800;
+}
+
+/* Colorblind-safe hues with heavier tints and maximum-contrast text. */
+html.diff-palette-high-contrast {
+  --color-diff-add: #58a6ff;
+  --color-diff-add-fg: #cae8ff;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 28%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 45%,
+    transparent
+  );
+  --color-diff-del: #f0883e;
+  --color-diff-del-fg: #ffdfb6;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 28%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 45%,
+    transparent
+  );
+}
+
+html.diff-palette-high-contrast.theme-light {
+  --color-diff-add: #0550ae;
+  --color-diff-add-fg: #032563;
+  --color-diff-del: #953800;
+  --color-diff-del-fg: #471700;
 }
 
 html,
@@ -128,6 +225,8 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 /* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
@@ -163,10 +262,12 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
+/* Tint-less transparent rather than `transparent`, which browsers interpolate
+   through black and would dim the page on the way in and out of glass. */
 html.has-native-glass:not(.theme-light),
 html.has-native-glass:not(.theme-light) body,
 html.has-native-glass:not(.theme-light) #root {
-  background: transparent;
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 .reorder-item {
@@ -266,6 +367,8 @@ html.has-native-glass:not(.theme-light) #root {
 
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 html.theme-light .sidebar-glass {
@@ -277,6 +380,15 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
     var(--theme-hue) var(--theme-saturation) var(--background-lightness) /
       var(--sidebar-opacity)
   );
+}
+
+/* AppKit fills the shared tint as the window grows. Painting it here too
+   would compound the opacity; wait for the native host's acknowledgement. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .workspace-background,
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .sidebar-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 /* The activity dot sits at (23px, 9px) in a 32px button. Its icon is
@@ -292,6 +404,18 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
 
 .body-glass {
   background: var(--color-background-base);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .sidebar-glass,
+  .body-glass {
+    transition: none;
+  }
 }
 
 .chat-pane-background::before {
@@ -522,6 +646,55 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
 
 ::highlight(monocode-transcript-search-current) {
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
+}
+
+/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+.tab-label[data-overflow="true"] {
+  --tab-label-mask: linear-gradient(
+    to right,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--tab-label-mask);
+  mask-image: var(--tab-label-mask);
+}
+
+/* Fade scrolling content at the bottom viewport edge. */
+.sidebar-session-scroll,
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--scroll-bottom-mask);
+  mask-image: var(--scroll-bottom-mask);
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade. */
+.transcript-composer-fade [data-transcript-content] {
+  padding-bottom: 2.5rem;
+}
+
+.mono-transcript-fades {
+  --mono-transcript-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 2rem),
+    transparent
+  );
+  -webkit-mask-image: var(--mono-transcript-mask);
+  mask-image: var(--mono-transcript-mask);
+}
+
+/* Mono history is already paged in groups of ten. Lay out those turns at
+   their real heights so opening and scrolling never correct placeholders. */
+.mono-transcript-fades .transcript-turn {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
 }
 
 .agent-transcript
@@ -1191,6 +1364,13 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
   min-height: var(--transcript-viewport, 0px);
 }
 
+/* A finished run can still be revealing its reply. Artifacts and actions wait
+   for the final word's fade, using the reply's actual animation state. */
+.transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
 .transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
   opacity: 0;
@@ -1218,6 +1398,11 @@ html.has-native-glass.glass-body:not(.theme-light) .body-glass {
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
     transparent
   );
+}
+
+html.is-mac.has-native-glass.has-native-glass-tint.glass-body:not(.theme-light)
+  .body-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 textarea,
@@ -1370,7 +1555,8 @@ html.is-resizing * {
   }
 }
 
-html.theme-light [data-composer-box] {
+html.theme-light [data-composer-box],
+html.theme-light .agent-chat-composer {
   background: var(--color-background-base);
   box-shadow:
     0 6px 24px color-mix(in srgb, var(--color-content) 9%, transparent),
@@ -1428,6 +1614,18 @@ html.has-user-accent .primary-action:disabled {
   color: transparent;
   caret-color: var(--color-content);
   -webkit-text-fill-color: transparent;
+}
+
+/* Keep selected text hidden so the styled highlight layer still shows through,
+   rather than the raw `/command` and `@path` text. */
+.composer-field::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 30%,
+    transparent
+  );
 }
 
 .composer-field::placeholder {
@@ -1681,6 +1879,47 @@ header[data-tauri-drag-region] button {
   visibility: hidden;
 }
 
+.agent-markdown .markdown-code-fallback-label {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  left: 34px;
+  right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+  pointer-events: none;
+}
+
+/* highlightLanguageFor swaps text/plaintext/txt/untagged fences to the "js"
+   grammar so Shiki still colors them, but Streamdown's own header reuses
+   that same value as its visible label. Hide the vendor label here and show
+   the real fence language via .markdown-code-fallback-label instead. */
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label)
+  [data-streamdown="code-block-header"]
+  > span {
+  visibility: hidden;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"] {
+  display: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"]
+  + [data-streamdown="code-block-body"] {
+  border-top: 0;
+}
+
 .agent-markdown [data-streamdown="heading-1"] {
   font-size: 22px;
 }
@@ -1811,16 +2050,22 @@ header[data-tauri-drag-region] button {
   color: color-mix(in srgb, var(--color-content) 78%, transparent);
 }
 
-/* AgentMarkdown passes dir="auto", so Streamdown puts every block in its own
-   <div dir="..." style="display: contents"> wrapper. A display:contents box
-   drops its own margins, so Streamdown's `space-y-4` on the root (it targets
-   those wrappers) paints no gap at all. Headings, blockquotes and rules keep
-   their spacing because their margin sits on the element itself (mt-6/mb-2,
-   my-4, my-6); paragraphs and lists carry none, so every "\n\n" started a new
-   <p> with no visible gap and the reply read as one dense block (#218).
+/* AgentMarkdown passes dir="auto", so every block sits in its own
+   <div dir="..." class="agent-markdown-block"> wrapper (a real block box, not
+   Streamdown's display:contents one, so triple-click stops at the block; #496).
+   The wrapper carries no margin of its own: Streamdown's `space-y-4` on the
+   root would otherwise space every wrapper, including empty ones, and override
+   the tighter list gap below. Headings, blockquotes and rules keep their
+   spacing because their margin sits on the element itself (mt-6/mb-2, my-4,
+   my-6) and collapses through the wrapper; paragraphs and lists carry none, so
+   every "\n\n" would start a new <p> with no visible gap (#218).
    Put the gap back on the block inside the wrapper, top side only, so a reply
    never ends with a trailing gap. Ignore empty wrappers before the first
    visible block, and keep lists closer to the paragraph that introduces them. */
+.agent-markdown > .agent-markdown-block {
+  margin: 0;
+}
+
 .agent-markdown > div:not(:empty) ~ div > p {
   margin-top: 1rem;
 }
@@ -1914,6 +2159,78 @@ header[data-tauri-drag-region] button {
   }
 }
 
+@keyframes linked-panel-slide {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.linked-panel-slide {
+  animation: linked-panel-slide 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* New split panes; same motion as the linked panel's slide. */
+@keyframes pane-enter {
+  from {
+    opacity: var(--pane-enter-opacity, 1);
+    transform: translate(var(--pane-enter-x, 0), var(--pane-enter-y, 0));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+[data-pane-enter] {
+  animation: pane-enter 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-pane-enter="right"] {
+  --pane-enter-x: 100%;
+}
+
+[data-pane-enter="left"] {
+  --pane-enter-x: -100%;
+}
+
+[data-pane-enter="bottom"] {
+  --pane-enter-y: 100%;
+}
+
+[data-pane-enter="top"] {
+  --pane-enter-y: -100%;
+}
+
+[data-pane-enter="fade"] {
+  --pane-enter-opacity: 0;
+}
+
+@keyframes linked-panel-reveal {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.linked-panel-reveal {
+  animation: linked-panel-reveal 240ms cubic-bezier(0.22, 1, 0.36, 1) 90ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .linked-panel-slide,
+  .linked-panel-reveal,
+  [data-pane-enter] {
+    animation: none;
+  }
+}
+
 .shimmer-text {
   background-image:
     linear-gradient(
@@ -1938,6 +2255,37 @@ header[data-tauri-drag-region] button {
   -webkit-background-clip: text;
   color: transparent;
   animation: shimmer-text var(--shimmer-duration, 2s) linear infinite;
+}
+
+/* One light sweep across a composer mode command as it appears. */
+.composer-mode-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0 40%,
+    color-mix(in srgb, currentColor 25%, white) 50%,
+    currentColor 60% 100%
+  );
+  background-size: 300% 100%;
+  background-position: 0% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: composer-mode-shimmer 900ms ease-out;
+}
+
+@keyframes composer-mode-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-mode-shimmer {
+    animation: none;
+  }
 }
 
 /* Two-frame mascot loop — a hard swap plus a one-pixel hop, arcade style. */
@@ -2007,6 +2355,357 @@ header[data-tauri-drag-region] button {
 
 .mascot-stunned .mascot-talk {
   opacity: 0;
+}
+
+/* The agent's name pill, which the mascot stands on. */
+.mono-pill {
+  border-color: color-mix(in srgb, var(--color-content) 14%, transparent);
+  background: color-mix(in srgb, var(--color-content) 6%, transparent);
+}
+
+/* Messaging-app bubbles. The tail is a sibling shape that inherits the
+   bubble's fill and only covers what sits outside the rounded corner, so
+   translucent bubbles never darken where the two meet. */
+.agent-chat-bubble {
+  position: relative;
+}
+
+.agent-chat-bubble-tail-left::after,
+.agent-chat-bubble-tail-right::after {
+  content: "";
+  position: absolute;
+  bottom: calc(var(--agent-bubble-radius, 12px) / -3);
+  width: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
+  height: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
+  background: inherit;
+  pointer-events: none;
+  -webkit-mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
+  mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
+  /* Drawn against an 18px left corner and scaled to the bubble's radius.
+     It only fills what lies outside the corner, so nothing is painted twice. */
+  --agent-bubble-tail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 15.6C9.05 16.3 9.05 17.4 9.05 18.6C9.05 20 8.3 21.4 7.4 22.6Q6.9 23.4 7.8 23.5C9.6 23.3 11.6 22.3 13.2 21.5C15 20.5 16.2 19.6 17.2 18.8C17.9 18.25 18.6 18 19.6 18L18 18A18 18 0 0 1 9 15.6Z'/%3E%3C/svg%3E");
+}
+
+.agent-chat-bubble-tail-left::after {
+  left: 0;
+}
+
+.agent-chat-bubble-tail-right::after {
+  right: 0;
+  transform: scaleX(-1);
+}
+
+/* New bubbles pop up from their tail corner with a little overshoot, the
+   way a sent message lifts off the composer. */
+.agent-chat-bubble-in-left,
+.agent-chat-bubble-in-right {
+  animation: agent-chat-bubble-in 380ms cubic-bezier(0.2, 1.2, 0.4, 1) both;
+}
+
+.agent-chat-bubble-in-left {
+  transform-origin: 0% 100%;
+}
+
+.agent-chat-bubble-in-right {
+  transform-origin: 100% 100%;
+}
+
+@keyframes agent-chat-bubble-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  40% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agent-chat-fade-in {
+  animation: agent-chat-fade-in 240ms ease-out both;
+}
+
+@keyframes agent-chat-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Typing dots rise and brighten in a wave. */
+.agent-chat-typing-dot {
+  animation: agent-chat-typing 1.1s ease-in-out infinite;
+}
+
+@keyframes agent-chat-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-bubble-in-left,
+  .agent-chat-bubble-in-right,
+  .agent-chat-fade-in {
+    animation: none;
+  }
+
+  .agent-chat-typing-dot {
+    animation-name: agent-chat-typing-fade;
+  }
+}
+
+@keyframes agent-chat-typing-fade {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+html.has-user-accent .agent-chat-user-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+}
+
+html.theme-light .agent-chat-user-bubble {
+  background: #0a0a0a;
+  color: #fff;
+}
+
+html.theme-light.has-user-accent .agent-chat-user-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  color: var(--color-content);
+}
+
+html.theme-light .mono-pill {
+  background: #fff;
+  border-color: rgb(0 0 0 / 0.06);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.06),
+    0 4px 14px rgb(0 0 0 / 0.08);
+}
+
+/* Agent chat bubbles: trim only the outer edges so paragraphs keep their gaps.
+   Each block sits in its own direction wrapper, so :first-child on the
+   paragraph itself would match every block. */
+/* A habit run's report, read inside its row on the habit page: the row's
+   own size and rhythm, with lists hung just inside the text's left edge. */
+.mono-run-report.agent-markdown {
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.mono-run-report.agent-markdown p,
+.mono-run-report.agent-markdown li {
+  margin-block: 0;
+}
+
+.mono-run-report.agent-markdown > * + * {
+  margin-top: 8px;
+}
+
+.mono-run-report.agent-markdown [data-streamdown="ordered-list"],
+.mono-run-report.agent-markdown [data-streamdown="unordered-list"] {
+  margin-block: 0;
+  padding-inline-start: 14px;
+}
+
+.mono-run-report.agent-markdown li + li {
+  margin-top: 2px;
+}
+
+/* The activity panel is narrow: its steps read at the panel's size. */
+.mono-activity-steps .text-sm {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.agent-chat-bubble-md.agent-markdown > :first-child,
+.agent-chat-bubble-md.agent-markdown > .agent-markdown-block:first-child > * {
+  margin-top: 0;
+}
+
+.agent-chat-bubble-md.agent-markdown > :last-child,
+.agent-chat-bubble-md.agent-markdown > .agent-markdown-block:last-child > * {
+  margin-bottom: 0;
+}
+
+/* Inline code must fit inside the dots' 24px line box. A 24px inline-flex
+   badge on the text baseline makes even a one-line reply a pixel taller. */
+.agent-chat-bubble-md.agent-markdown :not(pre) > code {
+  min-height: 0;
+  line-height: 1.4;
+}
+
+/* Shaded pixel mascots. Motion moves half a sprite cell at a time and stays
+   unhurried; blinks swap in closed eyes instead of squashing open ones. */
+.pixel-bob {
+  animation: pixel-bob 3.6s step-end infinite;
+}
+
+.pixel-hop {
+  animation: pixel-bob 1.2s step-end infinite;
+}
+
+.pixel-frame-a {
+  animation: pixel-frame-a 600ms step-end infinite;
+}
+
+.pixel-frame-b {
+  opacity: 0;
+  animation: pixel-frame-b 600ms step-end infinite;
+}
+
+.pixel-eyes-open {
+  animation: pixel-eyes-open 5.2s step-end infinite;
+}
+
+.pixel-eyes-closed {
+  opacity: 0;
+  animation: pixel-eyes-closed 5.2s step-end infinite;
+}
+
+.pixel-bulb {
+  animation: pixel-flicker 2.4s step-end infinite;
+}
+
+@keyframes pixel-bob {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-0.75px);
+  }
+}
+
+@keyframes pixel-frame-a {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes pixel-frame-b {
+  0% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes pixel-eyes-open {
+  0% {
+    opacity: 1;
+  }
+  96% {
+    opacity: 0;
+  }
+  98.5% {
+    opacity: 1;
+  }
+}
+
+@keyframes pixel-eyes-closed {
+  0% {
+    opacity: 0;
+  }
+  96% {
+    opacity: 1;
+  }
+  98.5% {
+    opacity: 0;
+  }
+}
+
+@keyframes pixel-flicker {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.7;
+  }
+  48% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-mascot * {
+    animation: none !important;
+  }
+}
+
+/* Mono intro: the mascots march in and line up, then the user's mono drops
+   into the spotlight. Every step holds its end state, so reduced motion just
+   skips to the final scene. */
+.mono-intro-march {
+  animation: mono-intro-march 700ms var(--delay) cubic-bezier(0.2, 0.8, 0.3, 1)
+    both;
+}
+
+.mono-intro-march .mono-intro-hop {
+  animation: mono-intro-hop 175ms var(--delay) ease-out 4 alternate;
+}
+
+.mono-intro-drop {
+  transform-origin: bottom center;
+  animation: mono-intro-drop 650ms 1350ms ease-in both;
+}
+
+@keyframes mono-intro-march {
+  from {
+    transform: translateX(var(--from));
+  }
+}
+
+@keyframes mono-intro-hop {
+  to {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes mono-intro-drop {
+  0% {
+    transform: translateY(-240px);
+  }
+  55% {
+    transform: translateY(0);
+  }
+  68% {
+    transform: scale(1.16, 0.82);
+    animation-timing-function: ease-out;
+  }
+  84% {
+    transform: translateY(-10px) scale(0.95, 1.06);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mono-intro * {
+    animation-duration: 1ms !important;
+    animation-delay: 0s !important;
+  }
+  .mono-intro .mono-intro-hop {
+    animation: none !important;
+  }
 }
 
 @keyframes shimmer-text {
@@ -2459,6 +3158,46 @@ header[data-tauri-drag-region] button {
   }
   50% {
     opacity: 0.9;
+  }
+}
+
+.mono-details-panel[data-open="false"] {
+  display: none;
+}
+
+/* A Mono's activity rolls through one clipped line without moving the chat. */
+.mono-work-ticker {
+  height: 24px;
+  overflow: hidden;
+}
+
+.mono-work-ticker-track {
+  display: flex;
+  flex-direction: column;
+}
+
+.mono-work-ticker-row {
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.mono-work-ticker-track[data-moving="true"] {
+  animation: mono-work-tick 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes mono-work-tick {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mono-work-ticker-track[data-moving="true"] {
+    animation: none;
+    transform: translateY(-24px);
   }
 }
 

@@ -6,6 +6,7 @@ import {
 import type { HarnessId } from "../../../features/sessions/model/session";
 import {
   HARNESS_IDLE_PARK_MS,
+  bindHarnessSession,
   canCompactHarnessContext,
   canRunHarnessTextPrompt,
   runHarnessTextPrompt,
@@ -60,6 +61,40 @@ describe("harness registry", () => {
         .filter((id) => id === "claude" || id === "codex" || id === "cursor")
         .sort(),
     ).toEqual(["claude", "codex", "cursor"]);
+  });
+
+  it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {
+    let accepted!: () => void;
+    let finish!: () => void;
+    registerHarness(
+      stub("codex", {
+        async sendTurn(input) {
+          accepted = () => input.onAccepted?.();
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      }),
+    );
+    const onEvent = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = sendHarnessTurn({
+      harness: "codex",
+      sessionId: "readiness",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Hello",
+      onEvent,
+      onAccepted,
+    });
+    await vi.waitFor(() => expect(accepted).toBeDefined());
+    expect(onEvent).not.toHaveBeenCalled();
+    accepted();
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ type: "turn.ready" });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    finish();
+    await sending;
   });
 
   it("advertises isolated text prompt support by harness", () => {
@@ -352,5 +387,31 @@ describe("harness registry", () => {
       "start:s1",
       "end:s1",
     ]);
+  });
+
+  it("binds a restored session and forwards its task panels", () => {
+    const bindSession = vi.fn();
+    const restoreTaskLists = vi.fn();
+    registerHarness(stub("claude", { bindSession, restoreTaskLists }));
+    const taskList = {
+      key: "claude-tasks",
+      items: [{ id: "1", text: "Write tests", status: "pending" as const }],
+    };
+
+    bindHarnessSession("claude", "s1", "sess_1", "/repo", "work", [
+      { id: "b1", role: "user", text: "go" },
+      { id: "b2", role: "tasks", text: "Write tests", taskList },
+    ]);
+    bindHarnessSession("claude", "s2", "sess_2", "/repo");
+
+    expect(bindSession).toHaveBeenCalledWith("s1", "sess_1", "/repo", "work");
+    expect(bindSession).toHaveBeenCalledWith(
+      "s2",
+      "sess_2",
+      "/repo",
+      undefined,
+    );
+    expect(restoreTaskLists).toHaveBeenCalledTimes(1);
+    expect(restoreTaskLists).toHaveBeenCalledWith("s1", [taskList]);
   });
 });

@@ -389,13 +389,23 @@ fn powershell_quote(value: &str) -> String {
 }
 
 pub fn bootstrap_script(platform: HostPlatform) -> String {
+    let template = match platform {
+        HostPlatform::Unix => include_str!("remote_bootstrap.sh"),
+        HostPlatform::Windows => include_str!("remote_bootstrap.ps1"),
+    };
+    bootstrap_script_from_template(platform, template)
+}
+
+fn bootstrap_script_from_template(platform: HostPlatform, template: &str) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let url = format!("https://github.com/hardbeat920/monocode/releases/download/v{version}");
     match platform {
-        HostPlatform::Unix => include_str!("remote_bootstrap.sh")
+        // include_str! preserves checkout line endings, including Windows CRLF.
+        HostPlatform::Unix => template
+            .replace("\r\n", "\n")
             .replace("@@VERSION@@", &shell_quote(version))
             .replace("@@RELEASE@@", &shell_quote(&url)),
-        HostPlatform::Windows => include_str!("remote_bootstrap.ps1")
+        HostPlatform::Windows => template
             .replace("@@VERSION@@", &powershell_quote(version))
             .replace("@@RELEASE@@", &powershell_quote(&url))
             .replace("@@ACL@@", include_str!("../../host/windows-acl.ps1")),
@@ -772,8 +782,21 @@ mod tests {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
     #[test]
+    fn unix_bootstrap_accepts_windows_checkout_line_endings() {
+        let lf_template = include_str!("remote_bootstrap.sh").replace("\r\n", "\n");
+        let crlf_template = lf_template.replace('\n', "\r\n");
+        let script = bootstrap_script_from_template(HostPlatform::Unix, &crlf_template);
+        assert!(script.starts_with("set -eu\n"));
+        assert!(!script.contains('\r'));
+        assert_eq!(
+            script,
+            bootstrap_script_from_template(HostPlatform::Unix, &lf_template)
+        );
+    }
+    #[test]
     fn bootstrap_is_versioned_and_only_explicit_upgrade_restarts_the_host() {
         let script = bootstrap_script(HostPlatform::Unix);
+        assert!(!script.contains('\r'));
         assert!(!script.contains("@@"));
         assert!(script.contains("--proto '=https'"));
         assert!(script.contains("checksum mismatch"));
@@ -782,6 +805,7 @@ mod tests {
         assert!(
             upgrade_script(HostPlatform::Unix, 3774).starts_with("MONOCODE_HOST_FORCE_UPGRADE=1")
         );
+        assert!(!upgrade_script(HostPlatform::Unix, 3774).contains('\r'));
         assert!(upgrade_script(HostPlatform::Windows, 3774)
             .starts_with("$env:MONOCODE_HOST_FORCE_UPGRADE = '1'"));
     }

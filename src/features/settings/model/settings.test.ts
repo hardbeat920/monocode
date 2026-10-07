@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSER_RUNNER_DEFAULT,
+  AUTOSAVE_DEFAULT,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
   searchSettings,
   SETTINGS_INDEX,
@@ -15,6 +16,7 @@ import {
   LIVE_AGENTS_ENABLED_DEFAULT,
   TAB_ANIMATIONS_ENABLED_DEFAULT,
   loadComposerRunner,
+  loadAutosave,
   loadCollapsedProjectRailMode,
   loadModelControls,
   loadDiffViewer,
@@ -31,6 +33,7 @@ import {
   loadTabAnimationsEnabled,
   NOTES_ENABLED_DEFAULT,
   saveComposerRunner,
+  saveAutosave,
   saveCollapsedProjectRailMode,
   saveModelControls,
   saveDiffViewer,
@@ -57,6 +60,7 @@ const LIVE_AGENTS_KEY = "monocode.liveAgentsEnabled";
 const GRID_ARCADE_KEY = "monocode.gridArcadeEnabled";
 const DIFF_VIEWER_KEY = "monocode.diffViewer";
 const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
+const AUTOSAVE_KEY = "monocode.autosave";
 const FILE_TAB_MODE_KEY = "monocode.fileTabMode";
 const FOLLOW_UP_BEHAVIOR_KEY = "monocode.followUpBehavior";
 const TAB_ANIMATIONS_KEY = "monocode.tabAnimationsEnabled";
@@ -483,6 +487,21 @@ describe("format on save setting", () => {
   });
 });
 
+describe("autosave setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem(AUTOSAVE_KEY);
+  });
+
+  it("defaults to off and persists changes", () => {
+    expect(AUTOSAVE_DEFAULT).toBe(false);
+    expect(loadAutosave()).toBe(false);
+    saveAutosave(true);
+    expect(localStorage.getItem(AUTOSAVE_KEY)).toBe("1");
+    expect(loadAutosave()).toBe(true);
+  });
+});
+
 describe("diff viewer setting", () => {
   beforeEach(mockLocalStorage);
   afterEach(() => {
@@ -589,7 +608,9 @@ describe("settings navigation", () => {
       "keybindings",
       "chat",
       "providers",
+      "mcp",
       "skills",
+      "monos",
       "inbox",
       "archive",
       "worktrees",

@@ -1,5 +1,7 @@
 import type {
+  Block,
   HarnessId,
+  TaskListMeta,
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -81,6 +83,8 @@ export type HarnessAdapter = {
     cwd: string,
     providerAccountId?: string,
   ): void;
+  /** Seed provider task state from a restored session's persisted panels. */
+  restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
@@ -222,7 +226,13 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       });
     activeTurnSessions.add(input.sessionId);
     try {
-      await adapter.sendTurn(input);
+      await adapter.sendTurn({
+        ...input,
+        onAccepted: () => {
+          input.onEvent({ type: "turn.ready" });
+          input.onAccepted?.();
+        },
+      });
     } finally {
       activeTurnSessions.delete(input.sessionId);
       if (controlled)
@@ -363,13 +373,16 @@ export function bindHarnessSession(
   providerSessionId: string,
   cwd: string,
   providerAccountId?: string,
+  /** Restored transcript, so the adapter can reseed its task state. */
+  blocks?: Block[],
 ): void {
-  getHarness(harness)?.bindSession(
-    threadId,
-    providerSessionId,
-    cwd,
-    providerAccountId,
+  const adapter = getHarness(harness);
+  adapter?.bindSession(threadId, providerSessionId, cwd, providerAccountId);
+  if (!blocks || !adapter?.restoreTaskLists) return;
+  const lists = blocks.flatMap((block) =>
+    block.role === "tasks" && block.taskList ? [block.taskList] : [],
   );
+  if (lists.length > 0) adapter.restoreTaskLists(threadId, lists);
 }
 
 /**
@@ -377,8 +390,10 @@ export function bindHarnessSession(
  * Boot used to refresh every adapter; that spawned unused CLIs (Pi with
  * extensions can sit at ~1GB) even when the workspace never touched them.
  */
+/** `force` re-reads a catalog that already loaded, e.g. after a CLI update. */
 export async function refreshHarnessCatalogs(
   ids: Iterable<HarnessId>,
+  options?: { force?: boolean },
 ): Promise<void> {
   const wanted = new Set(ids);
   if (wanted.size === 0) return;
@@ -386,7 +401,8 @@ export async function refreshHarnessCatalogs(
     [...adapters.values()]
       .filter((adapter) => wanted.has(adapter.id))
       .map(async (adapter) => {
-        if (!adapter.refreshCatalog || hasLiveCatalog(adapter.id)) return;
+        if (!adapter.refreshCatalog) return;
+        if (!options?.force && hasLiveCatalog(adapter.id)) return;
         await adapter.refreshCatalog().catch((error: unknown) => {
           console.debug(`[monocode] ${adapter.id} catalog`, error);
         });

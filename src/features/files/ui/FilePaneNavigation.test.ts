@@ -227,7 +227,10 @@ describe("file pane source navigation", () => {
       await act(async () => {
         if (interaction === "selection")
           view.dispatch({ selection: { anchor: 0 } });
-        else button.focus();
+        else {
+          view.focus();
+          button.focus();
+        }
       });
       const focus = vi.spyOn(view, "focus");
 

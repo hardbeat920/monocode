@@ -69,6 +69,12 @@ fn parse_shortcut(value: &str) -> Result<Shortcut, String> {
 #[serde(rename_all = "camelCase")]
 pub struct QuickLaunch {
     prompt: String,
+    /// Create an unsent user draft instead of starting an agent turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    draft: bool,
+    /// Turn mode picked with a leading composer command, e.g. `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intent: Option<String>,
     cwd: String,
     harness: String,
     /// Absent means the harness's default model.
@@ -553,7 +559,7 @@ fn show(app: &AppHandle, panel: &WebviewWindow) {
 }
 
 /// Restore focus without resetting a draft or moving the panel after capture.
-fn present(panel: &WebviewWindow) {
+pub(crate) fn present(panel: &WebviewWindow) {
     match crate::macos::ns_window(panel) {
         Some(ns_window) if is_panel(&ns_window) => {
             ns_window.orderFrontRegardless();
@@ -626,7 +632,7 @@ fn is_panel(ns_window: &NSWindow) -> bool {
 
 /// Swap Tao's window class for a non-activating panel subclass in place, the
 /// way tauri-nspanel does. Tao and wry keep their delegate and views.
-fn make_panel(window: &WebviewWindow) {
+pub(crate) fn make_panel(window: &WebviewWindow) {
     let Some(ns_window) = crate::macos::ns_window(window) else {
         return;
     };

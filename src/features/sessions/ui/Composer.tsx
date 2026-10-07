@@ -3,18 +3,12 @@ import {
   AiIdea,
   Check,
   CircleDashed,
-  CornerDownRight,
   CursorMagicSelection,
   FilePlus,
-  ListEnd,
-  Pause,
-  Pencil,
-  Play,
   Plus,
   Share,
   Square,
   StickyNote,
-  Trash2,
   X,
 } from "../../../shared/ui/icons";
 import {
@@ -29,10 +23,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   attachmentsFromFiles,
-  attachmentsFromPaths,
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
@@ -44,10 +36,7 @@ import {
   messageFilesFromClipboard,
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
-import {
-  EXPLORER_FILE_POINTER_DRAG_EVENT,
-  type ExplorerFilePointerDragDetail,
-} from "../../../shared/lib/drag";
+import { useFileDrop } from "../hooks/useFileDrop";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   loadProjectFiles,
@@ -121,12 +110,14 @@ import {
 import type { Worktree } from "../../source-control/model/worktrees";
 import { CwdPicker } from "../../projects/ui/CwdPicker";
 import { FileMentionPicker } from "./FileMentionPicker";
+import { McpServerPicker } from "./McpServerPicker";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { InboxMiniCard } from "../../inbox/ui/InboxMiniCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
+import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
@@ -159,6 +150,18 @@ import {
   OPERATOR_COMMAND,
 } from "../model/operatorCommand";
 import {
+  consumeOrchestratorCommand,
+  ORCHESTRATOR_COMMAND,
+} from "../model/orchestratorCommand";
+import { consumeDraftCommand, DRAFT_COMMAND } from "../model/draftCommand";
+import {
+  leadingModeCommand,
+  MODE_COMMAND_INDENT,
+  ModeCommandPill,
+  ModeCommandText,
+  type ModeCommandToken,
+} from "./modeCommands";
+import {
   BTW_COMMAND,
   consumeBtwCommand,
   consumeBtwPrefix,
@@ -177,6 +180,22 @@ import {
   type SessionFolder,
 } from "../model/sessionFolders";
 import { SessionFolderPicker } from "./SessionFolderPicker";
+import { MCP_COMMAND, isMcpCommand } from "../model/mcpCommand";
+import {
+  mcpContextText,
+  mcpTagParts,
+  newMcpTag,
+  taggedMcpServers,
+  type McpTag,
+} from "../model/mcpPicker";
+import { getComposerMcpTags, setComposerMcpTags } from "../model/draftCache";
+import { type McpConnection } from "../../settings/model/mcp";
+import {
+  getCachedMcpSettings,
+  loadMcpSettings,
+  subscribeMcpSettings,
+  type McpSettingsSnapshot,
+} from "../../settings/model/mcpSettingsCache";
 import type { LastTurnRecall } from "../model/editLastTurn";
 
 type Props = {
@@ -305,172 +324,6 @@ function ToolButton({
   );
 }
 
-function MessageQueue({
-  messages,
-  status,
-  onDelete,
-  onEdit,
-  onEditingChange,
-  onSteer,
-  onResume,
-}: {
-  messages: QueuedMessage[];
-  status?: MessageQueueStatus;
-  onDelete?: (messageId: string) => void;
-  onEdit?: (messageId: string, text: string) => void;
-  onEditingChange?: (messageId?: string) => void;
-  onSteer?: (messageId: string) => void;
-  onResume?: () => void;
-}) {
-  const [editingId, setEditingId] = useState<string>();
-  const [editDraft, setEditDraft] = useState("");
-  const onEditingChangeRef = useRef(onEditingChange);
-  onEditingChangeRef.current = onEditingChange;
-  const editingIdRef = useRef(editingId);
-  editingIdRef.current = editingId;
-  useEffect(() => {
-    return () => {
-      if (editingIdRef.current) onEditingChangeRef.current?.();
-    };
-  }, []);
-  if (messages.length === 0) return null;
-  const paused = status === "paused";
-
-  const startEdit = (message: QueuedMessage) => {
-    setEditingId(message.id);
-    setEditDraft(message.text);
-    onEditingChange?.(message.id);
-  };
-  const cancelEdit = () => {
-    setEditingId(undefined);
-    setEditDraft("");
-    onEditingChange?.();
-  };
-  const saveEdit = (message: QueuedMessage) => {
-    if (!editDraft.trim() && message.attachments.length === 0) return;
-    onEdit?.(message.id, editDraft);
-    setEditingId(undefined);
-    setEditDraft("");
-  };
-
-  return (
-    <div className="px-2 text-content/55" data-message-queue>
-      <div
-        className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
-        data-message-queue-card
-      >
-        {paused ? (
-          <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
-            <Pause className="size-3.5" />
-            <span className="min-w-0 flex-1 truncate">
-              Queue paused because you interrupted
-            </span>
-            <button
-              type="button"
-              onClick={onResume}
-              className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
-            >
-              <Play className="size-3.5" />
-              Resume
-            </button>
-          </div>
-        ) : null}
-        {messages.map((message, index) => {
-          const editing = editingId === message.id;
-          const label =
-            message.text.trim() ||
-            `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
-          return (
-            <div
-              key={message.id}
-              className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-stroke" : ""
-              }`}
-            >
-              <ListEnd className="size-3.5 shrink-0" />
-              {editing ? (
-                <>
-                  <textarea
-                    autoFocus
-                    aria-label="Edit queued message"
-                    value={editDraft}
-                    rows={1}
-                    onChange={(event) => setEditDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isImeComposition(event.nativeEvent)) return;
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelEdit();
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        saveEdit(message);
-                      }
-                    }}
-                    className="min-h-6 min-w-0 flex-1 resize-none rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] text-content outline-none focus:border-content/30"
-                  />
-                  <button
-                    type="button"
-                    title="Save queued message"
-                    aria-label="Save queued message"
-                    disabled={
-                      !editDraft.trim() && message.attachments.length === 0
-                    }
-                    onClick={() => saveEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
-                  >
-                    <Check className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Cancel queued message edit"
-                    aria-label="Cancel queued message edit"
-                    onClick={cancelEdit}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 truncate text-content/80">
-                    {label}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onSteer?.(message.id)}
-                    className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
-                  >
-                    <CornerDownRight className="size-3.5" />
-                    Steer
-                  </button>
-                  <button
-                    type="button"
-                    title="Edit queued message"
-                    aria-label="Edit queued message"
-                    onClick={() => startEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Pencil className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Remove queued message"
-                    aria-label="Remove queued message"
-                    onClick={() => onDelete?.(message.id)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function Composer({
   enabled = true,
   focused,
@@ -564,15 +417,20 @@ export function Composer({
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
   const draftResetTokenRef = useRef(draftResetToken);
-  /** Bumped when the draft is cleared, so a late paste cannot land on the next one. */
+  /** Bumped when the draft is cleared, so a late file read cannot land on the next one. */
   const pasteGenerationRef = useRef(0);
-  /** Native and file pastes still reading when Send is pressed. */
+  /** Pasted and dropped files still reading when Send is pressed. */
   const pasteFlightRef = useRef<Promise<void> | null>(null);
   const submitLockRef = useRef(false);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  // React rewrites a textarea's text node whenever defaultValue changes, and
+  // WebKit then resets the field, committing any IME composition. Parents
+  // re-render with the latest draft (remote sessions on every poll), so keep
+  // the mount-time value; the effect below applies later changes.
+  const [mountDraft] = useState(initialDraft);
   const { branches: draftBranches } = useProjectBranchesState(
     executionCwd,
     draftWorkspace && enabled && !busy,
@@ -606,7 +464,6 @@ export function Composer({
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pasteError, setPasteError] = useState<string | null>(null);
-  const [fileDrag, setFileDrag] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
   const [operatorSelected, setOperatorSelected] = useState(false);
@@ -618,6 +475,15 @@ export function Composer({
   const [sessionFolderOpen, setSessionFolderOpen] = useState(false);
   const [sessionFolders, setSessionFolders] = useState<SessionFolder[]>([]);
   const [sessionFolderSelected, setSessionFolderSelected] = useState(false);
+  const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
+  const [mcpConnections, setMcpConnections] = useState<McpConnection[]>([]);
+  const [mcpStatus, setMcpStatus] = useState<Map<string, string>>(new Map());
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [mcpError, setMcpError] = useState("");
+  const [selectedMcp, setSelectedMcp] = useState<McpTag[]>(() =>
+    sessionId ? getComposerMcpTags(sessionId) : [],
+  );
+  const mcpInsertAt = useRef<number | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
   const remote = remoteSession;
@@ -662,7 +528,7 @@ export function Composer({
     !noteCard &&
     !handoffCard;
   const skillPickerOpen = creatingSkill || slash !== null;
-  const pickerOpen = skillPickerOpen || sessionFolderOpen;
+  const pickerOpen = skillPickerOpen || sessionFolderOpen || mcpPickerOpen;
   const skillCatalog = useComposerSkills({
     harness,
     executionCwd: localCwd,
@@ -676,8 +542,11 @@ export function Composer({
         ? [...(remoteFeatures?.plan ? [PLAN_COMMAND] : []), COMPACT_COMMAND]
         : [
             SESSION_FOLDER_COMMAND,
+            MCP_COMMAND,
             OPERATOR_COMMAND,
+            ...(hideTopBar ? [] : [ORCHESTRATOR_COMMAND]),
             PLAN_COMMAND,
+            ...(canSaveDraft && onSaveDraft ? [DRAFT_COMMAND] : []),
             COMPACT_COMMAND,
             ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
             ...skills.filter(
@@ -689,10 +558,21 @@ export function Composer({
                   (skill.name !== PLAN_COMMAND.name &&
                     skill.name !== COMPACT_COMMAND.name &&
                     skill.name !== SESSION_FOLDER_COMMAND.name &&
+                    skill.name !== MCP_COMMAND.name &&
+                    skill.name !== ORCHESTRATOR_COMMAND.name &&
+                    skill.name !== DRAFT_COMMAND.name &&
                     skill.name !== BTW_COMMAND.name)),
             ),
           ],
-    [harness, skills, remote, remoteFeatures?.plan],
+    [
+      harness,
+      skills,
+      remote,
+      remoteFeatures?.plan,
+      hideTopBar,
+      canSaveDraft,
+      onSaveDraft,
+    ],
   );
   const skillLimit = hasNativeCommands(harness)
     ? Number.POSITIVE_INFINITY
@@ -705,6 +585,12 @@ export function Composer({
     () => new Set(slashItems.map((skill) => skill.invocation)),
     [slashItems],
   );
+  const leadingMode = leadingModeCommand(draft, skillNames);
+  const modeIndent = leadingMode ? MODE_COMMAND_INDENT : undefined;
+  useLayoutEffect(() => {
+    // The indent can rewrap the first line after the input already resized.
+    if (ref.current) resizeComposer(ref.current);
+  }, [modeIndent]);
   const mentionFiles = useMemo(
     () => (notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files),
     [files, notes, notesEnabled],
@@ -744,6 +630,66 @@ export function Composer({
     [inboxCard, noteCard, handoffCard],
   );
 
+  // A leading mode command in the text shows the same pill as picking the mode.
+  const operatorActive =
+    operatorSelected || leadingMode?.name === OPERATOR_COMMAND.name;
+  const orchestrationActive =
+    orchestrationSelected || leadingMode?.name === ORCHESTRATOR_COMMAND.name;
+  const draftActive = draftSelected || leadingMode?.name === DRAFT_COMMAND.name;
+  const planActive = planSelected || leadingMode?.name === PLAN_COMMAND.name;
+
+  /** Turning a mode off also drops its leading command from the text. */
+  const clearLeadingMode = (name: string) => {
+    const el = ref.current;
+    if (!el || leadingModeCommand(el.value, skillNames)?.name !== name) return;
+    const next = el.value.replace(/^\/[a-z]+\s?/, "");
+    el.value = next;
+    resizeComposer(el);
+    el.setSelectionRange(0, 0);
+    setDraft(next);
+    onDraftChange?.(next);
+    syncHasValue(next, attachmentsRef.current);
+  };
+
+  const openMcpPicker = useCallback(() => {
+    setMcpConnections([]);
+    setMcpStatus(new Map());
+    setMcpError("");
+    setMcpLoading(true);
+    setMcpPickerOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mcpPickerOpen) return;
+    const apply = (snapshot: McpSettingsSnapshot) => {
+      setMcpConnections(snapshot.servers);
+      setMcpStatus(
+        new Map(
+          snapshot.servers
+            .filter((server) => server.provider === "claude")
+            .map((server) => [server.name, server.status]),
+        ),
+      );
+      setMcpError(snapshot.error);
+      setMcpLoading(false);
+    };
+    const stop = subscribeMcpSettings(executionCwd, apply);
+    const cached = getCachedMcpSettings(executionCwd);
+    if (cached) apply(cached);
+    void loadMcpSettings(executionCwd, false, {
+      claudeHealth: harness === "claude",
+    });
+    return stop;
+  }, [executionCwd, harness, mcpPickerOpen]);
+
+  useEffect(() => {
+    setMcpPickerOpen(false);
+  }, [executionCwd, harness, sessionId]);
+
+  useEffect(() => {
+    if (sessionId) setComposerMcpTags(sessionId, selectedMcp);
+  }, [sessionId, selectedMcp]);
+
   useEffect(() => {
     syncHasValue(ref.current?.value ?? "", attachmentsRef.current);
   }, [inboxCard, noteCard, handoffCard, syncHasValue]);
@@ -760,6 +706,60 @@ export function Composer({
       ref.current?.focus();
     },
     [harness, syncHasValue],
+  );
+  // Native listener registration crosses several IPC hops. Keep changing
+  // composer callbacks and capabilities out of its subscription dependencies.
+  const fileDropStateRef = useRef({
+    attachmentsSupported,
+    remote,
+    addAttachments,
+  });
+  fileDropStateRef.current = { attachmentsSupported, remote, addAttachments };
+
+  const rememberAttachmentRead = useCallback((work: Promise<void>) => {
+    const flight = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    const previous = pasteFlightRef.current;
+    const joined = previous ? previous.then(() => flight) : flight;
+    pasteFlightRef.current = joined;
+    void joined.finally(() => {
+      if (pasteFlightRef.current === joined) pasteFlightRef.current = null;
+    });
+  }, []);
+
+  const readDroppedAttachments = useCallback(
+    (read: () => Promise<Attachment[]>) => {
+      const generation = pasteGenerationRef.current;
+      setPasteError(null);
+      rememberAttachmentRead(
+        read()
+          .then((incoming) => {
+            if (
+              pasteGenerationRef.current !== generation ||
+              !fileDropStateRef.current.attachmentsSupported
+            ) {
+              incoming.forEach(revokeAttachment);
+              return;
+            }
+            if (incoming.length === 0) {
+              setPasteError(
+                "Nothing to attach from that drop — the file may have been moved, renamed, or deleted.",
+              );
+              return;
+            }
+            fileDropStateRef.current.addAttachments(incoming);
+          })
+          .catch((reason: unknown) => {
+            if (pasteGenerationRef.current !== generation) return;
+            setPasteError(
+              reason instanceof Error ? reason.message : String(reason),
+            );
+          }),
+      );
+    },
+    [rememberAttachmentRead],
   );
 
   const removeAttachment = useCallback(
@@ -784,6 +784,7 @@ export function Composer({
     return () => {
       queueMicrotask(() => {
         if (attachmentLifecycleRef.current !== lifecycle) return;
+        pasteGenerationRef.current += 1;
         for (const file of attachmentsRef.current) {
           if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
             revokeAttachment(file);
@@ -930,6 +931,8 @@ export function Composer({
     setOrchestrationSelected(false);
     setSessionFolderSelected(false);
     setSessionFolderOpen(false);
+    setMcpPickerOpen(false);
+    setSelectedMcp([]);
     setPlusOpen(false);
     setSlash(null);
     setMention(null);
@@ -1036,8 +1039,19 @@ export function Composer({
         setCreatingSkill(false);
         return;
       }
-      const planCommand =
-        skill.kind === "builtin" && skill.name === PLAN_COMMAND.name;
+      if (skill.kind === "builtin" && skill.name === MCP_COMMAND.name) {
+        const next = `${el.value.slice(0, token.start)}${el.value.slice(token.end).replace(/^\s/, "")}`;
+        el.value = next;
+        resizeComposer(el);
+        mcpInsertAt.current = token.start;
+        el.setSelectionRange(token.start, token.start);
+        setDraft(next);
+        onDraftChange?.(next);
+        syncHasValue(next, attachmentsRef.current);
+        setSlash(null);
+        openMcpPicker();
+        return;
+      }
       const sessionFolderCommand =
         skill.kind === "builtin" &&
         skill.name === SESSION_FOLDER_COMMAND.name &&
@@ -1060,16 +1074,10 @@ export function Composer({
         openSessionFolderPicker();
         return;
       }
-      const next = planCommand
-        ? `${el.value.slice(0, token.start)}${el.value
-            .slice(token.end)
-            .replace(/^\s/, "")}`
-        : replaceSlashToken(el.value, token, skill.invocation);
+      const next = replaceSlashToken(el.value, token, skill.invocation);
       el.value = next;
       resizeComposer(el);
-      let cursor = planCommand
-        ? token.start
-        : token.start + skill.invocation.length + 1;
+      let cursor = token.start + skill.invocation.length + 1;
       if (next[cursor] === " ") cursor += 1;
       el.setSelectionRange(cursor, cursor);
       setDraft(next);
@@ -1079,16 +1087,13 @@ export function Composer({
       if (skill.kind === "builtin" && skill.name === BTW_COMMAND.name) {
         enterBtwFromPrefix(el);
       }
-      if (planCommand) {
-        setPlanSelected(true);
-        setOperatorSelected(false);
-        setOrchestrationSelected(false);
-      }
       el.focus();
     },
     [
       enterBtwFromPrefix,
+      onDraftChange,
       onPlaceInFolder,
+      openMcpPicker,
       openSessionFolderPicker,
       syncHasValue,
     ],
@@ -1135,7 +1140,7 @@ export function Composer({
 
     if (
       composer?.querySelector(
-        "[data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-composer-plus], [data-question-form]",
+        "[data-skill-picker], [data-session-folder-picker], [data-mention-picker], [data-mcp-picker], [data-composer-plus], [data-question-form]",
       )
     )
       return;
@@ -1151,130 +1156,13 @@ export function Composer({
     ref.current?.focus();
   }, [disabled, focused, question, busy, focusToken]);
 
-  useEffect(() => {
-    if (!enabled || disabled) {
-      setFileDrag(false);
-      return;
-    }
-    const dropRoot = () =>
-      boxRef.current?.closest("[data-session-drop]") as HTMLElement | null;
-    let nativeDropAt = 0;
-
-    const toClientPoint = (x: number, y: number) => {
-      const scale = window.devicePixelRatio || 1;
-      // Tauri types this as PhysicalPosition, but macOS wry reports logical
-      // points. Only scale down when the point sits outside the CSS viewport.
-      if (scale !== 1 && (x > window.innerWidth || y > window.innerHeight)) {
-        return { x: x / scale, y: y / scale };
-      }
-      return { x, y };
-    };
-
-    const overTarget = (x: number, y: number) => {
-      const root = dropRoot();
-      if (!root) return false;
-      const point = toClientPoint(x, y);
-      const rect = root.getBoundingClientRect();
-      return (
-        point.x >= rect.left &&
-        point.x <= rect.right &&
-        point.y >= rect.top &&
-        point.y <= rect.bottom
-      );
-    };
-
-    const onDragOver = (event: DragEvent) => {
-      const data = event.dataTransfer;
-      if (!hasFiles(data)) return;
-      event.preventDefault();
-      if (!attachmentsSupported) return;
-      data.dropEffect = "copy";
-      setFileDrag(true);
-    };
-    const onDragLeave = (event: DragEvent) => {
-      const root = dropRoot();
-      if (!root) return;
-      const next = event.relatedTarget as Node | null;
-      if (next && root.contains(next)) return;
-      setFileDrag(false);
-    };
-    const onDrop = (event: DragEvent) => {
-      const data = event.dataTransfer;
-      if (!hasFiles(data)) return;
-      event.preventDefault();
-      setFileDrag(false);
-      if (!attachmentsSupported) return;
-      if (Date.now() - nativeDropAt < 250) return;
-      const files = [...data.files];
-      if (files.length === 0) return;
-      void attachmentsFromFiles(files).then(addAttachments);
-    };
-
-    const onExplorerFilePointerDrag = (event: Event) => {
-      if (remote) return;
-      const detail = (event as CustomEvent<ExplorerFilePointerDragDetail>)
-        .detail;
-      if (!detail || detail.type === "end") {
-        setFileDrag(false);
-        return;
-      }
-      const over = overTarget(detail.x, detail.y);
-      if (detail.type === "move") {
-        setFileDrag(over && attachmentsSupported);
-        return;
-      }
-      setFileDrag(false);
-      if (!over || !attachmentsSupported) return;
-      void attachmentsFromPaths([detail.path]).then(addAttachments);
-    };
-
-    const root = dropRoot();
-    root?.addEventListener("dragover", onDragOver);
-    root?.addEventListener("dragleave", onDragLeave);
-    root?.addEventListener("drop", onDrop);
-    window.addEventListener(
-      EXPLORER_FILE_POINTER_DRAG_EVENT,
-      onExplorerFilePointerDrag,
-    );
-
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "leave") {
-          setFileDrag(false);
-          return;
-        }
-        const { x, y } = event.payload.position;
-        const over = overTarget(x, y);
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setFileDrag(over && attachmentsSupported);
-          return;
-        }
-        if (event.payload.type !== "drop") return;
-        setFileDrag(false);
-        if (!over || !attachmentsSupported) return;
-        nativeDropAt = Date.now();
-        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-      root?.removeEventListener("dragover", onDragOver);
-      root?.removeEventListener("dragleave", onDragLeave);
-      root?.removeEventListener("drop", onDrop);
-      window.removeEventListener(
-        EXPLORER_FILE_POINTER_DRAG_EVENT,
-        onExplorerFilePointerDrag,
-      );
-      unlisten?.();
-    };
-  }, [addAttachments, attachmentsSupported, enabled, remote]);
+  const fileDrag = useFileDrop({
+    anchor: boxRef,
+    enabled: enabled && !disabled,
+    state: fileDropStateRef,
+    read: readDroppedAttachments,
+    onError: setPasteError,
+  });
   const restoreDraft = useCallback(
     (
       text: string,
@@ -1285,8 +1173,7 @@ export function Composer({
       onDraftChange?.(text);
       if (ref.current) {
         ref.current.value = text;
-        ref.current.style.height = "auto";
-        ref.current.style.height = `${Math.min(ref.current.scrollHeight, 240)}px`;
+        resizeComposer(ref.current);
       }
 
       const nextIds = new Set(nextAttachments.map((file) => file.id));
@@ -1334,6 +1221,8 @@ export function Composer({
     setPlusOpen(false);
     setSlash(null);
     setMention(null);
+    setMcpPickerOpen(false);
+    setSelectedMcp([]);
     syncHasValue("", []);
     ref.current?.focus();
   }, [onDraftChange, onEditingLastTurnChange, syncHasValue]);
@@ -1377,18 +1266,6 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const rememberPaste = (work: Promise<void>) => {
-    const flight = work.then(
-      () => undefined,
-      () => undefined,
-    );
-    const previous = pasteFlightRef.current;
-    const joined = previous ? previous.then(() => flight) : flight;
-    pasteFlightRef.current = joined;
-    void joined.finally(() => {
-      if (pasteFlightRef.current === joined) pasteFlightRef.current = null;
-    });
-  };
   const submit = (value: string) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
@@ -1407,10 +1284,30 @@ export function Composer({
     }
     const value = ref.current?.value ?? submittedValue;
     if (disabled || worktreeRemoved) return;
-    if (draftSelected && onSaveDraft) {
+    if (isMcpCommand(value)) {
+      mcpInsertAt.current = 0;
+      if (ref.current) {
+        ref.current.value = "";
+        ref.current.style.height = "auto";
+      }
+      setDraft("");
+      onDraftChange?.("");
+      setSlash(null);
+      syncHasValue("", attachments);
+      openMcpPicker();
+      return;
+    }
+    const draftCommand = canSaveDraft
+      ? consumeDraftCommand(value)
+      : { text: value, matched: false };
+    if ((draftSelected || draftCommand.matched) && onSaveDraft) {
       const files = attachmentsRef.current;
-      if (!value.trim() && files.length === 0) return;
-      const accepted = onSaveDraft(value, files);
+      const text = draftCommand.text;
+      if (!text.trim() && files.length === 0) return;
+      const accepted = onSaveDraft(
+        mcpContextText(taggedMcpServers(text, selectedMcp), text),
+        files,
+      );
       if (accepted === false || !ref.current) return;
       pasteGenerationRef.current += 1;
       ref.current.value = "";
@@ -1419,6 +1316,7 @@ export function Composer({
       onDraftChange?.("");
       setAttachments([]);
       setDraftSelected(false);
+      setSelectedMcp([]);
       setPlusOpen(false);
       setSlash(null);
       setMention(null);
@@ -1481,9 +1379,13 @@ export function Composer({
         ? folderCommand.text
         : value,
     );
-    const text = isNativeCommandPrompt(command.text, harness)
-      ? command.text
-      : composeInboxMessage(inboxCard, command.text);
+    const orchestratorCommand =
+      !remote && !hideTopBar && !command.planning
+        ? consumeOrchestratorCommand(command.text)
+        : { text: command.text, matched: false };
+    const text = isNativeCommandPrompt(orchestratorCommand.text, harness)
+      ? orchestratorCommand.text
+      : composeInboxMessage(inboxCard, orchestratorCommand.text);
     const submittedText =
       operatorSelected && !consumeOperatorCommand(text).matched
         ? `/operator ${text}`
@@ -1498,26 +1400,35 @@ export function Composer({
     const resendBorrowedAttachmentIds = new Set(
       borrowedAttachmentIdsRef.current,
     );
+    const resendSelectedMcp = selectedMcp;
     onDraftChange?.("");
-    const accepted = onSubmit(submittedText, files, {
-      intent:
-        planSelected || command.planning
-          ? "plan"
-          : orchestrationSelected
-            ? "orchestrate"
-            : "default",
-      ...(resendEdited
-        ? {
-            resendEdited: true,
-            onResendRejected: ({ providerRewound }) => {
-              if (draftRevisionRef.current !== resendDraftRevision) return;
-              restoreDraft(text, files, resendBorrowedAttachmentIds);
-              setResendEdited(!providerRewound);
-              onEditingLastTurnChange?.(!providerRewound);
-            },
-          }
-        : {}),
-    });
+    const accepted = onSubmit(
+      mcpContextText(
+        taggedMcpServers(submittedText, selectedMcp),
+        submittedText,
+      ),
+      files,
+      {
+        intent:
+          planSelected || command.planning
+            ? "plan"
+            : orchestrationSelected || orchestratorCommand.matched
+              ? "orchestrate"
+              : "default",
+        ...(resendEdited
+          ? {
+              resendEdited: true,
+              onResendRejected: ({ providerRewound }) => {
+                if (draftRevisionRef.current !== resendDraftRevision) return;
+                restoreDraft(text, files, resendBorrowedAttachmentIds);
+                setSelectedMcp(resendSelectedMcp);
+                setResendEdited(!providerRewound);
+                onEditingLastTurnChange?.(!providerRewound);
+              },
+            }
+          : {}),
+      },
+    );
     // The app can reject a turn before it is recorded (for example while an
     // orchestration is paused). Keep the user's text, files and selected mode
     // intact so resolving the blocker never destroys their work.
@@ -1535,6 +1446,7 @@ export function Composer({
     borrowedAttachmentIdsRef.current.clear();
     attachmentsRef.current = [];
     setAttachments([]);
+    setSelectedMcp([]);
     setResendEdited(false);
     onEditingLastTurnChange?.(false);
     setPlanSelected(false);
@@ -1621,6 +1533,7 @@ export function Composer({
       e.key === "Enter" &&
       !e.shiftKey &&
       (isCompactCommand(e.currentTarget.value) ||
+        isMcpCommand(e.currentTarget.value) ||
         isSessionFolderCommand(e.currentTarget.value))
     ) {
       e.preventDefault();
@@ -1721,7 +1634,7 @@ export function Composer({
       const text = e.clipboardData.getData("text/plain");
       if (captured) insertRestoredText(captured, text);
       if (!attachmentsSupported) return;
-      rememberPaste(
+      rememberAttachmentRead(
         attachmentsFromFiles(messageFiles).then((pasted) => {
           if (pasteGenerationRef.current !== generation) {
             pasted.forEach(revokeAttachment);
@@ -1750,7 +1663,7 @@ export function Composer({
       const captured = isFileReferenceText(text)
         ? captureDraft(e.currentTarget)
         : null;
-      rememberPaste(
+      rememberAttachmentRead(
         nativeClipboardAttachments(text)
           .then(({ files: pasted, warning }) => {
             if (pasteGenerationRef.current !== generation) {
@@ -1777,7 +1690,7 @@ export function Composer({
     e.preventDefault();
     if (!attachmentsSupported) return;
     const generation = pasteGenerationRef.current;
-    rememberPaste(
+    rememberAttachmentRead(
       attachmentsFromFiles(files).then((pasted) => {
         if (pasteGenerationRef.current !== generation) {
           pasted.forEach(revokeAttachment);
@@ -1829,7 +1742,65 @@ export function Composer({
         onResume={onResumeQueue}
       />
       <div className="relative overflow-visible">
-        {sessionFolderOpen ? (
+        {mcpPickerOpen ? (
+          <div className="absolute inset-x-0 bottom-full z-30 mb-1">
+            <McpServerPicker
+              connections={mcpConnections}
+              harness={harness}
+              claudeStatus={mcpStatus}
+              loading={mcpLoading}
+              error={mcpError}
+              onPick={(server) => {
+                const el = ref.current;
+                if (!el) return;
+                const previous = selectedMcp.find(
+                  (item) =>
+                    item.server.provider === server.provider &&
+                    item.server.name === server.name &&
+                    item.server.scope === server.scope &&
+                    item.server.configPath === server.configPath,
+                );
+                const tag = previous ?? newMcpTag(server, selectedMcp);
+                if (!previous) setSelectedMcp((current) => [...current, tag]);
+                if (!previous || !taggedMcpServers(el.value, [tag]).length) {
+                  const at = Math.min(
+                    mcpInsertAt.current ?? el.selectionStart,
+                    el.value.length,
+                  );
+                  const before = el.value.slice(0, at);
+                  const after = el.value.slice(at);
+                  const leading = before && !/\s$/.test(before) ? " " : "";
+                  const trailing = after && /^\s/.test(after) ? "" : " ";
+                  const insertion = `${leading}${tag.token}${trailing}`;
+                  const next = before + insertion + after;
+                  el.value = next;
+                  resizeComposer(el);
+                  el.setSelectionRange(
+                    at + insertion.length,
+                    at + insertion.length,
+                  );
+                  draftRevisionRef.current += 1;
+                  setDraft(next);
+                  syncHasValue(next, attachmentsRef.current);
+                  setMention(null);
+                }
+                mcpInsertAt.current = null;
+                setMcpPickerOpen(false);
+                el.focus();
+              }}
+              onManage={() => {
+                mcpInsertAt.current = null;
+                setMcpPickerOpen(false);
+                window.dispatchEvent(new Event("monocode:open-mcp-settings"));
+              }}
+              onDismiss={(reason) => {
+                mcpInsertAt.current = null;
+                setMcpPickerOpen(false);
+                if (reason === "escape") ref.current?.focus();
+              }}
+            />
+          </div>
+        ) : sessionFolderOpen ? (
           <div className="absolute inset-x-0 bottom-full z-30 mb-1">
             <SessionFolderPicker
               folders={sessionFolders}
@@ -2068,22 +2039,26 @@ export function Composer({
             <div
               ref={highlightRef}
               aria-hidden
+              style={{ textIndent: modeIndent }}
               className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
             >
               <ComposerHighlight
                 text={draft}
+                mode={leadingMode}
                 names={skillNames}
                 mentions={mentionIndex.labels}
+                mcpTags={selectedMcp}
               />
             </div>
             <textarea
               ref={ref}
               data-composer-empty={navigationEmpty ? "true" : undefined}
+              style={{ textIndent: modeIndent }}
               rows={1}
               spellCheck={false}
-              defaultValue={initialDraft}
+              defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
                   ? "Select a branch or worktree to continue…"
@@ -2116,6 +2091,14 @@ export function Composer({
                 resizeComposer(el);
                 draftRevisionRef.current += 1;
                 setDraft(el.value);
+                setSelectedMcp((current) => {
+                  const retained = current.filter(
+                    (tag) => taggedMcpServers(el.value, [tag]).length > 0,
+                  );
+                  return retained.length === current.length
+                    ? current
+                    : retained;
+                });
                 setPasteError(null);
                 if (
                   sessionFolderSelected &&
@@ -2179,10 +2162,11 @@ export function Composer({
                   {!remote || remoteFeatures?.plan ? (
                     <button
                       type="button"
-                      aria-pressed={planSelected}
+                      aria-pressed={planActive}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
-                        setPlanSelected((selected) => !selected);
+                        setPlanSelected(!planActive);
+                        if (planActive) clearLeadingMode(PLAN_COMMAND.name);
                         setOperatorSelected(false);
                         setOrchestrationSelected(false);
                         setDraftSelected(false);
@@ -2198,7 +2182,7 @@ export function Composer({
                           Review a plan before building
                         </span>
                       </span>
-                      {planSelected ? (
+                      {planActive ? (
                         <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
                       ) : null}
                     </button>
@@ -2206,10 +2190,13 @@ export function Composer({
                   {!remote ? (
                     <button
                       type="button"
-                      aria-pressed={operatorSelected}
+                      aria-pressed={operatorActive}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => {
-                        setOperatorSelected((selected) => !selected);
+                        setOperatorSelected(!operatorActive);
+                        if (operatorActive) {
+                          clearLeadingMode(OPERATOR_COMMAND.name);
+                        }
                         setPlanSelected(false);
                         setOrchestrationSelected(false);
                         setDraftSelected(false);
@@ -2225,7 +2212,7 @@ export function Composer({
                           Give this thread access to MonoCode
                         </span>
                       </span>
-                      {operatorSelected ? (
+                      {operatorActive ? (
                         <Check className="mt-0.5 size-3.5 shrink-0 text-sky-300/80" />
                       ) : null}
                     </button>
@@ -2233,10 +2220,13 @@ export function Composer({
                   {!remote && !hideTopBar && (
                     <button
                       type="button"
-                      aria-pressed={orchestrationSelected}
+                      aria-pressed={orchestrationActive}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => {
-                        setOrchestrationSelected((selected) => !selected);
+                        setOrchestrationSelected(!orchestrationActive);
+                        if (orchestrationActive) {
+                          clearLeadingMode(ORCHESTRATOR_COMMAND.name);
+                        }
                         setPlanSelected(false);
                         setOperatorSelected(false);
                         setDraftSelected(false);
@@ -2257,7 +2247,7 @@ export function Composer({
                           Plan and coordinate agent work
                         </span>
                       </span>
-                      {orchestrationSelected && (
+                      {orchestrationActive && (
                         <Check className="mt-0.5 size-3.5 shrink-0 text-fuchsia-300/80" />
                       )}
                     </button>
@@ -2265,10 +2255,11 @@ export function Composer({
                   {canSaveDraft && onSaveDraft ? (
                     <button
                       type="button"
-                      aria-pressed={draftSelected}
+                      aria-pressed={draftActive}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => {
-                        setDraftSelected((selected) => !selected);
+                        setDraftSelected(!draftActive);
+                        if (draftActive) clearLeadingMode(DRAFT_COMMAND.name);
                         setPlanSelected(false);
                         setOperatorSelected(false);
                         setOrchestrationSelected(false);
@@ -2284,7 +2275,7 @@ export function Composer({
                           Save this message without starting the agent
                         </span>
                       </span>
-                      {draftSelected ? (
+                      {draftActive ? (
                         <Check className="mt-0.5 size-3.5 shrink-0 text-accent" />
                       ) : null}
                     </button>
@@ -2292,71 +2283,45 @@ export function Composer({
                 </Popover>
               ) : null}
             </div>
-            {!compact && operatorSelected ? (
-              <button
-                type="button"
-                title="Turn off Operator"
-                aria-label="Turn off Operator"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
+            {!compact && operatorActive ? (
+              <ModeCommandPill
+                name={OPERATOR_COMMAND.name}
+                onClear={() => {
                   setOperatorSelected(false);
+                  clearLeadingMode(OPERATOR_COMMAND.name);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-sky-500/15 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-500/20 dark:bg-sky-400/10 dark:text-sky-200/90 dark:hover:bg-sky-400/15"
-              >
-                <CursorMagicSelection className="size-3.5" />
-                Operator
-                <X className="size-3" />
-              </button>
+              />
             ) : null}
-            {!compact && orchestrationSelected && (
-              <button
-                type="button"
-                title="Turn off Orchestrator mode"
-                aria-label="Turn off Orchestrator mode"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
+            {!compact && orchestrationActive ? (
+              <ModeCommandPill
+                name={ORCHESTRATOR_COMMAND.name}
+                onClear={() => {
                   setOrchestrationSelected(false);
+                  clearLeadingMode(ORCHESTRATOR_COMMAND.name);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-fuchsia-500/15 px-1.5 text-[11px] font-medium text-fuchsia-700 hover:bg-fuchsia-500/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200/90 dark:hover:bg-fuchsia-400/15"
-              >
-                <Share className="size-3.5" />
-                Orchestrator
-                <X className="size-3" />
-              </button>
-            )}
-            {!compact && planSelected ? (
-              <button
-                type="button"
-                title="Turn off Plan mode"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  setPlanSelected(false);
-                  ref.current?.focus();
-                }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-yellow-300/12 px-1.5 text-[11px] text-yellow-200/90 hover:bg-yellow-300/18"
-              >
-                <AiIdea className="size-3.5" />
-                Plan
-                <X className="size-3" />
-              </button>
+              />
             ) : null}
-            {!compact && draftSelected ? (
-              <button
-                type="button"
-                title="Turn off Draft mode"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  setDraftSelected(false);
+            {!compact && planActive ? (
+              <ModeCommandPill
+                name={PLAN_COMMAND.name}
+                onClear={() => {
+                  setPlanSelected(false);
+                  clearLeadingMode(PLAN_COMMAND.name);
                   ref.current?.focus();
                 }}
-                className="flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-dashed border-content/25 bg-content/5 px-1.5 text-[11px] text-content/70 hover:bg-content/10 hover:text-content"
-              >
-                <CircleDashed className="size-3.5" />
-                Draft
-                <X className="size-3" />
-              </button>
+              />
+            ) : null}
+            {!compact && draftActive ? (
+              <ModeCommandPill
+                name={DRAFT_COMMAND.name}
+                onClear={() => {
+                  setDraftSelected(false);
+                  clearLeadingMode(DRAFT_COMMAND.name);
+                  ref.current?.focus();
+                }}
+              />
             ) : null}
             <div
               className="composer-toolbar flex min-w-0 flex-1 items-center"
@@ -2430,7 +2395,7 @@ export function Composer({
                 disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}
-                label={draftSelected ? "Save draft" : "Send"}
+                label={draftActive ? "Save draft" : "Send"}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
@@ -2453,16 +2418,22 @@ export function Composer({
 
 function ComposerHighlight({
   text,
+  mode,
   names,
   mentions,
+  mcpTags,
 }: {
   text: string;
+  mode: ModeCommandToken | null;
   names: ReadonlySet<string>;
   mentions: ReadonlyMap<string, ProjectFile>;
+  mcpTags: McpTag[];
 }) {
-  const parts = skillTextParts(text, names);
+  const rest = mode ? text.slice(mode.end) : text;
+  const parts = skillTextParts(rest, names);
   return (
     <>
+      {mode ? <ModeCommandText text={text} mode={mode} /> : null}
       {parts.map((part, index) =>
         part.skill ? (
           <span key={index} className="text-skill">
@@ -2471,7 +2442,12 @@ function ComposerHighlight({
         ) : (
           // Skill tokens always end on whitespace, so each remaining run still
           // starts on a boundary `@mention` matching can rely on.
-          <MentionRuns key={index} text={part.text} mentions={mentions} />
+          <MentionRuns
+            key={index}
+            text={part.text}
+            mentions={mentions}
+            mcpTags={mcpTags}
+          />
         ),
       )}
       {text.endsWith("\n") ? "\n" : null}
@@ -2480,6 +2456,34 @@ function ComposerHighlight({
 }
 
 function MentionRuns({
+  text,
+  mentions,
+  mcpTags,
+}: {
+  text: string;
+  mentions: ReadonlyMap<string, ProjectFile>;
+  mcpTags: McpTag[];
+}) {
+  return (
+    <>
+      {mcpTagParts(text, mcpTags).map((part, index) =>
+        part.tag ? (
+          <span
+            key={index}
+            className="text-mention"
+            data-mcp-tag={part.tag.token}
+          >
+            {part.text}
+          </span>
+        ) : (
+          <FileMentionRuns key={index} text={part.text} mentions={mentions} />
+        ),
+      )}
+    </>
+  );
+}
+
+function FileMentionRuns({
   text,
   mentions,
 }: {
@@ -2496,7 +2500,9 @@ function MentionRuns({
                 lockstep; the file icon sits on top of it. */}
             <span className="relative text-transparent">
               {"@"}
-              <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+              {/* `indent-0`: a leading mode command indents the first line,
+                  and this box would otherwise inherit that indent. */}
+              <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 indent-0">
                 {part.file && isNoteMentionPath(part.file.path) ? (
                   <StickyNote className="size-3.5" strokeWidth={1.75} />
                 ) : (
@@ -2583,12 +2589,5 @@ export function ComposerAction({
     >
       <ArrowUp className="size-3.5" strokeWidth={2.25} />
     </button>
-  );
-}
-
-function hasFiles(data: DataTransfer | null): data is DataTransfer {
-  if (!data) return false;
-  return [...data.types].some(
-    (type) => type === "Files" || type === "application/x-moz-file",
   );
 }

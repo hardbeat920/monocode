@@ -1,6 +1,6 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { vi, describe, expect, it } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
 
@@ -324,6 +324,70 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("Claude Opus 5 worked for 9s");
   });
 
+  it("credits a Mono's turns to the Mono, whichever model ran them", () => {
+    const blocks: Block[] = [
+      {
+        id: "user",
+        role: "user",
+        text: "Remember this",
+        durationMs: 9_000,
+        turnModel: {
+          harness: "claude",
+          id: "claude:sonnet-5",
+          name: "Claude Sonnet 5",
+        },
+      },
+      { id: "answer", role: "assistant", text: "Remembered." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        agentName: "MonoCat",
+        harness: "claude",
+        model: "claude:opus-5",
+      }),
+    );
+
+    expect(markup).toContain("MonoCat worked for 9s");
+    expect(markup).not.toContain("Claude Sonnet 5 worked for 9s");
+  });
+
+  it("marks when a Mono's messages were sent, and keeps its footer to copy, note and time", () => {
+    const now = new Date(2026, 9, 5, 12).getTime();
+    vi.setSystemTime(now);
+    const turn = (id: string, startedAt: number): Block[] => [
+      {
+        id,
+        role: "user",
+        text: `Ask ${id}`,
+        startedAt,
+        durationMs: 2_000,
+        turnMetrics: { outputTokens: 900 },
+      },
+      { id: `${id}-answer`, role: "assistant", text: "Done." },
+    ];
+    const blocks = [
+      ...turn("yesterday", now - 26 * 60 * 60 * 1000),
+      ...turn("morning", now - 3 * 60 * 60 * 1000),
+      ...turn("soon-after", now - 3 * 60 * 60 * 1000 + 10 * 60 * 1000),
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        agentName: "MonoCat",
+        daySeparators: true,
+        hideTurnMetrics: true,
+        onSaveNote: () => {},
+      }),
+    );
+    expect(markup.match(/data-day-separator/g)).toHaveLength(2);
+    expect(markup).toContain(">Yesterday</span>");
+    expect(markup).toContain(">Today</span>");
+    expect(markup).toContain("Save as note");
+    expect(markup).not.toContain("900");
+    vi.useRealTimers();
+  });
+
   it("does not assign the current model to a legacy completed turn", () => {
     const blocks: Block[] = [
       {
@@ -581,6 +645,62 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("src/lib/session.ts");
   });
 
+  it("offers failed subagent tool results in the same error control as top-level tools", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        tool: { callId: "agent-1", kind: "agent", status: "failed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              toolKind: "execute",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("Show error details for npm test");
+  });
+
+  it("counts a failed step on a folded subagent row, so it is not hidden", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        // The run itself finished; only one of its steps did not.
+        tool: { callId: "agent-1", kind: "agent", status: "completed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            { id: "read", kind: "tool", text: "Read package.json" },
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+            { id: "fix", kind: "tool", text: "Edit src/App.tsx" },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("3 steps, 1 failed");
+  });
+
   it("opens a lone subagent straight into its own transcript", () => {
     const markup = render(
       [
@@ -710,6 +830,148 @@ describe("AgentTranscript collapsed work", () => {
       3,
     );
     expect(live).toContain("ping from #general");
+  });
+});
+
+describe("Mono inline work", () => {
+  function renderMono(blocks: Block[], busy = false) {
+    return renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        busy,
+        inlineWork: true,
+        agentName: "MonoCat",
+        onApproval: () => {},
+      }),
+    );
+  }
+
+  it.each([true, false])(
+    "keeps narration hidden and shows the final reply only after completion (busy=%s)",
+    (busy) => {
+      const blocks: Block[] = [
+        { id: "user", role: "user", text: "Check this", durationMs: 9_000 },
+        {
+          id: "intro",
+          role: "assistant",
+          text: "I will check the first part.",
+        },
+        tool("one"),
+        tool("two"),
+        {
+          id: "progress",
+          role: "assistant",
+          text: "The first part passed. Checking the next part.",
+        },
+        {
+          ...tool("three"),
+          tool: { kind: "shell", status: busy ? "in_progress" : "completed" },
+        },
+        ...(!busy
+          ? [
+              {
+                id: "answer",
+                role: "assistant" as const,
+                text: "Everything passed.",
+              },
+            ]
+          : []),
+      ];
+      const markup = renderMono(blocks, busy);
+      const header = markup.indexOf(
+        busy ? "Running command…" : "MonoCat worked for 9s",
+      );
+      expect(header).toBeGreaterThanOrEqual(markup.indexOf("MonoCat"));
+      expect(markup).not.toContain("I will check the first part.");
+      expect(markup).not.toContain(
+        "The first part passed. Checking the next part.",
+      );
+      expect(markup.match(/data-mono-work/g)).toHaveLength(1);
+      if (!busy)
+        expect(markup.indexOf("Everything passed.")).toBeGreaterThan(header);
+      expect(markup).not.toContain("hidden-detail-");
+      expect(markup).not.toContain('aria-label="Show the work"');
+      expect(markup).not.toContain("aria-expanded");
+      expect(markup).not.toContain("zen-phase-step");
+    },
+  );
+
+  it.each([true, false])(
+    "keeps a single tool call in the activity trail (busy=%s)",
+    (busy) => {
+      const markup = renderMono(
+        [
+          { id: "user", role: "user", text: "Run this", durationMs: 1_000 },
+          {
+            ...tool("single"),
+            tool: { kind: "shell", status: busy ? "in_progress" : "completed" },
+          },
+        ],
+        busy,
+      );
+      expect(markup).toContain(
+        busy ? "Running command…" : "MonoCat worked for 1s",
+      );
+      expect(markup).not.toContain("hidden-detail-single");
+      expect(markup).not.toContain("aria-expanded");
+    },
+  );
+
+  it("keeps approval controls available, then returns the call to the activity trail", () => {
+    const user: Block = {
+      id: "user",
+      role: "user",
+      text: "Run this",
+      durationMs: 1_000,
+    };
+    const approval = tool("approval", { requestId: 1 });
+    const waiting = renderMono([user, approval], true);
+    expect(waiting).toContain("hidden-detail-approval");
+    expect(waiting).toContain("Allow</button>");
+    expect(waiting).toContain("Deny</button>");
+    expect(waiting).toContain("Waiting for approval…");
+    expect(waiting).not.toContain('aria-label="Show the steps');
+    const approved = renderMono([
+      user,
+      {
+        ...approval,
+        approval: { requestId: 1, decided: "allow" },
+        tool: { kind: "shell", status: "completed" },
+      },
+    ]);
+    expect(approved).toContain("MonoCat worked for 1s");
+    expect(approved).not.toContain("hidden-detail-approval");
+    expect(approved).not.toContain("Allow</button>");
+  });
+
+  it("keeps delegated tool work compact, including failed runs", () => {
+    const markup = renderMono([
+      { id: "user", role: "user", text: "Delegate this", durationMs: 1_000 },
+      { id: "intro", role: "assistant", text: "I will ask for a review." },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Inspect auth",
+        tool: {
+          kind: "agent",
+          status: "failed",
+          detail: "Private provider failure detail",
+        },
+        agentRun: {
+          name: "Auth review",
+          steps: [
+            { id: "step", kind: "message", text: "Private delegated work" },
+          ],
+        },
+      },
+      { id: "answer", role: "assistant", text: "The review could not finish." },
+    ]);
+    expect(markup).not.toContain("I will ask for a review.");
+    expect(markup).not.toContain("Subagent failed");
+    expect(markup).toContain("The review could not finish.");
+    expect(markup).not.toContain("Private provider failure detail");
+    expect(markup).not.toContain("Private delegated work");
+    expect(markup).not.toContain("aria-expanded");
   });
 });
 

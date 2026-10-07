@@ -22,6 +22,7 @@ export function ColorSwatchRow({
   customHighlighted,
   onPickIndex,
   onToggleCustom,
+  className,
 }: {
   colors: readonly string[];
   labels?: readonly string[];
@@ -31,11 +32,14 @@ export function ColorSwatchRow({
   customHighlighted?: boolean;
   onPickIndex: (index: number) => void;
   onToggleCustom?: () => void;
+  className?: string;
 }) {
   const pipetteActive =
     customHighlighted ?? (customColor != null || customPickerOpen);
   return (
-    <div className="flex items-center justify-between gap-1 px-0.5">
+    <div
+      className={className ?? "flex items-center justify-between gap-1 px-0.5"}
+    >
       {colors.map((color, index) => {
         const label = labels?.[index] ?? `Color ${index + 1}`;
         const selected =

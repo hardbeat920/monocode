@@ -2,10 +2,10 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  DashboardSquare,
   Inbox,
   PanelLeft,
-  Plus,
-  Search,
+  PanelRightToggle,
   Settings,
   StickyNote,
   Terminal,
@@ -37,10 +37,20 @@ import { FileTypeIcon } from "../../features/files/ui/FileTypeIcon";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
+import { TabLabel } from "../../shared/ui/TabLabel";
 import { WindowControls } from "./WindowControls";
+import { PixelMascot } from "../../features/projects/ui/PixelMascot";
+import {
+  MONO_STATUS_LABEL,
+  type MonoLook,
+  type MonoState,
+} from "../../features/monos/model/mono";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
 import type { RecentProject } from "../../features/projects/model/recents";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../features/files/ui/ExplorerMenu";
 import {
   paneDropFromPoint,
   setExternalPaneDrop,
@@ -82,6 +92,14 @@ type Props = {
   tabs: Tab[];
   activeId: string;
   cwd: string;
+  /**
+   * The Mono filling the main area. It takes the tabs' place, and nothing
+   * project-scoped belongs beside it.
+   */
+  mono?: { look: MonoLook; state: MonoState };
+  onShowMonoDetails?: () => void;
+  /** The full-height Mono details panel owns these while it is open. */
+  hideWindowControls?: boolean;
   projectRailOpen?: boolean;
   sessionSidebarOpen?: boolean;
   compactRail?: boolean;
@@ -92,7 +110,6 @@ type Props = {
   onToggleSidebar: () => void;
   onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
-  onNew: () => void;
   onNewTerminal?: () => void;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
@@ -103,7 +120,6 @@ type Props = {
   onDeleteTab?: (id: string) => void;
   onReorder: (ids: string[], movedId?: string) => void;
   onPlaceOnPane?: (tabId: string, targetId: string, edge: PaneEdge) => void;
-  onGoToFile?: () => void;
   onPinFile?: (fileId: string) => void;
   recents?: RecentProject[];
   onSelectProject?: (path: string) => void;
@@ -359,15 +375,15 @@ function TitleTabItem({
         {/* Keep two-line tabs compact while leaving room for descenders. */}
         <span className="flex min-w-0 flex-1 flex-col justify-center">
           <span className="flex min-w-0 items-center gap-1">
-            <span
-              className={`min-w-0 truncate leading-tight ${tab.previewFileId ? "italic" : ""} ${
+            <TabLabel
+              className={`leading-tight ${tab.previewFileId ? "italic" : ""} ${
                 meta
                   ? "text-[13px] @min-[11rem]:text-[10px] @min-[11rem]:font-medium"
                   : "text-[13px]"
               }`}
             >
               {headline}
-            </span>
+            </TabLabel>
             {tab.dirty ? (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-content/70"
@@ -377,9 +393,9 @@ function TitleTabItem({
             ) : null}
           </span>
           {meta ? (
-            <span className="hidden min-w-0 truncate text-[10px] leading-tight text-content/45 @min-[11rem]:block">
+            <TabLabel className="hidden text-[10px] leading-tight text-content/45 @min-[11rem]:block">
               {meta}
-            </span>
+            </TabLabel>
           ) : null}
         </span>
       </button>
@@ -601,6 +617,9 @@ function TitleBarComponent({
   tabs,
   activeId,
   cwd,
+  mono,
+  onShowMonoDetails,
+  hideWindowControls = false,
   projectRailOpen = true,
   sessionSidebarOpen = true,
   compactRail = false,
@@ -611,7 +630,6 @@ function TitleBarComponent({
   onToggleSidebar,
   onToggleSessionSidebar,
   onSelect,
-  onNew,
   onNewTerminal,
   onOpenSettings,
   onOpenInbox,
@@ -622,7 +640,6 @@ function TitleBarComponent({
   onDeleteTab,
   onReorder,
   onPlaceOnPane,
-  onGoToFile,
   onPinFile,
   recents = [],
   onSelectProject,
@@ -848,13 +865,22 @@ function TitleBarComponent({
   const showProjectButton =
     railClosed && Boolean(onSelectProject) && !showCurrentProject;
   const showTrailingActions =
-    (projectless &&
-      railClosed &&
-      Boolean(onOpenInbox || onOpenNotes || onOpenSettings)) ||
-    (railClosed && !projectless);
+    !mono &&
+    projectless &&
+    railClosed &&
+    Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
   const trailingControls =
-    showTrailingActions || !IS_MAC ? (
+    showTrailingActions ||
+    (mono && onShowMonoDetails) ||
+    (!IS_MAC && !hideWindowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
+        {mono && onShowMonoDetails ? (
+          <div className="flex items-center px-3">
+            <IconButton label="Show Mono details" onClick={onShowMonoDetails}>
+              <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
+            </IconButton>
+          </div>
+        ) : null}
         {showTrailingActions ? (
           <div className="flex items-center gap-0.5 px-2">
             {projectless && railClosed && onOpenInbox ? (
@@ -867,16 +893,6 @@ function TitleBarComponent({
                 <StickyNote className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
-            {railClosed && !projectless ? (
-              <>
-                <IconButton label={`Go to File (${MOD}P)`} onClick={onGoToFile}>
-                  <Search className="size-3.5" strokeWidth={1.75} />
-                </IconButton>
-                <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
-                  <Plus className="size-3.5" strokeWidth={1.75} />
-                </IconButton>
-              </>
-            ) : null}
             {!projectRailOpen && !showCurrentProject && onOpenSettings ? (
               <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
                 <Settings className="size-3.5" strokeWidth={1.75} />
@@ -884,7 +900,7 @@ function TitleBarComponent({
             ) : null}
           </div>
         ) : null}
-        {!IS_MAC ? <WindowControls /> : null}
+        {!IS_MAC && !hideWindowControls ? <WindowControls /> : null}
       </div>
     ) : null;
 
@@ -894,14 +910,15 @@ function TitleBarComponent({
   return (
     <header
       className={`flex h-10 shrink-0 select-none items-stretch border-b border-stroke${
-        compactRail ? " body-glass" : ""
+        compactRail && !mono ? " body-glass" : ""
       }`}
       data-tauri-drag-region="deep"
     >
       {compactRail ? (
         <div
           data-compact-title-nav
-          className="flex shrink-0 items-center pl-[70px]"
+          // A full Mono's title bar starts beside the 48px compact rail.
+          className={`flex shrink-0 items-center ${mono ? "pl-[22px]" : "pl-[70px]"}`}
         >
           <TabVisitNav
             canGoBack={canGoBack}
@@ -935,7 +952,7 @@ function TitleBarComponent({
             label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
             onClick={onToggleSessionSidebar}
           >
-            <PanelLeft className="size-3.5" strokeWidth={1.75} />
+            <DashboardSquare className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         </div>
       ) : null}
@@ -957,101 +974,105 @@ function TitleBarComponent({
           showProjectButton ? " border-l border-stroke" : ""
         }`}
       >
-        <div
-          className="relative h-full min-w-0 flex-1 overflow-hidden"
-          onWheel={(event) => {
-            const el = tabStripRef.current;
-            if (!el || el.scrollWidth <= el.clientWidth) return;
-            if (event.deltaX === 0 && event.deltaY !== 0) {
-              el.scrollLeft += event.deltaY;
-            }
-          }}
-        >
-          {tabOverflow.left ? (
-            <TabStripChevron side="left" onClick={() => scrollTabsBy(-1)} />
-          ) : null}
-          {tabOverflow.right ? (
-            <TabStripChevron side="right" onClick={() => scrollTabsBy(1)} />
-          ) : null}
+        {mono ? (
+          <MonoTitle look={mono.look} state={mono.state} />
+        ) : (
           <div
-            ref={setTabStripRef}
-            data-title-tab-strip
-            className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
-          >
-            {displayed.map((entry) => {
-              const tab = entry.item;
-              const shell = (
-                <div
-                  ref={(el) => {
-                    if (!entry.closing) setTabNode(tab.id, el);
-                  }}
-                  className={
-                    entry.closing || entry.opening
-                      ? "relative flex h-full w-full min-w-0 overflow-hidden items-center"
-                      : "relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
-                  }
-                  data-title-tab-id={entry.closing ? undefined : tab.id}
-                  data-tab-slot-id={entry.closing ? undefined : tab.id}
-                  data-tauri-drag-region="false"
-                >
-                  {!entry.closing && paneToTabDrop?.targetTabId === tab.id ? (
-                    <span
-                      data-pane-tab-drop-hint
-                      className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
-                        paneToTabDrop.position === "before"
-                          ? "left-0"
-                          : "right-0"
-                      }`}
-                    />
-                  ) : null}
-                  <TitleTabItem
-                    tab={tab}
-                    active={!entry.closing && tab.id === activeId}
-                    closable={
-                      !entry.closing && titleTabClosable(tab, tabs.length)
-                    }
-                    canDrag={!entry.closing && canDrag}
-                    sortable={sortable}
-                    onSelect={onSelect}
-                    onClose={onClose}
-                    onPinFile={onPinFile}
-                    onContextMenu={(tabId, event) =>
-                      setTabMenu({
-                        tabId,
-                        x: event.clientX,
-                        y: event.clientY,
-                      })
-                    }
-                    itemRef={
-                      !entry.closing && tab.id === activeId
-                        ? (el) => {
-                            activeTabRef.current = el;
-                          }
-                        : undefined
-                    }
-                  />
-                </div>
-              );
-              if (entry.closing || entry.opening) {
-                return (
-                  <TabWidthMotion
-                    key={tab.id}
-                    phase={entry.closing ? "closing" : "opening"}
-                    width={entry.width}
-                    onFinish={() => finishMotion(tab.id)}
-                  >
-                    {shell}
-                  </TabWidthMotion>
-                );
+            className="relative h-full min-w-0 flex-1 overflow-hidden"
+            onWheel={(event) => {
+              const el = tabStripRef.current;
+              if (!el || el.scrollWidth <= el.clientWidth) return;
+              if (event.deltaX === 0 && event.deltaY !== 0) {
+                el.scrollLeft += event.deltaY;
               }
-              return (
-                <div key={tab.id} className="contents">
-                  {shell}
-                </div>
-              );
-            })}
+            }}
+          >
+            {tabOverflow.left ? (
+              <TabStripChevron side="left" onClick={() => scrollTabsBy(-1)} />
+            ) : null}
+            {tabOverflow.right ? (
+              <TabStripChevron side="right" onClick={() => scrollTabsBy(1)} />
+            ) : null}
+            <div
+              ref={setTabStripRef}
+              data-title-tab-strip
+              className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
+            >
+              {displayed.map((entry) => {
+                const tab = entry.item;
+                const shell = (
+                  <div
+                    ref={(el) => {
+                      if (!entry.closing) setTabNode(tab.id, el);
+                    }}
+                    className={
+                      entry.closing || entry.opening
+                        ? "relative flex h-full w-full min-w-0 overflow-hidden items-center"
+                        : "relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
+                    }
+                    data-title-tab-id={entry.closing ? undefined : tab.id}
+                    data-tab-slot-id={entry.closing ? undefined : tab.id}
+                    data-tauri-drag-region="false"
+                  >
+                    {!entry.closing && paneToTabDrop?.targetTabId === tab.id ? (
+                      <span
+                        data-pane-tab-drop-hint
+                        className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
+                          paneToTabDrop.position === "before"
+                            ? "left-0"
+                            : "right-0"
+                        }`}
+                      />
+                    ) : null}
+                    <TitleTabItem
+                      tab={tab}
+                      active={!entry.closing && tab.id === activeId}
+                      closable={
+                        !entry.closing && titleTabClosable(tab, tabs.length)
+                      }
+                      canDrag={!entry.closing && canDrag}
+                      sortable={sortable}
+                      onSelect={onSelect}
+                      onClose={onClose}
+                      onPinFile={onPinFile}
+                      onContextMenu={(tabId, event) =>
+                        setTabMenu({
+                          tabId,
+                          x: event.clientX,
+                          y: event.clientY,
+                        })
+                      }
+                      itemRef={
+                        !entry.closing && tab.id === activeId
+                          ? (el) => {
+                              activeTabRef.current = el;
+                            }
+                          : undefined
+                      }
+                    />
+                  </div>
+                );
+                if (entry.closing || entry.opening) {
+                  return (
+                    <TabWidthMotion
+                      key={tab.id}
+                      phase={entry.closing ? "closing" : "opening"}
+                      width={entry.width}
+                      onFinish={() => finishMotion(tab.id)}
+                    >
+                      {shell}
+                    </TabWidthMotion>
+                  );
+                }
+                return (
+                  <div key={tab.id} className="contents">
+                    {shell}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
         {!IS_MAC && !IS_WIN ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">
@@ -1078,3 +1099,32 @@ function TitleBarComponent({
 }
 
 export const TitleBar = memo(TitleBarComponent);
+
+/** In a Mono's view the title bar names it and shows its status. */
+function MonoTitle({ look, state }: { look: MonoLook; state: MonoState }) {
+  return (
+    <div
+      data-mono-title
+      className="flex min-w-0 flex-1 items-center gap-2 px-4"
+    >
+      <PixelMascot
+        name={look.mascot}
+        color={look.color}
+        status={state.status}
+        still={state.status === "idle"}
+        className="size-4 shrink-0"
+      />
+      <span className="min-w-0 truncate text-[13px] font-medium text-content">
+        {look.name}
+      </span>
+      <span
+        data-mono-status={state.status}
+        className={`shrink-0 text-[12px] ${
+          state.status === "needs-you" ? "text-accent" : "text-content/45"
+        }`}
+      >
+        {MONO_STATUS_LABEL[state.status]}
+      </span>
+    </div>
+  );
+}

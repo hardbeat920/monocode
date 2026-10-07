@@ -1,8 +1,12 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { promptBlocks } from "../../../../features/sessions/model/attachments";
-import { isTaskListToolName, taskListFromToolInput } from "../../../../features/sessions/model/taskList";
+import {
+  isTaskListToolName,
+  taskListFromToolInput,
+} from "../../../../features/sessions/model/taskList";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
   killChild,
@@ -145,7 +149,7 @@ export async function sendCursorTurn(input: SendTurnInput): Promise<void> {
 
 export async function steerCursorTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Cursor session");
+  if (!live) throw new TurnNotReadyError("No active Cursor session");
 
   const blocks = promptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
@@ -454,10 +458,12 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.backgroundAgentTools.clear();
     live.taskListTools.clear();
     live.promptActive = true;
-    await live.acp.request("session/prompt", {
+    const pending = live.acp.request("session/prompt", {
       sessionId: live.acpSessionId,
       prompt: blocks,
     });
+    input.onAccepted?.();
+    await pending;
     live.promptActive = false;
     if (live.cancelled) {
       live.backgroundAgentTools.clear();
@@ -862,12 +868,14 @@ function handleSessionUpdate(live: Live, params: unknown) {
           previewKind: preview?.kind,
         }) || rawTitle;
     if (live.subagents.isChild(params)) {
+      // The shared child route decides what is worth keeping on a step.
       emit({
         type: "tool.updated",
         callId,
         title,
         kind: toolKind,
         status,
+        detail: toolOutput(update, tool),
         preview,
       });
       return;
@@ -1361,7 +1369,12 @@ function toolLabel(
   return kindTitle(kind);
 }
 
-function toolDetail(
+/**
+ * What the call produced. A step that opens an error control wants the reason
+ * it failed, and the request it was making is already its title, so the input
+ * fallback below belongs to a top-level row and not to this.
+ */
+function toolOutput(
   update: Record<string, unknown>,
   tool: Record<string, unknown>,
 ): string | undefined {
@@ -1373,8 +1386,16 @@ function toolDetail(
   if (typeof output === "string" && output.trim()) return capToolDetail(output);
   const outputText = textFromContent(output);
   if (outputText.trim()) return capToolDetail(outputText);
-  return inputLabel(
-    update.rawInput ?? tool.rawInput ?? update.input ?? tool.input,
+  return undefined;
+}
+
+function toolDetail(
+  update: Record<string, unknown>,
+  tool: Record<string, unknown>,
+): string | undefined {
+  return (
+    toolOutput(update, tool) ??
+    inputLabel(update.rawInput ?? tool.rawInput ?? update.input ?? tool.input)
   );
 }
 
