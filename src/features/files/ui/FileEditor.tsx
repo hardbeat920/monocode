@@ -83,6 +83,11 @@ import {
   type EditorSelectionTarget,
 } from "./EditorSelectionMenu";
 import {
+  ReviewCommentComposer,
+  type ReviewCommentTarget,
+} from "../../review-comments/ui/ReviewCommentComposer";
+import { ReviewCommentsPanel } from "../../review-comments/ui/ReviewCommentsPanel";
+import {
   diffActiveChunkIndex,
   diffLineStatsForView,
   diffNavigablePositions,
@@ -604,6 +609,8 @@ export function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  const [reviewTarget, setReviewTarget] =
+    useState<ReviewCommentTarget | null>(null);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -998,6 +1005,19 @@ export function CodeMirrorEditor({
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {active ? (
+          <ReviewCommentsPanel
+            onAddFileComment={(anchor) =>
+              setReviewTarget({
+                path: commentPath,
+                startLine: 0,
+                endLine: 0,
+                snippet: "",
+                anchor,
+              })
+            }
+          />
+        ) : null}
         {showDiff ? (
           <DiffChunkNav
             index={chunkNav?.index ?? 0}
@@ -1020,7 +1040,25 @@ export function CodeMirrorEditor({
       <EditorSelectionMenu
         selection={selectionTarget}
         onDismiss={() => setSelectionTarget(null)}
+        onAddReviewComment={(selection) => {
+          const view = viewRef.current;
+          if (!view) return;
+          const range = view.state.selection.main;
+          setReviewTarget({
+            path: selection.path,
+            startLine: selection.startLine,
+            endLine: selection.endLine,
+            snippet: view.state.sliceDoc(range.from, range.to),
+            anchor: selection.anchor,
+          });
+        }}
       />
+      {reviewTarget ? (
+        <ReviewCommentComposer
+          target={reviewTarget}
+          onDismiss={() => setReviewTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
