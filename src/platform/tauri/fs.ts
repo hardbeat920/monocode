@@ -369,6 +369,19 @@ export function gitPrStatus(cwd: string): Promise<GitPr | null> {
   return invoke<GitPr | null>("git_pr_status", { cwd });
 }
 
+/** Latest PR for a pushed branch (current when omitted) on its push remote. */
+export function gitBranchPr(
+  cwd: string,
+  branch?: string,
+  remote?: string,
+): Promise<GitPr | null> {
+  return invoke<GitPr | null>("git_branch_pr", {
+    cwd,
+    branch: branch ?? null,
+    remote: remote ?? null,
+  });
+}
+
 export function gitPrCreate(
   cwd: string,
   title: string,
@@ -431,6 +444,25 @@ export function notifyGitChanged() {
 export function subscribeGitChanged(listener: () => void): () => void {
   window.addEventListener(GIT_CHANGED, listener);
   return () => window.removeEventListener(GIT_CHANGED, listener);
+}
+
+const PR_CREATED = "monocode-pr-created";
+
+/** A pull request MonoCode itself opened for the checkout at `cwd`. */
+export function notifyPrCreated(cwd: string, url: string) {
+  window.dispatchEvent(new CustomEvent(PR_CREATED, { detail: { cwd, url } }));
+}
+
+export function subscribePrCreated(
+  listener: (cwd: string, url: string) => void,
+): () => void {
+  const handle = (event: Event) => {
+    const { cwd, url } = (event as CustomEvent<{ cwd: string; url: string }>)
+      .detail;
+    listener(cwd, url);
+  };
+  window.addEventListener(PR_CREATED, handle);
+  return () => window.removeEventListener(PR_CREATED, handle);
 }
 
 export function createPath(

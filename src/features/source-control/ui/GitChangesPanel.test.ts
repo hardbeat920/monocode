@@ -29,6 +29,7 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitPrCreate: vi.fn(async () => ""),
   gitRangeContext: vi.fn(),
   notifyGitChanged: vi.fn(),
+  notifyPrCreated: vi.fn(),
   subscribeGitChanged: () => () => {},
   basename: (path: string) => path.split("/").pop() ?? path,
 }));
@@ -57,6 +58,7 @@ import {
   gitStageFile,
   gitUnstageFile,
   notifyGitChanged,
+  notifyPrCreated,
 } from "../../../platform/tauri/fs";
 import {
   generateCommitMessage,
@@ -498,5 +500,9 @@ describe("GitChangesPanel remote pull request", () => {
       "feature/pull",
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
+    expect(notifyPrCreated).toHaveBeenCalledWith(
+      cwd,
+      "https://example.test/pull/42",
+    );
   });
 });

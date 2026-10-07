@@ -75,9 +75,8 @@ function shellWords(command: string): string[] | undefined {
   return words;
 }
 
-/** Recognize the actual app CLI command, not a mention of it in prose/output. */
-export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
-  if (block.role !== "tool" && block.role !== "approval") return undefined;
+/** The shell command a tool block ran, as the harness reported it. */
+export function toolCommand(block: Block): string | undefined {
   // A shell preview retains the original command when the display title was
   // simplified. Never accept a shorter title in place of that command.
   const candidate =
@@ -86,7 +85,15 @@ export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
       : undefined) ??
     block.tool?.title ??
     block.text;
-  const command = candidate?.trim().replace(/^Run(?:ning)?\s+command:\s*/i, "");
+  return (
+    candidate?.trim().replace(/^Run(?:ning)?\s+command:\s*/i, "") || undefined
+  );
+}
+
+/** Recognize the actual app CLI command, not a mention of it in prose/output. */
+export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
+  if (block.role !== "tool" && block.role !== "approval") return undefined;
+  const command = toolCommand(block);
   if (!command) return undefined;
   const words = shellWords(command);
   if (!words || !/(?:^|[/\\])monocode(?:\.exe)?$/i.test(words[0] ?? ""))

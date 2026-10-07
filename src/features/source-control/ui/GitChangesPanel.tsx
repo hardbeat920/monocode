@@ -47,6 +47,7 @@ import {
   gitHeadMessage,
   gitPrCreate,
   gitPrStatus,
+  notifyPrCreated,
   gitPull,
   gitPush,
   gitRangeContext,
@@ -671,6 +672,7 @@ function ChangedFiles({
     );
     const number = Number(/\/pull\/(\d+)(?:[/?#]|$)/.exec(url)?.[1]);
     if (Number.isInteger(number) && number > 0) recordPrActivity(number);
+    notifyPrCreated(cwd, url.trim());
     await openUrl(url.trim());
   };
 
