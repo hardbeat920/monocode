@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 30] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
     "usage.list",
     "sessions.list",
@@ -100,6 +100,9 @@ const APP_ACTIONS: [&str; 30] = [
     "notes.list",
     "notes.read",
     "notes.write",
+    "artifacts.list",
+    "artifacts.read",
+    "artifacts.write",
     "soul.read",
     "soul.update",
     "memory.read",
@@ -212,6 +215,17 @@ Actions:
                   to derive it from the body. Use {"id":"...","body":"..."}
                   to edit an existing note; title and tags are also optional.
                   Omitted fields stay unchanged. Reuse --request-id on retries.
+  artifacts.list {"limit":30,"offset":0}  Mono or habit only. Saved artifact titles.
+  artifacts.read {"id":"..."}  Full content of one artifact.
+  artifacts.write {"kind":"document","title":"PR review",
+                   "summary":"Merge queue and blockers",
+                   "body":"<complete Markdown>"}
+                  Save a document and attach its card below your chat reply.
+                  Artifacts are separate from Notes. Currently only kind "document"
+                  (Markdown) is supported. Reply briefly; do not
+                  repeat the document body in chat. Returns metadata only.
+                  To revise, pass {"id":"...","body":"<updated Markdown>"};
+                  omitted title stays unchanged. Reuse --request-id on retries.
   soul.read      {}  Mono's own conversation only. Current SOUL.md text and hash.
   soul.update    {"text":"<complete Markdown>","expectedHash":"<hash from soul.read>"}
                   Update your standing instructions only when the user asks.
@@ -648,13 +662,21 @@ mod tests {
         );
         assert!(app_help().contains("notes.read"));
         assert!(app_help().contains("notes.write"));
-        for action in ["worktrees.list", "worktrees.create"] {
+        for action in [
+            "worktrees.list",
+            "worktrees.create",
+            "artifacts.list",
+            "artifacts.read",
+            "artifacts.write",
+        ] {
             assert!(matches!(
                 parse_args_for(&args(&[action]), true),
                 Ok(Parsed::Call(_, _, _))
             ));
             assert!(app_help().contains(action));
         }
+        assert!(app_help().contains(r#""kind":"document""#));
+        assert!(app_help().contains("Artifacts are separate from Notes"));
     }
 
     #[test]
