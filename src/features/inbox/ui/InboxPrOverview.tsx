@@ -143,10 +143,10 @@ export function InboxPrChangesGlance({
               {files.length} {files.length === 1 ? "file" : "files"}
             </span>
             <span className="flex items-center gap-1.5 text-[11px] font-semibold tabular-nums">
-              <span className="text-emerald-400">
+              <span className="text-diff-add-fg">
                 +{formatInteger(diff.additions)}
               </span>
-              <span className="text-red-400">
+              <span className="text-diff-del-fg">
                 -{formatInteger(diff.deletions)}
               </span>
             </span>
@@ -208,19 +208,19 @@ export function InboxPrChangesGlance({
                     style={{ width }}
                   >
                     <span
-                      className="shrink-0 bg-emerald-400/80"
+                      className="shrink-0 bg-diff-add/80"
                       style={{ width: added }}
                     />
-                    <span className="flex-1 bg-red-400/80" />
+                    <span className="flex-1 bg-diff-del/80" />
                   </span>
                   <span className="flex w-20 shrink-0 items-center justify-end gap-1.5 text-[11px] font-semibold tabular-nums">
                     {file.additions > 0 ? (
-                      <span className="text-emerald-400">
+                      <span className="text-diff-add-fg">
                         +{formatInteger(file.additions)}
                       </span>
                     ) : null}
                     {file.deletions > 0 ? (
-                      <span className="text-red-400">
+                      <span className="text-diff-del-fg">
                         -{formatInteger(file.deletions)}
                       </span>
                     ) : null}
