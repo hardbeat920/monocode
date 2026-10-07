@@ -7,6 +7,7 @@ import {
   Copy,
   FilePlusCorner,
   ListBullet,
+  MessageSquarePlus,
   Minus,
   Pencil,
   PenLine,
@@ -141,7 +142,7 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
-import { outOfContextIds } from "../model/contextBoundary";
+import { outOfContextIds, resendableIds } from "../model/contextBoundary";
 import { formatTokens } from "../model/contextUsage";
 import {
   monoCodeToolCall,
@@ -320,6 +321,10 @@ function AgentTranscriptComponent({
       : visibleBlocks;
   }, [harness, sourceBlocks]);
   const outOfContext = useMemo(() => outOfContextIds(blocks), [blocks]);
+  const resendable = useMemo(
+    () => (onAddToChat ? resendableIds(blocks) : new Set<string>()),
+    [blocks, onAddToChat],
+  );
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -1120,7 +1125,12 @@ function AgentTranscriptComponent({
               next.block.role === "user"
             );
           };
-          const renderItem = (item: TurnItem, itemIndex: number) =>
+          // Work the fold holds is narration, not something to hand back.
+          const renderItem = (
+            item: TurnItem,
+            itemIndex: number,
+            inFold = false,
+          ) =>
             item.type === "subagents" && !inlineWork ? (
               <SubagentStack
                 key={item.blocks[0].id}
@@ -1175,6 +1185,11 @@ function AgentTranscriptComponent({
                 bubbleTail={!!agentMascot}
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
                 delivery={messageDeliveries?.get(item.block.id)}
+                onAddToChat={
+                  !inFold && resendable.has(item.block.id)
+                    ? onAddToChat
+                    : undefined
+                }
                 onRetryMessage={onRetryMessage}
                 visible={item.block.role === "user" ? visible : undefined}
                 stickyIndex={firstVisibleTurn + turnIndex + 1}
@@ -1323,7 +1338,7 @@ function AgentTranscriptComponent({
                                   : ""
                               }`}
                             >
-                              {renderItem(entry, index)}
+                              {renderItem(entry, index, true)}
                             </div>
                           ))
                         }
@@ -1950,6 +1965,24 @@ function SaveNoteButton({
   );
 }
 
+/** Quote a message the agent may have lost into the composer, to send again. */
+function AddToChatButton({ onAdd }: { onAdd: () => void }) {
+  return (
+    <button
+      type="button"
+      title="Add to chat: the agent may no longer have this message"
+      aria-label="Add to chat"
+      onClick={(event) => {
+        event.stopPropagation();
+        onAdd();
+      }}
+      className="rounded-md p-1 text-content/40 transition-[background-color,color] duration-150 hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
+    >
+      <MessageSquarePlus className="size-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
 function EditLastTurnButton({
   onEdit,
   editing = false,
@@ -2006,6 +2039,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings,
   onEditLastTurn,
   editing = false,
+  onAddToChat,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -2035,10 +2069,13 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings?: Record<string, string>;
   onEditLastTurn?: () => void;
   editing?: boolean;
+  /** Offered when the agent may no longer hold this message. */
+  onAddToChat?: (text: string) => void;
 }) {
   if (block.role === "user") {
     return (
       <UserMessageBlock
+        onAddToChat={onAddToChat}
         block={block}
         layout={layout}
         bubbleTail={bubbleTail}
@@ -2165,7 +2202,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       data-selectable-agent-response={block.streaming ? undefined : block.id}
       data-chat-message={block.id}
       data-chat-message-role="assistant"
-      className={`min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
+      className={`group min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -2174,6 +2211,11 @@ const TranscriptBlock = memo(function TranscriptBlock({
         cwd={cwd}
         onOpenFile={onOpenFile}
       />
+      {onAddToChat && !block.streaming ? (
+        <div className="flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <AddToChatButton onAdd={() => onAddToChat(block.text)} />
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -2193,6 +2235,7 @@ function UserMessageBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onAddToChat,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -2202,6 +2245,7 @@ function UserMessageBlock({
   onRetryMessage?: (blockId: string) => void;
   visible: boolean;
   stickyIndex: number;
+  onAddToChat?: (text: string) => void;
   onEdit?: () => void;
   editing?: boolean;
   cwd?: string;
@@ -2555,6 +2599,9 @@ function UserMessageBlock({
             ) : null}
             {onEdit ? (
               <EditLastTurnButton onEdit={onEdit} editing={editing} />
+            ) : null}
+            {text && onAddToChat ? (
+              <AddToChatButton onAdd={() => onAddToChat(text)} />
             ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />

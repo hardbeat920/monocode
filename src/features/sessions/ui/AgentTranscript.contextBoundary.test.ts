@@ -136,3 +136,42 @@ it("names a Mono's fresh session and what it carried", () => {
   );
   expect(divider?.textContent).not.toContain("automatic");
 });
+
+it("hands a message the agent may have lost back to the composer", () => {
+  const onAddToChat = vi.fn();
+  const blocks: Block[] = [
+    { id: "u1", role: "user", text: "First prompt" },
+    { id: "a1", role: "assistant", text: "First answer" },
+    {
+      id: "b1",
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: {
+        kind: "compaction",
+        trigger: "auto",
+        at: 1,
+        kept: "user-messages",
+      },
+    },
+    { id: "u2", role: "user", text: "Second prompt" },
+  ];
+  act(() =>
+    root.render(createElement(AgentTranscript, { blocks, onAddToChat })),
+  );
+  const buttons = [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Add to chat"]',
+    ),
+  ];
+  // Codex kept your prompts, so only its reply is offered.
+  expect(buttons).toHaveLength(1);
+  act(() => buttons[0].click());
+  expect(onAddToChat).toHaveBeenCalledWith("First answer");
+});
+
+it("offers nothing to add without somewhere to add it", () => {
+  render("none");
+  expect(
+    container.querySelector('button[aria-label="Add to chat"]'),
+  ).toBeNull();
+});

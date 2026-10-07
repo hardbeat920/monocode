@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, ContextKept } from "./session";
-import { outOfContextIds } from "./contextBoundary";
+import { outOfContextIds, resendableIds } from "./contextBoundary";
 
 function boundary(id: string, kept: ContextKept): Block {
   return {
@@ -108,6 +108,61 @@ describe("outOfContextIds with a known kept point", () => {
         reply("a2"),
         rotation("paged-out"),
         user("u3"),
+      ]),
+    ).toEqual(new Set());
+  });
+});
+
+describe("resendableIds", () => {
+  const compaction = (kept: ContextKept): Block => boundary("b1", kept);
+  const above = [user("u1"), tool("t1"), reply("a1")];
+
+  it("offers nothing before any boundary", () => {
+    expect(resendableIds(above)).toEqual(new Set());
+  });
+
+  it("offers messages, never tool rows, from before a summary-only boundary", () => {
+    expect(resendableIds([...above, compaction("none"), user("u2")])).toEqual(
+      new Set(["u1", "a1"]),
+    );
+  });
+
+  it("offers only replies where the harness kept your prompts", () => {
+    expect(
+      resendableIds([...above, compaction("user-messages"), user("u2")]),
+    ).toEqual(new Set(["a1"]));
+  });
+
+  it("offers everything above when what was kept is not known", () => {
+    for (const kept of ["recent", "unknown"] as const) {
+      expect(resendableIds([...above, compaction(kept)])).toEqual(
+        new Set(["u1", "a1"]),
+      );
+    }
+  });
+
+  it("stops at a known kept point", () => {
+    const rotation: Block = {
+      ...boundary("r1", "recent"),
+      contextBoundary: {
+        kind: "rotation",
+        trigger: "auto",
+        at: 1,
+        kept: "recent",
+        keptFromBlockId: "u2",
+      },
+    };
+    expect(
+      resendableIds([...above, user("u2"), reply("a2"), rotation]),
+    ).toEqual(new Set(["u1", "a1"]));
+  });
+
+  it("skips app-written turns and drafts", () => {
+    expect(
+      resendableIds([
+        { id: "i1", role: "user", text: "internal", internal: true },
+        { id: "d1", role: "user", text: "draft", draft: true },
+        compaction("none"),
       ]),
     ).toEqual(new Set());
   });

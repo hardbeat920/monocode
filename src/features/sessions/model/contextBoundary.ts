@@ -49,3 +49,30 @@ export function outOfContextIds(blocks: readonly Block[]): Set<string> {
   }
   return ids;
 }
+
+/**
+ * Messages from before the latest boundary that may be gone from the agent's
+ * context, so worth handing back: everything above it not known to be kept.
+ * Tool rows are left out; an app-written turn or a draft was never the user's.
+ */
+export function resendableIds(blocks: readonly Block[]): Set<string> {
+  let index = blocks.length - 1;
+  while (index >= 0 && !blocks[index].contextBoundary) index--;
+  const boundary = blocks[index]?.contextBoundary;
+  const ids = new Set<string>();
+  if (!boundary) return ids;
+  const end = boundary.keptFromBlockId
+    ? Math.max(
+        0,
+        blocks.findIndex((block) => block.id === boundary.keptFromBlockId),
+      )
+    : index;
+  for (const block of blocks.slice(0, end)) {
+    const message =
+      block.role === "user"
+        ? !block.internal && !block.draft && boundary.kept !== "user-messages"
+        : block.role === "assistant" && !block.tool && !!block.text.trim();
+    if (message) ids.add(block.id);
+  }
+  return ids;
+}
