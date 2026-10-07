@@ -2614,7 +2614,8 @@ fn git_push_for(root: &Path) -> Result<(), String> {
 }
 
 /// Remote `git push` would use: the upstream's remote when the branch tracks
-/// one, otherwise the default remote. Mirrors `git_push_for` so pull-request
+/// one, otherwise `branch.<name>.pushRemote`, then `remote.pushDefault`,
+/// otherwise the default remote. Mirrors `git_push_for` so pull-request
 /// creation targets the same repository the branch pushes to.
 pub(crate) fn git_push_remote_name(root: &Path) -> Option<String> {
     if let Some(upstream) = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]) {
@@ -2626,7 +2627,27 @@ pub(crate) fn git_push_remote_name(root: &Path) -> Option<String> {
         }
         return None;
     }
+    if let Some(branch) = git_head_branch(root) {
+        let key = format!("branch.{branch}.pushRemote");
+        if let Some(remote) = git_config_value(root, &key) {
+            if git_remote_names(root).iter().any(|name| name == &remote) {
+                return Some(remote);
+            }
+        }
+    }
+    if let Some(remote) = git_config_value(root, "remote.pushDefault") {
+        if git_remote_names(root).iter().any(|name| name == &remote) {
+            return Some(remote);
+        }
+    }
     git_remote_name(root)
+}
+
+/// Single trimmed `git config` value, or `None` when unset/empty.
+fn git_config_value(root: &Path, key: &str) -> Option<String> {
+    git_stdout(root, &["config", "--get", key])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
@@ -6858,6 +6879,43 @@ mod tests {
         if !git(&dir.0, &["update-ref", "refs/remotes/azure/feature", &sha])
             || !git(&dir.0, &["branch", "--set-upstream-to", "azure/feature"])
         {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
+    }
+
+    #[test]
+    fn git_push_remote_name_honors_push_remote_config() {
+        let dir = tmp("git-push-remote-config");
+        if !init_git(&dir.0, "feature", Some("https://github.com/acme/web.git")) {
+            return;
+        }
+        if !git(
+            &dir.0,
+            &[
+                "remote",
+                "add",
+                "azure",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        ) {
+            return;
+        }
+        // `branch.<name>.pushRemote` wins over the default remote.
+        if !git(&dir.0, &["config", "branch.feature.pushRemote", "azure"]) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
+        // An unknown remote in pushRemote is ignored.
+        if !git(&dir.0, &["config", "branch.feature.pushRemote", "missing"]) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        if !git(&dir.0, &["config", "--unset", "branch.feature.pushRemote"]) {
+            return;
+        }
+        // `remote.pushDefault` wins over the default remote.
+        if !git(&dir.0, &["config", "remote.pushDefault", "azure"]) {
             return;
         }
         assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));

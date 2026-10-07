@@ -316,11 +316,12 @@ pub(crate) fn try_create_pull_request(
     let Some(config) = read_config(app)? else {
         return Ok(None);
     };
-    if !config.url.trim().eq_ignore_ascii_case(&org_key) {
-        return Err(format!(
-            "Azure DevOps is connected to {} but this repository belongs to {org_key}. Update the organization in Settings.",
-            config.url.trim()
-        ));
+    if !azure_config_matches_repo(&config.url, &org_key) {
+        // The checkout belongs to a different organization than the stored
+        // configuration (e.g. a GitHub-first checkout with an extra Azure
+        // remote, or two Azure orgs). Fall back to the GitHub CLI path
+        // instead of erroring so `gh` can still create the PR.
+        return Ok(None);
     }
     let path = format!(
         "/{}/_apis/git/repositories/{}/pullrequests?api-version={}",
@@ -353,6 +354,16 @@ pub(crate) fn try_create_pull_request(
         Some(id) if id > 0 => Ok(Some(pr_web_url(&config, &project, &repo_name, id))),
         _ => Err("Azure DevOps did not return a pull request URL".into()),
     }
+}
+
+/// True when the stored Azure DevOps configuration URL identifies the same
+/// organization as the push remote's organization URL. Compared
+/// case-insensitively with trailing slashes ignored so `https://dev.azure.com/acme/`
+/// still matches `https://dev.azure.com/acme`.
+fn azure_config_matches_repo(config_url: &str, org_key: &str) -> bool {
+    let normalize = |url: &str| url.trim().trim_end_matches('/').to_ascii_lowercase();
+    let config = normalize(config_url);
+    !config.is_empty() && config == normalize(org_key)
 }
 
 /// Azure DevOps coordinates of the branch's push destination, resolved with
@@ -2382,6 +2393,25 @@ mod tests {
             ],
         );
         assert!(azure_remote_for(&dir).unwrap().is_none());
+    }
+
+    #[test]
+    fn config_matches_repo_ignores_case_and_trailing_slash() {
+        assert!(azure_config_matches_repo(
+            "https://dev.azure.com/acme",
+            "https://dev.azure.com/acme"
+        ));
+        assert!(azure_config_matches_repo(
+            "https://dev.azure.com/acme/",
+            "https://DEV.azure.com/Acme"
+        ));
+        // A different organization must not match: callers fall back to `gh`
+        // instead of erroring so mixed checkouts keep working.
+        assert!(!azure_config_matches_repo(
+            "https://dev.azure.com/other",
+            "https://dev.azure.com/acme"
+        ));
+        assert!(!azure_config_matches_repo("", "https://dev.azure.com/acme"));
     }
 
     static GIT_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

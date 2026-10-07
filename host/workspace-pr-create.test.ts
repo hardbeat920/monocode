@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 type CliStub = {
   calls: string[][];
+  options: unknown[];
   stdout?: string;
   fail?: boolean;
 };
@@ -38,6 +39,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       );
     }
     stub.calls.push([...args]);
+    stub.options.push(options);
     if (stub.fail) {
       const error = new Error(`Command failed: ${file} ${args.join(" ")}`);
       callback(error, "", "not logged in");
@@ -72,6 +74,8 @@ import {
   azurePrWebUrl,
   parseAzureDevOpsRemote,
   pushRemoteFromUpstream,
+  selectPushRemote,
+  shouldUseShell,
   WorkspaceCommands,
 } from "./workspace-commands";
 
@@ -82,8 +86,8 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function stubCli(name: string, stub: Omit<CliStub, "calls">): CliStub {
-  const entry: CliStub = { ...stub, calls: [] };
+function stubCli(name: string, stub: Omit<CliStub, "calls" | "options">): CliStub {
+  const entry: CliStub = { ...stub, calls: [], options: [] };
   cliStubs.set(name, entry);
   return entry;
 }
@@ -182,6 +186,24 @@ it("resolves the push remote from the upstream ref", () => {
   expect(pushRemoteFromUpstream("")).toBeNull();
 });
 
+it("selects the push remote from pushRemote/pushDefault config", () => {
+  const remotes = ["origin", "azure"];
+  expect(selectPushRemote({ branchPushRemote: "azure", pushDefault: "", remotes })).toBe("azure");
+  expect(selectPushRemote({ branchPushRemote: "", pushDefault: "azure", remotes })).toBe("azure");
+  expect(selectPushRemote({ branchPushRemote: "", pushDefault: "", remotes })).toBe("origin");
+  expect(selectPushRemote({ branchPushRemote: "", pushDefault: "", remotes: ["azure"] })).toBe("azure");
+  // Unknown configured names are ignored instead of breaking PR routing.
+  expect(selectPushRemote({ branchPushRemote: "missing", pushDefault: "", remotes })).toBe("origin");
+  expect(selectPushRemote({ branchPushRemote: "", pushDefault: "missing", remotes })).toBe("origin");
+  expect(selectPushRemote({ branchPushRemote: "", pushDefault: "", remotes: [] })).toBeNull();
+});
+
+it("requires a shell on Windows to launch the az.cmd wrapper", () => {
+  expect(shouldUseShell("win32")).toBe(true);
+  expect(shouldUseShell("linux")).toBe(false);
+  expect(shouldUseShell("darwin")).toBe(false);
+});
+
 it("builds canonical Azure pull-request URLs", () => {
   expect(
     azurePrWebUrl(
@@ -244,5 +266,35 @@ it("falls back to gh when az fails", async () => {
   stubCli("gh", { stdout: "https://github.com/acme/web/pull/9" });
   const url = await createPr(cwd);
   expect(url).toBe("https://github.com/acme/web/pull/9");
+  expect(az.calls).toHaveLength(1);
+});
+
+it("forwards exec options (incl. Windows shell flag) to the az process", async () => {
+  const cwd = initRepo({ origin: AZURE_URL });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 12}' });
+  await createPr(cwd);
+  expect(az.calls).toHaveLength(1);
+  const options = az.options[0] as Record<string, unknown>;
+  // gitRoot resolves symlinks (e.g. /var -> /private/var on macOS), so only
+  // assert the shell flag plus that a cwd was passed through.
+  expect(options.shell).toBe(shouldUseShell());
+  expect(typeof options.cwd).toBe("string");
+});
+
+it("honors branch.pushRemote over origin when no upstream is set", async () => {
+  const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
+  execFileSync("git", ["config", "branch.feature.pushRemote", "azure"], { cwd });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 11}' });
+  const url = await createPr(cwd);
+  expect(url).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/11");
+  expect(az.calls).toHaveLength(1);
+});
+
+it("honors remote.pushDefault when no upstream is set", async () => {
+  const cwd = initRepo({ origin: GITHUB_URL, azure: AZURE_URL });
+  execFileSync("git", ["config", "remote.pushDefault", "azure"], { cwd });
+  const az = stubCli("az", { stdout: '{"pullRequestId": 13}' });
+  const url = await createPr(cwd);
+  expect(url).toBe("https://dev.azure.com/acme/shop/_git/web/pullrequest/13");
   expect(az.calls).toHaveLength(1);
 });

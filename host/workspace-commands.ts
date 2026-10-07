@@ -239,6 +239,29 @@ export function pushRemoteFromUpstream(upstream: string): string | null {
   return upstream.trim().slice(0, slash);
 }
 
+/** Whether CLI subprocesses need a shell. On Windows the Azure CLI ships
+ * as an `az.cmd` wrapper, which `execFile` cannot launch directly without
+ * a shell; `gh` is a real executable and works either way. */
+export function shouldUseShell(platform: string = process.platform): boolean {
+  return platform === "win32";
+}
+
+/** Pure push-remote selection mirroring `git push` (no upstream case):
+ * `branch.<name>.pushRemote`, then `remote.pushDefault`, then origin if
+ * present, else the first remote. Unknown configured names are ignored.
+ * The upstream remote, when present, is handled by the caller. */
+export function selectPushRemote(options: {
+  branchPushRemote: string;
+  pushDefault: string;
+  remotes: string[];
+}): string | null {
+  const { branchPushRemote, pushDefault, remotes } = options;
+  if (branchPushRemote && remotes.includes(branchPushRemote)) return branchPushRemote;
+  if (pushDefault && remotes.includes(pushDefault)) return pushDefault;
+  if (remotes.length === 0) return null;
+  return remotes.includes("origin") ? "origin" : remotes[0]!;
+}
+
 export class WorkspaceCommands {
   private roots = new Map<string, { at: number; roots: string[] }>();
   private rootsGeneration = 0;
@@ -665,11 +688,13 @@ export class WorkspaceCommands {
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
       encoding: "utf8",
+      shell: shouldUseShell(),
       env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" },
     })).stdout.trim();
   }
 
-  /** Remote `git push` would use: the upstream's remote, else origin if
+  /** Remote `git push` would use: the upstream's remote, else
+   * `branch.<name>.pushRemote`, then `remote.pushDefault`, else origin if
    * present, else the first remote. Mirrors the desktop backend so PR
    * creation targets the same repository the branch pushes to. */
   private async gitPushRemote(root: string): Promise<string | null> {
@@ -677,11 +702,25 @@ export class WorkspaceCommands {
       .then((output) => output.trim())
       .catch(() => "");
     if (upstream) return pushRemoteFromUpstream(upstream);
-    const remotes = await this.gitCommand(root, ["remote"])
-      .then((output) => output.split("\n").map((name) => name.trim()).filter(Boolean))
-      .catch(() => [] as string[]);
+    const [branch, pushDefault, remotes] = await Promise.all([
+      this.gitCommand(root, ["branch", "--show-current"])
+        .then((output) => output.trim())
+        .catch(() => ""),
+      this.gitCommand(root, ["config", "--get", "remote.pushDefault"])
+        .then((output) => output.trim())
+        .catch(() => ""),
+      this.gitCommand(root, ["remote"])
+        .then((output) => output.split("\n").map((name) => name.trim()).filter(Boolean))
+        .catch(() => [] as string[]),
+    ]);
     if (remotes.length === 0) return null;
-    return remotes.includes("origin") ? "origin" : remotes[0]!;
+    let branchPushRemote = "";
+    if (branch) {
+      branchPushRemote = await this.gitCommand(root, ["config", "--get", `branch.${branch}.pushRemote`])
+        .then((output) => output.trim())
+        .catch(() => "");
+    }
+    return selectPushRemote({ branchPushRemote, pushDefault, remotes });
   }
 
   /** Azure DevOps coordinates of the branch's push destination, or null when
@@ -699,7 +738,9 @@ export class WorkspaceCommands {
   }
 
   /** Creates the PR with the Azure CLI and returns its web URL. Throws when
-   * `az` is unavailable or creation fails, so the caller can fall back to `gh`. */
+   * `az` is unavailable or creation fails, so the caller can fall back to `gh`.
+   * Uses a shell on Windows because the Azure CLI ships as an `az.cmd`
+   * wrapper, which `execFile` cannot launch directly. */
   private async azurePrCreate(
     root: string,
     target: AzurePrTarget,
@@ -723,6 +764,7 @@ export class WorkspaceCommands {
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
       encoding: "utf8",
+      shell: shouldUseShell(),
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     }).then((result) => result.stdout.trim());
     const id = Number((JSON.parse(output) as { pullRequestId?: unknown }).pullRequestId);
