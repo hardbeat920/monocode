@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { stopSessionProcesses } from "./stopSessionProcesses";
+import { stopOnce, stopSessionProcesses } from "./stopSessionProcesses";
 
 describe("stopSessionProcesses", () => {
   it("finishes the control turn, then reports a kill that failed", async () => {
@@ -72,4 +72,39 @@ describe("stopSessionProcesses", () => {
       expect(calls).toEqual(["stopChildren", "kill", "finishTurn"]);
     },
   );
+});
+
+describe("stopOnce", () => {
+  it("stops a worker before applying its result and not again at removal", async () => {
+    const order: string[] = [];
+    const stop = stopOnce(async () => void order.push("stop"));
+    // cleanupWorker: stop, apply the result, then remove the worktree.
+    await stop();
+    order.push("apply");
+    await stop();
+    order.push("remove");
+    expect(order).toEqual(["stop", "apply", "remove"]);
+  });
+
+  it("shares a stop in progress", async () => {
+    let finish!: () => void;
+    const run = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const stop = stopOnce(run);
+    const first = stop();
+    const second = stop();
+    finish();
+    await Promise.all([first, second]);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("runs again after a failed stop", async () => {
+    const run = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("kill failed"))
+      .mockResolvedValueOnce(undefined);
+    const stop = stopOnce(run);
+    await expect(stop()).rejects.toThrow("kill failed");
+    await expect(stop()).resolves.toBeUndefined();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
 });

@@ -31,3 +31,18 @@ export async function stopSessionProcesses({
   const first = failures.find((entry) => entry !== undefined);
   if (first) throw first.error;
 }
+
+/**
+ * Wraps a stop so a flow that needs the process gone at several points stops
+ * it once. Later calls wait for the first. A stop that failed runs again.
+ */
+export function stopOnce(stop: () => Promise<void>): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  return () => {
+    pending ??= stop().catch((error: unknown) => {
+      pending = undefined;
+      throw error;
+    });
+    return pending;
+  };
+}

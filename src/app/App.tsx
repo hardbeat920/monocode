@@ -18,7 +18,7 @@ import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
-import { stopSessionProcesses } from "./model/stopSessionProcesses";
+import { stopOnce, stopSessionProcesses } from "./model/stopSessionProcesses";
 import {
   handleAgentApp,
   canAccessAgentAppProject,
@@ -9985,6 +9985,21 @@ function Workspace({
   }, [tabs, activeTabId, orchestrationRuns]);
 
   useLayoutEffect(() => {
+    const stopProcesses = (id: string) => {
+      const session = sessionsRef.current.find((entry) => entry.id === id);
+      return stopSessionProcesses({
+        stopChildren: () =>
+          Promise.all(
+            (session ? sessionChildHarnesses(session) : []).map((harness) =>
+              stopHarnessSession(harness, id),
+            ),
+          ),
+        // Also reap processes left behind by a renderer reload, before the
+        // corresponding session has been restored in this window.
+        kill: () => invoke("harness_kill", { sessionId: id }),
+        finishTurn: () => invoke("control_turn_finished", { sessionId: id }),
+      });
+    };
     orchestrator.bind({
       session: (id) => sessionsRef.current.find((session) => session.id === id),
       sessions: () => sessionsRef.current,
@@ -10152,17 +10167,7 @@ function Workspace({
         const fromCwd = task.workspace?.checkoutCwd;
         if (!fromCwd)
           throw new Error("This worker's isolated checkout is unavailable");
-        const session = sessionsRef.current.find(
-          (entry) => entry.id === task.sessionId,
-        );
-        if (session)
-          await Promise.all(
-            sessionChildHarnesses(session).map((harness) =>
-              stopHarnessSession(harness, task.sessionId),
-            ),
-          );
-        await invoke("harness_kill", { sessionId: task.sessionId });
-        await invoke("control_turn_finished", { sessionId: task.sessionId });
+        await stopProcesses(task.sessionId);
         await flushSessionCheckpoint(task.sessionId);
         const listed = await listWorktrees(orchestrationCheckoutCwd(run));
         const workerTree = listed.worktrees.find((tree) =>
@@ -10190,6 +10195,13 @@ function Workspace({
         const workspace = task.workspace;
         if (!workspace || workspace.kind !== "worktree") return true;
         const path = workspace.checkoutCwd;
+        // Applying or removing the worktree needs the worker gone first, or a
+        // write that lands meanwhile is neither copied to the lead nor kept.
+        const stopWorker = stopOnce(async () => {
+          onStop(task.sessionId, true);
+          await stopProcesses(task.sessionId);
+          await flushSessionCheckpoint(task.sessionId);
+        });
         await flushSessionCheckpoint(task.sessionId);
         const listed = await listWorktrees(orchestrationCheckoutCwd(run));
         const exists = listed.worktrees.some(
@@ -10227,6 +10239,7 @@ function Workspace({
           if (dispatch?.stage !== "integrated") {
             // The operation is idempotent, so this also finishes a partially
             // applied integration.
+            await stopWorker();
             const applied = await applySessionCheckpoint(
               task.sessionId,
               path,
@@ -10241,21 +10254,10 @@ function Workspace({
         }
 
         if (exists) {
-          onStop(task.sessionId, true);
           const session = sessionsRef.current.find(
             (entry) => entry.id === task.sessionId,
           );
-          if (session) {
-            await Promise.all(
-              sessionChildHarnesses(session).map((harness) =>
-                stopHarnessSession(harness, task.sessionId),
-              ),
-            );
-          }
-          await invoke("harness_kill", { sessionId: task.sessionId });
-          await invoke("control_turn_finished", {
-            sessionId: task.sessionId,
-          });
+          await stopWorker();
           await flushSessionWrites();
           checkOpenWorktreeFiles(path);
           const removed = await removeOrchestrationWorktree(
@@ -10368,20 +10370,8 @@ function Workspace({
           respondHarnessQuestion(session.harness, id, requestId, reply);
       },
       stop: async (id) => {
-        const session = sessionsRef.current.find((entry) => entry.id === id);
         onStop(id, true);
-        await stopSessionProcesses({
-          stopChildren: () =>
-            Promise.all(
-              (session ? sessionChildHarnesses(session) : []).map((harness) =>
-                stopHarnessSession(harness, id),
-              ),
-            ),
-          // Also reap processes left behind by a renderer reload, before the
-          // corresponding session has been restored in this window.
-          kill: () => invoke("harness_kill", { sessionId: id }),
-          finishTurn: () => invoke("control_turn_finished", { sessionId: id }),
-        });
+        await stopProcesses(id);
       },
     });
   }, [checkOpenWorktreeFiles, submitSession, onStop, flushHarnessEvents]);
