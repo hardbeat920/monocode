@@ -10,6 +10,7 @@ import {
   inboxListCacheKey,
   inboxItemKey,
   inboxProjectsForRail,
+  githubWorkItem,
   listInboxItems,
   type GithubWorkItem,
   type InboxItem,
@@ -49,6 +50,11 @@ import {
   InboxNotificationTracker,
   inboxNotificationSubject,
 } from "../model/inboxNotifications";
+import {
+  InboxTransitionTracker,
+  resolveMissingTransitions,
+  type InboxTransition,
+} from "../model/inboxTransitions";
 import {
   inboxNotificationProject,
   rememberNotificationProjects,
@@ -102,7 +108,14 @@ export function useInboxActivity(
   recents: RecentProject[],
   cwd: string,
   sessions: readonly SessionSummary[],
-  options?: { onAppeared?: (items: InboxItem[]) => void },
+  options?: {
+    /** Newly appeared items, and GitHub items that changed state. */
+    onActivity?: (
+      appeared: InboxItem[],
+      transitions: InboxTransition[],
+      observed: InboxItem[],
+    ) => void;
+  },
 ): InboxActivity {
   const [unseen, setUnseen] = useState(false);
   const [workItems, setWorkItems] = useState<
@@ -112,8 +125,9 @@ export function useInboxActivity(
   const [notificationRevision, setNotificationRevision] = useState(0);
   const entriesRef = useRef<ProjectSeenEntry[]>([]);
   const notifications = useRef(new InboxNotificationTracker());
+  const transitions = useRef(new InboxTransitionTracker());
   const sessionsRef = useRef(sessions);
-  const onAppearedRef = useRef(options?.onAppeared);
+  const onActivityRef = useRef(options?.onActivity);
   const lastPulledAt = useRef<number | null>(null);
 
   const applyUnseen = useCallback(() => {
@@ -133,8 +147,8 @@ export function useInboxActivity(
   }, [sessions]);
 
   useLayoutEffect(() => {
-    onAppearedRef.current = options?.onAppeared;
-  }, [options?.onAppeared]);
+    onActivityRef.current = options?.onActivity;
+  }, [options?.onActivity]);
 
   useEffect(() => {
     const stopSeen = subscribeInboxSeen(applyUnseen);
@@ -191,15 +205,27 @@ export function useInboxActivity(
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
         );
+        const scope = inboxListCacheKey(projects, query);
+        const failedProviders = Object.keys(listed.errors) as InboxProvider[];
         const observed = notifications.current.observe(
           listed.items,
-          inboxListCacheKey(projects, query),
-          Object.keys(listed.errors) as InboxProvider[],
+          scope,
+          failedProviders,
+        );
+        const moved = transitions.current.observe(
+          listed.items,
+          scope,
+          failedProviders,
         );
         const changed = observed.changed;
         // Invoke on every successful poll so retained automation claims can be
         // retried even when the item is no longer newly appeared.
-        onAppearedRef.current?.(observed.appeared);
+        onActivityRef.current?.(
+          observed.appeared,
+          moved.transitions,
+          failedProviders.includes("github") ? [] : listed.items,
+        );
+        transitions.current.checkpoint();
         const selfAuthored = changed.filter((item) =>
           consumeInboxSelfActivity(item),
         );
@@ -275,6 +301,32 @@ export function useInboxActivity(
         if (snapshots.length > 0) {
           setWorkItems((current) => mergeSnapshots(current, snapshots));
         }
+        // A closed item just leaves an open-only list, so ask GitHub what
+        // happened to it. The tracker discards stale lookup completions.
+        const confirmed = await resolveMissingTransitions(
+          transitions.current,
+          moved.missing,
+          (item) =>
+            githubWorkItem(
+              item.projectPath,
+              item.repo,
+              item.kind === "pr" ? "pr" : "issue",
+              item.number,
+              { force: true },
+            ),
+          undefined,
+          () => !cancelled,
+        );
+        // Earlier lookups may have resolved before this effect was replaced.
+        // Hand those transitions off because the tracker has recorded them.
+        if (confirmed.length > 0) {
+          onActivityRef.current?.(
+            [],
+            confirmed,
+            confirmed.map(({ item }) => item),
+          );
+        }
+        transitions.current.checkpoint();
       } catch {
         // Leave the last known badges; a later poll can try again.
       } finally {

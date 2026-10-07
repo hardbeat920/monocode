@@ -315,3 +315,232 @@ describe("Inbox activity polling", () => {
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
   });
 });
+
+describe("Inbox activity for automations", () => {
+  const POLL_MS = 2 * 60_000;
+  const onActivity = vi.fn();
+
+  function AutomationHarness({
+    projects = recents,
+  }: {
+    projects?: typeof recents;
+  }) {
+    useInboxActivity(projects, "/tmp/app", [], { onActivity });
+    return null;
+  }
+
+  async function mountForAutomations() {
+    await act(async () => {
+      root.render(createElement(AutomationHarness));
+    });
+  }
+
+  async function nextPoll() {
+    await act(async () => vi.advanceTimersByTimeAsync(POLL_MS));
+  }
+
+  const reportedTransitions = () =>
+    onActivity.mock.calls.flatMap(([, transitions]) => transitions);
+  const reportedAppeared = () =>
+    onActivity.mock.calls.flatMap(([appeared]) => appeared);
+
+  beforeEach(() => {
+    onActivity.mockReset();
+    vi.useFakeTimers();
+  });
+
+  it("reports a pull request that left the open list because it was merged", async () => {
+    const merged = {
+      ...remote,
+      state: "merged",
+      updatedAt: "2026-09-13T13:00:00Z",
+    };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: {} });
+    githubWorkItem.mockResolvedValue(merged);
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([]);
+
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/app",
+      "acme/app",
+      "pr",
+      42,
+      { force: true },
+    );
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+
+    await nextPoll();
+    expect(reportedTransitions()).toHaveLength(1);
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports nothing when the missing pull request is still open", async () => {
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: {} });
+    githubWorkItem.mockResolvedValue(remote);
+    await mountForAutomations();
+    await nextPoll();
+    await nextPoll();
+
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+    expect(reportedTransitions()).toEqual([]);
+  });
+
+  it("retries a lookup cancelled by an effect replacement", async () => {
+    const merged = { ...remote, state: "merged" };
+    let finishLookup!: (item: InboxItem) => void;
+    let finishList!: (result: { items: InboxItem[]; errors: {} }) => void;
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValueOnce({ items: [], errors: {} })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishList = resolve;
+          }),
+      );
+    githubWorkItem
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLookup = resolve;
+          }),
+      )
+      .mockResolvedValue(merged);
+    await mountForAutomations();
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(createElement(AutomationHarness, { projects: [...recents] }));
+    });
+    await act(async () => {
+      finishLookup(merged);
+    });
+    expect(reportedTransitions()).toEqual([]);
+    await act(async () => {
+      finishList({ items: [], errors: {} });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+    expect(githubWorkItem).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands off earlier confirmed lookups when a later lookup is cancelled", async () => {
+    const other = { ...remote, number: 43 };
+    const merged = { ...remote, state: "merged" };
+    let finishLookup!: (item: InboxItem) => void;
+    let finishList!: (result: { items: InboxItem[]; errors: {} }) => void;
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote, other], errors: {} })
+      .mockResolvedValueOnce({ items: [], errors: {} })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishList = resolve;
+          }),
+      );
+    githubWorkItem
+      .mockResolvedValueOnce(merged)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLookup = resolve;
+          }),
+      )
+      .mockResolvedValue({ ...other, state: "open" });
+    await mountForAutomations();
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      root.render(createElement(AutomationHarness, { projects: [...recents] }));
+    });
+    await act(async () => {
+      finishLookup({ ...other, state: "merged" });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+    await act(async () => {
+      finishList({ items: [], errors: {} });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+  });
+
+  it("reports a reopened item without treating it as newly appeared", async () => {
+    const closed = { ...remote, state: "closed" };
+    const reopened = { ...remote, updatedAt: "2026-09-13T14:00:00Z" };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [closed], errors: {} })
+      .mockResolvedValue({ items: [reopened], errors: {} });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(reportedTransitions()).toEqual([
+      { item: reopened, transition: "reopened" },
+    ]);
+    expect(reportedAppeared()).toEqual([]);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("does not look items up while the GitHub refresh is failing", async () => {
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [], errors: { github: "gh is offline" } });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(githubWorkItem).not.toHaveBeenCalled();
+    expect(reportedTransitions()).toEqual([]);
+  });
+
+  it("reports head changes through the shared poll and catches up after remount without extra fetches", async () => {
+    const a = { ...remote, headRefOid: "a".repeat(40) };
+    const b = { ...remote, headRefOid: "b".repeat(40) };
+    listInboxItems.mockResolvedValue({ items: [a], errors: {} });
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([]);
+    expect(localStorage.getItem("monocode.inbox-pr-heads.v1")).toContain(
+      a.headRefOid,
+    );
+    await act(async () => {
+      root.render(null);
+    });
+    listInboxItems.mockResolvedValue({ items: [b], errors: {} });
+    await mountForAutomations();
+    expect(reportedTransitions()).toEqual([
+      { item: b, transition: "head_changed", previousHead: a.headRefOid },
+    ]);
+    expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([b]);
+    await nextPoll();
+    expect(reportedTransitions()).toHaveLength(1);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+    listInboxItems.mockResolvedValue({
+      items: [b],
+      errors: { github: "offline" },
+    });
+    await nextPoll();
+    expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([]);
+  });
+
+  it("still reports newly appeared items on every poll", async () => {
+    const other = { ...remote, number: 43 };
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValue({ items: [remote, other], errors: {} });
+    await mountForAutomations();
+    await nextPoll();
+
+    expect(reportedAppeared()).toEqual([other]);
+    expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});

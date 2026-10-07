@@ -58,6 +58,12 @@ Orchestration workers keep their existing scoped `control` workflow and do not r
 
 Small, focused pull requests are welcome. Anything large is worth an issue first - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### PR review automations
+
+Combine **Pull request opened** and **Pull request head changed** to review later
+pushes through the shared Inbox refresh. See [setup, retries and restart
+behavior](docs/pr-review-automations.md).
+
 ## Build from source
 
 Supports macOS, Linux, and Windows.
