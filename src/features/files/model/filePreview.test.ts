@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatFileSize, isImagePath, sniffImageMime } from "./filePreview";
+import { formatFileSize, isHtmlPath, isImagePath, sniffImageMime } from "./filePreview";
 
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values);
@@ -18,6 +18,20 @@ describe("isImagePath", () => {
     expect(isImagePath("/w/spec.pdf")).toBe(false);
     expect(isImagePath("/w/LICENSE")).toBe(false);
     expect(isImagePath("/w/.png/notes.txt")).toBe(false);
+  });
+});
+
+describe("isHtmlPath", () => {
+  it("recognizes .html and .htm extensions case-insensitively", () => {
+    expect(isHtmlPath("/site/index.html")).toBe(true);
+    expect(isHtmlPath("/site/about.HTM")).toBe(true);
+    expect(isHtmlPath("preview.Html")).toBe(true);
+  });
+
+  it("rejects other files", () => {
+    expect(isHtmlPath("/site/index.xhtml")).toBe(false);
+    expect(isHtmlPath("/site/index.php")).toBe(false);
+    expect(isHtmlPath("/site/index.html.txt")).toBe(false);
   });
 });
 

@@ -11,6 +11,8 @@ const IMAGE_EXTENSIONS = new Set([
   ".ico",
 ]);
 
+const HTML_EXTENSIONS = new Set([".html", ".htm"]);
+
 /**
  * Whether a path belongs to the image viewer, decided before anything is read.
  *
@@ -21,6 +23,13 @@ export function isImagePath(path: string): boolean {
   const name = basename(path).toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   return IMAGE_EXTENSIONS.has(extension);
+}
+
+/** Whether a path is a local HTML/HTM document. */
+export function isHtmlPath(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  return HTML_EXTENSIONS.has(extension);
 }
 
 /**

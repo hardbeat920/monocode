@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Check,
   Copy,
+  ExternalLink,
   Folder,
   Minus,
   Plus,
@@ -16,10 +17,12 @@ import { watchFile } from "../model/fileWatch";
 import {
   basename,
   copyFileToClipboard,
+  openPathWithDefaultApp,
   readBinaryFile,
   revealPath,
 } from "../../../platform/tauri/fs";
 import { displayPath } from "../../../shared/lib/paths";
+import { isRemoteProjectPath } from "../../projects/model/recents";
 import { IS_MAC } from "../../../platform/tauri/platform";
 
 const MIN_ZOOM = 0.1;
@@ -342,6 +345,12 @@ function FileCard({
             <CardButton onClick={onRetry}>
               <RotateCcw className="size-3" strokeWidth={1.75} />
               Retry
+            </CardButton>
+          ) : null}
+          {!isRemoteProjectPath(path) && !isRemoteProjectPath(cwd) ? (
+            <CardButton onClick={() => void openPathWithDefaultApp(path).catch(() => {})}>
+              <ExternalLink className="size-3" strokeWidth={1.75} />
+              Open externally
             </CardButton>
           ) : null}
           <CardButton onClick={() => void revealPath(path).catch(() => {})}>
