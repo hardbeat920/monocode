@@ -167,6 +167,18 @@ import {
   type GitlabWorkItemThread,
 } from "../model/gitlab";
 import {
+  BITBUCKET_CHANGE_EVENT,
+  bitbucketConnected,
+  bitbucketPrDiff,
+  bitbucketWorkItemComment,
+  bitbucketWorkItemDetails,
+  bitbucketWorkItemThread,
+  peekBitbucketPrDiff,
+  peekBitbucketWorkItemDetails,
+  peekBitbucketWorkItemThread,
+  type BitbucketWorkItemThread,
+} from "../model/bitbucket";
+import {
   AZUREDEVOPS_CHANGE_EVENT,
   azureDevOpsConnected,
   azureDevOpsMrDiff,
@@ -562,9 +574,11 @@ export function InboxView({
     const onChange = () => setRefresh((value) => value + 1);
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+    window.addEventListener(BITBUCKET_CHANGE_EVENT, onChange);
     return () => {
       window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+      window.removeEventListener(BITBUCKET_CHANGE_EVENT, onChange);
     };
   }, []);
 
@@ -582,7 +596,8 @@ export function InboxView({
         jiraConnected(),
         gitlabConnected(),
         azureDevOpsConnected(),
-      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
+        bitbucketConnected(),
+      ]).then(([github, linear, jira, gitlab, azuredevops, bitbucket]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
           github:
@@ -602,6 +617,10 @@ export function InboxView({
             azuredevops.status === "fulfilled"
               ? azuredevops.value.connected
               : prev.azuredevops,
+          bitbucket:
+            bitbucket.status === "fulfilled"
+              ? bitbucket.value.connected
+              : prev.bitbucket,
         }));
       });
     };
@@ -610,12 +629,14 @@ export function InboxView({
     window.addEventListener(JIRA_CHANGE_EVENT, read);
     window.addEventListener(GITLAB_CHANGE_EVENT, read);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
+    window.addEventListener(BITBUCKET_CHANGE_EVENT, read);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, read);
       window.removeEventListener(JIRA_CHANGE_EVENT, read);
       window.removeEventListener(GITLAB_CHANGE_EVENT, read);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
+      window.removeEventListener(BITBUCKET_CHANGE_EVENT, read);
     };
   }, []);
 
@@ -714,6 +735,7 @@ export function InboxView({
           jira: message,
           gitlab: message,
           azuredevops: message,
+          bitbucket: message,
         });
       })
       .finally(() => {
@@ -1035,12 +1057,12 @@ export function InboxView({
                     : "No matching issues or pull requests"
                 : isTrackerSource(source)
                   ? `No ${INBOX_SOURCE_LABELS[source]} issues match these filters`
-                  : source === "gitlab" || source === "azuredevops"
+                  : source === "gitlab" ||
+                      source === "azuredevops" ||
+                      source === "bitbucket"
                     ? activeFilters.assignedToMe
                       ? "Nothing needs your attention"
-                      : source === "gitlab"
-                        ? "No GitLab items match these filters"
-                        : "No ADO items match these filters"
+                      : `No ${INBOX_SOURCE_LABELS[source]} items match these filters`
                     : "No issues or pull requests match these filters"
               : isTrackerSource(source)
                 ? `No ${INBOX_SOURCE_LABELS[source]} issues`
@@ -1527,7 +1549,9 @@ function InboxCard({
   const tracker = item.provider === "linear" || item.provider === "jira";
   const source = tracker ? item.teamName || item.repo : item.repo || name;
   const attentionLabel =
-    item.provider === "gitlab" || item.provider === "azuredevops"
+    item.provider === "gitlab" ||
+    item.provider === "azuredevops" ||
+    item.provider === "bitbucket"
       ? gitlabAttentionLabel(item.attentionReason ?? "")
       : "";
   const unseen = isInboxEntryUnseen({
@@ -2028,6 +2052,7 @@ export function InboxDetail({
   const jiraKey = jira ? (item.identifier ?? "") : "";
   const gitlab = item.provider === "gitlab";
   const azuredevops = item.provider === "azuredevops";
+  const bitbucket = item.provider === "bitbucket";
   const isPr = !tracker && item.kind === "pr";
   const githubKind =
     item.provider === "github" && (item.kind === "issue" || item.kind === "pr")
@@ -2039,7 +2064,9 @@ export function InboxDetail({
         ? "Review on GitLab"
         : azuredevops
           ? "Review on ADO"
-          : "Review on GitHub"
+          : bitbucket
+            ? "Review on Bitbucket"
+            : "Review on GitHub"
       : linear
         ? "Open in Linear"
         : jira
@@ -2048,11 +2075,17 @@ export function InboxDetail({
             ? "Open on GitLab"
             : azuredevops
               ? "Open on ADO"
-              : "Open on GitHub";
+              : bitbucket
+                ? "Open on Bitbucket"
+                : "Open on GitHub";
   const gitlabKind =
     gitlab && (item.kind === "issue" || item.kind === "pr") ? item.kind : null;
   const azureDevOpsKind =
     azuredevops && (item.kind === "issue" || item.kind === "pr")
+      ? item.kind
+      : null;
+  const bitbucketKind =
+    bitbucket && (item.kind === "issue" || item.kind === "pr")
       ? item.kind
       : null;
   const cached = linear
@@ -2067,15 +2100,23 @@ export function InboxDetail({
               azureDevOpsKind,
               item.number,
             )
-          : githubKind
-            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-            : null;
+          : bitbucketKind
+            ? peekBitbucketWorkItemDetails(
+                item.repo,
+                bitbucketKind,
+                item.number,
+              )
+            : githubKind
+              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+              : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number)
+        : bitbucket
+          ? peekBitbucketPrDiff(item.repo, item.number)
+          : peekGithubPrDiff(item.repo, item.number)
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
@@ -2089,9 +2130,11 @@ export function InboxDetail({
               azureDevOpsKind,
               item.number,
             )
-          : githubKind
-            ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
-            : null;
+          : bitbucketKind
+            ? peekBitbucketWorkItemThread(item.repo, bitbucketKind, item.number)
+            : githubKind
+              ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
+              : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
   const [error, setError] = useState<string | null>(null);
@@ -2113,6 +2156,7 @@ export function InboxDetail({
     | JiraIssueThread
     | GitlabWorkItemThread
     | AzureDevOpsWorkItemThread
+    | BitbucketWorkItemThread
     | null
   >(cachedThread);
   const [threadLoading, setThreadLoading] = useState(cachedThread == null);
@@ -2138,7 +2182,7 @@ export function InboxDetail({
     ? item.teamName || item.repo
     : item.repo || projectName(item.projectPath);
   const attentionLabel =
-    gitlab || azuredevops
+    gitlab || azuredevops || bitbucket
       ? gitlabAttentionLabel(item.attentionReason ?? "")
       : "";
   const markdownCwd = chooseStartProject
@@ -2200,9 +2244,15 @@ export function InboxDetail({
                 azureDevOpsKind,
                 item.number,
               )
-            : githubKind
-              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
-              : null;
+            : bitbucketKind
+              ? peekBitbucketWorkItemDetails(
+                  item.repo,
+                  bitbucketKind,
+                  item.number,
+                )
+              : githubKind
+                ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+                : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
       setLoading(false);
@@ -2228,15 +2278,17 @@ export function InboxDetail({
                 azureDevOpsKind,
                 item.number,
               )
-            : githubKind
-              ? githubWorkItemDetails(
-                  item.projectPath,
-                  item.repo,
-                  githubKind,
-                  item.number,
-                  { maxAgeMs: panelMaxAge },
-                )
-              : Promise.reject(new Error("Unknown inbox item"));
+            : bitbucketKind
+              ? bitbucketWorkItemDetails(item.repo, bitbucketKind, item.number)
+              : githubKind
+                ? githubWorkItemDetails(
+                    item.projectPath,
+                    item.repo,
+                    githubKind,
+                    item.number,
+                    { maxAgeMs: panelMaxAge },
+                  )
+                : Promise.reject(new Error("Unknown inbox item"));
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -2256,6 +2308,7 @@ export function InboxDetail({
     };
   }, [
     azureDevOpsKind,
+    bitbucketKind,
     githubKind,
     gitlabKind,
     item.id,
@@ -2396,6 +2449,39 @@ export function InboxDetail({
         cancelled = true;
       };
     }
+    if (bitbucketKind) {
+      const cachedThread = peekBitbucketWorkItemThread(
+        item.repo,
+        bitbucketKind,
+        item.number,
+      );
+      if (cachedThread) {
+        setThread(cachedThread);
+        setThreadLoading(false);
+        setThreadError(null);
+      } else {
+        setThreadLoading(true);
+        setThreadError(null);
+        setThread(null);
+      }
+      void bitbucketWorkItemThread(item.repo, bitbucketKind, item.number)
+        .then((next) => {
+          if (cancelled) return;
+          setThread(next);
+          setThreadError(null);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (cachedThread) return;
+          setThreadError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancelled) setThreadLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (!githubKind) return;
     const cachedThread = peekGithubWorkItemThread(
       item.repo,
@@ -2436,6 +2522,7 @@ export function InboxDetail({
     };
   }, [
     azureDevOpsKind,
+    bitbucketKind,
     githubKind,
     gitlabKind,
     item.id,
@@ -2456,7 +2543,9 @@ export function InboxDetail({
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number, fullFile);
+        : bitbucket
+          ? peekBitbucketPrDiff(item.repo, item.number)
+          : peekGithubPrDiff(item.repo, item.number, fullFile);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);
@@ -2470,10 +2559,12 @@ export function InboxDetail({
       ? gitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? azureDevOpsMrDiff(item.repo, item.number)
-        : githubPrDiff(item.projectPath, item.repo, item.number, {
-            fullContext: fullFile,
-            maxAgeMs: panelMaxAge,
-          });
+        : bitbucket
+          ? bitbucketPrDiff(item.repo, item.number)
+          : githubPrDiff(item.projectPath, item.repo, item.number, {
+              fullContext: fullFile,
+              maxAgeMs: panelMaxAge,
+            });
     void pending
       .then((next) => {
         if (cancelled) return;
@@ -2493,6 +2584,7 @@ export function InboxDetail({
     };
   }, [
     azuredevops,
+    bitbucket,
     diffWanted,
     fullFile,
     gitlab,
@@ -2565,6 +2657,28 @@ export function InboxDetail({
               {
                 force: true,
               },
+            ),
+          );
+        } catch (err: unknown) {
+          setPostError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      if (bitbucketKind) {
+        await bitbucketWorkItemComment(
+          item.repo,
+          bitbucketKind,
+          item.number,
+          body,
+        );
+        setReplyTo(null);
+        try {
+          setThread(
+            await bitbucketWorkItemThread(
+              item.repo,
+              bitbucketKind,
+              item.number,
+              { force: true },
             ),
           );
         } catch (err: unknown) {
@@ -3047,7 +3161,7 @@ export function InboxDetail({
                   replyMode={
                     linear
                       ? "parent"
-                      : jira || gitlab || azuredevops
+                      : jira || gitlab || azuredevops || bitbucket
                         ? undefined
                         : "thread"
                   }

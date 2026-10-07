@@ -693,6 +693,10 @@ import {
   peekGitlabWorkItemDetails,
 } from "../features/inbox/model/gitlab";
 import {
+  bitbucketWorkItemDetails,
+  peekBitbucketWorkItemDetails,
+} from "../features/inbox/model/bitbucket";
+import {
   azureDevOpsWorkItemDetails,
   peekAzureDevOpsWorkItemDetails,
 } from "../features/inbox/model/azureDevOps";
@@ -4440,7 +4444,21 @@ function Workspace({
                         item.number,
                       ))
                     ).body
-                  : undefined;
+                  : item.provider === "bitbucket" &&
+                      (item.kind === "issue" || item.kind === "pr")
+                    ? (
+                        peekBitbucketWorkItemDetails(
+                          item.repo,
+                          item.kind,
+                          item.number,
+                        ) ??
+                        (await bitbucketWorkItemDetails(
+                          item.repo,
+                          item.kind,
+                          item.number,
+                        ))
+                      ).body
+                    : undefined;
           session = {
             ...newDefaultSession(cwd),
             title: `Ask · ${item.title}`,

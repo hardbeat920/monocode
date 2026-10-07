@@ -4,6 +4,7 @@ mod account_identity;
 mod artifacts;
 mod automations;
 mod azure_devops;
+mod bitbucket;
 mod chat_background;
 mod checkpoint;
 mod control;
@@ -365,6 +366,14 @@ pub fn run() {
             azure_devops::azure_devops_work_item_thread,
             azure_devops::azure_devops_work_item_comment,
             azure_devops::azure_devops_mr_diff,
+            bitbucket::bitbucket_status,
+            bitbucket::bitbucket_set_config,
+            bitbucket::bitbucket_repo,
+            bitbucket::bitbucket_list_work_items,
+            bitbucket::bitbucket_work_item_details,
+            bitbucket::bitbucket_work_item_thread,
+            bitbucket::bitbucket_work_item_comment,
+            bitbucket::bitbucket_pr_diff,
             linear::linear_status,
             linear::linear_set_token,
             linear::linear_list_teams,

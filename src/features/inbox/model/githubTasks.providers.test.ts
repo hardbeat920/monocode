@@ -56,7 +56,8 @@ describe.each([
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||
-        command === "azure_devops_status"
+        command === "azure_devops_status" ||
+        command === "bitbucket_status"
       ) {
         return { connected: false };
       }
@@ -246,5 +247,86 @@ describe.each([
       `${commandPrefix}_repo`,
       expect.anything(),
     );
+  });
+});
+
+describe("bitbucket inbox fetching", () => {
+  const projects = [{ path: "/tmp/first" }, { path: "/tmp/other" }];
+  const query = { assignedToMe: false, state: "open", search: "" } as const;
+  let calls: { command: string; args: unknown }[];
+
+  beforeEach(() => {
+    clearInboxCache();
+    calls = [];
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "git_github_repositories") return ["github/repo"];
+      if (command === "git_github_work_items") return [];
+      if (command === "bitbucket_status") return { connected: true };
+      if (command.endsWith("_status")) return { connected: false };
+      if (command === "bitbucket_repo") {
+        const { cwd } = args as { cwd: string };
+        if (cwd === "/tmp/first") return "acme/web";
+        throw new Error("no bitbucket remote");
+      }
+      if (command === "bitbucket_list_work_items") {
+        const { kind } = args as { kind: GithubTaskKind };
+        return kind === "pr" ? [{ ...workItem("acme/web", "pr") }] : [];
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+  });
+
+  it("lists per repository and skips checkouts without a Bitbucket remote", async () => {
+    const result = await listInboxItems(projects, query);
+
+    expect(result.errors).toEqual({});
+    // Bitbucket retired issues, so only pull requests are requested.
+    expect(
+      calls
+        .filter((call) => call.command === "bitbucket_list_work_items")
+        .map((call) => (call.args as { kind: string }).kind),
+    ).toEqual(["pr"]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      provider: "bitbucket",
+      kind: "pr",
+      repo: "acme/web",
+      projectPath: "/tmp/first",
+    });
+  });
+
+  it("answers needs-attention per repository because there is no to-do feed", async () => {
+    await listInboxItems(projects, { ...query, assignedToMe: true });
+
+    const listed = calls.filter(
+      (call) => call.command === "bitbucket_list_work_items",
+    );
+    expect(
+      listed.map((call) => (call.args as { kind: string }).kind).sort(),
+    ).toEqual(["pr"]);
+    for (const call of listed) {
+      expect(call.args).toMatchObject({
+        cwd: "/tmp/first",
+        assignedToMe: true,
+      });
+    }
+  });
+
+  it("reports a provider error without dropping other sources", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "git_github_repositories") return ["github/repo"];
+      if (command === "git_github_work_items") return [];
+      if (command === "bitbucket_status") return { connected: true };
+      if (command.endsWith("_status")) return { connected: false };
+      if (command === "bitbucket_repo") return "acme/web";
+      throw new Error("Bitbucket credentials are invalid or lack permission");
+    });
+
+    const result = await listInboxItems(projects, query);
+
+    expect(result.items).toEqual([]);
+    expect(result.errors.bitbucket).toContain("invalid or lack permission");
   });
 });
