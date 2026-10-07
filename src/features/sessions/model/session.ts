@@ -316,12 +316,19 @@ export type TurnMetrics = {
  */
 export type ContextKept = "none" | "user-messages" | "recent" | "unknown";
 
-/** Where the harness compacted its context; earlier blocks may be gone from it. */
+/**
+ * Where the agent's context was cut down: the harness compacted it, or a Mono
+ * moved to a fresh provider session. Earlier blocks may be gone from it.
+ */
 export type ContextBoundaryMeta = {
-  kind: "compaction";
+  kind: "compaction" | "rotation";
   trigger: "manual" | "auto";
+  /** Why a Mono rotated: its context grew, or it came back after a break. */
+  reason?: "context" | "idle";
   at: number;
   kept: ContextKept;
+  /** The first block the agent still holds word for word, when known. */
+  keptFromBlockId?: string;
   preTokens?: number;
   postTokens?: number;
   /** The harness's own summary of what it compacted, where it shares one. */

@@ -1720,6 +1720,33 @@ describe("context boundaries", () => {
     ).toBe(session);
   });
 
+  it("keeps a Mono rotation boundary through a save", () => {
+    const session = {
+      ...appendUser(newSession("claude", "/tmp"), "go"),
+    };
+    session.blocks = [
+      ...session.blocks,
+      {
+        id: "rotated",
+        role: "system",
+        text: "Started a fresh session",
+        contextBoundary: {
+          kind: "rotation",
+          trigger: "auto",
+          reason: "idle",
+          at: 7,
+          kept: "recent",
+          keptFromBlockId: session.blocks[0].id,
+          summary: "- User: hi → You: hello",
+        },
+      },
+    ];
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[1].contextBoundary).toEqual(
+      session.blocks[1].contextBoundary,
+    );
+  });
+
   it("survives a save", () => {
     let session = appendUser(newSession("codex", "/tmp"), "go");
     session = applyHarnessEvent(session, {

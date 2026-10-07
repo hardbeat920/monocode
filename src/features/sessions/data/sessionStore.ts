@@ -1246,8 +1246,8 @@ function sanitizeContextBoundary(
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const { trigger, kept, at } = record;
-  if (record.kind !== "compaction") return undefined;
+  const { kind, trigger, kept, at, reason } = record;
+  if (kind !== "compaction" && kind !== "rotation") return undefined;
   if (trigger !== "manual" && trigger !== "auto") return undefined;
   if (
     kept !== "none" &&
@@ -1268,11 +1268,14 @@ function sanitizeContextBoundary(
     typeof record.summary === "string"
       ? record.summary.trim().slice(0, CONTEXT_SUMMARY_LIMIT)
       : "";
+  const keptFromBlockId = sanitizeNestedId(record.keptFromBlockId);
   return {
-    kind: "compaction",
+    kind,
     trigger,
+    ...(reason === "context" || reason === "idle" ? { reason } : {}),
     at,
     kept,
+    ...(keptFromBlockId ? { keptFromBlockId } : {}),
     ...(preTokens ? { preTokens } : {}),
     ...(postTokens ? { postTokens } : {}),
     ...(summary ? { summary } : {}),
