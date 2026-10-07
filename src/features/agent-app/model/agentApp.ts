@@ -32,6 +32,7 @@ import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import { usageSnapshot } from "./usageSnapshot";
 import {
   CARD_FIELDS,
   parseCard,
