@@ -442,6 +442,9 @@ jobs:
       - name: Build Linux packages
         run: npm run build:linux
 
+      - name: Assert AppImage uses host libraries
+        run: bash scripts/assert-appimage-host-libs.sh
+
       - name: Stage Linux packages
         run: |
           set -euo pipefail

@@ -56,6 +56,66 @@ jobs:
       - run: cargo check
       - run: cargo test
 
+  appimage:
+    name: AppImage host libraries
+    runs-on: ubuntu-22.04
+    # A full tauri release build is too expensive for every PR. Run when
+    # packaging inputs change; the release linux job still always asserts.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip unless packaging files changed
+        id: packaging
+        run: |
+          set -euo pipefail
+          pattern='^(scripts/repack-appimage\.sh|scripts/assert-appimage-host-libs\.sh|scripts/install-linux-deps-debian\.sh|package\.json|src-tauri/tauri\.conf\.json|src-tauri/tauri\.linux\.conf\.json|src-tauri/Cargo\.toml|\.github/workflows/(ci|release)\.yml)$'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Could not resolve $base; building AppImage."
+            exit 0
+          fi
+          if git diff --name-only "$base" "${{ github.sha }}" | grep -Eq "$pattern"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Packaging files unchanged; skipping AppImage build."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.packaging.outputs.run == 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.packaging.outputs.run == 'true'
+
+      - name: Install Linux system dependencies
+        if: steps.packaging.outputs.run == 'true'
+        run: bash scripts/install-linux-deps-debian.sh
+
+      - run: npm ci
+        if: steps.packaging.outputs.run == 'true'
+
+      - name: Build Linux packages
+        if: steps.packaging.outputs.run == 'true'
+        run: npm run build:linux
+
+      - name: Assert AppImage uses host libraries
+        if: steps.packaging.outputs.run == 'true'
+        run: bash scripts/assert-appimage-host-libs.sh
+
   rpm:
     name: RPM build (${{ matrix.image }})
     runs-on: ubuntu-latest
