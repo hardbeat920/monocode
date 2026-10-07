@@ -16,7 +16,6 @@ const ACTION_LABELS: Record<string, string> = {
   "sessions.unarchive": "Unarchive a session",
   "sessions.start": "Start a session",
   "sessions.stop": "Stop a session",
-  "sessions.archive": "Archive a session",
   "sessions.delete": "Delete a session",
   "folders.list": "List folders",
   "folders.move": "Move a session",

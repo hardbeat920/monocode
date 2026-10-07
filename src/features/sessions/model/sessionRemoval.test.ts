@@ -10,6 +10,7 @@ import {
 import { newSession, type Session } from "./session";
 import type { SessionWorkspaceRemoval } from "./sessionWorkspaceLifecycle";
 import { createSessionRemover } from "./sessionRemoval";
+import * as registry from "../../../integrations/harness/core/registry";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
@@ -59,7 +60,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     state = { ...state, ...removal };
   });
   mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "session_set_archived") return true;
+    if (command === "session_set_archived") return args.archived;
     if (command === "session_upsert") {
       return { ...args.session, createdAt: 1, updatedAt: 1 };
     }
@@ -284,13 +285,57 @@ it("rejects a busy archive before confirmation or storage", async () => {
   const f = fixture("archive");
   f.write({
     ...f.read(),
-    sessions: f.read().sessions.map((session) =>
-      session.id === f.closing.id ? { ...session, busy: true } : session,
-    ),
+    sessions: f
+      .read()
+      .sessions.map((session) =>
+        session.id === f.closing.id ? { ...session, busy: true } : session,
+      ),
   });
   expect(await f.run()).toBe(false);
   expect(f.confirmClose).not.toHaveBeenCalled();
   expect(f.stop).not.toHaveBeenCalled();
   expect(mocks.invoke).not.toHaveBeenCalled();
   expect(f.read().sessions[0].busy).toBe(true);
+});
+
+it("keeps a turn that starts during the archive write and restores persisted state", async () => {
+  const f = fixture("archive");
+  const archiveWrite = deferred();
+  const archiveStates: boolean[] = [];
+  const forget = vi.spyOn(registry, "forgetHarnessSession");
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_upsert")
+      return { ...args.session, createdAt: 1, updatedAt: 1 };
+    if (command === "session_set_archived") {
+      archiveStates.push(args.archived);
+      if (args.archived) {
+        await archiveWrite.promise;
+        return true;
+      }
+      return false;
+    }
+  });
+
+  const removing = f.run();
+  await vi.waitFor(() => expect(archiveStates).toEqual([true]));
+  const sessions = f
+    .read()
+    .sessions.map((session) =>
+      session.id === f.closing.id ? { ...session, busy: true } : session,
+    );
+  f.write({
+    ...f.read(),
+    sessions,
+  });
+  archiveWrite.resolve();
+
+  expect(await removing).toBe(false);
+  expect(archiveStates).toEqual([true, false]);
+  expect(f.read().sessions[0].busy).toBe(true);
+  expect(
+    f.read().tabs.some((tab) => leafIds(tab.layout).includes(f.closing.id)),
+  ).toBe(true);
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(forget).not.toHaveBeenCalled();
+  forget.mockRestore();
 });

@@ -7,7 +7,10 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
-import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
+import {
+  isFilesystemTab,
+  type WorkspaceTab,
+} from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   newSession,
@@ -168,9 +171,10 @@ async function removeSession(
   let savedSummary: SessionSummary | undefined;
   let archivedChanged: boolean | undefined;
   if (options.mode === "delete") {
-    const imagePaths = stopped?.blocks.flatMap((block) =>
-      block.role === "image" && block.image ? [block.image.path] : [],
-    ) ?? [];
+    const imagePaths =
+      stopped?.blocks.flatMap((block) =>
+        block.role === "image" && block.image ? [block.image.path] : [],
+      ) ?? [];
     await orchestrator.deleteSession(sessionId, () =>
       deleteSession(sessionId, imagePaths),
     );
@@ -192,6 +196,15 @@ async function removeSession(
     )
       return false;
     archivedChanged = await setSessionArchived(sessionId, true);
+    if (
+      options.workspace
+        .snapshot()
+        .sessions.find((session) => session.id === sessionId)?.busy ||
+      orchestrator.run(sessionId)
+    ) {
+      if (archivedChanged) await setSessionArchived(sessionId, false);
+      return false;
+    }
   }
 
   const current = options.workspace.snapshot();
