@@ -47,4 +47,29 @@ describe("stopSessionProcesses", () => {
     expect(kill).toHaveBeenCalledOnce();
     expect(finishTurn).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    [["stopChildren", "kill", "finishTurn"], "stopChildren"],
+    [["kill", "finishTurn"], "kill"],
+    [["stopChildren", "finishTurn"], "stopChildren"],
+    [["finishTurn"], "finishTurn"],
+  ] as const)(
+    "runs every step when %j fail and reports %s",
+    async (failing, reported) => {
+      const calls: string[] = [];
+      const step = (name: string) => async () => {
+        calls.push(name);
+        if ((failing as readonly string[]).includes(name))
+          throw new Error(name);
+      };
+      await expect(
+        stopSessionProcesses({
+          stopChildren: step("stopChildren"),
+          kill: step("kill"),
+          finishTurn: step("finishTurn"),
+        }),
+      ).rejects.toThrow(new Error(reported));
+      expect(calls).toEqual(["stopChildren", "kill", "finishTurn"]);
+    },
+  );
 });

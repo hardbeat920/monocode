@@ -498,7 +498,13 @@ impl CheckpointStore {
         for file in &changed.files {
             restore_one(&dir, &root, &manifest, &file.relative)?;
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        if manifest.isolated {
+            // A later integration still reads the seed, as after keep.
+            clear_review(&dir, &mut manifest);
+            write_manifest(&dir, &manifest)?;
+        } else {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
         Ok(CheckpointStatus { files: Vec::new() })
     }
 
@@ -3615,6 +3621,35 @@ mod tests {
         let applied = store.apply("worker", &from, &to, None).unwrap();
         assert_eq!(applied.files, ["src/app.ts"]);
         assert_eq!(read(&lead.0.join("src/app.ts")), "fx edit\n");
+    }
+
+    #[test]
+    fn isolated_worker_undo_all_keeps_the_seed_for_integration() {
+        let lead = tmp("isolated-undo-all");
+        let Some(worker) = lead_and_worker(&lead.0, &[("src/app.ts", "head\n")]) else {
+            return;
+        };
+        let from = worker.to_string_lossy().into_owned();
+        let to = lead.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("worker", &from, true).unwrap();
+
+        store
+            .prepare("worker", &from, &["src/app.ts".into()])
+            .unwrap();
+        std::fs::write(worker.join("src/app.ts"), "first\n").unwrap();
+        store
+            .capture("worker", &from, &["src/app.ts".into()])
+            .unwrap();
+        assert!(!store.status("worker", &from).unwrap().files.is_empty());
+        assert!(store.undo("worker", &from, None).unwrap().files.is_empty());
+        assert_eq!(read(&worker.join("src/app.ts")), "head\n");
+
+        // The worker keeps going after the undo, and its result still applies.
+        std::fs::write(worker.join("src/app.ts"), "second\n").unwrap();
+        let applied = store.apply("worker", &from, &to, None).unwrap();
+        assert_eq!(applied.files, ["src/app.ts"]);
+        assert_eq!(read(&lead.0.join("src/app.ts")), "second\n");
     }
 
     #[test]
