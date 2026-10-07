@@ -10,11 +10,13 @@ import {
   loadProjectMachines,
   normalizeGitRemoteUrl,
   projectLocations,
+  sessionCanMove,
   unlinkIn,
   unlinkProjectLocation,
   type ProjectMachines,
 } from "./projectMachines";
 import { loadRecents } from "./recents";
+import { newSession } from "../../sessions/model/session";
 
 const MAC = "/Users/me/code/app";
 const MINI = "remote://env-mini/Users/me/app";
@@ -169,5 +171,24 @@ describe("autoLinkIn", () => {
     expect(linked).toBe(true);
     expect(loadProjectMachines().identities[MAC]).toBe(repo);
     expect(projectLocations(MINI)).toEqual([MAC, MINI]);
+  });
+});
+
+describe("sessionCanMove", () => {
+  it("moves a blank local session", () => {
+    expect(sessionCanMove(newSession("codex", MAC), undefined)).toBe(true);
+  });
+
+  it("moves a remote tab only before it is bound to a host session", () => {
+    const remote = newSession("codex", MINI);
+    expect(sessionCanMove(remote, undefined)).toBe(true);
+    expect(sessionCanMove(remote, "host-session-1")).toBe(false);
+  });
+
+  it("keeps a conversation with a message in place", () => {
+    const chat = newSession("codex", MAC);
+    chat.blocks = [{ id: "u", role: "user", text: "Hi" }];
+    expect(sessionCanMove(chat, undefined)).toBe(false);
+    expect(sessionCanMove(undefined, undefined)).toBe(false);
   });
 });

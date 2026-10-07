@@ -673,6 +673,7 @@ import {
   linkProjectLocation,
   projectHome,
   projectLocations,
+  sessionCanMove,
   useProjectMachinesRevision,
   type AddProjectLocationRequest,
 } from "../features/projects/model/projectMachines";
@@ -5664,6 +5665,18 @@ function Workspace({
       notifyReviewChanged(sessionId);
     },
     [appendTab, projectOfTab],
+  );
+
+  // The picker is disabled once a remote tab is bound to a host session, but
+  // a binding can land while its menu is open. Moving then would leave the tab
+  // polling the old host's session id on the new machine.
+  const onMachineChange = useCallback(
+    (sessionId: string, cwd: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (sessionCanMove(session, remoteSessionFor(sessionId)))
+        onCwdChange(sessionId, cwd);
+    },
+    [onCwdChange],
   );
 
   const onBranchChange = useCallback(
@@ -11435,7 +11448,8 @@ function Workspace({
       const session = sessionId
         ? sessionsRef.current.find((entry) => entry.id === sessionId)
         : undefined;
-      if (session && isBlankSession(session)) onCwdChange(session.id, path);
+      if (session && sessionCanMove(session, remoteSessionFor(session.id)))
+        onCwdChange(session.id, path);
     },
     [onCwdChange],
   );
@@ -12176,7 +12190,7 @@ function Workspace({
     onFocus: onFocusPane,
     onClose: onClosePane,
     onCwdChange,
-    onMachineChange: onCwdChange,
+    onMachineChange,
     onBranchChange,
     onWorktreeChange: onComposerWorktreeChange,
     onRemoteSnapshot,

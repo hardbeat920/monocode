@@ -10,6 +10,8 @@ import {
 } from "./recents";
 import { parseRemotePath } from "../../connections/model/remoteProjects";
 import type { RemoteMachine } from "../../connections/model/protocol";
+import type { Session } from "../../sessions/model/session";
+import { isBlankSession } from "./projectReturn";
 
 /**
  * One project, many machines. A rail project is a repository, and it may have
@@ -25,6 +27,22 @@ export type ProjectMachines = {
   /** Canonical repository key per location; "" when there is none. */
   identities: Record<string, string>;
 };
+
+/**
+ * Whether "Run on" may move a session to another location. Only a blank
+ * session moves. A tab on another machine shows the host's conversation
+ * through `remoteSession`, its bound host session id, and has no local
+ * messages, so it counts as blank only while that binding is empty.
+ */
+export function sessionCanMove(
+  session: Session | undefined,
+  remoteSession: string | undefined,
+): boolean {
+  return (
+    isBlankSession(session) &&
+    !(session && isRemoteProjectPath(session.cwd) && remoteSession)
+  );
+}
 
 const KEY = "monocode.projectMachines.v1";
 export const PROJECT_MACHINES_CHANGED = "monocode:project-machines-changed";
