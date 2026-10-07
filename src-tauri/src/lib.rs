@@ -4,6 +4,7 @@ mod account_identity;
 mod automations;
 mod azure_devops;
 mod browser;
+pub mod browser_mcp;
 mod chat_background;
 mod checkpoint;
 mod control;
@@ -269,6 +270,8 @@ pub fn run() {
             browser::browser_history,
             browser::browser_close,
             browser::browser_retain,
+            browser::browser_eval,
+            browser::browser_screenshot,
             remote::remote_machines,
             remote::remote_connect,
             remote::remote_disconnect,
@@ -279,6 +282,7 @@ pub fn run() {
             remote::remote_ssh_answer,
             remote::remote_ssh_cancel,
             control::control_enable,
+            control::control_browser_mcp,
             control::control_disable,
             control::control_reply,
             control::control_save,

@@ -26,8 +26,11 @@ export function linkTarget(
 
 /** Open a link the user clicked in app content (chat, terminal). */
 export function openLink(url: string, modifiers?: Modifiers | null): Promise<void> {
-  if (linkTarget(url, loadOpenLinksInApp(), modifiers) === "browser") {
-    openBrowserTab(url);
+  // Tabs belong to the focused session; with none, use the system browser.
+  if (
+    linkTarget(url, loadOpenLinksInApp(), modifiers) === "browser" &&
+    openBrowserTab(url) !== null
+  ) {
     return Promise.resolve();
   }
   return openExternalUrl(url);

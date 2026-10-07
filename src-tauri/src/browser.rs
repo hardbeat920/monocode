@@ -2,7 +2,11 @@
 //! placeholder in its workspace window; the page owns layout and tells us
 //! where to draw. Browsed pages never get IPC: they load remote origins, and
 //! no capability grants remote URLs access.
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
@@ -11,6 +15,9 @@ use tauri::{
 
 const LABEL_PREFIX: &str = "browser-";
 const EVENT: &str = "browser-event";
+const CONSOLE_CAPTURE: &str = include_str!("browser_console.js");
+const EVAL_TIMEOUT_MAX: Duration = Duration::from_secs(25);
+const EVAL_POLL: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Copy, Deserialize)]
 pub struct Bounds {
@@ -166,7 +173,8 @@ pub fn browser_open(
         .on_page_load(on_load)
         .on_document_title_changed(on_title)
         .on_new_window(on_new_window)
-        .on_navigation(on_navigation);
+        .on_navigation(on_navigation)
+        .initialization_script(CONSOLE_CAPTURE);
     let webview = window
         .add_child(
             builder,
@@ -239,6 +247,186 @@ pub fn browser_close(app: AppHandle, id: String) -> Result<(), String> {
     }
 }
 
+/// Evaluate `js` and hand back its JSON-encoded result. Native evaluation
+/// cannot return promises or arbitrary objects, so callers always produce a
+/// string; wry encodes that string as JSON once more.
+fn eval_string(webview: &Webview, js: String, timeout: Duration) -> Result<String, String> {
+    let (tx, rx) = mpsc::channel();
+    webview
+        .eval_with_callback(js, move |raw| {
+            let _ = tx.send(raw);
+        })
+        .map_err(|e| e.to_string())?;
+    let raw = rx
+        .recv_timeout(timeout)
+        .map_err(|_| "The page did not respond".to_string())?;
+    Ok(serde_json::from_str::<String>(&raw).unwrap_or_default())
+}
+
+/// Wrap an agent script as the body of an async function. A script with no
+/// `return` is treated as one expression so `document.title` just works.
+fn agent_script(key: &str, script: &str) -> String {
+    let body = if script.contains("return") {
+        script.to_string()
+    } else {
+        format!("return (\n{script}\n);")
+    };
+    let key = serde_json::to_string(key).unwrap_or_default();
+    format!(
+        r#"(function () {{
+  var store = window.__monocodeResults || (window.__monocodeResults = {{}});
+  var key = {key};
+  function encode(value) {{
+    var seen = new WeakSet();
+    return JSON.stringify(value === undefined ? null : value, function (_, v) {{
+      if (typeof Node !== "undefined" && v instanceof Node) {{
+        var html = v.outerHTML || v.textContent || "";
+        return html.length > 20000 ? html.slice(0, 20000) + "…" : html;
+      }}
+      if (typeof v === "function") return "[Function " + (v.name || "anonymous") + "]";
+      if (typeof v === "bigint") return v.toString();
+      if (v && typeof v === "object") {{
+        if (seen.has(v)) return "[Circular]";
+        seen.add(v);
+      }}
+      return v;
+    }});
+  }}
+  store[key] = {{ pending: true }};
+  (async function () {{
+{body}
+  }})().then(
+    function (value) {{
+      try {{ store[key] = {{ ok: true, json: encode(value) }}; }}
+      catch (e) {{ store[key] = {{ ok: false, error: "Result is not serializable: " + e }}; }}
+    }},
+    function (e) {{ store[key] = {{ ok: false, error: String((e && e.stack) || e) }}; }}
+  );
+  return "started";
+}})()"#
+    )
+}
+
+fn result_poll(key: &str) -> String {
+    let key = serde_json::to_string(key).unwrap_or_default();
+    format!(
+        r#"(function () {{
+  var store = window.__monocodeResults, key = {key};
+  var entry = store && store[key];
+  if (!entry) return "lost";
+  if (entry.pending) return "";
+  delete store[key];
+  return JSON.stringify(entry);
+}})()"#
+    )
+}
+
+fn run_agent_script(webview: &Webview, script: &str, timeout: Duration) -> Result<Value, String> {
+    let key = uuid::Uuid::new_v4().simple().to_string();
+    let started = eval_string(webview, agent_script(&key, script), Duration::from_secs(5))?;
+    if started != "started" {
+        return Err("The script did not start. Check it for syntax errors.".into());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let reply = eval_string(webview, result_poll(&key), Duration::from_secs(5))?;
+        match reply.as_str() {
+            "" => {}
+            "lost" => return Err("The page navigated away before the script finished".into()),
+            entry => {
+                let entry: Value =
+                    serde_json::from_str(entry).map_err(|_| "Unreadable script result")?;
+                if entry["ok"].as_bool() == Some(true) {
+                    let json = entry["json"].as_str().unwrap_or("null");
+                    return Ok(serde_json::from_str(json).unwrap_or(Value::Null));
+                }
+                return Err(entry["error"]
+                    .as_str()
+                    .unwrap_or("Script failed")
+                    .to_string());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Script still running after {} ms",
+                timeout.as_millis()
+            ));
+        }
+        std::thread::sleep(EVAL_POLL);
+    }
+}
+
+/// Run an agent's script in a tab and return its JSON result.
+#[tauri::command]
+pub async fn browser_eval(
+    app: AppHandle,
+    id: String,
+    script: String,
+    timeout_ms: Option<u64>,
+) -> Result<Value, String> {
+    let webview = find(&app, &id)?;
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000)).min(EVAL_TIMEOUT_MAX);
+    tauri::async_runtime::spawn_blocking(move || run_agent_script(&webview, &script, timeout))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The visible part of a tab as base64 PNG.
+#[tauri::command]
+pub async fn browser_screenshot(app: AppHandle, id: String) -> Result<String, String> {
+    let webview = find(&app, &id)?;
+    tauri::async_runtime::spawn_blocking(move || snapshot_png(&webview))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_png(webview: &Webview) -> Result<String, String> {
+    use base64::Engine;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_foundation::{NSDictionary, NSError};
+    use objc2_web_kit::WKWebView;
+
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
+    webview
+        .with_webview(move |platform| {
+            let view = platform.inner().cast::<WKWebView>();
+            if view.is_null() {
+                let _ = tx.send(Err("Browser view is gone".into()));
+                return;
+            }
+            // SAFETY: wry hands us its live WKWebView on the main thread.
+            let view = unsafe { &*view };
+            let tx = tx.clone();
+            let handler = block2::RcBlock::new(move |image: *mut NSImage, _: *mut NSError| {
+                // SAFETY: WebKit passes a valid image or null.
+                let png = unsafe { image.as_ref() }
+                    .and_then(|image| image.TIFFRepresentation())
+                    .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
+                    .and_then(|rep| unsafe {
+                        rep.representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &NSDictionary::new(),
+                        )
+                    })
+                    .map(|data| data.to_vec())
+                    .ok_or_else(|| "Could not capture the page".to_string());
+                let _ = tx.send(png);
+            });
+            unsafe { view.takeSnapshotWithConfiguration_completionHandler(None, &handler) };
+        })
+        .map_err(|e| e.to_string())?;
+    let png = rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "Timed out capturing the page".to_string())??;
+    Ok(base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn snapshot_png(_webview: &Webview) -> Result<String, String> {
+    Err("Browser screenshots are only available on macOS for now".into())
+}
+
 /// Close this window's tabs that the page no longer knows about. A webview
 /// reload keeps native children alive while the page forgets them.
 #[tauri::command]
@@ -263,6 +451,17 @@ mod tests {
         assert!(label("").is_err());
         assert!(label("../main").is_err());
         assert!(label(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn agent_scripts_are_async_bodies_and_expressions_return() {
+        let wrapped = agent_script("k1", "document.title");
+        assert!(wrapped.contains("return (\ndocument.title\n);"));
+        assert!(wrapped.contains("var key = \"k1\";"));
+        let body = agent_script("k2", "const a = 1;\nreturn a;");
+        assert!(body.contains("const a = 1;\nreturn a;"));
+        assert!(!body.contains("return (\nconst"));
+        assert!(result_poll("k\"x").contains(r#"key = "k\"x""#));
     }
 
     #[test]

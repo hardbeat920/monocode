@@ -64,3 +64,30 @@ export function onBrowserEvent(
     handler(event.payload),
   );
 }
+
+/** Run an agent script in a tab; resolves with its JSON result. */
+export function evalInBrowser(
+  id: string,
+  script: string,
+  timeoutMs?: number,
+): Promise<unknown> {
+  return invoke("browser_eval", { id, script, timeoutMs });
+}
+
+/** The visible part of a tab as base64 PNG. */
+export function screenshotBrowser(id: string): Promise<string> {
+  return invoke("browser_screenshot", { id });
+}
+
+/** How a provider launches the browser MCP server for a session. */
+export type BrowserMcpLaunch = {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+};
+
+export function browserMcpLaunch(
+  sessionId: string,
+): Promise<BrowserMcpLaunch | null> {
+  return invoke("control_browser_mcp", { sessionId });
+}

@@ -33,19 +33,11 @@ import type { BrowserTabSource } from "../../workspace/model/layout";
 import { BLANK_URL, browserUrlFromInput } from "../model/browserUrl";
 import { patchBrowserTab } from "../model/browserStore";
 import { useOverlayOcclusion } from "../hooks/useOverlayOcclusion";
-
-type Props = {
-  id: string;
-  tab: BrowserTabSource;
-  /** Active tab of a dock that is on screen. */
-  visible: boolean;
-  /** The dock sash is being dragged. */
-  resizing: boolean;
-};
+import { setNativeTabReady } from "../model/nativeTabs";
 
 /**
- * React StrictMode and dock moves unmount and remount a view in one turn.
- * Defer the native close so a remount can take the live page back.
+ * React StrictMode, dock moves and tab switches unmount and remount a surface
+ * in one turn. Defer the native close so a remount can take the live page back.
  */
 const pendingClose = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -59,17 +51,31 @@ function sameBounds(a: BrowserBounds | null, b: BrowserBounds): boolean {
   );
 }
 
-export function BrowserView({ id, tab, visible, resizing }: Props) {
+/**
+ * The native page for one tab, drawn over this placeholder. While mounted
+ * the page is live; unmounting suspends it to its URL.
+ */
+export function BrowserSurface({
+  id,
+  tab,
+  visible,
+  resizing = false,
+  className = "",
+}: {
+  id: string;
+  tab: BrowserTabSource;
+  /** Draw the page. Off-window hosts pass true so the page keeps rendering. */
+  visible: boolean;
+  /** The dock sash is being dragged. */
+  resizing?: boolean;
+  className?: string;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const scale = useSyncExternalStore(subscribeUiScale, loadUiScale);
   const covered = useOverlayOcclusion(host, visible);
   const shown = visible && !covered;
   const [ready, setReady] = useState(false);
-  const [address, setAddress] = useState(tab.url === BLANK_URL ? "" : tab.url);
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const placed = useRef<BrowserBounds | null>(null);
-  const input = useRef<HTMLInputElement>(null);
 
   const measure = useCallback((): BrowserBounds | null => {
     const el = host.current;
@@ -94,11 +100,19 @@ export function BrowserView({ id, tab, visible, resizing }: Props) {
     placed.current = bounds;
     let alive = true;
     openBrowserView(id, tab.url, bounds, false)
-      .then(() => alive && setReady(true))
-      .catch((reason: unknown) => alive && setError(String(reason)));
+      .then(() => {
+        if (!alive) return;
+        setReady(true);
+        setNativeTabReady(id, true);
+      })
+      .catch(
+        (reason: unknown) =>
+          alive && patchBrowserTab(id, { error: String(reason) }),
+      );
     return () => {
       alive = false;
       setReady(false);
+      setNativeTabReady(id, false);
       pendingClose.set(
         id,
         setTimeout(() => {
@@ -160,101 +174,116 @@ export function BrowserView({ id, tab, visible, resizing }: Props) {
     return () => cancelAnimationFrame(frame);
   }, [id, measure, ready, resizing]);
 
+  return (
+    <div
+      ref={host}
+      className={`relative min-h-0 flex-1 bg-background-base ${className}`}
+    >
+      {tab.error ? (
+        <div className="absolute inset-0 grid place-items-center p-6 text-center text-[12px] text-content/55">
+          {tab.error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Back, forward, reload and the address bar for one tab. */
+export function BrowserToolbar({
+  id,
+  tab,
+}: {
+  id: string;
+  tab: BrowserTabSource;
+}) {
+  const [address, setAddress] = useState(tab.url === BLANK_URL ? "" : tab.url);
+  const [editing, setEditing] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (!editing) setAddress(tab.url === BLANK_URL ? "" : tab.url);
   }, [editing, tab.url]);
 
   useEffect(() => {
-    if (ready && visible && tab.url === BLANK_URL) input.current?.focus();
+    if (tab.url === BLANK_URL) input.current?.focus();
     // Only when a blank tab first appears.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, visible]);
+  }, [id]);
 
   const go = (event: FormEvent) => {
     event.preventDefault();
     const url = browserUrlFromInput(address);
     setEditing(false);
-    setError(null);
     input.current?.blur();
-    patchBrowserTab(id, { url, loading: true });
+    patchBrowserTab(id, { url, loading: true, error: undefined });
     void navigateBrowser(id, url).catch((reason: unknown) => {
-      patchBrowserTab(id, { loading: false });
-      setError(String(reason));
+      patchBrowserTab(id, { loading: false, error: String(reason) });
     });
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <form
-        className="flex h-8 shrink-0 items-center gap-0.5 border-b border-stroke px-1.5"
-        onSubmit={go}
+    <form
+      className="flex h-8 shrink-0 items-center gap-0.5 border-b border-stroke px-1.5"
+      onSubmit={go}
+    >
+      <IconButton
+        label="Back"
+        onClick={() => void browserHistory(id, "back").catch(() => undefined)}
       >
-        <IconButton
-          label="Back"
-          onClick={() => void browserHistory(id, "back").catch(() => undefined)}
-        >
-          <ChevronLeft className="size-3.5" strokeWidth={1.75} />
-        </IconButton>
-        <IconButton
-          label="Forward"
-          onClick={() =>
-            void browserHistory(id, "forward").catch(() => undefined)
-          }
-        >
-          <ChevronRight className="size-3.5" strokeWidth={1.75} />
-        </IconButton>
-        <IconButton
-          label={tab.loading ? "Stop" : "Reload"}
-          onClick={() =>
-            void browserHistory(id, tab.loading ? "stop" : "reload").catch(
-              () => undefined,
-            )
-          }
-        >
-          {tab.loading ? (
-            <X className="size-3.5" strokeWidth={1.75} />
-          ) : (
-            <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          )}
-        </IconButton>
-        <input
-          ref={input}
-          aria-label="Address"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          placeholder="Search or enter address"
-          className="mx-1 h-6 min-w-0 flex-1 rounded-md bg-content/5 px-2 text-[12px] text-content outline-none placeholder:text-content/35 focus:bg-content/10"
-          value={address}
-          onFocus={(event) => {
-            setEditing(true);
-            event.currentTarget.select();
-          }}
-          onBlur={() => setEditing(false)}
-          onChange={(event) => setAddress(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            setEditing(false);
-            setAddress(tab.url === BLANK_URL ? "" : tab.url);
-            event.currentTarget.blur();
-          }}
-        />
-        <IconButton
-          label="Open in Default Browser"
-          onClick={() => {
-            if (tab.url !== BLANK_URL) void openUrl(tab.url).catch(() => undefined);
-          }}
-        >
-          <ExternalLink className="size-3.5" strokeWidth={1.75} />
-        </IconButton>
-      </form>
-      <div ref={host} className="relative min-h-0 flex-1 bg-background-base">
-        {error ? (
-          <div className="absolute inset-0 grid place-items-center p-6 text-center text-[12px] text-content/55">
-            {error}
-          </div>
-        ) : null}
-      </div>
-    </div>
+        <ChevronLeft className="size-3.5" strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label="Forward"
+        onClick={() =>
+          void browserHistory(id, "forward").catch(() => undefined)
+        }
+      >
+        <ChevronRight className="size-3.5" strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label={tab.loading ? "Stop" : "Reload"}
+        onClick={() =>
+          void browserHistory(id, tab.loading ? "stop" : "reload").catch(
+            () => undefined,
+          )
+        }
+      >
+        {tab.loading ? (
+          <X className="size-3.5" strokeWidth={1.75} />
+        ) : (
+          <RefreshCw className="size-3.5" strokeWidth={1.75} />
+        )}
+      </IconButton>
+      <input
+        ref={input}
+        aria-label="Address"
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        placeholder="Search or enter address"
+        className="mx-1 h-6 min-w-0 flex-1 rounded-md bg-content/5 px-2 text-[12px] text-content outline-none placeholder:text-content/35 focus:bg-content/10"
+        value={address}
+        onFocus={(event) => {
+          setEditing(true);
+          event.currentTarget.select();
+        }}
+        onBlur={() => setEditing(false)}
+        onChange={(event) => setAddress(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          setEditing(false);
+          setAddress(tab.url === BLANK_URL ? "" : tab.url);
+          event.currentTarget.blur();
+        }}
+      />
+      <IconButton
+        label="Open in Default Browser"
+        onClick={() => {
+          if (tab.url !== BLANK_URL) void openUrl(tab.url).catch(() => undefined);
+        }}
+      >
+        <ExternalLink className="size-3.5" strokeWidth={1.75} />
+      </IconButton>
+    </form>
   );
 }

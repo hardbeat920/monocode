@@ -256,6 +256,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "browser built-in embedded external default url web chat terminal",
   },
   {
+    id: "agent-browser",
+    section: "general",
+    label: "Agent browser",
+    keywords: "browser mcp tools automation agents chat control web page",
+  },
+  {
     id: "tab-animations",
     section: "general",
     label: "Tab animations",

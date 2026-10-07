@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
+const BROWSER_TURN_INACTIVE: &str =
+    "The MonoCode browser only answers during this session's active turn.";
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
 
 #[derive(Clone)]
@@ -161,11 +163,23 @@ struct Event {
 fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
     let grant = match namespace {
         "control" => host.grants.values().find(|grant| grant.token == token),
-        "app" => host.app_grants.values().find(|grant| grant.token == token),
+        "app" | "browser" => host.app_grants.values().find(|grant| grant.token == token),
         _ => return Err("Unknown control namespace".into()),
     }
     .cloned()
     .ok_or("Connection revoked or unauthorized")?;
+    // Browser tools need no opt-in, only a live turn of that session in its
+    // own window: an idle or parked provider cannot drive the page.
+    if namespace == "browser" {
+        let live = host
+            .active
+            .get(&grant.session)
+            .is_some_and(|turn| turn.window == grant.window);
+        if !live || host.workers.contains_key(&grant.session) {
+            return Err(BROWSER_TURN_INACTIVE.into());
+        }
+        return Ok(grant);
+    }
     if namespace == "app"
         && (host.grants.contains_key(&grant.session)
             || host.workers.contains_key(&grant.session)
@@ -484,6 +498,47 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     };
 }
 
+/// How a provider should launch the browser MCP server for this session.
+/// The session credential travels in the environment, never in arguments.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserMcpLaunch {
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+}
+
+#[tauri::command]
+pub fn control_browser_mcp(
+    window: Window,
+    host: State<'_, ControlHost>,
+    session_id: String,
+) -> Result<Option<BrowserMcpLaunch>, String> {
+    let inner = host
+        .inner
+        .lock()
+        .map_err(|_| "Control service unavailable")?;
+    let Some(grant) = inner
+        .app_grants
+        .get(&session_id)
+        .filter(|grant| grant.window == window.label())
+    else {
+        return Ok(None);
+    };
+    let command = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
+    Ok(Some(BrowserMcpLaunch {
+        command,
+        args: vec!["browser-mcp".into()],
+        env: HashMap::from([
+            ("MONOCODE_APP_ENDPOINT".into(), host.endpoint.clone()),
+            ("MONOCODE_APP_TOKEN".into(), grant.token.clone()),
+        ]),
+    }))
+}
+
 #[tauri::command]
 pub fn app_cli_path() -> Result<String, String> {
     std::env::current_exe()
@@ -652,6 +707,38 @@ mod tests {
         assert!(request_grant(&inner, "app", "app-token").is_err());
         inner.active.remove("ordinary");
         assert!(request_grant(&inner, "app", "app-token").is_err());
+    }
+    #[test]
+    fn browser_access_needs_a_live_turn_in_the_same_window() {
+        let mut inner = Inner::default();
+        inner.app_grants.insert(
+            "chat".into(),
+            Grant {
+                window: "main".into(),
+                session: "chat".into(),
+                cwd: "/repo".into(),
+                token: "app-token".into(),
+            },
+        );
+        assert!(matches!(
+            request_grant(&inner, "browser", "app-token"),
+            Err(error) if error == BROWSER_TURN_INACTIVE
+        ));
+        let turn = |window: &str| ActiveTurn {
+            window: window.into(),
+            cwd: "/repo".into(),
+            app_allowed: false,
+        };
+        // No /operator opt-in needed, unlike the app namespace.
+        inner.active.insert("chat".into(), turn("main"));
+        assert!(request_grant(&inner, "browser", "app-token").is_ok());
+        assert!(request_grant(&inner, "app", "app-token").is_err());
+        inner.active.insert("chat".into(), turn("window-2"));
+        assert!(request_grant(&inner, "browser", "app-token").is_err());
+        inner.active.insert("chat".into(), turn("main"));
+        inner.workers.insert("chat".into(), "lead".into());
+        assert!(request_grant(&inner, "browser", "app-token").is_err());
+        assert!(request_grant(&inner, "browser", "wrong").is_err());
     }
     #[test]
     fn app_token_survives_normal_turns_but_only_works_when_opted_in() {

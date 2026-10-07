@@ -23,11 +23,11 @@ import {
   clampDockSize,
   isVerticalDock,
   type DockSide,
-  type ProjectTerminalDock,
+  type DockState,
 } from "../../projects/model/projectTerminal";
 
 type Props = {
-  dock: ProjectTerminalDock;
+  dock: DockState;
   /** Singular surface name: "Terminal", "Browser". */
   name: string;
   /** Accessible name of the tab strip. */

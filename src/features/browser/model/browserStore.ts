@@ -4,38 +4,43 @@ import {
   addTerminalToDock,
   clampDockSize,
   closeTerminalInDock,
-  createProjectTerminal,
-  findProjectTerminal,
   isDockSide,
-  mapProjectTerminal,
   reorderDockTerminals,
   selectDockTerminal,
   withDockOpen,
   withDockSide,
   withDockSize,
   type DockSide,
-  type ProjectTerminalDock,
+  type DockState,
 } from "../../projects/model/projectTerminal";
-import { normalizeProjectPath } from "../../projects/model/recents";
+import { newEditorPane } from "../../workspace/model/layout";
 import type {
   BrowserTabSource,
   FilePaneTab,
 } from "../../workspace/model/layout";
 import { BLANK_URL } from "./browserUrl";
 
-/** Browser docks reuse the terminal dock model: per project, one pane of tabs. */
-export type BrowserDock = ProjectTerminalDock;
+/** One session's browser: its tabs and where its panel sits. */
+export type BrowserDock = DockState & { sessionId: string };
 
 export type BrowserState = {
   docks: BrowserDock[];
-  /** Project the window is showing; new tabs land in its dock. */
-  projectPath: string;
+  /** Session the window is showing; "" when none. Its dock is the visible one. */
+  sessionId: string;
   lastSide: DockSide;
+  /**
+   * Tabs an agent used recently, by last use. They stay live while out of
+   * view so the agent can keep working; other hidden tabs are suspended.
+   * Not persisted.
+   */
+  agentTabs: Record<string, number>;
 };
 
 export const BROWSER_DEFAULT_SIDE: DockSide = "right";
+/** How long an agent's tab stays live out of view after its last use. */
+export const AGENT_TAB_TTL_MS = 3 * 60_000;
 const DEFAULT_SIZE = { horizontal: 520, vertical: 320 };
-const STORAGE_PREFIX = "monocode.browser.v1:";
+const STORAGE_PREFIX = "monocode.browser.v2:";
 
 export function browserDefaultSize(side: DockSide): number {
   return side === "left" || side === "right"
@@ -43,11 +48,11 @@ export function browserDefaultSize(side: DockSide): number {
     : DEFAULT_SIZE.vertical;
 }
 
-export function newBrowserTab(url: string, cwd: string): FilePaneTab {
+export function newBrowserTab(url: string): FilePaneTab {
   return {
     id: crypto.randomUUID(),
     path: url,
-    cwd,
+    cwd: "",
     browser: { url },
   };
 }
@@ -60,77 +65,13 @@ function viewport() {
     : { width: window.innerWidth, height: window.innerHeight };
 }
 
-export function addBrowserTab(
-  state: BrowserState,
-  file: FilePaneTab,
-  projectPath = state.projectPath,
-  options: { afterId?: string } = {},
-): BrowserState {
-  const existing = findProjectTerminal(state.docks, projectPath);
-  if (!existing) {
-    const dock = createProjectTerminal(projectPath, file, state.lastSide);
-    return {
-      ...state,
-      docks: [
-        ...state.docks,
-        {
-          ...dock,
-          size: clampDockSize(
-            dock.side,
-            browserDefaultSize(dock.side),
-            viewport(),
-          ),
-        },
-      ],
-    };
-  }
-  return {
-    ...state,
-    docks: mapProjectTerminal(state.docks, projectPath, (dock) => {
-      const next = addTerminalToDock(dock, file);
-      const at = options.afterId
-        ? dock.pane.files.findIndex((entry) => entry.id === options.afterId)
-        : -1;
-      if (at < 0) return next;
-      const files = [...dock.pane.files];
-      files.splice(at + 1, 0, file);
-      return { ...next, pane: { ...next.pane, files } };
-    }),
-  };
-}
-
-export function toggleBrowserDock(state: BrowserState): BrowserState {
-  const dock = findProjectTerminal(state.docks, state.projectPath);
-  if (!dock) {
-    return addBrowserTab(state, newBrowserTab(BLANK_URL, state.projectPath));
-  }
-  return mapDock(state, (entry) => withDockOpen(entry, !entry.open));
-}
-
-export function patchBrowserTabIn(
-  state: BrowserState,
-  fileId: string,
-  patch: Partial<BrowserTabSource>,
-): BrowserState {
-  let changed = false;
-  const docks = state.docks.map((dock) => {
-    if (!dock.pane.files.some((file) => file.id === fileId)) return dock;
-    const files = dock.pane.files.map((file) => {
-      if (file.id !== fileId || !file.browser) return file;
-      const browser = { ...file.browser, ...patch };
-      if (
-        browser.url === file.browser.url &&
-        browser.title === file.browser.title &&
-        browser.loading === file.browser.loading
-      ) {
-        return file;
-      }
-      changed = true;
-      return { ...file, path: browser.url, browser };
-    });
-    return { ...dock, pane: { ...dock.pane, files } };
-  });
-  return changed ? { ...state, docks } : state;
+export function findBrowserDock(
+  docks: BrowserDock[],
+  sessionId: string,
+): BrowserDock | undefined {
+  return sessionId
+    ? docks.find((dock) => dock.sessionId === sessionId)
+    : undefined;
 }
 
 export function dockOfTab(
@@ -144,11 +85,149 @@ export function dockOfTab(
 
 function mapDock(
   state: BrowserState,
+  sessionId: string,
   update: (dock: BrowserDock) => BrowserDock | null,
-  projectPath = state.projectPath,
 ): BrowserState {
-  const docks = mapProjectTerminal(state.docks, projectPath, update);
-  return docks === state.docks ? state : { ...state, docks };
+  let changed = false;
+  const docks: BrowserDock[] = [];
+  for (const dock of state.docks) {
+    if (dock.sessionId !== sessionId) {
+      docks.push(dock);
+      continue;
+    }
+    const next = update(dock);
+    if (next !== dock) changed = true;
+    if (next) docks.push(next);
+  }
+  return changed ? { ...state, docks } : state;
+}
+
+/** Map the dock that holds `fileId`. */
+function mapDockOfTab(
+  state: BrowserState,
+  fileId: string,
+  update: (dock: BrowserDock) => BrowserDock | null,
+): BrowserState {
+  const dock = dockOfTab(state, fileId);
+  return dock ? mapDock(state, dock.sessionId, update) : state;
+}
+
+export function addBrowserTab(
+  state: BrowserState,
+  sessionId: string,
+  file: FilePaneTab,
+  options: { afterId?: string; open?: boolean } = {},
+): BrowserState {
+  const existing = findBrowserDock(state.docks, sessionId);
+  if (!existing) {
+    const side = state.lastSide;
+    const dock: BrowserDock = {
+      sessionId,
+      pane: newEditorPane(file),
+      side,
+      size: clampDockSize(side, browserDefaultSize(side), viewport()),
+      open: options.open ?? true,
+    };
+    return { ...state, docks: [...state.docks, dock] };
+  }
+  return mapDock(state, sessionId, (dock) => {
+    let next = addTerminalToDock(dock, file);
+    if (options.open === false) next = { ...next, open: dock.open };
+    const at = options.afterId
+      ? dock.pane.files.findIndex((entry) => entry.id === options.afterId)
+      : -1;
+    if (at < 0) return next;
+    const files = [...dock.pane.files];
+    files.splice(at + 1, 0, file);
+    return { ...next, pane: { ...next.pane, files } };
+  });
+}
+
+/** The status bar toggle: show or hide the current session's browser. */
+export function toggleBrowserDock(state: BrowserState): BrowserState {
+  if (!state.sessionId) return state;
+  if (!findBrowserDock(state.docks, state.sessionId)) {
+    return addBrowserTab(state, state.sessionId, newBrowserTab(BLANK_URL));
+  }
+  return mapDock(state, state.sessionId, (dock) =>
+    withDockOpen(dock, !dock.open),
+  );
+}
+
+export function patchBrowserTabIn(
+  state: BrowserState,
+  fileId: string,
+  patch: Partial<BrowserTabSource>,
+): BrowserState {
+  return mapDockOfTab(state, fileId, (dock) => {
+    let changed = false;
+    const files = dock.pane.files.map((file) => {
+      if (file.id !== fileId || !file.browser) return file;
+      const browser = { ...file.browser, ...patch };
+      if (
+        browser.url === file.browser.url &&
+        browser.title === file.browser.title &&
+        browser.loading === file.browser.loading &&
+        browser.error === file.browser.error
+      ) {
+        return file;
+      }
+      changed = true;
+      return { ...file, path: browser.url, browser };
+    });
+    return changed ? { ...dock, pane: { ...dock.pane, files } } : dock;
+  });
+}
+
+/** Drop the browsers of sessions that no longer exist. */
+export function forgetBrowserSessionsIn(
+  state: BrowserState,
+  sessionIds: Iterable<string>,
+): BrowserState {
+  const gone = new Set(sessionIds);
+  if (!state.docks.some((dock) => gone.has(dock.sessionId))) return state;
+  return {
+    ...state,
+    docks: state.docks.filter((dock) => !gone.has(dock.sessionId)),
+  };
+}
+
+export function touchAgentTabIn(
+  state: BrowserState,
+  fileId: string,
+  now: number,
+): BrowserState {
+  return { ...state, agentTabs: { ...state.agentTabs, [fileId]: now } };
+}
+
+export function pruneAgentTabsIn(
+  state: BrowserState,
+  now: number,
+  ttl = AGENT_TAB_TTL_MS,
+): BrowserState {
+  const open = new Set(browserTabIds(state));
+  const entries = Object.entries(state.agentTabs);
+  const kept = entries.filter(
+    ([id, used]) => open.has(id) && now - used < ttl,
+  );
+  if (kept.length === entries.length) return state;
+  return { ...state, agentTabs: Object.fromEntries(kept) };
+}
+
+/**
+ * Tabs whose native page should exist: every tab of the session on screen,
+ * plus tabs an agent is using. Everything else is suspended to its URL.
+ */
+export function liveBrowserTabIds(state: BrowserState): Set<string> {
+  const live = new Set(Object.keys(state.agentTabs));
+  const current = findBrowserDock(state.docks, state.sessionId);
+  for (const file of current?.pane.files ?? []) live.add(file.id);
+  return live;
+}
+
+/** Every tab this window knows about. */
+export function browserTabIds(state: BrowserState): string[] {
+  return state.docks.flatMap((dock) => dock.pane.files.map((file) => file.id));
 }
 
 // ---- persistence -------------------------------------------------------
@@ -185,7 +264,9 @@ export function parseBrowserState(raw: string | null): StoredState {
     const value = JSON.parse(raw) as Partial<StoredState>;
     const docks = (Array.isArray(value.docks) ? value.docks : []).flatMap(
       (dock): BrowserDock[] => {
-        if (!dock || typeof dock.projectPath !== "string") return [];
+        if (!dock || typeof dock.sessionId !== "string" || !dock.sessionId) {
+          return [];
+        }
         if (!isDockSide(dock.side) || !dock.pane) return [];
         const files = (dock.pane.files ?? []).filter(
           (file) =>
@@ -201,11 +282,15 @@ export function parseBrowserState(raw: string | null): StoredState {
           : files[0].id;
         return [
           {
-            projectPath: dock.projectPath,
+            sessionId: dock.sessionId,
             side: dock.side,
             size: clampDockSize(dock.side, Number(dock.size)),
             open: !!dock.open,
-            pane: { id: dock.pane.id || crypto.randomUUID(), files, activeFileId },
+            pane: {
+              id: dock.pane.id || crypto.randomUUID(),
+              files,
+              activeFileId,
+            },
           },
         ];
       },
@@ -221,7 +306,7 @@ export function parseBrowserState(raw: string | null): StoredState {
 
 // ---- store -------------------------------------------------------------
 
-// Per window: each window keeps its own docks, like its terminals.
+// Per window, like terminals: each window keeps its own sessions' browsers.
 function storageKey(): string | null {
   try {
     return `${STORAGE_PREFIX}${getCurrentWindow().label}`;
@@ -235,14 +320,16 @@ function initialState(): BrowserState {
   const stored = parseBrowserState(key ? localStorage.getItem(key) : null);
   return {
     docks: stored.docks,
-    projectPath: "",
+    sessionId: "",
     lastSide: stored.lastSide ?? BROWSER_DEFAULT_SIDE,
+    agentTabs: {},
   };
 }
 
 let state: BrowserState | null = null;
 const listeners = new Set<() => void>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let pruneTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function getBrowserState(): BrowserState {
   state ??= initialState();
@@ -250,9 +337,13 @@ export function getBrowserState(): BrowserState {
 }
 
 function setState(next: BrowserState) {
-  if (next === getBrowserState()) return;
+  const previous = getBrowserState();
+  if (next === previous) return;
   state = next;
   for (const listener of listeners) listener();
+  if (next.docks === previous.docks && next.lastSide === previous.lastSide) {
+    return;
+  }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const key = storageKey();
@@ -273,10 +364,9 @@ export function useBrowserState(): BrowserState {
   return useSyncExternalStore(subscribeBrowser, getBrowserState);
 }
 
-export function setBrowserProject(projectPath: string) {
-  const path = projectPath ? normalizeProjectPath(projectPath) : "";
+export function setBrowserSession(sessionId: string) {
   update((current) =>
-    current.projectPath === path ? current : { ...current, projectPath: path },
+    current.sessionId === sessionId ? current : { ...current, sessionId },
   );
 }
 
@@ -284,64 +374,64 @@ export function toggleBrowser() {
   update(toggleBrowserDock);
 }
 
-export function showBrowser() {
+export function hideBrowser() {
   update((current) =>
-    findProjectTerminal(current.docks, current.projectPath)
-      ? mapDock(current, (dock) => withDockOpen(dock, true))
-      : toggleBrowserDock(current),
+    mapDock(current, current.sessionId, (dock) => withDockOpen(dock, false)),
   );
 }
 
-export function hideBrowser() {
-  update((current) => mapDock(current, (dock) => withDockOpen(dock, false)));
-}
-
-/** Open `url` in a new tab of the current project's browser and show it. */
+/**
+ * Open `url` in a new tab of a session's browser (the one on screen unless
+ * given). A user's tab shows the panel; an agent's (`background`) does not.
+ * Returns the tab id, or null when there is no session to hold it.
+ */
 export function openBrowserTab(
   url: string = BLANK_URL,
-  options: { projectPath?: string; afterId?: string } = {},
-): string {
-  const projectPath = options.projectPath ?? getBrowserState().projectPath;
-  const file = newBrowserTab(url, projectPath);
-  update((current) =>
-    mapDock(
-      addBrowserTab(current, file, projectPath, options),
-      (dock) => withDockOpen(dock, true),
-      projectPath,
-    ),
-  );
+  options: { sessionId?: string; afterId?: string; background?: boolean } = {},
+): string | null {
+  const sessionId = options.sessionId ?? getBrowserState().sessionId;
+  if (!sessionId) return null;
+  const file = newBrowserTab(url);
+  const open = options.background ? false : true;
+  update((current) => {
+    const next = addBrowserTab(current, sessionId, file, {
+      afterId: options.afterId,
+      open,
+    });
+    return options.background
+      ? next
+      : mapDock(next, sessionId, (dock) => withDockOpen(dock, true));
+  });
   return file.id;
 }
 
 export function selectBrowserTab(fileId: string) {
-  update((current) => mapDock(current, (dock) => selectDockTerminal(dock, fileId)));
+  update((current) =>
+    mapDockOfTab(current, fileId, (dock) => selectDockTerminal(dock, fileId)),
+  );
 }
 
 export function closeBrowserTab(fileId: string) {
-  update((current) => {
-    const dock = dockOfTab(current, fileId);
-    if (!dock) return current;
-    return mapDock(
-      current,
-      (entry) => closeTerminalInDock(entry, fileId),
-      dock.projectPath,
-    );
-  });
+  update((current) =>
+    mapDockOfTab(current, fileId, (dock) => closeTerminalInDock(dock, fileId)),
+  );
 }
 
 export function closeOtherBrowserTabs(fileId: string) {
   update((current) =>
-    mapDock(current, (dock) => {
+    mapDockOfTab(current, fileId, (dock) => {
       const keep = dock.pane.files.filter((file) => file.id === fileId);
-      if (keep.length === 0) return dock;
-      return { ...dock, pane: { ...dock.pane, files: keep, activeFileId: fileId } };
+      return {
+        ...dock,
+        pane: { ...dock.pane, files: keep, activeFileId: fileId },
+      };
     }),
   );
 }
 
 export function reorderBrowserTabs(ids: string[]) {
   update((current) =>
-    mapDock(current, (dock) => {
+    mapDock(current, current.sessionId, (dock) => {
       const byId = new Map(dock.pane.files.map((file) => [file.id, file]));
       const files = ids.flatMap((id) => byId.get(id) ?? []);
       if (files.length !== dock.pane.files.length) return dock;
@@ -352,14 +442,18 @@ export function reorderBrowserTabs(ids: string[]) {
 
 export function setBrowserSide(side: DockSide) {
   update((current) => ({
-    ...mapDock(current, (dock) => withDockSide(dock, side, viewport())),
+    ...mapDock(current, current.sessionId, (dock) =>
+      withDockSide(dock, side, viewport()),
+    ),
     lastSide: side,
   }));
 }
 
 export function setBrowserSize(size: number) {
   update((current) =>
-    mapDock(current, (dock) => withDockSize(dock, size, viewport())),
+    mapDock(current, current.sessionId, (dock) =>
+      withDockSize(dock, size, viewport()),
+    ),
   );
 }
 
@@ -370,7 +464,18 @@ export function patchBrowserTab(
   update((current) => patchBrowserTabIn(current, fileId, patch));
 }
 
-/** Every native tab id this window should keep alive. */
-export function browserTabIds(current = getBrowserState()): string[] {
-  return current.docks.flatMap((dock) => dock.pane.files.map((file) => file.id));
+export function forgetBrowserSessions(sessionIds: Iterable<string>) {
+  update((current) => forgetBrowserSessionsIn(current, sessionIds));
+}
+
+/** Keep an agent's tab live out of view for a while. */
+export function touchAgentTab(fileId: string) {
+  update((current) => touchAgentTabIn(current, fileId, Date.now()));
+  clearTimeout(pruneTimer);
+  pruneTimer = setTimeout(function prune() {
+    update((current) => pruneAgentTabsIn(current, Date.now()));
+    if (Object.keys(getBrowserState().agentTabs).length > 0) {
+      pruneTimer = setTimeout(prune, 30_000);
+    }
+  }, 30_000);
 }

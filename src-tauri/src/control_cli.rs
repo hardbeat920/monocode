@@ -291,7 +291,8 @@ fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
         }
         Parsed::Call(action, input, request_id) => (action, input, request_id),
     };
-    match send(&action, &input, &request_id, app_mode) {
+    let namespace = if app_mode { "app" } else { "control" };
+    match send(namespace, &action, &input, &request_id) {
         Ok(mut value) => {
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
                 println!("{value}");
@@ -332,8 +333,8 @@ fn with_retry_hint(mut value: Value, request_id: &str) -> Value {
     value
 }
 
-struct Failure {
-    error: String,
+pub(crate) struct Failure {
+    pub(crate) error: String,
     /// The request was already on the wire, so the run may have applied it.
     sent: bool,
 }
@@ -350,7 +351,14 @@ fn sent(error: impl Into<String>) -> Failure {
     }
 }
 
-fn send(action: &str, input: &Value, request_id: &str, app_mode: bool) -> Result<Value, Failure> {
+pub(crate) fn send(
+    namespace: &str,
+    action: &str,
+    input: &Value,
+    request_id: &str,
+) -> Result<Value, Failure> {
+    // The app and browser namespaces share the session's app credential.
+    let app_mode = namespace != "control";
     let endpoint_key = if app_mode {
         "MONOCODE_APP_ENDPOINT"
     } else {
@@ -391,11 +399,16 @@ fn send(action: &str, input: &Value, request_id: &str, app_mode: bool) -> Result
     writeln!(
         stream,
         "{}",
-        json!({"token":token,"action":action,"input":input,"requestId":request_id,"namespace":if app_mode { "app" } else { "control" }})
+        json!({"token":token,"action":action,"input":input,"requestId":request_id,"namespace":namespace})
     )
     .map_err(|e| sent(e.to_string()))?;
     let mut line = String::new();
-    let max_response: u64 = if app_mode { 4_000_000 } else { 2_000_000 };
+    // Browser screenshots come back as base64 PNG.
+    let max_response: u64 = match namespace {
+        "browser" => 16_000_000,
+        "app" => 4_000_000,
+        _ => 2_000_000,
+    };
     BufReader::new(stream)
         .take(max_response + 1)
         .read_line(&mut line)

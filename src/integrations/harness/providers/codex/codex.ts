@@ -1,4 +1,8 @@
 import { TurnNotReadyError } from "../../core/types";
+import {
+  browserMcpFor,
+  codexBrowserMcpArgs,
+} from "../../../../features/browser/model/browserMcp";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -585,10 +589,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
+  const browserMcp = await browserMcpFor(input.sessionId);
   await spawnChild(
     input.sessionId,
     path,
-    ["app-server"],
+    ["app-server", ...(browserMcp ? codexBrowserMcpArgs(browserMcp) : [])],
     input.cwd,
     {
       provider: "codex",

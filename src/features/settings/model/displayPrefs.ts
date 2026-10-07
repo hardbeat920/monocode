@@ -81,3 +81,19 @@ const openLinksInApp = flagStore(
 export const loadOpenLinksInApp = openLinksInApp.load;
 export const saveOpenLinksInApp = openLinksInApp.save;
 export const useOpenLinksInApp = openLinksInApp.useFlag;
+
+const AGENT_BROWSER_KEY = "monocode.agentBrowser";
+export const AGENT_BROWSER_DEFAULT = true;
+/** Fired on `window` whenever agent browser access flips (detail: boolean). */
+export const AGENT_BROWSER_CHANGE_EVENT = "monocode:agentbrowserchange";
+
+const agentBrowser = flagStore(
+  AGENT_BROWSER_KEY,
+  AGENT_BROWSER_DEFAULT,
+  AGENT_BROWSER_CHANGE_EVENT,
+);
+
+/** Chats get browser tools (navigate, read, run scripts) for the built-in browser. */
+export const loadAgentBrowser = agentBrowser.load;
+export const saveAgentBrowser = agentBrowser.save;
+export const useAgentBrowser = agentBrowser.useFlag;

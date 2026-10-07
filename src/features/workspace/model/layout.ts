@@ -88,6 +88,8 @@ export type BrowserTabSource = {
   title?: string;
   /** Live only — not persisted. */
   loading?: boolean;
+  /** Why the page could not open or load. Live only. */
+  error?: string;
 };
 
 export type EditorPane = {

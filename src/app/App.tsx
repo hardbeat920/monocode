@@ -623,7 +623,9 @@ import { PaneTree } from "../features/workspace/ui/PaneTree";
 import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
-import { BrowserDockLayout } from "../features/browser/ui/ProjectBrowserDock";
+import { BrowserDockLayout } from "../features/browser/ui/SessionBrowserDock";
+import { forgetBrowserSessions } from "../features/browser/model/browserStore";
+import { handleBrowserRequest } from "../features/browser/model/browserAgent";
 
 import { lazySurface } from "../shared/ui/lazySurface";
 import { preloadNavigationWhenIdle } from "./model/preloadNavigation";
@@ -1645,6 +1647,17 @@ function Workspace({
     ? sessions.find((session) => session.id === monoViewId)
     : undefined;
   const monoCovers = !!monoViewId;
+
+  // A deleted session takes its browser tabs with it.
+  const browserSessionIds = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const ids = new Set(sessions.map((session) => session.id));
+    const previous = browserSessionIds.current;
+    browserSessionIds.current = ids;
+    if (!previous) return;
+    const gone = [...previous].filter((id) => !ids.has(id));
+    if (gone.length > 0) forgetBrowserSessions(gone);
+  }, [sessions]);
   const activeTabSessionIds = activeTab ? leafIds(activeTab.layout) : [];
   const activeLinkedWorkItemPanel = activeTab
     ? (linkedWorkItemPanels.get(activeTab.focusedId) ??
@@ -10220,6 +10233,19 @@ function Workspace({
             payload.input,
           );
         }
+        if (payload.namespace === "browser") {
+          if (
+            !sessionsRef.current.some(
+              (session) => session.id === payload.sessionId,
+            )
+          )
+            throw new Error("This session is not open in MonoCode");
+          return handleBrowserRequest(
+            payload.sessionId,
+            payload.action,
+            payload.input,
+          );
+        }
         if (payload.namespace !== "app")
           throw new Error("Unknown CLI namespace");
         const source = sessionsRef.current.find(
@@ -12168,9 +12194,8 @@ function Workspace({
 
                     <main className="relative flex min-h-0 min-w-0 flex-1">
                       <BrowserDockLayout
-                        projectPath={projectCwd}
+                        sessionId={monoViewSession?.id ?? active?.id ?? ""}
                         hidden={
-                          monoCovers ||
                           searchViewOpen ||
                           settingsOpen ||
                           inboxViewOpen ||
@@ -12509,7 +12534,7 @@ function Workspace({
                       : undefined
                   }
                   projectTerminalOpen={!monoCovers && dockVisible}
-                  showBrowser={!monoCovers}
+                  showBrowser
                 />
               )}
             </div>
