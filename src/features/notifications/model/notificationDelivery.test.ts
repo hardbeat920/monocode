@@ -2,6 +2,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   announceSessionFinished,
+  announceSessionInput,
   notifySession,
   saveNotificationsEnabled,
   setWindowFocused,
@@ -83,4 +84,19 @@ it("does not deliver an input event observed during a mute after expiry", async 
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("plays the input cue only when the question banner is not sent", async () => {
+  const session = newSession("claude", "/work");
+  const event = { kind: "question" as const, requestId: 1 };
+  await announceSessionInput(session, event, false);
+  expect(play).not.toHaveBeenCalled();
+
+  invoke.mockRejectedValue(new Error("No native bridge"));
+  await announceSessionInput(session, event, false);
+  expect(play.mock.calls).toEqual([["arrival"]]);
+
+  updateNotificationPreferences(["local:/work"], { mutedUntil: null });
+  await announceSessionInput(session, event, false);
+  expect(play).toHaveBeenCalledTimes(1);
 });
