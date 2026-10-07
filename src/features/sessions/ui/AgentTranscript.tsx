@@ -2138,7 +2138,13 @@ const TranscriptBlock = memo(function TranscriptBlock({
 
   if (block.role === "system") {
     if (block.contextBoundary) {
-      return <ContextBoundaryDivider block={block} />;
+      return (
+        <ContextBoundaryDivider
+          block={block}
+          cwd={cwd}
+          onOpenFile={onOpenFile}
+        />
+      );
     }
     if (block.interjection) {
       return <InterjectionDivider block={block} />;
@@ -4607,9 +4613,19 @@ const CONTEXT_KEPT_NOTE: Record<ContextKept, string | undefined> = {
 
 /**
  * Where the harness compacted its context. Everything above it stays in the
- * transcript, but the agent may now hold only a summary of it.
+ * transcript, but the agent may now hold only a summary of it. Where the
+ * harness shares that summary, it folds out from under the divider.
  */
-function ContextBoundaryDivider({ block }: { block: Block }) {
+function ContextBoundaryDivider({
+  block,
+  cwd,
+  onOpenFile,
+}: {
+  block: Block;
+  cwd?: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const meta = block.contextBoundary;
   if (!meta) return null;
   const tokens =
@@ -4643,6 +4659,27 @@ function ContextBoundaryDivider({ block }: { block: Block }) {
         </div>
         <div className="h-px min-w-4 flex-1 bg-content/12" />
       </div>
+      {meta.summary ? (
+        <div className="mt-1 text-center">
+          <button
+            type="button"
+            aria-expanded={summaryOpen}
+            onClick={() => setSummaryOpen((open) => !open)}
+            className="py-1 font-sans text-xs text-content/55 hover:text-content"
+          >
+            {summaryOpen ? "Hide summary" : "Show summary"}
+          </button>
+          {summaryOpen ? (
+            <div className="mt-1 rounded-md border border-content/10 px-3 py-2 text-left text-[13px] text-content/75">
+              <AgentMarkdown
+                text={meta.summary}
+                cwd={cwd}
+                onOpenFile={onOpenFile}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

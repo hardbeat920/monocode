@@ -29,7 +29,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(kept: ContextKept) {
+function render(kept: ContextKept, summary?: string) {
   const blocks: Block[] = [
     { id: "u1", role: "user", text: "First prompt" },
     { id: "a1", role: "assistant", text: "First answer" },
@@ -44,6 +44,7 @@ function render(kept: ContextKept) {
         kept,
         preTokens: 204_481,
         postTokens: 15_071,
+        ...(summary ? { summary } : {}),
       },
     },
     { id: "u2", role: "user", text: "Second prompt" },
@@ -80,4 +81,28 @@ it("dims what the agent no longer holds, and only that", () => {
 
   render("recent");
   expect(dimmed("First answer")).toBe(false);
+});
+
+it("keeps the harness's summary folded under the divider until asked", () => {
+  render("recent", "**Earlier**: the user fixed auth.");
+  const toggle = container.querySelector<HTMLButtonElement>(
+    "[data-context-boundary] button",
+  )!;
+  expect(toggle.textContent).toBe("Show summary");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(container.textContent).not.toContain("the user fixed auth");
+
+  act(() => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(toggle.textContent).toBe("Hide summary");
+  expect(
+    container.querySelector(
+      '[data-context-boundary] [data-streamdown="strong"]',
+    )?.textContent,
+  ).toBe("Earlier");
+});
+
+it("offers no summary toggle when the harness shared none", () => {
+  render("recent");
+  expect(container.querySelector("[data-context-boundary] button")).toBeNull();
 });
