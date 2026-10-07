@@ -68,6 +68,7 @@ import {
 } from "../../monos/model/mono";
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
+import { MonoUsage } from "../../monos/ui/MonoUsage";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { QuestionForm } from "./QuestionForm";
 import {
@@ -1138,6 +1139,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       }
                     />
                   ) : null}
+                  {visible ? <MonoUsage session={session} /> : null}
                   <MonoComposer
                     key={session.id}
                     sessionId={session.id}

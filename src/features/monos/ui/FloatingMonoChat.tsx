@@ -22,6 +22,7 @@ import {
   type FloatingMonoView,
 } from "../model/floatingMono";
 import { MonoComposer } from "./MonoComposer";
+import { MonoUsage } from "./MonoUsage";
 import { MonoStatus } from "./MonoStatus";
 import { MONO_PAGE_TURNS } from "../../sessions/data/sessionStore";
 
@@ -347,6 +348,7 @@ function FloatingConversation({
         </div>
       ) : null}
       <div className="shrink-0 px-1 pb-1">
+        <MonoUsage session={session} />
         <MonoComposer
           sessionId={`floating:${session.id}`}
           name={mono.name}
