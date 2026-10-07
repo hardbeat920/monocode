@@ -224,7 +224,7 @@ describe("OpenCode subagent trails", () => {
     idle();
     await done;
     expect(events.filter((event) => event.type === "context.compacted")).toEqual([
-      { type: "context.compacted", trigger: "auto", kept: "none" },
+      { type: "context.compacted", trigger: "auto", kept: "recent" },
     ]);
   });
   it("marks one boundary for a compaction it asked for", async () => {
@@ -243,7 +243,7 @@ describe("OpenCode subagent trails", () => {
     });
     // `runManualCompaction` marks it manual; see registry.test.
     expect(events.filter((event) => event.type === "context.compacted")).toEqual([
-      expect.objectContaining({ type: "context.compacted", kept: "none" }),
+      expect.objectContaining({ type: "context.compacted", kept: "recent" }),
     ]);
   });
   it("streams child reasoning and tools, including nested tasks, without user or hidden text", async () => {

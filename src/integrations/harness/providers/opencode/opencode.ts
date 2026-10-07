@@ -656,10 +656,15 @@ async function handleEvent(
   }
 
   switch (type) {
-    // OpenCode carries only the summary forward past a compaction. It does
-    // not say who started one; `runManualCompaction` marks the user's own.
+    // OpenCode keeps a recent tail of turns beside its summary, within a token
+    // budget, unless `compaction.tail_turns` is 0; the event says neither. It
+    // does not say who started it; `runManualCompaction` marks the user's own.
     case "session.compacted":
-      live.onEvent({ type: "context.compacted", trigger: "auto", kept: "none" });
+      live.onEvent({
+        type: "context.compacted",
+        trigger: "auto",
+        kept: "recent",
+      });
       break;
     case "message.updated": {
       const info = asRecord(properties.info);
