@@ -6330,12 +6330,7 @@ function Workspace({
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
-          let next = withHarnessChoice(
-            s,
-            harness,
-            resolved.id,
-            modelSettings,
-          );
+          let next = withHarnessChoice(s, harness, resolved.id, modelSettings);
           if (plan.kind === "arm") {
             next = { ...next, pendingSwitch: plan.pending };
           } else if (plan.kind === "revert") {
@@ -6405,8 +6400,7 @@ function Workspace({
         return false;
       }
       const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
+        current,
         HARNESS_LABEL[current.harness],
       );
       const title = placeholderTitle
@@ -7022,11 +7016,8 @@ function Workspace({
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
       const placeholderTitle =
-        canReplaceSessionTitle(
-          current.title,
-          current.harness,
-          HARNESS_LABEL[current.harness],
-        ) || !!draftBlock;
+        canReplaceSessionTitle(current, HARNESS_LABEL[current.harness]) ||
+        !!draftBlock;
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -7241,7 +7232,7 @@ function Workspace({
                 if (
                   generated &&
                   (options?.refreshTitle ||
-                    canReplaceSessionTitle(s.title, s.harness, titleSeed))
+                    canReplaceSessionTitle(s, titleSeed))
                 ) {
                   next = {
                     ...next,
@@ -8210,7 +8201,9 @@ function Workspace({
   );
   const queueMonoSessionCompletionRef = useRef(queueMonoSessionCompletion);
   queueMonoSessionCompletionRef.current = queueMonoSessionCompletion;
-  const monoCompletionBatches = useRef<MonoSessionCompletionBatches | null>(null);
+  const monoCompletionBatches = useRef<MonoSessionCompletionBatches | null>(
+    null,
+  );
   if (!monoCompletionBatches.current) {
     monoCompletionBatches.current = new MonoSessionCompletionBatches(
       (monoId, message, current) =>
@@ -10655,11 +10648,14 @@ function Workspace({
             monoOf: (id) => {
               const mono =
                 monoForSession(id) ?? findMono(habitRunMono(id) ?? "");
-              return mono && {
-                id: mono.id,
-                projects: mono.projects,
-                showStartedSessionsInSidebar: mono.showStartedSessionsInSidebar,
-              };
+              return (
+                mono && {
+                  id: mono.id,
+                  projects: mono.projects,
+                  showStartedSessionsInSidebar:
+                    mono.showStartedSessionsInSidebar,
+                }
+              );
             },
             habits: { load: loadHabits, update: updateHabits },
             agentFiles: (monoId) => loadMonoFiles(monoId),

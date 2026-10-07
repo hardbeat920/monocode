@@ -57,7 +57,6 @@ function chat(): Session {
 it("patches a busy session without losing queued harness events and awaits storage", async () => {
   let sessions = [chat()];
   let render = sessions;
-  let queued!: (sessions: Session[]) => Session[];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -74,28 +73,25 @@ it("patches a busy session without losing queued harness events and awaits stora
     () => sessions,
     (update) => {
       sessions = update(sessions);
-      queued = update;
     },
     "/repo",
   ).then(() => {
     saved = true;
   });
-  // Immediate list readers use the live ref before React processes its queue.
-  expect(sessions[0].titleIsExplicit).toBe(true);
-  expect(canReplaceSessionTitle(sessions[0], sessions[0].title)).toBe(false);
-  render = render.map((session) =>
-    applyHarnessEvent(session, {
+  expect(sessions[0].titleIsExplicit).toBeUndefined();
+  render = [
+    applyHarnessEvent(sessions[0], {
       type: "message.delta",
       text: "Still working",
     }),
-  );
-  render = queued(render);
+  ];
   sessions = render;
-  const savingProgress = upsertSession(sessions[0]);
   await Promise.resolve();
   expect(saved).toBe(false);
   release();
-  await Promise.all([renaming, savingProgress]);
+  await renaming;
+  await upsertSession(sessions[0]);
+  expect(canReplaceSessionTitle(sessions[0], sessions[0].title)).toBe(false);
   expect(sessions[0].busy).toBe(true);
   expect(sessions[0].blocks.at(-1)?.text).toBe("Still working");
   const restored = await getSession("chat");
@@ -136,6 +132,8 @@ it("surfaces a failed save and lets the same rename retry", async () => {
     );
   vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
   await expect(rename()).rejects.toThrow("disk full");
+  expect(sessions[0].title).toBe(titleFromPrompt("Fix tracking", "codex"));
+  expect(sessions[0].titleIsExplicit).toBeUndefined();
   await rename();
   expect((await getSession("chat"))?.title).toBe(
     "codex · #646 — Operator session titles",
