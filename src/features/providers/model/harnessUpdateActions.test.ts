@@ -194,6 +194,46 @@ describe("check overlapping an update", () => {
     ]);
   });
 
+  it.each(["the update", "the check"] as const)(
+    "keeps an updated CLI the probe missed when %s finishes last",
+    async (finishesLast) => {
+      const actions = await import("./harnessUpdateActions");
+      await check(actions);
+      const install = deferred<void>();
+      cli.updateHarnessCli.mockReturnValue(install.promise);
+      const run = actions.runHarnessUpdate({
+        harness: "claude",
+        installed: "1.0.0",
+        latest: "1.1.0",
+      });
+      // The updater has removed the binary when the probe looks for it.
+      probe.available.delete("claude");
+      const racing = check(actions);
+      await settle();
+
+      const finishUpdate = async () => {
+        installed = "1.1.0 (Claude Code)";
+        install.resolve();
+        await run;
+      };
+      if (finishesLast === "the update") {
+        await racing;
+        await finishUpdate();
+      } else {
+        await finishUpdate();
+        await racing;
+      }
+      expect(actions.getHarnessUpdateSnapshot().checks).toEqual([
+        {
+          harness: "claude",
+          status: "current",
+          installed: "1.1.0",
+          latest: "1.1.0",
+        },
+      ]);
+    },
+  );
+
   it("trusts a check that started after the update finished", async () => {
     const actions = await import("./harnessUpdateActions");
     await check(actions);

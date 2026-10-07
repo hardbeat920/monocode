@@ -100,6 +100,30 @@ function withUpdate(
   };
 }
 
+/**
+ * Applies each update to its harness's check. An updated harness the check
+ * left out is added, since the updater can replace the binary while the
+ * availability probe runs and the probe then reports the CLI as missing.
+ */
+function withUpdates(
+  checks: HarnessVersionCheck[],
+  updates: Map<HarnessId, FinishedUpdate>,
+): HarnessVersionCheck[] {
+  const merged = checks.map((check) => {
+    const update = updates.get(check.harness);
+    return update ? withUpdate(check, update) : check;
+  });
+  for (const [harness, update] of updates) {
+    if (merged.some((check) => check.harness === harness)) continue;
+    merged.push(
+      withUpdate({ harness, status: "unknown", error: "Not checked." }, update),
+    );
+  }
+  return merged.sort(
+    (a, b) => HARNESSES.indexOf(a.harness) - HARNESSES.indexOf(b.harness),
+  );
+}
+
 let inflightCheck: Promise<HarnessVersionCheck[]> | null = null;
 
 /**
@@ -127,12 +151,12 @@ export function checkInstalledHarnessVersions(options?: {
         installedVersion,
         latestVersion: fetchLatestHarnessVersion,
       });
-      const checks = found.map((check) => {
-        const update = lastUpdates.get(check.harness);
-        return update && update.order > startedAfter
-          ? withUpdate(check, update)
-          : check;
-      });
+      const checks = withUpdates(
+        found,
+        new Map(
+          [...lastUpdates].filter(([, update]) => update.order > startedAfter),
+        ),
+      );
       setSnapshot({ checks });
       return checks;
     } finally {
@@ -182,9 +206,7 @@ function recordUpdate(update: HarnessUpdate, version: string) {
   lastUpdates.set(update.harness, finished);
   if (!snapshot.checks) return;
   setSnapshot({
-    checks: snapshot.checks.map((check) =>
-      check.harness === update.harness ? withUpdate(check, finished) : check,
-    ),
+    checks: withUpdates(snapshot.checks, new Map([[update.harness, finished]])),
   });
 }
 
