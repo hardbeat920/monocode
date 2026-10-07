@@ -336,6 +336,7 @@ describe("UsageProviderChip", () => {
   });
 
   it("applies email masking live, reveals independently of account switching and hides on reopening", async () => {
+    saveMaskEmails(false);
     vi.mocked(invoke).mockImplementation(async (command) =>
       command === "provider_account_identity"
         ? { email: "user@example.com", plan: "Pro" }

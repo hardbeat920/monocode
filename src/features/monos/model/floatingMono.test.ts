@@ -22,6 +22,20 @@ function host(): FloatingMonoHost {
 }
 
 describe("floating Mono delivery", () => {
+  it("opens the selected document in the main Mono conversation", async () => {
+    const runtime = host();
+    runtime.openArtifact = vi.fn();
+    await deliverFloatingMonoRequest(
+      {
+        id: 1,
+        monoId: "mono",
+        action: { kind: "openArtifact", id: "doc-report" },
+      },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.openArtifact).toHaveBeenCalledWith("mono", "doc-report");
+  });
   it("uses the existing session for chat and approvals", async () => {
     const runtime = host();
     const accept = vi.fn().mockResolvedValue(true);
