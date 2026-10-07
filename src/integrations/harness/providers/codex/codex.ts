@@ -1,3 +1,4 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -5,7 +6,10 @@ import {
   parseCodexRateLimits,
 } from "../../../../features/providers/model/rateLimits";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { questionPromptTitle, type UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
+import {
+  questionPromptTitle,
+  type UserQuestionReply,
+} from "../../../../features/sessions/model/userQuestion";
 import {
   killChild,
   resolveCodexBinary,
@@ -29,7 +33,10 @@ import {
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import { deleteGeneratedImages, saveGeneratedImage } from "../../../../platform/tauri/fs";
+import {
+  deleteGeneratedImages,
+  saveGeneratedImage,
+} from "../../../../platform/tauri/fs";
 import {
   codexAsyncQuestions,
   codexAsyncQuestionResponse,
@@ -116,10 +123,7 @@ type Live = {
   usageLimited: boolean;
 };
 
-function trackNotificationQueue(
-  live: Live,
-  queued: Promise<void>,
-): void {
+function trackNotificationQueue(live: Live, queued: Promise<void>): void {
   live.notificationQueue = queued;
   void queued.then(() => {
     if (live.notificationQueue === queued) live.notificationQueue = null;
@@ -262,9 +266,9 @@ async function lastUserTurnId(
 
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Codex session");
+  if (!live) throw new TurnNotReadyError("No active Codex session");
   const turnId = live.activeTurnId;
-  if (!turnId) throw new Error("No active turn to steer");
+  if (!turnId) throw new TurnNotReadyError("No active turn to steer");
 
   const params = buildTurnSteerParams({
     threadId: live.threadId,
@@ -279,7 +283,15 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
     return;
   }
 
-  await live.rpc.request("turn/steer", params);
+  try {
+    await live.rpc.request("turn/steer", params);
+  } catch (error) {
+    if (live.activeTurnId !== turnId)
+      throw new TurnNotReadyError(
+        "The Codex turn ended before the follow-up arrived",
+      );
+    throw error;
+  }
   live.onEvent({ type: "turn.started", providerTurnId: turnId });
 }
 
@@ -451,7 +463,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   if (
     existing &&
     existing.cwd === input.cwd &&
-    sameProviderAccountId(existing.providerAccountId, input.providerAccountId) &&
+    sameProviderAccountId(
+      existing.providerAccountId,
+      input.providerAccountId,
+    ) &&
     existing.controlsAgents === controlsAgents
   ) {
     existing.onEvent = input.onEvent;
@@ -463,7 +478,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     // control, so its local CLI socket matches the current policy.
     if (
       existing.cwd !== input.cwd ||
-      !sameProviderAccountId(existing.providerAccountId, input.providerAccountId)
+      !sameProviderAccountId(
+        existing.providerAccountId,
+        input.providerAccountId,
+      )
     ) {
       resumeByThread.delete(input.sessionId);
     }
@@ -506,12 +524,18 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
               }
               return handleNotification(live, method, params);
             });
-          trackNotificationQueue(live, queued.catch(() => undefined));
+          trackNotificationQueue(
+            live,
+            queued.catch(() => undefined),
+          );
           return;
         }
         const result = handleNotification(live, method, params);
         if (!result) return;
-        trackNotificationQueue(live, result.catch(() => undefined));
+        trackNotificationQueue(
+          live,
+          result.catch(() => undefined),
+        );
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
@@ -657,13 +681,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnDone: null,
       turnFailed: null,
       turnEndPending: false,
-       emittedAssistantByItem: new Map(),
-       emittedReasoningByItem: new Map(),
-       emittedGeneratedImages: new Set(),
-       emittedAsyncQuestions: new Set(),
-       turnGeneration: 0,
-       notificationQueue: null,
-       subagentThreads: new Map(),
+      emittedAssistantByItem: new Map(),
+      emittedReasoningByItem: new Map(),
+      emittedGeneratedImages: new Set(),
+      emittedAsyncQuestions: new Set(),
+      turnGeneration: 0,
+      notificationQueue: null,
+      subagentThreads: new Map(),
       pendingSubagent: new Map(),
       openAgentRows: new Map(),
       rateLimits: new Map(),

@@ -128,6 +128,16 @@ export function closeTerminalInDock(
   return { ...dock, pane: { ...dock.pane, files, activeFileId } };
 }
 
+/** The active terminal while the dock has keyboard focus, for ⌘T / ⌘W routing. */
+export function focusedDockTerminalId(
+  dock: ProjectTerminalDock | undefined,
+  dockFocused: boolean,
+): string | null {
+  if (!dock?.open || !dockFocused) return null;
+  const { files, activeFileId } = dock.pane;
+  return files.some((file) => file.id === activeFileId) ? activeFileId : null;
+}
+
 export function selectDockTerminal(
   dock: ProjectTerminalDock,
   fileId: string,

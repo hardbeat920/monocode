@@ -2,6 +2,7 @@ import { Chunk, type DiffConfig } from "@codemirror/merge";
 import {
   EditorState,
   Facet,
+  Prec,
   RangeSet,
   RangeSetBuilder,
   StateEffect,
@@ -17,6 +18,9 @@ import {
   ViewPlugin,
   WidgetType,
   gutter,
+  gutterLineClass,
+  gutterWidgetClass,
+  lineNumberWidgetMarker,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -77,6 +81,35 @@ const addMarker = new GitMarker("cm-gitAdd", "+");
 // U+2212 minus, matching the removed-line mark in the other diff views.
 const delMarker = new GitMarker("cm-gitDel", "−");
 
+// Tints every gutter cell of a changed row, like the line-number lane in the
+// unified diff view.
+class GitRowClass extends GutterMarker {
+  constructor(readonly elementClass: string) {
+    super();
+  }
+
+  eq(other: GitRowClass) {
+    return this.elementClass === other.elementClass;
+  }
+}
+
+const addRow = new GitRowClass("cm-gitAddRow");
+const delRow = new GitRowClass("cm-gitDelRow");
+
+class OldLineNumber extends GutterMarker {
+  constructor(readonly number: number) {
+    super();
+  }
+
+  eq(other: OldLineNumber) {
+    return this.number === other.number;
+  }
+
+  toDOM() {
+    return document.createTextNode(String(this.number));
+  }
+}
+
 const originalField = StateField.define<Text | null>({
   create() {
     return null;
@@ -122,6 +155,7 @@ const chunksField = StateField.define<readonly Chunk[]>({
 type GitDecorations = {
   lines: DecorationSet;
   gutter: RangeSet<GutterMarker>;
+  rows: RangeSet<GutterMarker>;
 };
 
 const gitDecorations = StateField.define<GitDecorations>({
@@ -188,7 +222,10 @@ export function editorGit(options?: {
     originalField,
     chunksField,
     gitDecorations,
-    gitGutter,
+    gitRows,
+    // Lowest precedence puts the glyph lane after the line numbers and fold
+    // gutter, right next to the code it marks.
+    Prec.low(gitGutter),
     gitHunkActions,
     gitOverview,
     gitTheme,
@@ -648,7 +685,11 @@ function buildDecorations(state: EditorState): GitDecorations {
   const original = state.field(originalField);
   const chunks = state.field(chunksField);
   if (!original || chunks.length === 0) {
-    return { lines: Decoration.none, gutter: RangeSet.empty };
+    return {
+      lines: Decoration.none,
+      gutter: RangeSet.empty,
+      rows: RangeSet.empty,
+    };
   }
 
   const lineItems: { from: number; deco: Decoration }[] = [];
@@ -695,10 +736,14 @@ function buildDecorations(state: EditorState): GitDecorations {
 
   const lines = new RangeSetBuilder<Decoration>();
   const marks = new RangeSetBuilder<GutterMarker>();
+  const rows = new RangeSetBuilder<GutterMarker>();
   for (const item of lineItems) lines.add(item.from, item.from, item.deco);
-  for (const item of markItems) marks.add(item.from, item.from, addMarker);
+  for (const item of markItems) {
+    marks.add(item.from, item.from, addMarker);
+    rows.add(item.from, item.from, addRow);
+  }
 
-  return { lines: lines.finish(), gutter: marks.finish() };
+  return { lines: lines.finish(), gutter: marks.finish(), rows: rows.finish() };
 }
 
 function widgetPos(doc: Text, chunk: Chunk): number {
@@ -724,6 +769,33 @@ const gitGutter = gutter({
   lineMarkerChange: (update) =>
     update.startState.field(chunksField) !== update.state.field(chunksField),
 });
+
+const gitRows: Extension = [
+  gutterLineClass.compute(
+    [gitDecorations],
+    (state) => state.field(gitDecorations).rows,
+  ),
+  gutterWidgetClass.of((_view, widget) =>
+    widget instanceof DeletedLineWidget ? delRow : null,
+  ),
+  // Removed lines show their old number, as in the unified diff view.
+  lineNumberWidgetMarker.of((_view, widget) =>
+    widget instanceof DeletedLineWidget
+      ? new OldLineNumber(widget.oldLine)
+      : null,
+  ),
+  // The number gutter only sizes for the current document; reserve room for
+  // old numbers too so it doesn't clip them or shift while scrolling.
+  EditorView.editorAttributes.compute(
+    [originalField],
+    (state): Record<string, string> => {
+      const original = state.field(originalField);
+      return original
+        ? { style: `--cm-git-old-digits: ${String(original.lines).length}` }
+        : {};
+    },
+  ),
+];
 
 function activeChunkIndex(view: EditorView, positions: number[]): number {
   if (positions.length === 0) return -1;
@@ -1078,9 +1150,9 @@ const gitTheme = EditorView.theme({
     position: "relative",
   },
   ".cm-gitGutter": {
-    width: "22px",
+    width: "16px",
     padding: "0",
-    minWidth: "22px",
+    minWidth: "16px",
     overflow: "visible",
   },
   ".cm-gitGutter .cm-gutterElement": {
@@ -1089,34 +1161,54 @@ const gitTheme = EditorView.theme({
     padding: "0",
   },
   // The +/- glyph keeps added and removed lines distinguishable without
-  // relying on color; the bar on the right edge carries the color.
+  // relying on color; the row tints carry the color.
   ".cm-gitMarker": {
     width: "100%",
     height: "100%",
-    paddingRight: "6px",
     boxSizing: "border-box",
     fontFamily: "var(--font-mono)",
     fontSize: "11px",
     fontWeight: "600",
     lineHeight: `${LINE_HEIGHT}px`,
-    textAlign: "right",
+    textAlign: "center",
   },
   ".cm-gitAdd": {
     color: "var(--color-diff-add-fg)",
-    boxShadow: "inset -3px 0 0 var(--color-diff-add)",
   },
   ".cm-gitDel": {
     color: "var(--color-diff-del-fg)",
-    boxShadow: "inset -3px 0 0 var(--color-diff-del)",
+  },
+  // Line-number and fold cells take the stronger gutter tint; the glyph lane
+  // matches the row so the marker reads as part of the line.
+  ".cm-gutterElement.cm-gitAddRow": {
+    backgroundColor: "var(--color-diff-add-gutter)",
+    color: "var(--color-diff-add-fg)",
+  },
+  ".cm-gutterElement.cm-gitDelRow": {
+    backgroundColor: "var(--color-diff-del-gutter)",
+    color: "var(--color-diff-del-fg)",
+  },
+  // Diff tabs size the number column to its digits so the number sits close
+  // to its +/- glyph. 5px is the horizontal padding below.
+  ".cm-gutters .cm-lineNumbers .cm-gutterElement": {
+    minWidth: "0",
+    padding: "0 3px 0 2px",
+  },
+  ".cm-lineNumbers": {
+    minWidth: "calc(var(--cm-git-old-digits, 0) * 1ch + 5px)",
+  },
+  ".cm-gitGutter .cm-gutterElement.cm-gitAddRow": {
+    backgroundColor: "var(--color-diff-add-bg)",
+  },
+  ".cm-gitGutter .cm-gutterElement.cm-gitDelRow": {
+    backgroundColor: "var(--color-diff-del-bg)",
   },
   ".cm-gitInsertedLine": {
     backgroundColor: "var(--color-diff-add-bg)",
-    boxShadow: "inset 3px 0 0 var(--color-diff-add)",
   },
   ".cm-gitDeletedLine": {
     padding: "0 12px 0 6px",
     backgroundColor: "var(--color-diff-del-bg)",
-    boxShadow: "inset 3px 0 0 var(--color-diff-del)",
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
   },
