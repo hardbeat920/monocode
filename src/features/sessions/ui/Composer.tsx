@@ -1296,6 +1296,9 @@ export function Composer({
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     const review = formatReviewComments(reviewComments);
     if (!review) return;
+    const submittedCommentIds = new Set(
+      reviewComments.map((comment) => comment.id),
+    );
     const originalDraft = ref.current?.value ?? "";
     const value = appendComposerInsert(originalDraft, review);
     if (ref.current) {
@@ -1305,7 +1308,7 @@ export function Composer({
     setDraft(value);
     onDraftChange?.(value);
     syncHasValue(value, attachmentsRef.current);
-    submit(value, clearReviewComments, () => {
+    submit(value, () => clearReviewComments(submittedCommentIds), () => {
       if (ref.current) {
         ref.current.value = originalDraft;
         resizeComposer(ref.current);

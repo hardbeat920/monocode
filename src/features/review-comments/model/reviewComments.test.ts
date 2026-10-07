@@ -40,6 +40,25 @@ describe("review comments", () => {
     expect(reviewCommentsSnapshot()).toEqual([]);
   });
 
+  it("can clear only a submitted comment snapshot", () => {
+    const first = addReviewComment({
+      path: "a.ts",
+      startLine: 1,
+      endLine: 1,
+      snippet: "x",
+      body: "first",
+    });
+    const second = addReviewComment({
+      path: "a.ts",
+      startLine: 2,
+      endLine: 2,
+      snippet: "y",
+      body: "second",
+    });
+    clearReviewComments(new Set([first.id]));
+    expect(reviewCommentsSnapshot()).toEqual([second]);
+  });
+
   it("preserves deleted-line context and follows edits to its file", () => {
     addReviewComment({
       path: "a.ts",

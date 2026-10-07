@@ -49,9 +49,13 @@ export function removeReviewComment(id: string) {
   notify();
 }
 
-export function clearReviewComments() {
-  if (comments.length === 0) return;
-  comments = [];
+export function clearReviewComments(ids?: ReadonlySet<string>) {
+  const selected = ids && typeof ids.has === "function" ? ids : undefined;
+  const next = selected
+    ? comments.filter((comment) => !selected.has(comment.id))
+    : [];
+  if (next.length === comments.length) return;
+  comments = next;
   notify();
 }
 
