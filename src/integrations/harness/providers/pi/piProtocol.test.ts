@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentEndWillRetry,
   compactionEventFromPiEvent,
+  compactionSummaryFromPiEvent,
   assistantDeltaFromEvent,
   buildPiPrompt,
   buildPiSpawnArgs,
@@ -672,5 +673,35 @@ describe("compactionEventFromPiEvent", () => {
 
   it("ignores other events", () => {
     expect(compactionEventFromPiEvent({ type: "agent_end" })).toBeNull();
+  });
+});
+
+describe("compactionSummaryFromPiEvent", () => {
+  it("reads the summary Pi compacted into", () => {
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "compaction_end",
+        result: {
+          summary: "  Summary of conversation...  ",
+          firstKeptEntryId: "a",
+        },
+      }),
+    ).toBe("Summary of conversation...");
+  });
+
+  it("has none for an aborted pass or another event", () => {
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "compaction_end",
+        result: null,
+        aborted: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "agent_end",
+        result: { summary: "x" },
+      }),
+    ).toBeUndefined();
   });
 });

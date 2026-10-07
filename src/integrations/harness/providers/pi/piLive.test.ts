@@ -152,13 +152,14 @@ describe("Pi live session", () => {
       runtimeMode: "supervised",
       onEvent: (event) => events.push(event),
     });
-    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+    expect(events.filter((event) => event.type.startsWith("context."))).toEqual([
       {
         type: "context.compacted",
         trigger: "manual",
         kept: "recent",
         preTokens: 150_000,
       },
+      { type: "context.summarized", summary: "…" },
     ]);
     await stopPiSession("pi-compact-result");
   });
@@ -187,6 +188,9 @@ describe("Pi live session", () => {
     expect(
       events.filter((event) => event.type === "context.compacted"),
     ).toHaveLength(1);
+    expect(events.filter((event) => event.type === "context.summarized")).toEqual([
+      { type: "context.summarized", summary: "…" },
+    ]);
     await stopPiSession("pi-compact-event");
   });
 

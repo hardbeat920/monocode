@@ -45,6 +45,7 @@ import {
   sessionFromState,
   statusFromPiEvent,
   compactionEventFromPiEvent,
+  compactionSummaryFromPiEvent,
   stringField,
   summarizeToolRequest,
   toolCallDeltaFromEvent,
@@ -288,6 +289,11 @@ export async function compactContext(
         });
       if (!marked && boundary?.type === "context.compacted") {
         live.onEvent(boundary);
+        const summary = compactionSummaryFromPiEvent({
+          type: "compaction_end",
+          result: data,
+        });
+        if (summary) live.onEvent({ type: "context.summarized", summary });
       }
       const used = data?.estimatedTokensAfter;
       if (typeof used === "number" && Number.isFinite(used) && used > 0) {
@@ -876,6 +882,8 @@ function handleFrame(
 
   const compaction = compactionEventFromPiEvent(rec);
   if (compaction) live.onEvent(compaction);
+  const summary = compactionSummaryFromPiEvent(rec);
+  if (summary) live.onEvent({ type: "context.summarized", summary });
   const status = statusFromPiEvent(rec);
   if (status) live.onEvent({ type: "status", text: status });
 

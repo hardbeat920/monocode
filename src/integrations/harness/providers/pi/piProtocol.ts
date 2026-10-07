@@ -618,6 +618,15 @@ export function compactionEventFromPiEvent(
   };
 }
 
+/** The summary a successful `compaction_end` carries forward. */
+export function compactionSummaryFromPiEvent(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "compaction_end") return undefined;
+  if (rec.aborted === true) return undefined;
+  return stringField(asRecord(rec.result), "summary")?.trim();
+}
+
 export function statusFromPiEvent(rec: Record<string, unknown>): string | null {
   const type = stringField(rec, "type");
   if (type === "auto_retry_start") {
