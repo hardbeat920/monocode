@@ -1172,33 +1172,48 @@ export function CodeMirrorEditor({
         <div ref={hostRef} className="min-h-0 flex-1" />
         {references ? (
           <div
-            className="max-h-48 shrink-0 overflow-auto border-t border-stroke bg-background-base p-2"
+            className="flex max-h-48 shrink-0 flex-col border-t border-stroke bg-background-base"
             role="region"
             aria-label={`References for ${references.symbol}`}
           >
-            <div className="mb-1 flex items-center justify-between text-[11px] text-content/55">
-              <span>
-                {references.error ??
-                  `${references.matches.length} reference${references.matches.length === 1 ? "" : "s"} for ${references.symbol}`}
-              </span>
+            <div className="flex h-9 shrink-0 items-center border-b border-stroke px-1.5">
+              <div className="flex h-7.5 min-w-0 flex-1 items-center gap-1.5 rounded-md bg-selection px-2 text-[12px] text-content">
+                <span className="truncate font-medium">
+                  {references.error ?? `References: ${references.symbol}`}
+                </span>
+                {!references.error ? (
+                  <span className="shrink-0 text-[11px] text-content/50">
+                    {references.matches.length}
+                  </span>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={() => setReferences(null)}
-                className="px-1 hover:text-content"
+                aria-label="Close references"
+                title="Close references"
+                className="ml-1 grid size-7 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content"
               >
-                Close
+                ×
               </button>
             </div>
-            {references.matches.map((match) => (
-              <button
-                key={`${match.path}:${match.line}:${match.column}`}
-                type="button"
-                onClick={() => onOpenFile?.(match.path, match)}
-                className="block w-full truncate rounded px-1 py-0.5 text-left font-mono text-[11px] text-content/70 hover:bg-content/10"
-              >
-                {match.relative}:{match.line} {match.preview.trim()}
-              </button>
-            ))}
+            <div className="min-h-0 overflow-auto px-1.5 py-1">
+              {references.matches.map((match) => (
+                <button
+                  key={`${match.path}:${match.line}:${match.column}`}
+                  type="button"
+                  onClick={() => onOpenFile?.(match.path, match)}
+                  className="flex w-full min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left hover:bg-content/5"
+                >
+                  <span className="shrink-0 font-mono text-[10.5px] text-content/45">
+                    {match.relative}:{match.line}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-[11px] text-content/70">
+                    {match.preview.trim()}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
       </div>
