@@ -124,7 +124,22 @@ fn is_internal_origin(url: &Url) -> bool {
 
 /// Every navigation, including redirects and link clicks, passes through here.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
-    parse_url(url.as_str()).is_ok() && !is_app_origin(app, url)
+    navigation_allowed(url, &app_origins(app))
+}
+
+/// On macOS and Linux this also sees subframe navigations, with no frame to
+/// tell them apart. So it admits the documents frames are built from, which
+/// take their origin from a page already allowed: `about:blank` and
+/// `about:srcdoc` with any query or fragment, and `blob:` URLs of a web origin
+/// other than the app's. `data:` stays out: it would also open top-level.
+fn navigation_allowed(url: &Url, own: &[Url]) -> bool {
+    match url.scheme() {
+        "about" => matches!(url.path(), "blank" | "srcdoc"),
+        "blob" => Url::parse(url.path()).is_ok_and(|inner| {
+            matches!(inner.scheme(), "http" | "https") && !matches_app_origin(&inner, own)
+        }),
+        _ => parse_url(url.as_str()).is_ok() && !matches_app_origin(url, own),
+    }
 }
 
 /// Run in every frame before page scripts. Wry's navigation hook only sees
@@ -1105,16 +1120,38 @@ mod tests {
     }
 
     #[test]
-    fn redirect_targets_are_vetted_like_typed_urls() {
-        // `allow_navigation` applies `parse_url` to every redirect target.
+    fn navigations_admit_web_pages_and_frame_documents_only() {
+        let own = [Url::parse("http://localhost:1420/").unwrap()];
+        let allowed = |s: &str| navigation_allowed(&Url::parse(s).unwrap(), &own);
+        for ok in [
+            "https://example.com/a",
+            "http://localhost:3000/",
+            "about:blank",
+            "about:blank#frame",
+            "about:blank?x=1",
+            "about:srcdoc",
+            "about:srcdoc#top",
+            "blob:https://example.com/6f1c-uuid",
+        ] {
+            assert!(allowed(ok), "{ok}");
+        }
         for blocked in [
             "file:///etc/passwd",
             "javascript:1",
             "data:text/html,x",
-            "blob:https://a/b",
+            "about:config",
+            "blob:null/6f1c-uuid",
+            "blob:file:///6f1c-uuid",
+            "blob:http://localhost:1420/6f1c-uuid",
+            "blob:tauri://localhost/6f1c-uuid",
+            "http://localhost:1420/",
+            "tauri://localhost/",
         ] {
-            assert!(parse_url(blocked).is_err(), "{blocked}");
+            assert!(!allowed(blocked), "{blocked}");
         }
+        // Typed and agent URLs stay limited to web pages.
+        assert!(parse_url("blob:https://a/b").is_err());
+        assert!(parse_url("about:srcdoc").is_err());
     }
 
     #[test]
