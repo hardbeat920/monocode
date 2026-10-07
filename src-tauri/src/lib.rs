@@ -218,7 +218,15 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
+        // The plugin's link script would run in built-in browser pages too,
+        // swallowing plain clicks on target=_blank links: it cancels them and
+        // calls an opener command remote pages may not use. The app's own
+        // links open explicitly, so the script is not needed.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
