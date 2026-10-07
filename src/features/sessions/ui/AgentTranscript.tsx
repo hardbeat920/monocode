@@ -1105,6 +1105,18 @@ function AgentTranscriptComponent({
             item.type === "block"
               ? item.block.id === searchCurrent
               : item.blocks.some((block) => block.id === searchCurrent);
+          // The turn's answer, outside the folded work, if the agent may have
+          // lost it; the footer offers it back.
+          const lostReply = items
+            .filter(
+              (item, index) =>
+                !(fold && index >= fold.start && index <= fold.end) &&
+                item.type === "block" &&
+                item.block.role === "assistant" &&
+                resendable.has(item.block.id),
+            )
+            .map((item) => (item.type === "block" ? item.block.text : ""))
+            .join("\n\n");
           // Dimmed rows stay readable; hover brings them back to full.
           const dim = (entries: TurnItem[]) =>
             entries.length > 0 &&
@@ -1186,7 +1198,9 @@ function AgentTranscriptComponent({
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
                 delivery={messageDeliveries?.get(item.block.id)}
                 onAddToChat={
-                  !inFold && resendable.has(item.block.id)
+                  !inFold &&
+                  item.block.role === "user" &&
+                  resendable.has(item.block.id)
                     ? onAddToChat
                     : undefined
                 }
@@ -1421,6 +1435,11 @@ function AgentTranscriptComponent({
                         )
                       : turn,
                   )}
+                  onAddToChat={
+                    onAddToChat && lostReply
+                      ? () => onAddToChat(lostReply)
+                      : undefined
+                  }
                   onSaveNote={onSaveNote}
                   onShowWork={
                     inlineWork && onShowWork
@@ -1622,6 +1641,7 @@ function TurnDuration({
   onShowSessions,
   sessionsExpanded,
   sessionCount,
+  onAddToChat,
   fromHarness,
   fromModel,
   onSecondOpinion,
@@ -1642,6 +1662,8 @@ function TurnDuration({
   onShowSessions?: () => void;
   sessionsExpanded?: boolean;
   sessionCount?: number;
+  /** Offered when the agent may no longer hold this turn's reply. */
+  onAddToChat?: () => void;
   fromHarness?: HarnessId;
   /** The turn's own model, so a same-harness second opinion can hide it. */
   fromModel?: string;
@@ -1669,6 +1691,7 @@ function TurnDuration({
             {onSaveNote ? (
               <SaveNoteButton text={output} onSave={onSaveNote} />
             ) : null}
+            {onAddToChat ? <AddToChatButton onAdd={onAddToChat} /> : null}
           </>
         ) : (
           <Check className="size-3.5" strokeWidth={1.75} />
@@ -2069,7 +2092,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings?: Record<string, string>;
   onEditLastTurn?: () => void;
   editing?: boolean;
-  /** Offered when the agent may no longer hold this message. */
+  /** Offered on a user message the agent may no longer hold. */
   onAddToChat?: (text: string) => void;
 }) {
   if (block.role === "user") {
@@ -2202,7 +2225,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       data-selectable-agent-response={block.streaming ? undefined : block.id}
       data-chat-message={block.id}
       data-chat-message-role="assistant"
-      className={`group/reply relative min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
+      className={`min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -2211,14 +2234,6 @@ const TranscriptBlock = memo(function TranscriptBlock({
         cwd={cwd}
         onOpenFile={onOpenFile}
       />
-      {onAddToChat && !block.streaming ? (
-        // Out of the flow, so every earlier reply does not grow a blank row.
-        <div
-          className={`absolute -bottom-3 z-10 ${embedded ? "left-0" : "left-3"} opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100`}
-        >
-          <AddToChatButton onAdd={() => onAddToChat(block.text)} />
-        </div>
-      ) : null}
     </div>
   );
 });

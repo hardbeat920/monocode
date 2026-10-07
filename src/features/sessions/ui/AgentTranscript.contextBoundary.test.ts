@@ -140,7 +140,14 @@ it("names a Mono's fresh session and what it carried", () => {
 it("hands a message the agent may have lost back to the composer", () => {
   const onAddToChat = vi.fn();
   const blocks: Block[] = [
-    { id: "u1", role: "user", text: "First prompt" },
+    // A finished turn: its footer carries the turn's actions.
+    {
+      id: "u1",
+      role: "user",
+      text: "First prompt",
+      startedAt: 1,
+      durationMs: 5_000,
+    },
     { id: "a1", role: "assistant", text: "First answer" },
     {
       id: "b1",
@@ -153,11 +160,24 @@ it("hands a message the agent may have lost back to the composer", () => {
         kept: "user-messages",
       },
     },
-    { id: "u2", role: "user", text: "Second prompt" },
+    {
+      id: "u2",
+      role: "user",
+      text: "Second prompt",
+      startedAt: 9,
+      durationMs: 1_000,
+    },
+    { id: "a2", role: "assistant", text: "Second answer" },
   ];
   act(() =>
     root.render(createElement(AgentTranscript, { blocks, onAddToChat })),
   );
+  // The reply's action sits in its turn's footer, not over the reply.
+  expect(
+    container.querySelector(
+      '[data-chat-message="a1"] button[aria-label="Add to chat"]',
+    ),
+  ).toBeNull();
   const buttons = [
     ...container.querySelectorAll<HTMLButtonElement>(
       'button[aria-label="Add to chat"]',
