@@ -147,6 +147,13 @@ describe("FileTree render isolation", () => {
     ).toBe("mc/update-readme-tests files");
   });
 
+  it("keeps room for descenders in truncated file names", async () => {
+    await act(async () => render());
+    expect(row("first.ts").lastElementChild?.className).toContain(
+      "leading-label",
+    );
+  });
+
   it.each([false, true])(
     "skips unchanged rows on parent updates (hidden=%s)",
     async (hidden) => {
