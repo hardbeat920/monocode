@@ -1120,7 +1120,8 @@ pub(crate) fn upsert_session(
     let now = now_millis();
     let model_settings = serde_json::to_string(&session.model_settings)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    let blocks_json = serde_json::to_string(&session.blocks)
+    let blocks = crate::artifacts::retain_existing_cards(conn, &session.blocks)?;
+    let blocks_json = serde_json::to_string(blocks.as_ref())
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let queued_messages_json = serde_json::to_string(&session.queued_messages)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -1188,7 +1189,7 @@ pub(crate) fn upsert_session(
         .unwrap_or(now);
     let updated_at = match &existing {
         Some((_, prev_updated, prev_blocks, _, _, prev_queue))
-            if json_eq(prev_blocks, &session.blocks) && prev_queue == &queued_messages_json =>
+            if json_eq(prev_blocks, blocks.as_ref()) && prev_queue == &queued_messages_json =>
         {
             *prev_updated
         }

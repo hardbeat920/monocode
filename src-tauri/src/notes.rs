@@ -103,6 +103,25 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    let kind_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'content_kind'",
+        [],
+        |row| row.get(0),
+    )?;
+    if kind_present == 0 {
+        conn.execute(
+            "ALTER TABLE notes ADD COLUMN content_kind TEXT NOT NULL DEFAULT 'note'",
+            [],
+        )?;
+    }
+    let artifact_kind_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'artifact_kind'",
+        [],
+        |row| row.get(0),
+    )?;
+    if artifact_kind_present == 0 {
+        conn.execute("ALTER TABLE notes ADD COLUMN artifact_kind TEXT", [])?;
+    }
     Ok(())
 }
 
@@ -121,17 +140,26 @@ pub fn notes_get(store: State<'_, SessionStore>, id: String) -> Result<Option<No
 
 #[tauri::command(async)]
 pub fn notes_upsert(store: State<'_, SessionStore>, note: NoteUpsert) -> Result<Note, String> {
-    validate_id(&note.id, "note")?;
+    save_content(store, note, "note", None)
+}
+
+pub(crate) fn save_content(
+    store: State<'_, SessionStore>,
+    note: NoteUpsert,
+    kind: &str,
+    artifact_kind: Option<&str>,
+) -> Result<Note, String> {
+    validate_id(&note.id, kind)?;
     if let Some(session_id) = note.source_session_id.as_deref() {
         if !session_id.is_empty() {
             validate_id(session_id, "session")?;
         }
     }
     if note.body.len() > BODY_MAX {
-        return Err("Note is too large".into());
+        return Err("Content is too large".into());
     }
     let conn = store.lock_conn()?;
-    upsert_note(&conn, &note).map_err(|e| e.to_string())
+    upsert_content(&conn, &note, kind, artifact_kind).map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
@@ -292,29 +320,63 @@ fn remove_note_assets(app: &AppHandle, note_id: &str) -> Result<(), String> {
 }
 
 fn list_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
+    list_content(conn, "note")
+}
+
+fn list_content(conn: &Connection, kind: &str) -> rusqlite::Result<Vec<Note>> {
     let mut stmt = conn.prepare(
         "SELECT id, slug, title, body, source_session_id, source_cwd, tags_json,
                 created_at, updated_at, slug_pending
          FROM notes
+         WHERE content_kind = ?1
          ORDER BY updated_at DESC, id ASC",
     )?;
-    let rows = stmt.query_map([], read_note)?;
+    let rows = stmt.query_map(params![kind], read_note)?;
     rows.collect()
 }
 
 fn get_note(conn: &Connection, id: &str) -> rusqlite::Result<Option<Note>> {
+    get_content(conn, id, "note")
+}
+
+fn get_content(conn: &Connection, id: &str, kind: &str) -> rusqlite::Result<Option<Note>> {
     conn.query_row(
         "SELECT id, slug, title, body, source_session_id, source_cwd, tags_json,
                 created_at, updated_at, slug_pending
          FROM notes
-         WHERE id = ?1",
-        params![id],
+         WHERE id = ?1 AND content_kind = ?2",
+        params![id, kind],
         read_note,
     )
     .optional()
 }
 
+#[cfg(test)]
 fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
+    upsert_content(conn, note, "note", None)
+}
+
+pub(crate) fn upsert_content(
+    conn: &Connection,
+    note: &NoteUpsert,
+    kind: &str,
+    artifact_kind: Option<&str>,
+) -> rusqlite::Result<Note> {
+    let existing_kind: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT content_kind, artifact_kind FROM notes WHERE id = ?1",
+            params![note.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if existing_kind
+        .as_ref()
+        .is_some_and(|(category, subtype)| category != kind || subtype.as_deref() != artifact_kind)
+    {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Content belongs to a different kind".into(),
+        ));
+    }
     let title = normalize_title(&note.title);
     let body = note.body.replace("\r\n", "\n").replace('\r', "\n");
     let tags = normalize_tags(&note.tags);
@@ -332,7 +394,7 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
         .filter(|value| !value.is_empty());
     let now = now_millis();
 
-    if let Some(existing) = get_note(conn, &note.id)? {
+    if let Some(existing) = get_content(conn, &note.id, kind)? {
         let project_cwd = source_cwd.map(str::to_string).or(existing.source_cwd);
         // Project changes keep the note in its current position in the list.
         let updated_at =
@@ -386,8 +448,8 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
         conn.execute(
             "INSERT INTO notes (
                id, slug, title, body, source_session_id, source_cwd, tags_json,
-               created_at, updated_at, slug_pending
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+               created_at, updated_at, slug_pending, content_kind, artifact_kind
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 note.id,
                 slug,
@@ -398,7 +460,9 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
                 tags_json,
                 now,
                 now,
-                slug_pending
+                slug_pending,
+                kind,
+                artifact_kind
             ],
         )?;
         Ok(Note {
@@ -417,7 +481,10 @@ fn upsert_note(conn: &Connection, note: &NoteUpsert) -> rusqlite::Result<Note> {
 }
 
 fn delete_note(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+    conn.execute(
+        "DELETE FROM notes WHERE id = ?1 AND content_kind = 'note'",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -576,6 +643,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn artifacts_stay_out_of_notes_and_cannot_be_reclassified() {
+        let store = SessionStore::open_in_memory().unwrap();
+        upsert(&store, "note-1", "Personal note", "Keep this in Notes");
+        let conn = store.lock_conn().unwrap();
+        let input = NoteUpsert {
+            id: "doc-1".into(),
+            title: "PR report".into(),
+            body: "# Report\n\nDetailed review".into(),
+            tags: Vec::new(),
+            source_session_id: Some("mono-1".into()),
+            source_cwd: None,
+            finalize_slug: false,
+        };
+        upsert_content(&conn, &input, "artifact", Some("document")).unwrap();
+        assert_eq!(list_notes(&conn).unwrap().len(), 1);
+        assert_eq!(list_notes(&conn).unwrap()[0].id, "note-1");
+        assert!(get_note(&conn, "doc-1").unwrap().is_none());
+        assert!(get_content(&conn, "note-1", "artifact").unwrap().is_none());
+        assert_eq!(list_content(&conn, "artifact").unwrap()[0].id, "doc-1");
+        assert!(upsert_content(&conn, &input, "artifact", Some("code")).is_err());
+        assert!(upsert_note(&conn, &input).is_err());
+        assert!(upsert_content(
+            &conn,
+            &NoteUpsert {
+                id: "note-1".into(),
+                ..input.clone()
+            },
+            "artifact",
+            Some("document"),
+        )
+        .is_err());
+        delete_note(&conn, "doc-1").unwrap();
+        assert!(get_content(&conn, "doc-1", "artifact").unwrap().is_some());
+        upsert_content(
+            &conn,
+            &NoteUpsert {
+                body: "Revised report".into(),
+                ..input
+            },
+            "artifact",
+            Some("document"),
+        )
+        .unwrap();
+        assert_eq!(
+            get_content(&conn, "doc-1", "artifact")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Revised report"
+        );
+    }
+
+    #[test]
+    fn content_kind_migration_keeps_existing_rows_as_notes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+               id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+               body TEXT NOT NULL DEFAULT '', source_session_id TEXT, source_cwd TEXT,
+               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+             );
+             INSERT INTO notes VALUES ('old', 'personal', 'Personal', 'Kept', NULL, NULL, 1, 2);",
+        )
+        .unwrap();
+        ensure_notes_table(&conn).unwrap();
+        ensure_notes_table(&conn).unwrap();
+        assert_eq!(list_notes(&conn).unwrap()[0].body, "Kept");
+        assert!(list_content(&conn, "artifact").unwrap().is_empty());
     }
 
     #[test]

@@ -29,6 +29,7 @@ export type FloatingMonoAction =
   | { kind: "questionInteraction"; requestId: number }
   | { kind: "reveal" }
   | { kind: "openFile"; path: string }
+  | { kind: "openArtifact"; id: string }
   | { kind: "resume" };
 export type FloatingMonoRequest = {
   id: number;
@@ -99,6 +100,7 @@ export type FloatingMonoHost = {
   questionInteraction(sessionId: string, requestId: number): void;
   reveal(monoId: string): Promise<void>;
   openFile(path: string): void | Promise<void>;
+  openArtifact?(monoId: string, id: string): void | Promise<void>;
   resume(sessionId: string): void;
 };
 
@@ -138,6 +140,10 @@ export async function deliverFloatingMonoRequest(
       break;
     case "openFile":
       await host.openFile(action.path);
+      break;
+    case "openArtifact":
+      if (!host.openArtifact) throw new Error("Artifacts are unavailable.");
+      await host.openArtifact(request.monoId, action.id);
       break;
     case "resume":
       host.resume(session.id);
