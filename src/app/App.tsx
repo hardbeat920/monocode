@@ -7642,6 +7642,7 @@ function Workspace({
           if (monoRotation) {
             await forgetHarnessSession(current.harness, sessionId);
             // The chat marks where the fresh session starts, before this turn.
+            const boundaryId = crypto.randomUUID();
             const fresh = (session: Session) =>
               session.id === sessionId
                 ? insertContextBoundaryBeforeTurn(
@@ -7651,6 +7652,7 @@ function Workspace({
                       context: undefined,
                     },
                     monoRotation.boundary,
+                    boundaryId,
                   )
                 : session;
             current = fresh(current);

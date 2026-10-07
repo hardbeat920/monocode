@@ -800,14 +800,18 @@ function upsertKeyedStatus(
 /**
  * Mark a context boundary the app made itself, such as a Mono moving to a
  * fresh provider session: it lands just before the user block of the turn
- * that starts there, since that turn is the first the new context sees.
+ * that starts there, since that turn is the first the new context sees. The
+ * caller picks the id, so applying it to several copies of the session (state,
+ * ref, updater) lands one boundary, the same in each.
  */
 export function insertContextBoundaryBeforeTurn(
   session: Session,
   meta: ContextBoundaryMeta,
+  id: string,
 ): Session {
+  if (session.blocks.some((block) => block.id === id)) return session;
   const block: Block = {
-    id: crypto.randomUUID(),
+    id,
     role: "system",
     text: meta.kind === "rotation" ? ROTATED_TEXT : COMPACTED_TEXT,
     contextBoundary: meta,

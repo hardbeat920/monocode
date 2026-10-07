@@ -2202,7 +2202,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       data-selectable-agent-response={block.streaming ? undefined : block.id}
       data-chat-message={block.id}
       data-chat-message-role="assistant"
-      className={`group min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
+      className={`group/reply relative min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -2212,7 +2212,10 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onOpenFile={onOpenFile}
       />
       {onAddToChat && !block.streaming ? (
-        <div className="flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        // Out of the flow, so every earlier reply does not grow a blank row.
+        <div
+          className={`absolute -bottom-3 z-10 ${embedded ? "left-0" : "left-3"} opacity-0 transition-opacity group-hover/reply:opacity-100 focus-within:opacity-100`}
+        >
           <AddToChatButton onAdd={() => onAddToChat(block.text)} />
         </div>
       ) : null}

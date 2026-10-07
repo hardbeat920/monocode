@@ -1739,7 +1739,7 @@ describe("context boundaries", () => {
       text: "and then this",
       attachments: [],
     });
-    session = insertContextBoundaryBeforeTurn(session, rotation);
+    session = insertContextBoundaryBeforeTurn(session, rotation, "rotated");
     expect(session.blocks.map((block) => block.text)).toEqual([
       "first",
       "One.",
@@ -1751,14 +1751,27 @@ describe("context boundaries", () => {
   });
 
   it("appends a rotation boundary when no turn has started", () => {
-    const session = insertContextBoundaryBeforeTurn(newSession("claude", "/tmp"), {
-      kind: "rotation",
-      trigger: "auto",
-      at: 9,
-      kept: "none",
-    });
+    const session = insertContextBoundaryBeforeTurn(
+      newSession("claude", "/tmp"),
+      { kind: "rotation", trigger: "auto", at: 9, kept: "none" },
+      "rotated",
+    );
     expect(session.blocks.map((block) => block.text)).toEqual([
       "Fresh session started",
+    ]);
+  });
+
+  it("inserts a given rotation boundary once however often it is applied", () => {
+    const rotation = { kind: "rotation", trigger: "auto", at: 9, kept: "none" } as const;
+    const once = insertContextBoundaryBeforeTurn(
+      appendUser(newSession("claude", "/tmp"), "go"),
+      rotation,
+      "rotated",
+    );
+    const twice = insertContextBoundaryBeforeTurn(once, rotation, "rotated");
+    expect(twice).toBe(once);
+    expect(once.blocks.filter((block) => block.contextBoundary)).toEqual([
+      expect.objectContaining({ id: "rotated" }),
     ]);
   });
 
