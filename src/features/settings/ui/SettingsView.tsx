@@ -233,8 +233,10 @@ import {
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
   saveMaskEmails,
+  saveOpenLinksInApp,
   saveShowRemainingUsage,
   useMaskEmails,
+  useOpenLinksInApp,
   useShowRemainingUsage,
 } from "../model/displayPrefs";
 import {
@@ -885,6 +887,7 @@ function GeneralPage({
             onChange={onFileTabMode}
           />
         </Row>
+        <OpenLinksSetting />
         <Row
           id="tab-animations"
           label="Tab animations"
@@ -3311,6 +3314,27 @@ function ProvidersPage({
         </Row>
       </Group>
     </>
+  );
+}
+
+function OpenLinksSetting() {
+  const inApp = useOpenLinksInApp();
+  return (
+    <Row
+      id="open-links"
+      label="Open links in"
+      description={`Where links clicked in chats and terminals open. Hold ${IS_MAC ? "⌘" : "Ctrl"} while clicking to use the other one.`}
+    >
+      <Segmented
+        label="Open links in"
+        value={inApp ? "app" : "system"}
+        options={[
+          { value: "app", label: "Built-in browser" },
+          { value: "system", label: "Default browser" },
+        ]}
+        onChange={(value) => saveOpenLinksInApp(value === "app")}
+      />
+    </Row>
   );
 }
 

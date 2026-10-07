@@ -1,15 +1,37 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath } from "node:url";
 
-// @ts-expect-error process is a nodejs global
+const OPENER = "@tauri-apps/plugin-opener";
+const OPENER_SHIM = fileURLToPath(
+  new URL("./src/platform/tauri/opener.ts", import.meta.url),
+);
+
+/**
+ * Send every app import of the opener plugin through the in-app shim, so
+ * links clicked in a terminal can open in the built-in browser. The shim
+ * itself still gets the real package.
+ */
+function routeOpener(): Plugin {
+  return {
+    name: "monocode:route-opener",
+    enforce: "pre",
+    resolveId(source, importer) {
+      if (source !== OPENER || !importer) return null;
+      if (importer.split("?")[0] === OPENER_SHIM) return null;
+      return OPENER_SHIM;
+    },
+  };
+}
+
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async ({ mode }) => {
   const stable = mode === "stable";
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [routeOpener(), react(), tailwindcss()],
     clearScreen: false,
     build: {
       rollupOptions: {

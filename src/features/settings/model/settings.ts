@@ -250,6 +250,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "editor open top workspace normal session pane beside chat",
   },
   {
+    id: "open-links",
+    section: "general",
+    label: "Open links in",
+    keywords: "browser built-in embedded external default url web chat terminal",
+  },
+  {
     id: "tab-animations",
     section: "general",
     label: "Tab animations",
