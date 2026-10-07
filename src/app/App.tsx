@@ -641,7 +641,6 @@ import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
 import { BrowserDockLayout } from "../features/browser/ui/SessionBrowserDock";
-import { forgetBrowserSessions } from "../features/browser/model/browserStore";
 import { handleBrowserRequest } from "../features/browser/model/browserAgent";
 
 import { lazySurface } from "../shared/ui/lazySurface";
@@ -1717,16 +1716,6 @@ function Workspace({
     : undefined;
   const monoCovers = !!monoViewId;
 
-  // A deleted session takes its browser tabs with it.
-  const browserSessionIds = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    const ids = new Set(sessions.map((session) => session.id));
-    const previous = browserSessionIds.current;
-    browserSessionIds.current = ids;
-    if (!previous) return;
-    const gone = [...previous].filter((id) => !ids.has(id));
-    if (gone.length > 0) forgetBrowserSessions(gone);
-  }, [sessions]);
   const activeTabSessionIds = activeTab ? leafIds(activeTab.layout) : [];
   const activeLinkedWorkItemPanel = activeTab
     ? (linkedWorkItemPanels.get(activeTab.focusedId) ??
