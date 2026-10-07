@@ -26,6 +26,7 @@ import {
   type TerminalFitMode,
 } from "../model/terminalLayout";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { openLink } from "../../browser/model/openLink";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -172,6 +173,13 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       smoothScrollDuration: 0,
       theme: terminalTheme(isLightScheme()),
       macOptionIsMeta: IS_MAC,
+      linkHandler: {
+        activate: (event, uri) => {
+          void openLink(uri, event).catch((error) => {
+            console.error("Failed to open web link:", error);
+          });
+        },
+      },
     });
     term.open(host);
     termRef.current = term;

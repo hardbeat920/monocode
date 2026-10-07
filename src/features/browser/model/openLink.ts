@@ -1,4 +1,4 @@
-import { openExternalUrl } from "../../../platform/tauri/opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { loadOpenLinksInApp } from "../../settings/model/displayPrefs";
 import { isBrowsableUrl } from "./browserUrl";
@@ -36,5 +36,5 @@ export function openLink(
   ) {
     return Promise.resolve();
   }
-  return openExternalUrl(url);
+  return openUrl(url);
 }
