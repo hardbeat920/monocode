@@ -118,11 +118,11 @@ export function FilePreview({
         {added > 0 || deleted > 0 ? (
           <span className="shrink-0 font-sans text-[11px] font-semibold tabular-nums">
             {added > 0 ? (
-              <span className="text-emerald-400">+{formatInteger(added)}</span>
+              <span className="text-diff-add-fg">+{formatInteger(added)}</span>
             ) : null}
             {added > 0 && deleted > 0 ? " " : null}
             {deleted > 0 ? (
-              <span className="text-red-400">-{formatInteger(deleted)}</span>
+              <span className="text-diff-del-fg">-{formatInteger(deleted)}</span>
             ) : null}
           </span>
         ) : (
@@ -172,22 +172,22 @@ function PreviewLine({
 }) {
   const bg =
     line.kind === "add"
-      ? "bg-teal-800/20"
+      ? "bg-diff-add-bg"
       : line.kind === "del"
-        ? "bg-rose-800/20"
+        ? "bg-diff-del-bg"
         : "";
   const bar =
     line.kind === "add"
-      ? "bg-teal-400"
+      ? "bg-diff-add"
       : line.kind === "del"
-        ? "bg-rose-400"
+        ? "bg-diff-del"
         : "bg-transparent";
   const mark = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
   const markColor =
     line.kind === "add"
-      ? "text-teal-400"
+      ? "text-diff-add-fg"
       : line.kind === "del"
-        ? "text-rose-400"
+        ? "text-diff-del-fg"
         : "text-transparent";
 
   return (
