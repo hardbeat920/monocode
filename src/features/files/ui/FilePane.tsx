@@ -18,7 +18,7 @@ import {
   type EditorPane,
   type FilePaneTab,
 } from "../../workspace/model/layout";
-import { isImagePath } from "../model/filePreview";
+import { isImagePath, isPdfPath } from "../model/filePreview";
 import type { TerminalMetaPatch } from "../../terminal/model/terminalTab";
 import type { EditorNavigationTarget } from "../../search/model/search";
 import { editorPathsEqual } from "../../search/model/search";
@@ -42,6 +42,10 @@ const CommitDiff = lazySurface(async () => {
 const FileEditor = lazySurface(async () => {
   const module = await import("./FileEditor");
   return { default: module.FileEditor };
+});
+const PdfViewer = lazySurface(async () => {
+  const module = await import("./PdfViewer");
+  return { default: module.PdfViewer };
 });
 const SessionChangesDiff = lazySurface(async () => {
   const module = await import("../../source-control/ui/SessionChangesDiff");
@@ -211,6 +215,8 @@ function FilePaneComponent({
                 />
               ) : isImagePath(file.path) ? (
                 <BinaryFileView path={file.path} cwd={file.cwd} />
+              ) : isPdfPath(file.path) ? (
+                <PdfViewer path={file.path} cwd={file.cwd} />
               ) : (
                 <FileEditor
                   path={file.path}

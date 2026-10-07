@@ -4,9 +4,9 @@
   "version": "0.9.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:stable": "vite --mode stable",
-    "build": "tsc && vite build",
+    "dev": "node scripts/copy-pdf-assets.mjs && vite",
+    "dev:stable": "node scripts/copy-pdf-assets.mjs && vite --mode stable",
+    "build": "node scripts/copy-pdf-assets.mjs && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -65,7 +65,8 @@
     "react-material-icon-theme": "^1.2.0",
     "rehype-harden": "^1.1.8",
     "shiki": "^3.23.0",
-    "streamdown": "^2.5.0"
+    "streamdown": "^2.5.0",
+    "pdfjs-dist": "^6.4.299"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
