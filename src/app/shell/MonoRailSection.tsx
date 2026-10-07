@@ -5,7 +5,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ImagePlus, MoreHorizontal, Plus, Trash2 } from "../../shared/ui/icons";
+import {
+  ChevronDown,
+  ChevronRight,
+  ImagePlus,
+  MoreHorizontal,
+  Plus,
+  Trash2,
+} from "../../shared/ui/icons";
 import { Popover, type PopoverAnchor } from "../../shared/ui/Popover";
 import { Shimmer } from "../../shared/ui/Shimmer";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
@@ -22,6 +29,7 @@ import {
   dismissMonoIntro,
   findMono,
   listMonos,
+  loadMonoRailCollapsed,
   MONO_STATUS_LABEL,
   monoIntroDismissed,
   nextMonoLook,
@@ -29,6 +37,7 @@ import {
   monoProjectsPhrase,
   monosSnapshot,
   reorderMonos,
+  saveMonoRailCollapsed,
   saveMonoMascot,
   saveMonoName,
   subscribeMonos,
@@ -69,9 +78,14 @@ export function MonoRailSection({
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
   const [addButton, setAddButton] = useState<HTMLButtonElement | null>(null);
+  const [collapsed, setCollapsed] = useState(loadMonoRailCollapsed);
+  const toggleCollapsed = (next: boolean) => {
+    setCollapsed(next);
+    saveMonoRailCollapsed(next);
+  };
   // Shown once ever, and only the user's choice puts it away.
   const showIntro =
-    introAvailable && monos.length === 0 && !monoIntroDismissed();
+    introAvailable && !collapsed && monos.length === 0 && !monoIntroDismissed();
   const ids = monos.map((mono) => mono.id);
   const sortable = useAnimatedReorder(ids, reorderMonos, "y");
   const [menu, setMenu] = useState<{ id: string; anchor: PopoverAnchor }>();
@@ -81,16 +95,29 @@ export function MonoRailSection({
   return (
     <div className="mb-2 shrink-0" data-mono-rail>
       <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
-        <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/50">
-          Monos
-        </span>
-        {/* With none yet, the row below is the way to add one. */}
-        {monos.length ? (
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          onClick={() => toggleCollapsed(!collapsed)}
+          className="flex min-w-0 flex-1 cursor-default items-center gap-1 px-1 text-left text-xs leading-5 text-content/50 hover:text-content"
+        >
+          <span className="truncate">Monos</span>
+          {collapsed ? (
+            <ChevronRight className="size-3 shrink-0" strokeWidth={1.75} />
+          ) : (
+            <ChevronDown className="size-3 shrink-0" strokeWidth={1.75} />
+          )}
+        </button>
+        {/* With none yet and expanded, the row below is the way to add one. */}
+        {monos.length || collapsed ? (
           <button
             type="button"
             title="New mono"
             aria-label="New mono"
-            onClick={onCreate}
+            onClick={() => {
+              toggleCollapsed(false);
+              onCreate();
+            }}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
           >
             <Plus className="size-3.5" strokeWidth={1.75} />
@@ -108,120 +135,126 @@ export function MonoRailSection({
           onLater={dismissMonoIntro}
         />
       ) : null}
-      <div className="flex flex-col gap-px px-2">
-        {monos.length === 0 ? (
-          <button
-            ref={setAddButton}
-            type="button"
-            data-mono-add
-            title="New mono"
-            aria-label="New mono"
-            onClick={onCreate}
-            className="grid h-8 w-full cursor-default place-items-center rounded-md border border-dashed border-content/15 text-content/50 hover:border-content/30 hover:bg-content/5 hover:text-content"
-          >
-            <Plus className="size-3.5" strokeWidth={1.75} />
-          </button>
-        ) : null}
-        {monos.map((mono) => {
-          const look = monoLook(mono);
-          const state = states.get(mono.id) ?? IDLE;
-          const selected = mono.id === activeId;
-          const unseen = !selected && !!unseenIds?.has(mono.id);
-          const projects = look.projects.length
-            ? monoProjectsPhrase(look.projects)
-            : "No projects yet";
-          const status =
-            state.status === "idle"
-              ? undefined
-              : (state.activity ?? MONO_STATUS_LABEL[state.status]);
-          return (
-            <div
-              key={mono.id}
-              ref={(el) => sortable.setItemRef(mono.id, el)}
-              data-selected={selected || undefined}
-              data-mono-status={state.status}
-              className={`reorder-item project-reorder-item group relative flex h-8 cursor-default touch-none items-stretch rounded-md px-2 ${
-                selected ? "bg-selection-strong text-content" : "opacity-65"
-              }`}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                if (
-                  (event.target as HTMLElement | null)?.closest(
-                    "[data-no-drag]",
-                  )
-                )
-                  return;
-                sortable.onItemPointerDown(mono.id, event);
-              }}
-              onClick={(event) => {
-                if (
-                  (event.target as HTMLElement | null)?.closest(
-                    "[data-no-drag]",
-                  )
-                )
-                  return;
-                if (sortable.consumeClick()) return;
-                onOpen(mono.id);
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setMenu({
-                  id: mono.id,
-                  anchor: { x: event.clientX, y: event.clientY },
-                });
-              }}
+      {collapsed ? null : (
+        <div className="flex flex-col gap-px px-2">
+          {monos.length === 0 ? (
+            <button
+              ref={setAddButton}
+              type="button"
+              data-mono-add
+              title="New mono"
+              aria-label="New mono"
+              onClick={onCreate}
+              className="grid h-8 w-full cursor-default place-items-center rounded-md border border-dashed border-content/15 text-content/50 hover:border-content/30 hover:bg-content/5 hover:text-content"
             >
-              <button
-                type="button"
-                title={[look.name, projects, status].filter(Boolean).join("\n")}
-                aria-label={[look.name, status ?? "idle", projects].join(", ")}
-                aria-current={selected ? "true" : undefined}
-                className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
-              >
-                <MonoRailMascot
-                  name={look.mascot}
-                  color={look.color}
-                  status={state.status}
-                />
-                {state.status === "working" ? (
-                  <Shimmer
-                    as="span"
-                    duration={1.4}
-                    className="min-w-0 flex-1 truncate text-sm font-medium leading-tight"
-                  >
-                    {look.name}
-                  </Shimmer>
-                ) : (
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
-                    {look.name}
-                  </span>
-                )}
-                {unseen ? (
-                  <span
-                    aria-hidden
-                    className="size-1.5 shrink-0 rounded-full bg-content/60 group-hover:hidden group-has-[:focus-visible]:hidden"
-                  />
-                ) : null}
-              </button>
-              <button
-                type="button"
-                data-no-drag
-                title="Mono options"
-                aria-label={`${look.name} options`}
-                aria-haspopup="menu"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setMenu({ id: mono.id, anchor: event.currentTarget });
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </button>
+          ) : null}
+          {monos.map((mono) => {
+            const look = monoLook(mono);
+            const state = states.get(mono.id) ?? IDLE;
+            const selected = mono.id === activeId;
+            const unseen = !selected && !!unseenIds?.has(mono.id);
+            const projects = look.projects.length
+              ? monoProjectsPhrase(look.projects)
+              : "No projects yet";
+            const status =
+              state.status === "idle"
+                ? undefined
+                : (state.activity ?? MONO_STATUS_LABEL[state.status]);
+            return (
+              <div
+                key={mono.id}
+                ref={(el) => sortable.setItemRef(mono.id, el)}
+                data-selected={selected || undefined}
+                data-mono-status={state.status}
+                className={`reorder-item project-reorder-item group relative flex h-8 cursor-default touch-none items-stretch rounded-md px-2 ${
+                  selected ? "bg-selection-strong text-content" : "opacity-65"
+                }`}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  if (
+                    (event.target as HTMLElement | null)?.closest(
+                      "[data-no-drag]",
+                    )
+                  )
+                    return;
+                  sortable.onItemPointerDown(mono.id, event);
                 }}
-                className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+                onClick={(event) => {
+                  if (
+                    (event.target as HTMLElement | null)?.closest(
+                      "[data-no-drag]",
+                    )
+                  )
+                    return;
+                  if (sortable.consumeClick()) return;
+                  onOpen(mono.id);
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({
+                    id: mono.id,
+                    anchor: { x: event.clientX, y: event.clientY },
+                  });
+                }}
               >
-                <MoreHorizontal className="size-4" strokeWidth={1.75} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
+                <button
+                  type="button"
+                  title={[look.name, projects, status]
+                    .filter(Boolean)
+                    .join("\n")}
+                  aria-label={[look.name, status ?? "idle", projects].join(
+                    ", ",
+                  )}
+                  aria-current={selected ? "true" : undefined}
+                  className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+                >
+                  <MonoRailMascot
+                    name={look.mascot}
+                    color={look.color}
+                    status={state.status}
+                  />
+                  {state.status === "working" ? (
+                    <Shimmer
+                      as="span"
+                      duration={1.4}
+                      className="min-w-0 flex-1 truncate text-sm font-medium leading-tight"
+                    >
+                      {look.name}
+                    </Shimmer>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
+                      {look.name}
+                    </span>
+                  )}
+                  {unseen ? (
+                    <span
+                      aria-hidden
+                      className="size-1.5 shrink-0 rounded-full bg-content/60 group-hover:hidden group-has-[:focus-visible]:hidden"
+                    />
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  data-no-drag
+                  title="Mono options"
+                  aria-label={`${look.name} options`}
+                  aria-haspopup="menu"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenu({ id: mono.id, anchor: event.currentTarget });
+                  }}
+                  className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+                >
+                  <MoreHorizontal className="size-4" strokeWidth={1.75} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {menu ? (
         <MonoMenu
           key={menu.id}

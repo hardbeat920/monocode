@@ -87,3 +87,40 @@ it("lists monos once there are some, with the plus in the header", () => {
   expect(container.querySelector("[data-mono-add]")).toBeNull();
   expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
 });
+
+const header = () =>
+  container.querySelector<HTMLButtonElement>("button[aria-expanded]");
+
+it("collapses the monos from the header, and remembers it", () => {
+  createMono();
+  render();
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
+
+  act(() => header()?.click());
+  expect(header()?.getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(0);
+
+  act(() => root.unmount());
+  root = createRoot(container);
+  render();
+  expect(header()?.getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(0);
+
+  act(() => header()?.click());
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
+});
+
+it("keeps a way to add a mono while collapsed with none, and expands on it", () => {
+  const onCreate = render({ introAvailable: true });
+  act(() => header()?.click());
+  expect(intro()).toBeNull();
+  expect(container.querySelector("[data-mono-add]")).toBeNull();
+  const add = container.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="New mono"]',
+  );
+  expect(add).toHaveLength(1);
+
+  act(() => add[0]?.click());
+  expect(onCreate).toHaveBeenCalledOnce();
+  expect(header()?.getAttribute("aria-expanded")).toBe("true");
+});

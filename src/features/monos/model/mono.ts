@@ -256,6 +256,25 @@ export function dismissMonoIntro(): void {
   window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
 }
 
+const RAIL_COLLAPSED_KEY = "monocode:mono-rail-collapsed";
+
+export function loadMonoRailCollapsed(): boolean {
+  try {
+    return localStorage.getItem(RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveMonoRailCollapsed(collapsed: boolean): void {
+  try {
+    if (collapsed) localStorage.setItem(RAIL_COLLAPSED_KEY, "1");
+    else localStorage.removeItem(RAIL_COLLAPSED_KEY);
+  } catch {
+    // The section opens expanded next launch; harmless.
+  }
+}
+
 function uniqueProjects(paths: readonly string[]): string[] {
   const seen = new Set<string>();
   return paths.filter((path) => {
