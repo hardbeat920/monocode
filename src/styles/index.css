@@ -1364,6 +1364,13 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
   min-height: var(--transcript-viewport, 0px);
 }
 
+/* A finished run can still be revealing its reply. Artifacts and actions wait
+   for the final word's fade, using the reply's actual animation state. */
+.transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
 .transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
   opacity: 0;

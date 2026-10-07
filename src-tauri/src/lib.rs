@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod artifacts;
 mod automations;
 mod azure_devops;
 mod chat_background;
@@ -483,6 +484,10 @@ pub fn run() {
             notes::notes_list,
             notes::notes_get,
             notes::notes_upsert,
+            artifacts::artifacts_list,
+            artifacts::artifacts_get,
+            artifacts::artifacts_upsert,
+            artifacts::artifacts_delete,
             notes::notes_delete,
             notes::notes_save_image,
             notes::notes_image_path,

@@ -309,6 +309,7 @@ function FloatingConversation({
             void action({ kind: "approval", requestId, decision })
           }
           onOpenFile={(path) => void action({ kind: "openFile", path })}
+          onOpenArtifact={(id) => void action({ kind: "openArtifact", id })}
           onOpenDiff={() => void action({ kind: "reveal" })}
           onShowWork={() => void action({ kind: "reveal" })}
           onShowSessions={() => void action({ kind: "reveal" })}
