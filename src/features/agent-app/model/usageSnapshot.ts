@@ -141,7 +141,7 @@ export function usageSnapshot(source: Session, input: Record<string, unknown>) {
         (limits?.status === "ok" ? limits.updatedAt : null);
       const hasData =
         windows.length > 0 ||
-        !!limits?.extraUsage ||
+        (!!limits?.extraUsage && limits.extraUsage.enabled !== false) ||
         !!limits?.credits?.length ||
         !!limits?.resetCredits;
       const stale =

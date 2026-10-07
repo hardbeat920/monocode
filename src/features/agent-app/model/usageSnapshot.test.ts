@@ -322,6 +322,33 @@ describe("usage.list through the app handler", () => {
     expect(JSON.stringify(result)).not.toContain("secret-token");
   });
 
+  it("does not treat disabled Claude extra usage as available allowance", async () => {
+    setCachedRateLimits(
+      "claude",
+      "default",
+      parseClaudeOAuthUsage(
+        JSON.stringify({
+          extra_usage: {
+            is_enabled: false,
+            monthly_limit: 100,
+            used_credits: 25,
+          },
+        }),
+      ),
+    );
+
+    expect((await list({ provider: "claude" })).accounts[0]).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      windows: [],
+      extraUsage: {
+        enabled: false,
+        monthlyLimit: 100,
+        usedCredits: 25,
+      },
+    });
+  });
+
   it("retains an explicitly removed session account without probing it", async () => {
     const result = await list(
       { refresh: true },
