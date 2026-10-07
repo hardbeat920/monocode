@@ -7,10 +7,17 @@ import {
   dequeueQueuedMessage,
   queuedMessageForSubmit,
 } from "../../sessions/model/messageQueue";
-import { newSession, type Session } from "../../sessions/model/session";
 import {
+  newSession,
+  type QueuedMessage,
+  type Session,
+} from "../../sessions/model/session";
+import {
+  dismissQueuedMonoSessionCompletion,
   enqueueMonoSessionCompletion,
   monoSessionCompletionMessage,
+  monoSessionCompletionResult,
+  MonoSessionCompletionBatches,
 } from "./monoSessionCompletion";
 
 const options = {
@@ -23,6 +30,32 @@ const options = {
     text: "The API is fixed and tests pass.",
   } as ControlOutcome,
 };
+
+function groupedMessage() {
+  let message!: QueuedMessage;
+  const batches = new MonoSessionCompletionBatches((_, ready) => {
+    message = ready;
+  });
+  for (const [sessionId, status] of [
+    ["stopped", "cancelled"],
+    ["failed", "failed"],
+    ["completed", "completed"],
+  ] as const) {
+    batches.watch(
+      { monoId: "mono", turn: 1 },
+      sessionId,
+    )(
+      monoSessionCompletionResult({
+        ...options,
+        sessionId,
+        requestId: sessionId,
+        outcome: { status, text: `Result for ${sessionId}` },
+      }),
+    );
+  }
+  batches.closeInactive(() => false);
+  return message;
+}
 
 describe("Mono session completion notifications", () => {
   it("accepts immediately, then queues completion behind chat without steering a busy Mono", async () => {
@@ -139,6 +172,90 @@ describe("Mono session completion notifications", () => {
       ],
     };
     expect(enqueueMonoSessionCompletion(delivered, message)).toBe(delivered);
+  });
+
+  it("dismisses a queued session report while keeping chat, other reports and the consumed transcript", () => {
+    const target = monoSessionCompletionMessage(options);
+    const other = monoSessionCompletionMessage({
+      ...options,
+      requestId: "other-request",
+      sessionId: "other",
+    });
+    const chat = { id: "chat", text: "Explain the change", attachments: [] };
+    const mono: Session = {
+      ...newSession("codex", options.project),
+      queueStatus: "paused",
+      queuedMessages: [chat, target, other],
+      blocks: [
+        {
+          id: "old-notice",
+          role: "user",
+          text: target.text,
+          appRequestId: target.id,
+          internal: true,
+        },
+      ],
+    };
+    const next = dismissQueuedMonoSessionCompletion(mono, "worker");
+    expect(next.queuedMessages).toEqual([chat, other]);
+    expect(next.queueStatus).toBe("paused");
+    expect(next.blocks).toBe(mono.blocks);
+    expect(dismissQueuedMonoSessionCompletion(next, "worker")).toBe(next);
+  });
+
+  it("removes reports from a saved batch and updates its identity, count and aggregate status", () => {
+    // A save/load keeps the JSON text and metadata; it has no in-memory watches.
+    const message = JSON.parse(
+      JSON.stringify(groupedMessage()),
+    ) as QueuedMessage;
+    const mono: Session = {
+      ...newSession("codex", options.project),
+      queuedMessages: [message],
+    };
+    const next = dismissQueuedMonoSessionCompletion(mono, "failed");
+    const remaining = next.queuedMessages![0];
+    expect(remaining.id).toBe(message.id);
+    expect(remaining.monoSessionCompletion).toEqual({
+      sessionId: "stopped",
+      title: "2 session results",
+      status: "cancelled",
+      sessionCount: 2,
+    });
+    expect(
+      JSON.parse(remaining.text.split("\n\n")[1]).sessions.map(
+        (entry: { sessionId: string }) => entry.sessionId,
+      ),
+    ).toEqual(["stopped", "completed"]);
+
+    const last = dismissQueuedMonoSessionCompletion(next, "stopped");
+    expect(last.queuedMessages![0].id).toBe(message.id);
+    expect(last.queuedMessages![0].monoSessionCompletion).toEqual({
+      sessionId: "completed",
+      title: "Agent session",
+      status: "completed",
+    });
+    expect(
+      JSON.parse(last.queuedMessages![0].text.split("\n\n")[1]).sessionId,
+    ).toBe("completed");
+    expect(
+      dismissQueuedMonoSessionCompletion(last, "completed").queuedMessages,
+    ).toEqual([]);
+  });
+
+  it("leaves unrelated or unrecognized saved batches untouched", () => {
+    const message = groupedMessage();
+    const mono: Session = {
+      ...newSession("codex", options.project),
+      queuedMessages: [message],
+    };
+    expect(dismissQueuedMonoSessionCompletion(mono, "unrelated")).toBe(mono);
+    const malformed: Session = {
+      ...mono,
+      queuedMessages: [{ ...message, text: "Incomplete saved report" }],
+    };
+    expect(dismissQueuedMonoSessionCompletion(malformed, "stopped")).toBe(
+      malformed,
+    );
   });
 
   it("bounds long results and points the Mono to the source conversation", () => {

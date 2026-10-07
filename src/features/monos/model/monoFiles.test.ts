@@ -140,6 +140,9 @@ it("says how to keep memory and update the soul only at the user's request", () 
   expect(full).toContain('set "notifyOnComplete":false on sessions.start');
   expect(full).toContain("waits for every session in that group to stop");
   expect(full).toContain("give one consolidated report");
+  expect(full).toContain("acknowledge the action in your current reply");
+  expect(full).toContain("dismisses your pending report for that session");
+  expect(full).toContain("do not generate a later completion notification");
   expect(full).toContain(
     "Sessions launched during later turns form separate groups",
   );

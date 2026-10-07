@@ -73,6 +73,7 @@ export type AppSessionListing = {
   model: string;
   busy: boolean;
   hasDraft: boolean;
+  archived: boolean;
 };
 
 export type AppSessionPlacement = {
@@ -101,6 +102,8 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  stop(id: string): Promise<void>;
+  remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -117,7 +120,11 @@ export type AgentAppHost = {
    * The Mono a session works for: its own conversation or one of its habit
    * runs. Its projects are the ones it may name with "project".
    */
-  monoOf?(sessionId: string): { id: string; projects: readonly string[] } | undefined;
+  monoOf?(sessionId: string): {
+    id: string;
+    projects: readonly string[];
+    showStartedSessionsInSidebar?: boolean;
+  } | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
@@ -151,6 +158,9 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
+  ["sessions.stop", ["sessionId", "project"]],
+  ["sessions.archive", ["sessionId", "project"]],
+  ["sessions.delete", ["sessionId", "project"]],
   [
     "sessions.start",
     [
@@ -325,7 +335,8 @@ async function projectSession(
   if (!(await host.sessions(cwd)).some((session) => session.id === id))
     throw new Error("Session was not found in this project");
   const target = await host.session(id);
-  if (!target) throw new Error("Session was not found in this project");
+  if (!target || pathKey(target.cwd) !== pathKey(cwd))
+    throw new Error("Session was not found in this project");
   return target;
 }
 
@@ -417,6 +428,9 @@ function startLaunch(
   return {
     cwd,
     prompt,
+    ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar === false
+      ? { sidebarHidden: true }
+      : {}),
     ...(draft ? { draft: true } : {}),
     harness: chosenHarness,
     model: model.id,
@@ -866,6 +880,32 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.stop":
+    case "sessions.archive":
+    case "sessions.delete": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Cannot stop, archive or delete the calling session");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be managed here");
+      if (action === "sessions.stop") {
+        await host.stop(id);
+        return { sessionId: id, stopped: true };
+      }
+      const mode = action === "sessions.archive" ? "archive" : "delete";
+      await host.remove(id, mode);
+      return {
+        sessionId: id,
+        [mode === "archive" ? "archived" : "deleted"]: true,
+      };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))

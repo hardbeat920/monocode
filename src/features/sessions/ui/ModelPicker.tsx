@@ -59,6 +59,7 @@ type Props = {
   values: Record<string, string>;
   /** Project whose disabled providers are hidden from the picker. */
   project?: string;
+  /** Selects the model catalog; project still selects hidden providers. */
   catalogCwd?: string;
   /** Hide option rows from the menu when they render as pills beside the picker. */
   hideSettings?: boolean;
@@ -132,11 +133,10 @@ function isEffortSetting(setting: ModelSetting): boolean {
 }
 
 function effortTileTone(
-  harness: HarnessId,
   setting: ModelSetting,
   value: string,
 ): "ultra" | "max" | undefined {
-  if (harness !== "codex" || !isEffortSetting(setting)) return undefined;
+  if (!isEffortSetting(setting)) return undefined;
   const normalized = value.toLowerCase();
   return normalized === "ultra"
     ? "ultra"
@@ -904,11 +904,7 @@ export function ModelPicker({
                 const selected =
                   option.value === settingValue(submenu.setting, values);
                 const highlighted = index === activeSetting;
-                const tileTone = effortTileTone(
-                  current.harness,
-                  submenu.setting,
-                  option.value,
-                );
+                const tileTone = effortTileTone(submenu.setting, option.value);
                 return (
                   <button
                     key={option.value}
@@ -1080,7 +1076,6 @@ export function ModelControlPills({
             values={values}
             onSettingsChange={onSettingsChange}
             onClose={onClose}
-            harness={harness}
             additionalSettings={
               setting.id === effort?.id ? groupedSettings : undefined
             }
@@ -1150,7 +1145,6 @@ export function ModelSettingRows({
                   values={values}
                   variant="plain"
                   side={side}
-                  harness={harness}
                   onSettingsChange={onSettingsChange}
                 />
               ),
@@ -1226,7 +1220,6 @@ function SelectPill({
   side = "top",
   onSettingsChange,
   onClose,
-  harness,
   additionalSettings,
 }: {
   setting: ModelSetting;
@@ -1235,7 +1228,6 @@ function SelectPill({
   side?: "top" | "bottom";
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
-  harness: HarnessId;
   additionalSettings?: ModelSetting[];
 }) {
   const [open, setOpen] = useState(false);
@@ -1354,11 +1346,7 @@ function SelectPill({
                   const selected =
                     option.value === settingValue(menuSetting, values);
                   const highlighted = index === active;
-                  const tileTone = effortTileTone(
-                    harness,
-                    menuSetting,
-                    option.value,
-                  );
+                  const tileTone = effortTileTone(menuSetting, option.value);
                   return (
                     <button
                       key={option.value}

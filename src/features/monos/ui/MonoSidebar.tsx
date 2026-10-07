@@ -6,7 +6,7 @@ import { PanelRightToggle } from "../../../shared/ui/icons";
 const MIN_WIDTH = 340;
 let rememberedWidth = MIN_WIDTH;
 
-/** The shared frame for a Mono's details and turn activity. */
+/** The shared frame for a Mono's details and turn sidebars. */
 export function MonoSidebar({
   open,
   kind,
@@ -16,7 +16,7 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity";
+  kind: "details" | "activity" | "sessions";
   label: string;
   color: string;
   windowControls?: ReactNode;
@@ -40,6 +40,7 @@ export function MonoSidebar({
       inert={!open || undefined}
       data-mono-details={kind === "details" ? "" : undefined}
       data-mono-activity={kind === "activity" ? "" : undefined}
+      data-mono-sessions={kind === "sessions" ? "" : undefined}
       data-open={open}
       style={
         {

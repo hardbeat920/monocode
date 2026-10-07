@@ -134,6 +134,12 @@ export type SessionPaneProps = {
     blocks: Block[],
   ) => void;
   monoActivityTurnId?: string;
+  onShowMonoSessions?: (
+    sessionId: string,
+    turnId: string,
+    blocks: Block[],
+  ) => void;
+  monoSessionsTurnId?: string;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -332,6 +338,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenDiff,
   onShowMonoActivity,
   monoActivityTurnId,
+  onShowMonoSessions,
+  monoSessionsTurnId,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -936,6 +944,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     activeWorkTurnId={monoActivityTurnId}
+                    onShowSessions={
+                      agent && onShowMonoSessions
+                        ? (turnId, blocks) =>
+                            onShowMonoSessions(session.id, turnId, blocks)
+                        : undefined
+                    }
+                    activeSessionsTurnId={monoSessionsTurnId}
                     // A Mono's turn keeps copy, save as note and the time.
                     daySeparators={!!agent}
                     hideTurnMetrics={!!agent}

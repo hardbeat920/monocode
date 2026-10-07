@@ -195,7 +195,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "mono-list",
     section: "monos",
     label: "Your monos",
-    keywords: "mono reset soul name projects",
+    keywords: "mono reset soul name projects sessions sidebar visibility hidden show",
   },
   {
     id: "project-worktrees",

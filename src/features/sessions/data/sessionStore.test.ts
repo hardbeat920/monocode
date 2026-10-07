@@ -20,6 +20,15 @@ import {
   shouldPersistSession,
 } from "./sessionStore";
 
+it("persists sidebar visibility without making the session ephemeral", () => {
+  const session = newSession("codex", "/tmp");
+  session.blocks = [{ id: "u", role: "user", text: "Review" }];
+  const hidden = { ...session, sidebarHidden: true };
+  expect(shouldPersistSession(hidden)).toBe(true);
+  expect(sanitizeSessionForPersist(hidden).sidebarHidden).toBe(true);
+  expect(persistFingerprint(hidden)).not.toBe(persistFingerprint(session));
+});
+
 it("fingerprints queued message edits, ordering, errors and pause state", () => {
   const session = newSession("codex", "/tmp");
   const first = { id: "first", text: "One", attachments: [] };
@@ -337,6 +346,37 @@ describe("sanitizeSessionForPersist", () => {
     const session = newSession("opencode", "/tmp");
     session.blocks = [{ id: "block", role: "assistant", text: "Hello", providerPartId: "prt_fixed" }];
     expect(sanitizeSessionForPersist(session).blocks[0].providerPartId).toBe("prt_fixed");
+  });
+  it("persists accepted Mono launches on user turns and fingerprints their addition", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [{ id: "user", role: "user", text: "Review" }];
+    const before = persistFingerprint(session);
+    const launch = {
+      sessionId: "app-review",
+      cwd: "/repo",
+      title: "Review",
+      harness: "codex" as const,
+      model: "gpt-6",
+    };
+    session.blocks = [
+      { ...session.blocks[0], monoSpawnedSessions: [launch] },
+      {
+        id: "reply",
+        role: "assistant",
+        text: "Started",
+        monoSpawnedSessions: [launch],
+      },
+    ];
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[0].monoSpawnedSessions).toEqual([launch]);
+    expect(saved.blocks[1].monoSpawnedSessions).toBeUndefined();
+    expect(persistFingerprint(session)).not.toBe(before);
+    expect(
+      sanitizeSessionForPersist({
+        ...session,
+        blocks: JSON.parse(JSON.stringify(saved.blocks)),
+      }).blocks,
+    ).toEqual(saved.blocks);
   });
   it("keeps the stripped /operator turn marker for later turns", () => {
     const submitted = appendUser(

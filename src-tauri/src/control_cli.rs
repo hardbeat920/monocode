@@ -82,13 +82,16 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 26] = [
+const APP_ACTIONS: [&str; 29] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
     "sessions.start",
+    "sessions.stop",
+    "sessions.archive",
+    "sessions.delete",
     "worktrees.list",
     "worktrees.create",
     "folders.list",
@@ -120,7 +123,7 @@ left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
-  sessions.list  {}  Project sessions with IDs, busy status and hasDraft.
+  sessions.list  {}  Project sessions with IDs, busy status, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
                   reasoning are omitted. Omit before for the newest page;
@@ -154,6 +157,11 @@ Actions:
                   Sessions monitored during the same Mono turn form one group:
                   their results arrive together after every session stops.
                   The Mono reviews the whole group and gives one combined report.
+                  Rejected launches or follow-ups return a CLI error without
+                  a later completion report. When a Mono successfully stops,
+                  archives or deletes a monitored session, its pending report
+                  for that session is dismissed; acknowledge the action in
+                  the current reply. Other sessions' reports are kept.
                   Returns after creation/acceptance, not agent completion;
                   use its ID with folders.move immediately. Optional model,
                   effort, modelSettings, permission mode and workspace choice
@@ -164,6 +172,22 @@ Actions:
                   runtimeMode to inherit this
                   session's permission mode; set it to override. Run
                   models.list for allowed IDs. cwd is your project; no attachments.
+  sessions.stop {"sessionId":"..."}
+                  Stop a session's current turn and pause its queued messages.
+                  The conversation and checkout are kept. Idle sessions are
+                  unchanged. Reuse --request-id on retries.
+  sessions.archive {"sessionId":"..."}
+                  Stop the session if running, save its conversation, and
+                  archive it. It can be restored from MonoCode's archive.
+                  Open files, terminals and worktrees are kept.
+                  Reuse --request-id on retries.
+  sessions.delete {"sessionId":"..."}
+                  Stop the session if running and permanently delete its
+                  saved conversation. Open files, terminals and worktrees
+                  are kept. Reuse --request-id on retries.
+                  stop, archive and delete cannot target the calling session,
+                  Mono chats, habit runs or orchestration workers. Sessions
+                  must belong to the chosen project.
   worktrees.list {}  Working copies in this project, with paths and branches.
   worktrees.create {"branch":"feature/name","base":"HEAD","existing":false}
                   Create a worktree on a named new branch from base (a branch
@@ -593,12 +617,20 @@ mod tests {
             parse_args_for(&args(&["notes.list"]), true),
             Ok(Parsed::Call(_, _, _))
         ));
-        for action in ["sessions.read", "sessions.send", "sessions.draft"] {
+        for action in [
+            "sessions.read",
+            "sessions.send",
+            "sessions.draft",
+            "sessions.stop",
+            "sessions.archive",
+            "sessions.delete",
+        ] {
             assert!(matches!(
                 parse_args_for(&args(&[action, "--json", r#"{"sessionId":"other"}"#]), true),
                 Ok(Parsed::Call(_, _, _))
             ));
             assert!(app_help().contains(action));
+            assert!(parse_args_for(&args(&[action]), false).is_err());
         }
         assert!(app_help().contains("draft:true"));
         assert!(app_help().contains("inherit this"));
