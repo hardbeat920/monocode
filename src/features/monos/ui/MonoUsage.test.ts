@@ -5,6 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import { usageSnapshot } from "../../agent-app/model/usageSnapshot";
 import {
+  emitHarnessAvailability,
+  isHarnessAvailable,
+  setHarnessAvailability,
+  type HarnessAvailability,
+} from "../../../integrations/harness/core/availabilityState";
+import {
   providerAccounts,
   removeProviderAccount,
   renameProviderAccount,
@@ -97,7 +103,7 @@ const snapshot = {
       resetCredits: null,
     },
     {
-      provider: "omp",
+      provider: "grok",
       accountId: "default",
       accountLabel: "Default account",
       selectedForProject: null,
@@ -115,10 +121,24 @@ const snapshot = {
   ],
 } satisfies ReturnType<typeof usageSnapshot>;
 
+const unavailableHarnesses: HarnessAvailability = {
+  claude: false,
+  codex: false,
+  cursor: false,
+  grok: false,
+  opencode: false,
+  pi: false,
+  omp: false,
+  fx: false,
+  hermes: false,
+  antigravity: false,
+};
+
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  setHarnessAvailability(unavailableHarnesses);
   localStorage.clear();
   usage.snapshot.mockReset().mockReturnValue(snapshot);
   container = document.createElement("div");
@@ -156,7 +176,7 @@ it("shows shared and model-specific windows and refreshes through the shared sna
   expect(container.textContent).toContain("80% remaining");
   expect(container.textContent).toContain("Unsupported");
   expect(container.textContent).toContain("OpenCode Go");
-  expect(container.textContent).not.toContain("omp");
+  expect(container.textContent).not.toContain("grok");
   expect(container.textContent).toContain("Last successful snapshot");
   const claude = [...container.querySelectorAll("section")].find((row) =>
     row.textContent?.includes("Claude Code"),
@@ -166,6 +186,40 @@ it("shows shared and model-specific windows and refreshes through the shared sna
   expect(usage.snapshot).toHaveBeenLastCalledWith(expect.anything(), {
     refresh: true,
   });
+});
+
+it("shows an unsupported provider when its availability probe completes", () => {
+  usage.snapshot.mockImplementation(() => ({
+    ...snapshot,
+    accounts: snapshot.accounts.map((account) =>
+      account.provider === "grok"
+        ? { ...account, cliAvailable: isHarnessAvailable("grok") }
+        : account,
+    ),
+  }));
+  act(() =>
+    root.render(
+      createElement(MonoUsage, {
+        session: newSession("claude", "/tmp/project"),
+      }),
+    ),
+  );
+  const details = container.querySelector("details")!;
+  act(() => {
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+  });
+  expect(container.textContent).not.toContain("grok");
+  const callsBeforeProbe = usage.snapshot.mock.calls.length;
+
+  act(() => {
+    setHarnessAvailability({ ...unavailableHarnesses, grok: true });
+    emitHarnessAvailability();
+  });
+
+  expect(container.textContent).toContain("grok · Default account (default)");
+  expect(usage.snapshot.mock.calls.length).toBe(callsBeforeProbe + 1);
+  expect(details.open).toBe(true);
 });
 
 it("updates account rows immediately when provider accounts change", () => {

@@ -1,6 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Session } from "../../sessions/model/session";
 import { usageSnapshot } from "../../agent-app/model/usageSnapshot";
+import {
+  getHarnessAvailabilitySnapshot,
+  subscribeHarnessAvailability,
+} from "../../../integrations/harness/core/availability";
 import { ChevronDown } from "../../../shared/ui/icons";
 import { subscribeProviderAccounts } from "../../providers/model/providerAccounts";
 import {
@@ -14,6 +18,11 @@ const MINUTE = 60_000;
 /** Compact, read-only allowance view backed by the same cache as app usage.list. */
 export function MonoUsage({ session }: { session: Session }) {
   useSyncExternalStore(subscribeRateLimits, getAllRateLimits, getAllRateLimits);
+  useSyncExternalStore(
+    subscribeHarnessAvailability,
+    getHarnessAvailabilitySnapshot,
+    getHarnessAvailabilitySnapshot,
+  );
   // Freshness can change without another cache write.
   const [, setNow] = useState(() => Date.now());
   const [, setAccountsVersion] = useState(0);
