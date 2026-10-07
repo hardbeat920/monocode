@@ -13,7 +13,7 @@ use tauri::menu::{IconMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    WebviewWindowBuilder, Window,
 };
 
 use crate::window::{is_workspace_window, workspace_windows, MONO_CHAT_PREFIX};
@@ -339,7 +339,7 @@ fn changed(app: &AppHandle, mono_id: &str) {
     }
 }
 
-fn workspace(window: &WebviewWindow) -> Result<(), String> {
+fn workspace(window: &Window) -> Result<(), String> {
     if is_workspace_window(window.label()) {
         Ok(())
     } else {
@@ -347,12 +347,12 @@ fn workspace(window: &WebviewWindow) -> Result<(), String> {
     }
 }
 
-fn panel(app: &AppHandle, window: &WebviewWindow) -> Result<String, String> {
+fn panel(app: &AppHandle, label: &str) -> Result<String, String> {
     app.state::<MonoChatState>()
         .0
         .lock()
         .unwrap()
-        .shown(window.label())
+        .shown(label)
         .map(str::to_owned)
         .ok_or_else(|| "This action belongs to the floating chat.".into())
 }
@@ -360,7 +360,7 @@ fn panel(app: &AppHandle, window: &WebviewWindow) -> Result<String, String> {
 #[tauri::command]
 pub fn mono_chat_sync(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     monos: Vec<MonoEntry>,
     hosted: Vec<HostedMono>,
     mascots: Vec<menu_bar::MenuMascot>,
@@ -523,7 +523,7 @@ fn select(app: &AppHandle, mono_id: &str) -> Result<(), String> {
 
 /// Point a floating window at another Mono. The window stays put; only its
 /// conversation changes, and a Mono opened before shows its last snapshot.
-fn switch(app: &AppHandle, window: &WebviewWindow, to: &str) -> Result<(), String> {
+fn switch(app: &AppHandle, window: &Window, to: &str) -> Result<(), String> {
     let owner = owner(app, to)?;
     {
         let state = app.state::<MonoChatState>();
@@ -540,7 +540,7 @@ fn switch(app: &AppHandle, window: &WebviewWindow, to: &str) -> Result<(), Strin
 #[tauri::command]
 pub fn mono_chat_switch(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     from: String,
     to: String,
 ) -> Result<(), String> {
@@ -548,8 +548,8 @@ pub fn mono_chat_switch(
         // A Mono added from a floating chat: switch the window that asked.
         let mut showing = panels(&app, &from);
         showing.sort_by_key(|w| !w.is_visible().unwrap_or(false));
-        showing.into_iter().next()
-    } else if panel(&app, &window)? == from {
+        showing.into_iter().next().map(|w| w.as_ref().window())
+    } else if panel(&app, window.label())? == from {
         Some(window)
     } else {
         return Err("This action belongs to a different Mono.".into());
@@ -670,7 +670,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
 
 #[tauri::command]
 pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
-    panel(&app, &window)?;
+    panel(&app, window.label())?;
     let (tx, mut rx) = tauri::async_runtime::channel(1);
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -707,7 +707,7 @@ pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<()
 
 #[tauri::command]
 pub fn mono_chat_state(app: AppHandle, window: WebviewWindow) -> Result<View, String> {
-    let id = panel(&app, &window)?;
+    let id = panel(&app, window.label())?;
     Ok(app
         .state::<MonoChatState>()
         .0
@@ -720,7 +720,7 @@ pub fn mono_chat_state(app: AppHandle, window: WebviewWindow) -> Result<View, St
 #[tauri::command]
 pub fn mono_chat_publish(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     mono_id: String,
     session: Value,
 ) -> Result<(), String> {
@@ -737,7 +737,7 @@ pub fn mono_chat_publish(
 }
 
 #[tauri::command]
-pub fn mono_chat_take(app: AppHandle, window: WebviewWindow) -> Result<Vec<Request>, String> {
+pub fn mono_chat_take(app: AppHandle, window: Window) -> Result<Vec<Request>, String> {
     workspace(&window)?;
     Ok(app
         .state::<MonoChatState>()
@@ -752,7 +752,7 @@ pub fn mono_chat_take(app: AppHandle, window: WebviewWindow) -> Result<Vec<Reque
 }
 
 #[tauri::command]
-pub fn mono_chat_accept(app: AppHandle, window: WebviewWindow, id: u32) -> Result<bool, String> {
+pub fn mono_chat_accept(app: AppHandle, window: Window, id: u32) -> Result<bool, String> {
     workspace(&window)?;
     Ok(app
         .state::<MonoChatState>()
@@ -765,7 +765,7 @@ pub fn mono_chat_accept(app: AppHandle, window: WebviewWindow, id: u32) -> Resul
 #[tauri::command]
 pub fn mono_chat_reply(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     id: u32,
     error: Option<String>,
 ) -> Result<(), String> {
@@ -812,7 +812,7 @@ pub async fn mono_chat_action(
     mono_id: String,
     action: Value,
 ) -> Result<(), String> {
-    if panel(&app, &window)? != mono_id {
+    if panel(&app, window.label())? != mono_id {
         return Err("This action belongs to a different Mono.".into());
     }
     let kind = action
@@ -877,7 +877,7 @@ pub async fn mono_chat_action(
 }
 
 #[tauri::command]
-pub fn mono_chat_keep_alive(app: AppHandle, window: WebviewWindow) -> bool {
+pub fn mono_chat_keep_alive(app: AppHandle, window: Window) -> bool {
     let state = app.state::<MonoChatState>();
     let inner = state.0.lock().unwrap();
     inner.views.keys().any(|id| {
