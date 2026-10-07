@@ -90,7 +90,9 @@ type ModelGroup = {
 const MENU_WIDTH = 250;
 const MODEL_MENU_WIDTH = 310;
 const SETTING_MENU_WIDTH = 210;
-const SUBMENU_OVERLAP = -4;
+// Leave a visible breathing gap so the model flyout does not cover the
+// parent menu or make the two surfaces read as one overlapping panel.
+const SUBMENU_GAP = 8;
 const SELF = "[data-model-picker]";
 
 const PROVIDER_TAB_SIZE = 32;
@@ -888,7 +890,7 @@ export function ModelPicker({
               key={submenu.setting.id}
               anchor={activeRow}
               side="right"
-              gap={SUBMENU_OVERLAP}
+              gap={SUBMENU_GAP}
               width={SETTING_MENU_WIDTH}
               layer={LAYER.submenu}
               role="menu"
@@ -1467,7 +1469,7 @@ function ModelFlyout({
     <Popover
       anchor={anchor}
       side={side}
-      gap={side === "right" ? SUBMENU_OVERLAP : undefined}
+      gap={side === "right" ? SUBMENU_GAP : undefined}
       width={MODEL_MENU_WIDTH}
       minHeight={MODEL_MENU_FRAME_HEIGHT}
       maxHeight={MODEL_MENU_FRAME_HEIGHT}

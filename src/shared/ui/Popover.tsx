@@ -36,6 +36,8 @@ export type PopoverDismissReason = "outside" | "escape";
 
 type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   anchor: PopoverAnchor;
+  /** Centers the surface in the viewport instead of attaching it to the anchor. */
+  centered?: boolean;
   side?: PopoverSide;
   align?: PopoverAlign;
   gap?: number;
@@ -62,6 +64,10 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
 };
 
 const FRAME = "isolate overflow-hidden border border-content/10 shadow-xl";
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
 
 /** Which corner the open animation grows from, so it reads as anchored. */
 function origin(side: PopoverSide, align: PopoverAlign): string {
@@ -184,6 +190,7 @@ function NativePopover({
   // These position the ordinary web popover; the OS positions this surface.
   const {
     anchor: _anchor,
+    centered: _centered,
     side: _side,
     align: _align,
     gap: _gap,
@@ -215,6 +222,7 @@ function NativePopover({
 
 function WebPopover({
   anchor,
+  centered = false,
   side = "bottom",
   align = "start",
   gap,
@@ -247,18 +255,42 @@ function WebPopover({
 
   const place = useCallback(() => {
     const el = frame.current;
-    const rect = anchorRect(anchorRef.current);
-    if (!el || !rect) return;
-    const next = placePopover(
-      rect,
-      { width: el.offsetWidth, height: el.offsetHeight },
-      { width: window.innerWidth, height: window.innerHeight },
-      { side, align, gap, padding, width, minHeight, maxHeight },
-    );
+    if (!el) return;
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const next = centered
+      ? {
+          side,
+          left: clamp(
+            (viewport.width - el.offsetWidth) / 2,
+            padding ?? 8,
+            viewport.width - el.offsetWidth - (padding ?? 8),
+          ),
+          top: clamp(
+            (viewport.height - el.offsetHeight) / 2,
+            padding ?? 8,
+            viewport.height - el.offsetHeight - (padding ?? 8),
+          ),
+          width: el.offsetWidth,
+          maxHeight: Math.min(
+            maxHeight ?? Infinity,
+            Math.max(0, viewport.height - (padding ?? 8) * 2),
+          ),
+        }
+      : (() => {
+          const rect = anchorRect(anchorRef.current);
+          if (!rect) return null;
+          return placePopover(
+            rect,
+            { width: el.offsetWidth, height: el.offsetHeight },
+            viewport,
+            { side, align, gap, padding, width, minHeight, maxHeight },
+          );
+        })();
+    if (!next) return;
     setPosition((prev) => (samePosition(prev, next) ? prev : next));
     // `key` stands in for the anchor, which is read through a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, side, align, gap, padding, width, minHeight, maxHeight]);
+  }, [centered, key, side, align, gap, padding, width, minHeight, maxHeight]);
 
   useLayoutEffect(() => {
     place();
@@ -274,7 +306,7 @@ function WebPopover({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [place]);
+  }, [centered, place]);
 
   useEffect(() => {
     if (autoFocus) surface.current?.focus();
@@ -361,7 +393,7 @@ function WebPopover({
           transformOrigin: origin(position?.side ?? side, align),
           ...style,
         }}
-        className={`${position ? "popover-open " : ""}relative z-[1] outline-none ${className ?? ""}`}
+        className={`${position || centered ? "popover-open " : ""}relative z-[1] outline-none ${className ?? ""}`}
       >
         {children}
       </div>
