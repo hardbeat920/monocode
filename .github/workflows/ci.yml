@@ -59,18 +59,21 @@ jobs:
   appimage:
     name: AppImage host libraries
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     # A full tauri release build is too expensive for every PR. Run when
     # packaging inputs change; the release linux job still always asserts.
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Skip unless packaging files changed
         id: packaging
         run: |
           set -euo pipefail
-          pattern='^(scripts/repack-appimage\.sh|scripts/assert-appimage-host-libs\.sh|scripts/install-linux-deps-debian\.sh|package\.json|src-tauri/tauri\.conf\.json|src-tauri/tauri\.linux\.conf\.json|src-tauri/Cargo\.toml|\.github/workflows/(ci|release)\.yml)$'
+          pattern='^(scripts/repack-appimage\.sh|scripts/assert-appimage-host-libs\.sh|scripts/install-linux-deps-debian\.sh|package\.json|package-lock\.json|Cargo\.lock|src-tauri/tauri\.conf\.json|src-tauri/tauri\.linux\.conf\.json|src-tauri/Cargo\.toml|\.github/workflows/(ci|release)\.yml)$'
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
           else
@@ -85,7 +88,9 @@ jobs:
             echo "Could not resolve $base; building AppImage."
             exit 0
           fi
-          if git diff --name-only "$base" "${{ github.sha }}" | grep -Eq "$pattern"; then
+          changed="$(mktemp)"
+          git diff --name-only --no-renames "$base" "${{ github.sha }}" > "$changed"
+          if grep -Eq "$pattern" "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
