@@ -77,8 +77,18 @@ fn parse_url(value: &str) -> Result<Url, String> {
 /// configured with. Read from config, not from live webviews: `Webview::url`
 /// can fail (and panics on macOS before the native URL exists).
 fn app_origins(app: &AppHandle) -> Vec<Url> {
-    let config = app.config();
-    let mut own: Vec<Url> = config.build.dev_url.iter().cloned().collect();
+    app_origins_from(app.config(), tauri::is_dev())
+}
+
+/// The dev server is the app's origin only in a dev build (no
+/// `custom-protocol`); otherwise the app is served from `tauri://` and the dev
+/// server's address is an ordinary page a user may be developing.
+fn app_origins_from(config: &tauri::Config, dev: bool) -> Vec<Url> {
+    let mut own: Vec<Url> = if dev {
+        config.build.dev_url.iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
     for window in &config.app.windows {
         if let WebviewUrl::External(url) = &window.url {
             own.push(url.clone());
@@ -1059,6 +1069,24 @@ mod tests {
             &Url::parse("https://example.com").unwrap(),
             &own
         ));
+    }
+
+    #[test]
+    fn dev_server_is_an_app_origin_only_in_dev_builds() {
+        let config: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "test.monocode",
+            "build": { "devUrl": "http://localhost:1420" },
+            "app": { "windows": [{ "url": "https://app.example.com/" }] },
+        }))
+        .unwrap();
+        let dev_server = Url::parse("http://localhost:1420/").unwrap();
+        let external = Url::parse("https://app.example.com/x").unwrap();
+        let dev = app_origins_from(&config, true);
+        assert!(matches_app_origin(&dev_server, &dev));
+        assert!(matches_app_origin(&external, &dev));
+        let bundled = app_origins_from(&config, false);
+        assert!(!matches_app_origin(&dev_server, &bundled));
+        assert!(matches_app_origin(&external, &bundled));
     }
 
     #[test]
