@@ -20,7 +20,8 @@ the PR head; the reviewer must inspect the supplied revision.
 
 ## Detection and catch-up
 
-- Detection uses the existing shared Inbox refresh (normally every 30 seconds),
+- Detection uses the existing shared Inbox refresh (every two minutes while
+  visible, every five minutes while hidden or in the tray),
   its bounded GitHub list/lookup requests and caches. It adds the head SHA to
   those responses, with no per-agent polling or extra per-PR fetch loop.
 - The first observation of each PR in a project establishes a baseline. Enabling

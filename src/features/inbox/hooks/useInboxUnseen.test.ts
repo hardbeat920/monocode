@@ -320,8 +320,12 @@ describe("Inbox activity for automations", () => {
   const POLL_MS = 2 * 60_000;
   const onActivity = vi.fn();
 
-  function AutomationHarness() {
-    useInboxActivity(recents, "/tmp/app", [], { onActivity });
+  function AutomationHarness({
+    projects = recents,
+  }: {
+    projects?: typeof recents;
+  }) {
+    useInboxActivity(projects, "/tmp/app", [], { onActivity });
     return null;
   }
 
@@ -386,6 +390,90 @@ describe("Inbox activity for automations", () => {
 
     expect(githubWorkItem).toHaveBeenCalledTimes(1);
     expect(reportedTransitions()).toEqual([]);
+  });
+
+  it("retries a lookup cancelled by an effect replacement", async () => {
+    const merged = { ...remote, state: "merged" };
+    let finishLookup!: (item: InboxItem) => void;
+    let finishList!: (result: { items: InboxItem[]; errors: {} }) => void;
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote], errors: {} })
+      .mockResolvedValueOnce({ items: [], errors: {} })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishList = resolve;
+          }),
+      );
+    githubWorkItem
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLookup = resolve;
+          }),
+      )
+      .mockResolvedValue(merged);
+    await mountForAutomations();
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(createElement(AutomationHarness, { projects: [...recents] }));
+    });
+    await act(async () => {
+      finishLookup(merged);
+    });
+    expect(reportedTransitions()).toEqual([]);
+    await act(async () => {
+      finishList({ items: [], errors: {} });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+    expect(githubWorkItem).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands off earlier confirmed lookups when a later lookup is cancelled", async () => {
+    const other = { ...remote, number: 43 };
+    const merged = { ...remote, state: "merged" };
+    let finishLookup!: (item: InboxItem) => void;
+    let finishList!: (result: { items: InboxItem[]; errors: {} }) => void;
+    listInboxItems
+      .mockResolvedValueOnce({ items: [remote, other], errors: {} })
+      .mockResolvedValueOnce({ items: [], errors: {} })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishList = resolve;
+          }),
+      );
+    githubWorkItem
+      .mockResolvedValueOnce(merged)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLookup = resolve;
+          }),
+      )
+      .mockResolvedValue({ ...other, state: "open" });
+    await mountForAutomations();
+    await nextPoll();
+    expect(githubWorkItem).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      root.render(createElement(AutomationHarness, { projects: [...recents] }));
+    });
+    await act(async () => {
+      finishLookup({ ...other, state: "merged" });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
+    await act(async () => {
+      finishList({ items: [], errors: {} });
+    });
+    expect(reportedTransitions()).toEqual([
+      { item: merged, transition: "merged" },
+    ]);
   });
 
   it("reports a reopened item without treating it as newly appeared", async () => {

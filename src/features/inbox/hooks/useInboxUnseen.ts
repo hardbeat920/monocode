@@ -314,8 +314,12 @@ export function useInboxActivity(
               item.number,
               { force: true },
             ),
+          undefined,
+          () => !cancelled,
         );
-        if (!cancelled && confirmed.length > 0) {
+        // Earlier lookups may have resolved before this effect was replaced.
+        // Hand those transitions off because the tracker has recorded them.
+        if (confirmed.length > 0) {
           onActivityRef.current?.(
             [],
             confirmed,

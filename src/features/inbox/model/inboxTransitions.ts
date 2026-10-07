@@ -195,17 +195,20 @@ export async function resolveMissingTransitions(
   missing: readonly InboxItem[],
   lookup: (item: InboxItem) => Promise<GithubWorkItem>,
   limit = MAX_LOOKUPS_PER_POLL,
+  isCurrent: () => boolean = () => true,
 ): Promise<InboxTransition[]> {
   const transitions: InboxTransition[] = [];
   const revision = tracker.revision;
   for (const item of missing.slice(0, limit)) {
-    if (tracker.revision !== revision) break;
+    if (tracker.revision !== revision || !isCurrent()) break;
     try {
       const fresh = await lookup(item);
+      if (!isCurrent()) break;
       transitions.push(
         ...tracker.resolve({ ...item, ...fresh, kind: item.kind }, revision),
       );
     } catch {
+      if (!isCurrent()) break;
       tracker.unresolved(item, revision);
     }
   }
