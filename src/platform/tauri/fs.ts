@@ -1,7 +1,47 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as invokeLocal } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { slash } from "../../shared/lib/paths";
+import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
+
+export { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
+
+type RemoteCommandRunner = (
+  command: string,
+  args: Record<string, unknown>,
+) => Promise<unknown>;
+let remoteRunner: RemoteCommandRunner | undefined;
+
+/** Set once by the connections feature, which knows the connected machines. */
+export function setRemoteCommandRunner(runner: RemoteCommandRunner) {
+  remoteRunner = runner;
+}
+
+const isRemotePath = (value: unknown): boolean =>
+  typeof value === "string"
+    ? value.startsWith(REMOTE_PATH_PREFIX)
+    : Array.isArray(value) && value.some(isRemotePath);
+const PATH_ARGS = ["path", "cwd", "parent", "from", "destParent", "paths"];
+
+/** Runs a command on the machine that owns its paths, so the same file and
+ * Git UI works for a local project and one on a connected machine. */
+export function invokeWorkspace<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const options = args?.options;
+  const remoteOptions =
+    options && typeof options === "object" && !Array.isArray(options)
+      ? isRemotePath((options as Record<string, unknown>).cwd)
+      : false;
+  if (args && (PATH_ARGS.some((key) => isRemotePath(args[key])) || remoteOptions)) {
+    if (!remoteRunner)
+      return Promise.reject(
+        new Error("Connect this project’s machine to open its files."),
+      );
+    return remoteRunner(command, args) as Promise<T>;
+  }
+  return invokeLocal<T>(command, args);
+}
+
+const invoke = invokeWorkspace;
 
 export type OmpInterjectionAnchor = InterjectionMeta & {
   id: string;
@@ -35,6 +75,18 @@ export interface OmpAssistantText {
 
 export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpAssistantText[]> {
   return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
+}
+
+export function claudeShellCommands(
+  providerSessionId: string,
+  providerAccountId: string | undefined,
+  toolIds: string[],
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("claude_shell_commands", {
+    providerSessionId,
+    providerAccountId,
+    toolIds,
+  });
 }
 
 export type FsEntry = {
@@ -405,7 +457,11 @@ export function movePath(from: string, destParent: string): Promise<string> {
   return invoke<string>("move_path", { from, destParent }).then(slash);
 }
 
-/** macOS only. Other platforms return an empty list. */
+/**
+ * Paths for files copied in a file manager, on macOS, Linux and Windows.
+ * Rejects when the clipboard cannot be read; an empty list means it holds no
+ * files.
+ */
 export function clipboardFilePaths(): Promise<string[]> {
   return invoke<string[]>("clipboard_file_paths").then((paths) =>
     paths.map(slash),
@@ -429,13 +485,21 @@ export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
 }
 
-export async function pickFolder(title = "Open project"): Promise<string | null> {
+/**
+ * Folders chosen from the system picker. Multi-select is on, so several
+ * projects can be opened in one pass; the dialog still returns a bare string
+ * when only one was taken.
+ */
+export async function pickFolders(title = "Open projects"): Promise<string[]> {
   const selected = await open({
     directory: true,
-    multiple: false,
+    multiple: true,
     title,
   });
-  return typeof selected === "string" && selected ? slash(selected) : null;
+  if (Array.isArray(selected)) {
+    return selected.filter((path) => !!path).map(slash);
+  }
+  return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
 export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
@@ -477,7 +541,21 @@ export type FileMtime = {
 
 export function statFiles(paths: string[]): Promise<FileMtime[]> {
   if (paths.length === 0) return Promise.resolve([]);
-  return invoke<FileMtime[]>("stat_files", { paths });
+  const groups = new Map<string, string[]>();
+  for (const path of paths) {
+    const machine = path.startsWith(REMOTE_PATH_PREFIX)
+      ? path.slice(REMOTE_PATH_PREFIX.length).split("/", 1)[0]
+      : "";
+    const group = groups.get(machine) ?? [];
+    group.push(path);
+    groups.set(machine, group);
+  }
+  return Promise.all(
+    [...groups.values()].map((group) => invoke<FileMtime[]>("stat_files", { paths: group })),
+  ).then((results) => {
+    const byPath = new Map(results.flat().map((entry) => [entry.path, entry]));
+    return paths.map((path) => byPath.get(path) ?? { path, mtimeMs: null });
+  });
 }
 
 export function readTextFile(path: string): Promise<string> {
@@ -486,8 +564,30 @@ export function readTextFile(path: string): Promise<string> {
 
 /** Raw bytes for the image viewer. Arrives as an ArrayBuffer, not base64. */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
-  const buffer = await invoke<ArrayBuffer>("read_binary_file", { path });
-  return new Uint8Array(buffer);
+  const buffer = await invoke<ArrayBuffer | string>("read_binary_file", {
+    path,
+  });
+  // A connected machine sends the bytes as base64 inside its JSON reply.
+  return typeof buffer === "string"
+    ? Uint8Array.from(atob(buffer), (char) => char.charCodeAt(0))
+    : new Uint8Array(buffer);
+}
+
+export type GeneratedImageAsset = {
+  path: string;
+  mimeType: string;
+  size: number;
+};
+
+export function saveGeneratedImage(input: {
+  data: string;
+  name: string;
+}): Promise<GeneratedImageAsset> {
+  return invoke<GeneratedImageAsset>("save_generated_image", input);
+}
+
+export function deleteGeneratedImages(paths: string[]): Promise<void> {
+  return invoke<void>("delete_generated_images", { paths });
 }
 
 export function writeTextFile(path: string, content: string): Promise<void> {

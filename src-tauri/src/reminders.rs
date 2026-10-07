@@ -272,7 +272,8 @@ pub(crate) fn open_from_notification(app: &AppHandle, identifier: &str) {
 fn queue_open(app: &AppHandle, session_id: String, due_at: i64) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        let windows = handle.webview_windows();
+        let mut windows = handle.webview_windows();
+        windows.retain(|label, _| crate::window::is_workspace_window(label));
         let service = handle.state::<ReminderService>();
         let owners = service.window_sessions.lock().ok();
         let owns_session = |window: &&WebviewWindow| {

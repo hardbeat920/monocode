@@ -1,4 +1,5 @@
 import { isEditTool } from "../../../integrations/harness/core/preview";
+import { compactCiRepairContext } from "../../inbox/model/ciRepair";
 import { limitSection } from "../../../shared/lib/jsonText";
 import { displayPath } from "../../../shared/lib/paths";
 import {
@@ -12,6 +13,7 @@ import {
 const USER_LIMIT = 400;
 const REPORT_LIMIT = 900;
 const PROMPT_LIMIT = 1_800;
+const CI_BASE_LIMIT = 900;
 
 export const SECOND_OPINION_TITLE = "Second opinion";
 
@@ -104,6 +106,7 @@ export function buildSecondOpinionPrompt(input: {
   userRequest: string;
   report: string;
   files: string[];
+  ciContext?: string;
 }): string {
   const fromTitle = HARNESS_TITLE[input.from];
   const request = input.userRequest.trim();
@@ -134,7 +137,14 @@ export function buildSecondOpinionPrompt(input: {
     sections.push("## Files it edited\n(none recorded on this turn)");
   }
 
-  return limitSection(sections.join("\n\n"), PROMPT_LIMIT);
+  const base = sections.join("\n\n");
+  if (!input.ciContext) return limitSection(base, PROMPT_LIMIT);
+  const suffix = "\n\n## CI context\n";
+  const basePrefix =
+    base.length <= CI_BASE_LIMIT
+      ? base
+      : `${base.slice(0, CI_BASE_LIMIT - "\n\n[truncated]".length)}\n\n[truncated]`;
+  return `${basePrefix}${suffix}${compactCiRepairContext(input.ciContext, PROMPT_LIMIT - basePrefix.length - suffix.length)}`;
 }
 
 export function buildSecondOpinionCard(input: {
@@ -151,5 +161,35 @@ export function buildSecondOpinionCard(input: {
     ...(request ? { request: request.slice(0, 240) } : {}),
     ...(input.files.length > 0 ? { files: input.files.length } : {}),
     ...(input.kind ? { kind: input.kind } : {}),
+  };
+}
+
+/** Keep the prompt and the metadata for its saved user turn together. */
+export function buildSecondOpinionRequest(input: {
+  from: HarnessId;
+  to: HarnessId;
+  turn: Block[];
+  cwd: string;
+}) {
+  const userRequest = turnUserRequest(input.turn);
+  const files = turnEditedFiles(input.turn, input.cwd);
+  const ciContext = input.turn.find((block) => block.role === "user")?.ciContext;
+  return {
+    prompt: buildSecondOpinionPrompt({
+      from: input.from,
+      userRequest,
+      report: turnReport(input.turn),
+      files,
+      ciContext,
+    }),
+    options: {
+      ...(ciContext ? { ciContext } : {}),
+      secondOpinion: buildSecondOpinionCard({
+        from: input.from,
+        to: input.to,
+        userRequest,
+        files,
+      }),
+    },
   };
 }

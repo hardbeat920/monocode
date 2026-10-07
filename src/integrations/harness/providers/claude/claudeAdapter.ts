@@ -5,6 +5,7 @@ import {
   forgetClaudeSession,
   respondClaudeApproval,
   respondClaudeQuestion,
+  restoreClaudeTaskLists,
   sendClaudeTurn,
   steerClaudeTurn,
   stopClaudeSession,
@@ -16,7 +17,11 @@ import {
   generateClaudePrContent,
 } from "./claudeGit";
 import { generateClaudeSessionTitle } from "./claudeTitle";
-import { warmupClaudeText } from "./claudeText";
+import {
+  runClaudeTextPrompt,
+  stopClaudeTextPrompt,
+  warmupClaudeText,
+} from "./claudeText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const claudeAdapter: HarnessAdapter = {
@@ -31,12 +36,15 @@ export const claudeAdapter: HarnessAdapter = {
   stopSession: stopClaudeSession,
   forgetSession: forgetClaudeSession,
   bindSession: bindClaudeSession,
+  restoreTaskLists: restoreClaudeTaskLists,
   refreshCatalog: refreshClaudeCatalog,
   generateTitle: generateClaudeSessionTitle,
   generateCommitMessage: generateClaudeCommitMessage,
   generatePrContent: generateClaudePrContent,
   generateBranchName: generateClaudeBranchName,
   warmupText: warmupClaudeText,
+  runTextPrompt: runClaudeTextPrompt,
+  stopTextPrompt: stopClaudeTextPrompt,
 };
 
 let registered = false;

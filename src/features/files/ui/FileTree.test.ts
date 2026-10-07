@@ -81,6 +81,12 @@ function pressPaste(el: HTMLElement) {
   });
 }
 
+function press(el: HTMLElement, init: KeyboardEventInit) {
+  return act(async () => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+  });
+}
+
 function nativeDrop(paths: string[]) {
   return act(async () => {
     dragDrop.handler!({
@@ -139,6 +145,13 @@ describe("FileTree render isolation", () => {
     expect(
       container.querySelector('[role="tree"]')?.getAttribute("aria-label"),
     ).toBe("mc/update-readme-tests files");
+  });
+
+  it("keeps room for descenders in truncated file names", async () => {
+    await act(async () => render());
+    expect(row("first.ts").lastElementChild?.className).toContain(
+      "leading-label",
+    );
   });
 
   it.each([false, true])(
@@ -250,6 +263,16 @@ describe("FileTree accepts files from outside the tree", () => {
     ]);
   });
 
+  it("pastes on a non-Latin layout", async () => {
+    clipboardFiles.push("/Users/me/Desktop/a.txt");
+    saveSelected(cwd, `${cwd}/docs`);
+    await act(async () => render());
+    await press(row("docs"), { key: "м", code: "KeyV", metaKey: true });
+    expect(copied).toEqual([
+      { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
+    ]);
+  });
+
   it("does nothing on paste when the clipboard holds no files", async () => {
     saveSelected(cwd, `${cwd}/docs`);
     await act(async () => render());
@@ -295,6 +318,50 @@ describe("FileTree accepts files from outside the tree", () => {
     document.elementFromPoint = () => document.body;
     await nativeDrop(["/Users/me/Desktop/a.txt"]);
     expect(copied).toEqual([]);
+  });
+});
+
+describe("FileTree copies paths", () => {
+  beforeEach(async () => {
+    saveSelected(cwd, `${cwd}/first.ts`);
+    await navigator.clipboard.writeText("before");
+    await act(async () => render());
+  });
+
+  it("copies the selected path on Mod+Shift+C", async () => {
+    await press(row("first.ts"), { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("copies the project root path from the root row", async () => {
+    const rootRow = container.querySelector<HTMLButtonElement>(
+      "[data-explorer-root]",
+    );
+    if (!rootRow) throw new Error("Root row not rendered");
+    await act(async () => rootRow.click());
+    await press(rootRow, { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(cwd);
+  });
+
+  it("copies the selected path on a non-Latin layout", async () => {
+    await press(row("first.ts"), {
+      key: "С",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("matches the typed Latin letter, not the physical key", async () => {
+    // Dvorak types "j" on the physical C key.
+    await press(row("first.ts"), {
+      key: "J",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe("before");
   });
 });
 

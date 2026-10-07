@@ -1,4 +1,4 @@
-import type { ContextUsage } from "./contextUsage";
+import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
@@ -8,10 +8,12 @@ import type { OrchestrationProposal } from "../../orchestration/model/orchestrat
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
   defaultSessionChoice,
+  firstEnabledHarness,
   preferredModelId,
   preferredModelSettings,
   resolveModel,
 } from "./models";
+import { loadProjectProviderSettings } from "./projectProviders";
 
 export type HarnessId =
   | "claude"
@@ -41,6 +43,7 @@ export const HARNESSES: HarnessId[] = [
 export type BlockRole =
   | "user"
   | "assistant"
+  | "image"
   | "reasoning"
   | "tool"
   | "approval"
@@ -48,6 +51,15 @@ export type BlockRole =
   | "plan"
   | "system"
   | "handoff";
+
+/** A session created by a Mono during this conversation turn. */
+export type MonoSpawnedSession = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  harness: HarnessId;
+  model: string;
+};
 
 export type TaskListItemStatus =
   "pending" | "in_progress" | "completed" | "cancelled";
@@ -62,6 +74,8 @@ export type TaskListItem = {
 export type TaskListMeta = {
   /** Provider identity for replacing later snapshots of the same list. */
   key?: string;
+  /** Provider conversation that produced this list, when the provider scopes task ids to one. */
+  providerSessionId?: string;
   explanation?: string;
   items: TaskListItem[];
 };
@@ -110,6 +124,39 @@ export type HandoffMeta = {
   status: HandoffStatus;
   /** Inject this brief into prompts to `to` until that harness accepts a turn. */
   pending?: boolean;
+};
+
+/** One persisted question/answer in a completed turn's side conversation. */
+export type BtwMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: number;
+  /** Rich harness activity for assistant replies, when available. */
+  blocks?: Block[];
+};
+
+export type BtwThreadStatus = "running" | "ready" | "error";
+
+/** Independent, read-only "by the way" conversation anchored to a turn. */
+export type BtwThread = {
+  id: string;
+  sourceEndBlockId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: BtwThreadStatus;
+  messages: BtwMessage[];
+  /** Provider that answered this side thread. */
+  harness?: HarnessId;
+  /** Selected harness model for this side thread; absent means session default. */
+  model?: string;
+  /** Provider settings selected for this side thread's model. */
+  modelSettings?: Record<string, string>;
+  /** Provider-specific side-thread id when the text runner supports resume. */
+  providerThreadId?: string;
+  error?: string;
+  /** Live harness blocks for the in-flight reply; not persisted. */
+  pendingBlocks?: Block[];
 };
 
 /** Compact transcript card for a second-opinion or split-pane handoff turn. */
@@ -167,6 +214,7 @@ export type AgentStep = {
   text: string;
   toolKind?: string;
   status?: string;
+  detail?: string;
   preview?: ToolPreview;
 };
 
@@ -187,6 +235,14 @@ export type AgentRunMeta = {
 
 export type AttachmentKind = "image" | "audio" | "file";
 
+export type GeneratedImageMeta = {
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  alt?: string;
+};
+
 export type Attachment = {
   /** Live transcript only; deliberately excluded from persisted attachments. */
   copyFromPath?: boolean;
@@ -203,16 +259,38 @@ export type Attachment = {
   previewUrl?: string;
 };
 
+export type MonoSessionCompletion = {
+  sessionId: string;
+  title: string;
+  status: "completed" | "failed" | "cancelled";
+  /** A single report covering several sessions launched in one Mono turn. */
+  sessionCount?: number;
+};
+
 export type QueuedMessage = {
   id: string;
+  /** User bubble already shown optimistically in a Mono's conversation. */
+  blockId?: string;
   text: string;
   attachments: Attachment[];
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   intent?: TurnIntent;
+  /** An app notification that must wait for an idle Mono, never steer its work. */
+  monoSessionCompletion?: MonoSessionCompletion;
+  /** Delivery failed; the message remains available to retry or edit. */
+  error?: string;
 };
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";
+
+/** The provider stopped the last turn at a usage limit. */
+export type UsageLimit = {
+  /** Epoch ms when the provider's window resets, once known. */
+  resetsAt?: number;
+  /** Send a continue turn once the window resets. */
+  resumeAtReset?: boolean;
+};
 
 /** Provider/model provenance captured when a user turn is submitted. */
 export type TurnModel = {
@@ -235,18 +313,27 @@ export type Block = {
   id: string;
   role: BlockRole;
   text: string;
+  image?: GeneratedImageMeta;
   attachments?: Attachment[];
   streaming?: boolean;
   /** Epoch ms when this user turn started. */
   startedAt?: number;
   /** How long the agent worked on this user turn, in ms. */
   durationMs?: number;
+  /** Epoch ms when this message joined a turn that was already running. */
+  sentAt?: number;
   /** Stable model label for this turn. Present on newly created user blocks. */
   turnModel?: TurnModel;
   /** Provider turn boundary used to replace this user message, when known. */
   providerTurnId?: string;
   /** User turn saved to the session but not submitted to the harness yet. */
   draft?: boolean;
+  /** This user turn activated MonoCode app access for its thread. */
+  monocode?: boolean;
+  /** The Plan or Orchestrator mode this user turn was sent in. */
+  intent?: Extract<TurnIntent, "plan" | "orchestrate">;
+  /** Stable CLI request that submitted this turn, for safe retries. */
+  appRequestId?: string;
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {
@@ -256,6 +343,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Left running by the agent when it yielded; the turn waits on it. */
+    background?: boolean;
   };
   approval?: {
     requestId: number;
@@ -274,10 +363,17 @@ export type Block = {
    * conversation rather than the user narrating their own agents.
    */
   internal?: boolean;
+  /** Hidden app prompt that starts a separate completion report in a Mono chat. */
+  monoSessionCompletion?: MonoSessionCompletion;
+  /** Accepted session launches, kept on the originating user turn. */
+  monoSpawnedSessions?: MonoSpawnedSession[];
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
-  /** Note chip shown on this user turn. Body is not stored; the harness already received it. */
+  /** Independent read-only side conversations anchored to this user turn. */
+  btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Exact CI repair instructions and evidence supplied with this user turn. */
+  ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
   interjection?: InterjectionMeta;
   /**
@@ -285,6 +381,11 @@ export type Block = {
    * rather than turn chrome like a status ping. Never folds into the trail.
    */
   notice?: "error" | "interrupt";
+  statusKey?: string;
+  /** Posted to a Mono's chat by one of its habits, outside any turn. */
+  monoHabit?: { id: string; name: string; at: number };
+  /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
+  monoCard?: import("../../monos/model/monoCards").MonoCard;
 };
 
 export type RuntimeMode =
@@ -318,12 +419,17 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
   supervised: "Ask before commands and file changes.",
   "auto-accept-edits": "Auto-approve edits, ask before other actions.",
   auto: "An AI reviewer can approve or deny actions.",
-  "full-access": "Allow commands and edits without prompts.",
+  "full-access":
+    "Allow commands, edits, and supported MCP confirmations in non-plan turns without prompts.",
 };
 
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Saved and accessible by id, but omitted from the normal session sidebar. */
+  sidebarHidden?: boolean;
+  /** Receipt for an acknowledged floating-composer handoff. */
+  quickLaunchAccepted?: boolean;
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
   orchestrationLeadId?: string;
   /** Temporary Inbox conversation: shares the runtime, never saved as a session. */
@@ -337,14 +443,32 @@ export type Session = {
   /** Project / working directory for this session. */
   cwd: string;
   blocks: Block[];
+  /** Mono-only database window. Older blocks are fetched separately by the viewer. */
+  monoTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */
   busy?: boolean;
-  /** Follow-ups waiting for current turn. In-memory only. */
+  /** The provider has accepted this turn and can take live follow-ups. */
+  turnReady?: boolean;
+  /**
+   * What the live turn is waiting on after the agent yielded with work still
+   * running in the background. In-memory only.
+   */
+  backgroundTasks?: string[];
+  /** Follow-ups retained until they have been delivered. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
   /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */
   editingQueuedMessageId?: string;
+  /** Pending delivery locks this row against edits and deletion. Not persisted. */
+  sendingQueuedMessageId?: string;
+  /** Last turn hit a provider usage limit; cleared by the next send. In-memory only. */
+  usageLimit?: UsageLimit;
+  /**
+   * Lives only in memory: never saved, never listed with the project's chats.
+   * A Mono's habit runs are, and disappear when the run ends.
+   */
+  ephemeral?: boolean;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
   /** Named local credential profile used by Claude or Codex. */
@@ -395,6 +519,8 @@ export type PendingHarnessSwitch = {
   fromSettings: Record<string, string>;
   fromProviderSessionId?: string;
   fromProviderAccountId?: string;
+  /** The outgoing provider is exhausted; build the recap from the transcript. */
+  skipOutgoingRecap?: boolean;
 };
 
 export const HARNESS_LABEL: Record<HarnessId, string> = {
@@ -453,12 +579,93 @@ export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
 ): Session {
-  const choice = defaultSessionChoice();
+  const choice = defaultSessionChoice(cwd);
   return newSession(choice.harness, cwd, choice.model, runtimeMode);
 }
 
+/**
+ * Provider and model a seeded session should use in `cwd`. The project's own
+ * default provider and model win over the seed; when the project has neither,
+ * the seed's provider and model are carried. A provider the project hides is
+ * swapped for its first enabled one.
+ */
+function projectSessionChoice(
+  seed: Pick<Session, "harness" | "model"> | undefined,
+  cwd: string,
+): { harness: HarnessId; model?: string } {
+  const project = loadProjectProviderSettings(cwd);
+  const seedHarness = seed?.harness ?? "claude";
+  const harness = firstEnabledHarness(
+    cwd,
+    project.defaultHarness ?? seedHarness,
+  );
+  const model =
+    project.models?.[harness] ??
+    (project.defaultHarness === harness ? project.defaultModel : undefined) ??
+    (project.defaultHarness == null && harness === seedHarness
+      ? seed?.model
+      : undefined);
+  return { harness, model };
+}
+
+/**
+ * New conversation for a project. The project's default provider and model win
+ * over the seed's; a provider the project has hidden is swapped for its first
+ * enabled one.
+ */
+export function newSessionForProject(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(seed, cwd);
+  const carriesSeed =
+    model != null && model === seed?.model && harness === seed?.harness;
+  return newSession(
+    harness,
+    cwd,
+    model,
+    seed?.runtimeMode,
+    carriesSeed ? seed?.modelSettings : undefined,
+  );
+}
+
+/**
+ * Retarget an existing session (typically a blank one) to a project, adopting
+ * that project's provider defaults while keeping its id, blocks and composer
+ * seed.
+ */
+export function retargetSessionToProject(
+  session: Session,
+  cwd: string,
+): Session {
+  const { harness, model } = projectSessionChoice(session, cwd);
+  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const carriesSeed =
+    model != null && model === session.model && harness === session.harness;
+  return {
+    ...session,
+    cwd,
+    harness,
+    model: resolved.id,
+    modelSettings: preferredModelSettings(
+      resolved,
+      carriesSeed ? session.modelSettings : undefined,
+    ),
+    title: HARNESS_LABEL[harness],
+    ...(harness === session.harness
+      ? {}
+      : { providerSessionId: undefined, providerAccountId: undefined }),
+    ...(resolved.id === session.model
+      ? {}
+      : { context: dropContextWindow(session.context) }),
+  };
+}
+
 /** New conversation carrying another session's harness, model and settings. */
-export function newSessionLike(seed: Session | undefined, cwd: string): Session {
+export function newSessionLike(
+  seed: Session | undefined,
+  cwd: string,
+): Session {
   return newSession(
     seed?.harness ?? "claude",
     cwd,

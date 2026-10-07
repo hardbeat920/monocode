@@ -28,7 +28,7 @@ type Props = {
   expanded: boolean;
   selectedSha?: string;
   onToggleExpanded: () => void;
-  onOpenCommit: (commit: GitHistoryCommit) => void;
+  onOpenCommit: (commit: GitHistoryCommit, pin?: boolean) => void;
 };
 
 const historyByCwd = new Map<string, GitHistoryCommit[]>();
@@ -91,7 +91,7 @@ export function GitHistoryGraph({
                     commit={commit}
                     row={row}
                     active={selectedSha === commit.sha}
-                    onOpen={() => onOpenCommit(commit)}
+                    onOpen={(pin) => onOpenCommit(commit, pin)}
                   />
                 );
               })}
@@ -112,7 +112,7 @@ function HistoryRow({
   commit: GitHistoryCommit;
   row: HistoryItemViewModel;
   active: boolean;
-  onOpen: () => void;
+  onOpen: (pin?: boolean) => void;
 }) {
   const graph = historyItemGraph(row);
   const badge = row.refs.find((ref) => ref.color) ?? row.refs[0];
@@ -121,7 +121,8 @@ function HistoryRow({
       <button
         type="button"
         title={`${commit.shortSha} ${commit.subject}${commit.author ? ` — ${commit.author}` : ""}`}
-        onClick={onOpen}
+        onClick={() => onOpen()}
+        onDoubleClick={() => onOpen(true)}
         aria-pressed={active}
         className={`git-history-item flex h-[22px] min-w-0 w-full items-stretch overflow-visible pr-2 text-left ${
           row.kind === "HEAD" ? "is-head" : ""

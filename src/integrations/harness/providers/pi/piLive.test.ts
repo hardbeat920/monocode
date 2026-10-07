@@ -66,6 +66,44 @@ describe("Pi live session", () => {
     );
   });
 
+  it("publishes the resolved Pi default model for provider usage", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") return { data: {
+        sessionId: "pi_default",
+        model: { provider: "openai-codex", id: "gpt-5.4", contextWindow: 200_000 },
+      } };
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-default", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event),
+    });
+    expect(events).toContainEqual({
+      type: "session.configChanged", model: "pi:openai-codex/gpt-5.4",
+    });
+    await stopPiSession("pi-default");
+  });
+
+  it("does not publish an intermediate default when explicit model selection fails", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") return { data: {
+        sessionId: "pi_explicit",
+        model: { provider: "anthropic", id: "claude-sonnet-5", contextWindow: 200_000 },
+      } };
+      if (command.type === "set_model") throw new Error("Model unavailable");
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await expect(compactPiContext({
+      sessionId: "pi-explicit", cwd: "/repo", model: "pi:openai-codex/gpt-5.4",
+      runtimeMode: "supervised", onEvent: event => events.push(event),
+    })).rejects.toThrow("Model unavailable");
+    expect(events.filter(event => event.type === "session.configChanged")).toEqual([]);
+    expect(mocks.request).toHaveBeenCalledWith({ type: "set_model", provider: "openai-codex", modelId: "gpt-5.4" });
+    await stopPiSession("pi-explicit");
+  });
+
   it("uses the compact RPC command and publishes the post-compact estimate", async () => {
     const events: HarnessEvent[] = [];
 
@@ -120,9 +158,40 @@ describe("Pi live session", () => {
       statusText: "\u001b[0m",
     });
     expect(events.filter((event) => event.type === "status")).toEqual([
-      { type: "status", text: "○ ponytail: ⚡ FULL" },
+      { type: "status", key: "ponytail", text: "○ ponytail: ⚡ FULL" },
       { type: "status", text: "Plugin ready" },
     ]);
     await stopPiSession("pi-ansi");
+  });
+
+  it("publishes animated extension status as one keyed slot", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-caveman",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    const frame = mocks.frames[0]!;
+    for (const [id, statusText] of [
+      ["frame-1", "⠋ \u001b[2mcaveman level: \u001b[0mULTRA"],
+      ["frame-2", "⠙ \u001b[2mcaveman level: \u001b[0mULTRA"],
+      ["clear", ""],
+    ]) {
+      frame({
+        type: "extension_ui_request",
+        id,
+        method: "setStatus",
+        statusKey: "caveman",
+        statusText,
+      });
+    }
+    expect(events.filter((event) => event.type === "status")).toEqual([
+      { type: "status", key: "caveman", text: "⠋ caveman level: ULTRA" },
+      { type: "status", key: "caveman", text: "⠙ caveman level: ULTRA" },
+      { type: "status", key: "caveman", text: "" },
+    ]);
+    await stopPiSession("pi-caveman");
   });
 });

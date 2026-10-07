@@ -50,4 +50,16 @@ describe("MarkdownDocumentPreview", () => {
     expect(html).toMatch(/<p[^>]*>Body\.<\/p>/);
     expect(html).not.toContain("<ul");
   });
+
+  // https://github.com/hardbeat920/monocode/issues/591
+  it("keeps consecutive lines on their own lines", () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownDocumentPreview, {
+        text: "> first line\n> second line\n> third line",
+        metadataLabel: "Properties",
+      }),
+    );
+
+    expect(html).toContain("<p>first line<br/>second line<br/>third line</p>");
+  });
 });

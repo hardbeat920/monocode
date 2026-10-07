@@ -22,7 +22,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function fixture(mode: "archive" | "delete") {
+function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
   const closing: Session = {
     ...newSession("cursor", "/tmp/project"),
     busy: true,
@@ -64,6 +64,7 @@ function fixture(mode: "archive" | "delete") {
     run: () => {
       const remover = createSessionRemover({
         mode,
+        preserveOpenFiles,
         replacement: { cwd: "/tmp/project", harness: "cursor" },
         workspace: {
           snapshot: () => state,
@@ -92,6 +93,35 @@ function fixture(mode: "archive" | "delete") {
 afterEach(() => mocks.invoke.mockReset());
 
 describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
+  it("keeps dirty files and terminals open when removing through the CLI", async () => {
+    const f = fixture(mode, true);
+    const file = newFileTab("/tmp/project/unsaved.ts", "/tmp/project");
+    const terminal = newTerminalFile("/tmp/project");
+    const tab = openTerminalTab(
+      openEditorTab(f.read().tabs[0], file, { pin: true }),
+      terminal,
+    );
+    f.write({
+      ...f.read(),
+      tabs: [tab, f.read().tabs[1]],
+      dirtyFiles: new Set([file.id]),
+    });
+    expect(await f.run()).toBe(true);
+    expect(f.confirmClose).toHaveBeenCalledExactlyOnceWith([], mode);
+    const kept = f.read().tabs.find((entry) => entry.id === tab.id)!;
+    expect(kept.editorPanes[0].files).toContain(file);
+    expect(kept.terminalPanes[0].files).toContain(terminal);
+    expect(f.read().dirtyFiles.has(file.id)).toBe(true);
+    expect(leafIds(kept.layout)).not.toContain(f.closing.id);
+    expect(f.read().sessions.map((session) => session.id)).not.toContain(
+      f.closing.id,
+    );
+    expect(f.read().sessions.find((session) => session.id === f.other.id)).toBe(
+      f.other,
+    );
+    expect(f.commit.mock.calls[0][0].closedTabs).toEqual([]);
+  });
+
   it("creates the replacement session behind the removal interface", async () => {
     const f = fixture(mode);
     const onlyTab = f.read().tabs[0];
@@ -179,7 +209,10 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     const file = newFileTab("/tmp/project/new.ts", "/tmp/project");
     f.write({
       ...f.read(),
-      tabs: [openEditorTab(f.read().tabs[0], file), f.read().tabs[1]],
+      tabs: [
+        openEditorTab(f.read().tabs[0], file, { pin: true }),
+        f.read().tabs[1],
+      ],
     });
     mocks.invoke.mockImplementation(async (command, args) => {
       f.write({ ...f.read(), dirtyFiles: new Set([file.id]) });

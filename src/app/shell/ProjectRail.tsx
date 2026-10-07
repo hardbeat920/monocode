@@ -1,13 +1,9 @@
 import {
-  AppWindow,
-  Archive,
   BellOff,
   ChevronDown,
   ChevronRight,
-  FolderOpen,
   FolderPlus,
-  FolderTree,
-  ImagePlus,
+  Internet,
   Inbox,
   MoreHorizontal,
   Pin,
@@ -16,7 +12,6 @@ import {
   Plus,
   Search,
   Settings,
-  Trash2,
   Zap,
 } from "../../shared/ui/icons";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -34,13 +29,9 @@ import {
 } from "../../features/settings/model/appearance";
 import {
   basename,
-  listExternalEditors,
-  openInExternalEditor,
-  revealPath,
-  type ExternalEditor,
   type GitDiffStats,
 } from "../../platform/tauri/fs";
-import { IS_MAC, IS_WIN, MOD } from "../../platform/tauri/platform";
+import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { formatInteger } from "../../shared/lib/numbers";
 import { pathKey, projectKey, projectName } from "../../shared/lib/paths";
 import {
@@ -53,167 +44,55 @@ import {
   saveProjectRailOrder,
   subscribeProjectPathsChanged,
   syncProjectRailOrder,
+  toggleProjectPin,
   type RecentProject,
 } from "../../features/projects/model/recents";
 import {
-  TAB_GROUP_COLORS,
   loadTabGroupColors,
   loadTabGroupCustomColors,
   loadTabGroupLabels,
   loadTabGroupMascots,
   resolveTabGroupColor,
-  resolveTabGroupColorIndex,
-  resolveTabGroupCustomColor,
   resolveTabGroupLabel,
   resolveTabGroupLogo,
   resolveTabGroupMascot,
-  saveTabGroupColor,
-  saveTabGroupCustomColor,
-  saveTabGroupLabel,
-  saveTabGroupMascot,
-  tabGroupColor,
 } from "../../features/workspace/model/tabGroups";
 import {
-  createProjectGroup,
   loadProjectGroupAssignments,
   loadProjectGroups,
+  projectGroupColor,
   projectGroupIdForPath,
-  saveProjectGroupAssignments,
-  saveProjectGroups,
+  updateProjectGroup,
   type ProjectGroup,
 } from "../../features/projects/model/projectGroups";
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import { LiveAgentsPreview } from "../../features/sessions/ui/LiveAgentsPreview";
 import { ProjectLogoIcon } from "../../features/projects/ui/ProjectLogoIcon";
-import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { ProjectMascot } from "../../features/projects/ui/ProjectMascot";
 import { RailAction, RailSearch } from "./RailAction";
-import { RemoveProjectDialog } from "../../features/projects/ui/RemoveProjectDialog";
 import { DevModeSlot, TabVisitNav } from "./TitleBar";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { SettingsNav } from "./SettingsRail";
 import { Shimmer } from "../../shared/ui/Shimmer";
-import { TabGroupMenu, type TabGroupMenuExtraItem } from "../../features/workspace/ui/TabGroupMenu";
 import type { SettingsSectionId } from "../../features/settings/model/settings";
-import {
-  knownNotificationProject,
-  type NotificationProject,
-} from "../../features/notifications/model/notificationProjects";
-import { NotificationMuteDatePicker } from "../../features/notifications/ui/NotificationMuteDatePicker";
-import { Popover } from "../../shared/ui/Popover";
 import { InboxNotificationMenu } from "../../features/inbox/ui/InboxNotificationMenu";
-import { notificationMuteActions, notificationMuteDeadline, notificationMuteStatus } from "../../features/notifications/ui/notificationMuteActions";
+import { notificationMuteStatus } from "../../features/notifications/ui/notificationMuteActions";
 import { useProjectNotificationPreferences } from "../../features/notifications/hooks/useProjectNotificationPreferences";
 import { useNotificationProjects } from "../../features/notifications/hooks/useNotificationProjects";
-import { updateNotificationPreferences } from "../../features/notifications/model/notificationPreferences";
-import type { ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
 import { GithubStarPrompt } from "./GithubStarPrompt";
-
-const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
-  : IS_WIN
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
-
-function projectMenuExtraItems(
-  pinned: boolean,
-  canRemove: boolean,
-  canConfigureNotifications: boolean,
-  notificationReady: boolean,
-  externalEditors: ExternalEditor[] | null,
-  projectGroups: ProjectGroup[],
-  currentProjectGroupId?: string,
-): TabGroupMenuExtraItem[] {
-  const groupSubmenu: ExplorerMenuItem[] = [
-    { kind: "item", id: "project-group:new", label: "New group…" },
-    ...(projectGroups.length > 0 ? [{ kind: "sep" } as const] : []),
-    ...projectGroups.map((group) => ({
-      kind: "item" as const,
-      id: `project-group:${group.id}`,
-      label: group.name,
-      checked: group.id === currentProjectGroupId,
-    })),
-    ...(projectGroups.length > 0 ? [{ kind: "sep" } as const] : []),
-    {
-      kind: "item",
-      id: "project-group:none",
-      label: "Ungrouped",
-      checked: currentProjectGroupId == null,
-    },
-  ];
-  const items: TabGroupMenuExtraItem[] = [
-    {
-      id: "background",
-      label: "Background image",
-      icon: ImagePlus,
-    },
-    {
-      id: "project-group",
-      label: "Move to group",
-      icon: FolderTree,
-      submenu: groupSubmenu,
-    },
-    pinned
-      ? { id: "unpin", label: "Unpin project", icon: PinOff }
-      : { id: "pin", label: "Pin project", icon: Pin },
-    { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
-    {
-      id: "external-editor",
-      label: "Open in editor",
-      icon: AppWindow,
-      disabled: externalEditors === null,
-      submenu:
-        externalEditors === null
-          ? [
-              {
-                kind: "item",
-                id: "external-editor:loading",
-                label: "Looking for editors…",
-                disabled: true,
-              },
-            ]
-          : externalEditors.length > 0
-            ? externalEditors.map((editor) => ({
-                kind: "item" as const,
-                id: `external-editor:${editor.id}`,
-                label: editor.name,
-              }))
-            : [
-                {
-                  kind: "item",
-                  id: "external-editor:none",
-                  label: "No supported editors found",
-                  disabled: true,
-                },
-              ],
-    },
-    {
-      id: "notifications-mute",
-      label: "Mute notifications",
-      icon: BellOff,
-      sepBefore: true,
-      disabled: !notificationReady,
-      submenu: notificationMuteActions(),
-    },
-  ];
-  if (canConfigureNotifications) {
-    items.push({
-      id: "notifications-settings",
-      label: "Notification settings…",
-      icon: Settings,
-    });
-  }
-  if (canRemove) {
-    items.push(
-      { id: "archive", label: "Archive", icon: Archive, sepBefore: true },
-      { id: "delete", label: "Delete", icon: Trash2, danger: true },
-    );
-  }
-  return items;
-}
+import { Popover } from "../../shared/ui/Popover";
+import { OPEN_REMOTE_PROJECT_EVENT } from "../../features/connections/model/connections";
+import {
+  useRemoteMachineOnline,
+  useRemoteMachines,
+} from "../../features/connections/model/connections";
+import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
+import { useProjectMenu } from "./useProjectMenu";
+import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
 
 type Props = {
+  visible?: boolean;
   cwd: string;
   recents: RecentProject[];
   inboxUnseen?: boolean;
@@ -247,9 +126,12 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
+  /** The Monos section above the projects; absent while Monos are off. */
+  monos?: MonoRailProps;
 };
 
 export function ProjectRail({
+  visible = true,
   cwd,
   recents,
   inboxUnseen = false,
@@ -283,6 +165,7 @@ export function ProjectRail({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
+  monos,
 }: Props) {
   const resize = useDragResize({
     min: PROJECT_RAIL_WIDTH_MIN,
@@ -313,73 +196,32 @@ export function ProjectRail({
         setGroupColors(loadTabGroupColors());
         setGroupMascots(loadTabGroupMascots());
         setGroupCustomColors(loadTabGroupCustomColors());
+        setProjectGroups(loadProjectGroups());
         setProjectGroupAssignments(loadProjectGroupAssignments());
       }),
     [],
   );
-  const [externalEditors, setExternalEditors] = useState<
-    ExternalEditor[] | null
-  >(null);
-  const [projectMenu, setProjectMenu] = useState<{
+  const [inboxMenu, setInboxMenu] = useState<{
     x: number;
     y: number;
-    path: string;
-    projectKey: string;
   } | null>(null);
-  const [projectGroupMenu, setProjectGroupMenu] = useState<{
-    x: number;
-    y: number;
-    id: string;
-  } | null>(null);
-  const [notificationMenu, setNotificationMenu] = useState<{
-    x: number;
-    y: number;
-    path: string;
-    project: NotificationProject;
-  } | null>(null);
-  const [projectMenuError, setProjectMenuError] = useState<string | null>(null);
+  const projectMenu = useProjectMenu({
+    onRemoveProject,
+    onOpenNotificationSettings,
+    onOpen: () => setInboxMenu(null),
+  });
+  useEffect(() => {
+    if (visible) return;
+    projectMenu.dismiss();
+    setInboxMenu(null);
+  }, [visible]);
   const notificationPreferences = useProjectNotificationPreferences();
   const allProjects = useMemo(
     () => collectRailProjects(recents, cwd),
     [cwd, recents],
   );
   const notificationProjects = useNotificationProjects([...allProjects.keys()]);
-  const notificationPath = projectMenu?.path;
-  const readyNotificationProject = notificationPath
-    ? knownNotificationProject(notificationPath)
-    : undefined;
-  const menuMuteStatus = readyNotificationProject
-    ? notificationMuteStatus(notificationPreferences[readyNotificationProject.id])
-    : null;
-  useEffect(() => {
-    setProjectMenuError(null);
-  }, [notificationPath]);
-  useEffect(() => {
-    let active = true;
-    void listExternalEditors()
-      .then((installed) => {
-        if (active) setExternalEditors(Array.isArray(installed) ? installed : []);
-      })
-      .catch(() => {
-        if (active) setExternalEditors([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-  const [inboxMenu, setInboxMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
   const menuTrigger = useRef<HTMLElement | null>(null);
-  const [removing, setRemoving] = useState<{
-    path: string;
-    name: string;
-  } | null>(null);
-  const [backgroundProject, setBackgroundProject] = useState<{
-    project: string;
-    name: string;
-  } | null>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const groupLogos = useTabGroupLogos();
@@ -430,34 +272,19 @@ export function ProjectRail({
   }, [allProjects]);
 
   useEffect(() => {
-    setPinnedPaths((prev) => {
-      const next = prev.filter((path) => allProjects.has(path));
-      if (next.length === prev.length) return prev;
-      savePinnedProjects(next);
-      return next;
-    });
+    // Saving announces the change, which reloads `pinnedPaths`.
+    const pinned = loadPinnedProjects();
+    const next = pinned.filter((path) => allProjects.has(path));
+    if (next.length !== pinned.length) savePinnedProjects(next);
   }, [allProjects]);
 
   useEffect(() => {
-    if (!projectMenu) return;
-    const onScroll = () => setProjectMenu(null);
+    if (!projectMenu.isOpen) return;
+    const onScroll = () => projectMenu.close();
     const scrollParent = scrollRef.current ?? window;
     scrollParent.addEventListener("scroll", onScroll, true);
     return () => scrollParent.removeEventListener("scroll", onScroll, true);
-  }, [projectMenu]);
-
-  const openProjectMenu = (path: string, x: number, y: number) => {
-    menuTrigger.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setInboxMenu(null);
-    setNotificationMenu(null);
-    setProjectMenu({
-      x,
-      y,
-      path,
-      projectKey: projectKey(path),
-    });
-  };
+  }, [projectMenu.isOpen]);
 
   const onProjectContextMenu = (
     path: string,
@@ -466,83 +293,7 @@ export function ProjectRail({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.querySelector<HTMLButtonElement>("button")?.focus();
-    openProjectMenu(path, event.clientX, event.clientY);
-  };
-
-  const onProjectRename = (projectKey: string, label: string) => {
-    saveTabGroupLabel(projectKey, label);
-    setGroupLabels(loadTabGroupLabels());
-  };
-
-  const onProjectColorChange = (
-    projectKey: string,
-    colorIndex: number | null,
-  ) => {
-    saveTabGroupColor(projectKey, colorIndex);
-    setGroupColors(loadTabGroupColors());
-    setGroupCustomColors(loadTabGroupCustomColors());
-  };
-
-  const onProjectMascotChange = (projectKey: string, name: string | null) => {
-    saveTabGroupMascot(projectKey, name);
-    setGroupMascots(loadTabGroupMascots());
-  };
-
-  const onProjectCustomColorChange = (projectKey: string, color: string) => {
-    saveTabGroupCustomColor(projectKey, color);
-    setGroupColors(loadTabGroupColors());
-    setGroupCustomColors(loadTabGroupCustomColors());
-  };
-
-  const saveProjectGroupList = (next: ProjectGroup[]) => {
-    if (!saveProjectGroups(next)) return false;
-    setProjectGroups(next);
-    return true;
-  };
-
-  const updateProjectGroup = (
-    id: string,
-    update: (group: ProjectGroup) => ProjectGroup,
-  ) => {
-    const current = loadProjectGroups();
-    if (!current.some((group) => group.id === id)) return;
-    const next = current.map((group) =>
-      group.id === id ? update(group) : group,
-    );
-    saveProjectGroupList(next);
-  };
-
-  const assignProjectGroup = (path: string, groupId: string | null) => {
-    const next = { ...loadProjectGroupAssignments() };
-    const key = pathKey(path);
-    if (groupId == null) delete next[key];
-    else next[key] = groupId;
-    if (!saveProjectGroupAssignments(next)) return false;
-    setProjectGroupAssignments(next);
-    return true;
-  };
-
-  const createGroup = (x: number, y: number, projectPath?: string) => {
-    const current = loadProjectGroups();
-    const group = createProjectGroup(current);
-    if (!saveProjectGroupList([...current, group])) return;
-    if (projectPath) assignProjectGroup(projectPath, group.id);
-    if (!projectPath) {
-      menuTrigger.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-    }
-    setProjectGroupMenu({ x, y, id: group.id });
-  };
-
-  const deleteGroup = (id: string) => {
-    const nextGroups = loadProjectGroups().filter((group) => group.id !== id);
-    if (!saveProjectGroupList(nextGroups)) return false;
-    const nextAssignments = loadProjectGroupAssignments(nextGroups);
-    saveProjectGroupAssignments(nextAssignments);
-    setProjectGroupAssignments(nextAssignments);
-    return true;
+    projectMenu.open(path, event.clientX, event.clientY);
   };
 
   const reorderSubset = (
@@ -578,87 +329,13 @@ export function ProjectRail({
     saveProjectRailOrder(next);
   };
 
-  const onTogglePin = (path: string) => {
-    const isPinned = pinnedPaths.some((pinned) =>
-      sameProjectPath(pinned, path),
-    );
-    const next = isPinned
-      ? pinnedPaths.filter((pinned) => !sameProjectPath(pinned, path))
-      : [...pinnedPaths, path];
-    setPinnedPaths(next);
-    savePinnedProjects(next);
-  };
-
-  const onProjectMenuPick = (action: string) => {
-    if (!projectMenu) return;
-    const { path, projectKey } = projectMenu;
-    if (action === "project-group:new") {
-      createGroup(projectMenu.x, projectMenu.y, path);
-    } else if (action === "project-group:none") {
-      assignProjectGroup(path, null);
-    } else if (action.startsWith("project-group:")) {
-      const groupId = action.slice("project-group:".length);
-      if (projectGroups.some((group) => group.id === groupId)) {
-        assignProjectGroup(path, groupId);
-      }
-    }
-    else if (action === "mute:custom") {
-      if (!readyNotificationProject) return false;
-      setNotificationMenu({ ...projectMenu, project: readyNotificationProject });
-    }
-    else if (action.startsWith("mute:") || action === "notifications-resume") {
-      if (!readyNotificationProject) return false;
-      const mutedUntil = notificationMuteDeadline(action);
-      if (action !== "notifications-resume" && mutedUntil === undefined) return false;
-      try {
-        updateNotificationPreferences([readyNotificationProject.id], { mutedUntil });
-      } catch {
-        setProjectMenuError("Could not save notification preferences. Please try again.");
-        return false;
-      }
-    }
-    else if (action.startsWith("external-editor:")) {
-      const editorId = action.slice("external-editor:".length);
-      if (!externalEditors?.some((editor) => editor.id === editorId)) return false;
-      void openInExternalEditor(editorId, path)
-        .then(() => {
-          setProjectMenu(null);
-          menuTrigger.current?.focus();
-        })
-        .catch((error: unknown) => {
-          setProjectMenuError(
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-      return false;
-    }
-    else if (action === "notifications-settings") {
-      onOpenNotificationSettings?.(path);
-    }
-    else if (action === "pin" || action === "unpin") onTogglePin(path);
-    else if (action === "background") {
-      setBackgroundProject({
-        project: projectKey,
-        name: resolveTabGroupLabel(projectKey, groupLabels, basename(path)),
-      });
-    } else if (action === "reveal") void revealPath(path);
-    else if (action === "archive") {
-      onRemoveProject?.(path, { purgeData: false });
-    } else if (action === "delete") {
-      setRemoving({
-        path,
-        name: resolveTabGroupLabel(projectKey, groupLabels, basename(path)),
-      });
-    }
-  };
-
-  const onConfirmDelete = () => {
-    if (!removing) return;
-    assignProjectGroup(removing.path, null);
-    onRemoveProject?.(removing.path, { purgeData: true });
-    setRemoving(null);
-  };
-
+  // Another view in the main area means no project row is the current one.
+  const otherViewActive =
+    searchActive ||
+    inboxActive ||
+    notesActive ||
+    automationsActive ||
+    !!monos?.activeId;
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = groupedProjectSections.ungrouped.map((item) => item.path);
   const pinnedSortable = useAnimatedReorder(pinnedIds, onReorderPinned, "y");
@@ -667,7 +344,7 @@ export function ProjectRail({
     <nav
       ref={resize.setPaneRef}
       aria-label="Projects"
-      className="sidebar-glass relative flex shrink-0 flex-col border-r border-stroke"
+      className={`sidebar-glass relative shrink-0 flex-col border-r border-stroke ${visible ? "flex" : "hidden"}`}
     >
       <div
         className="flex h-10 shrink-0 select-none items-center pr-1.5"
@@ -712,8 +389,7 @@ export function ProjectRail({
                   document.activeElement instanceof HTMLElement
                     ? document.activeElement
                     : null;
-                setProjectMenu(null);
-                setNotificationMenu(null);
+                projectMenu.close();
                 setInboxMenu({ x, y });
               }}
               active={inboxActive}
@@ -745,6 +421,13 @@ export function ProjectRail({
             }}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-none pb-2"
           >
+            {monos ? (
+              <MonoRailSection
+                {...monos}
+                introAvailable={visible && !!monos.introAvailable}
+              />
+            ) : null}
+
             {sections.pinned.length > 0 ? (
               <ProjectSection
                 label="Pinned"
@@ -752,18 +435,14 @@ export function ProjectRail({
                 muteStatuses={muteStatuses}
                 cwd={cwd}
                 busy={busy}
+                statsEnabled={visible}
                 sortable={pinnedSortable}
                 pinned
-                searchActive={
-                  searchActive ||
-                  inboxActive ||
-                  notesActive ||
-                  automationsActive
-                }
+                searchActive={otherViewActive}
                 onSelect={onSelectProject}
-                onTogglePin={onTogglePin}
+                onTogglePin={toggleProjectPin}
                 onContextMenu={onProjectContextMenu}
-                onOpenMenu={openProjectMenu}
+                onOpenMenu={projectMenu.open}
                 groupLabels={groupLabels}
                 groupColors={groupColors}
                 groupCustomColors={groupCustomColors}
@@ -774,7 +453,10 @@ export function ProjectRail({
 
             {projectGroups.length > 0 ? (
               <div className="mb-2 shrink-0">
-                <ProjectSectionHeader label="Groups" onAddGroup={createGroup} />
+                <ProjectSectionHeader
+                  label="Groups"
+                  onAddGroup={(x, y) => projectMenu.createGroup(x, y)}
+                />
                 <div className="flex flex-col gap-px px-2">
                   {groupedProjectSections.grouped.map(({ group, items }) => (
                     <ProjectGroupSection
@@ -784,16 +466,12 @@ export function ProjectRail({
                       muteStatuses={muteStatuses}
                       cwd={cwd}
                       busy={busy}
-                      searchActive={
-                        searchActive ||
-                        inboxActive ||
-                        notesActive ||
-                        automationsActive
-                      }
+                      statsEnabled={visible}
+                      searchActive={otherViewActive}
                       onSelect={onSelectProject}
-                      onTogglePin={onTogglePin}
+                      onTogglePin={toggleProjectPin}
                       onContextMenu={onProjectContextMenu}
-                      onOpenMenu={openProjectMenu}
+                      onOpenMenu={projectMenu.open}
                       onReorder={onReorderProjects}
                       onToggleCollapsed={() =>
                         updateProjectGroup(group.id, (current) => ({
@@ -801,15 +479,9 @@ export function ProjectRail({
                           collapsed: !current.collapsed,
                         }))
                       }
-                      onOpenGroupMenu={(x, y) => {
-                        menuTrigger.current =
-                          document.activeElement instanceof HTMLElement
-                            ? document.activeElement
-                            : null;
-                        setProjectMenu(null);
-                        setNotificationMenu(null);
-                        setProjectGroupMenu({ x, y, id: group.id });
-                      }}
+                      onOpenGroupMenu={(x, y) =>
+                        projectMenu.openGroupMenu(group.id, x, y)
+                      }
                       groupLabels={groupLabels}
                       groupColors={groupColors}
                       groupCustomColors={groupCustomColors}
@@ -833,15 +505,14 @@ export function ProjectRail({
               onAdd={onOpenProject}
               cwd={cwd}
               busy={busy}
+              statsEnabled={visible}
               sortable={projectSortable}
               pinned={false}
-              searchActive={
-                searchActive || inboxActive || notesActive || automationsActive
-              }
+              searchActive={otherViewActive}
               onSelect={onSelectProject}
-              onTogglePin={onTogglePin}
+              onTogglePin={toggleProjectPin}
               onContextMenu={onProjectContextMenu}
-              onOpenMenu={openProjectMenu}
+              onOpenMenu={projectMenu.open}
               groupLabels={groupLabels}
               groupColors={groupColors}
               groupCustomColors={groupCustomColors}
@@ -875,120 +546,8 @@ export function ProjectRail({
           </div>
         </>
       )}
-      {projectMenu ? (
-        <TabGroupMenu
-          x={projectMenu.x}
-          y={projectMenu.y}
-          groupId={projectMenu.projectKey}
-          label={resolveTabGroupLabel(
-            projectMenu.projectKey,
-            groupLabels,
-            basename(projectMenu.path),
-          )}
-          colorIndex={resolveTabGroupColorIndex(
-            projectMenu.projectKey,
-            groupColors,
-            groupCustomColors,
-          )}
-          customColor={resolveTabGroupCustomColor(
-            projectMenu.projectKey,
-            groupCustomColors,
-          )}
-          currentColor={resolveTabGroupColor(
-            projectMenu.projectKey,
-            groupColors,
-            groupCustomColors,
-            projectName(projectMenu.path),
-          )}
-          logoPath={resolveTabGroupLogo(projectMenu.projectKey, groupLogos)}
-          logoProject={projectMenu.path}
-          mascotName={resolveTabGroupMascot(
-            projectMenu.projectKey,
-            groupMascots,
-          )}
-          mascotProject={projectName(projectMenu.path)}
-          onRename={onProjectRename}
-          onColorChange={onProjectColorChange}
-          onCustomColorChange={onProjectCustomColorChange}
-          onMascotChange={onProjectMascotChange}
-          onLogoChange={() => {}}
-          onPick={() => {}}
-          onClose={() => {
-            setProjectMenu(null);
-            menuTrigger.current?.focus();
-          }}
-          showActions={false}
-          leadingAction={menuMuteStatus ? {
-            id: "notifications-resume",
-            label: "Resume notifications",
-            description: menuMuteStatus,
-            icon: BellOff,
-          } : undefined}
-          extraItems={projectMenuExtraItems(
-            pinnedPaths.some((pinned) =>
-              sameProjectPath(pinned, projectMenu.path),
-            ),
-            Boolean(onRemoveProject),
-            Boolean(onOpenNotificationSettings),
-            Boolean(readyNotificationProject),
-            externalEditors,
-            projectGroups,
-            projectGroupIdForPath(projectMenu.path, projectGroupAssignments),
-          )}
-          footer={projectMenuError ? (
-            <p role="alert" className="px-2 py-1 text-xs text-red-400">{projectMenuError}</p>
-          ) : null}
-          onExtraPick={onProjectMenuPick}
-        />
-      ) : null}
-      {projectGroupMenu ? (
-        <ProjectGroupAppearanceMenu
-          menu={projectGroupMenu}
-          groups={projectGroups}
-          onRename={(id, name) =>
-            updateProjectGroup(id, (group) => ({
-              ...group,
-              name: name.trim() || group.name,
-            }))
-          }
-          onColorChange={(id, colorIndex) =>
-            updateProjectGroup(id, (group) => ({
-              ...group,
-              colorIndex: colorIndex ?? undefined,
-              customColor: undefined,
-            }))
-          }
-          onCustomColorChange={(id, customColor) =>
-            updateProjectGroup(id, (group) => ({
-              ...group,
-              colorIndex: undefined,
-              customColor,
-            }))
-          }
-          onMascotChange={(id, mascot) =>
-            updateProjectGroup(id, (group) => ({
-              ...group,
-              mascot: mascot ?? undefined,
-            }))
-          }
-          onDelete={deleteGroup}
-          onClose={() => {
-            setProjectGroupMenu(null);
-            menuTrigger.current?.focus();
-          }}
-        />
-      ) : null}
-      {notificationMenu ? (
-        <ProjectNotificationDatePicker
-          key={notificationMenu.path}
-          {...notificationMenu}
-          onClose={() => {
-            setNotificationMenu(null);
-            menuTrigger.current?.focus();
-          }}
-        />
-      ) : null}
-      {inboxMenu ? (
+      {visible ? projectMenu.element : null}
+      {visible && inboxMenu ? (
         <InboxNotificationMenu
           {...inboxMenu}
           projectPaths={[...allProjects.keys()]}
@@ -997,21 +556,6 @@ export function ProjectRail({
             setInboxMenu(null);
             menuTrigger.current?.focus();
           }}
-        />
-      ) : null}
-      {removing ? (
-        <RemoveProjectDialog
-          name={removing.name}
-          path={removing.path}
-          onConfirm={onConfirmDelete}
-          onCancel={() => setRemoving(null)}
-        />
-      ) : null}
-      {backgroundProject ? (
-        <ProjectBackgroundDialog
-          project={backgroundProject.project}
-          name={backgroundProject.name}
-          onClose={() => setBackgroundProject(null)}
         />
       ) : null}
       <div
@@ -1033,38 +577,6 @@ export function ProjectRail({
 
 type SortableHandle = ReturnType<typeof useAnimatedReorder>;
 
-function ProjectNotificationDatePicker({
-  project,
-  x,
-  y,
-  onClose,
-}: {
-  project: NotificationProject;
-  x: number;
-  y: number;
-  onClose: () => void;
-}) {
-  return (
-    <Popover
-      anchor={{ x, y }}
-      gap={0}
-      width={280}
-      role="dialog"
-      aria-label="Mute project notifications"
-      onDismiss={onClose}
-      className="space-y-1 overflow-y-auto p-3"
-    >
-      <p
-        className="truncate px-1 text-xs font-medium text-content/85"
-        title={project.name}
-      >
-        {project.name}
-      </p>
-      <NotificationMuteDatePicker projectIds={[project.id]} onCancel={onClose} onChanged={onClose} />
-    </Popover>
-  );
-}
-
 function ProjectSection({
   label,
   items,
@@ -1073,6 +585,7 @@ function ProjectSection({
   onAdd,
   cwd,
   busy,
+  statsEnabled,
   sortable,
   pinned,
   searchActive,
@@ -1093,6 +606,7 @@ function ProjectSection({
   onAdd?: () => void;
   cwd: string;
   busy: Set<string>;
+  statsEnabled: boolean;
   sortable: SortableHandle;
   pinned: boolean;
   searchActive: boolean;
@@ -1122,6 +636,7 @@ function ProjectSection({
             muteStatus={muteStatuses.get(pathKey(item.path)) ?? undefined}
             selected={!searchActive && sameProjectPath(item.path, cwd)}
             busy={isBusyPath(item.path, busy)}
+            statsEnabled={statsEnabled}
             pinned={pinned}
             sortable={sortable}
             onSelect={onSelect}
@@ -1151,7 +666,8 @@ function ProjectSectionHeader({
 }) {
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
-      <span className="min-w-0 flex-1 truncate px-1 text-xs text-content/50">
+      {/* As tall as the header buttons, so every section header matches. */}
+      <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/50">
         {label}
       </span>
       {onAddGroup ? (
@@ -1168,88 +684,8 @@ function ProjectSectionHeader({
           <FolderPlus className="size-3.5" strokeWidth={1.75} />
         </button>
       ) : null}
-      {onAdd ? (
-        <button
-          type="button"
-          title="Open project"
-          aria-label="Open project"
-          onClick={onAdd}
-          className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
-        >
-          <Plus className="size-3.5" strokeWidth={1.75} />
-        </button>
-      ) : null}
+      {onAdd ? <AddProjectButton onOpenFolder={onAdd} /> : null}
     </div>
-  );
-}
-
-function projectGroupColor(group: ProjectGroup): string {
-  if (group.customColor) return group.customColor;
-  if (
-    group.colorIndex != null &&
-    group.colorIndex >= 0 &&
-    group.colorIndex < TAB_GROUP_COLORS.length
-  ) {
-    return TAB_GROUP_COLORS[group.colorIndex];
-  }
-  return tabGroupColor(group.id);
-}
-
-function ProjectGroupAppearanceMenu({
-  menu,
-  groups,
-  onRename,
-  onColorChange,
-  onCustomColorChange,
-  onMascotChange,
-  onDelete,
-  onClose,
-}: {
-  menu: { x: number; y: number; id: string };
-  groups: ProjectGroup[];
-  onRename: (id: string, name: string) => void;
-  onColorChange: (id: string, colorIndex: number | null) => void;
-  onCustomColorChange: (id: string, color: string) => void;
-  onMascotChange: (id: string, mascot: string | null) => void;
-  onDelete: (id: string) => boolean;
-  onClose: () => void;
-}) {
-  const group = groups.find((item) => item.id === menu.id);
-  if (!group) return null;
-  return (
-    <TabGroupMenu
-      x={menu.x}
-      y={menu.y}
-      groupId={group.id}
-      label={group.name}
-      colorIndex={group.colorIndex ?? null}
-      customColor={group.customColor ?? null}
-      currentColor={projectGroupColor(group)}
-      logoPath={null}
-      mascotName={group.mascot ?? null}
-      mascotProject={group.id}
-      onRename={onRename}
-      onColorChange={onColorChange}
-      onCustomColorChange={onCustomColorChange}
-      onMascotChange={onMascotChange}
-      onLogoChange={() => {}}
-      onPick={() => {}}
-      onClose={onClose}
-      showActions={false}
-      ariaLabel="Project group actions"
-      extraItems={[
-        {
-          id: "delete-project-group",
-          label: "Delete group",
-          description: "Projects will become ungrouped",
-          icon: Trash2,
-          danger: true,
-        },
-      ]}
-      onExtraPick={(action) =>
-        action === "delete-project-group" ? onDelete(group.id) : undefined
-      }
-    />
   );
 }
 
@@ -1259,6 +695,7 @@ function ProjectGroupSection({
   muteStatuses,
   cwd,
   busy,
+  statsEnabled,
   searchActive,
   onSelect,
   onTogglePin,
@@ -1278,6 +715,7 @@ function ProjectGroupSection({
   muteStatuses: ReadonlyMap<string, string | null>;
   cwd: string;
   busy: Set<string>;
+  statsEnabled: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
   onTogglePin: (path: string) => void;
@@ -1384,6 +822,7 @@ function ProjectGroupSection({
               muteStatus={muteStatuses.get(pathKey(item.path)) ?? undefined}
               selected={!searchActive && sameProjectPath(item.path, cwd)}
               busy={isBusyPath(item.path, busy)}
+              statsEnabled={statsEnabled}
               pinned={false}
               sortable={sortable}
               onSelect={onSelect}
@@ -1411,6 +850,7 @@ function ProjectCard({
   muteStatus,
   selected,
   busy,
+  statsEnabled,
   pinned,
   sortable,
   onSelect,
@@ -1427,6 +867,7 @@ function ProjectCard({
   muteStatus?: string;
   selected: boolean;
   busy: boolean;
+  statsEnabled: boolean;
   pinned: boolean;
   sortable: SortableHandle;
   onSelect: (path: string) => void;
@@ -1445,14 +886,43 @@ function ProjectCard({
   const name = resolveTabGroupLabel(key, groupLabels, fallbackName);
   const logoPath = resolveTabGroupLogo(key, groupLogos);
   const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
-  const diffEnabled = Boolean(item.path) && item.path !== "~";
+  const diffEnabled = statsEnabled && Boolean(item.path) && item.path !== "~";
   const stats = useProjectDiffStats(item.path, diffEnabled);
   const files = stats?.files ?? 0;
   const additions = stats?.additions ?? 0;
   const deletions = stats?.deletions ?? 0;
   const hasChanges = files > 0 || additions > 0 || deletions > 0;
-  const cardTitle = projectCardTitle(item.path, name, stats, busy);
-  const cardAriaLabel = projectCardAriaLabel(name, stats, busy);
+  const remote = remoteProjectFor(item.path);
+  const { machines } = useRemoteMachines(!!remote);
+  const machine = remote
+    ? machines.find((entry) => entry.environmentId === remote.environmentId)
+    : undefined;
+  const online = useRemoteMachineOnline(machine?.id);
+  const connection = !remote
+    ? ""
+    : !machine
+      ? "Machine not connected on this computer"
+      : online === undefined
+        ? "Connecting"
+        : online
+          ? "Connected"
+          : "Reconnecting";
+  const cardTitle = projectCardTitle(
+    remote
+      ? `${remote.cwd} on ${machine?.name ?? "another machine"} (${connection})`
+      : item.path,
+    name,
+    stats,
+    busy,
+  );
+  const cardAriaLabel = projectCardAriaLabel(
+    machine ? `${name} on ${machine.name}` : name,
+    stats,
+    busy,
+  );
+  const labelClassName = machine
+    ? "min-w-0 max-w-[75%] shrink-0 truncate text-sm font-medium leading-tight"
+    : nameClassName;
 
   return (
     <div
@@ -1514,15 +984,35 @@ function ProjectCard({
           )}
         </div>
         {busy ? (
-          <Shimmer as="span" duration={1.4} className={nameClassName}>
+          <Shimmer as="span" duration={1.4} className={labelClassName}>
             {name}
           </Shimmer>
         ) : (
-          <span className={nameClassName}>{name}</span>
+          <span className={labelClassName}>{name}</span>
         )}
+        {machine ? (
+          <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
+            {machine.name}
+          </span>
+        ) : null}
         {hasChanges ? (
           <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
             <ProjectDiffStat additions={additions} deletions={deletions} />
+          </span>
+        ) : null}
+        {remote ? (
+          <span
+            role="img"
+            aria-label={connection}
+            className="relative grid size-4 shrink-0 place-items-center text-content/45"
+          >
+            <Internet className="size-3" strokeWidth={1.75} aria-hidden="true" />
+            <span
+              aria-hidden="true"
+              className={`absolute right-0 bottom-0 size-1.5 rounded-full ring-1 ring-background-base ${
+                online ? "bg-emerald-400" : "bg-content/35"
+              }`}
+            />
           </span>
         ) : null}
         {muteStatus ? (
@@ -1607,10 +1097,10 @@ function ProjectDiffStat({
       className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
-        <span className="text-emerald-400">+{formatInteger(additions)}</span>
+        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{formatInteger(deletions)}</span>
+        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
       ) : null}
     </span>
   );
@@ -1657,4 +1147,64 @@ function projectCardAriaLabel(
   if (additions > 0) parts.push(`+${formatInteger(additions)}`);
   if (deletions > 0) parts.push(`-${formatInteger(deletions)}`);
   return parts.join(", ");
+}
+
+/** Adds a folder on this computer, or one on a connected machine. */
+function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
+  const anchor = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const item =
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-content/80 hover:bg-content/8 hover:text-content";
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        title="Open project"
+        aria-label="Open project"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content"
+      >
+        <Plus className="size-3.5" strokeWidth={1.75} />
+      </button>
+      {open ? (
+        <Popover
+          anchor={anchor}
+          align="start"
+          width={230}
+          onDismiss={() => setOpen(false)}
+          role="menu"
+          aria-label="Open project"
+          className="p-1"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
+              setOpen(false);
+              onOpenFolder();
+            }}
+          >
+            <FolderPlus className="size-3.5 shrink-0" strokeWidth={1.75} />
+            Open folder…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            onClick={() => {
+              setOpen(false);
+              window.dispatchEvent(new Event(OPEN_REMOTE_PROJECT_EVENT));
+            }}
+          >
+            <Internet className="size-3.5 shrink-0" strokeWidth={1.75} />
+            Open folder on a machine…
+          </button>
+        </Popover>
+      ) : null}
+    </>
+  );
 }

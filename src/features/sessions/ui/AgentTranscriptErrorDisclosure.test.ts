@@ -72,3 +72,62 @@ describe("tool error disclosure", () => {
     expect(container.textContent).not.toContain("Server.setupListenHandle");
   });
 });
+
+describe("MonoCode CLI disclosure", () => {
+  it("shows a compact row without a disclosure for a successful call", () => {
+    const command =
+      "/repo/target/debug/MonoCode.app/Contents/MacOS/monocode app notes.list";
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "/monocode list notes" },
+      {
+        id: "notes",
+        role: "tool",
+        text: command,
+        tool: {
+          kind: "shell",
+          status: "completed",
+          detail: '{"ok":true,"result":{"notes":[{"title":"Ideas"}]}}',
+        },
+      },
+    ];
+    act(() =>
+      root.render(createElement(AgentTranscript, { blocks, busy: true })),
+    );
+
+    const row = container.querySelector<HTMLElement>(
+      '[data-monocode-tool-call="notes.list"]',
+    );
+    expect(row?.querySelector("button")).toBeNull();
+    expect(row?.querySelector("pre")).toBeNull();
+    expect(row?.textContent).toContain("Ranmonocode app notes.list");
+    expect(row?.querySelector('img[src="/monocode.png"]')).not.toBeNull();
+    expect(row?.querySelector(".bg-content\\/6")).not.toBeNull();
+    expect(container.textContent).not.toContain("Contents/MacOS/monocode");
+    expect(container.textContent).not.toContain('"title":"Ideas"');
+  });
+
+  it("reveals a failed call's error when clicked", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "/monocode list notes" },
+      {
+        id: "notes",
+        role: "tool",
+        text: "monocode app notes.list",
+        tool: { kind: "shell", status: "failed", detail: "Connection refused" },
+      },
+    ];
+    act(() =>
+      root.render(createElement(AgentTranscript, { blocks, busy: true })),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show error details for MonoCode: List notes"]',
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Connection refused");
+
+    act(() => trigger?.click());
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("Connection refused");
+  });
+});

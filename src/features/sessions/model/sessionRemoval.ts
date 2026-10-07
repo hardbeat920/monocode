@@ -58,6 +58,8 @@ type SessionRemovalMode = "archive" | "delete";
 
 type SessionRemovalOptions = {
   mode: SessionRemovalMode;
+  /** Keep file and terminal panes open when removing a session through the CLI. */
+  preserveOpenFiles?: boolean;
   scope?: WorkspaceTabCloseScope;
   replacement: ReplacementSeed;
   workspace: {
@@ -101,11 +103,15 @@ async function removeSession(
   options: SessionRemovalOptions,
 ): Promise<boolean> {
   const initial = options.workspace.snapshot();
+  const canCloseTab = (tab: WorkspaceTab) =>
+    !options.preserveOpenFiles ||
+    (tab.editorPanes.length === 0 && tab.terminalPanes.length === 0);
   const plan = removeSessionFromWorkspace({
     ...initial,
     sessionId,
     scope,
     createReplacement,
+    canCloseTab,
   });
   if (!(await options.confirm(plan.closedTabs, options.mode))) return false;
 
@@ -146,7 +152,12 @@ async function removeSession(
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
   if (options.mode === "delete") {
-    await orchestrator.deleteSession(sessionId, () => deleteSession(sessionId));
+    const imagePaths = stopped?.blocks.flatMap((block) =>
+      block.role === "image" && block.image ? [block.image.path] : [],
+    ) ?? [];
+    await orchestrator.deleteSession(sessionId, () =>
+      deleteSession(sessionId, imagePaths),
+    );
     options.workspace.apply({
       type: "orchestrationReleased",
       leadId: sessionId,
@@ -171,6 +182,7 @@ async function removeSession(
     scope,
     createReplacement,
     canCloseTab: (tab) => {
+      if (!canCloseTab(tab)) return false;
       const before = confirmed.get(tab.id);
       // File/terminal panes opened or rearranged during a dialog or save were
       // never confirmed. Remove the conversation but keep those surfaces open.
