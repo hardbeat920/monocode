@@ -147,6 +147,10 @@ function oscColors() {
   };
 }
 
+/**
+ * Open an HTTP(S) terminal link in the default browser, ignoring other schemes
+ * and opener failures.
+ */
 function openTerminalLink(uri: string) {
   if (!/^https?:\/\//i.test(uri)) return;
   void openUrl(uri).catch(() => undefined);
