@@ -30,15 +30,25 @@ export type BrowserState = {
   lastSide: DockSide;
   /**
    * Tabs an agent used recently, by last use. They stay live while out of
-   * view so the agent can keep working; other hidden tabs are suspended.
-   * Not persisted.
+   * view so the agent can keep working. Not persisted.
    */
   agentTabs: Record<string, number>;
+  /**
+   * When each tab was last on screen or used by an agent. Out-of-view pages
+   * stay live, most recent first, up to MAX_LIVE_TABS. Not persisted.
+   */
+  recent: Record<string, number>;
 };
 
 export const BROWSER_DEFAULT_SIDE: DockSide = "right";
 /** How long an agent's tab stays live out of view after its last use. */
 export const AGENT_TAB_TTL_MS = 3 * 60_000;
+/**
+ * Pages kept running at once. Each is a browser process, so past this the
+ * least recently viewed tabs of other sessions unload and reload from their
+ * URL when shown again. The focused session's tabs and agent tabs always stay.
+ */
+export const MAX_LIVE_TABS = 12;
 const DEFAULT_SIZE = { horizontal: 520, vertical: 320 };
 const STORAGE_PREFIX = "monocode.browser.v2:";
 
@@ -197,7 +207,24 @@ export function touchAgentTabIn(
   fileId: string,
   now: number,
 ): BrowserState {
-  return { ...state, agentTabs: { ...state.agentTabs, [fileId]: now } };
+  return {
+    ...state,
+    agentTabs: { ...state.agentTabs, [fileId]: now },
+    recent: { ...state.recent, [fileId]: now },
+  };
+}
+
+/** Focus another session; the one leaving keeps its pages, newest first. */
+export function switchBrowserSessionIn(
+  state: BrowserState,
+  sessionId: string,
+  now: number,
+): BrowserState {
+  if (state.sessionId === sessionId) return state;
+  const leaving = findBrowserDock(state.docks, state.sessionId);
+  const recent = { ...state.recent };
+  for (const file of leaving?.pane.files ?? []) recent[file.id] = now;
+  return { ...state, sessionId, recent };
 }
 
 export function pruneAgentTabsIn(
@@ -215,13 +242,27 @@ export function pruneAgentTabsIn(
 }
 
 /**
- * Tabs whose native page should exist: every tab of the session on screen,
- * plus tabs an agent is using. Everything else is suspended to its URL.
+ * Tabs whose native page should exist: every tab of the session on screen
+ * and tabs an agent is using, then other sessions' tabs by how recently they
+ * were seen, up to `limit`. The rest are suspended to their URL.
  */
-export function liveBrowserTabIds(state: BrowserState): Set<string> {
-  const live = new Set(Object.keys(state.agentTabs));
+export function liveBrowserTabIds(
+  state: BrowserState,
+  limit = MAX_LIVE_TABS,
+): Set<string> {
+  const open = new Set(browserTabIds(state));
+  const live = new Set(
+    Object.keys(state.agentTabs).filter((id) => open.has(id)),
+  );
   const current = findBrowserDock(state.docks, state.sessionId);
   for (const file of current?.pane.files ?? []) live.add(file.id);
+  const others = Object.entries(state.recent)
+    .filter(([id]) => open.has(id) && !live.has(id))
+    .sort((a, b) => b[1] - a[1]);
+  for (const [id] of others) {
+    if (live.size >= limit) break;
+    live.add(id);
+  }
   return live;
 }
 
@@ -323,6 +364,7 @@ function initialState(): BrowserState {
     sessionId: "",
     lastSide: stored.lastSide ?? BROWSER_DEFAULT_SIDE,
     agentTabs: {},
+    recent: {},
   };
 }
 
@@ -365,9 +407,7 @@ export function useBrowserState(): BrowserState {
 }
 
 export function setBrowserSession(sessionId: string) {
-  update((current) =>
-    current.sessionId === sessionId ? current : { ...current, sessionId },
-  );
+  update((current) => switchBrowserSessionIn(current, sessionId, Date.now()));
 }
 
 export function toggleBrowser() {

@@ -4,11 +4,13 @@ import {
   AGENT_TAB_TTL_MS,
   forgetBrowserSessionsIn,
   liveBrowserTabIds,
+  MAX_LIVE_TABS,
   newBrowserTab,
   parseBrowserState,
   patchBrowserTabIn,
   pruneAgentTabsIn,
   serializeBrowserState,
+  switchBrowserSessionIn,
   toggleBrowserDock,
   touchAgentTabIn,
   type BrowserState,
@@ -19,6 +21,7 @@ const empty: BrowserState = {
   sessionId: "chat-a",
   lastSide: "right",
   agentTabs: {},
+  recent: {},
 };
 
 describe("session browsers", () => {
@@ -108,6 +111,45 @@ describe("session browsers", () => {
 });
 
 describe("live and suspended tabs", () => {
+  it("keeps a session's pages running after switching away", () => {
+    const a = newBrowserTab("https://a/");
+    const b = newBrowserTab("https://b/");
+    let state = addBrowserTab(empty, "chat-a", a);
+    state = addBrowserTab(state, "chat-b", b, { open: false });
+    state = switchBrowserSessionIn(state, "chat-b", 1_000);
+    expect(liveBrowserTabIds(state)).toEqual(new Set([a.id, b.id]));
+    expect(switchBrowserSessionIn(state, "chat-b", 2_000)).toBe(state);
+  });
+
+  it("unloads the least recently viewed pages past the limit", () => {
+    let state = empty;
+    const tabs: string[] = [];
+    for (let i = 0; i < MAX_LIVE_TABS + 2; i++) {
+      const tab = newBrowserTab(`https://${i}/`);
+      tabs.push(tab.id);
+      state = addBrowserTab(state, `chat-${i}`, tab);
+      state = switchBrowserSessionIn(state, `chat-${i}`, i);
+    }
+    const live = liveBrowserTabIds(state);
+    expect(live.size).toBe(MAX_LIVE_TABS);
+    // The focused session (last) stays; the two oldest sessions unload.
+    expect(live.has(tabs[tabs.length - 1])).toBe(true);
+    expect(live.has(tabs[0])).toBe(false);
+    expect(live.has(tabs[1])).toBe(false);
+    expect(live.has(tabs[2])).toBe(true);
+  });
+
+  it("never unloads the focused session or agent tabs to meet the limit", () => {
+    const a = newBrowserTab("https://a/");
+    const b = newBrowserTab("https://b/");
+    const c = newBrowserTab("https://c/");
+    let state = addBrowserTab(empty, "chat-a", a);
+    state = addBrowserTab(state, "chat-a", b);
+    state = addBrowserTab(state, "chat-b", c, { open: false });
+    state = touchAgentTabIn(state, c.id, 5);
+    expect(liveBrowserTabIds(state, 1)).toEqual(new Set([a.id, b.id, c.id]));
+  });
+
   it("keeps the focused session's tabs and agent tabs live", () => {
     const a = newBrowserTab("https://a/");
     const b = newBrowserTab("https://b/");

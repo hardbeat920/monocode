@@ -120,8 +120,10 @@ function useBrowserEvents() {
 /**
  * Lays the focused session's browser dock beside `children`, the way the
  * terminal dock sits beside the workspace. Only the docked tab draws on
- * screen. Other live tabs (the session's background tabs, and tabs an agent
- * is using) keep running in an off-window host; the rest are suspended.
+ * screen. Other live tabs (the session's other tabs, recently viewed
+ * sessions' tabs, and tabs an agent is using) keep running in an off-window
+ * host, so switching sessions never reloads them. Past the live-page limit
+ * the least recently viewed are suspended to their URL.
  */
 export function BrowserDockLayout({
   sessionId,
