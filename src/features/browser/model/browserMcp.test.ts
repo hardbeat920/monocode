@@ -9,7 +9,10 @@ import { buildClaudeSpawnArgs } from "../../../integrations/harness/providers/cl
 const launch = {
   command: "/Applications/MonoCode.app/Contents/MacOS/monocode",
   args: ["browser-mcp"],
-  env: { MONOCODE_APP_ENDPOINT: "127.0.0.1:5000", MONOCODE_APP_TOKEN: "secret" },
+  env: {
+    MONOCODE_APP_ENDPOINT: "127.0.0.1:5000",
+    MONOCODE_APP_TOKEN: "secret",
+  },
 };
 
 describe("browser MCP launch", () => {
@@ -32,7 +35,10 @@ describe("browser MCP launch", () => {
     const args = buildClaudeSpawnArgs({ mcpConfig: config });
     expect(args).toContain("--mcp-config");
     expect(args).not.toContain("--strict-mcp-config");
-    const isolated = buildClaudeSpawnArgs({ isolated: true, mcpConfig: config });
+    const isolated = buildClaudeSpawnArgs({
+      isolated: true,
+      mcpConfig: config,
+    });
     expect(isolated.filter((arg) => arg === config)).toEqual([]);
   });
 
@@ -48,6 +54,8 @@ describe("browser MCP launch", () => {
       'mcp_servers.monocode_browser.args=["browser-mcp"]',
       "-c",
       'mcp_servers.monocode_browser.env_vars=["MONOCODE_APP_ENDPOINT","MONOCODE_APP_TOKEN"]',
+      "-c",
+      "mcp_servers.monocode_browser.required=true",
     ]);
     expect(args.join(" ")).not.toContain("secret");
   });

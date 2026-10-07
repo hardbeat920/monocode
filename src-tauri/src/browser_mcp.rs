@@ -11,11 +11,18 @@ use serde_json::{json, Value};
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
-const INSTRUCTIONS: &str = "Drive this chat's browser in MonoCode. Its tabs belong to this chat only and \
-run in the background: the user can open the browser panel to watch or take over, and may already be \
-using a tab, so prefer opening a new tab over navigating one you did not open. Sign-ins are shared with \
-the user's other MonoCode browser tabs. Most tools act on the active tab unless you pass tabId. \
-Use browser_read to see the page, browser_console for logs and errors, browser_eval for anything else.";
+const INSTRUCTIONS: &str = "This chat's web browser: the embedded, built-in, in-app browser in \
+MonoCode, shown in the browser panel beside the chat. Requests to open a page in the embedded \
+browser, evaluate JavaScript in it, or inspect its page refer to these tools; users do not need \
+to name the server or tools. Honor requests for a different browser or browsing method. Prefer it over fetching pages another way whenever \
+the result depends on a real rendered page: how something looks, JavaScript, console output, \
+clicking or typing, signed-in pages, and local dev servers (localhost) you are building. \
+Its tabs belong to this chat only and run in the background: the user can open the panel to \
+watch or take over, and may already be using a tab, so prefer opening a new tab over navigating \
+one you did not open. Sign-ins are shared with the user's other MonoCode browser tabs. Most \
+tools act on the active tab unless you pass tabId. Use browser_read to see the page, \
+browser_screenshot to see how it looks, browser_console for logs and errors, browser_eval for \
+anything else.";
 
 fn tab_id() -> Value {
     json!({"type": "string", "description": "Tab to act on. Defaults to the active tab."})
@@ -30,7 +37,7 @@ fn tools() -> Value {
         },
         {
             "name": "browser_open",
-            "description": "Open a URL in a new tab of this chat's browser and wait for the page to load. It does not open the panel. Returns the new tab id.",
+            "description": "Open a web page in the embedded browser (a new tab of this chat's in-app browser) and wait for it to load. Use this to view, test, or interact with a site or a local dev server. It does not open the panel. Returns the new tab id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -93,7 +100,7 @@ fn tools() -> Value {
         },
         {
             "name": "browser_eval",
-            "description": "Run JavaScript in the page and return the result as JSON. The script is the body of an async function: use `return` to send a value back and `await` freely. A single expression without `return` is also accepted. DOM nodes come back as their outer HTML.",
+            "description": "Evaluate JavaScript in a page in the embedded browser and return the result as JSON. The script is the body of an async function: use `return` to send a value back and `await` freely. A single expression without `return` is also accepted. DOM nodes come back as their outer HTML.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -158,7 +165,7 @@ fn tools() -> Value {
         },
         {
             "name": "browser_screenshot",
-            "description": "Capture a tab's viewport as a PNG image, whether or not the browser panel is open.",
+            "description": "See what a page in the embedded browser looks like: captures the tab's viewport as a PNG image, whether or not the browser panel is open.",
             "inputSchema": {"type": "object", "properties": {"tabId": tab_id()}}
         }
     ])

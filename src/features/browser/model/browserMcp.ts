@@ -7,6 +7,12 @@ import { loadAgentBrowser } from "../../settings/model/displayPrefs";
 /** MCP server name agents see; tools appear as browser_* under it. */
 export const BROWSER_MCP_NAME = "monocode_browser";
 
+/** Context supplied each turn, including when an older provider thread resumes. */
+export const BROWSER_AGENT_CONTEXT = `<monocode_browser>
+You are running inside MonoCode. This chat's embedded, built-in, in-app browser is provided by the monocode_browser MCP server. For requests to open a page in your embedded browser, search a website, click links, read pages, take screenshots, or evaluate JavaScript there, use its browser_* tools. Discover those tools if they are deferred. Start with browser_open for a new page or browser_tabs for existing pages; use browser_read, browser_type, browser_click, browser_eval, and browser_screenshot as needed.
+MonoCode's browser is separate from Computer Use's iab browser. An unavailable iab or an empty Computer Use browser inventory does not mean MonoCode's browser is unavailable. Try the monocode_browser tools before reporting that it is unavailable. Users do not need to name tools. Honor an explicit request to use another browser. The browser can run while its panel is hidden.
+</monocode_browser>`;
+
 /** Session credential variables the server reads; set on every provider child. */
 const CREDENTIAL_ENV = ["MONOCODE_APP_ENDPOINT", "MONOCODE_APP_TOKEN"];
 
@@ -56,13 +62,13 @@ export function codexBrowserMcpArgs(launch: BrowserMcpLaunch): string[] {
     `${key}.args=${JSON.stringify(launch.args)}`,
     "-c",
     `${key}.env_vars=${JSON.stringify(CREDENTIAL_ENV)}`,
+    "-c",
+    `${key}.required=true`,
   ];
 }
 
 /** ACP `mcpServers` for session/new and session/load. */
-export function acpBrowserMcpServers(
-  launch: BrowserMcpLaunch | null,
-): Array<{
+export function acpBrowserMcpServers(launch: BrowserMcpLaunch | null): Array<{
   name: string;
   command: string;
   args: string[];

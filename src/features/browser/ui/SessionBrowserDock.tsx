@@ -71,10 +71,13 @@ function SessionBrowserDock({
       onReorder={reorderBrowserTabs}
     >
       {active?.browser ? (
-        <div className="absolute inset-0 flex h-full min-h-0 flex-col">
-          <BrowserToolbar key={active.id} id={active.id} tab={active.browser} />
+        // One key on the wrapper: switching tabs swaps toolbar and page together.
+        <div
+          key={active.id}
+          className="absolute inset-0 flex h-full min-h-0 flex-col"
+        >
+          <BrowserToolbar id={active.id} tab={active.browser} />
           <BrowserSurface
-            key={active.id}
             id={active.id}
             tab={active.browser}
             visible

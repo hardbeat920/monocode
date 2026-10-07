@@ -1,5 +1,6 @@
 import { TurnNotReadyError } from "../../core/types";
 import {
+  BROWSER_AGENT_CONTEXT,
   browserMcpFor,
   codexBrowserMcpArgs,
 } from "../../../../features/browser/model/browserMcp";
@@ -92,6 +93,7 @@ type Live = {
   providerAccountId?: string;
   /** Thread-level network policy used when this app-server opened the thread. */
   controlsAgents: boolean;
+  browserAvailable: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -277,7 +279,11 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const params = buildTurnSteerParams({
     threadId: live.threadId,
     expectedTurnId: turnId,
-    prompt: input.text.trim() || undefined,
+    prompt: input.text.trim()
+      ? live.browserAvailable
+        ? `${BROWSER_AGENT_CONTEXT}\n\n${input.text.trim()}`
+        : input.text.trim()
+      : undefined,
     attachments: input.attachments,
   });
   if (
@@ -462,6 +468,8 @@ export function bindCodexSession(
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  const browserMcp = await browserMcpFor(input.sessionId);
+  const browserAvailable = browserMcp !== null;
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
   if (
@@ -471,7 +479,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       existing.providerAccountId,
       input.providerAccountId,
     ) &&
-    existing.controlsAgents === controlsAgents
+    existing.controlsAgents === controlsAgents &&
+    existing.browserAvailable === browserAvailable
   ) {
     existing.onEvent = input.onEvent;
     return existing;
@@ -479,7 +488,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   if (existing) {
     // Codex may retain the thread's sandbox network policy across turns.
     // Switch it when this session gains /operator access or loses agent
-    // control, so its local CLI socket matches the current policy.
+    // control, so its local CLI socket matches the current policy. Browser
+    // access changes also need a new process to update the MCP configuration.
     if (
       existing.cwd !== input.cwd ||
       !sameProviderAccountId(
@@ -589,7 +599,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  const browserMcp = await browserMcpFor(input.sessionId);
   await spawnChild(
     input.sessionId,
     path,
@@ -672,6 +681,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
       controlsAgents,
+      browserAvailable,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
@@ -727,7 +737,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     threadId: live.threadId,
     runtimeMode: input.runtimeMode,
     controlsAgents: input.controlsAgents,
-    prompt: input.text.trim() || undefined,
+    prompt: input.text.trim()
+      ? live.browserAvailable
+        ? `${BROWSER_AGENT_CONTEXT}\n\n${input.text.trim()}`
+        : input.text.trim()
+      : undefined,
     attachments: input.attachments,
     model,
     effort,
