@@ -238,6 +238,7 @@ export function BrowserDockLayout({
                 id={file.id}
                 tab={file.browser}
                 visible
+                offWindow
                 className="absolute inset-0"
               />
             ) : null,

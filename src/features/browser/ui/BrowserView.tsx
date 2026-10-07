@@ -60,6 +60,7 @@ export function BrowserSurface({
   id,
   tab,
   visible,
+  offWindow = false,
   resizing = false,
   className = "",
 }: {
@@ -67,13 +68,15 @@ export function BrowserSurface({
   tab: BrowserTabSource;
   /** Draw the page. Off-window hosts pass true so the page keeps rendering. */
   visible: boolean;
+  /** The host is placed outside the window, where no overlay can cover it. */
+  offWindow?: boolean;
   /** The dock sash is being dragged. */
   resizing?: boolean;
   className?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const scale = useSyncExternalStore(subscribeUiScale, loadUiScale);
-  const covered = useOverlayOcclusion(host, visible);
+  const covered = useOverlayOcclusion(host, visible && !offWindow);
   const shown = visible && !covered;
   const [ready, setReady] = useState(false);
   const placed = useRef<BrowserBounds | null>(null);
