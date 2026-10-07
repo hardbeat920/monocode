@@ -10307,8 +10307,14 @@ function Workspace({
         } finally {
           // Also reap processes left behind by a renderer reload, before the
           // corresponding session has been restored in this window.
-          await invoke("harness_kill", { sessionId: id }).catch(() => undefined);
+          const killed = await invoke("harness_kill", { sessionId: id }).then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
           await invoke("control_turn_finished", { sessionId: id });
+          // A process that outlived the kill may still be writing files, so the
+          // caller must not treat the worker as stopped.
+          if (!killed.ok) throw killed.error;
         }
       },
     });
