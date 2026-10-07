@@ -237,6 +237,30 @@ describe("harness registry", () => {
     ]);
   });
 
+  it("passes the harness's summary through after the boundary", async () => {
+    registerHarness(
+      stub("codex", {
+        compactContext: async (input) => {
+          input.onEvent({ type: "context.compacted", trigger: "auto", kept: "none" });
+          input.onEvent({ type: "context.summarized", summary: "Earlier work." });
+        },
+      }),
+    );
+    const events: HarnessEvent[] = [];
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-summary",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.slice(1)).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "none" },
+      { type: "context.summarized", summary: "Earlier work." },
+    ]);
+  });
+
   it("clears compaction progress when no boundary lands", async () => {
     // A cancelled compaction resolves quietly; a failed one rejects.
     registerHarness(stub("codex", { compactContext: async () => undefined }));

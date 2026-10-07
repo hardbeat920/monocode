@@ -324,6 +324,8 @@ export type ContextBoundaryMeta = {
   kept: ContextKept;
   preTokens?: number;
   postTokens?: number;
+  /** The harness's own summary of what it compacted, where it shares one. */
+  summary?: string;
 };
 
 export type Block = {

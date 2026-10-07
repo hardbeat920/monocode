@@ -145,6 +145,8 @@ export function applyHarnessEvent(
       };
     case "context.compacted":
       return appendContextBoundary(session, event);
+    case "context.summarized":
+      return attachContextSummary(session, event.summary);
     case "turn.metrics":
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
@@ -824,6 +826,23 @@ function appendContextBoundary(
   const blocks = next.blocks.slice();
   blocks[index] = { ...block, id: blocks[index].id };
   return { ...next, blocks };
+}
+
+/** The summary belongs to the boundary it followed: the latest one. */
+function attachContextSummary(session: Session, summary: string): Session {
+  const text = summary.trim();
+  const index = lastMatchingBlock(
+    session.blocks,
+    (block) => !!block.contextBoundary,
+  );
+  const boundary = session.blocks[index]?.contextBoundary;
+  if (!text || !boundary) return session;
+  const blocks = session.blocks.slice();
+  blocks[index] = {
+    ...blocks[index],
+    contextBoundary: { ...boundary, summary: text },
+  };
+  return { ...session, blocks };
 }
 
 function appendImage(

@@ -160,6 +160,11 @@ export type HarnessEvent =
       preTokens?: number;
       postTokens?: number;
     }
+  /**
+   * The summary a harness carried past its latest compaction. It follows that
+   * compaction's `context.compacted` and never stands in for one.
+   */
+  | { type: "context.summarized"; summary: string }
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number }
   /** Provider token accounting for the active user turn. */

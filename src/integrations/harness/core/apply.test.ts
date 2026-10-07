@@ -1698,6 +1698,28 @@ describe("context boundaries", () => {
     ]);
   });
 
+  it("attaches the harness's summary to the latest boundary", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    for (const summary of ["First summary", "Second summary"]) {
+      session = applyHarnessEvent(session, {
+        type: "context.compacted",
+        trigger: "auto",
+        kept: "recent",
+      });
+      session = applyHarnessEvent(session, { type: "context.summarized", summary });
+    }
+    expect(
+      session.blocks.map((block) => block.contextBoundary?.summary),
+    ).toEqual([undefined, "First summary", "Second summary"]);
+  });
+
+  it("never makes a boundary out of a summary alone", () => {
+    const session = appendUser(newSession("claude", "/tmp"), "go");
+    expect(
+      applyHarnessEvent(session, { type: "context.summarized", summary: "Stray" }),
+    ).toBe(session);
+  });
+
   it("survives a save", () => {
     let session = appendUser(newSession("codex", "/tmp"), "go");
     session = applyHarnessEvent(session, {
@@ -1706,10 +1728,15 @@ describe("context boundaries", () => {
       kept: "user-messages",
       preTokens: 180_000,
     });
+    session = applyHarnessEvent(session, {
+      type: "context.summarized",
+      summary: "What came before.",
+    });
     const saved = sanitizeSessionForPersist(session);
     expect(saved.blocks[1].contextBoundary).toEqual(
       session.blocks[1].contextBoundary,
     );
+    expect(saved.blocks[1].contextBoundary?.summary).toBe("What came before.");
   });
 
   it("drops the context meter to the post-compaction level when known", () => {

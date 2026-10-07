@@ -1236,6 +1236,9 @@ function sanitizeInterjection(
   };
 }
 
+/** Harness summaries run a few KB; anything far past that is not one. */
+const CONTEXT_SUMMARY_LIMIT = 64 * 1024;
+
 function sanitizeContextBoundary(
   value: unknown,
 ): ContextBoundaryMeta | undefined {
@@ -1261,6 +1264,10 @@ function sanitizeContextBoundary(
       : undefined;
   const preTokens = tokens(record.preTokens);
   const postTokens = tokens(record.postTokens);
+  const summary =
+    typeof record.summary === "string"
+      ? record.summary.trim().slice(0, CONTEXT_SUMMARY_LIMIT)
+      : "";
   return {
     kind: "compaction",
     trigger,
@@ -1268,6 +1275,7 @@ function sanitizeContextBoundary(
     kept,
     ...(preTokens ? { preTokens } : {}),
     ...(postTokens ? { postTokens } : {}),
+    ...(summary ? { summary } : {}),
   };
 }
 
