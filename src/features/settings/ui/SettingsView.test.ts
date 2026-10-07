@@ -295,6 +295,19 @@ describe("settings pages", () => {
     );
   });
 
+  it("offers background blur without a global image for project backgrounds", async () => {
+    localStorage.setItem("monocode.chatBackgroundBlur", "12");
+    await render("appearance");
+
+    expect(
+      container.querySelector('[aria-label="Show background on"]'),
+    ).toBeNull();
+    const blur = container.querySelector<HTMLInputElement>(
+      '[aria-label="Chat background blur"]',
+    );
+    expect(blur?.value).toBe("12");
+  });
+
   it("previews and restores Haze with the existing empty-chat visibility", async () => {
     localStorage.setItem("monocode.chatBackgroundPath", "/background.png");
     localStorage.setItem("monocode.chatBackgroundEmptyOpacity", "0.4");

@@ -2488,21 +2488,23 @@ function ChatBackgroundCard({
               onChange={appearance.onChatBackgroundSessionOpacity}
             />
           </Row>
-          <Row
-            label="Background blur"
-            description="Blurs the image behind chat panes, including project images. Haze keeps its own blur."
-          >
-            <Slider
-              label="Chat background blur"
-              value={appearance.chatBackgroundBlur}
-              display={`${appearance.chatBackgroundBlur}px`}
-              min={CHAT_BACKGROUND_BLUR_MIN}
-              max={CHAT_BACKGROUND_BLUR_MAX}
-              onChange={appearance.onChatBackgroundBlur}
-            />
-          </Row>
         </>
       ) : null}
+      {/* Project background images use this blur too, so it stays available
+          without a global image. */}
+      <Row
+        label="Background blur"
+        description="Blurs the image behind chat panes, including project images. Haze keeps its own blur."
+      >
+        <Slider
+          label="Chat background blur"
+          value={appearance.chatBackgroundBlur}
+          display={`${appearance.chatBackgroundBlur}px`}
+          min={CHAT_BACKGROUND_BLUR_MIN}
+          max={CHAT_BACKGROUND_BLUR_MAX}
+          onChange={appearance.onChatBackgroundBlur}
+        />
+      </Row>
     </Group>
   );
 }
