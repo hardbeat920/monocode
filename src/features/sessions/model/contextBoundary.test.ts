@@ -73,3 +73,42 @@ describe("outOfContextIds", () => {
     ).toEqual(new Set(["u1", "b1", "a2"]));
   });
 });
+
+describe("outOfContextIds with a known kept point", () => {
+  const rotation = (keptFromBlockId?: string): Block => ({
+    id: "r1",
+    role: "system",
+    text: "Fresh session started",
+    contextBoundary: {
+      kind: "rotation",
+      trigger: "auto",
+      at: 1,
+      kept: "recent",
+      ...(keptFromBlockId ? { keptFromBlockId } : {}),
+    },
+  });
+
+  it("covers exactly what comes before the first kept block", () => {
+    expect(
+      outOfContextIds([
+        user("u1"),
+        reply("a1"),
+        user("u2"),
+        reply("a2"),
+        rotation("u2"),
+        user("u3"),
+      ]),
+    ).toEqual(new Set(["u1", "a1"]));
+  });
+
+  it("claims nothing when the kept block is not in view", () => {
+    expect(
+      outOfContextIds([
+        user("u2"),
+        reply("a2"),
+        rotation("paged-out"),
+        user("u3"),
+      ]),
+    ).toEqual(new Set());
+  });
+});

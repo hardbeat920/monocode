@@ -31,8 +31,17 @@ export function compactingStatusCleared(): CompactionProgress {
 export function outOfContextIds(blocks: readonly Block[]): Set<string> {
   let index = blocks.length - 1;
   while (index >= 0 && !blocks[index].contextBoundary) index--;
-  const kept = blocks[index]?.contextBoundary?.kept;
+  const boundary = blocks[index]?.contextBoundary;
   const ids = new Set<string>();
+  // A known first kept block draws the line itself; out of view, claim nothing.
+  if (boundary?.keptFromBlockId) {
+    const from = blocks.findIndex(
+      (block) => block.id === boundary.keptFromBlockId,
+    );
+    for (const block of blocks.slice(0, Math.max(0, from))) ids.add(block.id);
+    return ids;
+  }
+  const kept = boundary?.kept;
   if (kept !== "none" && kept !== "user-messages") return ids;
   for (const block of blocks.slice(0, index)) {
     if (kept === "user-messages" && block.role === "user") continue;
