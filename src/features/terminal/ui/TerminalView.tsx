@@ -113,12 +113,19 @@ function terminalTheme(light: boolean) {
   };
 }
 
-function monoFont(): string {
+function terminalFont(): string {
   const fromCss = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-mono")
+    .getPropertyValue("--font-terminal")
     .trim();
   return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
 }
+
+/**
+ * Teardown still in flight per PTY id. A view that mounts with an id another
+ * view (or a StrictMode replay of itself) is still stopping must wait, or the
+ * late kill lands on the replacement shell and drops its data handler.
+ */
+const stoppingPtys = new Map<string, Promise<void>>();
 
 function oscColors() {
   const light = isLightScheme();
@@ -156,7 +163,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
-      fontFamily: monoFont(),
+      fontFamily: terminalFont(),
       fontSize: 13,
       lineHeight: 1,
       letterSpacing: 0,
@@ -218,32 +225,41 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
 
     let oscBuffer = "";
 
-    const unsubscribe = subscribePty(
-      id,
-      (data) => {
-        const onMeta = onMetaChangeRef.current;
-        if (onMeta) {
-          const text = new TextDecoder().decode(data);
-          const scanned = scanOscCwd(text, oscBuffer);
-          oscBuffer = scanned.rest;
-          if (scanned.cwd) {
-            const patch: TerminalMetaPatch = { cwd: scanned.cwd };
-            if (!runningProcessRef.current) {
-              patch.title = defaultTerminalTitle(scanned.cwd);
+    let unsubscribe = () => {};
+    let didStart = false;
+    const start = () => {
+      if (closed) return;
+      unsubscribe = subscribePty(
+        id,
+        (data) => {
+          if (closed) return;
+          const onMeta = onMetaChangeRef.current;
+          if (onMeta) {
+            const text = new TextDecoder().decode(data);
+            const scanned = scanOscCwd(text, oscBuffer);
+            oscBuffer = scanned.rest;
+            if (scanned.cwd) {
+              const patch: TerminalMetaPatch = { cwd: scanned.cwd };
+              if (!runningProcessRef.current) {
+                patch.title = defaultTerminalTitle(scanned.cwd);
+              }
+              onMeta(patch);
             }
-            onMeta(patch);
           }
-        }
-        term.write(data);
-      },
-      (code) => {
-        if (closed) return;
-        const status = code == null ? "" : ` (${code})`;
-        term.writeln(`\r\n[process exited${status}]`);
-      },
-    );
+          term.write(data);
+        },
+        (code) => {
+          if (closed) return;
+          const status = code == null ? "" : ` (${code})`;
+          term.writeln(`\r\n[process exited${status}]`);
+        },
+      );
+      didStart = true;
+      return spawnPty(id, cwd, term.cols, term.rows);
+    };
 
-    const starting = spawnPty(id, cwd, term.cols, term.rows)
+    const starting = (stoppingPtys.get(id) ?? Promise.resolve())
+      .then(start)
       .then(() => {
         if (!closed) spawned.current = true;
       })
@@ -362,8 +378,16 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       oscCursor.dispose();
       renderSub.dispose();
       bufferSub.dispose();
-      unsubscribe();
-      void starting.catch(() => undefined).then(() => killPty(id));
+      const stopping = starting
+        .catch(() => undefined)
+        .then(() => {
+          unsubscribe();
+          return didStart ? killPty(id) : undefined;
+        })
+        .finally(() => {
+          if (stoppingPtys.get(id) === stopping) stoppingPtys.delete(id);
+        });
+      stoppingPtys.set(id, stopping);
       term.dispose();
       termRef.current = null;
       spawned.current = false;

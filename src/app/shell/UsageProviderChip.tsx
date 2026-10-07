@@ -48,10 +48,11 @@ import {
 import {
   identityKey,
   identityOrganizationTag,
-  identitySubtitle,
   useProviderAccountIdentities,
   type ProviderAccountIdentity,
 } from "../../features/providers/model/providerAccountIdentity";
+import { ProviderAccountSubtitle } from "../../features/providers/ui/ProviderAccountSubtitle";
+import { useShowRemainingUsage } from "../../features/settings/model/displayPrefs";
 
 type UsageWindowEntry = {
   key: "session" | "weekly" | "monthly";
@@ -86,6 +87,7 @@ export function UsageProviderChip({
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
   onReconnect?: () => Promise<void>;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [accountView, setAccountView] = useState<"usage" | "accounts" | "add">(
@@ -117,7 +119,7 @@ export function UsageProviderChip({
     return best;
   }, null);
   const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now))
+    .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
     .join(" · ");
   const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
   const iconHarness = presentation?.harness ?? limits.provider;
@@ -131,7 +133,6 @@ export function UsageProviderChip({
   const activeIdentity = activeAccount
     ? identities[identityKey(activeAccount)]
     : null;
-  const activeSubtitle = identitySubtitle(activeIdentity);
   const accountProvider = supportsProviderAccounts(limits.provider)
     ? limits.provider
     : undefined;
@@ -261,7 +262,11 @@ export function UsageProviderChip({
                     <span className="text-content/25">·</span>
                   ) : null}
                   <span>
-                    {formatUsagePercent(entry.window.usedPercent)}{" "}
+                    {formatUsagePercent(
+                      showRemaining
+                        ? 100 - clampUsedPercent(entry.window.usedPercent)
+                        : entry.window.usedPercent,
+                    )}{" "}
                     {formatRateLimitWindowChipLabel(entry.window, now)}
                   </span>
                 </span>
@@ -349,26 +354,30 @@ export function UsageProviderChip({
                     </p>
                   ) : null}
                   {canManageAccounts ? (
-                    <button
-                      type="button"
-                      className="mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55 hover:bg-content/10 hover:text-content"
-                      aria-label={`Switch ${providerLabel} account`}
-                      onClick={() => setAccountView("accounts")}
+                    <div
+                      className="pointer-events-none relative mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55"
                     >
+                      {/* Keep account switching separate from email revelation. */}
+                      <button
+                        type="button"
+                        className="pointer-events-auto absolute inset-0 rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent"
+                        aria-label={`Switch ${providerLabel} account`}
+                        onClick={() => setAccountView("accounts")}
+                      />
                       <span className="max-w-[60%] shrink-0 truncate">
                         {activeAccountLabel}
                       </span>
-                      {activeSubtitle ? (
-                        <span className="truncate text-content/35">
-                          {activeSubtitle}
-                        </span>
-                      ) : null}
+                      <ProviderAccountSubtitle
+                        key={activeAccount && identityKey(activeAccount)}
+                        identity={activeIdentity}
+                        className="text-content/35"
+                      />
                       <ChevronRight
                         className="size-2.5 shrink-0"
                         strokeWidth={1.75}
                         aria-hidden
                       />
-                    </button>
+                    </div>
                   ) : null}
                 </div>
                 {limits.status === "fetching" ? (
@@ -514,40 +523,42 @@ function ProviderAccountPicker({
       <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
         Each conversation stays pinned to the account that started it.
       </p>
-      <div className="mt-2 flex flex-col gap-1" role="listbox">
+      <div
+        className="mt-2 flex flex-col gap-1"
+        role="group"
+        aria-label={`${providerLabel} accounts`}
+      >
         {accounts.map((account) => {
           const selected = account.id === accountId;
           const identity = identities[identityKey(account)];
           const orgTag = identityOrganizationTag(identity);
-          const subtitle = identitySubtitle(identity);
           const usage = usageFor(account);
           const meters = meterWindows(usage);
           return (
-            <button
+            <div
               key={account.id}
-              type="button"
-              role="option"
-              aria-selected={selected}
-              aria-label={account.label}
-              aria-describedby={`${statusId}-${account.id}`}
-              className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[11px] ring-1 ring-inset transition-colors ${
+              className={`pointer-events-none relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[11px] ring-1 ring-inset transition-colors ${
                 selected
                   ? "bg-accent/10 text-content ring-accent/20"
-                  : "bg-content/[0.035] text-content/70 ring-content/[0.06] hover:bg-content/[0.075] hover:text-content"
+                  : "bg-content/[0.035] text-content/70 ring-content/[0.06]"
               }`}
-              onClick={() => onSelect(account.id)}
             >
+              {/* A sibling target keeps the email button out of the selection button. */}
+              <button
+                type="button"
+                aria-pressed={selected}
+                aria-label={account.label}
+                aria-describedby={`${statusId}-${account.id}`}
+                className="pointer-events-auto absolute inset-0 rounded-lg hover:bg-content/[0.04] focus-visible:outline-2 focus-visible:outline-accent"
+                onClick={() => onSelect(account.id)}
+              />
               <span className="min-w-0 flex-1 py-0.5">
                 <span className="flex min-w-0 items-baseline gap-1.5">
                   <span className="shrink-0 truncate">{account.label}</span>
-                  {subtitle ? (
-                    <span
-                      className="min-w-0 truncate text-[10px] text-content/35"
-                      title={subtitle}
-                    >
-                      {subtitle}
-                    </span>
-                  ) : null}
+                  <ProviderAccountSubtitle
+                    identity={identity}
+                    className="text-[10px] text-content/35"
+                  />
                   {orgTag ? (
                     <span className="max-w-[6rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
                       {orgTag}
@@ -588,7 +599,7 @@ function ProviderAccountPicker({
                   aria-hidden
                 />
               ) : null}
-            </button>
+            </div>
           );
         })}
       </div>
@@ -754,8 +765,10 @@ function UsageWindowCard({
   window: RateLimitWindow;
   now: number;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
+  const shown = showRemaining ? remaining : pct;
   const title =
     kind === "session"
       ? "5-hour limit"
@@ -769,24 +782,27 @@ function UsageWindowCard({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-[11px] font-medium text-content/65">{title}</h3>
         <span className="shrink-0 text-[11px] font-medium tabular-nums">
-          {formatUsagePercent(pct)} used
+          {formatUsagePercent(shown)} {showRemaining ? "remaining" : "used"}
         </span>
       </div>
       <div
         className="mt-2 h-1.5 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} remaining`}
+        aria-label={`${title} ${showRemaining ? "remaining" : "used"}`}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(remaining)}
+        aria-valuenow={Math.round(shown)}
       >
         <span
           className={`block h-full rounded-full ${barClass(pct)}`}
-          style={{ width: `${remaining}%` }}
+          style={{ width: `${shown}%` }}
         />
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] leading-4 text-content/40">
-        <span className="tabular-nums">{Math.round(remaining)}% remaining</span>
+        <span className="tabular-nums">
+          {formatUsagePercent(showRemaining ? pct : remaining)}{" "}
+          {showRemaining ? "used" : "remaining"}
+        </span>
         <span
           className="truncate text-right tabular-nums"
           title={
@@ -1141,6 +1157,7 @@ function emptyUsageLabel(limits: ProviderRateLimits): string {
 }
 
 function MiniBar({ usedPct }: { usedPct: number }) {
+  const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(usedPct);
   return (
     <span
@@ -1149,7 +1166,7 @@ function MiniBar({ usedPct }: { usedPct: number }) {
     >
       <span
         className={`block h-full rounded-full ${barClass(pct)}`}
-        style={{ width: `${100 - pct}%` }}
+        style={{ width: `${showRemaining ? 100 - pct : pct}%` }}
       />
     </span>
   );

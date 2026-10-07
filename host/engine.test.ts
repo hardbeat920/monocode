@@ -255,6 +255,43 @@ describe("headless session ownership", () => {
     expect(store.session(id).session.title).toBe("codex · My own title");
   });
 
+  it("uses one creation timestamp and advances only updatedAt on later commands", () => {
+    let now = 1_700_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    try {
+      const { engine, store, project, id } = setup();
+      const initial = store.session(id);
+      const timestamps = {
+        createdAt: initial.createdAt,
+        updatedAt: initial.createdAt,
+        revision: 1,
+      };
+      expect(initial).toMatchObject(timestamps);
+      expect(store.sessions(project.id)[0]).toMatchObject(timestamps);
+      expect(store.summaries(project.id)[0]).toMatchObject(timestamps);
+
+      now = initial.updatedAt + 1_000;
+      engine.command({
+        type: "configure",
+        commandId: "configure-timestamps",
+        sessionId: id,
+        model: "codex:updated",
+        modelSettings: {},
+        runtimeMode: "supervised",
+      });
+      const updatedTimestamps = {
+        createdAt: initial.createdAt,
+        updatedAt: initial.updatedAt + 1_000,
+        revision: 2,
+      };
+      expect(store.session(id)).toMatchObject(updatedTimestamps);
+      expect(store.sessions(project.id)[0]).toMatchObject(updatedTimestamps);
+      expect(store.summaries(project.id)[0]).toMatchObject(updatedTimestamps);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps remote card changes in host history and removes deleted sessions", () => {
     const { store, project, id } = setup();
     const initial = store.summaries(project.id)[0];

@@ -52,6 +52,15 @@ export type BlockRole =
   | "system"
   | "handoff";
 
+/** A session created by a Mono during this conversation turn. */
+export type MonoSpawnedSession = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  harness: HarnessId;
+  model: string;
+};
+
 export type TaskListItemStatus =
   "pending" | "in_progress" | "completed" | "cancelled";
 
@@ -65,6 +74,8 @@ export type TaskListItem = {
 export type TaskListMeta = {
   /** Provider identity for replacing later snapshots of the same list. */
   key?: string;
+  /** Provider conversation that produced this list, when the provider scopes task ids to one. */
+  providerSessionId?: string;
   explanation?: string;
   items: TaskListItem[];
 };
@@ -203,6 +214,7 @@ export type AgentStep = {
   text: string;
   toolKind?: string;
   status?: string;
+  detail?: string;
   preview?: ToolPreview;
 };
 
@@ -247,13 +259,27 @@ export type Attachment = {
   previewUrl?: string;
 };
 
+export type MonoSessionCompletion = {
+  sessionId: string;
+  title: string;
+  status: "completed" | "failed" | "cancelled";
+  /** A single report covering several sessions launched in one Mono turn. */
+  sessionCount?: number;
+};
+
 export type QueuedMessage = {
   id: string;
+  /** User bubble already shown optimistically in a Mono's conversation. */
+  blockId?: string;
   text: string;
   attachments: Attachment[];
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   intent?: TurnIntent;
+  /** An app notification that must wait for an idle Mono, never steer its work. */
+  monoSessionCompletion?: MonoSessionCompletion;
+  /** Delivery failed; the message remains available to retry or edit. */
+  error?: string;
 };
 
 export type MessageQueueStatus = "active" | "paused" | "resuming";
@@ -294,6 +320,8 @@ export type Block = {
   startedAt?: number;
   /** How long the agent worked on this user turn, in ms. */
   durationMs?: number;
+  /** Epoch ms when this message joined a turn that was already running. */
+  sentAt?: number;
   /** Stable model label for this turn. Present on newly created user blocks. */
   turnModel?: TurnModel;
   /** Provider turn boundary used to replace this user message, when known. */
@@ -335,11 +363,17 @@ export type Block = {
    * conversation rather than the user narrating their own agents.
    */
   internal?: boolean;
+  /** Hidden app prompt that starts a separate completion report in a Mono chat. */
+  monoSessionCompletion?: MonoSessionCompletion;
+  /** Accepted session launches, kept on the originating user turn. */
+  monoSpawnedSessions?: MonoSpawnedSession[];
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Saved artifacts attached to this turn; their bodies live outside chat. */
+  artifactCards?: import("../../artifacts/artifacts").ArtifactCard[];
   /** Exact CI repair instructions and evidence supplied with this user turn. */
   ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
@@ -349,6 +383,11 @@ export type Block = {
    * rather than turn chrome like a status ping. Never folds into the trail.
    */
   notice?: "error" | "interrupt";
+  statusKey?: string;
+  /** Posted to a Mono's chat by one of its habits, outside any turn. */
+  monoHabit?: { id: string; name: string; at: number };
+  /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
+  monoCard?: import("../../monos/model/monoCards").MonoCard;
 };
 
 export type RuntimeMode =
@@ -389,6 +428,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Saved and accessible by id, but omitted from the normal session sidebar. */
+  sidebarHidden?: boolean;
   /** Receipt for an acknowledged floating-composer handoff. */
   quickLaunchAccepted?: boolean;
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
@@ -404,21 +445,32 @@ export type Session = {
   /** Project / working directory for this session. */
   cwd: string;
   blocks: Block[];
+  /** Mono-only database window. Older blocks are fetched separately by the viewer. */
+  monoTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /** The provider has accepted this turn and can take live follow-ups. */
+  turnReady?: boolean;
   /**
    * What the live turn is waiting on after the agent yielded with work still
    * running in the background. In-memory only.
    */
   backgroundTasks?: string[];
-  /** Follow-ups waiting for current turn. In-memory only. */
+  /** Follow-ups retained until they have been delivered. */
   queuedMessages?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
   /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */
   editingQueuedMessageId?: string;
+  /** Pending delivery locks this row against edits and deletion. Not persisted. */
+  sendingQueuedMessageId?: string;
   /** Last turn hit a provider usage limit; cleared by the next send. In-memory only. */
   usageLimit?: UsageLimit;
+  /**
+   * Lives only in memory: never saved, never listed with the project's chats.
+   * A Mono's habit runs are, and disappear when the run ends.
+   */
+  ephemeral?: boolean;
   /** Provider-side conversation id (Cursor ACP session id). */
   providerSessionId?: string;
   /** Named local credential profile used by Claude or Codex. */
@@ -469,6 +521,8 @@ export type PendingHarnessSwitch = {
   fromSettings: Record<string, string>;
   fromProviderSessionId?: string;
   fromProviderAccountId?: string;
+  /** The outgoing provider is exhausted; build the recap from the transcript. */
+  skipOutgoingRecap?: boolean;
 };
 
 export const HARNESS_LABEL: Record<HarnessId, string> = {

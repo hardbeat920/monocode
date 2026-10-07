@@ -1,4 +1,3 @@
-import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -30,6 +29,7 @@ import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { boundedCode } from "../../files/editor/codeHighlightPlugin";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
   displayPath,
@@ -47,6 +47,7 @@ import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMe
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { rehypeHardBreaks } from "./hardBreaks";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 
 const MERMAID_BASE_CONFIG = {
@@ -62,7 +63,7 @@ const mermaid = createLazyMermaidPlugin({
   },
 });
 
-const MARKDOWN_PLUGINS = { code, mermaid };
+const MARKDOWN_PLUGINS = { code: boundedCode, mermaid };
 
 const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   defaultRehypePlugins.raw,
@@ -210,6 +211,17 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
   zsh: "code.sh",
 };
 
+// Shiki (via Streamdown's CodeBlock) treats these as plaintext and renders no
+// syntax colors at all, which is common in agent output (pseudocode, file
+// trees, command output) fenced as `text` or left untagged. Falling back to
+// the JS grammar for these still colors strings, numbers, and punctuation,
+// matching what most agent-output fences actually look like.
+const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
+
+function highlightLanguageFor(language: string): string {
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+}
+
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };
 
 function MarkdownLink({
@@ -332,6 +344,15 @@ function MarkdownCode({
     (fence.language ? fileNameForLanguage(fence.language) : "");
   const lineNumbers = !/\bnoLineNumbers\b/.test(meta);
   const code = textContent(children);
+  // highlightLanguageFor swaps the fence language for "js" so Shiki still
+  // colors plaintext fences, but Streamdown's CodeBlock reuses that same
+  // value for the header label. Without this, a `text` fence would show a
+  // "js" header, and an untagged fence would gain a header it never had.
+  // Render our own label with the original language instead, and hide
+  // Streamdown's via CSS (see .markdown-code-fallback-label in index.css).
+  const isPlaintextFallback = PLAINTEXT_FENCE_LANGUAGES.has(
+    fence.language.toLowerCase(),
+  );
 
   return (
     <div className="markdown-code-shell" dir="ltr">
@@ -342,13 +363,15 @@ function MarkdownCode({
       ) : null}
       {fence.filePath ? (
         <MarkdownCodePath path={fence.filePath} startLine={fence.startLine} />
+      ) : isPlaintextFallback ? (
+        <span className="markdown-code-fallback-label">{fence.language}</span>
       ) : null}
       <CodeCopyButton code={code} />
       <CodeBlock
         className={className}
         code={code}
         isIncomplete={incomplete}
-        language={fence.language}
+        language={highlightLanguageFor(fence.language)}
         lineNumbers={lineNumbers}
         startLine={fence.startLine}
       />
@@ -482,17 +505,23 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
   streaming,
+  revealOnMount,
   className,
   cwd,
   onOpenFile,
   allowRemoteMedia,
+  hardBreaks,
 }: {
   text: string;
   streaming?: boolean;
+  /** Pace newly arrived output even if it finished before its first paint. */
+  revealOnMount?: boolean;
   className?: string;
   cwd?: string;
   onOpenFile?: OpenFileFn;
   allowRemoteMedia?: boolean;
+  /** Show a newline inside a block as a line break, as a document does (#591). */
+  hardBreaks?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
@@ -516,19 +545,26 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
-  const paced = usePacedText(text, !!streaming);
+  const paced = usePacedText(text, !!streaming, revealOnMount);
   const fading = useWordFading(!!streaming || paced.revealing);
   // Spans stay while words are fading so a word already on screen keeps its
   // element. Dropping one mid-fade would remount it and fade it again. Once
   // the fade is over they come off, or a finished reply would keep a span per
   // word for as long as this transcript stays mounted.
-  const rehypePlugins = fading
+  const baseRehypePlugins = fading
     ? remoteMedia
       ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
       : FADING_MARKDOWN_REHYPE_PLUGINS
     : remoteMedia
       ? INBOX_MEDIA_REHYPE_PLUGINS
       : MARKDOWN_REHYPE_PLUGINS;
+  // Hard breaks go last, so nothing after them undoes them, and after the word
+  // fade, whose word spans would otherwise hide the newlines from them.
+  const rehypePlugins = useMemo(
+    () =>
+      hardBreaks ? [...baseRehypePlugins, rehypeHardBreaks] : baseRehypePlugins,
+    [baseRehypePlugins, hardBreaks],
+  );
 
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
@@ -615,12 +651,14 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   cwd,
   onOpenFile,
   header,
+  hardBreaks,
 }: {
   text: string;
   streaming?: boolean;
   cwd?: string;
   onOpenFile?: OpenFileFn;
   header?: ReactNode;
+  hardBreaks?: boolean;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
 
@@ -639,6 +677,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           streaming={streaming}
           cwd={cwd}
           onOpenFile={onOpenFile}
+          hardBreaks={hardBreaks}
         />
       </div>
     </div>

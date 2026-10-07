@@ -27,14 +27,6 @@ export async function readProviderAccountIdentity(
   }
 }
 
-/** "Max · user@example.com", or whichever half is known. */
-export function identitySubtitle(
-  identity: ProviderAccountIdentity | null | undefined,
-): string | null {
-  const parts = [identity?.plan, identity?.email].filter(Boolean);
-  return parts.length ? parts.join(" · ") : null;
-}
-
 /** Org chip text: "Personal" for Claude's default "<name>'s Organization". */
 export function identityOrganizationTag(
   identity: ProviderAccountIdentity | null | undefined,

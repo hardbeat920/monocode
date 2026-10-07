@@ -16,12 +16,13 @@ export type HarnessEvent =
   | { type: "session.error"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "turn.started"; providerTurnId: string }
+  | { type: "turn.ready" }
   | {
       type: "session.configChanged";
       model?: string;
       modelSettings?: Record<string, string>;
     }
-  | { type: "status"; text: string }
+  | { type: "status"; text: string; key?: string }
   /** The provider refused the turn until its usage window resets (epoch ms). */
   | { type: "usage.limited"; resetsAt?: number }
   /**
@@ -87,6 +88,7 @@ export type HarnessEvent =
       /** Tool kind for a "tool" step, so it gets the right icon. */
       toolKind?: string;
       status?: string;
+      detail?: string;
       preview?: ToolPreview;
       /** The subagent's own name, when the provider only reveals it here. */
       agentName?: string;
@@ -130,6 +132,10 @@ export type HarnessEvent =
       explanation?: string;
       /** Merge changed items into the existing list instead of replacing it. */
       merge?: boolean;
+      /** This snapshot owns its labels, so a changed item text is a rename. */
+      authoritative?: boolean;
+      /** Provider conversation that owns these items. */
+      providerSessionId?: string;
       items: TaskListItem[];
     }
   | {
@@ -148,6 +154,9 @@ export type HarnessEvent =
   | ({ type: "turn.metrics" } & TurnMetrics);
 
 export type ApprovalDecision = "allow" | "deny";
+
+/** The turn is connecting or has just ended; retain the follow-up for later. */
+export class TurnNotReadyError extends Error {}
 
 export type HarnessSessionInput = {
   sessionId: string;
