@@ -1,7 +1,15 @@
-import { modelContextWindow, nativeModelId } from "../../../../features/sessions/model/models";
-import type { RuntimeMode, TurnMetrics } from "../../../../features/sessions/model/session";
+import { TurnNotReadyError } from "../../core/types";
+import {
+  modelContextWindow,
+  nativeModelId,
+} from "../../../../features/sessions/model/models";
+import type {
+  RuntimeMode,
+  TurnMetrics,
+} from "../../../../features/sessions/model/session";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import {
+  closeHarnessSse,
   execChild,
   freeHarnessPort,
   killChild,
@@ -248,7 +256,7 @@ async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
 
 export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new Error("No active turn to steer");
+  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
 
   const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!parsed) {
@@ -328,6 +336,10 @@ export async function stopOpenCodeSession(sessionId: string): Promise<void> {
     live.turnFailed = null;
     await live.client.abortSession(live.openCodeSessionId);
     await live.client.closeEvents(sessionId);
+  } else {
+    // A stream or server that ended on its own already dropped `live`, but
+    // its SSE handlers still hold it until the stream is closed.
+    await closeHarnessSse(sessionId).catch(() => undefined);
   }
   unwatchChild(sessionId);
   await killChild(sessionId).catch(() => undefined);
@@ -410,6 +422,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     input.cwd,
+    undefined,
+    "opencode",
   );
 
   try {
@@ -696,7 +710,8 @@ async function handleEvent(
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
-      if ([...live.approvals.values()].some((pending) => pending.id === id)) break;
+      if ([...live.approvals.values()].some((pending) => pending.id === id))
+        break;
       const permission = stringField(properties, "permission") ?? "tool";
       const patterns = Array.isArray(properties.patterns)
         ? properties.patterns.filter(
@@ -782,7 +797,8 @@ async function handleEvent(
       const id =
         stringField(properties, "id") ?? stringField(properties, "requestID");
       if (!id) break;
-      if ([...live.questions.values()].some((pending) => pending.id === id)) break;
+      if ([...live.questions.values()].some((pending) => pending.id === id))
+        break;
       const questions = questionsFromUnknown(properties);
       const uiId = live.nextApprovalUiId++;
       const pending = waitQuestion(live, uiId, id, questions);
@@ -993,10 +1009,17 @@ function bindSubagentSession(
   if (live.subagentSessions.get(sessionId) === callId) return;
   live.subagentSessions.set(sessionId, callId);
   const model = live.subagentModels.get(sessionId);
-  if (model) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
+  if (model)
+    live.onEvent({
+      type: "tool.updated",
+      callId,
+      kind: "agent",
+      agentModel: model,
+    });
   const backlog = live.pendingSubagent.get(sessionId);
   live.pendingSubagent.delete(sessionId);
-  for (const part of backlog ?? []) emitSubagentStep(live, callId, sessionId, part);
+  for (const part of backlog ?? [])
+    emitSubagentStep(live, callId, sessionId, part);
 }
 
 function handleSubagentEvent(
@@ -1009,7 +1032,11 @@ function handleSubagentEvent(
   let ancestor: string | undefined = sessionId;
   const visited = new Set<string>();
   while (ancestor && !visited.has(ancestor)) {
-    if (ancestor === live.openCodeSessionId || live.subagentSessions.has(ancestor)) break;
+    if (
+      ancestor === live.openCodeSessionId ||
+      live.subagentSessions.has(ancestor)
+    )
+      break;
     visited.add(ancestor);
     ancestor = live.sessionParentById.get(ancestor);
   }
@@ -1021,14 +1048,27 @@ function handleSubagentEvent(
     const agent = stringField(info, "agent");
     const model = stringField(info, "modelID");
     // Nested agents share the outer trail, but have their own model.
-    if (role === "assistant" && model && !(agent && KNOWN_HIDDEN_AGENTS.has(agent)) &&
-        live.sessionParentById.get(sessionId) === live.openCodeSessionId) {
+    if (
+      role === "assistant" &&
+      model &&
+      !(agent && KNOWN_HIDDEN_AGENTS.has(agent)) &&
+      live.sessionParentById.get(sessionId) === live.openCodeSessionId
+    ) {
       live.subagentModels.set(sessionId, model);
       const callId = live.subagentSessions.get(sessionId);
-      if (callId) live.onEvent({ type: "tool.updated", callId, kind: "agent", agentModel: model });
+      if (callId)
+        live.onEvent({
+          type: "tool.updated",
+          callId,
+          kind: "agent",
+          agentModel: model,
+        });
     }
     if (id && (role === "user" || role === "assistant")) {
-      live.messageRoleById.set(id, agent && KNOWN_HIDDEN_AGENTS.has(agent) ? "hidden" : role);
+      live.messageRoleById.set(
+        id,
+        agent && KNOWN_HIDDEN_AGENTS.has(agent) ? "hidden" : role,
+      );
       // Message metadata may follow the first part on a resumed stream.
       for (const part of live.partById.values()) {
         if (part.messageID === id) mirrorSubagentPart(live, sessionId, part);
@@ -1036,12 +1076,17 @@ function handleSubagentEvent(
     }
     return;
   }
-  let part = type === "message.part.updated" ? parsePart(properties.part) : null;
+  let part =
+    type === "message.part.updated" ? parsePart(properties.part) : null;
   if (type === "message.part.delta") {
     const id = stringField(properties, "partID");
     const existing = id ? live.partById.get(id) : undefined;
     const delta = streamTextDelta(properties.delta);
-    if (existing && delta && (existing.type === "text" || existing.type === "reasoning")) {
+    if (
+      existing &&
+      delta &&
+      (existing.type === "text" || existing.type === "reasoning")
+    ) {
       part = { ...existing, text: (existing.text ?? "") + delta };
     }
   }
@@ -1065,7 +1110,8 @@ function mirrorSubagentPart(
     emitSubagentStep(live, callId, sessionId, part);
     return;
   }
-  if (part.type !== "tool" && part.type !== "text" && part.type !== "reasoning") return;
+  if (part.type !== "tool" && part.type !== "text" && part.type !== "reasoning")
+    return;
   const backlog = live.pendingSubagent.get(sessionId) ?? [];
   const index = backlog.findIndex((entry) => entry.id === part.id);
   if (index >= 0) backlog[index] = part;
@@ -1115,6 +1161,7 @@ function emitSubagentStep(
     }) ||
     (typeof state.title === "string" && state.title) ||
     tool;
+  const failed = status === "error";
   live.onEvent({
     type: "agent.step",
     callId,
@@ -1122,12 +1169,13 @@ function emitSubagentStep(
     kind: "tool",
     text: title,
     toolKind: kind,
-    status:
-      status === "error"
-        ? "failed"
-        : status === "completed"
-          ? "completed"
-          : "in_progress",
+    status: failed
+      ? "failed"
+      : status === "completed"
+        ? "completed"
+        : "in_progress",
+    // Only a failure earns detail; a preview's output is never shown here.
+    ...(failed ? { detail: detailFromToolPart(part) } : {}),
     ...(preview ? { preview } : {}),
   });
   if (kind === "agent") trackSubagentRow(live, callId, part);
@@ -1318,7 +1366,9 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
 }
 
 async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
-  const output = await execChild(path, ["--version"], cwd).catch(() => "");
+  const output = await execChild(path, ["--version"], cwd, "opencode").catch(
+    () => "",
+  );
   const version = parseOpenCodeVersion(output);
   if (!version) {
     throw new Error(

@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import type { ComponentPropsWithoutRef } from "react";
 import { FolderTree, GitBranch } from "../../../shared/ui/icons";
 
@@ -8,6 +10,7 @@ type Props = Omit<
   label: string;
   loading?: boolean;
   worktree?: boolean;
+  dimWhenDisabled?: boolean;
 };
 
 /** Keep working-copy and branch modes visually identical in the composer. */
@@ -15,17 +18,20 @@ export function GitPickerTrigger({
   label,
   loading = false,
   worktree = false,
+  dimWhenDisabled = true,
   ...props
 }: Props) {
+  const host = useContext(NativePopupHost);
+  if (host) return null;
   const Icon = worktree ? FolderTree : GitBranch;
   return (
     <button
       type="button"
       {...props}
-      className="-ml-1.5 flex h-6 min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-content/55 active:scale-[0.97]"
+      className={`-ml-1.5 flex h-6 min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:hover:bg-transparent disabled:hover:text-content/55 active:scale-[0.97] ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
     >
       <Icon className="size-3.5 shrink-0" />
-      <span className="relative truncate">
+      <span className="relative min-w-0 flex-1 truncate">
         {loading ? (
           <>
             {/* Reserve the same line box while the current branch loads. */}

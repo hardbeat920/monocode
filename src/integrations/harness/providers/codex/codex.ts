@@ -1,7 +1,15 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
+import {
+  exhaustedWindowResetAt,
+  parseCodexRateLimits,
+} from "../../../../features/providers/model/rateLimits";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { questionPromptTitle, type UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
+import {
+  questionPromptTitle,
+  type UserQuestionReply,
+} from "../../../../features/sessions/model/userQuestion";
 import {
   killChild,
   resolveCodexBinary,
@@ -25,11 +33,17 @@ import {
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
 import {
-  codexMcpConfirmation,
-  isCodexComputerUseAccessConfirmation,
-} from "./codexElicitation";
+  deleteGeneratedImages,
+  saveGeneratedImage,
+} from "../../../../platform/tauri/fs";
+import {
+  codexAsyncQuestions,
+  codexAsyncQuestionResponse,
+  codexQuestions,
+  codexQuestionResponse,
+} from "./codexQuestions";
+import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
 import type {
   ApprovalDecision,
@@ -52,8 +66,11 @@ type PendingApproval = {
 };
 
 type PendingQuestion = {
-  rpcId: JsonRpcId;
+  /** Async agentMessage questions have no pending server request. */
+  rpcId: JsonRpcId | null;
   threadId: string;
+  turnId?: string;
+  sending?: boolean;
   event: Extract<HarnessEvent, { type: "question.asked" }>;
   isBlocking: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -69,6 +86,8 @@ type Live = {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  /** Thread-level network policy used when this app-server opened the thread. */
+  controlsAgents: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -88,13 +107,28 @@ type Live = {
   /** Completed snapshots describe one item, not all text in the turn. */
   emittedAssistantByItem: Map<string, string>;
   emittedReasoningByItem: Map<string, string>;
+  emittedGeneratedImages: Set<string>;
+  emittedAsyncQuestions: Set<string>;
+  turnGeneration: number;
+  notificationQueue: Promise<void> | null;
   /** Child thread id -> the agent tool row that spawned it. */
   subagentThreads: Map<string, string>;
   /** Child notifications that arrived before their row was known. */
   pendingSubagent: Map<string, Array<{ method: string; params: unknown }>>;
   /** Agent rows still running, by call id, with the name to settle them under. */
   openAgentRows: Map<string, string>;
+  /** Latest rate-limit windows by limit id, merged from sparse updates. */
+  rateLimits: Map<string, Record<string, unknown>>;
+  /** The active turn failed on a spent usage limit. */
+  usageLimited: boolean;
 };
+
+function trackNotificationQueue(live: Live, queued: Promise<void>): void {
+  live.notificationQueue = queued;
+  void queued.then(() => {
+    if (live.notificationQueue === queued) live.notificationQueue = null;
+  });
+}
 
 type Resume = {
   threadId: string;
@@ -232,9 +266,9 @@ async function lastUserTurnId(
 
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Codex session");
+  if (!live) throw new TurnNotReadyError("No active Codex session");
   const turnId = live.activeTurnId;
-  if (!turnId) throw new Error("No active turn to steer");
+  if (!turnId) throw new TurnNotReadyError("No active turn to steer");
 
   const params = buildTurnSteerParams({
     threadId: live.threadId,
@@ -249,7 +283,15 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
     return;
   }
 
-  await live.rpc.request("turn/steer", params);
+  try {
+    await live.rpc.request("turn/steer", params);
+  } catch (error) {
+    if (live.activeTurnId !== turnId)
+      throw new TurnNotReadyError(
+        "The Codex turn ended before the follow-up arrived",
+      );
+    throw error;
+  }
   live.onEvent({ type: "turn.started", providerTurnId: turnId });
 }
 
@@ -269,7 +311,45 @@ export function respondCodexQuestion(
   requestId: number,
   reply: UserQuestionReply,
 ): void {
-  liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(reply);
+  const live = liveByThread.get(sessionId);
+  const pending = live?.questions.get(requestId);
+  if (!live || !pending || pending.sending) return;
+  if (pending.rpcId !== null || reply.kind === "skipped") {
+    pending.resolve(reply);
+    return;
+  }
+  const text = codexAsyncQuestionResponse(pending.event.questions, reply);
+  if (!text) {
+    pending.resolve({ kind: "skipped" });
+    return;
+  }
+  const turnId = pending.turnId;
+  if (!turnId || live.activeTurnId !== turnId) {
+    pending.resolve("cancelled");
+    return;
+  }
+  pending.sending = true;
+  keepCodexQuestionOpen(sessionId, requestId);
+  void live.rpc
+    .request(
+      "turn/steer",
+      buildTurnSteerParams({
+        threadId: pending.threadId,
+        expectedTurnId: turnId,
+        prompt: text,
+      }),
+    )
+    .then(() => {
+      if (live.questions.get(requestId) === pending) pending.resolve(reply);
+    })
+    .catch((error: unknown) => {
+      pending.sending = false;
+      if (live.questions.get(requestId) !== pending) return;
+      live.onEvent({
+        type: "status",
+        text: `Could not send your answer to Codex: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
 }
 
 export function keepCodexQuestionOpen(
@@ -346,6 +426,7 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
   liveByThread.delete(sessionId);
   if (live) {
     live.muteUpdates = true;
+    live.turnGeneration += 1;
     clearServerRequests(live);
     live.turnDone?.();
     live.turnDone = null;
@@ -378,16 +459,32 @@ export function bindCodexSession(
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
+  const controlsAgents = input.controlsAgents === true;
   if (
     existing &&
     existing.cwd === input.cwd &&
-    sameProviderAccountId(existing.providerAccountId, input.providerAccountId)
+    sameProviderAccountId(
+      existing.providerAccountId,
+      input.providerAccountId,
+    ) &&
+    existing.controlsAgents === controlsAgents
   ) {
     existing.onEvent = input.onEvent;
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    // Codex may retain the thread's sandbox network policy across turns.
+    // Switch it when this session gains /operator access or loses agent
+    // control, so its local CLI socket matches the current policy.
+    if (
+      existing.cwd !== input.cwd ||
+      !sameProviderAccountId(
+        existing.providerAccountId,
+        input.providerAccountId,
+      )
+    ) {
+      resumeByThread.delete(input.sessionId);
+    }
     await stopCodexSession(input.sessionId);
   }
 
@@ -413,7 +510,32 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       onNotification: (method, params) => {
         const live = liveRef.current;
         if (!live || live.muteUpdates) return;
-        handleNotification(live, method, params);
+        if (live.notificationQueue) {
+          const turnGeneration = live.turnGeneration;
+          const queued = live.notificationQueue
+            .catch(() => undefined)
+            .then(() => {
+              if (
+                live.muteUpdates ||
+                live.cancelled ||
+                turnGeneration !== live.turnGeneration
+              ) {
+                return;
+              }
+              return handleNotification(live, method, params);
+            });
+          trackNotificationQueue(
+            live,
+            queued.catch(() => undefined),
+          );
+          return;
+        }
+        const result = handleNotification(live, method, params);
+        if (!result) return;
+        trackNotificationQueue(
+          live,
+          result.catch(() => undefined),
+        );
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
@@ -463,10 +585,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["app-server"], input.cwd, {
-    provider: "codex",
-    id: input.providerAccountId ?? "default",
-  });
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["app-server"],
+    input.cwd,
+    {
+      provider: "codex",
+      id: input.providerAccountId ?? "default",
+    },
+    "codex",
+  );
 
   try {
     await rpc.request("initialize", {
@@ -537,6 +666,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      controlsAgents,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
@@ -553,9 +683,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnEndPending: false,
       emittedAssistantByItem: new Map(),
       emittedReasoningByItem: new Map(),
+      emittedGeneratedImages: new Set(),
+      emittedAsyncQuestions: new Set(),
+      turnGeneration: 0,
+      notificationQueue: null,
       subagentThreads: new Map(),
       pendingSubagent: new Map(),
       openAgentRows: new Map(),
+      rateLimits: new Map(),
+      usageLimited: false,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -600,6 +736,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
+  live.emittedAsyncQuestions.clear();
+  live.turnGeneration += 1;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -638,6 +777,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 async function runCompaction(live: Live): Promise<void> {
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
     live.turnFailed = reject;
@@ -656,7 +796,12 @@ async function runCompaction(live: Live): Promise<void> {
   }
 }
 
-function handleNotification(live: Live, method: string, params: unknown): void {
+function handleNotification(
+  live: Live,
+  method: string,
+  params: unknown,
+): void | Promise<void> {
+  if (live.muteUpdates || live.cancelled) return;
   const rec = asRecord(params);
   if (method === "serverRequest/resolved") {
     for (const pending of live.approvals.values()) {
@@ -684,8 +829,7 @@ function handleNotification(live: Live, method: string, params: unknown): void {
       ? stringField(asRecord(rec?.thread), "id")
       : undefined);
   if (threadId && threadId !== live.threadId) {
-    handleSubagentNotification(live, threadId, method, params);
-    return;
+    return handleSubagentNotification(live, threadId, method, params);
   }
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
@@ -706,8 +850,20 @@ function handleNotification(live: Live, method: string, params: unknown): void {
   const itemId = snapshot
     ? stringField(asRecord(rec?.item), "id")
     : stringField(rec, "itemId");
+  let pending: Promise<void> | undefined;
   for (const event of mapped.events) {
     if (duplicate && duplicateAgentRow(event)) continue;
+    if (event.type === "image.generated") {
+      if (live.emittedGeneratedImages.has(event.itemId)) continue;
+      live.emittedGeneratedImages.add(event.itemId);
+      if ("data" in event) {
+        const save = () => materializeGeneratedImage(live, event);
+        pending = pending ? pending.then(save) : save();
+        continue;
+      }
+      live.onEvent(event);
+      continue;
+    }
     trackAgentRow(live, event);
     if (event.type === "message.delta") {
       publishCodexText(live, "assistant", event.text, snapshot, itemId);
@@ -719,22 +875,178 @@ function handleNotification(live: Live, method: string, params: unknown): void {
     }
     live.onEvent(event);
   }
+  if (method === "item/completed") showCodexAsyncQuestion(live, rec);
   // Metadata and steps can arrive before the spawn. Create its row first.
+  let replay: Promise<void> | undefined;
   for (const childId of codexSubagentThreadIds(asRecord(rec?.item) ?? {})) {
     const owner = live.subagentThreads.get(childId);
     if (!owner) continue;
     const backlog = live.pendingSubagent.get(childId);
     live.pendingSubagent.delete(childId);
-    for (const pending of backlog ?? [])
-      emitSubagentSteps(live, owner, pending.method, pending.params);
+    for (const pendingStep of backlog ?? []) {
+      const emit = () =>
+        emitSubagentSteps(live, owner, pendingStep.method, pendingStep.params);
+      if (replay) {
+        replay = replay.then(emit);
+      } else {
+        const result = emit();
+        if (result) replay = result;
+      }
+    }
   }
-  settleSubagentRows(live, rec);
-  if (mapped.activeTurnId !== undefined) {
-    live.activeTurnId = mapped.activeTurnId;
+  const finish = () => {
+    settleSubagentRows(live, rec);
+    if (mapped.rateLimits) noteRateLimits(live, mapped.rateLimits);
+    if (mapped.usageLimited) live.usageLimited = true;
+    if (mapped.activeTurnId !== undefined) {
+      live.activeTurnId = mapped.activeTurnId;
+    }
+    if (mapped.turnCompleted) {
+      // Report the limit before the turn settles so queued follow-ups hold.
+      if (live.usageLimited && !live.cancelled) {
+        const resetsAt = usageLimitResetAt(live);
+        live.onEvent({
+          type: "usage.limited",
+          ...(resetsAt != null ? { resetsAt } : {}),
+        });
+      }
+      live.usageLimited = false;
+      finishActiveTurn(live);
+    }
+  };
+  const afterImages = () => {
+    if (live.muteUpdates || live.cancelled) return;
+    if (replay) return replay.then(finish);
+    finish();
+  };
+  if (pending) return pending.then(afterImages);
+  return afterImages();
+}
+
+function showCodexAsyncQuestion(
+  live: Live,
+  rec: Record<string, unknown> | null,
+): void {
+  const item = asRecord(rec?.item);
+  const itemId = stringField(item, "id");
+  const turnId = stringField(rec, "turnId") ?? live.activeTurnId;
+  if (
+    !itemId ||
+    !turnId ||
+    turnId !== live.activeTurnId ||
+    live.emittedAsyncQuestions.has(itemId)
+  )
+    return;
+  let questions;
+  try {
+    questions = codexAsyncQuestions(item);
+  } catch (error) {
+    live.onEvent({
+      type: "status",
+      text: error instanceof Error ? error.message : String(error),
+    });
+    return;
   }
-  if (mapped.turnCompleted) {
-    finishActiveTurn(live);
+  if (!questions.length) return;
+  live.emittedAsyncQuestions.add(itemId);
+  const uiId = live.nextApprovalUiId++;
+  const event: Extract<HarnessEvent, { type: "question.asked" }> = {
+    type: "question.asked",
+    requestId: uiId,
+    title: questionPromptTitle(questions),
+    questions,
+    callId: itemId,
+  };
+  const outcome = new Promise<UserQuestionReply | "cancelled">((resolve) => {
+    live.questions.set(uiId, {
+      rpcId: null,
+      threadId: live.threadId,
+      turnId,
+      event,
+      isBlocking: false,
+      resolve,
+    });
+  }).finally(() => {
+    clearTimeout(live.questions.get(uiId)?.timer);
+    live.questions.delete(uiId);
+  });
+  showNextQuestion(live);
+  void outcome.then((reply) => {
+    live.onEvent({
+      type: "question.resolved",
+      requestId: uiId,
+      decision:
+        reply === "cancelled"
+          ? "cancelled"
+          : reply.kind === "answered"
+            ? "answered"
+            : "skipped",
+    });
+    showNextQuestion(live);
+  });
+}
+
+async function materializeGeneratedImage(
+  live: Live,
+  event: Extract<HarnessEvent, { type: "image.generated"; data: string }>,
+): Promise<void> {
+  const turnGeneration = live.turnGeneration;
+  try {
+    const asset = await saveGeneratedImage({
+      data: event.data,
+      name: event.name,
+    });
+    if (
+      live.cancelled ||
+      live.muteUpdates ||
+      turnGeneration !== live.turnGeneration
+    ) {
+      void deleteGeneratedImages([asset.path]).catch(() => undefined);
+      return;
+    }
+    live.onEvent({
+      type: "image.generated",
+      itemId: event.itemId,
+      path: asset.path,
+      name: event.name,
+      mimeType: asset.mimeType,
+      size: asset.size,
+      ...(event.alt ? { alt: event.alt } : {}),
+    });
+  } catch (cause) {
+    if (
+      live.cancelled ||
+      live.muteUpdates ||
+      turnGeneration !== live.turnGeneration
+    ) {
+      return;
+    }
+    live.onEvent({
+      type: "session.error",
+      message: `Could not save generated image: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    });
   }
+}
+
+/** Rate-limit updates are sparse: a missing window keeps its last reading. */
+function noteRateLimits(live: Live, update: Record<string, unknown>): void {
+  const id = stringField(update, "limitId") ?? "";
+  const current = live.rateLimits.get(id) ?? {};
+  live.rateLimits.set(id, {
+    primary: update.primary ?? current.primary,
+    secondary: update.secondary ?? current.secondary,
+  });
+}
+
+function usageLimitResetAt(live: Live): number | null {
+  let latest: number | null = null;
+  for (const windows of live.rateLimits.values()) {
+    const resetsAt = exhaustedWindowResetAt(parseCodexRateLimits(windows));
+    if (resetsAt != null) latest = Math.max(latest ?? 0, resetsAt);
+  }
+  return latest;
 }
 
 /**
@@ -808,12 +1120,12 @@ function handleSubagentNotification(
   threadId: string,
   method: string,
   params: unknown,
-): void {
+): void | Promise<void> {
   const callId = live.subagentThreads.get(threadId);
   if (callId) {
-    emitSubagentSteps(live, callId, method, params);
-    return;
+    return emitSubagentSteps(live, callId, method, params);
   }
+  if (!live.activeTurnId) return;
   if (
     method !== "item/started" &&
     method !== "item/completed" &&
@@ -831,7 +1143,18 @@ function emitSubagentSteps(
   callId: string,
   method: string,
   params: unknown,
-): void {
+): void | Promise<void> {
+  const image = mapCodexNotification(method, params).events.find(
+    (event): event is Extract<HarnessEvent, { type: "image.generated" }> =>
+      event.type === "image.generated",
+  );
+  if (image) {
+    if (live.emittedGeneratedImages.has(image.itemId)) return;
+    live.emittedGeneratedImages.add(image.itemId);
+    if ("data" in image) return materializeGeneratedImage(live, image);
+    live.onEvent(image);
+    return;
+  }
   for (const event of mapCodexSubagentSteps(callId, method, params)) {
     live.onEvent(event);
   }
@@ -922,9 +1245,14 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearServerRequests(live);
   closeOpenAgentRows(live);
   live.turnEndPending = false;
+  live.turnGeneration += 1;
   live.activeTurnId = null;
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
+  live.emittedGeneratedImages.clear();
+  live.emittedAsyncQuestions.clear();
+  live.subagentThreads.clear();
+  live.pendingSubagent.clear();
   for (const event of extraEvents) {
     live.onEvent(event);
   }
@@ -1023,11 +1351,7 @@ async function handleServerRequest(
       });
       return;
     }
-    if (
-      !live.planning &&
-      live.runtimeMode === "full-access" &&
-      isCodexComputerUseAccessConfirmation(params)
-    ) {
+    if (!live.planning && live.runtimeMode === "full-access") {
       await live.rpc.respond(id, {
         action: "accept",
         content: confirmation.content,
@@ -1037,7 +1361,7 @@ async function handleServerRequest(
     }
     const uiId = live.nextApprovalUiId++;
     const pending = waitApproval(live, uiId, id, "permissions", threadId);
-    // Other MCP consent must carry the user's decision, including in Full Access.
+    // MCP consent requires an explicit decision outside non-plan Full Access turns.
     live.onEvent({
       type: "approval.requested",
       requestId: uiId,

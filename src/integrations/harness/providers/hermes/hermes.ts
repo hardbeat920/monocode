@@ -1,6 +1,6 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { readTextFile } from "../../../../platform/tauri/fs";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import { AcpSubagents } from "../../core/acpSubagents";
 import {
@@ -9,6 +9,7 @@ import {
   spawnChild,
   unwatchChild,
   watchChild,
+  readHarnessTextFile,
 } from "../../core/child";
 import {
   HERMES_AUTH_HELP,
@@ -114,7 +115,7 @@ export async function sendHermesTurn(input: SendTurnInput): Promise<void> {
 /** Hermes redirects a concurrent text prompt, or queues it when redirect is unavailable. */
 export async function steerHermesTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Hermes Agent session");
+  if (!live) throw new TurnNotReadyError("No active Hermes Agent session");
   const blocks = hermesPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
   await live.acp.request(
@@ -250,7 +251,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
-  await spawnChild(input.sessionId, path, ["acp"], input.cwd);
+  await spawnChild(
+    input.sessionId,
+    path,
+    ["acp"],
+    input.cwd,
+    undefined,
+    "hermes",
+  );
 
   try {
     try {
@@ -368,12 +376,18 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
     let blocks = hermesPromptBlocks(input.text, input.attachments);
     if (blocks.length === 0) return;
+    let accepted = false;
     for (;;) {
-      await live.acp.request(
+      const pending = live.acp.request(
         "session/prompt",
         { sessionId: live.acpSessionId, prompt: blocks },
         PROMPT_TIMEOUT_MS,
       );
+      if (!accepted) {
+        accepted = true;
+        input.onAccepted?.();
+      }
+      await pending;
       if (live.cancelled) return;
       // Close this assistant bubble without ending MonoCode's busy turn. A
       // background handoff opens a fresh assistant bubble after it arrives.
@@ -447,7 +461,7 @@ async function backgroundFinished(
   const states = await Promise.all(
     manifests.map(async (path) => {
       try {
-        const manifest = JSON.parse(await readTextFile(path));
+        const manifest = JSON.parse(await readHarnessTextFile(path));
         const tasks = Array.isArray(manifest?.tasks) ? manifest.tasks : [];
         return (
           Boolean(manifest?.completed) &&
@@ -507,7 +521,7 @@ async function backgroundHandoff(
       dispatch.transcripts.map(async (path) => {
         let tail = "";
         try {
-          const transcript = await readTextFile(path);
+          const transcript = await readHarnessTextFile(path);
           tail = transcript.slice(-TRANSCRIPT_TAIL_CHARS);
         } catch {
           // Hermes can still read the path itself if the desktop file bridge

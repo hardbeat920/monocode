@@ -80,6 +80,22 @@ afterEach(() => {
 });
 
 describe("transcript pool", () => {
+  it("cycles through ten chats without rebuilding any transcript", () => {
+    const pool = new TranscriptPool();
+    const ids = Array.from({ length: 10 }, (_, index) => `chat-${index}`);
+    const instances = new Map<string, string | undefined>();
+    for (const id of ids) {
+      render(pool, id);
+      instances.set(id, probe(id)?.dataset.instance);
+    }
+    for (const id of ids) {
+      render(pool, id);
+      expect(probe(id)?.dataset.instance).toBe(instances.get(id));
+    }
+    expect(mounts).toEqual(ids);
+    expect(unmounts).toEqual([]);
+  });
+
   it("shows the transcript inside the pane that hosts it", () => {
     const pool = new TranscriptPool();
     render(pool, "a");
@@ -87,6 +103,51 @@ describe("transcript pool", () => {
     const shown = probe("a");
     expect(shown?.closest('[data-pane="a"]')).not.toBeNull();
     expect(shown?.dataset.visible).toBe("true");
+  });
+
+  it("keeps the snapshot stable when a pane supplies equivalent transcript props", () => {
+    const pool = new TranscriptPool();
+    const onFocus = vi.fn();
+    render(pool, "a", onFocus);
+    const instance = probe("a")?.dataset.instance;
+    const snapshot = pool.getSnapshot();
+    const changed = vi.fn();
+    const unsubscribe = pool.subscribe(changed);
+    for (let update = 0; update < 20; update++) render(pool, "a", onFocus);
+    expect(changed).not.toHaveBeenCalled();
+    expect(pool.getSnapshot()).toBe(snapshot);
+    expect(probe("a")?.dataset.instance).toBe(instance);
+    unsubscribe();
+  });
+
+  it("updates the portal's event handler when the pane supplies a new callback", () => {
+    const pool = new TranscriptPool();
+    const before = vi.fn();
+    const after = vi.fn();
+    render(pool, "a", before);
+    render(pool, "a", after);
+    act(() =>
+      probe("a")?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })),
+    );
+    expect(before).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledOnce();
+  });
+
+  it("delivers changed visibility props without remounting the transcript", () => {
+    const pool = new TranscriptPool();
+    render(pool, "a");
+    const instance = probe("a")?.dataset.instance;
+    const entry = pool.getSnapshot()[0];
+    act(() =>
+      pool.show(
+        "a",
+        entry.host!,
+        createElement(Probe, { id: "a", visible: false }),
+      ),
+    );
+    expect(probe("a")?.dataset.visible).toBe("false");
+    expect(probe("a")?.dataset.instance).toBe(instance);
+    expect(unmounts).toEqual([]);
   });
 
   it("reuses the mounted transcript when a session is shown again", () => {

@@ -1,8 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../features/files/ui/ExplorerMenu";
 import { ALT, MOD, SHIFT } from "../../platform/tauri/platform";
 import { runUpdateFlow } from "../model/updater";
+import {
+  keybindingShortcutLabel,
+  loadAutosave,
+  loadKeybindingOverrides,
+  saveAutosave,
+  subscribeAutosave,
+  subscribeKeybindings,
+} from "../../features/settings/model/settings";
 
 type MenuKey = "file" | "view" | "terminal";
 
@@ -49,8 +60,26 @@ export function MenuBar({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
-  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [, refreshShortcuts] = useState(loadKeybindingOverrides);
+  const [autosave, setAutosave] = useState(loadAutosave);
   const barRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () =>
+      subscribeKeybindings(() => refreshShortcuts(loadKeybindingOverrides())),
+    [],
+  );
+
+  useEffect(
+    () => subscribeAutosave(() => setAutosave(loadAutosave())),
+    [],
+  );
+
+  const shortcut = (command: string, keys: string) =>
+    keybindingShortcutLabel(command, keys) ?? undefined;
 
   // Toggle with standalone Alt key tap
   useEffect(() => {
@@ -148,6 +177,11 @@ export function MenuBar({
         case "close_all_tabs":
           onCloseAllTabs?.();
           break;
+        case "toggle_autosave": {
+          const next = saveAutosave(!loadAutosave());
+          setAutosave(next);
+          break;
+        }
         case "toggle_sidebar":
           onToggleSidebar();
           break;
@@ -176,6 +210,7 @@ export function MenuBar({
     },
     [
       closeMenu,
+      autosave,
       onCloseCurrentTab,
       onCloseOtherTabs,
       onCloseAllTabs,
@@ -201,51 +236,150 @@ export function MenuBar({
     switch (key) {
       case "file":
         return [
-          { kind: "item", id: "new_tab", label: "New Tab", shortcut: `${MOD}T` },
-          { kind: "item", id: "new_terminal", label: "New Terminal", shortcut: `${MOD}\`` },
-          { kind: "item", id: "new_window", label: "New Window", shortcut: `${MOD}${SHIFT}N` },
+          {
+            kind: "item",
+            id: "new_tab",
+            label: "New Tab",
+            shortcut: shortcut("Tab: New", `${MOD}T`),
+          },
+          {
+            kind: "item",
+            id: "new_terminal",
+            label: "New Terminal",
+            shortcut: shortcut("Terminal: New", `${MOD}\``),
+          },
+          {
+            kind: "item",
+            id: "new_window",
+            label: "New Window",
+            shortcut: shortcut("App: New Window", `${MOD}${SHIFT}N`),
+          },
           { kind: "sep" },
-          { kind: "item", id: "open_project", label: "Open Project…", shortcut: `${MOD}O` },
-          { kind: "item", id: "open_search", label: "Search…", shortcut: `${MOD}K` },
-          { kind: "item", id: "go_to_file", label: "Go to File…", shortcut: `${MOD}P` },
-          { kind: "item", id: "find_in_project", label: "Find in Files…", shortcut: `${MOD}${SHIFT}F` },
+          {
+            kind: "item",
+            id: "toggle_autosave",
+            label: "Autosave",
+            checked: autosave,
+          },
           { kind: "sep" },
-          { kind: "item", id: "close_tab", label: "Close Pane", shortcut: `${MOD}W` },
+          {
+            kind: "item",
+            id: "open_project",
+            label: "Open Project…",
+            shortcut: shortcut("App: Open Project", `${MOD}O`),
+          },
+          {
+            kind: "item",
+            id: "open_search",
+            label: "Search…",
+            shortcut: shortcut("App: Search", `${MOD}K`),
+          },
+          {
+            kind: "item",
+            id: "go_to_file",
+            label: "Go to File…",
+            shortcut: shortcut("App: Go to File", `${MOD}P`),
+          },
+          {
+            kind: "item",
+            id: "find_in_project",
+            label: "Find in Files…",
+            shortcut: shortcut("App: Find in Files", `${MOD}${SHIFT}F`),
+          },
+          { kind: "sep" },
+          {
+            kind: "item",
+            id: "close_tab",
+            label: "Close Pane",
+            shortcut: shortcut("Pane: Close", `${MOD}W`),
+          },
           {
             kind: "item",
             id: "close_other_tabs",
             label: "Close Other Tabs",
-            shortcut: `${MOD}${ALT}T`,
+            shortcut: shortcut("Tab: Close Others", `${MOD}${ALT}T`),
           },
           {
             kind: "item",
             id: "close_all_tabs",
             label: "Close All Tabs",
-            shortcut: `${MOD}${SHIFT}W`,
+            shortcut: shortcut("Tab: Close All", `${MOD}${SHIFT}W`),
           },
           { kind: "sep" },
-          { kind: "item", id: "check_for_updates", label: "Check for Updates…" },
+          {
+            kind: "item",
+            id: "check_for_updates",
+            label: "Check for Updates…",
+          },
         ];
       case "view":
         return [
-          { kind: "item", id: "toggle_sidebar", label: "Toggle Sidebar", shortcut: `${MOD}B` },
-          { kind: "item", id: "toggle_session_sidebar", label: "Toggle Session Sidebar", shortcut: `${MOD}${SHIFT}B` },
+          {
+            kind: "item",
+            id: "toggle_sidebar",
+            label: "Toggle Sidebar",
+            shortcut: shortcut("App: Toggle Sidebar", `${MOD}B`),
+          },
+          {
+            kind: "item",
+            id: "toggle_session_sidebar",
+            label: "Toggle Session Sidebar",
+            shortcut: shortcut(
+              "App: Toggle Session Sidebar",
+              `${MOD}${SHIFT}B`,
+            ),
+          },
           { kind: "item", id: "open_inbox", label: "Inbox" },
           ...(onOpenNotes
             ? [{ kind: "item" as const, id: "open_notes", label: "Notes" }]
             : []),
-          { kind: "item", id: "toggle_terminal", label: "Toggle Terminal", shortcut: `${MOD}J` },
-          { kind: "item", id: "open_model_picker", label: "Switch Model…", shortcut: `${MOD}.` },
+          {
+            kind: "item",
+            id: "toggle_terminal",
+            label: "Toggle Terminal",
+            shortcut: shortcut("Terminal: Toggle Dock", `${MOD}J`),
+          },
+          {
+            kind: "item",
+            id: "open_model_picker",
+            label: "Switch Model…",
+            shortcut: shortcut("App: Switch Model", `${MOD}.`),
+          },
           { kind: "item", id: "toggle_diff", label: "Toggle Changes" },
           { kind: "sep" },
-          { kind: "item", id: "zoom_in", label: "Zoom In", shortcut: `${MOD}+` },
-          { kind: "item", id: "zoom_out", label: "Zoom Out", shortcut: `${MOD}-` },
-          { kind: "item", id: "zoom_reset", label: "Reset Zoom", shortcut: `${MOD}0` },
+          {
+            kind: "item",
+            id: "zoom_in",
+            label: "Zoom In",
+            shortcut: shortcut("View: Zoom In", `${MOD}+`),
+          },
+          {
+            kind: "item",
+            id: "zoom_out",
+            label: "Zoom Out",
+            shortcut: shortcut("View: Zoom Out", `${MOD}-`),
+          },
+          {
+            kind: "item",
+            id: "zoom_reset",
+            label: "Reset Zoom",
+            shortcut: shortcut("View: Reset Zoom", `${MOD}0`),
+          },
         ];
       case "terminal":
         return [
-          { kind: "item", id: "new_terminal", label: "New Terminal", shortcut: `${MOD}\`` },
-          { kind: "item", id: "toggle_terminal", label: "Toggle Terminal", shortcut: `${MOD}J` },
+          {
+            kind: "item",
+            id: "new_terminal",
+            label: "New Terminal",
+            shortcut: shortcut("Terminal: New", `${MOD}\``),
+          },
+          {
+            kind: "item",
+            id: "toggle_terminal",
+            label: "Toggle Terminal",
+            shortcut: shortcut("Terminal: Toggle Dock", `${MOD}J`),
+          },
         ];
     }
   };

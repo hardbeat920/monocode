@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { JiraSettings } from "./JiraSettings";
 import { loadHiddenJiraProjectIds } from "../../inbox/model/jira";
+import { saveMaskEmails } from "../model/displayPrefs";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
@@ -63,6 +64,7 @@ async function submit() {
 }
 
 it("connects Jira, synchronizes project filters, and disconnects", async () => {
+  saveMaskEmails(true);
   await act(async () => root.render(createElement(JiraSettings)));
   await input("Jira site", "acme.atlassian.net");
   await input("Atlassian email", "ada@example.com");
@@ -74,6 +76,14 @@ it("connects Jira, synchronizes project filters, and disconnects", async () => {
     token: "secret",
   });
   expect(container.textContent).toContain("ada@example.com");
+  const email = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Reveal email"]',
+  )!;
+  expect(email.querySelector("span")?.className).toContain("blur-[5px]");
+  await act(async () => email.click());
+  expect(email.getAttribute("aria-label")).toBe("Hide email");
+  await act(async () => email.click());
+  expect(email.getAttribute("aria-label")).toBe("Reveal email");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   const project = container.querySelector<HTMLInputElement>(
     'input[type="checkbox"]',

@@ -50,6 +50,34 @@ afterEach(async () => {
 });
 
 describe("project background dialog", () => {
+  it("offers only the image when locked to a dimmed Haze", async () => {
+    saveProjectChatBackgroundSettings("mono:a", {
+      path: "/backgrounds/mono.png",
+      emptyOpacity: 0.24,
+      sessionOpacity: 0.24,
+      scope: "all",
+      effect: "gradient-blur",
+    });
+
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "mono:a",
+          name: "MonoCrab",
+          locked: true,
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Change image");
+    expect(dialog.textContent).toContain("Remove background image");
+    expect(dialog.textContent).not.toContain("Background effect");
+    expect(dialog.querySelector('input[type="range"]')).toBeNull();
+    expect(dialog.querySelector('[role="radiogroup"]')).toBeNull();
+    expect(dialog.querySelector(".gradient-blur-background")).not.toBeNull();
+  });
+
   it("changes the effect only for the selected project", async () => {
     saveProjectChatBackgroundSettings("/work/alpha", {
       path: "/backgrounds/alpha.png",
@@ -116,5 +144,38 @@ describe("project background dialog", () => {
     expect(loadProjectChatBackgroundSettings("/work/beta")?.effect).toBe(
       "ascii",
     );
+  });
+
+  it("previews a project Haze background with its own image and visibility", async () => {
+    saveProjectChatBackgroundSettings("/work/alpha", {
+      path: "/backgrounds/alpha.png",
+      emptyOpacity: 0.35,
+      sessionOpacity: 0.55,
+      scope: "empty",
+      effect: "gradient-blur",
+    });
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "/work/alpha",
+          name: "Alpha",
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+
+    const preview = document.querySelector<HTMLElement>(
+      ".gradient-blur-background",
+    )!;
+    expect(preview.style.opacity).toBe("0.35");
+    expect(preview.style.getPropertyValue("--chat-background-image")).toContain(
+      "alpha.png",
+    );
+    expect(loadProjectChatBackgroundSettings("/work/alpha")?.effect).toBe(
+      "gradient-blur",
+    );
+    expect(
+      document.querySelector('[aria-label="Project background effect: Haze"]'),
+    ).not.toBeNull();
   });
 });

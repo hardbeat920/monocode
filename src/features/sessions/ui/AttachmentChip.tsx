@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "../../../shared/ui/icons";
-import { attachmentPreviewSrc } from "../model/attachments";
+import { attachmentPreviewSrc, isAttachmentFolder } from "../model/attachments";
 import type { Attachment } from "../model/session";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
@@ -8,9 +8,11 @@ import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
 type Props = {
   attachment: Attachment;
   onRemove?: () => void;
+  /** A sent image shown large on its own, like a photo in a messaging app. */
+  photo?: boolean;
 };
 
-export function AttachmentChip({ attachment, onRemove }: Props) {
+export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const preview = attachmentPreviewSrc(attachment);
   const image = attachment.kind === "image" && preview;
@@ -32,19 +34,27 @@ export function AttachmentChip({ attachment, onRemove }: Props) {
               event.stopPropagation();
               setPreviewOpen(true);
             }}
-            className="shrink-0 cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className={`${photo ? "min-w-0 rounded-2xl" : "shrink-0 rounded-lg"} cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
           >
             <img
               src={preview}
               alt=""
               draggable={false}
-              className="size-9 rounded-lg object-cover"
+              className={
+                photo
+                  ? "block max-h-60 max-w-60 rounded-2xl object-cover"
+                  : "size-9 rounded-lg object-cover"
+              }
             />
           </button>
         ) : (
           <>
             <span className="grid size-5 shrink-0 place-items-center">
-              <FileTypeIcon name={attachment.name} isDir={false} size={16} />
+              <FileTypeIcon
+                name={attachment.name}
+                isDir={isAttachmentFolder(attachment)}
+                size={16}
+              />
             </span>
             <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-none text-content/80">
               {attachment.name}

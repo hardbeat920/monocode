@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -15,18 +16,25 @@ import {
   useExternalPaneDrop,
   type TitleTabDropPosition,
 } from "../model/paneDrop";
-import type { ApprovalDecision, UserQuestionReply } from "../../../integrations/harness";
+import type {
+  ApprovalDecision,
+  UserQuestionReply,
+} from "../../../integrations/harness";
 import type { EditorNavigationTarget } from "../../search/model/search";
 import {
   layoutLeaves,
   layoutSashes,
   setSplitRatio,
   type EditorPane,
+  type LayoutLeaf,
   type LayoutNode,
   type LayoutSash,
   type PaneEdge,
 } from "../model/layout";
-import { sameProjectPath, type RecentProject } from "../../projects/model/recents";
+import {
+  sameProjectPath,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type { TerminalMetaPatch } from "../../terminal/model/terminalTab";
 import {
   sessionWorkCwd,
@@ -48,6 +56,7 @@ import type { SessionFolderTarget } from "../../sessions/model/sessionFolders";
 import type { Worktree } from "../../source-control/model/worktrees";
 
 type Shared = {
+  workspaceSwitchingSessionId?: string;
   visible: boolean;
   sessions: Session[];
   editorPanes: EditorPane[];
@@ -64,6 +73,7 @@ type Shared = {
   onSelectFile: (paneId: string, fileId: string) => void;
   onCloseFile: (paneId: string, fileId: string) => void;
   onCloseOtherFiles: (paneId: string, fileId: string) => void;
+  onPinFile?: (fileId: string) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onFileDirtyChange: (fileId: string, dirty: boolean) => void;
   onFileErrorCountChange: (fileId: string, count: number) => void;
@@ -111,6 +121,9 @@ type Shared = {
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
+  onUsageLimitResume: (sessionId: string) => void;
+  onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
+  onUsageLimitDismiss: (sessionId: string) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
@@ -148,6 +161,25 @@ type Shared = {
     turn: Block[],
   ) => void;
   onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
+  onBtwSubmit?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    text: string,
+    model?: string,
+    modelSettings?: Record<string, string>,
+  ) => boolean | void;
+  onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwStop?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwModelChange?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onDetachPane: (
     paneId: string,
@@ -182,11 +214,13 @@ function PaneTreeComponent({
   composerFocusToken,
   recents,
   hideProjectPicker,
+  workspaceSwitchingSessionId,
   onFocus,
   onClose,
   onSelectFile,
   onCloseFile,
   onCloseOtherFiles,
+  onPinFile,
   onReorderFiles,
   onFileDirtyChange,
   onFileErrorCountChange,
@@ -211,6 +245,9 @@ function PaneTreeComponent({
   onQueuedMessageEditingChange,
   onSteerQueuedMessage,
   onResumeQueue,
+  onUsageLimitResume,
+  onUsageLimitResumeAtReset,
+  onUsageLimitDismiss,
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
@@ -228,6 +265,11 @@ function PaneTreeComponent({
   onUpdatePlan,
   onBuildPlan,
   onSecondOpinion,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwStop,
+  onBtwModelChange,
   onHandoff,
   onMovePane,
   onDetachPane,
@@ -272,6 +314,21 @@ function PaneTreeComponent({
   const leaves = layoutLeaves(tree);
   const sashes = layoutSashes(tree);
   const inSplit = leaves.length > 1;
+
+  // A pane split into an existing layout slides in from the edge it was added
+  // on, like the linked work item panel. The neighbours reflow once up front;
+  // only the new pane's content moves, so nothing rewraps mid-animation.
+  // Panes present when the tree mounts, or swapped in place, just appear.
+  const knownLeafIds = useRef<ReadonlySet<string> | null>(null);
+  const enteringPanes = useRef(new Map<string, PaneEnterFrom>());
+  const [, rerender] = useReducer((tick: number) => tick + 1, 0);
+  if (knownLeafIds.current && leaves.length > knownLeafIds.current.size) {
+    for (const leaf of leaves) {
+      if (knownLeafIds.current.has(leaf.id)) continue;
+      enteringPanes.current.set(leaf.id, paneEnterFrom(leaf));
+    }
+  }
+  knownLeafIds.current = new Set(leaves.map((leaf) => leaf.id));
 
   const startPaneDrag = useCallback(
     (fromId: string, event: ReactPointerEvent<HTMLElement>) => {
@@ -383,6 +440,15 @@ function PaneTreeComponent({
             key={leaf.id}
             data-pane-id={leaf.id}
             className={`absolute flex min-h-0 min-w-0 flex-col overflow-hidden ${dragging ? "opacity-40" : ""}`}
+            // The new pane focuses its composer or editor while it is still
+            // offscreen, and focus scrolls this clip box to reveal it, which
+            // fights the slide. Scroll events land before paint, so undoing
+            // it here never shows.
+            onScroll={(event) => {
+              if (!enteringPanes.current.has(leaf.id)) return;
+              event.currentTarget.scrollLeft = 0;
+              event.currentTarget.scrollTop = 0;
+            }}
             style={{
               left: `${leaf.rect.x * 100}%`,
               top: `${leaf.rect.y * 100}%`,
@@ -394,93 +460,113 @@ function PaneTreeComponent({
             {drop && drop.overId === leaf.id && drop.fromId !== leaf.id ? (
               <PaneDropHint edge={drop.edge} />
             ) : null}
-            {editorPane ? (
-              <FilePane
-                pane={editorPane}
-                focused={focusedId === editorPane.id}
-                showTabs={inSplit || editorPane.files.length > 1}
-                dirtyFileIds={dirtyFileIds}
-                fileErrorCounts={fileErrorCounts}
-                sessions={sessions}
-                onFocus={onFocus}
-                onSelectFile={onSelectFile}
-                onCloseFile={onCloseFile}
-                onCloseOtherFiles={onCloseOtherFiles}
-                onReorderFiles={onReorderFiles}
-                onDirtyChange={onFileDirtyChange}
-                onErrorCountChange={onFileErrorCountChange}
-                onOpenFile={onOpenFile}
-                onUpdatePlan={onUpdatePlan}
-                onBuildPlan={onBuildPlan}
-                editorNavigation={editorNavigation}
-                onPaneDragStart={onPaneDragStart}
-                onTerminalMetaChange={onTerminalMetaChange}
-              />
-            ) : session ? (
-              <SessionPane
-                session={session}
-                reviewUndoLocked={sessions.some(
-                  (other) =>
-                    other.id !== session.id &&
-                    other.busy &&
-                    sameProjectPath(
-                      sessionWorkCwd(other),
-                      sessionWorkCwd(session),
-                    ),
-                )}
-                visible={visible}
-                focused={focusedId === session.id}
-                addToChatTarget={addToChatSessionId === session.id}
-                inSplit={inSplit}
-                composerFocused={composerFocused}
-                composerFocusToken={composerFocusToken}
-                recents={recents}
-                hideProjectPicker={hideProjectPicker}
-                onFocus={onFocus}
-                onClose={onClose}
-                onCwdChange={onCwdChange}
-                onBranchChange={onBranchChange}
-                onWorktreeChange={onWorktreeChange}
-                onWorkspaceModeChange={onWorkspaceModeChange}
-                onWorktreeBaseChange={onWorktreeBaseChange}
-                onManageWorktrees={onManageWorktrees}
-                onModelChange={onModelChange}
-                onModelSettingsChange={onModelSettingsChange}
-                onRuntimeModeChange={onRuntimeModeChange}
-                onSaveDraft={onSaveDraft}
-                onRemoveDraft={onRemoveDraft}
-                onSubmit={onSubmit}
-                onStop={onStop}
-                onCompactContext={onCompactContext}
-                onPlaceSessionInFolder={onPlaceSessionInFolder}
-                onDeleteQueuedMessage={onDeleteQueuedMessage}
-                onEditQueuedMessage={onEditQueuedMessage}
-                onQueuedMessageEditingChange={onQueuedMessageEditingChange}
-                onSteerQueuedMessage={onSteerQueuedMessage}
-                onResumeQueue={onResumeQueue}
-                onInboxCardDismiss={onInboxCardDismiss}
-                onLinkedWorkItemUpdateCardDismiss={
-                  onLinkedWorkItemUpdateCardDismiss
-                }
-                onNoteCardDismiss={onNoteCardDismiss}
-                onHandoffCardDismiss={onHandoffCardDismiss}
-                onOpenLinkedWorkItem={onOpenLinkedWorkItem}
-                onArchiveSession={onArchiveSession}
-                onDeleteSession={onDeleteSession}
-                onApproval={onApproval}
-                onQuestionReply={onQuestionReply}
-                onQuestionInteraction={onQuestionInteraction}
-                onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
-                onOpenPlan={onOpenPlan}
-                onBuildPlan={onBuildPlan}
-                onSecondOpinion={onSecondOpinion}
-                onHandoff={onHandoff}
-                onNewTerminal={onNewTerminal}
-                onPaneDragStart={onPaneDragStart}
-                transcriptPool={transcriptPool}
-              />
-            ) : null}
+            <div
+              data-pane-enter={enteringPanes.current.get(leaf.id)}
+              onAnimationEnd={(event) => {
+                if (event.animationName !== "pane-enter") return;
+                enteringPanes.current.delete(leaf.id);
+                rerender();
+              }}
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+            >
+              {editorPane ? (
+                <FilePane
+                  pane={editorPane}
+                  focused={focusedId === editorPane.id}
+                  showTabs={inSplit || editorPane.files.length > 1}
+                  dirtyFileIds={dirtyFileIds}
+                  fileErrorCounts={fileErrorCounts}
+                  sessions={sessions}
+                  onFocus={onFocus}
+                  onSelectFile={onSelectFile}
+                  onCloseFile={onCloseFile}
+                  onCloseOtherFiles={onCloseOtherFiles}
+                  onPinFile={onPinFile}
+                  onReorderFiles={onReorderFiles}
+                  onDirtyChange={onFileDirtyChange}
+                  onErrorCountChange={onFileErrorCountChange}
+                  onOpenFile={onOpenFile}
+                  onUpdatePlan={onUpdatePlan}
+                  onBuildPlan={onBuildPlan}
+                  editorNavigation={editorNavigation}
+                  onPaneDragStart={onPaneDragStart}
+                  onTerminalMetaChange={onTerminalMetaChange}
+                />
+              ) : session ? (
+                <SessionPane
+                  session={session}
+                  workspaceSwitchingSessionId={workspaceSwitchingSessionId}
+                  reviewUndoLocked={sessions.some(
+                    (other) =>
+                      other.id !== session.id &&
+                      other.busy &&
+                      sameProjectPath(
+                        sessionWorkCwd(other),
+                        sessionWorkCwd(session),
+                      ),
+                  )}
+                  visible={visible}
+                  focused={focusedId === session.id}
+                  addToChatTarget={addToChatSessionId === session.id}
+                  inSplit={inSplit}
+                  composerFocused={composerFocused}
+                  composerFocusToken={composerFocusToken}
+                  recents={recents}
+                  hideProjectPicker={hideProjectPicker}
+                  onFocus={onFocus}
+                  onClose={onClose}
+                  onCwdChange={onCwdChange}
+                  onBranchChange={onBranchChange}
+                  onWorktreeChange={onWorktreeChange}
+                  onWorkspaceModeChange={onWorkspaceModeChange}
+                  onWorktreeBaseChange={onWorktreeBaseChange}
+                  onManageWorktrees={onManageWorktrees}
+                  onModelChange={onModelChange}
+                  onModelSettingsChange={onModelSettingsChange}
+                  onRuntimeModeChange={onRuntimeModeChange}
+                  onSaveDraft={onSaveDraft}
+                  onRemoveDraft={onRemoveDraft}
+                  onSubmit={onSubmit}
+                  onStop={onStop}
+                  onCompactContext={onCompactContext}
+                  onPlaceSessionInFolder={onPlaceSessionInFolder}
+                  onDeleteQueuedMessage={onDeleteQueuedMessage}
+                  onEditQueuedMessage={onEditQueuedMessage}
+                  onQueuedMessageEditingChange={onQueuedMessageEditingChange}
+                  onSteerQueuedMessage={onSteerQueuedMessage}
+                  onResumeQueue={onResumeQueue}
+                  onUsageLimitResume={onUsageLimitResume}
+                  onUsageLimitResumeAtReset={onUsageLimitResumeAtReset}
+                  onUsageLimitDismiss={onUsageLimitDismiss}
+                  onInboxCardDismiss={onInboxCardDismiss}
+                  onLinkedWorkItemUpdateCardDismiss={
+                    onLinkedWorkItemUpdateCardDismiss
+                  }
+                  onNoteCardDismiss={onNoteCardDismiss}
+                  onHandoffCardDismiss={onHandoffCardDismiss}
+                  onOpenLinkedWorkItem={onOpenLinkedWorkItem}
+                  onArchiveSession={onArchiveSession}
+                  onDeleteSession={onDeleteSession}
+                  onApproval={onApproval}
+                  onQuestionReply={onQuestionReply}
+                  onQuestionInteraction={onQuestionInteraction}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
+                  onOpenPlan={onOpenPlan}
+                  onBuildPlan={onBuildPlan}
+                  onSecondOpinion={onSecondOpinion}
+                  onHandoff={onHandoff}
+                  onBtwSubmit={onBtwSubmit}
+                  onBtwRetry={onBtwRetry}
+                  onBtwDelete={onBtwDelete}
+                  onBtwStop={onBtwStop}
+                  onBtwModelChange={onBtwModelChange}
+                  onNewTerminal={onNewTerminal}
+                  onPaneDragStart={onPaneDragStart}
+                  transcriptPool={transcriptPool}
+                />
+              ) : null}
+            </div>
           </div>
         );
       })}
@@ -509,6 +595,20 @@ export const PaneTree = memo(
   PaneTreeComponent,
   (previous, next) => !previous.visible && !next.visible,
 );
+
+type PaneEnterFrom = "left" | "right" | "top" | "bottom" | "fade";
+
+function paneEnterFrom({ rect, axis }: LayoutLeaf): PaneEnterFrom {
+  const edge = 0.001;
+  if (axis === "x") {
+    if (rect.x + rect.w >= 1 - edge) return "right";
+    if (rect.x <= edge) return "left";
+  } else {
+    if (rect.y + rect.h >= 1 - edge) return "bottom";
+    if (rect.y <= edge) return "top";
+  }
+  return "fade";
+}
 
 function PaneDropHint({ edge }: { edge: PaneEdge }) {
   const wash =

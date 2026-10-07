@@ -1,12 +1,20 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps } from "react";
+import { act, createElement, StrictMode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
-import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
+import {
+  loadSessionFolders,
+  saveSessionFolders,
+} from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
+import { copyText } from "../../platform/tauri/clipboard";
+import {
+  createMono,
+  saveMonoSessionId,
+} from "../../features/monos/model/mono";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -16,7 +24,13 @@ vi.mock("../../features/source-control/hooks/useGitFileStatuses", () => ({
   useGitFileStatuses: () => ({ files: new Map(), dirs: new Map() }),
 }));
 vi.mock("./SidebarUpdate", () => ({ SidebarUpdateFooter: () => null }));
-vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
+vi.mock("../../features/files/ui/FileTree", () => ({
+  FileTree: ({ cwd, rootLabel }: { cwd: string; rootLabel?: string }) =>
+    createElement("div", { "data-explorer-cwd": cwd }, rootLabel),
+}));
+vi.mock("../../platform/tauri/clipboard", () => ({
+  copyText: vi.fn().mockResolvedValue(undefined),
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -76,6 +90,7 @@ function startRename() {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(copyText).mockReset().mockResolvedValue(undefined);
   vi.mocked(useProjectDiffStats).mockReturnValue(null);
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -134,6 +149,170 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+it("leaves the resident agent and its description out of the session list", () => {
+  saveMonoSessionId(createMono(["/workspace/project"]).id, "resident");
+  props.sessions = [
+    ...props.sessions,
+    {
+      ...props.sessions[0],
+      id: "resident",
+      title: "Resident agent description",
+    },
+  ];
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
+  expect(container.querySelector("[data-mono]")).toBeNull();
+  expect(container.textContent).not.toContain("Resident agent description");
+});
+
+it("omits hidden Mono launches from history, open sessions and folders", () => {
+  const hidden = {
+    ...props.sessions[0],
+    id: "hidden-launch",
+    title: "Mono background work",
+    sidebarHidden: true,
+  };
+  props.sessions = [...props.sessions, hidden];
+  props.openSessions = [hidden];
+  saveSessionFolders("/workspace/project", [
+    { id: "folder", name: "Work", sessionIds: [hidden.id], collapsed: false },
+  ]);
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+  expect(container.textContent).not.toContain(hidden.title);
+  props.sessions = props.sessions.filter((session) => session.id !== hidden.id);
+  act(() => render());
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+});
+
+describe("project rail visibility", () => {
+  it("keeps the mounted rail and its scroll state when collapsed", async () => {
+    props = {
+      ...props,
+      recents: [{ path: "/workspace/project", openedAt: Date.now() }],
+      projectRailOpen: true,
+      compactProjectRail: false,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+    };
+    await act(async () => render());
+    const rail = container.querySelector<HTMLElement>('nav[aria-label="Projects"]');
+    expect(rail).not.toBeNull();
+    rail!.scrollTop = 37;
+
+    props = { ...props, projectRailOpen: false };
+    await act(async () => render());
+    expect(rail?.classList.contains("hidden")).toBe(true);
+
+    props = { ...props, projectRailOpen: true };
+    await act(async () => render());
+    expect(container.querySelector('nav[aria-label="Projects"]')).toBe(rail);
+    expect(rail?.scrollTop).toBe(37);
+  });
+});
+
+describe("worktree explorer visibility", () => {
+  it("does not mount the file tree while browsing chat tabs", () => {
+    props = { ...props, gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBeNull();
+  });
+
+  it("retains the hidden tree and catches up when Files opens", () => {
+    props = {
+      ...props,
+      tab: "files",
+      gitCwd: "/worktrees/first",
+      explorerRootLabel: "first-branch",
+    };
+    act(() => render());
+    const first = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    first.scrollTop = 73;
+    props = {
+      ...props,
+      tab: "sessions",
+      gitCwd: "/worktrees/second",
+      explorerRootLabel: "second-branch",
+    };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBe(first);
+    expect(first.scrollTop).toBe(73);
+    expect(first.dataset.explorerCwd).toBe("/worktrees/first");
+
+    props = { ...props, tab: "files" };
+    act(() => render());
+    const second = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    expect(second.dataset.explorerCwd).toBe("/worktrees/second");
+    expect(second.textContent).toBe("second-branch");
+    expect(second).not.toBe(first);
+  });
+
+  it("updates the visible explorer on a worktree switch", () => {
+    props = { ...props, tab: "files", gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(
+      container.querySelector<HTMLElement>("[data-explorer-cwd]")!.dataset
+        .explorerCwd,
+    ).toBe("/worktrees/second");
+  });
+});
+
+describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
+  it.each([
+    ["Inbox", "inboxActive", "onOpenInbox"],
+    ["Notes", "notesActive", "onOpenNotes"],
+    ["Automations", "automationsActive", "onOpenAutomations"],
+    ["Search", "searchActive", "onSearch"],
+  ] as const)("selects only %s while it covers a Mono", async (label, active, open) => {
+    const mono = createMono();
+    props = {
+      ...props,
+      projectRailOpen: !compact,
+      compactProjectRail: compact,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+      monoViewActive: true,
+      monos: {
+        activeId: mono.id,
+        states: new Map(),
+        onOpen: vi.fn(),
+        onCreate: vi.fn(),
+        onDelete: vi.fn(),
+      },
+      [open]: () => {
+        props = { ...props, [active]: true };
+        render();
+      },
+    };
+    await act(async () => render());
+    const monoSelected = () => compact
+      ? container.querySelector('[aria-label^="Switch project"]')!
+          .getAttribute("aria-label")!.includes("current mono")
+      : !!container.querySelector('[data-mono-rail] [aria-current="true"]');
+    expect(monoSelected()).toBe(true);
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!.click(),
+    );
+    expect(container.querySelector(`button[aria-label^="${label}"]`)!.classList)
+      .toContain("bg-selection");
+    expect(monoSelected()).toBe(false);
+    expect(container.querySelector('[data-mono-rail] [data-selected="true"]')).toBeNull();
+    expect(props.monos?.activeId).toBe(mono.id);
+
+    // Back reveals the same conversation and restores its rail selection.
+    props = { ...props, [active]: false };
+    await act(async () => render());
+    expect(monoSelected()).toBe(true);
+  });
 });
 
 describe("sidebar session multiselection", () => {
@@ -422,6 +601,69 @@ describe("sidebar session multiselection", () => {
   });
 });
 
+describe("sidebar session IDs", () => {
+  function openCopyIdMenu(sessionId: string) {
+    act(() => {
+      container
+        .querySelector(`[data-session-card="${sessionId}"]`)!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+    });
+    const trigger = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Copy session ID")!;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    act(() => trigger.click());
+    return document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Copy session ID"]',
+    )!;
+  }
+
+  it("copies either ID from the right-clicked session", async () => {
+    props.sessions = [
+      { ...props.sessions[0], providerSessionId: "harness-session-1" },
+      {
+        ...props.sessions[0],
+        id: "session-2",
+        providerSessionId: "harness-session-2",
+        updatedAt: props.sessions[0].updatedAt - 1,
+      },
+    ];
+    act(() => render());
+    const harnessMenu = openCopyIdMenu("session-2");
+    const copyHarnessId = Array.from(
+      harnessMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Harness session ID")!;
+    expect(copyHarnessId.disabled).toBe(false);
+    await act(async () => copyHarnessId.click());
+    expect(copyText).toHaveBeenNthCalledWith(1, "harness-session-2");
+
+    const monocodeMenu = openCopyIdMenu("session-2");
+    const copyMonoCodeId = Array.from(
+      monocodeMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "MonoCode session ID")!;
+    expect(copyMonoCodeId.disabled).toBe(false);
+    await act(async () => copyMonoCodeId.click());
+    expect(copyText).toHaveBeenNthCalledWith(2, "session-2");
+  });
+
+  it("keeps the MonoCode ID available before the harness supplies an ID", async () => {
+    act(() => render());
+    const copyMenu = openCopyIdMenu("session-1");
+    const copyHarnessId = Array.from(
+      copyMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "Harness session ID")!;
+    const copyMonoCodeId = Array.from(
+      copyMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === "MonoCode session ID")!;
+    expect(copyHarnessId.disabled).toBe(true);
+    expect(copyMonoCodeId.disabled).toBe(false);
+    await act(async () => copyMonoCodeId.click());
+    expect(copyText).toHaveBeenCalledExactlyOnceWith("session-1");
+  });
+});
+
 describe("sidebar session rename", () => {
   it.each(["idle", "working", "needs approval"])(
     "renames from the menu and restores navigation (status=%s)",
@@ -552,7 +794,7 @@ describe("sidebar session rename", () => {
 });
 
 describe("sidebar project picker", () => {
-  it("focuses the project search input when opened", () => {
+  it("focuses the project search input when opened", async () => {
     // Hold animation frames so the deferred focus retry runs on demand.
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -561,7 +803,7 @@ describe("sidebar project picker", () => {
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     props.onSelectProject = vi.fn();
-    act(() => render());
+    await act(async () => render());
 
     const trigger = container.querySelector<HTMLButtonElement>(
       '[aria-label^="Switch project"]',
@@ -628,6 +870,66 @@ describe("sidebar reorder affordances", () => {
   });
 });
 
+describe("sidebar new session rows", () => {
+  it("grows in only for a session that arrives after the list has rendered", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(() => ({ cancel: vi.fn() }) as unknown as Animation);
+    const animated = (property: string) =>
+      animate.mock.calls.flatMap(([keyframes], index) =>
+        property in (keyframes as Keyframe[])[0]
+          ? [animate.mock.contexts[index] as HTMLElement]
+          : [],
+      );
+    // Dev builds replay mount effects; the row must still animate, once.
+    const render = () =>
+      root.render(createElement(StrictMode, null, createElement(Sidebar, props)));
+    act(() => render());
+    expect(animate).not.toHaveBeenCalled();
+
+    props = {
+      ...props,
+      sessions: [
+        {
+          ...props.sessions[0],
+          id: "session-2",
+          createdAt: Date.now(),
+          updatedAt: props.sessions[0].updatedAt + 1,
+        },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    // The new card fades in where it lands; the row below slides down.
+    expect(animated("opacity")).toHaveLength(1);
+    expect(
+      animated("opacity")[0].closest("li")?.querySelector(
+        '[data-session-card="session-2"]',
+      ),
+    ).not.toBeNull();
+    expect(animated("transform")).toHaveLength(1);
+    expect(
+      animated("transform")[0].querySelector('[data-session-card="session-1"]'),
+    ).not.toBeNull();
+    const calls = animate.mock.calls.length;
+
+    props = {
+      ...props,
+      sessions: [
+        { ...props.sessions[0], id: "session-old", createdAt: 1 },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
+
+    // Reordering existing rows must not replay their entrance.
+    props = { ...props, sessions: [...props.sessions].reverse() };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
+  });
+});
+
 describe("sidebar pinned sessions", () => {
   it("renders them as a collapsible folder-style group without a divider", () => {
     props.sessions = [
@@ -672,6 +974,7 @@ describe("sidebar orchestration card", () => {
       props.linkedSessionUpdateIds = new Set(["session-1"]);
       const lead = {
         ...props.sessions[0],
+        model: "codex:gpt-5.6-sol",
         pinned,
         linkedWorkItem: {
           kind: "pr" as const,
@@ -723,7 +1026,7 @@ describe("sidebar orchestration card", () => {
       // The lead card carries the sidebar's ordinary active treatment.
       expect(card().className).toContain("bg-selection");
       // The lead names its own model, like every agent row beneath it.
-      expect(card().textContent).toContain("Claude Sonnet 5");
+      expect(card().textContent).toContain("GPT-5.6-Sol");
       expect(card().textContent).not.toContain("Orchestrator");
       const orchestrationIcon = card().querySelector<HTMLButtonElement>(
         "[data-orchestration-icon]",
@@ -1470,6 +1773,144 @@ describe("collapsed rail Inbox actions", () => {
     props.open = true;
     act(() => render());
     expect(drawer()).toBeNull();
+  });
+
+  it.each([
+    ["compact rail", true],
+    ["sidebar header", false],
+  ])(
+    "deletes a project from the %s picker while the rail is hidden",
+    async (_, compact) => {
+      props.projectRailOpen = false;
+      props.compactProjectRail = compact;
+      props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+      props.onSelectProject = vi.fn();
+      props.onOpenProject = vi.fn();
+      props.onRemoveProject = vi.fn();
+      await act(async () => render());
+
+      act(() =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+          .click(),
+      );
+      const row = document.querySelector<HTMLButtonElement>(
+        'button[title="/workspace/other"]',
+      )!;
+      await act(async () => {
+        row.dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+      });
+      expect(projectSearchInput()).not.toBeNull();
+      const remove = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ).find((item) => item.textContent?.startsWith("Delete"))!;
+      act(() => {
+        remove.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        remove.click();
+      });
+      expect(projectSearchInput()).not.toBeNull();
+      const dialog = document.querySelector('[aria-label="Delete other"]')!;
+      const confirm = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Delete")!;
+      act(() => confirm.click());
+      expect(props.onRemoveProject).toHaveBeenCalledWith("/workspace/other", {
+        purgeData: true,
+      });
+      expect(document.activeElement).toBe(projectSearchInput());
+    },
+  );
+
+  it("opens the active picker project's menu from the keyboard", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.onRemoveProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    pressKey(projectSearchInput()!, "ArrowDown");
+    await act(async () => {
+      projectSearchInput()!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ContextMenu",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Group name"]')
+        ?.value,
+    ).toBe("other");
+  });
+
+  it("opens a Tab-focused picker row's menu rather than the highlighted one", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    const row = document.querySelector<HTMLButtonElement>(
+      'button[title="/workspace/other"]',
+    )!;
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "F10",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Group name"]')
+        ?.value,
+    ).toBe("other");
+  });
+
+  it("shows a rename from the picker menu in the open picker", async () => {
+    props.projectRailOpen = false;
+    props.recents = [{ path: "/workspace/other", openedAt: 1 }];
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    await act(async () => render());
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label^="Switch project"]')!
+        .click(),
+    );
+    const row = () =>
+      document.querySelector<HTMLButtonElement>('button[title="/workspace/other"]')!;
+    await act(async () => {
+      row().dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+    const name = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Group name"]',
+    )!;
+    typeTitle(name, "Client site");
+    pressKey(name, "Enter");
+
+    expect(document.querySelector('input[aria-label="Group name"]')).toBeNull();
+    expect(row().textContent).toContain("Client site");
   });
 
   it("marks the compact Changes shortcut when the working tree has changes", async () => {

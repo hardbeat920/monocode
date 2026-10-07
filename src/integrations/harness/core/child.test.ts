@@ -50,6 +50,7 @@ afterEach(() => {
   mocks.invoke.mockReset();
   mocks.listen.mockReset();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("isCurrentChildExit", () => {
@@ -139,6 +140,73 @@ describe("child bridge", () => {
     release();
   });
 
+  it("passes stored overrides through resolution and command validation", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "monocode.providerBinaryPaths.v1"
+          ? JSON.stringify({
+              claude: "/opt/claude/bin/claude",
+              codex: "/opt/codex/bin/codex",
+              cursor: "/opt/cursor/bin/cursor-agent",
+              grok: "/opt/grok/bin/grok",
+              opencode: "/opt/opencode/bin/opencode",
+              pi: "/opt/pi/bin/pi",
+              omp: "/opt/omp/bin/omp",
+              fx: "/opt/fx/bin/fx",
+              hermes: "/opt/hermes/bin/hermes",
+              antigravity: "/opt/antigravity/bin/agy_acp_server.par",
+            })
+          : null,
+    });
+    mocks.invoke.mockResolvedValue({ path: "/resolved" });
+    const child = await loadChild();
+
+    await child.resolveCodexBinary();
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_resolve_configured", {
+      provider: "codex",
+      binaryPath: "/opt/codex/bin/codex",
+    });
+
+    for (const [provider, binaryPath, resolve] of [
+      ["claude", "/opt/claude/bin/claude", child.resolveClaudeBinary],
+      ["cursor", "/opt/cursor/bin/cursor-agent", child.resolveCursorBinary],
+      ["grok", "/opt/grok/bin/grok", child.resolveGrokBinary],
+      ["pi", "/opt/pi/bin/pi", child.resolvePiBinary],
+      ["omp", "/opt/omp/bin/omp", child.resolveOmpBinary],
+      ["fx", "/opt/fx/bin/fx", child.resolveFxBinary],
+      ["hermes", "/opt/hermes/bin/hermes", child.resolveHermesBinary],
+      [
+        "antigravity",
+        "/opt/antigravity/bin/agy_acp_server.par",
+        child.resolveAntigravityBinary,
+      ],
+    ] as const) {
+      await resolve();
+      expect(mocks.invoke).toHaveBeenLastCalledWith("harness_resolve_configured", {
+        provider,
+        binaryPath,
+      });
+    }
+
+    await child.execChild("/resolved", ["--version"], undefined, "opencode");
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_exec", {
+      command: "/resolved",
+      args: ["--version"],
+      cwd: undefined,
+      binaryProvider: "opencode",
+      binaryPath: "/opt/opencode/bin/opencode",
+    });
+
+    await child.execChild("/resolved", ["--version"], undefined, "codex", null);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("harness_exec", {
+      command: "/resolved",
+      args: ["--version"],
+      cwd: undefined,
+      binaryProvider: "codex",
+      binaryPath: null,
+    });
+  });
+
   it("never routes a retired generation's stdout or exit to its replacement", async () => {
     installResolvedListeners();
     const child = await loadChild();
@@ -158,7 +226,7 @@ describe("child bridge", () => {
     child.watchChild("thread#1", (line) => newLines.push(line), newExit);
 
     // Late output from the killed process arrives under its own key and is
-    // buffered there — it can never reach the replacement's handlers.
+    // dropped — it can never reach the replacement's handlers.
     emit("harness-stdout", { sessionId: "thread#0", line: "gen0-late" });
     emit("harness-exit", { sessionId: "thread#0", code: 1, pid: 42 });
     expect(oldLines).toEqual(["gen0"]);
@@ -169,6 +237,69 @@ describe("child bridge", () => {
     // The replacement still receives its own traffic.
     emit("harness-stdout", { sessionId: "thread#1", line: "gen1" });
     expect(newLines).toEqual(["gen1"]);
+    release();
+  });
+
+  it("does not hold output for children another window owns", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+
+    // Events are broadcast to every window; this one never spawned "other".
+    for (let i = 0; i < 5; i += 1) {
+      emit("harness-stdout", { sessionId: "other", line: `line ${i}` });
+      emit("harness-sse", { sessionId: "other", data: `event ${i}` });
+    }
+
+    const lines: string[] = [];
+    const events: string[] = [];
+    child.watchChild("other", (line) => lines.push(line), vi.fn());
+    child.watchSse("other", (data) => events.push(data));
+    expect(lines).toEqual([]);
+    expect(events).toEqual([]);
+    release();
+  });
+
+  it("still replays output a spawned child printed before it was watched", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockResolvedValue(42);
+
+    await child.spawnChild("mine", "agent", [], "/tmp");
+    emit("harness-stdout", { sessionId: "mine", line: "early" });
+    await child.openHarnessSse("mine", "http://127.0.0.1:1/event");
+    emit("harness-sse", { sessionId: "mine", data: "early-event" });
+
+    const lines: string[] = [];
+    const events: string[] = [];
+    child.watchChild("mine", (line) => lines.push(line), vi.fn());
+    child.watchSse("mine", (data) => events.push(data));
+    expect(lines).toEqual(["early"]);
+    expect(events).toEqual(["early-event"]);
+    release();
+  });
+
+  it("drops output a killed child prints after it was stopped", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockResolvedValue(42);
+
+    child.watchChild("probe", vi.fn(), vi.fn());
+    await child.spawnChild("probe", "agent", [], "/tmp");
+    await child.killChild("probe");
+    emit("harness-stdout", { sessionId: "probe", line: "late" });
+
+    const lines: string[] = [];
+    child.watchChild("probe", (line) => lines.push(line), vi.fn());
+    expect(lines).toEqual([]);
     release();
   });
 });

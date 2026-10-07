@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { forgetHarnessSession, killAllChildren } from "../../integrations/harness";
+import { forgetHarnessSession } from "../../integrations/harness/core/registry";
+import { killAllChildren } from "../../integrations/harness/core/child";
 import { newSession } from "../../features/sessions/model/session";
 import { newTab } from "../../features/workspace/model/layout";
 import {
@@ -12,6 +13,7 @@ import {
   reportQuitPoll,
   setQuitWorkspace,
 } from "./appLifecycle";
+import type { DockSide } from "../../features/projects/model/projectTerminal";
 import {
   collectWorkspaceSnapshot,
   hydrateWorkspaceSnapshot,
@@ -39,10 +41,12 @@ vi.mock("../../features/sessions/data/sessionStore", async (importOriginal) => {
     getSession: vi.fn().mockResolvedValue(null),
   };
 });
-vi.mock("../../integrations/harness", () => ({
+vi.mock("../../integrations/harness/core/registry", () => ({
   bindHarnessSession: vi.fn(),
   isLiveHarness: vi.fn(),
   forgetHarnessSession: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../integrations/harness/core/child", () => ({
   killAllChildren: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -405,5 +409,104 @@ describe("confirming reload", () => {
   it("cancels reload when unsaved changes are kept", async () => {
     vi.mocked(ask).mockResolvedValue(false);
     await expect(confirmReload(true)).resolves.toBe(false);
+  });
+});
+
+describe("remembering the terminal dock side across restarts", () => {
+  // The lifecycle caches its boot resume in module state, and the suites
+  // above have already consumed it — reset for a clean quit/restore cycle.
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  function dockWorkspace(side: DockSide | null) {
+    const sessions = ["a1"].map((id) => ({
+      ...newSession("cursor", "/alpha"),
+      id,
+    }));
+    const tabs = sessions.map((session) => ({
+      ...newTab(session.id),
+      id: `tab-${session.id}`,
+    }));
+    return {
+      sessions,
+      tabs,
+      activeTabId: "tab-a1",
+      projectCwd: "/alpha",
+      side,
+    };
+  }
+
+  async function lastSavedDockSide(): Promise<DockSide | undefined | null> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const call = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "workspace_set_snapshot")
+      .at(-1);
+    const args = call?.[1];
+    const snapshot =
+      args && typeof args === "object" && "snapshot" in args
+        ? parseWorkspaceSnapshot(args.snapshot)
+        : null;
+    expect(snapshot).not.toBeNull();
+    return snapshot?.lastDockSide;
+  }
+
+  it("saves the chosen side on a coordinated quit", async () => {
+    const state = dockWorkspace("right");
+    const { handleQuitRequested, setQuitWorkspace } = await import(
+      "./appLifecycle"
+    );
+    const release = setQuitWorkspace(
+      () => state.sessions,
+      () => state.tabs,
+      () => state.activeTabId,
+      () => state.projectCwd,
+      () => [],
+      () => new Map(),
+      vi.fn(),
+      () => state.side,
+    );
+    try {
+      await handleQuitRequested();
+      expect(await lastSavedDockSide()).toBe("right");
+    } finally {
+      release();
+    }
+  });
+
+  it("saves the side through unload persistence used by reload and tray close", async () => {
+    const state = dockWorkspace("left");
+    const { persistQuitState } = await import("./appLifecycle");
+    await persistQuitState(
+      state.sessions,
+      state.tabs,
+      state.activeTabId,
+      state.projectCwd,
+      new Map(),
+      "unload",
+      [],
+      "left",
+    );
+    expect(await lastSavedDockSide()).toBe("left");
+  });
+
+  it("keeps the restored side when quitting before App registers live getters", async () => {
+    const state = dockWorkspace("left");
+    const store = await import("../../features/sessions/data/sessionStore");
+    vi.mocked(store.loadWorkspaceSnapshot).mockResolvedValue(
+      collectWorkspaceSnapshot(
+        state.tabs,
+        state.sessions,
+        state.activeTabId,
+        state.projectCwd,
+        new Map(),
+        [],
+        "left",
+      ),
+    );
+    const { handleQuitRequested } = await import("./appLifecycle");
+    await handleQuitRequested();
+    expect(await lastSavedDockSide()).toBe("left");
   });
 });

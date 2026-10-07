@@ -4,8 +4,8 @@ import {
   bindHarnessSession,
   forgetHarnessSession,
   isLiveHarness,
-  killAllChildren,
-} from "../../integrations/harness";
+} from "../../integrations/harness/core/registry";
+import { killAllChildren } from "../../integrations/harness/core/child";
 import {
   hasInFlightSessions,
   inFlightRefs,
@@ -20,6 +20,7 @@ import { leafIds, type WorkspaceTab } from "../../features/workspace/model/layou
 import { killPty } from "../../platform/tauri/pty";
 import {
   projectTerminalFileIds,
+  type DockSide,
   type ProjectTerminalDock,
 } from "../../features/projects/model/projectTerminal";
 import { sessionWorkCwd, type Session } from "../../features/sessions/model/session";
@@ -68,6 +69,8 @@ let liveWorkspace: {
   projectCwd: () => string;
   projectTerminals: () => ProjectTerminalDock[];
   projectReturnMemory: () => ProjectReturnMemory;
+  lastDockSide: () => DockSide | null;
+  keepTab?: (tab: WorkspaceTab) => boolean;
   flush: () => void;
 } | null = null;
 
@@ -83,6 +86,8 @@ export function setQuitWorkspace(
   projectTerminals: () => ProjectTerminalDock[],
   projectReturnMemory: () => ProjectReturnMemory,
   flush: () => void,
+  lastDockSide: () => DockSide | null = () => null,
+  keepTab?: (tab: WorkspaceTab) => boolean,
 ): () => void {
   liveWorkspace = {
     sessions,
@@ -91,6 +96,8 @@ export function setQuitWorkspace(
     projectCwd,
     projectTerminals,
     projectReturnMemory,
+    lastDockSide,
+    keepTab,
     flush,
   };
   bootingResumed = null;
@@ -116,6 +123,8 @@ export async function handleQuitRequested(): Promise<boolean> {
         liveWorkspace.projectReturnMemory(),
         "quit",
         liveWorkspace.projectTerminals(),
+        liveWorkspace.lastDockSide() ?? undefined,
+        liveWorkspace.keepTab,
       );
       return true;
     } catch {
@@ -195,6 +204,7 @@ export async function closeBusyWindow(): Promise<void> {
     liveWorkspace.projectCwd(),
     liveWorkspace.projectReturnMemory(),
     liveWorkspace.projectTerminals(),
+    liveWorkspace.lastDockSide() ?? undefined,
   );
 }
 
@@ -307,7 +317,11 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
   if (workspace) {
     await Promise.all(
       workspace.sessions
-        .filter(shouldPersistSession)
+        // Idle transcripts already came from disk. Rewriting every open chat
+        // here serialized/indexed the entire workspace before first paint.
+        .filter(
+          (session) => interrupted.has(session.id) && shouldPersistSession(session),
+        )
         .map((session) => upsertSession(session).catch(() => null)),
     );
   }
@@ -328,6 +342,7 @@ export function bindResumedSessions(sessions: Session[]): void {
       session.providerSessionId,
       sessionWorkCwd(session),
       session.providerAccountId,
+      session.blocks,
     );
   }
 }
@@ -369,6 +384,8 @@ export async function persistQuitState(
   memory: ProjectReturnMemory,
   mode: "quit" | "unload" = "quit",
   projectTerminals: ProjectTerminalDock[] = [],
+  lastDockSide?: DockSide,
+  keepTab?: (tab: WorkspaceTab) => boolean,
 ): Promise<void> {
   const refs = inFlightRefs(sessions, tabs);
   const interrupted = new Set(refs.map((ref) => ref.sessionId));
@@ -396,6 +413,8 @@ export async function persistQuitState(
         projectCwd,
         memory,
         projectTerminals,
+        lastDockSide,
+        keepTab,
       ),
     ),
   );
@@ -420,6 +439,7 @@ async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> 
       workspace.projectCwd,
       workspace.projectReturnMemory ?? new Map(),
       workspace.projectTerminals ?? [],
+      workspace.lastDockSide,
     ),
   ).catch(() => undefined);
   await replaceInFlightSessions(
@@ -439,6 +459,7 @@ async function confirmAndCloseWindow(
   projectCwd: string,
   memory: ProjectReturnMemory,
   projectTerminals: ProjectTerminalDock[] = [],
+  lastDockSide?: DockSide,
 ): Promise<void> {
   if (quitDialogOpen) return;
   quitDialogOpen = true;
@@ -461,6 +482,7 @@ async function confirmAndCloseWindow(
         memory,
         "quit",
         projectTerminals,
+        lastDockSide,
       );
       await reapWindowRuntime(sessions, tabs, projectTerminals, false);
       await closeCurrentWindow();

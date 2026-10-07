@@ -7,7 +7,10 @@ import { ApprovalToasts } from "../../../../features/sessions/ui/ApprovalToasts"
 import { AgentTranscript } from "../../../../features/sessions/ui/AgentTranscript";
 import { hiddenApprovalNotices } from "../../../../features/notifications/model/approvalToast";
 import { useInputNotifications } from "../../../../features/notifications/hooks/useInputNotifications";
-import { newSession, type Session } from "../../../../features/sessions/model/session";
+import {
+  newSession,
+  type Session,
+} from "../../../../features/sessions/model/session";
 import {
   probeNotificationPermission,
   saveNotificationsEnabled,
@@ -15,6 +18,7 @@ import {
 } from "../../../../features/notifications/model/notifications";
 import { applyHarnessEvent } from "../../core/apply";
 import type { HarnessEvent } from "../../core/types";
+import type * as ChildModule from "../../core/child";
 
 const sent: Array<Record<string, unknown>> = [];
 let onLine: (line: string) => void;
@@ -24,18 +28,22 @@ const invoke = vi.hoisted(() =>
   }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("../../core/child", () => ({
-  resolveCodexBinary: async () => ({ path: "/fake/codex" }),
-  spawnChild: async () => undefined,
-  killChild: async () => undefined,
-  unwatchChild: () => undefined,
-  watchChild: (_id: string, line: (line: string) => void) => {
-    onLine = line;
-  },
-  writeChild: async (_id: string, line: string) => {
-    sent.push(JSON.parse(line));
-  },
-}));
+vi.mock("../../core/child", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildModule>();
+  return {
+    ...actual,
+    resolveCodexBinary: async () => ({ path: "/fake/codex" }),
+    spawnChild: async () => undefined,
+    killChild: async () => undefined,
+    unwatchChild: () => undefined,
+    watchChild: (_id: string, line: (line: string) => void) => {
+      onLine = line;
+    },
+    writeChild: async (_id: string, line: string) => {
+      sent.push(JSON.parse(line));
+    },
+  };
+});
 const { codexAdapter } = await import("./codexAdapter");
 const { __codexTestReset } = await import("./codex");
 
@@ -151,6 +159,95 @@ describe("Codex requests reach the chat and notifications", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it.each(["choice", "custom", "skip"])(
+    "handles an async question %s in the real form",
+    async (action) => {
+      const title =
+        "Does the glass strip appear when making the window larger?";
+      await act(async () =>
+        onLine(
+          JSON.stringify({
+            method: "item/completed",
+            params: {
+              threadId: "thr_ui",
+              turnId: "turn_ui",
+              item: {
+                type: "agentMessage",
+                id: "async_question",
+                text: `${title}\n- Yes, mostly when making it larger\n- It also happens when making it smaller`,
+                delivery: "async",
+                questions: [
+                  {
+                    title,
+                    options: [
+                      "Yes, mostly when making it larger",
+                      "It also happens when making it smaller",
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      );
+      const form = () => container.querySelector("[data-question-form]");
+      expect(form()?.textContent).toContain(title);
+      expect(form()?.textContent).toContain("Other");
+      expect(form()?.textContent).toContain("Optional question");
+      expect(document.querySelector(".approval-toast")?.textContent).toContain(
+        title,
+      );
+      expect(sent.some((message) => message.method === "turn/steer")).toBe(
+        false,
+      );
+      const button = (label: string) =>
+        Array.from(form()!.querySelectorAll("button")).find(
+          (candidate) => candidate.textContent?.trim() === label,
+        )!;
+      expect(button("Continue").disabled).toBe(true);
+      if (action === "skip") {
+        await act(async () => button("Skip").click());
+        expect(form()).toBeNull();
+        expect(document.querySelector(".approval-toast")).toBeNull();
+        expect(sent.some((message) => message.method === "turn/steer")).toBe(
+          false,
+        );
+        return;
+      }
+      const answer =
+        action === "custom"
+          ? "Only when dragging quickly"
+          : "It also happens when making it smaller";
+      await act(async () =>
+        button(action === "custom" ? "Other" : answer).click(),
+      );
+      if (action === "custom") {
+        await act(async () => {
+          const input = form()!.querySelector("input")!;
+          Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype,
+            "value",
+          )!.set!.call(input, answer);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+      expect(session.pendingQuestion?.autoResolveAt).toBeUndefined();
+      await act(async () => button("Continue").click());
+      const steer = sent.find((message) => message.method === "turn/steer")!;
+      expect(steer.params).toEqual({
+        threadId: "thr_ui",
+        expectedTurnId: "turn_ui",
+        input: [{ type: "text", text: `${title}\n${answer}` }],
+      });
+      expect(form()).not.toBeNull();
+      await act(async () =>
+        onLine(JSON.stringify({ id: steer.id, result: {} })),
+      );
+      expect(form()).toBeNull();
+      expect(document.querySelector(".approval-toast")).toBeNull();
+    },
+  );
 
   it("renders a question, dispatches a banner, and sends the clicked answer", async () => {
     await act(async () =>

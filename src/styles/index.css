@@ -69,6 +69,49 @@
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
     Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  /* Diff colors. `diff-add`/`diff-del` are the solid marker hues, `-fg` is
+     readable text on the theme background, `-bg`/`-gutter` are row tints.
+     Palettes below swap them; diff UI must also show a +/- glyph so color is
+     never the only cue. */
+  --color-diff-add: #10b981;
+  --color-diff-add-fg: #6ee7b7;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 15%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 25%,
+    transparent
+  );
+  --color-diff-del: #f43f5e;
+  --color-diff-del-fg: #fda4af;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 15%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 25%,
+    transparent
+  );
+}
+
+/* Static so Tailwind always emits it: only xterm reads it, via JS. */
+@theme static {
+  /* Terminal-only stack. JetBrains Mono Nerd Font leads so prompt text and
+     icons share one face; the Nerd Font families after the system monos fill
+     Private Use Area glyphs (powerline arrows, git/folder icons) because
+     WebKit's fallback never reaches user-installed icon fonts on its own. */
+  --font-terminal:
+    "JetBrainsMono NFM", "JetBrainsMono Nerd Font Mono", "JetBrainsMono NF",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, "Symbols Nerd Font Mono",
+    "Symbols Nerd Font", "MesloLGS NF", "MesloLGS Nerd Font Mono",
+    "FiraCode Nerd Font Mono", "Hack Nerd Font Mono",
+    "CaskaydiaCove Nerd Font Mono", Consolas, "Liberation Mono", "Courier New",
+    monospace;
 }
 
 :root {
@@ -81,6 +124,7 @@
   --theme-saturation: 0%;
   --theme-dark-lightness: 9%;
   --sidebar-opacity: 0.85;
+  --window-background-opacity: 0.4;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
   --selection-subtle-strength: 8%;
@@ -112,7 +156,60 @@ html.theme-light {
   --selection-strong-strength: 7%;
   --selection-hover-strength: 10%;
   --selection-emphasis-strength: 14%;
+  --color-diff-add-fg: #047857;
+  --color-diff-del-fg: #be123c;
   color-scheme: light;
+}
+
+/* Blue/orange stays distinguishable for protanopia, deuteranopia and
+   tritanopia (same pairing as GitHub's colorblind themes). */
+html.diff-palette-colorblind {
+  --color-diff-add: #388bfd;
+  --color-diff-add-fg: #79c0ff;
+  --color-diff-del: #db6d28;
+  --color-diff-del-fg: #ffa657;
+}
+
+html.diff-palette-colorblind.theme-light {
+  --color-diff-add: #0969da;
+  --color-diff-add-fg: #0550ae;
+  --color-diff-del: #bc4c00;
+  --color-diff-del-fg: #953800;
+}
+
+/* Colorblind-safe hues with heavier tints and maximum-contrast text. */
+html.diff-palette-high-contrast {
+  --color-diff-add: #58a6ff;
+  --color-diff-add-fg: #cae8ff;
+  --color-diff-add-bg: color-mix(
+    in srgb,
+    var(--color-diff-add) 28%,
+    transparent
+  );
+  --color-diff-add-gutter: color-mix(
+    in srgb,
+    var(--color-diff-add) 45%,
+    transparent
+  );
+  --color-diff-del: #f0883e;
+  --color-diff-del-fg: #ffdfb6;
+  --color-diff-del-bg: color-mix(
+    in srgb,
+    var(--color-diff-del) 28%,
+    transparent
+  );
+  --color-diff-del-gutter: color-mix(
+    in srgb,
+    var(--color-diff-del) 45%,
+    transparent
+  );
+}
+
+html.diff-palette-high-contrast.theme-light {
+  --color-diff-add: #0550ae;
+  --color-diff-add-fg: #032563;
+  --color-diff-del: #953800;
+  --color-diff-del-fg: #471700;
 }
 
 html,
@@ -128,6 +225,8 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
   user-select: none;
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 /* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
@@ -163,10 +262,12 @@ html:not(.is-mac) ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
+/* Tint-less transparent rather than `transparent`, which browsers interpolate
+   through black and would dim the page on the way in and out of glass. */
 html.has-native-glass:not(.theme-light),
 html.has-native-glass:not(.theme-light) body,
 html.has-native-glass:not(.theme-light) #root {
-  background: transparent;
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 .reorder-item {
@@ -266,6 +367,8 @@ html.has-native-glass:not(.theme-light) #root {
 
 .sidebar-glass {
   background: color-mix(in srgb, var(--color-background-base) 90%, black);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
 }
 
 html.theme-light .sidebar-glass {
@@ -279,8 +382,40 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   );
 }
 
+/* AppKit fills the shared tint as the window grows. Painting it here too
+   would compound the opacity; wait for the native host's acknowledgement. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .workspace-background,
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .sidebar-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
+}
+
+/* The activity dot sits at (23px, 9px) in a 32px button. Its icon is
+   centered at (8px, 8px), so this cuts a 2px gap around the 6px dot. */
+.compact-rail-icon-with-dot {
+  -webkit-mask-image: radial-gradient(
+    circle at 15px 1px,
+    transparent 5px,
+    black 5.5px
+  );
+  mask-image: radial-gradient(circle at 15px 1px, transparent 5px, black 5.5px);
+}
+
 .body-glass {
   background: var(--color-background-base);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .sidebar-glass,
+  .body-glass {
+    transition: none;
+  }
 }
 
 .chat-pane-background::before {
@@ -300,15 +435,161 @@ html.has-native-glass:not(.theme-light) .sidebar-glass {
   pointer-events: none;
 }
 
-html.has-chat-background.chat-background-effect-ready
-  .chat-pane-background::before,
-.chat-pane-background[data-project-chat-background="true"]::before {
+/* Each masked copy samples the same artwork; only the image is blurred. */
+.gradient-blur-background {
+  --gradient-blur-soft: 7px;
+  --gradient-blur-strong: 18px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 60%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 28%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 16%,
+    color-mix(in srgb, var(--color-background-base) 26%, transparent) 38%,
+    color-mix(in srgb, var(--color-background-base) 55%, transparent) 55%,
+    color-mix(in srgb, var(--color-background-base) 78%, transparent) 75%
+  );
+  --gradient-blur-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 94%) 30%,
+    rgb(0 0 0 / 72%) 42%,
+    rgb(0 0 0 / 42%) 54%,
+    rgb(0 0 0 / 16%) 66%,
+    rgb(0 0 0 / 4%) 78%,
+    transparent 90%
+  );
+  overflow: hidden;
+  pointer-events: none;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: var(--gradient-blur-mask);
+  mask-image: var(--gradient-blur-mask);
+}
+
+.gradient-blur-preview {
+  --gradient-blur-soft: 2px;
+  --gradient-blur-strong: 5px;
+}
+
+.gradient-blur-background > span {
+  position: absolute;
+  inset: 0;
+  background-image: var(--chat-background-image, none);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.gradient-blur-background-soft {
+  filter: blur(var(--gradient-blur-soft));
+  -webkit-mask-image: var(--gradient-blur-soft-mask);
+  mask-image: var(--gradient-blur-soft-mask);
+}
+
+.gradient-blur-background-strong {
+  filter: blur(var(--gradient-blur-strong));
+  -webkit-mask-image: var(--gradient-blur-strong-mask);
+  mask-image: var(--gradient-blur-strong-mask);
+}
+
+.gradient-blur-background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-background-base) 36%, transparent) 0 1px,
+      transparent 1px 3px
+    ),
+    var(--gradient-blur-overlay);
+}
+
+.chat-pane-background > .gradient-blur-background {
+  display: none;
+  position: absolute;
+  left: var(--chat-background-left, 0);
+  top: var(--chat-background-top, 0);
+  width: var(--chat-background-width, 100%);
+  height: var(--chat-background-height, 100%);
+  z-index: -1;
+  opacity: 0;
+  transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+/* Keep the active transcript clear of the wide blurred haze used by the empty hero. */
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  --gradient-blur-soft: 5px;
+  --gradient-blur-strong: 12px;
+  --gradient-blur-soft-mask: linear-gradient(
+    to bottom,
+    transparent 18%,
+    #000 70%
+  );
+  --gradient-blur-strong-mask: linear-gradient(
+    to bottom,
+    transparent 22%,
+    #000 76%
+  );
+  --gradient-blur-overlay: linear-gradient(
+    to bottom,
+    transparent 15%,
+    color-mix(in srgb, var(--color-background-base) 70%, transparent) 76%
+  );
+  --gradient-blur-mask: linear-gradient(to bottom, #000 0 18%, transparent 76%);
+}
+
+html.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
+  display: block;
+}
+
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"]
+  > .gradient-blur-background {
   opacity: var(--chat-background-empty-opacity);
 }
 
-html.has-chat-background.chat-background-effect-ready
-  .chat-pane-background[data-session-empty="false"]::before,
-.chat-pane-background[data-project-chat-background="true"][data-session-empty="false"]::before {
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-effect="gradient-blur"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: var(--chat-background-session-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )::before {
+  opacity: var(--chat-background-empty-opacity);
+}
+
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  )
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
+.chat-pane-background[data-project-chat-background="true"]:not(
+    [data-project-background-effect="gradient-blur"]
+  )[data-session-empty="false"]::before {
   opacity: var(--chat-background-session-opacity);
 }
 
@@ -327,10 +608,31 @@ html.has-chat-background.chat-background-effect-ready
   }
 }
 
-html.chat-background-empty-only
+html.has-chat-background.chat-background-effect-ready:not(
+    .chat-background-gradient-blur
+  ).chat-background-empty-only
   .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]::before,
 .chat-pane-background[data-project-chat-background="true"][data-project-background-scope="empty"][data-session-empty="false"]::before {
   opacity: 0;
+}
+
+/* Scope and visibility follow the same rules as the existing image layer. */
+html.has-chat-background.chat-background-effect-ready.chat-background-gradient-blur.chat-background-empty-only
+  .chat-pane-background[data-project-chat-background="false"][data-session-empty="false"]
+  > .gradient-blur-background,
+.chat-pane-background[data-project-background-scope="empty"][data-session-empty="false"]
+  > .gradient-blur-background {
+  opacity: 0;
+}
+
+.chat-pane-background[data-session-empty="false"] > .gradient-blur-background {
+  transition-duration: 600ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-background > .gradient-blur-background {
+    transition-duration: 0ms;
+  }
 }
 
 .transcript-turn {
@@ -346,7 +648,59 @@ html.chat-background-empty-only
   background-color: color-mix(in srgb, var(--color-accent) 62%, transparent);
 }
 
-.agent-transcript [data-transcript-search-current="true"] .user-message-bubble pre.line-clamp-4 {
+/* Match the Mono transcript's soft edge fade on overflowing tab text. */
+.tab-label[data-overflow="true"] {
+  --tab-label-mask: linear-gradient(
+    to right,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--tab-label-mask);
+  mask-image: var(--tab-label-mask);
+}
+
+/* Fade scrolling content at the bottom viewport edge. */
+.sidebar-session-scroll,
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    #000,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  -webkit-mask-image: var(--scroll-bottom-mask);
+  mask-image: var(--scroll-bottom-mask);
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade. */
+.transcript-composer-fade [data-transcript-content] {
+  padding-bottom: 2.5rem;
+}
+
+.mono-transcript-fades {
+  --mono-transcript-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 2rem),
+    transparent
+  );
+  -webkit-mask-image: var(--mono-transcript-mask);
+  mask-image: var(--mono-transcript-mask);
+}
+
+/* Mono history is already paged in groups of ten. Lay out those turns at
+   their real heights so opening and scrolling never correct placeholders. */
+.mono-transcript-fades .transcript-turn {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
+
+.agent-transcript
+  [data-transcript-search-current="true"]
+  .user-message-bubble
+  pre.line-clamp-4 {
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
@@ -401,6 +755,556 @@ html.chat-background-empty-only
 html.has-user-accent .user-message-bubble {
   background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
   border-color: color-mix(in srgb, var(--user-accent-color) 30%, transparent);
+}
+
+/*
+ * A freshly sent /operator turn lights up once: the bubble blooms with a warm
+ * halo, a golden sheen sweeps across it, and sparkles drift up from a glow at
+ * its base, twinkling as they rise and fading out past the top edge.
+ */
+.monocode-sparkles {
+  --sparkle-color: #fde68a;
+  --sparkle-glow: rgb(251 191 36 / 0.9);
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: monocode-halo 2400ms 150ms ease-out both;
+}
+
+html.theme-light .monocode-sparkles {
+  --sparkle-color: #f59e0b;
+  --sparkle-glow: rgb(217 119 6 / 0.55);
+}
+
+.monocode-sparkles::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(254 243 199 / 0.5) 48%,
+    rgb(251 191 36 / 0.35) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: monocode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.monocode-sparkles::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    rgb(251 191 36 / 0.35),
+    transparent 70%
+  );
+  animation: monocode-ember-glow 2200ms 100ms ease-out both;
+}
+
+.monocode-sparkle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.monocode-sparkle-glyph {
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  color: var(--sparkle-color);
+  filter: drop-shadow(0 0 3px var(--sparkle-glow));
+  animation: monocode-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+.monocode-sparkle-ember {
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fffbeb, var(--sparkle-color) 70%);
+}
+
+@keyframes monocode-rise {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--drift), calc(-100% - 6px));
+  }
+}
+
+@keyframes monocode-twinkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1) rotate(calc(var(--spin) * 0.3));
+  }
+  42% {
+    opacity: 0.75;
+    transform: scale(0.65) rotate(calc(var(--spin) * 0.5));
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.1) rotate(calc(var(--spin) * 0.7));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.3) rotate(var(--spin));
+  }
+}
+
+@keyframes monocode-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px rgb(245 158 11 / 0.55),
+      0 0 24px 3px rgb(245 158 11 / 0.35);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgb(245 158 11 / 0),
+      0 0 0 0 rgb(245 158 11 / 0);
+  }
+}
+
+@keyframes monocode-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes monocode-ember-glow {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monocode-sparkles {
+    display: none;
+  }
+}
+
+/*
+ * Plan and Orchestrator turns share the /operator bloom and upward exit.
+ * Numbered plan marks and a small agent network keep their own shapes and
+ * colors as they travel from the bottom of the bubble past its top edge.
+ */
+.plan-steps,
+.orchestrator-constellation {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: turn-mode-halo 2400ms 150ms ease-out both;
+}
+
+.plan-steps::before,
+.orchestrator-constellation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--mode-color) 32%, transparent) 48%,
+    color-mix(in srgb, var(--mode-glow) 28%, transparent) 52%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+}
+
+.plan-steps::after,
+.orchestrator-constellation::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 70% at 50% 100%,
+    color-mix(in srgb, var(--mode-glow) 35%, transparent),
+    transparent 70%
+  );
+  animation: monocode-ember-glow 2200ms 100ms ease-out both;
+}
+
+@keyframes turn-mode-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  25% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--mode-glow) 60%, transparent),
+      0 0 24px 3px color-mix(in srgb, var(--mode-glow) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes turn-mode-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+.plan-steps {
+  --mode-color: #fde047;
+  --mode-glow: rgb(250 204 21 / 0.85);
+  --mode-ink: #422006;
+}
+
+html.theme-light .plan-steps {
+  --mode-color: #ca8a04;
+  --mode-glow: rgb(202 138 4 / 0.55);
+  --mode-ink: #fff;
+}
+
+.plan-steps::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.plan-step {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 2;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-dot {
+  position: absolute;
+  bottom: -16px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--mode-color);
+  border-radius: 9999px;
+  color: var(--mode-color);
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  box-shadow: 0 0 8px var(--mode-glow);
+  animation: plan-step-dot var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-number,
+.plan-step-check {
+  grid-area: 1 / 1;
+}
+
+.plan-step-number {
+  animation: plan-step-number var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-check {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: var(--mode-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10;
+  animation: plan-step-check var(--duration) var(--delay) ease-out both;
+}
+
+.plan-step-ember {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  z-index: 1;
+  width: 0;
+  animation: monocode-rise var(--duration) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.plan-step-ember-glyph {
+  --spin: 0deg;
+  position: absolute;
+  bottom: calc(var(--size) * -1);
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  height: var(--size);
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fefce8, var(--mode-color) 70%);
+  box-shadow: 0 0 5px var(--mode-glow);
+  animation: monocode-twinkle var(--duration) var(--delay) ease-in-out both;
+}
+
+@keyframes plan-step-dot {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  20%,
+  38% {
+    transform: scale(1);
+  }
+  34% {
+    background: color-mix(in srgb, var(--mode-color) 12%, transparent);
+  }
+  44% {
+    transform: scale(1.14);
+    background: var(--mode-color);
+  }
+  52% {
+    transform: scale(1);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.8);
+    background: var(--mode-color);
+  }
+}
+
+@keyframes plan-step-number {
+  0%,
+  34% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  42%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+@keyframes plan-step-check {
+  0%,
+  36% {
+    opacity: 0;
+    stroke-dashoffset: 10;
+  }
+  50%,
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+.orchestrator-constellation {
+  --mode-color: #f0abfc;
+  --mode-glow: rgb(232 121 249 / 0.85);
+  --mode-spark: #fdf4ff;
+}
+
+html.theme-light .orchestrator-constellation {
+  --mode-color: #c026d3;
+  --mode-glow: rgb(192 38 211 / 0.5);
+  --mode-spark: #f5d0fe;
+}
+
+.orchestrator-constellation::before {
+  animation: turn-mode-sheen 1100ms 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.orchestrator-network {
+  position: absolute;
+  inset: 0;
+  animation: orchestrator-network-rise 2200ms 300ms
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+}
+
+.orchestrator-edge,
+.orchestrator-pulse {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.orchestrator-edge {
+  stroke: color-mix(in srgb, var(--mode-color) 60%, transparent);
+  stroke-width: 1.25;
+  stroke-dasharray: var(--length);
+  animation: orchestrator-edge-draw var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+/* A bright head rides the tip of each edge as it draws out. */
+.orchestrator-pulse {
+  stroke: var(--mode-spark);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 var(--length);
+  filter: drop-shadow(0 0 3px var(--mode-glow));
+  animation: orchestrator-pulse var(--draw) var(--delay)
+    cubic-bezier(0.3, 0.6, 0.4, 1) both;
+}
+
+.orchestrator-hub,
+.orchestrator-node {
+  position: absolute;
+  z-index: 2;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--mode-spark), var(--mode-color) 70%);
+  box-shadow: 0 0 8px var(--mode-glow);
+}
+
+.orchestrator-hub::after,
+.orchestrator-node::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--mode-color);
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.orchestrator-hub {
+  --size: 8px;
+  animation: orchestrator-hub 600ms 120ms ease-out both;
+}
+
+.orchestrator-hub::after {
+  animation: orchestrator-ring 700ms 220ms ease-out both;
+}
+
+.orchestrator-node {
+  --size: 6px;
+  animation: orchestrator-node 600ms var(--delay) ease-out both;
+}
+
+.orchestrator-node[data-child="true"] {
+  --size: 4.5px;
+}
+
+.orchestrator-node::after {
+  animation: orchestrator-ring 500ms var(--delay) ease-out both;
+}
+
+@keyframes orchestrator-edge-draw {
+  from {
+    stroke-dashoffset: var(--length);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes orchestrator-network-rise {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(calc(-100% - 12px));
+  }
+}
+
+@keyframes orchestrator-pulse {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 6;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    stroke-dashoffset: calc(var(--length) * -1);
+  }
+}
+
+@keyframes orchestrator-hub {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-node {
+  0% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.4);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orchestrator-ring {
+  0% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(3.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-steps,
+  .orchestrator-constellation {
+    display: none;
+  }
 }
 
 .edit-last-turn-composer {
@@ -460,9 +1364,15 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
   min-height: var(--transcript-viewport, 0px);
 }
 
+/* A finished run can still be revealing its reply. Artifacts and actions wait
+   for the final word's fade, using the reply's actual animation state. */
+.transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
-.transcript-turn[data-prompt-rise="rising"]
-  > :not(:has([data-prompt-anchor])) {
+.transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
   opacity: 0;
 }
 
@@ -488,6 +1398,11 @@ html.has-native-glass.glass-body:not(.theme-light) .body-glass {
     var(--color-background-base) calc(var(--sidebar-opacity) * 100%),
     transparent
   );
+}
+
+html.is-mac.has-native-glass.has-native-glass-tint.glass-body:not(.theme-light)
+  .body-glass {
+  background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
 textarea,
@@ -626,13 +1541,22 @@ html.is-resizing * {
 }
 
 .composer-toolbar {
+  container: composer-toolbar / inline-size;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 
-html.theme-light [data-composer-box] {
+@container composer-toolbar (width < 220px) {
+  [data-access-picker-trigger] > span,
+  [data-access-picker-trigger] > svg:last-child {
+    display: none;
+  }
+}
+
+html.theme-light [data-composer-box],
+html.theme-light .agent-chat-composer {
   background: var(--color-background-base);
   box-shadow:
     0 6px 24px color-mix(in srgb, var(--color-content) 9%, transparent),
@@ -690,6 +1614,18 @@ html.has-user-accent .primary-action:disabled {
   color: transparent;
   caret-color: var(--color-content);
   -webkit-text-fill-color: transparent;
+}
+
+/* Keep selected text hidden so the styled highlight layer still shows through,
+   rather than the raw `/command` and `@path` text. */
+.composer-field::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 30%,
+    transparent
+  );
 }
 
 .composer-field::placeholder {
@@ -943,6 +1879,47 @@ header[data-tauri-drag-region] button {
   visibility: hidden;
 }
 
+.agent-markdown .markdown-code-fallback-label {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  left: 34px;
+  right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+  pointer-events: none;
+}
+
+/* highlightLanguageFor swaps text/plaintext/txt/untagged fences to the "js"
+   grammar so Shiki still colors them, but Streamdown's own header reuses
+   that same value as its visible label. Hide the vendor label here and show
+   the real fence language via .markdown-code-fallback-label instead. */
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label)
+  [data-streamdown="code-block-header"]
+  > span {
+  visibility: hidden;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"] {
+  display: none;
+}
+
+.agent-markdown
+  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
+  [data-streamdown="code-block-header"]
+  + [data-streamdown="code-block-body"] {
+  border-top: 0;
+}
+
 .agent-markdown [data-streamdown="heading-1"] {
   font-size: 22px;
 }
@@ -1073,16 +2050,22 @@ header[data-tauri-drag-region] button {
   color: color-mix(in srgb, var(--color-content) 78%, transparent);
 }
 
-/* AgentMarkdown passes dir="auto", so Streamdown puts every block in its own
-   <div dir="..." style="display: contents"> wrapper. A display:contents box
-   drops its own margins, so Streamdown's `space-y-4` on the root (it targets
-   those wrappers) paints no gap at all. Headings, blockquotes and rules keep
-   their spacing because their margin sits on the element itself (mt-6/mb-2,
-   my-4, my-6); paragraphs and lists carry none, so every "\n\n" started a new
-   <p> with no visible gap and the reply read as one dense block (#218).
+/* AgentMarkdown passes dir="auto", so every block sits in its own
+   <div dir="..." class="agent-markdown-block"> wrapper (a real block box, not
+   Streamdown's display:contents one, so triple-click stops at the block; #496).
+   The wrapper carries no margin of its own: Streamdown's `space-y-4` on the
+   root would otherwise space every wrapper, including empty ones, and override
+   the tighter list gap below. Headings, blockquotes and rules keep their
+   spacing because their margin sits on the element itself (mt-6/mb-2, my-4,
+   my-6) and collapses through the wrapper; paragraphs and lists carry none, so
+   every "\n\n" would start a new <p> with no visible gap (#218).
    Put the gap back on the block inside the wrapper, top side only, so a reply
    never ends with a trailing gap. Ignore empty wrappers before the first
    visible block, and keep lists closer to the paragraph that introduces them. */
+.agent-markdown > .agent-markdown-block {
+  margin: 0;
+}
+
 .agent-markdown > div:not(:empty) ~ div > p {
   margin-top: 1rem;
 }
@@ -1176,6 +2159,78 @@ header[data-tauri-drag-region] button {
   }
 }
 
+@keyframes linked-panel-slide {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.linked-panel-slide {
+  animation: linked-panel-slide 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* New split panes; same motion as the linked panel's slide. */
+@keyframes pane-enter {
+  from {
+    opacity: var(--pane-enter-opacity, 1);
+    transform: translate(var(--pane-enter-x, 0), var(--pane-enter-y, 0));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+[data-pane-enter] {
+  animation: pane-enter 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-pane-enter="right"] {
+  --pane-enter-x: 100%;
+}
+
+[data-pane-enter="left"] {
+  --pane-enter-x: -100%;
+}
+
+[data-pane-enter="bottom"] {
+  --pane-enter-y: 100%;
+}
+
+[data-pane-enter="top"] {
+  --pane-enter-y: -100%;
+}
+
+[data-pane-enter="fade"] {
+  --pane-enter-opacity: 0;
+}
+
+@keyframes linked-panel-reveal {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.linked-panel-reveal {
+  animation: linked-panel-reveal 240ms cubic-bezier(0.22, 1, 0.36, 1) 90ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .linked-panel-slide,
+  .linked-panel-reveal,
+  [data-pane-enter] {
+    animation: none;
+  }
+}
+
 .shimmer-text {
   background-image:
     linear-gradient(
@@ -1200,6 +2255,37 @@ header[data-tauri-drag-region] button {
   -webkit-background-clip: text;
   color: transparent;
   animation: shimmer-text var(--shimmer-duration, 2s) linear infinite;
+}
+
+/* One light sweep across a composer mode command as it appears. */
+.composer-mode-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0 40%,
+    color-mix(in srgb, currentColor 25%, white) 50%,
+    currentColor 60% 100%
+  );
+  background-size: 300% 100%;
+  background-position: 0% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: composer-mode-shimmer 900ms ease-out;
+}
+
+@keyframes composer-mode-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-mode-shimmer {
+    animation: none;
+  }
 }
 
 /* Two-frame mascot loop — a hard swap plus a one-pixel hop, arcade style. */
@@ -1269,6 +2355,357 @@ header[data-tauri-drag-region] button {
 
 .mascot-stunned .mascot-talk {
   opacity: 0;
+}
+
+/* The agent's name pill, which the mascot stands on. */
+.mono-pill {
+  border-color: color-mix(in srgb, var(--color-content) 14%, transparent);
+  background: color-mix(in srgb, var(--color-content) 6%, transparent);
+}
+
+/* Messaging-app bubbles. The tail is a sibling shape that inherits the
+   bubble's fill and only covers what sits outside the rounded corner, so
+   translucent bubbles never darken where the two meet. */
+.agent-chat-bubble {
+  position: relative;
+}
+
+.agent-chat-bubble-tail-left::after,
+.agent-chat-bubble-tail-right::after {
+  content: "";
+  position: absolute;
+  bottom: calc(var(--agent-bubble-radius, 12px) / -3);
+  width: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
+  height: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
+  background: inherit;
+  pointer-events: none;
+  -webkit-mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
+  mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
+  /* Drawn against an 18px left corner and scaled to the bubble's radius.
+     It only fills what lies outside the corner, so nothing is painted twice. */
+  --agent-bubble-tail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 15.6C9.05 16.3 9.05 17.4 9.05 18.6C9.05 20 8.3 21.4 7.4 22.6Q6.9 23.4 7.8 23.5C9.6 23.3 11.6 22.3 13.2 21.5C15 20.5 16.2 19.6 17.2 18.8C17.9 18.25 18.6 18 19.6 18L18 18A18 18 0 0 1 9 15.6Z'/%3E%3C/svg%3E");
+}
+
+.agent-chat-bubble-tail-left::after {
+  left: 0;
+}
+
+.agent-chat-bubble-tail-right::after {
+  right: 0;
+  transform: scaleX(-1);
+}
+
+/* New bubbles pop up from their tail corner with a little overshoot, the
+   way a sent message lifts off the composer. */
+.agent-chat-bubble-in-left,
+.agent-chat-bubble-in-right {
+  animation: agent-chat-bubble-in 380ms cubic-bezier(0.2, 1.2, 0.4, 1) both;
+}
+
+.agent-chat-bubble-in-left {
+  transform-origin: 0% 100%;
+}
+
+.agent-chat-bubble-in-right {
+  transform-origin: 100% 100%;
+}
+
+@keyframes agent-chat-bubble-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  40% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agent-chat-fade-in {
+  animation: agent-chat-fade-in 240ms ease-out both;
+}
+
+@keyframes agent-chat-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Typing dots rise and brighten in a wave. */
+.agent-chat-typing-dot {
+  animation: agent-chat-typing 1.1s ease-in-out infinite;
+}
+
+@keyframes agent-chat-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-bubble-in-left,
+  .agent-chat-bubble-in-right,
+  .agent-chat-fade-in {
+    animation: none;
+  }
+
+  .agent-chat-typing-dot {
+    animation-name: agent-chat-typing-fade;
+  }
+}
+
+@keyframes agent-chat-typing-fade {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+html.has-user-accent .agent-chat-user-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+}
+
+html.theme-light .agent-chat-user-bubble {
+  background: #0a0a0a;
+  color: #fff;
+}
+
+html.theme-light.has-user-accent .agent-chat-user-bubble {
+  background: color-mix(in srgb, var(--user-accent-color) 24%, transparent);
+  color: var(--color-content);
+}
+
+html.theme-light .mono-pill {
+  background: #fff;
+  border-color: rgb(0 0 0 / 0.06);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.06),
+    0 4px 14px rgb(0 0 0 / 0.08);
+}
+
+/* Agent chat bubbles: trim only the outer edges so paragraphs keep their gaps.
+   Each block sits in its own direction wrapper, so :first-child on the
+   paragraph itself would match every block. */
+/* A habit run's report, read inside its row on the habit page: the row's
+   own size and rhythm, with lists hung just inside the text's left edge. */
+.mono-run-report.agent-markdown {
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.mono-run-report.agent-markdown p,
+.mono-run-report.agent-markdown li {
+  margin-block: 0;
+}
+
+.mono-run-report.agent-markdown > * + * {
+  margin-top: 8px;
+}
+
+.mono-run-report.agent-markdown [data-streamdown="ordered-list"],
+.mono-run-report.agent-markdown [data-streamdown="unordered-list"] {
+  margin-block: 0;
+  padding-inline-start: 14px;
+}
+
+.mono-run-report.agent-markdown li + li {
+  margin-top: 2px;
+}
+
+/* The activity panel is narrow: its steps read at the panel's size. */
+.mono-activity-steps .text-sm {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.agent-chat-bubble-md.agent-markdown > :first-child,
+.agent-chat-bubble-md.agent-markdown > .agent-markdown-block:first-child > * {
+  margin-top: 0;
+}
+
+.agent-chat-bubble-md.agent-markdown > :last-child,
+.agent-chat-bubble-md.agent-markdown > .agent-markdown-block:last-child > * {
+  margin-bottom: 0;
+}
+
+/* Inline code must fit inside the dots' 24px line box. A 24px inline-flex
+   badge on the text baseline makes even a one-line reply a pixel taller. */
+.agent-chat-bubble-md.agent-markdown :not(pre) > code {
+  min-height: 0;
+  line-height: 1.4;
+}
+
+/* Shaded pixel mascots. Motion moves half a sprite cell at a time and stays
+   unhurried; blinks swap in closed eyes instead of squashing open ones. */
+.pixel-bob {
+  animation: pixel-bob 3.6s step-end infinite;
+}
+
+.pixel-hop {
+  animation: pixel-bob 1.2s step-end infinite;
+}
+
+.pixel-frame-a {
+  animation: pixel-frame-a 600ms step-end infinite;
+}
+
+.pixel-frame-b {
+  opacity: 0;
+  animation: pixel-frame-b 600ms step-end infinite;
+}
+
+.pixel-eyes-open {
+  animation: pixel-eyes-open 5.2s step-end infinite;
+}
+
+.pixel-eyes-closed {
+  opacity: 0;
+  animation: pixel-eyes-closed 5.2s step-end infinite;
+}
+
+.pixel-bulb {
+  animation: pixel-flicker 2.4s step-end infinite;
+}
+
+@keyframes pixel-bob {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-0.75px);
+  }
+}
+
+@keyframes pixel-frame-a {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes pixel-frame-b {
+  0% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes pixel-eyes-open {
+  0% {
+    opacity: 1;
+  }
+  96% {
+    opacity: 0;
+  }
+  98.5% {
+    opacity: 1;
+  }
+}
+
+@keyframes pixel-eyes-closed {
+  0% {
+    opacity: 0;
+  }
+  96% {
+    opacity: 1;
+  }
+  98.5% {
+    opacity: 0;
+  }
+}
+
+@keyframes pixel-flicker {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.7;
+  }
+  48% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-mascot * {
+    animation: none !important;
+  }
+}
+
+/* Mono intro: the mascots march in and line up, then the user's mono drops
+   into the spotlight. Every step holds its end state, so reduced motion just
+   skips to the final scene. */
+.mono-intro-march {
+  animation: mono-intro-march 700ms var(--delay) cubic-bezier(0.2, 0.8, 0.3, 1)
+    both;
+}
+
+.mono-intro-march .mono-intro-hop {
+  animation: mono-intro-hop 175ms var(--delay) ease-out 4 alternate;
+}
+
+.mono-intro-drop {
+  transform-origin: bottom center;
+  animation: mono-intro-drop 650ms 1350ms ease-in both;
+}
+
+@keyframes mono-intro-march {
+  from {
+    transform: translateX(var(--from));
+  }
+}
+
+@keyframes mono-intro-hop {
+  to {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes mono-intro-drop {
+  0% {
+    transform: translateY(-240px);
+  }
+  55% {
+    transform: translateY(0);
+  }
+  68% {
+    transform: scale(1.16, 0.82);
+    animation-timing-function: ease-out;
+  }
+  84% {
+    transform: translateY(-10px) scale(0.95, 1.06);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mono-intro * {
+    animation-duration: 1ms !important;
+    animation-delay: 0s !important;
+  }
+  .mono-intro .mono-intro-hop {
+    animation: none !important;
+  }
 }
 
 @keyframes shimmer-text {
@@ -1701,8 +3138,8 @@ header[data-tauri-drag-region] button {
  * A streamed word fading in as the paced reveal lets it out (wordFade.tsx).
  * Opacity only: a word that moved would jostle the line it is set on. The
  * fade plays as a word's span is added, and words already on screen keep
- * theirs; only while the reply is coming in, so a finished one hidden and
- * shown again never replays.
+ * theirs while the reply is coming in. The spans come off once the fade
+ * ends, so a finished reply hidden and shown again never replays.
  */
 @keyframes word-fade-in {
   from {
@@ -1721,6 +3158,46 @@ header[data-tauri-drag-region] button {
   }
   50% {
     opacity: 0.9;
+  }
+}
+
+.mono-details-panel[data-open="false"] {
+  display: none;
+}
+
+/* A Mono's activity rolls through one clipped line without moving the chat. */
+.mono-work-ticker {
+  height: 24px;
+  overflow: hidden;
+}
+
+.mono-work-ticker-track {
+  display: flex;
+  flex-direction: column;
+}
+
+.mono-work-ticker-row {
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.mono-work-ticker-track[data-moving="true"] {
+  animation: mono-work-tick 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes mono-work-tick {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mono-work-ticker-track[data-moving="true"] {
+    animation: none;
+    transform: translateY(-24px);
   }
 }
 
@@ -1831,6 +3308,261 @@ html.theme-light .popover-backdrop {
   .popover-open {
     animation: none;
   }
+}
+
+/* /btw: a sheet that morphs out of the composer box over the transcript
+   (the clip is animated from BtwSheet). Its surface is the popover glass:
+   the same tint, blur, border, and shadow. */
+/* The session composer steps aside while the glass sheet's own composer
+   sits over it, so the two never show through each other. BtwSheet fades it
+   in step with the morph; this is its resting state under an open sheet. */
+[data-session-composer][inert] {
+  opacity: 0;
+}
+
+/* Held on the first frame until the freshly mounted sheet has painted. */
+.btw-overlay[data-morph="pending"] .btw-sheet-body,
+.btw-overlay[data-morph="pending"] .btw-burst,
+.btw-overlay[data-morph="pending"] .btw-burst * {
+  animation-play-state: paused;
+}
+
+/* The composer's outline, carried between the session composer's box and
+   the side composer's box while their contents cross-fade inside it. */
+.btw-morph-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent);
+  border-radius: var(--radius-lg, 0.5rem);
+  background: color-mix(in srgb, var(--color-content) 3%, transparent);
+}
+
+html.theme-light .btw-morph-frame {
+  background: var(--color-background-base);
+  box-shadow:
+    0 6px 24px color-mix(in srgb, var(--color-content) 9%, transparent),
+    0 2px 6px color-mix(in srgb, var(--color-content) 6%, transparent);
+}
+
+/*
+ * Opening a side question: question marks drift up out of the composer into
+ * the panel, wobbling as they rise, while the composer box glows and a sheen
+ * crosses it. The /operator sparkles' cousin, in the accent color.
+ */
+.btw-burst {
+  --burst-color: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 70%,
+    white
+  );
+  --burst-glow: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 75%,
+    transparent
+  );
+  position: absolute;
+  pointer-events: none;
+  border-radius: var(--radius-lg, 0.5rem);
+  animation: btw-burst-halo 1100ms 60ms ease-out both;
+}
+
+html.theme-light .btw-burst {
+  --burst-color: var(--user-accent-color, var(--color-accent));
+  --burst-glow: color-mix(
+    in srgb,
+    var(--user-accent-color, var(--color-accent)) 45%,
+    transparent
+  );
+}
+
+.btw-burst-sheen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.btw-burst-sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--burst-color) 30%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: btw-burst-sheen 900ms 140ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.btw-burst-mark {
+  position: absolute;
+  bottom: 45%;
+  left: var(--x);
+  width: 0;
+  height: 0;
+  animation: btw-mark-rise var(--duration) var(--delay)
+    cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.btw-burst-glyph {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--size) / -2);
+  width: var(--size);
+  color: var(--burst-color);
+  font-size: var(--size);
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 0 6px var(--burst-glow);
+  transform-origin: 50% 80%;
+  animation: btw-mark-wobble var(--duration) var(--delay) ease-in-out both;
+}
+
+.btw-burst-ember {
+  left: calc(var(--size) / -2);
+  height: var(--size);
+  border-radius: 9999px;
+  background: radial-gradient(circle, white, var(--burst-color) 70%);
+  box-shadow: 0 0 6px var(--burst-glow);
+}
+
+@keyframes btw-mark-rise {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--drift), calc(var(--rise) * -1));
+  }
+}
+
+@keyframes btw-mark-wobble {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1.15) rotate(var(--tilt));
+  }
+  45% {
+    transform: scale(0.9) rotate(calc(var(--tilt) * -0.6));
+  }
+  70% {
+    opacity: 0.9;
+    transform: scale(1) rotate(calc(var(--tilt) * 0.4));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6) rotate(0deg);
+  }
+}
+
+@keyframes btw-burst-halo {
+  0% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow:
+      0 0 0 1px var(--burst-glow),
+      0 0 28px 4px color-mix(in srgb, var(--burst-glow) 45%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes btw-burst-sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btw-burst {
+    display: none;
+  }
+}
+
+.btw-sheet {
+  top: clamp(2.5rem, 18%, 12rem);
+}
+
+/* Match the composer box it morphs out of. */
+.btw-sheet-glass {
+  border: 1px solid color-mix(in srgb, var(--color-content) 10%, transparent);
+  border-bottom: 0;
+  border-radius: var(--radius-lg, 0.5rem) var(--radius-lg, 0.5rem) 0 0;
+  box-shadow:
+    0 20px 25px -5px rgb(0 0 0 / 0.1),
+    0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+/* Tabs and messages arrive once the panel has mostly opened; the composer
+   is where the morph starts, so it stays put. */
+.btw-sheet-body {
+  animation: btw-body-in 240ms 100ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.btw-overlay[data-state="closed"] {
+  pointer-events: none;
+}
+
+/* On close the side composer gives way to the session composer beneath
+   right away, while the panel is still folding down. */
+.btw-overlay[data-state="closed"] .btw-sheet-body,
+.btw-overlay[data-state="closed"] .btw-sheet-composer {
+  animation: btw-fade-out 120ms ease-in both;
+}
+
+@keyframes btw-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes btw-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btw-sheet-body,
+  .btw-overlay[data-state="closed"] .btw-sheet-body,
+  .btw-overlay[data-state="closed"] .btw-sheet-composer {
+    animation: none;
+  }
+}
+
+.btw-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, #f87171 24%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #f87171 7%, transparent);
 }
 
 /* The selected project mascot turns banked resets into a tiny status scene. */
