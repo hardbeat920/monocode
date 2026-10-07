@@ -10,6 +10,7 @@ import {
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
+import type { Artifact } from "../../artifacts/artifacts";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
@@ -24,6 +25,14 @@ const note: Note = {
   body: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph should stay out of list.",
   tags: ["work"],
   slugPending: false,
+  createdAt: 1,
+  updatedAt: 2,
+};
+const artifact: Artifact = {
+  id: "artifact-1",
+  kind: "document",
+  title: note.title,
+  body: note.body,
   createdAt: 1,
   updatedAt: 2,
 };
@@ -1314,6 +1323,213 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("Request ID was already used");
+  });
+
+  it("saves artifacts separately, returns metadata, and attaches one reference on retries", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    let created: Artifact | null = null;
+    host.artifact = vi.fn(async (id) => (id === created?.id ? created : null));
+    host.saveArtifact = vi.fn(async (input) => {
+      created = { ...artifact, ...input };
+      return created;
+    });
+    host.postArtifact = vi.fn();
+    const input = {
+      kind: "document",
+      title: "PR review",
+      body: "# PR review\n\nFull report",
+      summary: "Merge queue and blockers",
+    };
+    const result = await handleAgentApp(
+      source,
+      "report-1",
+      "artifacts.write",
+      input,
+      host,
+    );
+    expect(result).toEqual({
+      id: "artifact-lead-report-1",
+      kind: "document",
+      title: input.title,
+      summary: input.summary,
+      saved: true,
+      attached: true,
+    });
+    expect(result).not.toHaveProperty("body");
+    expect(host.saveNote).not.toHaveBeenCalled();
+    expect(host.saveArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionId: source.id,
+        body: input.body,
+        kind: "document",
+      }),
+    );
+    expect(
+      await handleAgentApp(source, "report-1", "artifacts.write", input, host),
+    ).toEqual(result);
+    expect(host.saveArtifact).toHaveBeenCalledTimes(1);
+    await expect(
+      handleAgentApp(
+        source,
+        "report-1",
+        "artifacts.write",
+        { ...input, body: "Different" },
+        host,
+      ),
+    ).rejects.toThrow("Request ID was already used");
+    expect(host.postArtifact).toHaveBeenCalledWith(source.id, {
+      id: "artifact-lead-report-1",
+      kind: "document",
+      title: input.title,
+      summary: input.summary,
+    });
+  });
+
+  it("revises a document without changing omitted fields and refuses note IDs", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async (id) =>
+      id === "artifact-1" ? { ...artifact, id } : null,
+    );
+    host.saveArtifact = vi.fn(async (input) => ({ ...artifact, ...input }));
+    host.postArtifact = vi.fn();
+    await handleAgentApp(
+      source,
+      "edit",
+      "artifacts.write",
+      { id: "artifact-1", body: "Revised" },
+      host,
+    );
+    expect(host.saveArtifact).toHaveBeenCalledWith({
+      id: "artifact-1",
+      title: note.title,
+      body: "Revised",
+      kind: "document",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "bad",
+        "artifacts.write",
+        { id: note.id, body: "Oops" },
+        host,
+      ),
+    ).rejects.toThrow("Artifact was not found");
+    expect(host.saveNote).not.toHaveBeenCalled();
+  });
+
+  it("allows habit artifacts and recovers an attachment failure without saving twice", async () => {
+    const { source, host } = fixture();
+    host.isHabitRun = () => true;
+    let created: Artifact | null = null;
+    host.artifact = vi.fn(async () => created);
+    host.saveArtifact = vi.fn(async (input) => {
+      created = { ...artifact, ...input };
+      return created;
+    });
+    host.postArtifact = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Attachment failed"))
+      .mockResolvedValue(undefined);
+    const input = { body: "# Habit report\n\nDetails" };
+    await expect(
+      handleAgentApp(source, "report", "artifacts.write", input, host),
+    ).rejects.toThrow("Attachment failed");
+    await expect(
+      handleAgentApp(source, "report", "artifacts.write", input, host),
+    ).resolves.toMatchObject({ attached: true });
+    expect(host.saveArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("restricts artifact actions to Monos and lists only document metadata", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "report",
+        "artifacts.write",
+        { body: "Report" },
+        host,
+      ),
+    ).rejects.toThrow("Only a Mono");
+    host.isMono = () => true;
+    host.artifact = vi.fn(async () => artifact);
+    host.artifacts = vi.fn(async () => [{ ...artifact, id: "artifact-1" }]);
+    const result = await handleAgentApp(
+      source,
+      "list",
+      "artifacts.list",
+      {},
+      host,
+    );
+    expect(result).toEqual({
+      total: 1,
+      offset: 0,
+      artifacts: [
+        {
+          id: "artifact-1",
+          kind: "document",
+          title: artifact.title,
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(host.notes).not.toHaveBeenCalled();
+    await expect(
+      handleAgentApp(
+        source,
+        "list-bad",
+        "artifacts.list",
+        { limit: 101 },
+        host,
+      ),
+    ).rejects.toThrow("limit");
+    await expect(
+      handleAgentApp(
+        source,
+        "read",
+        "artifacts.read",
+        { id: "artifact-1" },
+        host,
+      ),
+    ).resolves.toMatchObject({ body: note.body });
+  });
+
+  it("rejects unsupported artifact kinds before saving or posting a card", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async () => null);
+    host.artifacts = vi.fn(async () => []);
+    host.saveArtifact = vi.fn();
+    host.postArtifact = vi.fn();
+    for (const kind of ["code", "preview", "note", null]) {
+      await expect(
+        handleAgentApp(
+          source,
+          "bad",
+          "artifacts.write",
+          {
+            kind,
+            body: "Content",
+          },
+          host,
+        ),
+      ).rejects.toThrow("Unsupported artifact kind");
+    }
+    await expect(
+      handleAgentApp(
+        source,
+        "bad",
+        "artifacts.list",
+        {
+          kind: "code",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Unsupported artifact kind");
+    expect(host.saveArtifact).not.toHaveBeenCalled();
+    expect(host.postArtifact).not.toHaveBeenCalled();
   });
 
   it("edits only supplied note fields and refuses missing or malformed notes", async () => {
