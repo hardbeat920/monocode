@@ -17,7 +17,8 @@ export function ReviewCommentComposer({ target, onDismiss }: { target: ReviewCom
   const [body, setBody] = useState("");
   const save = () => {
     if (!body.trim()) return;
-    addReviewComment({ ...target, body: body.trim() });
+    const { anchor: _anchor, ...location } = target;
+    addReviewComment({ ...location, body: body.trim() });
     onDismiss();
   };
   const location = target.startLine === 0 ? target.path : target.startLine === target.endLine ? `${target.path}:${target.startLine}` : `${target.path}:${target.startLine}-${target.endLine}`;

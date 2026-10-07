@@ -3,6 +3,7 @@ import {
   addReviewComment,
   clearReviewComments,
   formatReviewComments,
+  remapReviewCommentLines,
   reviewCommentsSnapshot,
 } from "./reviewComments";
 
@@ -37,5 +38,20 @@ describe("review comments", () => {
     addReviewComment({ path: "a.ts", startLine: 1, endLine: 1, snippet: "x", body: "note" });
     clearReviewComments();
     expect(reviewCommentsSnapshot()).toEqual([]);
+  });
+
+  it("preserves deleted-line context and follows edits to its file", () => {
+    addReviewComment({
+      path: "a.ts",
+      startLine: 2,
+      endLine: 3,
+      snippet: "x",
+      body: "note",
+      deleted: true,
+    });
+    remapReviewCommentLines("a.ts", (line) => line + 2);
+    expect(formatReviewComments()).toBe(
+      "@a.ts (lines 4-5) (deleted)\nnote",
+    );
   });
 });

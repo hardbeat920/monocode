@@ -121,6 +121,7 @@ import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
 import {
+  appendComposerInsert,
   consumeQuoteRequest,
   type QuoteRequest,
 } from "../model/quoteDraft";
@@ -1280,10 +1281,10 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const submit = (value: string) => {
+  const submit = (value: string, onAccepted?: () => void) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value).finally(() => {
+    void completeSubmit(value, onAccepted).finally(() => {
       submitLockRef.current = false;
     });
   };
@@ -1291,17 +1292,20 @@ export function Composer({
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     const review = formatReviewComments(reviewComments);
     if (!review) return;
+    const value = appendComposerInsert(ref.current?.value ?? "", review);
     if (ref.current) {
-      ref.current.value = review;
+      ref.current.value = value;
       resizeComposer(ref.current);
     }
-    setDraft(review);
-    onDraftChange?.(review);
-    syncHasValue(review, attachmentsRef.current);
-    submit(review);
-    clearReviewComments();
+    setDraft(value);
+    onDraftChange?.(value);
+    syncHasValue(value, attachmentsRef.current);
+    submit(value, clearReviewComments);
   };
-  const completeSubmit = async (submittedValue: string) => {
+  const completeSubmit = async (
+    submittedValue: string,
+    onAccepted?: () => void,
+  ) => {
     let pending = pasteFlightRef.current;
     const generation = pasteGenerationRef.current;
     while (pending) {
@@ -1464,6 +1468,7 @@ export function Composer({
       restoreDraft(text, files);
       return;
     }
+    onAccepted?.();
     pasteGenerationRef.current += 1;
     if (ref.current) {
       ref.current.value = "";

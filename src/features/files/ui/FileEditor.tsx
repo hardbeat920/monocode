@@ -87,6 +87,7 @@ import {
   type ReviewCommentTarget,
 } from "../../review-comments/ui/ReviewCommentComposer";
 import { ReviewCommentBubbles } from "../../review-comments/ui/ReviewCommentBubbles";
+import { remapReviewCommentLines } from "../../review-comments/model/reviewComments";
 import {
   diffActiveChunkIndex,
   diffLineStatsForView,
@@ -612,6 +613,7 @@ export function CodeMirrorEditor({
   const [reviewTarget, setReviewTarget] =
     useState<ReviewCommentTarget | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [documentRevision, setDocumentRevision] = useState(0);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -843,6 +845,14 @@ export function CodeMirrorEditor({
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
             return;
           }
+          remapReviewCommentLines(path, (line) => {
+            const previous = update.startState.doc.line(
+              Math.min(line, update.startState.doc.lines),
+            );
+            const position = update.changes.mapPos(previous.from, 1);
+            return update.state.doc.lineAt(position).number;
+          });
+          setDocumentRevision((current) => current + 1);
           markDirty();
           scheduleAutosave();
         }),
@@ -1024,6 +1034,7 @@ export function CodeMirrorEditor({
             path={commentPath}
             host={hostRef.current}
             view={editorView}
+            revision={documentRevision}
           />
         </div>
       </div>

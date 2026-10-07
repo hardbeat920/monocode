@@ -55,6 +55,25 @@ export function clearReviewComments() {
   notify();
 }
 
+/** Keeps review comment locations aligned with edits to their source file. */
+export function remapReviewCommentLines(
+  path: string,
+  remapLine: (line: number) => number,
+) {
+  let changed = false;
+  comments = comments.map((comment) => {
+    if (comment.path !== path || comment.startLine === 0) return comment;
+    const startLine = remapLine(comment.startLine);
+    const endLine = remapLine(comment.endLine);
+    if (startLine === comment.startLine && endLine === comment.endLine) {
+      return comment;
+    }
+    changed = true;
+    return { ...comment, startLine, endLine };
+  });
+  if (changed) notify();
+}
+
 export function formatReviewComments(items = comments) {
   if (items.length === 0) return "";
   return items
@@ -62,7 +81,7 @@ export function formatReviewComments(items = comments) {
       const reference =
         comment.startLine === 0
           ? `@${comment.path} (file)`
-          : `@${comment.path} (${comment.startLine === comment.endLine ? `line ${comment.startLine}` : `lines ${comment.startLine}-${comment.endLine}`})`;
+          : `@${comment.path} (${comment.startLine === comment.endLine ? `line ${comment.startLine}` : `lines ${comment.startLine}-${comment.endLine}`})${comment.deleted ? " (deleted)" : ""}`;
       return `${reference}\n${comment.body}`;
     })
     .join("\n\n");

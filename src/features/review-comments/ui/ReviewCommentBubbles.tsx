@@ -16,10 +16,13 @@ export function ReviewCommentBubbles({
   path,
   host,
   view,
+  revision,
 }: {
   path: string;
   host: HTMLDivElement | null;
   view: EditorView | null;
+  /** Changes whenever the editor document changes, including reflow-only edits. */
+  revision: number;
 }) {
   const comments = useSyncExternalStore(
     subscribeReviewComments,
@@ -50,7 +53,7 @@ export function ReviewCommentBubbles({
       view.scrollDOM.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
     };
-  }, [comments, host, path, view]);
+  }, [comments, host, path, revision, view]);
 
   return (
     <>
