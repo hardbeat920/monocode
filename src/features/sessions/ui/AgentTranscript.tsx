@@ -46,6 +46,8 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
+import { artifactCards } from "../../artifacts/artifacts";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -221,6 +223,7 @@ type Props = {
   onRemoveDraft?: (block: Block) => boolean | void;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
+  onOpenArtifact?: (id: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -283,6 +286,7 @@ function AgentTranscriptComponent({
   onRemoveDraft,
   onSaveSelectionNote,
   onOpenFile,
+  onOpenArtifact,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -973,6 +977,7 @@ function AgentTranscriptComponent({
             firstVisibleTurn + turnIndex === activeTurnIndex
           );
           const proposals = turn.filter((block) => block.orchestration);
+          const artifacts = artifactCards(turn);
           // Proposals are turn results, like the changes card. Keep them out
           // of the live work and append them after all of the lead's output.
           const items = turnCache.turnItems(turn, settled, {
@@ -1360,6 +1365,20 @@ function AgentTranscriptComponent({
                       <OrchestrationPreview block={block} busy={!!busy} />
                     </div>
                   ))}
+              {settled && artifacts.length > 0 ? (
+                <div
+                  data-artifact-results
+                  className="flex flex-col gap-2 px-4 pt-1 pb-3"
+                >
+                  {artifacts.map((card) => (
+                    <ArtifactCard
+                      key={card.id}
+                      card={card}
+                      onOpen={onOpenArtifact}
+                    />
+                  ))}
+                </div>
+              ) : null}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
               {isLastTurn && latestTurnAccessory && !parked
                 ? latestTurnAccessory

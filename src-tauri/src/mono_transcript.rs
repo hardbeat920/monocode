@@ -129,6 +129,8 @@ fn insert_blocks(
     // A handoff occupies its own turn, including when a suffix is edited.
     let mut after_handoff = conn.query_row("SELECT json_extract(block_json, '$.role') = 'handoff' FROM mono_blocks WHERE session_id = ?1 AND seq = ?2", params![id, after], |row| row.get::<_, bool>(0)).optional()?.unwrap_or(false);
     for (index, block) in blocks.iter().enumerate() {
+        let cleaned = crate::artifacts::retain_existing_cards(conn, block)?;
+        let block = cleaned.as_ref();
         let seq = after + index as i64 + 1;
         let block_id = block["id"]
             .as_str()

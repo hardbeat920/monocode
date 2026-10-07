@@ -195,6 +195,7 @@ export type SessionPaneProps = {
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
+  onOpenArtifact?: (sessionId: string, id: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
   onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
@@ -327,6 +328,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
+  onOpenArtifact,
   onHandoffCardDismiss,
   onOpenLinkedWorkItem,
   onArchiveSession,
@@ -930,6 +932,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     visible={visible}
                     cwd={workCwd}
                     agentName={agent?.name}
+                    onOpenArtifact={
+                      onOpenArtifact
+                        ? (id) => onOpenArtifact(session.id, id)
+                        : undefined
+                    }
                     agentMascot={agent}
                     bottomAligned={!!agent}
                     inlineWork={!!agent}
