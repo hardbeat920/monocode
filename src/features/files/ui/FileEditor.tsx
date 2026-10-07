@@ -602,6 +602,8 @@ export function CodeMirrorEditor({
   const onStageGitRef = useRef(onStageGit);
   const canStage = onStageGit !== undefined;
   const onDocChangeRef = useRef(onDocChange);
+  const cwdRef = useRef(cwd);
+  const onOpenFileRef = useRef(onOpenFile);
   const valueRef = useRef(value);
   const symbolSearchTokenRef = useRef(0);
   const navigationTokenRef = useRef<number | undefined>(undefined);
@@ -638,6 +640,8 @@ export function CodeMirrorEditor({
   canAutosaveRef.current = canAutosave;
   onStageGitRef.current = onStageGit;
   onDocChangeRef.current = onDocChange;
+  cwdRef.current = cwd;
+  onOpenFileRef.current = onOpenFile;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
 
@@ -651,7 +655,7 @@ export function CodeMirrorEditor({
       const token = ++symbolSearchTokenRef.current;
       try {
         const result = await searchProject({
-          cwd,
+          cwd: cwdRef.current,
           query: symbol.name,
           wholeWord: true,
           searchId: crypto.randomUUID(),
@@ -664,14 +668,17 @@ export function CodeMirrorEditor({
           editorPathsEqual(path, definition.path) &&
           definition.line === line.number &&
           definition.column === symbol.from - line.from + 1;
-        if (mode === "definition" || (mode === "auto" && !clickedDefinition)) {
-          if (definition) onOpenFile?.(definition.path, definition);
-          else
-            setReferences({
-              symbol: symbol.name,
-              matches: [],
-              error: "No definition found",
-            });
+        if (
+          definition &&
+          (mode === "definition" || (mode === "auto" && !clickedDefinition))
+        ) {
+          onOpenFileRef.current?.(definition.path, definition);
+        } else if (!definition && mode === "definition") {
+          setReferences({
+            symbol: symbol.name,
+            matches: [],
+            error: "No definition found",
+          });
         } else {
           setReferences({
             symbol: symbol.name,
@@ -696,7 +703,7 @@ export function CodeMirrorEditor({
       }
       return true;
     },
-    [cwd, onOpenFile, path],
+    [path],
   );
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
@@ -781,6 +788,7 @@ export function CodeMirrorEditor({
     let hoverGeneration = 0;
 
     const clearSymbolHover = () => {
+      if (hoverKey === "") return;
       hoverKey = "";
       hoverGeneration += 1;
       view.dom.style.cursor = "";
@@ -809,7 +817,7 @@ export function CodeMirrorEditor({
       view.dom.style.cursor = "progress";
       view.dispatch({ effects: symbolHover.of(null) });
       void searchProject({
-        cwd,
+        cwd: cwdRef.current,
         query: symbol.name,
         wholeWord: true,
         searchId: crypto.randomUUID(),
@@ -1040,6 +1048,9 @@ export function CodeMirrorEditor({
 
     return () => {
       disposed = true;
+      // A definition lookup may still be resolving after this editor is gone.
+      // Invalidate it before teardown so it cannot open a file late.
+      symbolSearchTokenRef.current += 1;
       window.clearTimeout(autosaveTimer);
       onErrorCountChangeRef.current(0);
       lockOverscroll(null);
