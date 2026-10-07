@@ -4,6 +4,7 @@ import {
   type Session,
 } from "../../../features/sessions/model/session";
 import { planTurnKey } from "../../../features/sessions/model/plan";
+import { contextRatio } from "../../../features/sessions/model/contextUsage";
 import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
 import {
   acknowledgeMonoMessage,
@@ -1223,6 +1224,83 @@ describe("applyHarnessEvent context", () => {
       window: 200_000,
     });
     expect(session.blocks).toEqual([]);
+  });
+
+  it("retires a level a compaction has invalidated", () => {
+    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 190_000,
+      window: 200_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", compacted: true });
+    expect(session.context).toEqual({
+      used: 190_000,
+      window: 200_000,
+      compacted: true,
+    });
+    // The next real reading takes over and the ring comes back.
+    session = applyHarnessEvent(session, { type: "context", used: 40_000 });
+    expect(session.context).toEqual({ used: 40_000, window: 200_000 });
+  });
+
+  it("keeps a window learned across a boundary, with no level of its own", () => {
+    // Codex and Grok only ever learn the window from the level they report, so
+    // dropping it here would cost the ring its denominator until the next turn.
+    let session = newSession("codex", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      window: 272_000,
+      compacted: true,
+    });
+    expect(session.context).toEqual({ used: 0, window: 272_000, compacted: true });
+    // Nothing is claimed about the level, so nothing is drawn from it either.
+    expect(contextRatio(session.context)).toBeNull();
+    session = applyHarnessEvent(session, { type: "context", used: 18_000 });
+    expect(session.context).toEqual({ used: 18_000, window: 272_000 });
+  });
+
+  it("carries the marker through the window-only event Claude sends after it", () => {    let session = newSession("claude", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 190_000,
+      window: 200_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", compacted: true });
+    session = applyHarnessEvent(session, { type: "context", window: 200_000 });
+    expect(session.context).toEqual({
+      used: 190_000,
+      window: 200_000,
+      compacted: true,
+    });
+  });
+
+  it("drops the window on a reset, keeping the level", () => {
+    let session = newSession("grok", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 30_000,
+      window: 500_000,
+    });
+    // The model changed, so the held window belongs to the one just left.
+    session = applyHarnessEvent(session, { type: "context", reset: true });
+    expect(session.context).toEqual({ used: 30_000 });
+    // A later reading without a window cannot inherit the old denominator.
+    session = applyHarnessEvent(session, { type: "context", used: 64_000 });
+    expect(session.context).toEqual({ used: 64_000 });
+    expect(contextRatio(session.context)).toBeNull();
+  });
+
+  it("keeps a stale marker across a reset", () => {
+    let session = newSession("grok", "/repo");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 190_000,
+      window: 500_000,
+    });
+    session = applyHarnessEvent(session, { type: "context", compacted: true });
+    session = applyHarnessEvent(session, { type: "context", reset: true });
+    expect(session.context).toEqual({ used: 190_000, compacted: true });
   });
 });
 

@@ -434,9 +434,17 @@ export function contextWindowFromSetup(result: unknown): number | undefined {
     ...modelsFromSessionNew(result),
     ...modelsFromInitialize(result),
   ];
+  if (models.length === 0) return undefined;
   const current = currentModelId(result);
-  const match = models.find((model) => model.nativeId === current) ?? models[0];
-  return match?.contextWindow;
+  const match = current
+    ? models.find((model) => model.nativeId === current)
+    : undefined;
+  // Falling back to `models[0]` would hand the session a window belonging to
+  // whichever model the catalog happens to list first, which is the same
+  // mismatched-denominator problem as reading the widest entry out of a usage
+  // ledger. A single model is not a guess; several are.
+  if (match) return match.contextWindow;
+  return models.length === 1 ? models[0].contextWindow : undefined;
 }
 
 export function currentModelId(result: unknown): string | undefined {

@@ -195,3 +195,177 @@ describe("Pi live session", () => {
     await stopPiSession("pi-caveman");
   });
 });
+
+describe("Pi auto compaction", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.request.mockReset();
+    mocks.resolveBinary.mockReset();
+    mocks.spawnChild.mockReset();
+    mocks.resolveBinary.mockResolvedValue({ path: "/fake/pi" });
+    mocks.killChild.mockResolvedValue(undefined);
+    mocks.request.mockImplementation(
+      async (command: Record<string, unknown>) => {
+        if (command.type === "get_state") {
+          return {
+            data: { sessionId: "pi_session", model: { contextWindow: 200_000 } },
+          };
+        }
+        return { data: {} };
+      },
+    );
+  });
+
+  /** Start a session and return its frame sink plus the events it emits. */
+  async function session(sessionId: string) {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId,
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    events.length = 0;
+    return { events, frame: mocks.frames.at(-1)! };
+  }
+
+  const readings = (events: HarnessEvent[]) =>
+    events.filter((event) => event.type === "context");
+
+  it("skips the summarizer's own usage while it runs", async () => {
+    const { events, frame } = await session("pi-auto-1");
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+        usage: { totalTokens: 190_000 },
+      },
+    });
+    frame({ type: "compaction_start" });
+    // Pi's summarizer is a separate model call. Whatever it reports describes
+    // that call, not the conversation being rebuilt.
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "summary" }],
+        usage: { totalTokens: 196_000 },
+      },
+    });
+    frame({ type: "compaction_end" });
+
+    expect(readings(events)).toEqual([
+      { type: "context", used: 190_000, window: 200_000 },
+      { type: "context", compacted: true },
+    ]);
+    await stopPiSession("pi-auto-1");
+  });
+
+  it("retires the level when the boundary reports nothing", async () => {
+    const { events, frame } = await session("pi-auto-2");
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+        usage: { totalTokens: 190_000 },
+      },
+    });
+    frame({ type: "compaction_start" });
+    frame({ type: "compaction_end" });
+
+    // The level we hold describes the conversation the summary replaced, so the
+    // ring stops claiming it rather than sitting at its pre-compaction height.
+    expect(readings(events)).toEqual([
+      { type: "context", used: 190_000, window: 200_000 },
+      { type: "context", compacted: true },
+    ]);
+    await stopPiSession("pi-auto-2");
+  });
+
+  it("lets a reading on the boundary frame win", async () => {
+    const { events, frame } = await session("pi-auto-3");
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+        usage: { totalTokens: 190_000 },
+      },
+    });
+    frame({ type: "compaction_start" });
+    // Pi sends the boundary once the summary is materialised, so a usage
+    // figure riding on that very frame already describes the rebuilt
+    // conversation and must not be overwritten by the marker.
+    frame({
+      type: "compaction_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "summary" }],
+        usage: { totalTokens: 24_000 },
+      },
+    });
+
+    expect(readings(events)).toEqual([
+      { type: "context", used: 190_000, window: 200_000 },
+      { type: "context", used: 24_000, window: 200_000 },
+    ]);
+    await stopPiSession("pi-auto-3");
+  });
+});
+
+describe("Pi auto compaction boundary without a level", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.request.mockReset();
+    mocks.resolveBinary.mockReset();
+    mocks.spawnChild.mockReset();
+    mocks.resolveBinary.mockResolvedValue({ path: "/fake/pi" });
+    mocks.killChild.mockResolvedValue(undefined);
+    mocks.request.mockImplementation(
+      async (command: Record<string, unknown>) => {
+        if (command.type === "get_state") {
+          return {
+            data: { sessionId: "pi_session", model: { contextWindow: 200_000 } },
+          };
+        }
+        return { data: {} };
+      },
+    );
+  });
+
+  it("retires the level when the boundary frame sizes nothing", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-auto-4",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    const frame = mocks.frames.at(-1)!;
+    events.length = 0;
+
+    frame({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+        usage: { totalTokens: 190_000 },
+      },
+    });
+    frame({ type: "compaction_start" });
+    // A usage object with no tokens answers a bare window rather than a level,
+    // which sizes nothing. Treating that as a reading left the replaced level
+    // on the ring instead of retiring it.
+    frame({ type: "compaction_end", usage: {} });
+
+    expect(events.filter((event) => event.type === "context")).toEqual([
+      { type: "context", used: 190_000, window: 200_000 },
+      { type: "context", window: 200_000, compacted: true },
+    ]);
+    await stopPiSession("pi-auto-4");
+  });
+});

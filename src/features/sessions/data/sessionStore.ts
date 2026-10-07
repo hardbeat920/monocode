@@ -174,7 +174,12 @@ function persistableMeta(
     ...(session.providerAccountId && isPersistableId(session.providerAccountId)
       ? { providerAccountId: session.providerAccountId }
       : {}),
-    ...(session.context ? { contextUsed: session.context.used } : {}),
+    // A stale level is the one the compaction replaced, so storing it would
+    // resurrect a full-looking ring after a restart. The window still describes
+    // the active model, so keep it and let the next reading re-pair with it.
+    ...(session.context && !session.context.compacted
+      ? { contextUsed: session.context.used }
+      : {}),
     ...(session.context?.window
       ? { contextWindow: session.context.window }
       : {}),
@@ -1462,15 +1467,21 @@ function contextFromRecord(
   record: SessionRecord,
 ): { context: ContextUsage } | undefined {
   const used = record.contextUsed;
+  const window =
+    typeof record.contextWindow === "number" &&
+    Number.isFinite(record.contextWindow) &&
+    record.contextWindow > 0
+      ? record.contextWindow
+      : undefined;
   if (typeof used !== "number" || !Number.isFinite(used) || used <= 0) {
-    return undefined;
+    // A window stored without a level can only mean the session compacted:
+    // `persistableMeta` drops the level at a boundary and keeps the window.
+    // Restoring it as stale keeps the meter — and its Compact now action —
+    // reachable after a restart, instead of dropping the denominator too.
+    return window ? { context: { used: 0, window, compacted: true } } : undefined;
   }
-  const window = record.contextWindow;
   return {
-    context:
-      typeof window === "number" && Number.isFinite(window) && window > 0
-        ? { used, window }
-        : { used },
+    context: window ? { used, window } : { used },
   };
 }
 

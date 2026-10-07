@@ -7,8 +7,10 @@ import {
   applyClaudePromptEffortPrefix,
   applyClaudeTaskTool,
   askUserQuestionAllowInput,
+  assistantModel,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  compactionFromSystem,
   contextFromResult,
   contextUsedFromAssistant,
   extractExitPlanModePlan,
@@ -747,6 +749,68 @@ describe("helpers", () => {
   });
 });
 
+describe("compactionFromSystem", () => {
+  it("reads the trigger and the sizes either side of the summary", () => {
+    // Shape captured from `claude --output-format stream-json --verbose`.
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 48_230,
+          post_tokens: 7_161,
+        },
+      }),
+    ).toEqual({ trigger: "auto", preTokens: 48_230, postTokens: 7_161 });
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual" },
+      }),
+    ).toEqual({ trigger: "manual" });
+  });
+
+  it("reports a boundary that says nothing about itself", () => {
+    // Truthy even when empty: a /compact on a build that sends no metadata is
+    // still a confirmed compaction, and treating it as unconfirmed makes
+    // compactClaudeContext throw on a compaction that worked. So callers must
+    // test this result, never `.trigger`.
+    expect(
+      compactionFromSystem({ type: "system", subtype: "compact_boundary" }),
+    ).toEqual({});
+    expect(compactionFromSystem({ type: "system", subtype: "compact" })).toEqual(
+      {},
+    );
+    // An unrecognised trigger is dropped rather than passed through.
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "later" },
+      }),
+    ).toEqual({});
+  });
+
+  it("drops sizes that are not positive numbers", () => {
+    expect(
+      compactionFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 0, post_tokens: -5 },
+      }),
+    ).toEqual({ trigger: "auto" });
+  });
+
+  it("ignores anything that is not a compaction boundary", () => {
+    expect(compactionFromSystem({ type: "system", subtype: "init" })).toBeNull();
+    expect(compactionFromSystem({ type: "system", subtype: "status" })).toBeNull();
+    expect(compactionFromSystem({ type: "assistant" })).toBeNull();
+    expect(compactionFromSystem({ type: "result" })).toBeNull();
+  });
+});
+
 describe("contextUsedFromAssistant", () => {
   it("counts cached reads and writes as window occupancy", () => {
     // Shape captured from `claude --output-format stream-json --verbose`.
@@ -815,6 +879,132 @@ describe("contextFromResult", () => {
 
   it("has nothing to report for a turn that never called the API", () => {
     expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
+  });
+
+  it("keeps the parent window when a subagent ran a wider one", () => {
+    // `modelUsage` is the CLI's ledger for "main loop, Task subagents,
+    // sidechains, and internal calls such as compaction", so a Task pinned to a
+    // 1M model sits beside its 200K parent. Widest-wins would report this
+    // session at a fifth of the occupancy it actually has.
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 12941,
+        cache_read_input_tokens: 16652,
+        output_tokens: 13,
+      },
+      modelUsage: {
+        "claude-opus-5": { contextWindow: 200000 },
+        "claude-sonnet-5": { contextWindow: 1000000 },
+      },
+    };
+    expect(contextFromResult(rec, { model: "claude-opus-5" })).toEqual({
+      used: 29608,
+      window: 200000,
+    });
+  });
+
+  it("does not shrink a 1M main loop to a subagent's window", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 90_000,
+        output_tokens: 500,
+      },
+      modelUsage: {
+        "claude-opus-5": { contextWindow: 1000000 },
+        "claude-haiku-4-5": { contextWindow: 200000 },
+      },
+    };
+    expect(contextFromResult(rec, { model: "claude-opus-5" })).toEqual({
+      used: 90_510,
+      window: 1000000,
+    });
+  });
+
+  it("matches a model named with the context suffix the key lacks", () => {
+    // `resolveClaudeApiModelId` asks for a 1M window by suffixing `[1m]`.
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 4,
+        cache_read_input_tokens: 40_000,
+        output_tokens: 100,
+      },
+      modelUsage: {
+        "claude-opus-5": { contextWindow: 1000000 },
+        "claude-haiku-4-5": { contextWindow: 200000 },
+      },
+    };
+    expect(contextFromResult(rec, { model: "claude-opus-5[1m]" })).toEqual({
+      used: 40_104,
+      window: 1000000,
+    });
+  });
+
+  it("reports no window rather than guessing between two models", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 20_000,
+        output_tokens: 200,
+      },
+      modelUsage: {
+        "claude-opus-5": { contextWindow: 200000 },
+        "claude-sonnet-5": { contextWindow: 1000000 },
+      },
+    };
+    const context = contextFromResult(rec);
+    expect(context?.used).toBe(20_210);
+    expect(context?.window).toBeUndefined();
+  });
+
+  it("takes a lone model's window before the main loop has been seen", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 20_000,
+        output_tokens: 200,
+      },
+      modelUsage: { "claude-sonnet-5": { contextWindow: 200000 } },
+    };
+    expect(contextFromResult(rec)).toEqual({ used: 20_210, window: 200000 });
+  });
+
+  it("falls back to the lone entry when the named model is not in the ledger", () => {
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 20_000,
+        output_tokens: 200,
+      },
+      modelUsage: { "claude-sonnet-5": { contextWindow: 200000 } },
+    };
+    expect(contextFromResult(rec, { model: "claude-fable-5" })).toEqual({
+      used: 20_210,
+      window: 200000,
+    });
+  });
+});
+
+describe("assistantModel", () => {
+  it("names the model that served the message", () => {
+    expect(
+      assistantModel({
+        type: "assistant",
+        message: { model: "claude-opus-5", content: [] },
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("has nothing to say about a message with no model", () => {
+    expect(assistantModel({ type: "assistant", message: {} })).toBeUndefined();
+    expect(assistantModel({ type: "system" })).toBeUndefined();
   });
 });
 
