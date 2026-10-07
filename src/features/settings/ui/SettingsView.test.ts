@@ -24,6 +24,12 @@ import {
   HARNESS_TITLE,
 } from "../../sessions/model/session";
 import { saveMaskEmails, saveShowRemainingUsage } from "../model/displayPrefs";
+import {
+  createMono,
+  findMono,
+  monoLook,
+  updateMono,
+} from "../../monos/model/mono";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -114,6 +120,30 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("saves each Mono's session visibility and restores it when settings reopen", async () => {
+    const mono = createMono();
+    const other = createMono();
+    const toggle = (id: string) =>
+      container.querySelector<HTMLButtonElement>(
+        `[role="switch"][aria-label="Show sessions started by ${monoLook(findMono(id)!).name} in sidebar"]`,
+      )!;
+    await render("monos");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
+    await act(async () => toggle(mono.id).click());
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(false);
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
+    await render("general");
+    await render("monos");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    await act(async () => updateMono(mono.id, (entry) => ({
+      ...entry,
+      showStartedSessionsInSidebar: true,
+    })));
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
     saveMaskEmails(true);
     vi.mocked(invoke).mockImplementation(async (command, args) => {

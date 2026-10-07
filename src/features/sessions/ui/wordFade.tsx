@@ -52,18 +52,19 @@ function isSpace(code: number): boolean {
 }
 
 /**
- * The part of `text` to show right now. Text that is already there when the
- * component mounts, or that changes while nothing is streaming, shows at
- * once; only what streams in is paced, and a stream that ends ahead of the
- * reveal is still let out at pace. `revealing` stays true until the reveal
- * has caught up.
+ * Pace new output, including its first chunk and a reply that completed before
+ * its first paint. Callers opening existing output opt out of the mount reveal.
+ * A stream that ends ahead of the reveal still finishes at pace.
  */
 export function usePacedText(
   text: string,
   streaming: boolean,
+  revealOnMount = streaming,
 ): { text: string; revealing: boolean } {
-  const shown = useRef(text.length);
-  const pacing = useRef(streaming);
+  const shown = useRef(revealOnMount ? 0 : text.length);
+  const pacing = useRef(streaming || revealOnMount);
+  const latest = useRef({ text, streaming });
+  latest.current = { text, streaming };
   const [, rerender] = useReducer((n: number) => n + 1, 0);
 
   if (streaming) pacing.current = true;
@@ -79,8 +80,10 @@ export function usePacedText(
     }
     let position = shown.current;
     let last = performance.now();
-    let hold = 0;
+    let heldText = "";
+    let heldAt = 0;
     let frame = requestAnimationFrame(function tick(now) {
+      const { text, streaming } = latest.current;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const backlog = text.length - position;
@@ -93,19 +96,21 @@ export function usePacedText(
       }
       // Once the reveal has run into the end of what has arrived there is
       // nothing to do until more does, which restarts this.
-      if (position < text.length) frame = requestAnimationFrame(tick);
-      else if (shown.current < text.length) {
-        hold = window.setTimeout(() => {
+      if (position >= text.length && shown.current < text.length) {
+        if (heldText !== text) {
+          heldText = text;
+          heldAt = now;
+        }
+        if (now - heldAt >= REVEAL_HOLD_MS) {
           shown.current = text.length;
           rerender();
-        }, REVEAL_HOLD_MS);
+        }
       }
+      if (shown.current < text.length) frame = requestAnimationFrame(tick);
     });
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(hold);
-    };
-  }, [text, streaming, behind]);
+    return () => cancelAnimationFrame(frame);
+    // Incoming chunks update the target without restarting the reveal clock.
+  }, [streaming, behind]);
 
   return {
     text: behind ? text.slice(0, shown.current) : text,

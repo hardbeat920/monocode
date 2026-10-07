@@ -52,6 +52,8 @@ export type QuickCatalog = {
 export type QuickChoice = { harness: HarnessId; model: string };
 
 export type QuickLaunch = {
+  /** Mono's visibility preference, captured before creating the session. */
+  sidebarHidden?: boolean;
   prompt: string;
   /** Explicit display title, using the same format as a manual rename. */
   title?: string;

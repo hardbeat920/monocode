@@ -1,8 +1,12 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { promptBlocks } from "../../../../features/sessions/model/attachments";
-import { isTaskListToolName, taskListFromToolInput } from "../../../../features/sessions/model/taskList";
+import {
+  isTaskListToolName,
+  taskListFromToolInput,
+} from "../../../../features/sessions/model/taskList";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
 import {
   killChild,
@@ -145,7 +149,7 @@ export async function sendCursorTurn(input: SendTurnInput): Promise<void> {
 
 export async function steerCursorTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Cursor session");
+  if (!live) throw new TurnNotReadyError("No active Cursor session");
 
   const blocks = promptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
@@ -454,10 +458,12 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.backgroundAgentTools.clear();
     live.taskListTools.clear();
     live.promptActive = true;
-    await live.acp.request("session/prompt", {
+    const pending = live.acp.request("session/prompt", {
       sessionId: live.acpSessionId,
       prompt: blocks,
     });
+    input.onAccepted?.();
+    await pending;
     live.promptActive = false;
     if (live.cancelled) {
       live.backgroundAgentTools.clear();

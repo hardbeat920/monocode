@@ -87,6 +87,36 @@ describe("paced streaming", () => {
     expect(shown()).toBe(reply);
   });
 
+  it("paces the first chunk even when the reply mounts with text", () => {
+    render(reply, true);
+    expect(shown()).toBe("");
+
+    act(() => vi.advanceTimersByTime(100));
+    expect(shown().length).toBeGreaterThan(0);
+    expect(shown().length).toBeLessThan(reply.length);
+
+    render(reply, false);
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(shown()).toBe(reply);
+  });
+
+  it("keeps revealing while chunks arrive faster than animation frames", () => {
+    render("", true);
+    let text = "";
+    for (let index = 0; index < 40; index++) {
+      text += `word${index} `;
+      render(text, true);
+      act(() => vi.advanceTimersByTime(8));
+    }
+    expect(shown().length).toBeGreaterThan(0);
+    expect(shown().length).toBeLessThan(text.length);
+    expect(text.startsWith(shown())).toBe(true);
+
+    render(text.trimEnd(), false);
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(shown()).toBe(text.trimEnd());
+  });
+
   it("adds each word as its own span and never replaces one already shown", () => {
     render("", true);
     render("I will review ", true);

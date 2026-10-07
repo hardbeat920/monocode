@@ -505,6 +505,7 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
   streaming,
+  revealOnMount,
   className,
   cwd,
   onOpenFile,
@@ -513,6 +514,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
 }: {
   text: string;
   streaming?: boolean;
+  /** Pace newly arrived output even if it finished before its first paint. */
+  revealOnMount?: boolean;
   className?: string;
   cwd?: string;
   onOpenFile?: OpenFileFn;
@@ -542,7 +545,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
-  const paced = usePacedText(text, !!streaming);
+  const paced = usePacedText(text, !!streaming, revealOnMount);
   const fading = useWordFading(!!streaming || paced.revealing);
   // Spans stay while words are fading so a word already on screen keeps its
   // element. Dropping one mid-fade would remount it and fade it again. Once

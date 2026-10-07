@@ -38,7 +38,8 @@ const extra: ProjectFile = {
 };
 
 vi.mock("../../../platform/tauri/fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../platform/tauri/fs")>();
+  const actual =
+    await importOriginal<typeof import("../../../platform/tauri/fs")>();
   return {
     ...actual,
     listProjectFiles: vi.fn(async () => files),
@@ -74,14 +75,18 @@ describe("resolveOpenablePath", () => {
   });
 
   it("matches a relative project path", async () => {
-    const resolved = await resolveOpenablePath(cwd, "apps/desktop/src/main.tsx");
+    const resolved = await resolveOpenablePath(
+      cwd,
+      "apps/desktop/src/main.tsx",
+    );
     expect(resolved).toBe(files[2].path);
   });
 
   it("still opens a direct file when the optional project index is unavailable", async () => {
     list.mockRejectedValue(new Error("Project scan unavailable"));
-    await expect(resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"))
-      .resolves.toBe(files[2].path);
+    await expect(
+      resolveOpenablePath(cwd, "apps/desktop/src/main.tsx"),
+    ).resolves.toBe(files[2].path);
   });
 
   it("preserves an exact path even when it is absent from the project index", async () => {
@@ -144,6 +149,73 @@ describe("loadProjectFiles", () => {
     pending.resolve(files);
     expect(await first).toEqual(files);
     expect(await second).toEqual(files);
+  });
+
+  it("keeps both worktree indexes during repeated tab switches", async () => {
+    const other = "/Users/me/project-worktree";
+    const otherFiles = [{ ...extra, path: `${other}/pasted.ts` }];
+    list.mockImplementation(async (path) =>
+      path === cwd ? files : otherFiles,
+    );
+
+    for (let index = 0; index < 10; index++) {
+      expect(await loadProjectFiles(cwd)).toBe(files);
+      expect(await loadProjectFiles(other)).toBe(otherFiles);
+    }
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(peekProjectFiles(cwd)).toBe(files);
+    expect(peekProjectFiles(other)).toBe(otherFiles);
+  });
+
+  it("lets scans for separate worktrees finish independently", async () => {
+    const other = "/Users/me/project-worktree";
+    const first = deferred<ProjectFile[]>();
+    const second = deferred<ProjectFile[]>();
+    list.mockImplementationOnce(() => first.promise);
+    list.mockImplementationOnce(() => second.promise);
+    const firstScan = loadProjectFiles(cwd);
+    const secondScan = loadProjectFiles(other);
+    expect(loadProjectFiles(cwd)).toBe(firstScan);
+    expect(loadProjectFiles(other)).toBe(secondScan);
+    first.resolve(files);
+    second.resolve([extra]);
+    await Promise.all([firstScan, secondScan]);
+    expect(peekProjectFiles(cwd)).toBe(files);
+    expect(peekProjectFiles(other)).toEqual([extra]);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates one worktree without evicting or cancelling another", async () => {
+    const other = "/Users/me/project-worktree";
+    await loadProjectFiles(cwd);
+    await loadProjectFiles(other);
+    invalidateProjectFiles(cwd);
+    expect(peekProjectFiles(cwd)).toBeNull();
+    expect(await loadProjectFiles(other)).toBe(files);
+    expect(list).toHaveBeenCalledTimes(2);
+    await loadProjectFiles(cwd);
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let an invalidated scan restore its old listing", async () => {
+    const pending = deferred<ProjectFile[]>();
+    list.mockImplementationOnce(() => pending.promise);
+    const scan = loadProjectFiles(cwd);
+    invalidateProjectFiles(cwd);
+    pending.resolve(files);
+    await scan;
+    expect(peekProjectFiles(cwd)).toBeNull();
+  });
+
+  it("bounds retained worktrees and keeps recently revisited ones", async () => {
+    for (let index = 0; index < 8; index++) {
+      await loadProjectFiles(`/repo/tree-${index}`);
+    }
+    await loadProjectFiles("/repo/tree-0");
+    await loadProjectFiles("/repo/tree-8");
+    expect(peekProjectFiles("/repo/tree-0")).toBe(files);
+    expect(peekProjectFiles("/repo/tree-1")).toBeNull();
+    expect(list).toHaveBeenCalledTimes(9);
   });
 
   it("notifies subscribers when the listing changes", async () => {

@@ -87,6 +87,7 @@ export function UsageProviderChip({
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
   onReconnect?: () => Promise<void>;
 }) {
+  const showRemaining = useShowRemainingUsage();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [accountView, setAccountView] = useState<"usage" | "accounts" | "add">(
@@ -118,7 +119,7 @@ export function UsageProviderChip({
     return best;
   }, null);
   const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now))
+    .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
     .join(" · ");
   const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
   const iconHarness = presentation?.harness ?? limits.provider;
@@ -261,7 +262,11 @@ export function UsageProviderChip({
                     <span className="text-content/25">·</span>
                   ) : null}
                   <span>
-                    {formatUsagePercent(entry.window.usedPercent)}{" "}
+                    {formatUsagePercent(
+                      showRemaining
+                        ? 100 - clampUsedPercent(entry.window.usedPercent)
+                        : entry.window.usedPercent,
+                    )}{" "}
                     {formatRateLimitWindowChipLabel(entry.window, now)}
                   </span>
                 </span>
@@ -777,7 +782,7 @@ function UsageWindowCard({
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-[11px] font-medium text-content/65">{title}</h3>
         <span className="shrink-0 text-[11px] font-medium tabular-nums">
-          {formatUsagePercent(pct)} used
+          {formatUsagePercent(shown)} {showRemaining ? "remaining" : "used"}
         </span>
       </div>
       <div
@@ -794,7 +799,10 @@ function UsageWindowCard({
         />
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] leading-4 text-content/40">
-        <span className="tabular-nums">{Math.round(remaining)}% remaining</span>
+        <span className="tabular-nums">
+          {formatUsagePercent(showRemaining ? pct : remaining)}{" "}
+          {showRemaining ? "used" : "remaining"}
+        </span>
         <span
           className="truncate text-right tabular-nums"
           title={

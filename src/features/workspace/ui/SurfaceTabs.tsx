@@ -39,6 +39,7 @@ import {
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
+import { TabLabel } from "../../../shared/ui/TabLabel";
 
 type Props = {
   files: FilePaneTab[];
@@ -383,8 +384,8 @@ export function SurfaceTabs({
                 ) : (
                   <FileTypeIcon name={iconName} isDir={false} size={14} />
                 )}
-                <span
-                  className={`min-w-0 flex-1 truncate ${file.preview ? "italic" : ""} ${
+                <TabLabel
+                  className={`flex-1 ${file.preview ? "italic" : ""} ${
                     errors
                       ? active
                         ? "text-red-400"
@@ -393,7 +394,7 @@ export function SurfaceTabs({
                   }`}
                 >
                   {label}
-                </span>
+                </TabLabel>
                 {dirty ? (
                   <span
                     className="size-1.5 shrink-0 rounded-full bg-content/70"

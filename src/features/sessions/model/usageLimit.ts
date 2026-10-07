@@ -1,5 +1,28 @@
 import { formatResetDuration } from "../../providers/model/rateLimits";
-import type { Session } from "./session";
+import type { Session, UsageLimit } from "./session";
+
+/** A fallback for adapters that report exhausted accounts as plain errors. */
+export function usageLimitFromError(message: string): UsageLimit | undefined {
+  return /(?:usage|spending|monthly|weekly|daily) limit (?:reached|exceeded)|(?:quota|credits?) (?:exceeded|exhausted|depleted)|insufficient[_ ](?:quota|credits)|hit your (?:usage )?limit|credit balance is too low/i.test(
+    message,
+  )
+    ? {}
+    : undefined;
+}
+
+/** Release the stopped outbox only when the user chooses to recover. */
+export function resumeUsageLimitedSession(session: Session): Session {
+  if (!session.usageLimit || session.busy) return session;
+  return {
+    ...session,
+    usageLimit: undefined,
+    queueStatus: session.queuedMessages?.length ? "active" : undefined,
+    queuedMessages: session.queuedMessages?.map((message) => ({
+      ...message,
+      error: undefined,
+    })),
+  };
+}
 
 /** Providers can still refuse right at the reset; give them a moment. */
 export const USAGE_LIMIT_RESUME_GRACE_MS = 30_000;

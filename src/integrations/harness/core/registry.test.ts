@@ -63,6 +63,40 @@ describe("harness registry", () => {
     ).toEqual(["claude", "codex", "cursor"]);
   });
 
+  it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {
+    let accepted!: () => void;
+    let finish!: () => void;
+    registerHarness(
+      stub("codex", {
+        async sendTurn(input) {
+          accepted = () => input.onAccepted?.();
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      }),
+    );
+    const onEvent = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = sendHarnessTurn({
+      harness: "codex",
+      sessionId: "readiness",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Hello",
+      onEvent,
+      onAccepted,
+    });
+    await vi.waitFor(() => expect(accepted).toBeDefined());
+    expect(onEvent).not.toHaveBeenCalled();
+    accepted();
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ type: "turn.ready" });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    finish();
+    await sending;
+  });
+
   it("advertises isolated text prompt support by harness", () => {
     registerBuiltinHarnesses();
     const ids: HarnessId[] = [
@@ -371,7 +405,12 @@ describe("harness registry", () => {
     bindHarnessSession("claude", "s2", "sess_2", "/repo");
 
     expect(bindSession).toHaveBeenCalledWith("s1", "sess_1", "/repo", "work");
-    expect(bindSession).toHaveBeenCalledWith("s2", "sess_2", "/repo", undefined);
+    expect(bindSession).toHaveBeenCalledWith(
+      "s2",
+      "sess_2",
+      "/repo",
+      undefined,
+    );
     expect(restoreTaskLists).toHaveBeenCalledTimes(1);
     expect(restoreTaskLists).toHaveBeenCalledWith("s1", [taskList]);
   });

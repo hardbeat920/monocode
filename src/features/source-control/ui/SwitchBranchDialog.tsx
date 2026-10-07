@@ -108,7 +108,7 @@ export function SwitchBranchDialog({
       style={{ zIndex: LAYER.dialog }}
     >
       <div
-        className="absolute inset-0 bg-black/30"
+        className="absolute inset-0 z-0 bg-black/30"
         onMouseDown={() => {
           if (!busy && !generating) onCancel();
         }}
@@ -119,7 +119,7 @@ export function SwitchBranchDialog({
         aria-busy={Boolean(busy) || generating}
         aria-label={creating ? `Create ${branch}` : `Switch to ${branch}`}
         onMouseDown={(event) => event.stopPropagation()}
-        className={`${host ? "relative w-full" : "absolute left-1/2 top-[22%] w-[min(420px,calc(100vw-24px))] -translate-x-1/2"} flex flex-col gap-3 rounded-lg border border-content/10 bg-content/5 p-4 shadow-xl backdrop-blur-xl`}
+        className={`${host ? "relative w-full" : "absolute left-1/2 top-[22%] w-[min(420px,calc(100vw-24px))] -translate-x-1/2"} z-[1] flex flex-col gap-3 rounded-lg border border-content/10 bg-background-base dark:bg-content/5 p-4 shadow-xl backdrop-blur-xl`}
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">

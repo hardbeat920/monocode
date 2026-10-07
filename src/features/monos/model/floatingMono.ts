@@ -1,0 +1,149 @@
+import type { ApprovalDecision } from "../../../integrations/harness";
+import type { Attachment, Session } from "../../sessions/model/session";
+import type { UserQuestionReply } from "../../sessions/model/userQuestion";
+import { displayAttachments } from "../../sessions/model/attachments";
+import { listMonos, monoLook } from "./mono";
+import { pixelLayers } from "../../projects/model/pixelMascots";
+
+export const FLOATING_MONO_CHANGED = "mono_chat_changed";
+export const FLOATING_MONO_REQUEST = "mono_chat_request";
+export type FloatingMonoEntry = {
+  id: string;
+  name: string;
+  mascot: string;
+  color: string;
+  sessionId: string | null;
+};
+export type FloatingMonoView = {
+  monos: FloatingMonoEntry[];
+  monoId: string | null;
+  session: Session | null;
+  error: string | null;
+};
+export type FloatingMonoAction =
+  | { kind: "open" }
+  | { kind: "submit"; text: string; attachments: Attachment[] }
+  | { kind: "stop" }
+  | { kind: "approval"; requestId: number; decision: ApprovalDecision }
+  | { kind: "question"; requestId: number; reply: UserQuestionReply }
+  | { kind: "questionInteraction"; requestId: number }
+  | { kind: "reveal" }
+  | { kind: "openFile"; path: string }
+  | { kind: "resume" };
+export type FloatingMonoRequest = {
+  id: number;
+  monoId: string;
+  action: FloatingMonoAction;
+};
+
+export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
+  return enabled
+    ? listMonos().map((mono) => ({
+        id: mono.id,
+        ...monoLook(mono),
+        sessionId: mono.sessionId ?? null,
+      }))
+    : [];
+}
+
+/** Draw the same portraits in AppKit without a second set of mascot assets. */
+export function floatingMonoMenuMascots(monos: FloatingMonoEntry[]) {
+  return monos.map((mono) => {
+    const { body, open } = pixelLayers(mono.mascot, mono.color);
+    return { monoId: mono.id, rects: [...body, ...open] };
+  });
+}
+
+/** Blob URLs belong to their webview; send attachment bytes/paths instead. */
+export function floatingMonoSession(session: Session): Session {
+  return {
+    ...session,
+    blocks: session.blocks.map((block) =>
+      block.attachments?.length
+        ? { ...block, attachments: floatingMonoAttachments(block.attachments) }
+        : block,
+    ),
+    queuedMessages: session.queuedMessages?.map((message) => ({
+      ...message,
+      attachments: floatingMonoAttachments(message.attachments),
+    })),
+  };
+}
+
+export function floatingMonoAttachments(
+  attachments: Attachment[],
+): Attachment[] {
+  return displayAttachments(attachments).map(
+    ({ previewUrl: _preview, ...file }) => file,
+  );
+}
+
+export type FloatingMonoHost = {
+  open(monoId: string): Promise<Session | undefined>;
+  submit(
+    sessionId: string,
+    text: string,
+    attachments: Attachment[],
+  ): boolean | void;
+  stop(sessionId: string): void;
+  approval(
+    sessionId: string,
+    requestId: number,
+    decision: ApprovalDecision,
+  ): void;
+  question(
+    sessionId: string,
+    requestId: number,
+    reply: UserQuestionReply,
+  ): void;
+  questionInteraction(sessionId: string, requestId: number): void;
+  reveal(monoId: string): Promise<void>;
+  openFile(path: string): void | Promise<void>;
+  resume(sessionId: string): void;
+};
+
+/** Preparation may await disk; recheck the receipt before mutating a session. */
+export async function deliverFloatingMonoRequest(
+  request: FloatingMonoRequest,
+  host: FloatingMonoHost,
+  accept: () => Promise<boolean>,
+): Promise<Session | undefined> {
+  const session = await host.open(request.monoId);
+  if (!session) throw new Error("That Mono is no longer available.");
+  if (!(await accept())) return undefined;
+  const action = request.action;
+  switch (action.kind) {
+    case "open":
+      break;
+    case "submit":
+      if (host.submit(session.id, action.text, action.attachments) === false)
+        throw new Error(
+          "The message could not be sent. Try again in a moment.",
+        );
+      break;
+    case "stop":
+      host.stop(session.id);
+      break;
+    case "approval":
+      host.approval(session.id, action.requestId, action.decision);
+      break;
+    case "question":
+      host.question(session.id, action.requestId, action.reply);
+      break;
+    case "questionInteraction":
+      host.questionInteraction(session.id, action.requestId);
+      break;
+    case "reveal":
+      await host.reveal(request.monoId);
+      break;
+    case "openFile":
+      await host.openFile(action.path);
+      break;
+    case "resume":
+      host.resume(session.id);
+      break;
+    default:
+      throw new Error("Unknown chat action.");
+  }
+  return session;
+}

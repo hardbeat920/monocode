@@ -31,11 +31,14 @@ export function isLiveAgentSession(
 export function liveAgentsFromSessions(
   sessions: Session[],
   unseenFinishedIds: ReadonlySet<string> = new Set(),
+  excludedIds: ReadonlySet<string> = new Set(),
 ): LiveAgent[] {
   return sessions
     .filter(
       (session) =>
-        isLiveAgentSession(session) && (isInFlightSession(session) || unseenFinishedIds.has(session.id)),
+        !excludedIds.has(session.id) &&
+        isLiveAgentSession(session) &&
+        (isInFlightSession(session) || unseenFinishedIds.has(session.id)),
     )
     .map((session) =>
       toLiveAgent(session, unseenFinishedIds.has(session.id)),
