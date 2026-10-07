@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isImeComposition } from "../../../shared/lib/keyboard";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { AUTOMATION_WEEKDAYS } from "../../automations/model/automations";
 import {
@@ -97,7 +98,12 @@ export function NewHabitPage({
             placeholder="Name"
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") create();
+              if (
+                event.key === "Enter" &&
+                !isImeComposition(event.nativeEvent)
+              ) {
+                create();
+              }
             }}
             className="h-8 w-full rounded-md bg-transparent px-2 text-[13px] font-medium text-content outline-none placeholder:text-content/35 hover:bg-content/5 focus:bg-content/5"
           />

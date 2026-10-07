@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
 import type { Attachment } from "../../sessions/model/session";
@@ -37,7 +38,10 @@ type Props = {
   onQuoteRequestConsumed?: (id: number) => void;
   onDraftChange?: (text: string) => void;
   /** Returns false when the message wasn't taken, so the draft stays. */
-  onSubmit: (text: string, attachments: Attachment[]) => boolean | void;
+  onSubmit: (
+    text: string,
+    attachments: Attachment[],
+  ) => boolean | void | Promise<boolean | void>;
   onFocus?: () => void;
 };
 
@@ -71,8 +75,13 @@ export function MonoComposer({
   const inlineMeasure = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [dropError, setDropError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   const ready =
-    pendingReads === 0 && (text.trim().length > 0 || attachments.length > 0);
+    enabled &&
+    !submitting &&
+    pendingReads === 0 &&
+    (text.trim().length > 0 || attachments.length > 0);
   // Attachments sit above the field like a second line of text, so the field
   // moves above the buttons for them too.
   const stacked = multiline || attachments.length > 0;
@@ -143,6 +152,7 @@ export function MonoComposer({
   };
   const readAttachments = useCallback(
     (read: () => Promise<Attachment[]>, dropped = false) => {
+      if (submittingRef.current) return;
       const generation = readGeneration.current;
       pendingReadsRef.current++;
       setPendingReads(pendingReadsRef.current);
@@ -185,21 +195,48 @@ export function MonoComposer({
   );
   const fileDrag = useFileDrop({
     anchor: box,
-    enabled,
+    enabled: enabled && !submitting,
     state: DROP_STATE,
     read: readDropped,
     onError: setDropError,
   });
   const send = () => {
-    if (pendingReadsRef.current > 0) return;
+    if (!enabled || submittingRef.current || pendingReadsRef.current > 0)
+      return;
     const message = textRef.current.trim();
+    const draft = textRef.current;
     const files = attachmentsRef.current;
     if (!message && !files.length) return;
-    if (onSubmit(message, files) === false) return;
-    update("");
-    attachmentsRef.current = [];
-    setAttachments([]);
-    setDropError(null);
+    const generation = readGeneration.current;
+    const clear = (accepted: boolean | void) => {
+      if (accepted === false) return;
+      if (generation !== readGeneration.current) {
+        if (getComposerDraft(sessionId) === draft)
+          setComposerDraft(sessionId, "");
+        return;
+      }
+      update("");
+      attachmentsRef.current = [];
+      setAttachments([]);
+      setDropError(null);
+    };
+    const result = onSubmit(message, files);
+    if (result instanceof Promise) {
+      submittingRef.current = true;
+      setSubmitting(true);
+      void result
+        .then(clear)
+        .catch((reason: unknown) => {
+          if (generation === readGeneration.current)
+            setDropError(
+              reason instanceof Error ? reason.message : String(reason),
+            );
+        })
+        .finally(() => {
+          submittingRef.current = false;
+          if (generation === readGeneration.current) setSubmitting(false);
+        });
+    } else clear(result);
   };
 
   return (
@@ -231,6 +268,7 @@ export function MonoComposer({
                 key={file.id}
                 attachment={file}
                 onRemove={() => {
+                  if (submittingRef.current) return;
                   revokeAttachment(file);
                   const next = attachmentsRef.current.filter(
                     (item) => item.id !== file.id,
@@ -263,6 +301,7 @@ export function MonoComposer({
             type="button"
             title="Attach files"
             aria-label="Attach files"
+            disabled={!enabled || submitting}
             onClick={() => readAttachments(pickAttachments)}
             className={`col-start-1 grid size-6.5 place-items-center rounded-md bg-content/8 text-content/55 hover:bg-content/12 hover:text-content ${stacked ? "row-start-2" : "row-start-1"}`}
           >
@@ -273,6 +312,7 @@ export function MonoComposer({
             rows={1}
             aria-label={`Message ${name}`}
             placeholder={`Message ${name}`}
+            disabled={!enabled || submitting}
             value={text}
             onFocus={onFocus}
             onChange={(event) => update(event.target.value)}
@@ -280,7 +320,7 @@ export function MonoComposer({
               if (
                 event.key !== "Enter" ||
                 event.shiftKey ||
-                event.nativeEvent.isComposing
+                isImeComposition(event.nativeEvent)
               ) {
                 return;
               }

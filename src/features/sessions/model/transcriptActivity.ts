@@ -341,12 +341,7 @@ function groupTranscriptTurns(
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
     if (block.internal && !managed) {
-      // Older completion deliveries lost their marker but kept the receipt ID.
-      const completion =
-        block.monoSessionCompletion ||
-        (block.role === "user" &&
-          block.appRequestId?.startsWith("mono-completion-"));
-      if (completion) {
+      if (isMonoCompletionPrompt(block)) {
         if (current.length > 0) turns.push(current);
         // Mono replies need a stable turn before their first output arrives.
         // Keep the hidden prompt as its identity and timing, not visible text.
@@ -370,6 +365,84 @@ function groupTranscriptTurns(
   return turns;
 }
 
+/** The hidden turn the app writes when a session a Mono launched finishes. */
+export function isMonoCompletionPrompt(block: Block): boolean {
+  // Older completion deliveries lost their marker but kept the receipt ID.
+  return (
+    !!block.internal &&
+    (!!block.monoSessionCompletion ||
+      (block.role === "user" &&
+        !!block.appRequestId?.startsWith("mono-completion-")))
+  );
+}
+
+/** A message this long after the one before gets its own day and time. */
+const STRETCH_GAP = 60 * 60 * 1000;
+
+/** Whether a turn starts a new stretch: the first, a new day or after a break. */
+export function opensNewStretch(at: number, previousAt?: number): boolean {
+  if (previousAt == null) return true;
+  return (
+    at - previousAt > STRETCH_GAP ||
+    new Date(at).toDateString() !== new Date(previousAt).toDateString()
+  );
+}
+
+/** When the latest run in a Mono turn started, for measuring the gap after it. */
+export function monoTurnLatestStart(turn: Block[]): number | undefined {
+  let latest = turn[0].monoHabit?.at ?? turn[0].startedAt;
+  for (const block of turn) {
+    if (
+      block.role === "user" &&
+      block.startedAt != null &&
+      (latest == null || block.startedAt > latest)
+    )
+      latest = block.startedAt;
+  }
+  return latest;
+}
+
+/**
+ * The Mono chat's turns. A reply the Mono sends on its own, after a session it
+ * launched finishes, continues the message above it: one header, one answer,
+ * one set of actions. Only a new stretch, which gets its own day and time,
+ * starts a fresh message.
+ */
+export function groupMonoChatTurns(
+  blocks: Block[],
+  managed = false,
+): Block[][] {
+  const groups: Block[][] = [];
+  for (const turn of groupMonoTurns(blocks, managed)) {
+    const previous = groups[groups.length - 1];
+    const at = turn[0].startedAt;
+    if (
+      previous &&
+      !previous[0].monoHabit &&
+      previous[0].role !== "handoff" &&
+      isMonoCompletionPrompt(turn[0]) &&
+      (at == null || !opensNewStretch(at, monoTurnLatestStart(previous)))
+    ) {
+      previous.push(...turn);
+    } else groups.push(turn);
+  }
+  return groups;
+}
+
+/** The runs a merged Mono turn holds, each opened by its own prompt. */
+export function monoTurnRuns(turn: Block[]): Block[][] {
+  const runs: Block[][] = [];
+  turn.forEach((block, index) => {
+    if (
+      index === 0 ||
+      (isMonoCompletionPrompt(block) && block.startedAt != null)
+    )
+      runs.push([block]);
+    else runs[runs.length - 1].push(block);
+  });
+  return runs;
+}
+
 /** Follow-ups belong to one conversation burst even when work lands between them. */
 export function groupMonoTurns(blocks: Block[], managed = false): Block[][] {
   const groups: Block[][] = [];
@@ -378,7 +451,8 @@ export function groupMonoTurns(blocks: Block[], managed = false): Block[][] {
     if (
       previous?.[0].role === "user" &&
       turn[0].role === "user" &&
-      turn[0].sentAt != null
+      turn[0].sentAt != null &&
+      turn[0].startedAt == null
     ) {
       previous.push(...turn);
     } else groups.push([...turn]);
@@ -443,37 +517,54 @@ export function groupTurnItems(
 }
 
 /**
- * A Mono keeps its opening message and reply outside one compact work group.
- * Live narration stays in the group; settling reveals the trailing reply.
+ * A Mono keeps its process, including the opening message, in the activity
+ * trail. Live prose stays there until the user joins the running turn; replies
+ * after a delivered follow-up stay visible even when more work arrives.
+ * Settling reveals the trailing reply for uninterrupted turns.
  * Cards, notices and interjections keep their
  * own rows, and work resumed after a yielded reply does not absorb that reply.
  */
 export function groupMonoTurnItems(
   blocks: Block[],
-  options?: { live?: boolean },
+  options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
 ): TurnItem[] {
+  // Read the original order before moving user bubbles above the work. Once
+  // the user joins in, hiding subsequent replies makes a delivered message
+  // look ignored. Queued or failed messages have not reached the agent yet.
+  const followUpReplies = new Set<string>();
+  let interactive = false;
+  for (const block of blocks) {
+    if (
+      block.role === "user" &&
+      block.sentAt != null &&
+      block.startedAt == null &&
+      !block.internal &&
+      !block.draft &&
+      !options?.undeliveredMessageIds?.has(block.id)
+    )
+      interactive = true;
+    if (interactive && isProseBlock(block)) followUpReplies.add(block.id);
+  }
   // Keep the user's messages together above the work, without mutating history.
   const items = groupTurnItems([
     ...blocks.filter((block) => block.role === "user"),
     ...blocks.filter((block) => block.role !== "user"),
   ]);
-  const first = items.findIndex(
+  const start = items.findIndex(
     (item) => item.type !== "block" || item.block.role !== "user",
   );
-  const opening = items[first];
-  const start =
-    opening?.type === "block" && isProseBlock(opening.block)
-      ? first + 1
-      : first;
   if (start < 0) return items;
   let end = -1;
   const boundary = yieldedAt(items);
-  for (let index = start; index < boundary; index += 1) {
+  for (let index = start; index < items.length; index += 1) {
     const item = items[index];
+    // Status pings after an answer are not new work that should absorb it.
     if (
-      item.type !== "block" ||
-      isToolBlock(item.block) ||
-      (options?.live && isProseBlock(item.block))
+      item.type !== "block"
+        ? item.blocks.some(
+            (block) => isToolBlock(block) || isThinkingBlock(block),
+          )
+        : isToolBlock(item.block) || (options?.live && isProseBlock(item.block))
     )
       end = index;
   }
@@ -489,6 +580,9 @@ export function groupMonoTurnItems(
     if (
       index >= start &&
       index <= end &&
+      !(item.type === "block" && followUpReplies.has(item.block.id)) &&
+      // A reply already delivered before background work resumed stays put.
+      !(boundary < items.length && index === boundary - 1) &&
       (item.type !== "block" ||
         isProseBlock(item.block) ||
         isToolBlock(item.block))
