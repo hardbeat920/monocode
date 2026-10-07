@@ -46,6 +46,11 @@ import {
   setComposerDraft,
 } from "../model/draftCache";
 import type { UserQuestionPrompt } from "../model/userQuestion";
+import { DRAFT_COMMAND } from "../model/draftCommand";
+import { OPERATOR_COMMAND } from "../model/operatorCommand";
+import { ORCHESTRATOR_COMMAND } from "../model/orchestratorCommand";
+import { PLAN_COMMAND } from "../model/plan";
+import { MODE_COMMAND_STYLES } from "./modeCommands";
 
 function renderAction(
   busy: boolean,
@@ -1023,6 +1028,109 @@ describe("Composer question focus", () => {
     expect(
       container.querySelector('[aria-label="Turn off Operator"]'),
     ).toBeNull();
+  });
+
+  it("explains each + menu mode with the shared copy and lets it wrap", async () => {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          canSaveDraft: true,
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn().mockReturnValue(true),
+          onSaveDraft: vi.fn(),
+        }),
+      ),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Add files or choose a mode"]',
+        )!
+        .click(),
+    );
+    const menu = document.querySelector("[data-composer-plus]")!;
+    const rows = Array.from(menu.querySelectorAll<HTMLButtonElement>("button"));
+    for (const command of [
+      PLAN_COMMAND,
+      OPERATOR_COMMAND,
+      ORCHESTRATOR_COMMAND,
+      DRAFT_COMMAND,
+    ]) {
+      const copy = MODE_COMMAND_STYLES[command.name].menu!;
+      const row = rows.find((button) =>
+        button.textContent?.includes(copy.description),
+      );
+      expect(row?.textContent, command.name).toContain(copy.label);
+    }
+    expect(menu.textContent).toContain(
+      "Let this thread use MonoCode sessions, folders, and notes",
+    );
+    expect(menu.querySelector(".truncate, .whitespace-nowrap")).toBeNull();
+  });
+
+  it("explains why uploads are off instead of clipping the reason", async () => {
+    const props = {
+      focused: true,
+      model: "claude-sonnet",
+      runtimeMode: "supervised" as const,
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      onFocus: vi.fn(),
+      onCwdChange: vi.fn(),
+      onModelChange: vi.fn(),
+      onRuntimeModeChange: vi.fn(),
+      onSubmit: vi.fn().mockReturnValue(true),
+    };
+    const uploadRow = async () => {
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Add files or choose a mode"]',
+          )!
+          .click(),
+      );
+      return Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          "[data-composer-plus] button",
+        ),
+      ).find((button) => button.textContent?.includes("Upload file"))!;
+    };
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          ...props,
+          harness: "claude",
+          remoteSession: true,
+          remoteFeatures: { attachments: false, plan: true, draft: true },
+        }),
+      ),
+    );
+    let upload = await uploadRow();
+    expect(upload.disabled).toBe(true);
+    expect(upload.textContent).toContain(
+      "Update this machine’s host to attach files",
+    );
+    expect(upload.querySelector(".truncate, .whitespace-nowrap")).toBeNull();
+
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(createElement(Composer, { ...props, harness: "fx" })),
+    );
+    upload = await uploadRow();
+    expect(upload.disabled).toBe(true);
+    expect(upload.textContent).toContain("fx does not support attachments");
   });
 
   it("clears the parent draft before submit so a remounting composer stays empty", async () => {

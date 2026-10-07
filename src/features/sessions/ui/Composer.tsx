@@ -1,12 +1,8 @@
 import {
   ArrowUp,
-  AiIdea,
   Check,
-  CircleDashed,
-  CursorMagicSelection,
   FilePlus,
   Plus,
-  Share,
   Square,
   StickyNote,
   X,
@@ -157,6 +153,7 @@ import { consumeDraftCommand, DRAFT_COMMAND } from "../model/draftCommand";
 import {
   leadingModeCommand,
   MODE_COMMAND_INDENT,
+  MODE_COMMAND_STYLES,
   ModeCommandPill,
   ModeCommandText,
   type ModeCommandToken,
@@ -292,6 +289,11 @@ type Props = {
   onEditingLastTurnChange?: (editing: boolean) => void;
   children?: ReactNode;
 };
+
+const PLAN_STYLE = MODE_COMMAND_STYLES[PLAN_COMMAND.name];
+const OPERATOR_STYLE = MODE_COMMAND_STYLES[OPERATOR_COMMAND.name];
+const ORCHESTRATOR_STYLE = MODE_COMMAND_STYLES[ORCHESTRATOR_COMMAND.name];
+const DRAFT_STYLE = MODE_COMMAND_STYLES[DRAFT_COMMAND.name];
 
 function ToolButton({
   active,
@@ -2132,7 +2134,7 @@ export function Composer({
                   width={250}
                   onDismiss={() => setPlusOpen(false)}
                   data-composer-plus
-                  className="p-1.5"
+                  className="overflow-y-auto p-1.5"
                 >
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
                     Add to message
@@ -2148,9 +2150,9 @@ export function Composer({
                     className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
-                    <span className="min-w-0">
+                    <span className="min-w-0 flex-1">
                       <span className="block text-[13px]">Upload file</span>
-                      <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
+                      <span className="block text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
                           ? "Attach files or images"
                           : remote && !remoteFeatures?.attachments
@@ -2175,11 +2177,15 @@ export function Composer({
                       }}
                       className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
                     >
-                      <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
+                      <PLAN_STYLE.Icon
+                        className={`mt-0.5 size-4 shrink-0 ${PLAN_STYLE.menu?.iconClassName ?? ""}`}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Plan mode</span>
-                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Review a plan before building
+                        <span className="block text-[13px]">
+                          {PLAN_STYLE.menu?.label}
+                        </span>
+                        <span className="block text-[11px] leading-4 text-content/45">
+                          {PLAN_STYLE.menu?.description}
                         </span>
                       </span>
                       {planActive ? (
@@ -2205,11 +2211,15 @@ export function Composer({
                       }}
                       className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
                     >
-                      <CursorMagicSelection className="mt-0.5 size-4 shrink-0 text-sky-300/80" />
+                      <OPERATOR_STYLE.Icon
+                        className={`mt-0.5 size-4 shrink-0 ${OPERATOR_STYLE.menu?.iconClassName ?? ""}`}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Operator</span>
-                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Give this thread access to MonoCode
+                        <span className="block text-[13px]">
+                          {OPERATOR_STYLE.menu?.label}
+                        </span>
+                        <span className="block text-[11px] leading-4 text-content/45">
+                          {OPERATOR_STYLE.menu?.description}
                         </span>
                       </span>
                       {operatorActive ? (
@@ -2235,16 +2245,20 @@ export function Composer({
                       }}
                       className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
                     >
-                      <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
+                      <ORCHESTRATOR_STYLE.Icon
+                        className={`mt-0.5 size-4 shrink-0 ${ORCHESTRATOR_STYLE.menu?.iconClassName ?? ""}`}
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5">
-                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="text-[13px]">
+                            {ORCHESTRATOR_STYLE.menu?.label}
+                          </span>
                           <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
                             v1
                           </span>
                         </span>
-                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Plan and coordinate agent work
+                        <span className="block text-[11px] leading-4 text-content/45">
+                          {ORCHESTRATOR_STYLE.menu?.description}
                         </span>
                       </span>
                       {orchestrationActive && (
@@ -2268,11 +2282,15 @@ export function Composer({
                       }}
                       className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-content hover:bg-content/10"
                     >
-                      <CircleDashed className="mt-0.5 size-4 shrink-0 text-content/60" />
+                      <DRAFT_STYLE.Icon
+                        className={`mt-0.5 size-4 shrink-0 ${DRAFT_STYLE.menu?.iconClassName ?? ""}`}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Draft</span>
-                        <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Save this message without starting the agent
+                        <span className="block text-[13px]">
+                          {DRAFT_STYLE.menu?.label}
+                        </span>
+                        <span className="block text-[11px] leading-4 text-content/45">
+                          {DRAFT_STYLE.menu?.description}
                         </span>
                       </span>
                       {draftActive ? (

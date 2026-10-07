@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Descriptions in the composer's + menu wrap instead of being cut off, so Operator and the disabled Upload file reason are fully readable. The mode rows read their copy from the shared mode table, and Operator describes itself the same way in the + menu and the `/` command list.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added

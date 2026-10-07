@@ -5,8 +5,7 @@ export const OPERATOR_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "operator",
   invocation: "operator",
-  description:
-    "Give this thread access to MonoCode sessions, folders, and notes.",
+  description: "Let this thread use MonoCode sessions, folders, and notes.",
   scope: "builtin",
   source: "monocode",
 };

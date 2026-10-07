@@ -6,11 +6,18 @@ import {
   operatorUserPrompt,
   OPERATOR_COMMAND,
 } from "./operatorCommand";
+import { MODE_COMMAND_STYLES } from "../ui/modeCommands";
 
 describe("Operator composer command", () => {
   it("exposes a local slash command", () => {
     expect(OPERATOR_COMMAND.invocation).toBe("operator");
     expect(OPERATOR_COMMAND.kind).toBe("builtin");
+  });
+
+  it("describes itself the same way in the command list and the + menu", () => {
+    expect(OPERATOR_COMMAND.description).toBe(
+      `${MODE_COMMAND_STYLES[OPERATOR_COMMAND.name].menu?.description}.`,
+    );
   });
 
   it("consumes only a leading standalone command", () => {
