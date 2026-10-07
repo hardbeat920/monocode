@@ -183,6 +183,27 @@ it("starts the first turn in the mode picked in the floating composer", async ()
   );
 });
 
+it.each([false, true])("keeps a hidden launch hidden before submission (draft: %s)", async (draft) => {
+  const { state, request, workspace } = setup();
+  request.sidebarHidden = true;
+  request.draft = draft;
+  const save = draft ? workspace.saveDraft : workspace.submit;
+  const original = save.getMockImplementation()!;
+  save.mockImplementation((...args) => {
+    expect(state.sessions.find((session) => session.id === args[0])?.sidebarHidden)
+      .toBe(true);
+    return original(...args);
+  });
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(state.sessions.find((session) => session.id === "quick-session"))
+    .toMatchObject({ sidebarHidden: true, quickLaunchAccepted: true });
+  request.sidebarHidden = false;
+  await acceptQuickLaunch(request, "quick-session", workspace);
+  expect(state.sessions.find((session) => session.id === "quick-session")?.sidebarHidden)
+    .toBe(true);
+  expect(save).toHaveBeenCalledOnce();
+});
+
 it("creates a draft-only session without submitting an agent turn", async () => {
   const { state, request, workspace } = setup();
   request.draft = true;

@@ -59,6 +59,8 @@ type SessionRemovalMode = "archive" | "delete";
 
 type SessionRemovalOptions = {
   mode: SessionRemovalMode;
+  /** Keep file and terminal panes open when removing a session through the CLI. */
+  preserveOpenFiles?: boolean;
   scope?: WorkspaceTabCloseScope;
   replacement: ReplacementSeed;
   workspace: {
@@ -94,7 +96,7 @@ export function createSessionRemover(options: SessionRemovalOptions): {
   };
 }
 
-/** Confirm view closure, reject busy archives, then persist before removal. */
+/** Run the same lifecycle for archive and delete, reading state after each wait. */
 async function removeSession(
   sessionId: string,
   scope: WorkspaceTabCloseScope,
@@ -108,11 +110,15 @@ async function removeSession(
       orchestrator.run(sessionId))
   )
     return false;
+  const canCloseTab = (tab: WorkspaceTab) =>
+    !options.preserveOpenFiles ||
+    (tab.editorPanes.length === 0 && tab.terminalPanes.length === 0);
   const plan = removeSessionFromWorkspace({
     ...initial,
     sessionId,
     scope,
     createReplacement,
+    canCloseTab,
   });
   if (!(await options.confirm(plan.closedTabs, options.mode))) return false;
 
@@ -199,6 +205,7 @@ async function removeSession(
     scope,
     createReplacement,
     canCloseTab: (tab) => {
+      if (!canCloseTab(tab)) return false;
       const before = confirmed.get(tab.id);
       // File/terminal panes opened or rearranged during a dialog or save were
       // never confirmed. Remove the conversation but keep those surfaces open.

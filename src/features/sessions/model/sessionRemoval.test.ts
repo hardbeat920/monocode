@@ -14,7 +14,6 @@ import { createSessionRemover } from "./sessionRemoval";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
-/** Pause a storage or confirmation wait until the test releases it. */
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -24,7 +23,7 @@ function deferred() {
 }
 
 /** Build an idle archive or active delete workspace with observable effects. */
-function fixture(mode: "archive" | "delete") {
+function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
   const busy = mode === "delete";
   const closing: Session = {
     ...newSession("cursor", "/tmp/project"),
@@ -75,16 +74,17 @@ function fixture(mode: "archive" | "delete") {
     confirmClose,
     stop,
     commit,
-    /** Expose the changed flag reported by the removal lifecycle. */
+    /** Read the persisted transition reported by the removal lifecycle. */
     archiveChanged: () => archiveChanged,
-    /** Execute the remover against this fixture's tabs, sessions, and safeguards. */
+    /** Run the remover against this fixture's tabs and safeguards. */
     run: () => {
       const remover = createSessionRemover({
         mode,
+        preserveOpenFiles,
         replacement: { cwd: "/tmp/project", harness: "cursor" },
         workspace: {
           snapshot: () => state,
-          /** Record archive results and apply lifecycle changes to fixture state. */
+          /** Apply the workspace result and capture its archive change flag. */
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {
@@ -110,8 +110,36 @@ function fixture(mode: "archive" | "delete") {
 
 afterEach(() => mocks.invoke.mockReset());
 
-/** Exercise shared safeguards for archive and delete operations. */
 describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
+  it("keeps dirty files and terminals open when removing through the CLI", async () => {
+    const f = fixture(mode, true);
+    const file = newFileTab("/tmp/project/unsaved.ts", "/tmp/project");
+    const terminal = newTerminalFile("/tmp/project");
+    const tab = openTerminalTab(
+      openEditorTab(f.read().tabs[0], file, { pin: true }),
+      terminal,
+    );
+    f.write({
+      ...f.read(),
+      tabs: [tab, f.read().tabs[1]],
+      dirtyFiles: new Set([file.id]),
+    });
+    expect(await f.run()).toBe(true);
+    expect(f.confirmClose).toHaveBeenCalledExactlyOnceWith([], mode);
+    const kept = f.read().tabs.find((entry) => entry.id === tab.id)!;
+    expect(kept.editorPanes[0].files).toContain(file);
+    expect(kept.terminalPanes[0].files).toContain(terminal);
+    expect(f.read().dirtyFiles.has(file.id)).toBe(true);
+    expect(leafIds(kept.layout)).not.toContain(f.closing.id);
+    expect(f.read().sessions.map((session) => session.id)).not.toContain(
+      f.closing.id,
+    );
+    expect(f.read().sessions.find((session) => session.id === f.other.id)).toBe(
+      f.other,
+    );
+    expect(f.commit.mock.calls[0][0].closedTabs).toEqual([]);
+  });
+
   it("creates the replacement session behind the removal interface", async () => {
     const f = fixture(mode);
     const onlyTab = f.read().tabs[0];
@@ -171,18 +199,17 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     expect(f.read().tabs.map((tab) => tab.id)).toContain(addedTab.id);
   });
 
-  it("retains a stopped session and paused queue when storage fails", async () => {
+  it("keeps the session open when storage fails", async () => {
     const f = fixture(mode);
     mocks.invoke.mockRejectedValue(new Error("disk unavailable"));
     await expect(f.run()).rejects.toThrow("disk unavailable");
     expect(f.stop).toHaveBeenCalledTimes(mode === "delete" ? 1 : 0);
     expect(f.commit).not.toHaveBeenCalled();
-    expect(f.read().sessions[0]).toMatchObject({
-      busy: false,
-      ...(mode === "delete" ? { queueStatus: "paused" } : {}),
-    });
-    if (mode === "delete")
+    expect(f.read().sessions[0].busy).toBe(false);
+    if (mode === "delete") {
+      expect(f.read().sessions[0].queueStatus).toBe("paused");
       expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
+    }
     expect(f.read().tabs).toHaveLength(2);
   });
 
@@ -234,8 +261,8 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   });
 });
 
-/** Save the transcript and archive state without cancelling the idle worker. */
-it("archives an idle transcript without stopping or cancelling a worker", async () => {
+/** Save an idle transcript and archive it without stopping its provider. */
+it("archives an idle transcript without stopping the worker", async () => {
   const f = fixture("archive");
   await f.run();
   const [command, args] = mocks.invoke.mock.calls[0];
@@ -252,8 +279,8 @@ it("archives an idle transcript without stopping or cancelling a worker", async 
   ]);
 });
 
-/** Leave a newly busy target, its view, and its stored state unchanged. */
-it("rejects a busy archive before confirmation, cancellation, or storage", async () => {
+/** Leave a newly busy target, its view, and storage unchanged. */
+it("rejects a busy archive before confirmation or storage", async () => {
   const f = fixture("archive");
   f.write({
     ...f.read(),
