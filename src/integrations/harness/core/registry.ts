@@ -230,7 +230,13 @@ export function sendHarnessTurn(
       });
     activeTurnSessions.add(input.sessionId);
     try {
-      await adapter.sendTurn(input);
+      await adapter.sendTurn({
+        ...input,
+        onAccepted: () => {
+          input.onEvent({ type: "turn.ready" });
+          input.onAccepted?.();
+        },
+      });
     } finally {
       activeTurnSessions.delete(input.sessionId);
       if (controlled)

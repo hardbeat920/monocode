@@ -320,20 +320,41 @@ export function resolveToolCallDisplay(
 }
 
 /**
- * User turns, with handoff dividers sitting on their own row. `managed` is for
+ * User turns, with handoffs and habit updates sitting on their own row. `managed` is for
  * a worker's own transcript, where the app-written turns are the orchestrator
  * talking to it — the whole prompt side of that conversation, and the only
  * thing its replies are answering.
  */
 export function groupTurns(blocks: Block[], managed = false): Block[][] {
+  return groupTranscriptTurns(blocks, managed, false);
+}
+
+function groupTranscriptTurns(
+  blocks: Block[],
+  managed: boolean,
+  retainCompletionPrompts: boolean,
+): Block[][] {
   const turns: Block[][] = [];
   let current: Block[] = [];
   for (const block of blocks) {
     // A turn the app wrote to keep an orchestration moving is not a user
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
-    if (block.internal && !managed) continue;
-    if (block.role === "handoff") {
+    if (block.internal && !managed) {
+      // Older completion deliveries lost their marker but kept the receipt ID.
+      const completion =
+        block.monoSessionCompletion ||
+        (block.role === "user" &&
+          block.appRequestId?.startsWith("mono-completion-"));
+      if (completion) {
+        if (current.length > 0) turns.push(current);
+        // Mono replies need a stable turn before their first output arrives.
+        // Keep the hidden prompt as its identity and timing, not visible text.
+        current = retainCompletionPrompts ? [block] : [];
+      }
+      continue;
+    }
+    if (block.role === "handoff" || block.monoHabit) {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
       current = [];
@@ -347,6 +368,23 @@ export function groupTurns(blocks: Block[], managed = false): Block[][] {
   }
   if (current.length > 0) turns.push(current);
   return turns;
+}
+
+/** Follow-ups belong to one conversation burst even when work lands between them. */
+export function groupMonoTurns(blocks: Block[], managed = false): Block[][] {
+  const groups: Block[][] = [];
+  for (const turn of groupTranscriptTurns(blocks, managed, true)) {
+    const previous = groups[groups.length - 1];
+    if (
+      previous?.[0].role === "user" &&
+      turn[0].role === "user" &&
+      turn[0].sentAt != null &&
+      turn[0].startedAt == null
+    ) {
+      previous.push(...turn);
+    } else groups.push([...turn]);
+  }
+  return groups;
 }
 
 /**
@@ -403,6 +441,87 @@ export function groupTurnItems(
   });
   flush();
   return items;
+}
+
+/**
+ * A Mono keeps its process, including the opening message, in the activity
+ * trail. Live prose stays there until the user joins the running turn; replies
+ * after a delivered follow-up stay visible even when more work arrives.
+ * Settling reveals the trailing reply for uninterrupted turns.
+ * Cards, notices and interjections keep their
+ * own rows, and work resumed after a yielded reply does not absorb that reply.
+ */
+export function groupMonoTurnItems(
+  blocks: Block[],
+  options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
+): TurnItem[] {
+  // Read the original order before moving user bubbles above the work. Once
+  // the user joins in, hiding subsequent replies makes a delivered message
+  // look ignored. Queued or failed messages have not reached the agent yet.
+  const followUpReplies = new Set<string>();
+  let interactive = false;
+  for (const block of blocks) {
+    if (
+      block.role === "user" &&
+      block.sentAt != null &&
+      block.startedAt == null &&
+      !block.internal &&
+      !block.draft &&
+      !options?.undeliveredMessageIds?.has(block.id)
+    )
+      interactive = true;
+    if (interactive && isProseBlock(block)) followUpReplies.add(block.id);
+  }
+  // Keep the user's messages together above the work, without mutating history.
+  const items = groupTurnItems([
+    ...blocks.filter((block) => block.role === "user"),
+    ...blocks.filter((block) => block.role !== "user"),
+  ]);
+  const start = items.findIndex(
+    (item) => item.type !== "block" || item.block.role !== "user",
+  );
+  if (start < 0) return items;
+  let end = -1;
+  const boundary = yieldedAt(items);
+  for (let index = start; index < items.length; index += 1) {
+    const item = items[index];
+    // Status pings after an answer are not new work that should absorb it.
+    if (
+      item.type !== "block"
+        ? item.blocks.some(
+            (block) => isToolBlock(block) || isThinkingBlock(block),
+          )
+        : isToolBlock(item.block) || (options?.live && isProseBlock(item.block))
+    )
+      end = index;
+  }
+  if (end < start) return items;
+
+  const grouped: TurnItem[] = [];
+  let work: Block[] = [];
+  const flush = () => {
+    if (work.length) grouped.push({ type: "activity", blocks: work });
+    work = [];
+  };
+  items.forEach((item, index) => {
+    if (
+      index >= start &&
+      index <= end &&
+      !(item.type === "block" && followUpReplies.has(item.block.id)) &&
+      // A reply already delivered before background work resumed stays put.
+      !(boundary < items.length && index === boundary - 1) &&
+      (item.type !== "block" ||
+        isProseBlock(item.block) ||
+        isToolBlock(item.block))
+    ) {
+      work.push(...(item.type === "block" ? [item.block] : item.blocks));
+    } else {
+      flush();
+      grouped.push(item);
+    }
+  });
+  flush();
+  return grouped;
 }
 
 /**
@@ -982,17 +1101,15 @@ export function firstFoldableIndex(items: TurnItem[]): number {
 
 /** Every block inside a fold, work and commentary alike. */
 export function foldedBlocks(items: TurnItem[], fold: WorkFold): Block[] {
-  return items
-    .slice(fold.start, fold.end + 1)
-    .flatMap((item) =>
-      item.type === "block"
-        ? [item.block]
-        : // Delegated runs keep their own rows, so they are not part of what
-          // the fold summarises.
-          item.type === "subagents"
-          ? []
-          : item.blocks,
-    );
+  return items.slice(fold.start, fold.end + 1).flatMap((item) =>
+    item.type === "block"
+      ? [item.block]
+      : // Delegated runs keep their own rows, so they are not part of what
+        // the fold summarises.
+        item.type === "subagents"
+        ? []
+        : item.blocks,
+  );
 }
 
 /** True when a nested scroller should consume this wheel, not the parent. */
