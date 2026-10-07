@@ -1,5 +1,6 @@
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
+  clearHarnessModels,
   setHarnessModels,
   type AgentModel,
   type ModelSetting,
@@ -236,13 +237,16 @@ export function refreshClaudeCatalog(scope: CatalogScope = {}): Promise<void> {
       : pending;
   const generation = ++catalogGeneration;
   const run = discoverClaudeModels(scope.cwd, scope.providerAccountId)
-    .then((models) => {
-      if (generation === catalogGeneration && models.length > 0)
-        setHarnessModels("claude", models);
+    .catch((error: unknown) => {
+      console.debug("[monocode] claude catalog", error);
+      return [];
     })
-    .catch((error: unknown) =>
-      console.debug("[monocode] claude catalog", error),
-    )
+    .then((models) => {
+      if (generation !== catalogGeneration) return;
+      // An empty result must not leave the previous account's models listed.
+      if (models.length > 0) setHarnessModels("claude", models);
+      else clearHarnessModels("claude");
+    })
     .finally(() => {
       if (inflight.get(key) === run) inflight.delete(key);
     });

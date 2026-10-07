@@ -278,6 +278,16 @@ export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
   emit();
 }
 
+/** Drop a live catalog so the harness shows its built-in fallback list. */
+export function clearHarnessModels(harness: HarnessId) {
+  if (overlays[harness] == null) return;
+  const { [harness]: _models, ...restModels } = overlays;
+  const { [harness]: _default, ...restDefaults } = overlayDefaults;
+  overlays = restModels;
+  overlayDefaults = restDefaults;
+  emit();
+}
+
 /** True after a live CLI catalog has replaced the built-in fallback list. */
 export function hasLiveCatalog(harness: HarnessId): boolean {
   return overlays[harness] != null;
@@ -409,7 +419,11 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     // A saved Claude model may belong to another profile or gateway catalog.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
-    if (harness === "claude" && requested.startsWith("claude:") && nativeIdFrom(requested).trim()) {
+    if (
+      harness === "claude" &&
+      requested.startsWith("claude:") &&
+      nativeIdFrom(requested).trim()
+    ) {
       const nativeId = nativeIdForUnknownKey(requested);
       return { id: requested, harness, name: nativeId, nativeId };
     }

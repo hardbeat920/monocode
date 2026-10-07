@@ -4,12 +4,16 @@ import {
   saveProviderAccount,
   selectProviderAccount,
 } from "../../../../features/providers/model/providerAccounts";
-import { resetHarnessModelOverlays } from "../../../../features/sessions/model/models";
+import {
+  hasLiveCatalog,
+  resetHarnessModelOverlays,
+} from "../../../../features/sessions/model/models";
 import { refreshHarnessCatalogs, registerHarness } from "../../core/registry";
 import { claudeAdapter } from "./claudeAdapter";
 
 const fixture = vi.hoisted(() => ({
   spawned: [] as unknown[][],
+  fail: false,
   listeners: new Map<string, (line: string) => void>(),
 }));
 
@@ -19,6 +23,7 @@ vi.mock("../../../../platform/tauri/fs", () => ({
 vi.mock("../../core/child", () => ({
   resolveClaudeBinary: async () => ({ path: "/audit/claude" }),
   spawnChild: async (...args: unknown[]) => {
+    if (fixture.fail) throw new Error("spawn failed");
     fixture.spawned.push(args);
   },
   killChild: async () => undefined,
@@ -51,12 +56,16 @@ vi.mock("../../core/child", () => ({
     );
   },
   writeChildWithTimeout: async () => undefined,
-  execChild: async () => "2.1.287",
+  execChild: async () => {
+    if (fixture.fail) throw new Error("version failed");
+    return "2.1.287";
+  },
 }));
 
 beforeEach(() => {
   localStorage.clear();
   fixture.spawned.length = 0;
+  fixture.fail = false;
   resetHarnessModelOverlays();
   registerHarness(claudeAdapter);
   saveProviderAccount({
@@ -86,4 +95,15 @@ it("refreshes the model list when the selected account changes", async () => {
   selectProviderAccount("claude", "/audit-project", "default");
   await refreshHarnessCatalogs(["claude"], { cwd: "/audit-project" });
   expect(fixture.spawned).toHaveLength(2);
+});
+
+it("drops the previous account's models when the new account finds none", async () => {
+  await refreshHarnessCatalogs(["claude"], { cwd: "/audit-project" });
+  expect(hasLiveCatalog("claude")).toBe(true);
+  fixture.fail = true;
+  await refreshHarnessCatalogs(["claude"], {
+    cwd: "/audit-project",
+    providerAccountId: "default",
+  });
+  expect(hasLiveCatalog("claude")).toBe(false);
 });
