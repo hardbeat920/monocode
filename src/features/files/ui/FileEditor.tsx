@@ -12,6 +12,7 @@ import {
   countColumn,
   EditorSelection,
   Prec,
+  StateEffect,
   StateField,
   Transaction,
   type EditorState,
@@ -765,6 +766,59 @@ export function CodeMirrorEditor({
     let saveGeneration = 0;
     let autosaveTimer = 0;
     let view: EditorView;
+    let hoverKey = "";
+    let hoverGeneration = 0;
+
+    const clearSymbolHover = () => {
+      hoverKey = "";
+      hoverGeneration += 1;
+      view.dom.style.cursor = "";
+      view.dispatch({ effects: symbolHover.of(null) });
+    };
+
+    const updateSymbolHover = (event: MouseEvent) => {
+      if (!event.metaKey && !event.ctrlKey) {
+        clearSymbolHover();
+        return;
+      }
+      const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (position === null) {
+        clearSymbolHover();
+        return;
+      }
+      const symbol = symbolAt(view.state.doc.toString(), position);
+      if (!symbol) {
+        clearSymbolHover();
+        return;
+      }
+      const key = `${symbol.from}:${symbol.to}:${symbol.name}`;
+      if (key === hoverKey) return;
+      hoverKey = key;
+      const generation = ++hoverGeneration;
+      view.dom.style.cursor = "progress";
+      view.dispatch({ effects: symbolHover.of(null) });
+      void searchProject({
+        cwd,
+        query: symbol.name,
+        wholeWord: true,
+        searchId: crypto.randomUUID(),
+      })
+        .then((result) => {
+          if (disposed || generation !== hoverGeneration || key !== hoverKey)
+            return;
+          const definition = definitionFor(symbol.name, result.matches);
+          const navigable = !!definition || result.matches.length > 1;
+          view.dom.style.cursor = navigable ? "pointer" : "";
+          if (navigable) {
+            view.dispatch({
+              effects: symbolHover.of({ from: symbol.from, to: symbol.to }),
+            });
+          }
+        })
+        .catch(() => {
+          if (generation === hoverGeneration) view.dom.style.cursor = "";
+        });
+    };
 
     const markDirty = () => {
       const saved = savedDocumentRef.current;
@@ -857,6 +911,7 @@ export function CodeMirrorEditor({
         editorLint(path, (count) => onErrorCountChangeRef.current(count)),
         editorScrollbar,
         editorSearch,
+        symbolHoverField,
         Prec.high(
           keymap.of([
             ...foldKeymap,
@@ -927,6 +982,12 @@ export function CodeMirrorEditor({
             event.preventDefault();
             void findSymbol(view, event.shiftKey ? "references" : "definition");
             return true;
+          },
+          mousemove: (event) => {
+            updateSymbolHover(event);
+          },
+          mouseleave: () => {
+            clearSymbolHover();
           },
           blur: () => {
             pendingNavigationRef.current = null;
@@ -1275,6 +1336,26 @@ function revealNavigation(view: EditorView, target: EditorNavigation) {
 
 const diskReload = Annotation.define<boolean>();
 const sourceNavigation = Annotation.define<boolean>();
+const symbolHover = StateEffect.define<{ from: number; to: number } | null>();
+const symbolHoverField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update: (decorations, transaction) => {
+    for (const effect of transaction.effects) {
+      if (effect.is(symbolHover)) {
+        return effect.value
+          ? Decoration.set([
+              Decoration.mark({ class: "cm-symbol-navigation-target" }).range(
+                effect.value.from,
+                effect.value.to,
+              ),
+            ])
+          : Decoration.none;
+      }
+    }
+    return decorations.map(transaction.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function indentOrInsertTab(view: EditorView): boolean {
   const { state, dispatch } = view;
