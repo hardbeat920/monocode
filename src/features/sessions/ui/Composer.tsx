@@ -730,6 +730,7 @@ export function Composer({
   });
   fileDropStateRef.current = { attachmentsSupported, remote, addAttachments };
 
+  /** Keep pending attachment reads visible to Send and automated-close guards. */
   const rememberAttachmentRead = useCallback((work: Promise<void>) => {
     const flight = work.then(
       () => undefined,
@@ -743,6 +744,7 @@ export function Composer({
     });
   }, []);
 
+  /** Attach dropped files only if their read still belongs to this draft. */
   const readDroppedAttachments = useCallback(
     (read: () => Promise<Attachment[]>) => {
       const generation = pasteGenerationRef.current;
