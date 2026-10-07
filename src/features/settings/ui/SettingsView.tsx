@@ -296,6 +296,18 @@ import {
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
+import { PixelMascot } from "../../projects/ui/PixelMascot";
+import {
+  defaultMonoName,
+  listMonos,
+  monoLook,
+  monoProjectsPhrase,
+  monosSnapshot,
+  subscribeMonos,
+  type Mono,
+} from "../../monos/model/mono";
+import { resetMonoDefaults } from "../../monos/model/monoFiles";
+import { ConfirmReset } from "../../monos/ui/ConfirmReset";
 import {
   filterKeybindings,
   currentKeybindings,
@@ -311,6 +323,7 @@ import {
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadMonosEnabled,
   loadKeybindingOverrides,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
@@ -327,6 +340,8 @@ import {
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveMonosEnabled,
+  subscribeMonosEnabled,
   saveKeybindingOverride,
   validateKeybindingShortcut,
   saveQuickComposerEnabled,
@@ -562,6 +577,9 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
+              {section === "monos" ? (
+                <MonosPage />
+              ) : null}
               {section === "mcp" ? (
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
@@ -2806,7 +2824,10 @@ function binaryInspectionError(
   inspection: HarnessBinaryInspection,
 ): string | null {
   if (inspection.error) return inspection.error;
-  if (provider === "codex" && !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")) {
+  if (
+    provider === "codex" &&
+    !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")
+  ) {
     return "Codex CLI returned an invalid version.";
   }
   if (provider === "opencode") {
@@ -2940,7 +2961,9 @@ function ProviderBinaryControl({
           setEditing(false);
         }}
         className={`grid size-6 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
-          restartRequired ? "text-amber-300" : "text-content/35 hover:text-content"
+          restartRequired
+            ? "text-amber-300"
+            : "text-content/35 hover:text-content"
         }`}
       >
         <FolderOpen className="size-3.5" strokeWidth={1.75} />
@@ -3017,7 +3040,8 @@ function ProviderBinaryControl({
                 className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
               />
               <p className="mt-1.5 text-[10px] text-content/40">
-                Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.
+                Enter the absolute path to the CLI executable. Changes apply
+                after restarting MonoCode.
               </p>
               {error ? (
                 <span
@@ -3056,31 +3080,33 @@ function ProviderBinaryControl({
               <div className="mt-2 rounded-md border border-content/10 bg-content/[0.03] px-2.5 py-2">
                 <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
                   {inspection?.path ??
-                    (error ? "CLI could not be resolved" : "Checking the selected CLI…")}
+                    (error
+                      ? "CLI could not be resolved"
+                      : "Checking the selected CLI…")}
                 </span>
                 <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
                   {inspection?.version ??
                     (error ? "Retry to check this CLI" : "Checking version…")}
                 </span>
               </div>
-               {error ? (
-                 <span
-                   role="alert"
-                   title={error}
-                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
-                 >
-                   {error}
-                 </span>
-               ) : null}
-               {revealError ? (
-                 <span
-                   role="alert"
-                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
-                 >
-                   Could not open the CLI location: {revealError}
-                 </span>
-               ) : null}
-               <div className="mt-3 flex justify-end gap-2">
+              {error ? (
+                <span
+                  role="alert"
+                  title={error}
+                  className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                >
+                  {error}
+                </span>
+              ) : null}
+              {revealError ? (
+                <span
+                  role="alert"
+                  className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                >
+                  Could not open the CLI location: {revealError}
+                </span>
+              ) : null}
+              <div className="mt-3 flex justify-end gap-2">
                 {error ? (
                   <SecondaryButton
                     disabled={working}
@@ -3102,7 +3128,9 @@ function ProviderBinaryControl({
                     if (inspection) {
                       void revealPath(inspection.path).catch((cause) => {
                         setRevealError(
-                          cause instanceof Error ? cause.message : String(cause),
+                          cause instanceof Error
+                            ? cause.message
+                            : String(cause),
                         );
                       });
                     }
@@ -3969,6 +3997,90 @@ function formatDate(value: number): string {
   } catch {
     return "";
   }
+}
+
+/** Monos on or off, and each Mono the user has. */
+function MonosPage() {
+  const enabled = useSyncExternalStore(
+    subscribeMonosEnabled,
+    loadMonosEnabled,
+    () => true,
+  );
+  const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const monos = useMemo(() => listMonos(), [snapshot]);
+
+  return (
+    <>
+      <Group title="Monos">
+        <Row
+          id="monos-enabled"
+          label="Show monos"
+          description="Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them."
+        >
+          <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
+        </Row>
+      </Group>
+      <Group
+        id="mono-list"
+        title="Your monos"
+        description="Add one with the plus beside Monos on the rail. Choose its projects from its details."
+      >
+        {monos.length ? (
+          monos.map((mono) => <MonoRow key={mono.id} mono={mono} />)
+        ) : (
+          <p className="px-4 py-3.5 text-[12px] text-content/45">
+            No monos yet.
+          </p>
+        )}
+      </Group>
+    </>
+  );
+}
+
+function MonoRow({ mono }: { mono: Mono }) {
+  const look = monoLook(mono);
+  return (
+    <Row
+      label={
+        <span className="flex min-w-0 items-center gap-2">
+          <PixelMascot
+            name={look.mascot}
+            color={look.color}
+            still
+            className="size-4 shrink-0"
+          />
+          <span className="truncate">{look.name}</span>
+        </span>
+      }
+      description={
+        look.projects.length
+          ? `Works on ${monoProjectsPhrase(look.projects)}`
+          : "No projects yet"
+      }
+    >
+      <ConfirmReset
+        label="Reset Mono"
+        title={`Reset ${look.name} to its defaults?`}
+        body={`Its soul goes back to the default and its name to ${defaultMonoName(look.mascot)}. Changes to its soul can't be recovered.`}
+        kept="Its conversation, projects, memory and habits will be kept."
+        failure="Could not reset the Mono."
+        onConfirm={() => resetMonoDefaults(mono.id)}
+      >
+        {(open, ref) => (
+          <button
+            ref={ref}
+            type="button"
+            title="Reset to defaults"
+            aria-label={`Reset ${look.name} to defaults`}
+            onClick={open}
+            className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96]"
+          >
+            <RotateCcw className="size-3.5" strokeWidth={1.75} />
+          </button>
+        )}
+      </ConfirmReset>
+    </Row>
+  );
 }
 
 function PageHeader({

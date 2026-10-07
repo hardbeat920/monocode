@@ -87,6 +87,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // Keep delayed file invalidations from reaching the next test's mocks.
+  vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -176,6 +178,8 @@ describe("GitChangesPanel commit message generation", () => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.clearAllTimers();
+  vi.useRealTimers();
   container.remove();
   document.body
     .querySelectorAll("[data-popover-side]")
@@ -399,6 +403,10 @@ describe("GitChangesPanel folder actions", () => {
       '[aria-label="Stage Changes in src"]',
     )!;
     await act(async () => stage.click());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
 
     expect(alert).toHaveBeenCalledWith("Git index is locked");
     expect(stage.disabled).toBe(false);

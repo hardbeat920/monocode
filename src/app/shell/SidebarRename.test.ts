@@ -8,6 +8,10 @@ import { Sidebar } from "./Sidebar";
 import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
+import {
+  createMono,
+  saveMonoSessionId,
+} from "../../features/monos/model/mono";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -17,7 +21,10 @@ vi.mock("../../features/source-control/hooks/useGitFileStatuses", () => ({
   useGitFileStatuses: () => ({ files: new Map(), dirs: new Map() }),
 }));
 vi.mock("./SidebarUpdate", () => ({ SidebarUpdateFooter: () => null }));
-vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
+vi.mock("../../features/files/ui/FileTree", () => ({
+  FileTree: ({ cwd, rootLabel }: { cwd: string; rootLabel?: string }) =>
+    createElement("div", { "data-explorer-cwd": cwd }, rootLabel),
+}));
 vi.mock("../../platform/tauri/clipboard", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
@@ -141,6 +148,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("leaves the resident agent and its description out of the session list", () => {
+  saveMonoSessionId(createMono(["/workspace/project"]).id, "resident");
+  props.sessions = [
+    ...props.sessions,
+    {
+      ...props.sessions[0],
+      id: "resident",
+      title: "Resident agent description",
+    },
+  ];
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
+  expect(container.querySelector("[data-mono]")).toBeNull();
+  expect(container.textContent).not.toContain("Resident agent description");
+});
+
 describe("project rail visibility", () => {
   it("keeps the mounted rail and its scroll state when collapsed", async () => {
     props = {
@@ -164,6 +188,106 @@ describe("project rail visibility", () => {
     await act(async () => render());
     expect(container.querySelector('nav[aria-label="Projects"]')).toBe(rail);
     expect(rail?.scrollTop).toBe(37);
+  });
+});
+
+describe("worktree explorer visibility", () => {
+  it("does not mount the file tree while browsing chat tabs", () => {
+    props = { ...props, gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBeNull();
+  });
+
+  it("retains the hidden tree and catches up when Files opens", () => {
+    props = {
+      ...props,
+      tab: "files",
+      gitCwd: "/worktrees/first",
+      explorerRootLabel: "first-branch",
+    };
+    act(() => render());
+    const first = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    first.scrollTop = 73;
+    props = {
+      ...props,
+      tab: "sessions",
+      gitCwd: "/worktrees/second",
+      explorerRootLabel: "second-branch",
+    };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBe(first);
+    expect(first.scrollTop).toBe(73);
+    expect(first.dataset.explorerCwd).toBe("/worktrees/first");
+
+    props = { ...props, tab: "files" };
+    act(() => render());
+    const second = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    expect(second.dataset.explorerCwd).toBe("/worktrees/second");
+    expect(second.textContent).toBe("second-branch");
+    expect(second).not.toBe(first);
+  });
+
+  it("updates the visible explorer on a worktree switch", () => {
+    props = { ...props, tab: "files", gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(
+      container.querySelector<HTMLElement>("[data-explorer-cwd]")!.dataset
+        .explorerCwd,
+    ).toBe("/worktrees/second");
+  });
+});
+
+describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
+  it.each([
+    ["Inbox", "inboxActive", "onOpenInbox"],
+    ["Notes", "notesActive", "onOpenNotes"],
+    ["Automations", "automationsActive", "onOpenAutomations"],
+    ["Search", "searchActive", "onSearch"],
+  ] as const)("selects only %s while it covers a Mono", async (label, active, open) => {
+    const mono = createMono();
+    props = {
+      ...props,
+      projectRailOpen: !compact,
+      compactProjectRail: compact,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+      monoViewActive: true,
+      monos: {
+        activeId: mono.id,
+        states: new Map(),
+        onOpen: vi.fn(),
+        onCreate: vi.fn(),
+        onDelete: vi.fn(),
+      },
+      [open]: () => {
+        props = { ...props, [active]: true };
+        render();
+      },
+    };
+    await act(async () => render());
+    const monoSelected = () => compact
+      ? container.querySelector('[aria-label^="Switch project"]')!
+          .getAttribute("aria-label")!.includes("current mono")
+      : !!container.querySelector('[data-mono-rail] [aria-current="true"]');
+    expect(monoSelected()).toBe(true);
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!.click(),
+    );
+    expect(container.querySelector(`button[aria-label^="${label}"]`)!.classList)
+      .toContain("bg-selection");
+    expect(monoSelected()).toBe(false);
+    expect(container.querySelector('[data-mono-rail] [data-selected="true"]')).toBeNull();
+    expect(props.monos?.activeId).toBe(mono.id);
+
+    // Back reveals the same conversation and restores its rail selection.
+    props = { ...props, [active]: false };
+    await act(async () => render());
+    expect(monoSelected()).toBe(true);
   });
 });
 
