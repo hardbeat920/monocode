@@ -87,7 +87,10 @@ import {
   type ReviewCommentTarget,
 } from "../../review-comments/ui/ReviewCommentComposer";
 import { ReviewCommentBubbles } from "../../review-comments/ui/ReviewCommentBubbles";
-import { remapReviewCommentLines } from "../../review-comments/model/reviewComments";
+import {
+  markReviewCommentsStale,
+  remapReviewCommentLines,
+} from "../../review-comments/model/reviewComments";
 import {
   diffActiveChunkIndex,
   diffLineStatsForView,
@@ -843,9 +846,11 @@ export function CodeMirrorEditor({
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
+            markReviewCommentsStale(commentPath);
+            setDocumentRevision((current) => current + 1);
             return;
           }
-          remapReviewCommentLines(path, (line) => {
+          remapReviewCommentLines(commentPath, (line) => {
             const previous = update.startState.doc.line(
               Math.min(line, update.startState.doc.lines),
             );

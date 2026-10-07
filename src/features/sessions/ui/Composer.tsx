@@ -1281,10 +1281,14 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const submit = (value: string, onAccepted?: () => void) => {
+  const submit = (
+    value: string,
+    onAccepted?: () => void,
+    onRejected?: () => void,
+  ) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value, onAccepted).finally(() => {
+    void completeSubmit(value, onAccepted, onRejected).finally(() => {
       submitLockRef.current = false;
     });
   };
@@ -1292,7 +1296,8 @@ export function Composer({
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     const review = formatReviewComments(reviewComments);
     if (!review) return;
-    const value = appendComposerInsert(ref.current?.value ?? "", review);
+    const originalDraft = ref.current?.value ?? "";
+    const value = appendComposerInsert(originalDraft, review);
     if (ref.current) {
       ref.current.value = value;
       resizeComposer(ref.current);
@@ -1300,11 +1305,20 @@ export function Composer({
     setDraft(value);
     onDraftChange?.(value);
     syncHasValue(value, attachmentsRef.current);
-    submit(value, clearReviewComments);
+    submit(value, clearReviewComments, () => {
+      if (ref.current) {
+        ref.current.value = originalDraft;
+        resizeComposer(ref.current);
+      }
+      setDraft(originalDraft);
+      onDraftChange?.(originalDraft);
+      syncHasValue(originalDraft, attachmentsRef.current);
+    });
   };
   const completeSubmit = async (
     submittedValue: string,
     onAccepted?: () => void,
+    onRejected?: () => void,
   ) => {
     let pending = pasteFlightRef.current;
     const generation = pasteGenerationRef.current;
@@ -1466,6 +1480,7 @@ export function Composer({
     // intact so resolving the blocker never destroys their work.
     if (accepted === false) {
       restoreDraft(text, files);
+      onRejected?.();
       return;
     }
     onAccepted?.();

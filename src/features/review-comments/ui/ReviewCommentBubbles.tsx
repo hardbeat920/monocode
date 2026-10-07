@@ -38,9 +38,12 @@ export function ReviewCommentBubbles({
       const hostRect = host.getBoundingClientRect();
       setBubbles(
         comments
-          .filter((comment) => comment.path === path && comment.startLine > 0)
+          .filter((comment) => comment.path === path)
           .flatMap((comment) => {
-            const line = Math.min(comment.startLine, view.state.doc.lines);
+            const line = Math.min(
+              Math.max(1, comment.startLine),
+              view.state.doc.lines,
+            );
             const coords = view.coordsAtPos(view.state.doc.line(line).from);
             return coords ? [{ comment, top: coords.top - hostRect.top }] : [];
           }),
@@ -85,7 +88,7 @@ export function ReviewCommentBubbles({
 }
 
 function anchorForComment(host: HTMLDivElement, view: EditorView, comment: ReviewComment) {
-  const line = Math.min(comment.startLine, view.state.doc.lines);
+  const line = Math.min(Math.max(1, comment.startLine), view.state.doc.lines);
   const coords = view.coordsAtPos(view.state.doc.line(line).from);
   if (!coords) return null;
   const rect = host.getBoundingClientRect();

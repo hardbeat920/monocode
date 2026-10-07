@@ -74,6 +74,17 @@ export function remapReviewCommentLines(
   if (changed) notify();
 }
 
+/** Marks comments as stale when an external full-file reload has no line map. */
+export function markReviewCommentsStale(path: string) {
+  let changed = false;
+  comments = comments.map((comment) => {
+    if (comment.path !== path || comment.deleted) return comment;
+    changed = true;
+    return { ...comment, deleted: true };
+  });
+  if (changed) notify();
+}
+
 export function formatReviewComments(items = comments) {
   if (items.length === 0) return "";
   return items
