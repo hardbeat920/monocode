@@ -606,6 +606,7 @@ export function Composer({
   const pasteGenerationRef = useRef(0);
   /** Native and file pastes still reading when Send is pressed. */
   const pasteFlightRef = useRef<Promise<void> | null>(null);
+  const attachmentConversionsRef = useRef(new Set<Promise<void>>());
   const submitLockRef = useRef(false);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
@@ -616,6 +617,7 @@ export function Composer({
     !!ref.current?.value ||
     attachmentsRef.current.length > 0 ||
     !!pasteFlightRef.current ||
+    attachmentConversionsRef.current.size > 0 ||
     submitLockRef.current;
   /** Register this mounted composer until its session or component is replaced. */
   const registerSessionCloseGuard = () => {
@@ -900,6 +902,16 @@ export function Composer({
     },
     [harness, syncHasValue],
   );
+
+  /** Keep close blocked until asynchronous picker and drop conversion finishes. */
+  const trackAttachmentConversion = (conversion: Promise<Attachment[]>) => {
+    const pending = conversion.then(addAttachments);
+    attachmentConversionsRef.current.add(pending);
+    void pending.then(
+      () => attachmentConversionsRef.current.delete(pending),
+      () => attachmentConversionsRef.current.delete(pending),
+    );
+  };
 
   const removeAttachment = useCallback(
     (id: string) => {
@@ -1350,7 +1362,7 @@ export function Composer({
       if (Date.now() - nativeDropAt < 250) return;
       const files = [...data.files];
       if (files.length === 0) return;
-      void attachmentsFromFiles(files).then(addAttachments);
+      trackAttachmentConversion(attachmentsFromFiles(files));
     };
 
     const onExplorerFilePointerDrag = (event: Event) => {
@@ -1368,7 +1380,7 @@ export function Composer({
       }
       setFileDrag(false);
       if (!over || !attachmentsSupported) return;
-      void attachmentsFromPaths([detail.path]).then(addAttachments);
+      trackAttachmentConversion(attachmentsFromPaths([detail.path]));
     };
 
     const root = dropRoot();
@@ -1398,7 +1410,7 @@ export function Composer({
         setFileDrag(false);
         if (!over || !attachmentsSupported) return;
         nativeDropAt = Date.now();
-        void attachmentsFromPaths(event.payload.paths).then(addAttachments);
+        trackAttachmentConversion(attachmentsFromPaths(event.payload.paths));
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -1971,10 +1983,9 @@ export function Composer({
 
   const attachFromPicker = () => {
     if (!attachmentsSupported) return;
-    void pickAttachments().then((files) => {
-      addAttachments(files);
-      ref.current?.focus();
-    });
+    const conversion = pickAttachments();
+    trackAttachmentConversion(conversion);
+    void conversion.then(() => ref.current?.focus());
   };
 
   return (
