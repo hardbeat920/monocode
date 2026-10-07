@@ -280,7 +280,7 @@ impl CheckpointStore {
         let in_scope = |relative: &str| {
             allowed
                 .as_ref()
-                .map_or(true, |allowed| in_scopes(allowed, relative))
+                .is_none_or(|allowed| in_scopes(allowed, relative))
         };
         let mut skipped = Vec::new();
         let mut renames = Vec::new();
@@ -3705,7 +3705,7 @@ mod tests {
         // `src` must not admit `src2/x.ts`.
         let src = worker.join("src").to_string_lossy().into_owned();
         let applied = store
-            .apply("worker", &from, &to, Some(&[src.clone()]))
+            .apply("worker", &from, &to, Some(std::slice::from_ref(&src)))
             .unwrap();
         assert_eq!(applied.files, ["src/app.ts"]);
         assert_eq!(applied.skipped, ["notes.md", "src2/x.ts"]);
@@ -3717,7 +3717,7 @@ mod tests {
 
         // A retry is idempotent and still reports the skipped files.
         let retried = store
-            .apply("worker", &from, &to, Some(&[src.clone()]))
+            .apply("worker", &from, &to, Some(std::slice::from_ref(&src)))
             .unwrap();
         assert_eq!(retried.already_applied, 1);
         assert_eq!(retried.skipped, ["notes.md", "src2/x.ts"]);
