@@ -1683,6 +1683,8 @@ function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
     });
   }
   const chunk = assistantTextBlocks(rec).join("").trim();
+  // Tool-only and thinking-only records share the message id. They add no prose.
+  if (!chunk) return;
   const key = `${parent.id}:${messageId}:text`;
   const prior = live.narration.get(key) ?? "";
   const text = chunk === prior ? prior : prior ? `${prior}\n${chunk}` : chunk;
@@ -1840,8 +1842,9 @@ function noteClaudeTurnStarted(live: Live): void {
         live.scheduledTasks.delete(id);
     }
     live.activeTurn = true;
+    // Keep accumulating: the transcript adds these counts to the user turn
+    // that started this native work, and replaces rather than adds them.
     live.nativeTurn = true;
-    live.metrics = {};
     live.outstandingResults = 1;
     live.onEvent({
       type: "turn.started",

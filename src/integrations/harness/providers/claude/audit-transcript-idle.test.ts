@@ -228,6 +228,58 @@ describe("review probe for native activity after an ordinary result", () => {
       expect(killChild).toHaveBeenCalled();
     },
   );
+  it("adds a native wakeup's tokens to the user turn instead of replacing them", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendHarnessTurn({
+      harness: "claude",
+      sessionId: "audit-idle",
+      cwd: "/repo",
+      model: "claude:claude-haiku-4-5",
+      runtimeMode: "supervised",
+      text: "Set up a session reminder",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await tick();
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_2", response: {} },
+    });
+    emit({ type: "system", subtype: "init", session_id: "provider-idle" });
+    await tick();
+    emit({
+      type: "result",
+      subtype: "success",
+      result: "Scheduled",
+      usage: { input_tokens: 100, output_tokens: 10 },
+    });
+    await turn;
+    emit({ type: "system", subtype: "init", session_id: "provider-idle" });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "The reminder fired." },
+      },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      result: "The reminder fired.",
+      usage: { input_tokens: 5, output_tokens: 1 },
+    });
+
+    expect(
+      events.some((event) => event.type === "turn.started" && event.native),
+    ).toBe(true);
+    const metrics = events.filter((event) => event.type === "turn.metrics");
+    expect(metrics.at(-1)).toMatchObject({
+      inputTokens: 105,
+      outputTokens: 11,
+    });
+  });
+
   it("does not park Claude while an unsolicited native wakeup is generating", async () => {
     const events: HarnessEvent[] = [];
     const turn = sendHarnessTurn({

@@ -1569,6 +1569,43 @@ describe("claude subagents", () => {
     ]);
   });
 
+  it("does not stretch a subagent's prose with tool-only records", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_agent",
+            name: "Agent",
+            input: { description: "Review" },
+          },
+        ],
+      },
+    });
+    const record = (content: unknown[]) =>
+      emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_agent",
+        message: { id: "msg_sub_1", content },
+      });
+    record([{ type: "text", text: "First" }]);
+    record([{ type: "tool_use", id: "toolu_sub_1", name: "Read", input: {} }]);
+    record([{ type: "thinking", thinking: "Next file." }]);
+    record([{ type: "text", text: "Second" }]);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    const prose = events.filter(
+      (event) => event.type === "agent.step" && event.kind === "message",
+    );
+    expect(
+      prose.map((step) => step.type === "agent.step" && step.text),
+    ).toEqual(["First", "First\nSecond"]);
+  });
+
   it("keeps a failed subagent tool result on its tool row", async () => {
     const { events, turn } = await startTurn("s1");
     emit({
