@@ -40,6 +40,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -157,7 +158,6 @@ import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { LiveAgentsPreview } from "../../features/sessions/ui/LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
 import { InboxNotificationMenu } from "../../features/inbox/ui/InboxNotificationMenu";
-import { prefetchGithubWorkItem } from "../../features/inbox/model/githubTasks";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
@@ -177,6 +177,16 @@ import { SessionsEmpty } from "../../features/sessions/ui/SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "../../features/source-control/ui/SourceControl";
 import { GithubStarPrompt } from "./GithubStarPrompt";
+import {
+  isMonoSession,
+  listMonos,
+  monoLook,
+  monosSnapshot,
+  subscribeMonos,
+} from "../../features/monos/model/mono";
+import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
+import { isHabitRun } from "../../features/monos/model/monoHabits";
+import type { MonoRailProps } from "./MonoRailSection";
 import {
   refreshRemoteProjectSessions,
   remoteRequest,
@@ -326,6 +336,10 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
+  /** The Monos on the rail; absent while Monos are off. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area, which has no project sidebar. */
+  monoViewActive?: boolean;
 };
 
 function SidebarComponent({
@@ -417,6 +431,8 @@ function SidebarComponent({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
+  monos,
+  monoViewActive = false,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
   const tab: SidebarTabId = requestedTab;
@@ -623,13 +639,19 @@ function SidebarComponent({
     : pending && sessions.length === 0;
   const worktreeFocus = useWorktreeFocus(cwd);
   const focusedWorktree = remoteProject ? undefined : worktreeFocus;
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
   const listedSessions = mergeFolderSessionSummaries(
     projectSessions,
     remoteProject ? [] : openSessions,
     sessionFolders,
   ).filter(
     (session) =>
-      !session.orchestrationLeadId && inWorktreeFocus(session, focusedWorktree),
+      !isMonoSession(session.id) &&
+      !session.sidebarHidden &&
+      !("ephemeral" in session && session.ephemeral) &&
+      !isHabitRun(session.id) &&
+      !session.orchestrationLeadId &&
+      inWorktreeFocus(session, focusedWorktree),
   );
   const visibleSessions = [
     ...filterSessionsByQuery(
@@ -757,15 +779,20 @@ function SidebarComponent({
     compactProjectRail && showProjectRail && !railVisible;
   const inProject = looksLikeProject(cwd);
   const showSidebarFooter = !projectRailOpen;
+  const otherViewActive =
+    searchActive ||
+    inboxActive ||
+    notesActive ||
+    automationsActive ||
+    settingsOpen;
+  // A remembered Mono sits underneath these views; select it only while visible.
+  const railMonos = monos
+    ? { ...monos, activeId: otherViewActive ? undefined : monos.activeId }
+    : undefined;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
   const sidebarAvailable =
-    !searchActive &&
-    !inboxActive &&
-    !notesActive &&
-    !automationsActive &&
-    !settingsOpen &&
-    inProject;
+    !otherViewActive && !monoViewActive && inProject;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
   // open the sidebar temporarily until the user clicks away.
@@ -781,6 +808,12 @@ function SidebarComponent({
   const drawerRendered = drawerVisible || drawerClosing;
   const drawerAnimation = useRef<Animation | null>(null);
   const panelOpen = open || drawerVisible;
+  // Keep the hidden explorer intact when a chat tab changes worktrees. Its
+  // rows and file icons only need rebuilding when Files is actually shown.
+  const explorer = useRef<{ cwd: string; rootLabel?: string } | null>(null);
+  if (panelOpen && tab === "files") {
+    explorer.current = { cwd: gitRoot, rootLabel: explorerRootLabel };
+  }
   const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
   const changeStats = useProjectDiffStats(gitRoot, panelOpen);
 
@@ -1724,17 +1757,19 @@ function SidebarComponent({
             />
           ) : cwd && cwd !== "~" ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <FileTree
-                key={gitRoot}
-                cwd={gitRoot}
-                rootLabel={explorerRootLabel}
-                onOpenFile={onOpenFile}
-                onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
-                onFileMoved={onFileMoved}
-                onFileDeleted={onFileDeleted}
-                onSearch={onOpenFilesSearch}
-                gitStatuses={gitStatuses}
-              />
+              {explorer.current ? (
+                <FileTree
+                  key={explorer.current.cwd}
+                  cwd={explorer.current.cwd}
+                  rootLabel={explorer.current.rootLabel}
+                  onOpenFile={onOpenFile}
+                  onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
+                  onFileMoved={onFileMoved}
+                  onFileDeleted={onFileDeleted}
+                  onSearch={onOpenFilesSearch}
+                  gitStatuses={gitStatuses}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="px-3 py-2 text-[12px] text-content/50">
@@ -2216,6 +2251,8 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
           titleBarAbove={titleBarAbove}
+          monos={railMonos}
+          monoViewActive={monoViewActive}
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
@@ -2254,6 +2291,7 @@ function SidebarComponent({
           updateNotice={updateNotice}
           onOpenWhatsNew={onOpenWhatsNew}
           onDismissUpdate={onDismissUpdate}
+          monos={railMonos}
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
@@ -2456,6 +2494,8 @@ function CompactProjectRail({
   onTogglePanel,
   onLeaveActive,
   titleBarAbove,
+  monos,
+  monoViewActive = false,
 }: {
   cwd: string;
   recents: RecentProject[];
@@ -2483,7 +2523,26 @@ function CompactProjectRail({
   onTogglePanel?: () => void;
   onLeaveActive?: () => void;
   titleBarAbove: boolean;
+  /** Monos have no row here, so the project button lists them too. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area: no workspace tab is the current one. */
+  monoViewActive?: boolean;
 }) {
+  const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const pickerMonos = useMemo((): PickerMonos | undefined => {
+    if (!monos) return undefined;
+    return {
+      items: listMonos().map((mono) => ({
+        id: mono.id,
+        ...monoLook(mono),
+        status: monos.states.get(mono.id)?.status ?? "idle",
+      })),
+      activeId: monos.activeId,
+      onOpen: monos.onOpen,
+      onCreate: monos.onCreate,
+    };
+    // The roster is read through its snapshot.
+  }, [monos, monosSnap]);
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -2491,7 +2550,11 @@ function CompactProjectRail({
   const action = (active: boolean, open?: () => void) =>
     active && onLeaveActive ? onLeaveActive : open;
   const workspaceActive =
-    !searchActive && !inboxActive && !notesActive && !automationsActive;
+    !searchActive &&
+    !inboxActive &&
+    !notesActive &&
+    !automationsActive &&
+    !monoViewActive;
   const openWorkspaceTab = (nextTab: SidebarTab) => {
     if (!workspaceActive) onLeaveActive?.();
     onTabChange(nextTab);
@@ -2536,6 +2599,7 @@ function CompactProjectRail({
             onOpenProject={onOpenProject}
             onRemoveProject={onRemoveProject}
             onOpenNotificationSettings={onOpenNotificationSettings}
+            monos={pickerMonos}
           />
         ) : null}
         <div
@@ -3186,11 +3250,6 @@ const SessionCard = memo(function SessionCard({
       data-tauri-drag-region="false"
       title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
       aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
-      onPointerEnter={() => {
-        // Hover usually precedes the click by a few hundred ms, which is
-        // most of what the panel would otherwise spend waiting on GitHub.
-        if (onOpenWorkItem) prefetchGithubWorkItem(session.cwd, linkedWorkItem);
-      }}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.preventDefault();

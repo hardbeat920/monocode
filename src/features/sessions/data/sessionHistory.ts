@@ -107,6 +107,7 @@ export function summaryFromSession(
   return {
     id: session.id,
     orchestrationLeadId: session.orchestrationLeadId,
+    sidebarHidden: session.sidebarHidden,
     cwd: session.cwd,
     harness: session.harness,
     model: session.model,
@@ -178,7 +179,9 @@ export function historyWithLiveSessions(
   );
   const hint = projectGitHint(rows, gitOverlayForCwd(cwd, git));
   for (const session of sessions) {
-    if (session.inboxAsk || workerIds.has(session.id)) continue;
+    // Ephemeral sessions are never chats of the project, even while busy.
+    if (session.ephemeral || session.inboxAsk || workerIds.has(session.id))
+      continue;
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;
@@ -193,11 +196,13 @@ export function historyWithLiveSessions(
         !!stored.draft !== draft ||
         stored.automationId !== automationId ||
         stored.title !== session.title ||
+        !!stored.sidebarHidden !== !!session.sidebarHidden ||
         stored.linkedWorkItem?.url !== linkedWorkItem?.url
       ) {
         rows[storedIndex] = {
           ...stored,
           title: session.title,
+          sidebarHidden: session.sidebarHidden,
           draft: draft || undefined,
           ...(automationId ? { automationId } : {}),
           ...(linkedWorkItem ? { linkedWorkItem } : {}),

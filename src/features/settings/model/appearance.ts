@@ -286,6 +286,7 @@ export function applyThemeDarkLightness(value: number) {
     "--theme-dark-lightness",
     `${next}%`,
   );
+  refreshNativeTint();
   return next;
 }
 
@@ -299,6 +300,7 @@ export function applyThemeTint(hue: number, saturation: number) {
     "--theme-saturation",
     `${nextSaturation}%`,
   );
+  refreshNativeTint();
   return { hue: nextHue, saturation: nextSaturation };
 }
 
@@ -375,7 +377,7 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
   return next;
 }
 
-/** The page colour the native window sits behind while glass is off. */
+/** The page colour, also used by the native macOS glass tint. */
 function opaqueWindowBackground(): Rgb {
   const style = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: number) => {
@@ -387,6 +389,23 @@ function opaqueWindowBackground(): Rgb {
     read("--theme-saturation", THEME_SATURATION_DEFAULT),
     read("--background-lightness", THEME_DARK_LIGHTNESS_DEFAULT),
   );
+}
+
+/** Compose both shared CSS tints into the native fill, including the shell's
+ * base tint, so the steady page and a newly exposed resize edge match. */
+function nativeWindowOpacity(): number {
+  const style = getComputedStyle(document.documentElement);
+  const glass = clamp(
+    Number.parseFloat(style.getPropertyValue("--sidebar-opacity")) ||
+      SIDEBAR_OPACITY_DEFAULT,
+    SIDEBAR_OPACITY_MIN,
+    SIDEBAR_OPACITY_MAX,
+  );
+  const storedBase = Number.parseFloat(
+    style.getPropertyValue("--window-background-opacity"),
+  );
+  const base = Number.isFinite(storedBase) ? clamp(storedBase, 0, 1) : 0.4;
+  return base + glass * (1 - base);
 }
 
 /** How long the page takes to reach opaque, from the same token the CSS uses. */
@@ -410,9 +429,10 @@ export function syncNativeGlass(scheme: ColorScheme) {
   const root = document.documentElement;
   const generation = ++glassSyncGeneration;
   const setWindow = () =>
-    invoke("set_window_glass_enabled", {
+    invoke<boolean>("set_window_glass_enabled", {
       enabled,
       background: opaqueWindowBackground(),
+      ...(IS_MAC ? { opacity: nativeWindowOpacity() } : {}),
     }).catch(() => {});
 
   if (glassFadeTimer !== undefined) {
@@ -421,19 +441,32 @@ export function syncNativeGlass(scheme: ColorScheme) {
   }
 
   if (enabled) {
-    void setWindow().finally(() => {
+    void setWindow().then((nativeTint) => {
       if (generation === glassSyncGeneration) {
+        // An older native host or browser preview has no native tint. Keep
+        // the CSS tint unless the window confirms it supplied one. If a
+        // later update fails, retain the tint already applied by AppKit.
+        if (IS_MAC && nativeTint === true) {
+          root.classList.add("has-native-glass-tint");
+        }
         root.classList.add("has-native-glass");
       }
     });
     return;
   }
 
-  root.classList.remove("has-native-glass");
+  root.classList.remove("has-native-glass", "has-native-glass-tint");
   glassFadeTimer = window.setTimeout(() => {
     glassFadeTimer = undefined;
     void setWindow();
   }, glassFadeMs());
+}
+
+/** Settings update the native colour too, once the launch cover has painted. */
+function refreshNativeTint() {
+  if (nativeGlassReady && IS_MAC) {
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
@@ -470,6 +503,7 @@ export function saveSidebarOpacity(value: number) {
 export function applySidebarOpacity(value: number) {
   const next = clamp(value, SIDEBAR_OPACITY_MIN, SIDEBAR_OPACITY_MAX);
   document.documentElement.style.setProperty("--sidebar-opacity", String(next));
+  refreshNativeTint();
   return next;
 }
 

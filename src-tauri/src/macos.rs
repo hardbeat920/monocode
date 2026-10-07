@@ -12,7 +12,9 @@
 //!
 //! Sidebar glass uses a transparent NSWindow plus
 //! `CGSSetWindowBackgroundBlurRadius` (private WindowServer API). That
-//! blurs the desktop behind the window; CSS only tints the sidebar on top.
+//! blurs the desktop behind the window. The shared glass tint is painted by
+//! NSWindow so newly exposed areas are filled during resize, even before
+//! WebKit's next frame. CSS keeps opaque panes above that native tint.
 //! A nearly transparent AppKit visual-effect view behind the WKWebView keeps
 //! CSS backdrop filters stable during hover repaints and window capture.
 //!
@@ -211,11 +213,19 @@ fn set_launch_background(window: &WebviewWindow, r: u8, g: u8, b: u8) {
     )));
 }
 
-/// Turn on desktop blur after the first UI paint.
-pub fn enable_glass(window: &WebviewWindow) {
+/// Turn on desktop blur after the first UI paint. Report whether AppKit paints
+/// the tint so the page can stop painting the same translucent colour twice.
+pub fn enable_glass(
+    window: &WebviewWindow,
+    background: crate::window::Rgb,
+    opacity: Option<f64>,
+) -> bool {
+    let tinted = prepare_glass(window, background, opacity);
+    if !glass_enabled(window) {
+        apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
+    }
     set_glass_enabled(window, true);
-    prepare_glass(window);
-    apply_blur(window, BLUR_RADIUS.load(Ordering::Relaxed));
+    tinted
 }
 
 /// Turn off the blur and fall back to an opaque window in the caller's colour.
@@ -225,17 +235,36 @@ pub fn disable_glass(window: &WebviewWindow, r: u8, g: u8, b: u8) {
     set_launch_background(window, r, g, b);
 }
 
-fn prepare_glass(window: &WebviewWindow) {
+fn prepare_glass(
+    window: &WebviewWindow,
+    background: crate::window::Rgb,
+    opacity: Option<f64>,
+) -> bool {
     let Some(ns_window) = ns_window(window) else {
-        return;
+        return false;
     };
-    set_glass_backing(&ns_window, true);
-    ns_window.setOpaque(false);
-    // Fully clear + shadow leaves a jagged gap at the corners.
-    ns_window.setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
-    ns_window.setHasShadow(true);
-    ns_window.invalidateShadow();
-    ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    if !glass_enabled(window) {
+        set_glass_backing(&ns_window, true);
+        ns_window.setOpaque(false);
+        ns_window.setHasShadow(true);
+        ns_window.invalidateShadow();
+        ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    }
+    let opacity = opacity.filter(|value| value.is_finite());
+    let color = if let Some(opacity) = opacity {
+        NSColor::colorWithSRGBRed_green_blue_alpha(
+            background.r as f64 / 255.0,
+            background.g as f64 / 255.0,
+            background.b as f64 / 255.0,
+            opacity.clamp(0.15, 1.0),
+        )
+    } else {
+        // Older pages still paint their own tint. Fully clear + shadow leaves
+        // a jagged gap at the corners, so keep the original tiny alpha.
+        NSColor::clearColor().colorWithAlphaComponent(0.01)
+    };
+    ns_window.setBackgroundColor(Some(&color));
+    opacity.is_some()
 }
 
 /// Keep an AppKit backdrop surface below the transparent WKWebView. With only

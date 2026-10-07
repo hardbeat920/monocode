@@ -174,7 +174,7 @@ export type InboxListResult = {
   errors: InboxProviderErrors;
 };
 
-const INBOX_CACHE_FRESH_MS = 30_000;
+const INBOX_CACHE_FRESH_MS = 2 * 60_000;
 
 /** Closed history competes for the same slots, so an unfiltered fetch needs the wider page. */
 const INBOX_ALL_LIMIT = 100;
@@ -201,7 +201,7 @@ const prDiffInflight = new Map<string, Promise<GithubPrDiff>>();
 const fetchedAt = new Map<string, number>();
 
 /** Work item views can reuse anything fetched this recently instead of refetching. */
-export const GITHUB_WORK_ITEM_FRESH_MS = INBOX_CACHE_FRESH_MS;
+export const GITHUB_WORK_ITEM_FRESH_MS = 30_000;
 
 function freshEnough(key: string, maxAgeMs: number | undefined): boolean {
   if (maxAgeMs == null) return false;
@@ -691,30 +691,6 @@ export async function githubPrDiff(
   return promise;
 }
 
-/**
- * Warms everything the linked side panel reads, so opening it from a session
- * card can render straight from cache instead of waiting on `gh`.
- */
-export function prefetchGithubWorkItem(
-  cwd: string,
-  target: { repo: string; kind: GithubTaskKind; number: number },
-) {
-  const { repo, kind, number } = target;
-  const quiet = () => undefined;
-  if (!peekGithubWorkItem(repo, kind, number)) {
-    void githubWorkItem(cwd, repo, kind, number).catch(quiet);
-  }
-  if (!peekGithubWorkItemDetails(repo, kind, number)) {
-    void githubWorkItemDetails(cwd, repo, kind, number).catch(quiet);
-  }
-  if (!peekGithubWorkItemThread(repo, kind, number)) {
-    void githubWorkItemThread(cwd, repo, kind, number).catch(quiet);
-  }
-  if (kind === "pr" && !peekGithubPrDiff(repo, number)) {
-    void githubPrDiff(cwd, repo, number).catch(quiet);
-  }
-}
-
 export async function listInboxItems(
   projects: readonly { path: string }[],
   query: InboxQuery,
@@ -729,6 +705,22 @@ export async function listInboxItems(
   const generation = inboxCacheGeneration;
   const promise = fetchInboxItems(projects, query)
     .then((result) => {
+      // Keep the last GitHub snapshot usable while the backend waits for a
+      // rate-limit reset. Other providers can continue refreshing normally.
+      if (result.errors.github && inboxListCache?.key === key) {
+        result = {
+          ...result,
+          items: dedupeInboxItems(
+            [
+              ...result.items,
+              ...inboxListCache.items.filter(
+                (item) => item.provider === "github",
+              ),
+            ],
+            projects.map((project) => project.path),
+          ),
+        };
+      }
       if (generation === inboxCacheGeneration) {
         inboxListCache = { key, ...result, fetchedAt: Date.now() };
       }
@@ -901,9 +893,7 @@ async function fetchRepositoryInboxItems(
         state: query.state,
         limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
       });
-      return items.map((item) =>
-        toInboxItem(item, project.path, project.repo),
-      );
+      return items.map((item) => toInboxItem(item, project.path, project.repo));
     }),
   );
   return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
