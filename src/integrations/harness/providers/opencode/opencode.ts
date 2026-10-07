@@ -105,6 +105,8 @@ type Live = {
   partById: Map<string, OpenCodePart>;
   emittedTextByPartId: Map<string, string>;
   messageRoleById: Map<string, "user" | "assistant" | "hidden">;
+  /** The latest compaction agent message; its text is the summary. */
+  compactionMessageId?: string;
   turnMetricsByMessageId: Map<string, TurnMetrics>;
   cancelled: boolean;
   muteUpdates: boolean;
@@ -619,6 +621,17 @@ async function runCompaction(
   await live.client.summarizeSession(live.openCodeSessionId, model);
 }
 
+function compactionSummary(live: Live): string | undefined {
+  const id = live.compactionMessageId;
+  if (!id) return undefined;
+  const text = [...live.partById.values()]
+    .filter((part) => part.messageID === id && part.type === "text")
+    .map((part) => part.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+  return text || undefined;
+}
+
 async function handleEvent(
   live: Live,
   event: Record<string, unknown>,
@@ -659,13 +672,18 @@ async function handleEvent(
     // OpenCode keeps a recent tail of turns beside its summary, within a token
     // budget, unless `compaction.tail_turns` is 0; the event says neither. It
     // does not say who started it; `runManualCompaction` marks the user's own.
-    case "session.compacted":
+    case "session.compacted": {
       live.onEvent({
         type: "context.compacted",
         trigger: "auto",
         kept: "recent",
       });
+      // The summary streamed before the event, so it is complete by now.
+      const summary = compactionSummary(live);
+      live.compactionMessageId = undefined;
+      if (summary) live.onEvent({ type: "context.summarized", summary });
       break;
+    }
     case "message.updated": {
       const info = asRecord(properties.info);
       const id = stringField(info, "id");
@@ -674,6 +692,10 @@ async function handleEvent(
       const hidden = agent != null && KNOWN_HIDDEN_AGENTS.has(agent);
       if (id && (role === "user" || role === "assistant")) {
         live.messageRoleById.set(id, hidden ? "hidden" : role);
+      }
+      // Only the compaction agent's message; `summary` titles the session.
+      if (id && role === "assistant" && agent === "compaction") {
+        live.compactionMessageId = id;
       }
       // A compaction assistant's usage describes the summarization call, not
       // the rebuilt context. Keep the previous meter value until a real turn
@@ -691,6 +713,17 @@ async function handleEvent(
       const delta = streamTextDelta(properties.delta);
       if (!partID || !delta) break;
       const existing = live.partById.get(partID);
+      if (
+        existing?.type === "text" &&
+        existing.messageID === live.compactionMessageId
+      ) {
+        // Hidden from the transcript, but kept whole for its boundary.
+        live.partById.set(partID, {
+          ...existing,
+          text: (existing.text ?? "") + delta,
+        });
+        break;
+      }
       if (!existing || roleForPart(live, existing) !== "assistant") break;
       const previous =
         live.emittedTextByPartId.get(partID) ?? existing.text ?? "";

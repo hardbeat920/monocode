@@ -227,6 +227,29 @@ describe("OpenCode subagent trails", () => {
       { type: "context.compacted", trigger: "auto", kept: "recent" },
     ]);
   });
+  it("carries the compaction agent's summary to the boundary", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    // A session summary from the `summary` agent is a different feature.
+    message("session_1", "title_msg", "assistant", "summary");
+    part("session_1", { id: "title", type: "text", messageID: "title_msg", text: "Auth fixes" });
+    message("session_1", "sum_msg", "assistant", "compaction");
+    part("session_1", { id: "sum", type: "text", messageID: "sum_msg", text: "" });
+    for (const delta of ["Earlier we ", "fixed auth."]) {
+      onSseEvent?.({
+        type: "message.part.delta",
+        properties: { sessionID: "session_1", partID: "sum", field: "text", delta },
+      });
+    }
+    onSseEvent?.({ type: "session.compacted", properties: { sessionID: "session_1" } });
+    idle();
+    await done;
+    expect(events.filter((event) => event.type.startsWith("context."))).toEqual([
+      { type: "context.compacted", trigger: "auto", kept: "recent" },
+      { type: "context.summarized", summary: "Earlier we fixed auth." },
+    ]);
+    expect(events.filter((event) => event.type === "message.delta")).toEqual([]);
+  });
   it("marks one boundary for a compaction it asked for", async () => {
     const events: HarnessEvent[] = [];
     const { done } = await startTurn(events);
