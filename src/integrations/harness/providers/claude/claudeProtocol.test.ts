@@ -1125,6 +1125,21 @@ describe("compactSummaryFromUser", () => {
     expect(compactSummaryFromUser(SUMMARY_RECORD)).toBe(SUMMARY_BODY);
   });
 
+  it("drops the transcript pointer Claude adds when the session is saved", () => {
+    // Recorded from a host session, where Claude persists its transcript.
+    const content =
+      "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+      SUMMARY_BODY +
+      "\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/u/.claude/projects/-repo/7a6b5128.jsonl" +
+      "\nContinue the conversation from where it left off without asking the user any further questions.";
+    expect(
+      compactSummaryFromUser({
+        ...SUMMARY_RECORD,
+        message: { role: "user", content },
+      }),
+    ).toBe(SUMMARY_BODY);
+  });
+
   it("keeps the whole text when the wrapper is not the one it knows", () => {
     expect(
       compactSummaryFromUser({

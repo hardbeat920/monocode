@@ -481,7 +481,10 @@ export function statusTextFromSystem(
 }
 
 const SUMMARY_PREAMBLE = /^This session is being continued[\s\S]*?\nSummary:\n/;
-const SUMMARY_TRAILER = /\nContinue the conversation from where it left off[\s\S]*$/;
+// What follows the summary is for the model: a pointer to the saved transcript
+// (only when the session is persisted) and the instruction to resume.
+const SUMMARY_TRAILER =
+  /\n+(?:If you need specific details from before compaction|Continue the conversation from where it left off)[\s\S]*$/;
 
 /**
  * The summary Claude Code carries past a compaction. It streams as a synthetic
