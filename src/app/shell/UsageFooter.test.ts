@@ -39,7 +39,7 @@ describe("UsageFooter terminal control", () => {
         terminalOpen: true,
         onToggleTerminal: vi.fn(),
         onNewTerminal: vi.fn(),
-        onShowTerminal: vi.fn(),
+        onToggleProjectTerminal: vi.fn(),
         projectTerminalActive: true,
       }),
     );
@@ -90,14 +90,13 @@ describe("UsageFooter terminal control", () => {
 
   it("toggles the dock instead of only showing it", () => {
     const onToggleProjectTerminal = vi.fn();
-    const onShowTerminal = vi.fn();
+    const onNewTerminal = vi.fn();
     root = createRoot(container);
     act(() =>
       root!.render(
         createElement(UsageFooter, {
           providers: [],
-          onNewTerminal: vi.fn(),
-          onShowTerminal,
+          onNewTerminal,
           onToggleProjectTerminal,
           projectTerminalActive: true,
           projectTerminalOpen: true,
@@ -109,6 +108,50 @@ describe("UsageFooter terminal control", () => {
     expect(button).not.toBeNull();
     act(() => (button as HTMLButtonElement).click());
     expect(onToggleProjectTerminal).toHaveBeenCalledTimes(1);
-    expect(onShowTerminal).not.toHaveBeenCalled();
+    expect(onNewTerminal).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "handles a toggle-only caller when projectTerminalActive is %s",
+    (projectTerminalActive) => {
+      const onToggleProjectTerminal = vi.fn();
+      root = createRoot(container);
+      act(() =>
+        root!.render(
+          createElement(UsageFooter, {
+            providers: [],
+            onToggleProjectTerminal,
+            projectTerminalActive,
+          }),
+        ),
+      );
+
+      const button = container.querySelector("button");
+      expect(button).not.toBeNull();
+      act(() => button!.click());
+      expect(onToggleProjectTerminal).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("prefers creating a terminal when no project terminal is active", () => {
+    const onNewTerminal = vi.fn();
+    const onToggleProjectTerminal = vi.fn();
+    root = createRoot(container);
+    act(() =>
+      root!.render(
+        createElement(UsageFooter, {
+          providers: [],
+          onNewTerminal,
+          onToggleProjectTerminal,
+          projectTerminalActive: false,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(onNewTerminal).toHaveBeenCalledTimes(1);
+    expect(onToggleProjectTerminal).not.toHaveBeenCalled();
   });
 });

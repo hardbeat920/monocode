@@ -63,7 +63,6 @@ export function UsageFooter({
   terminalOpen = false,
   onToggleTerminal,
   onNewTerminal,
-  onShowTerminal,
   onToggleProjectTerminal,
   projectTerminalActive = false,
   projectTerminalOpen = false,
@@ -77,7 +76,6 @@ export function UsageFooter({
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
   onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
   onToggleProjectTerminal?: () => void;
   projectTerminalActive?: boolean;
   projectTerminalOpen?: boolean;
@@ -297,14 +295,14 @@ export function UsageFooter({
   const showUsage = wantClaude || wantCodex || showOpencodeChip;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(
-    onNewTerminal || onShowTerminal || onToggleProjectTerminal,
+    onNewTerminal || onToggleProjectTerminal,
   );
   const terminalLabel = projectTerminalActive
     ? "Terminal"
     : `New Terminal (${MOD}\`)`;
   const onTerminalClick = projectTerminalActive
-    ? (onToggleProjectTerminal ?? onShowTerminal ?? onNewTerminal)
-    : (onNewTerminal ?? onShowTerminal);
+    ? (onToggleProjectTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onToggleProjectTerminal);
   const ariaLabel = showUsage || session?.harness === "pi"
     ? "Provider usage"
     : showTerminals || showTerminalButton
