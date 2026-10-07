@@ -331,6 +331,34 @@ describe("child bridge", () => {
     release();
   });
 
+  it("delivers the running child's exit when it lands during a failed respawn", async () => {
+    installResolvedListeners();
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const emit = (name: string, payload: unknown) =>
+      mocks.handlers.get(name)?.({ payload: payload as never });
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "harness_spawn") return 41;
+    });
+    const exit = vi.fn();
+    child.watchChild("thread", () => undefined, exit);
+    await child.spawnChild("thread", "/bin/claude", [], "/repo");
+
+    const spawn = deferred<number>();
+    mocks.invoke.mockImplementation((command: string) =>
+      command === "harness_spawn" ? spawn.promise : Promise.resolve(),
+    );
+    const respawn = child.spawnChild("thread", "/bin/claude", [], "/missing");
+    emit("harness-exit", { sessionId: "thread", code: 3, pid: 41 });
+    expect(exit).not.toHaveBeenCalled();
+    spawn.reject(new Error("bad cwd"));
+    await expect(respawn).rejects.toThrow("bad cwd");
+
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(3);
+    release();
+  });
+
   it("does not hold output for children another window owns", async () => {
     installResolvedListeners();
     const child = await loadChild();

@@ -369,7 +369,20 @@ export async function spawnChild(
       );
     }
     if (previousLive != null && !livePid.has(sessionId)) {
-      livePid.set(sessionId, previousLive);
+      // The previous child may have exited while the spawn was pending. Its
+      // exit was queued because it was no longer live, so deliver it now.
+      const exits = pendingExit.get(sessionId) ?? [];
+      const previousExit = exits.find((event) => event.pid === previousLive);
+      if (previousExit) {
+        pendingExit.set(
+          sessionId,
+          exits.filter((event) => event.pid !== previousLive),
+        );
+        noteChildExited(sessionId, previousLive);
+        exitHandlers.get(sessionId)?.(previousExit.code);
+      } else {
+        livePid.set(sessionId, previousLive);
+      }
     }
     if (previousExited != null && !exitedPid.has(sessionId)) {
       exitedPid.set(sessionId, previousExited);
