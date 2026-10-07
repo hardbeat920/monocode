@@ -72,6 +72,7 @@ export function BrowserSurface({
   offWindow?: boolean;
   /** The dock sash is being dragged. */
   resizing?: boolean;
+  /** Layout classes, replacing the default `relative min-h-0 flex-1`. */
   className?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -182,7 +183,9 @@ export function BrowserSurface({
   return (
     <div
       ref={host}
-      className={`relative min-h-0 flex-1 bg-background-base ${className}`}
+      // A caller's layout replaces the default rather than joining it: which
+      // of two conflicting utilities wins depends on stylesheet order.
+      className={`bg-background-base ${className || "relative min-h-0 flex-1"}`}
     >
       {tab.error ? (
         <div className="absolute inset-0 grid place-items-center p-6 text-center text-[12px] text-content/55">
