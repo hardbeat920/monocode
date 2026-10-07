@@ -5,6 +5,7 @@ import { normalizeTaskListStatus } from "../../../../features/sessions/model/tas
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 import {
   composeToolTitle,
+  describeToolInput,
   extractSearchQuery,
   extractShellCommand,
   extractSkillName,
@@ -18,6 +19,7 @@ export type AntigravityPermissionRequest = {
   title: string;
   kind?: string;
   callId?: string;
+  input?: string;
   preview?: ToolPreview;
   optionIds: string[];
   optionKinds: Record<string, string>;
@@ -135,6 +137,14 @@ export function permissionRequestFromAcp(
       stringField(tool, "tool_call_id") ??
       stringField(rec ?? {}, "toolCallId") ??
       stringField(subject ?? {}, "toolCallId"),
+    input: describeToolInput(
+      tool.rawInput ??
+        tool.raw_input ??
+        tool.input ??
+        (command ? { command } : undefined),
+      kind,
+      title,
+    ),
     preview,
     optionIds,
     optionKinds,
@@ -228,6 +238,16 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         kind: toolKind,
         status,
         detail: toolDetail(update, tool),
+        input: describeToolInput(
+          update.rawInput ??
+            tool.rawInput ??
+            update.raw_input ??
+            tool.raw_input ??
+            update.input ??
+            tool.input,
+          toolKind,
+          title,
+        ),
         preview,
         ...acpAgentInfo(update, tool, toolKind, title),
       },

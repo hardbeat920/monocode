@@ -52,6 +52,7 @@ import {
 } from "./opencodeProtocol";
 import {
   composeToolTitle,
+  describeToolInput,
   extractShellCommand,
   extractSkillName,
 } from "../../core/preview";
@@ -773,12 +774,16 @@ async function handleEvent(
       }
       const uiId = live.nextApprovalUiId++;
       const pending = waitApproval(live, uiId, id);
+      // A pattern is one piece of the call; the row keeps its own input when
+      // the permission does not carry the whole thing.
+      const input = describeToolInput(metadata.input, kind, permission);
       if (callId) {
         live.onEvent({
           type: "tool.updated",
           callId,
           title,
           kind,
+          input,
           preview,
         });
       }
@@ -788,6 +793,7 @@ async function handleEvent(
         title,
         kind,
         callId,
+        input,
         preview,
       });
       await pending;
@@ -945,6 +951,7 @@ function emitTool(live: Live, part: OpenCodePart): void {
     (typeof state.title === "string" && state.title) ||
     tool;
   const detail = detailFromToolPart(part);
+  const input = describeToolInput(state.input, kind, tool);
   const tasks = taskListFromToolInput(tool, state.input);
   if (tasks) live.onEvent({ type: "tasks.updated", items: tasks });
   if (status === "pending") {
@@ -954,6 +961,7 @@ function emitTool(live: Live, part: OpenCodePart): void {
       title,
       kind,
       status: "pending",
+      input,
       preview,
     });
     if (kind === "agent") trackSubagentRow(live, callId, part);
@@ -977,6 +985,7 @@ function emitTool(live: Live, part: OpenCodePart): void {
           ? "Subagent failed."
           : "Tool failed."
         : undefined),
+    input,
     preview,
   });
   // Bind after creating the parent block: replayed steps need an owner.
@@ -1176,6 +1185,7 @@ function emitSubagentStep(
         : "in_progress",
     // Only a failure earns detail; a preview's output is never shown here.
     ...(failed ? { detail: detailFromToolPart(part) } : {}),
+    input: describeToolInput(state.input, kind, tool),
     ...(preview ? { preview } : {}),
   });
   if (kind === "agent") trackSubagentRow(live, callId, part);

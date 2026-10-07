@@ -202,6 +202,19 @@ describe("grok protocol", () => {
     });
   });
 
+  it("carries a shell call's whole script as its input", () => {
+    const script = "cd web\nnpm test -- --run";
+    const [event] = eventsFromAcpUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "call-sh",
+      kind: "execute",
+      title: "Run",
+      status: "in_progress",
+      rawInput: { command: script },
+    });
+    expect(event).toMatchObject({ type: "tool.updated", input: script });
+  });
+
   it("maps turn_completed usage onto the context meter", () => {
     expect(
       eventsFromAcpUpdate({

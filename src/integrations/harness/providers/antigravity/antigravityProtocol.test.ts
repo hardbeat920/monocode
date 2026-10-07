@@ -112,6 +112,8 @@ describe.each(providers)("$id ACP protocol", ({ id, protocol, mode, blocks, mode
       .toEqual([{ type: "reasoning.delta", text: "think" }]);
     expect(parse({ sessionUpdate: "tool_call", toolCallId: "t", title: "Read file", kind: "read", status: "completed" }))
       .toMatchObject([{ type: "tool.updated", callId: "t", kind: "read", status: "completed" }]);
+    expect(parse({ sessionUpdate: "tool_call", toolCallId: "sh", kind: "execute", rawInput: { command: "cd web\nnpm test" } }))
+      .toMatchObject([{ type: "tool.updated", callId: "sh", input: "cd web\nnpm test" }]);
     expect(parse({ sessionUpdate: "plan", entries: [{ content: "Check code", status: "pending" }] }))
       .toMatchObject([{ type: "tasks.updated", items: [{ text: "Check code" }] }]);
     expect(parse({ sessionUpdate: "available_commands_update", availableCommands: [] })).toEqual([]);

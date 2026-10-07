@@ -9,7 +9,21 @@ import {
   acknowledgeMonoMessage,
   enqueueMonoMessage,
 } from "../../../features/monos/model/monoMessaging";
-import { previewFromTool } from "../providers/claude/claudeProtocol";
+import {
+  inputFromTool,
+  previewFromTool,
+  toolKindFromName,
+  toolTitle,
+} from "../providers/claude/claudeProtocol";
+import {
+  mapApprovalRequest,
+  mapCodexNotification,
+} from "../providers/codex/codexProtocol";
+import {
+  isReadableToolCall,
+  toolCallInput,
+  toolCallLabel,
+} from "../../../features/sessions/model/transcriptActivity";
 import {
   appendUser,
   applyHarnessEvent,
@@ -1405,6 +1419,36 @@ describe("clarifying questions", () => {
 });
 
 describe("subagent steps", () => {
+  it("keeps a tool step's call, capped like its text, and saves it", () => {
+    const script = "cd web\nnpm test -- --run";
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "spawn",
+      kind: "agent",
+      title: "Review",
+    });
+    const step = (extra: { input?: string; status: string }) =>
+      applyHarnessEvent(session, {
+        type: "agent.step",
+        callId: "spawn",
+        stepId: "sh",
+        kind: "tool",
+        text: "cd web",
+        toolKind: "execute",
+        ...extra,
+      });
+    session = step({ status: "in_progress", input: script });
+    session = step({ status: "completed" });
+    expect(session.blocks[0].agentRun?.steps).toEqual([
+      expect.objectContaining({ status: "completed", input: script }),
+    ]);
+    expect(
+      sanitizeSessionForPersist(session).blocks[0].agentRun?.steps[0].input,
+    ).toBe(script);
+    session = step({ status: "completed", input: "y".repeat(3_000) });
+    expect(session.blocks[0].agentRun?.steps[0].input).toHaveLength(2_001);
+  });
+
   it("keeps model metadata before steps arrive and preserves it through later updates", () => {
     let session = applyHarnessEvent(newSession("codex", "/tmp"), {
       type: "tool.started",
@@ -1580,5 +1624,183 @@ describe("subagent steps", () => {
 
     expect(session.blocks[0].tool?.status).toBe("completed");
     expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
+  });
+});
+
+describe("tool input", () => {
+  it("keeps the full call once the result replaces detail", () => {
+    const script = "cat <<'EOF' > notes.txt\nhello\nEOF";
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "call",
+      title: "cat <<'EOF' > notes.txt",
+      kind: "execute",
+      input: "cat",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call",
+      status: "pending",
+      input: script,
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call",
+      status: "completed",
+      detail: "done",
+    });
+    const tool = session.blocks.find((block) => block.role === "tool")?.tool;
+    expect(tool).toMatchObject({ input: script, detail: "done" });
+    expect(
+      sanitizeSessionForPersist(session).blocks.find((b) => b.role === "tool")
+        ?.tool?.input,
+    ).toBe(script);
+  });
+
+  it("caps a huge call on the way in, like detail", () => {
+    const session = applyHarnessEvent(newSession("claude", "/tmp"), {
+      type: "tool.started",
+      callId: "call",
+      title: "echo",
+      kind: "execute",
+      input: `echo ${"x".repeat(9_000)}`,
+    });
+    const input = session.blocks[0].tool?.input;
+    expect(input?.length).toBeLessThan(8_100);
+    expect(input?.endsWith("…")).toBe(true);
+  });
+
+  it("leaves input unset when the provider sends none", () => {
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "call",
+      title: "Read a.ts",
+      kind: "read",
+    });
+    const tool = session.blocks.find((block) => block.role === "tool")?.tool;
+    expect(tool && "input" in tool).toBe(false);
+  });
+});
+
+describe("tool input from providers", () => {
+  const codexCommand = (id: string, command: unknown) => {
+    const mapped = mapCodexNotification("item/started", {
+      item: { id, type: "commandExecution", command, status: "inProgress" },
+    });
+    let session = newSession("codex", "/repo");
+    for (const event of mapped.events) {
+      session = applyHarnessEvent(session, event);
+    }
+    return session.blocks.find((block) => block.role === "tool")!;
+  };
+
+  const claudeBash = (command: string) => {
+    const input = { command };
+    const session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "bash",
+      title: toolTitle("Bash", input),
+      kind: toolKindFromName("Bash"),
+      input: inputFromTool("Bash", input),
+      preview: previewFromTool("Bash", input),
+    });
+    return session.blocks.find((block) => block.role === "tool")!;
+  };
+
+  it("keeps a quoted one-liner raw, so it can still open once cut off", () => {
+    const script = "npm run build -- --mode 'production test'";
+    for (const block of [
+      codexCommand("argv", ["/bin/zsh", "-lc", script]),
+      codexCommand("string", `/bin/zsh -lc "${script}"`),
+      claudeBash(script),
+    ]) {
+      const label = toolCallLabel(block, "/repo");
+      expect(block.tool?.input).toBe(script);
+      expect(isReadableToolCall(block, label)).toBe(false);
+    }
+  });
+
+  it("marks a rewritten command readable", () => {
+    const script = "ls -la /usr/bin | head -80";
+    for (const block of [
+      codexCommand("argv", ["/bin/zsh", "-lc", script]),
+      claudeBash(script),
+    ]) {
+      const label = toolCallLabel(block, "/repo");
+      expect(label).not.toBe(script);
+      expect(isReadableToolCall(block, label)).toBe(true);
+    }
+  });
+
+  it("gives an approval that arrives first the full command", () => {
+    const mapped = mapApprovalRequest(
+      "item/commandExecution/requestApproval",
+      {
+        itemId: "cmd",
+        command: ["/bin/zsh", "-lc", "sed -n 1,80p src/main.ts"],
+      },
+      7,
+    );
+    const session = applyHarnessEvent(
+      newSession("codex", "/repo"),
+      mapped!.event,
+    );
+    const block = session.blocks.find((b) => b.role === "tool");
+    expect(block).toMatchObject({
+      approval: { requestId: 7 },
+      tool: { input: "sed -n 1,80p src/main.ts" },
+    });
+  });
+
+  it("keeps a Codex command raw once its approval's reason joins the label", () => {
+    const script = "node scripts/release.js --tag v1.2.3 --notes 'Fix the thing'";
+    let session = applyHarnessEvent(
+      newSession("codex", "/repo"),
+      mapApprovalRequest(
+        "item/commandExecution/requestApproval",
+        { itemId: "cmd", command: script, reason: "Cut the release" },
+        9,
+      )!.event,
+    );
+    for (const method of ["item/started", "item/completed"] as const) {
+      for (const event of mapCodexNotification(method, {
+        item: {
+          id: "cmd",
+          type: "commandExecution",
+          command: script,
+          status: method === "item/completed" ? "completed" : "inProgress",
+        },
+      }).events) {
+        session = applyHarnessEvent(session, event);
+      }
+    }
+    const block = session.blocks.find((b) => b.role === "tool")!;
+    const label = toolCallLabel(block, "/repo");
+    expect(label).toContain("Cut the release");
+    expect(isReadableToolCall(block, label)).toBe(false);
+    expect(toolCallInput(block, label)).toEqual({ text: script, hidden: false });
+  });
+
+  it("keeps the started call's input when the approval lands on it", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "bash",
+      title: "Read main.ts",
+      kind: "execute",
+      input: "sed -n 1,80p main.ts",
+    });
+    session = applyHarnessEvent(session, {
+      type: "approval.requested",
+      requestId: 3,
+      title: "Read main.ts",
+      kind: "execute",
+      callId: "bash",
+    });
+    expect(session.blocks.find((b) => b.role === "tool")).toMatchObject({
+      approval: { requestId: 3 },
+      tool: { input: "sed -n 1,80p main.ts" },
+    });
   });
 });

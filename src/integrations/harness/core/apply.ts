@@ -74,6 +74,7 @@ export function applyHarnessEvent(
         title: event.title,
         kind: event.kind,
         status: event.status,
+        input: event.input,
         preview: event.preview,
         streaming: true,
         agentModel: event.agentModel,
@@ -86,6 +87,7 @@ export function applyHarnessEvent(
         kind: event.kind,
         status: event.status,
         detail: event.detail,
+        input: event.input,
         preview: event.preview,
         streaming: event.status !== "completed" && event.status !== "failed",
         agentModel: event.agentModel,
@@ -855,6 +857,7 @@ function attachApproval(
   event: Extract<HarnessEvent, { type: "approval.requested" }>,
 ): Session {
   const index = findToolForApproval(session, event);
+  const input = capToolDetail(event.input);
   if (index >= 0) {
     const blocks = session.blocks.slice();
     const prev = blocks[index];
@@ -874,6 +877,7 @@ function attachApproval(
             ...prev.tool,
             kind: event.kind ?? prev.tool.kind,
             title: label || prev.tool.title,
+            ...(input ? { input } : {}),
             ...(preview ? { preview } : {}),
           }
         : event.callId
@@ -881,6 +885,7 @@ function attachApproval(
               callId: event.callId,
               title: label,
               kind: event.kind,
+              ...(input ? { input } : {}),
               ...(preview ? { preview } : {}),
             }
           : prev.tool,
@@ -900,6 +905,7 @@ function attachApproval(
       ...(event.callId ? { callId: event.callId } : {}),
       title: label,
       kind: event.kind,
+      ...(input ? { input } : {}),
       ...(preview ? { preview } : {}),
     },
     approval: { requestId: event.requestId },
@@ -945,6 +951,7 @@ function upsertTool(
     kind?: string;
     status?: string;
     detail?: string;
+    input?: string;
     preview?: ToolPreview;
     streaming: boolean;
     agentModel?: string;
@@ -954,6 +961,7 @@ function upsertTool(
   const index = findToolIndex(session, patch);
   if (index < 0) {
     const detail = capToolDetail(patch.detail);
+    const input = capToolDetail(patch.input);
     const preview = fillPreview(patch.preview, detail, patch.kind, patch.title);
     const label = finalToolLabel(
       session,
@@ -975,6 +983,7 @@ function upsertTool(
         kind: patch.kind,
         status: patch.status,
         ...(detail ? { detail } : {}),
+        ...(input ? { input } : {}),
         ...(preview ? { preview } : {}),
         ...(patch.background ? { background: true } : {}),
       },
@@ -982,6 +991,7 @@ function upsertTool(
   }
   const prev = session.blocks[index];
   const detail = capToolDetail(patch.detail) ?? prev.tool?.detail;
+  const input = capToolDetail(patch.input) ?? prev.tool?.input;
   const preview = fillPreview(
     mergeToolPreview(patch.preview, prev.tool?.preview),
     detail,
@@ -1004,6 +1014,7 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    prev.tool?.input === input &&
     (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
     (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
@@ -1031,6 +1042,7 @@ function upsertTool(
       kind,
       status,
       ...(detail ? { detail } : {}),
+      ...(input ? { input } : {}),
       ...(preview ? { preview } : {}),
       ...(prev.tool?.background ? { background: true } : {}),
     },
@@ -1113,6 +1125,7 @@ function recordAgentStep(
 
   const run = prev.agentRun;
   const detail = capToolDetail(event.detail);
+  const input = event.input ? capAgentStepText(event.input) : undefined;
   const step: AgentStep = {
     id: event.stepId,
     kind: event.kind,
@@ -1120,6 +1133,7 @@ function recordAgentStep(
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
     ...(detail ? { detail } : {}),
+    ...(input ? { input } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
@@ -1177,6 +1191,7 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
     a.toolKind === b.toolKind &&
     a.status === b.status &&
     a.detail === b.detail &&
+    a.input === b.input &&
     samePreview(a.preview, b.preview)
   );
 }

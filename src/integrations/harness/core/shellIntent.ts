@@ -59,7 +59,13 @@ export function inferShellIntent(command: string): ShellIntent | undefined {
  * `pwsh.exe -Command "Get-Content package.json"`. The launcher is transport
  * noise for this visual-only classifier; inspect the script it was given.
  */
-export function unwrapShellCommand(command: string): string {
+export function unwrapShellCommand(
+  command: string,
+  options?: {
+    /** Only unwrap when the script is the whole call, so nothing after it is lost. */
+    lossless?: boolean;
+  },
+): string {
   let current = command.trim();
   for (let depth = 0; depth < 2; depth += 1) {
     const tokens = tokenize(current);
@@ -96,6 +102,13 @@ export function unwrapShellCommand(command: string): string {
     if (flagIndex < 0) break;
     const commandToken = tokens[flagIndex + 1];
     if (!commandToken) break;
+    if (
+      options?.lossless &&
+      !wrapper.consumeRemainder &&
+      tokens.length > flagIndex + 2
+    ) {
+      break;
+    }
     const remainder = current.slice(commandToken.start).trim();
     const commandQuote = current[commandToken.start];
     const commandIsSoleQuotedToken =

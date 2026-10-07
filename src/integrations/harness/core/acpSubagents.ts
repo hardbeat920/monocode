@@ -56,6 +56,7 @@ export class AcpSubagents {
           event.detail
             ? { detail: event.detail }
             : {}),
+          ...(event.input ? { input: event.input } : {}),
           preview: event.preview,
         });
       } else if (

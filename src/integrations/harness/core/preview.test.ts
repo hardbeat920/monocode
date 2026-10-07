@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   composeToolTitle,
+  describeToolInput,
   extractSearchQuery,
   extractShellCommand,
   extractSkillName,
@@ -349,5 +350,65 @@ describe("agent titles", () => {
     expect(
       composeToolTitle({ kind: "agent", title: "Explore the auth module" }),
     ).toBe("Explore the auth module");
+  });
+});
+
+describe("describeToolInput", () => {
+  it("keeps a shell script whole, without its launcher", () => {
+    const script = "python3 - <<'PY'\nprint('hello')\nPY";
+    expect(describeToolInput({ command: script, timeout: 5 }, "execute")).toBe(
+      script,
+    );
+    expect(
+      describeToolInput(
+        { command: '/bin/zsh -lc "npm test -- --run"' },
+        "execute",
+      ),
+    ).toBe("npm test -- --run");
+    expect(
+      describeToolInput(
+        { command: ["/bin/zsh", "-lc", "npm test -- --run"] },
+        "execute",
+      ),
+    ).toBe("npm test -- --run");
+    expect(
+      describeToolInput({ command: ["/bin/zsh", "-lc", "git;pwd"] }, "execute"),
+    ).toBe("git;pwd");
+    expect(
+      describeToolInput({ command: "bash -c 'echo ok' && npm test" }, "execute"),
+    ).toBe("bash -c 'echo ok' && npm test");
+  });
+
+  it("shows a lone argument as is and several as JSON", () => {
+    expect(describeToolInput({ file_path: "/repo/src/a.ts" }, "read")).toBe(
+      "/repo/src/a.ts",
+    );
+    expect(
+      describeToolInput(
+        { pattern: "TODO", glob: "*.ts", path: "", output_mode: undefined },
+        "search",
+      ),
+    ).toBe('{\n  "pattern": "TODO",\n  "glob": "*.ts"\n}');
+    expect(describeToolInput('{"url":"https://example.com"}', "fetch")).toBe(
+      "https://example.com",
+    );
+  });
+
+  it("keeps a lone argument's edge whitespace by falling back to JSON", () => {
+    expect(describeToolInput({ pattern: " foo " }, "search")).toBe(
+      '{\n  "pattern": " foo "\n}',
+    );
+    expect(describeToolInput({ pattern: "" }, "search")).toBeUndefined();
+  });
+
+  it("leaves edits, subagents, and empty calls to their own views", () => {
+    expect(
+      describeToolInput({ file_path: "a.ts", old_string: "a", new_string: "b" }, "edit"),
+    ).toBeUndefined();
+    expect(
+      describeToolInput({ prompt: "Review it", subagent_type: "x" }, "agent"),
+    ).toBeUndefined();
+    expect(describeToolInput({}, "other")).toBeUndefined();
+    expect(describeToolInput({ timeout: 5 }, "execute")).toBeUndefined();
   });
 });

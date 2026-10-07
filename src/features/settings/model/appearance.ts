@@ -32,6 +32,7 @@ const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const CHANGES_VIEW_KEY = "monocode.changesView";
 const DIFF_PALETTE_KEY = "monocode.diffPalette";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
+const RAW_TOOL_CALLS_KEY = "monocode.rawToolCalls";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
 let glassFadeTimer: number | undefined;
@@ -105,6 +106,10 @@ export const SHOW_EXCLUDED_FILES_DEFAULT = false;
 /** Fired on `window` whenever the explorer excluded-files setting flips (detail: boolean). */
 export const SHOW_EXCLUDED_FILES_CHANGE_EVENT =
   "monocode:showexcludedfileschange";
+
+export const RAW_TOOL_CALLS_DEFAULT = false;
+
+const RAW_TOOL_CALLS_CHANGE_EVENT = "monocode:rawtoolcallschange";
 
 export type SidebarTabId = "files" | "sessions" | "changes" | "inbox";
 
@@ -929,6 +934,25 @@ export function saveShowExcludedFiles(value: boolean) {
       detail: value,
     }),
   );
+}
+
+export function loadRawToolCalls(): boolean {
+  return readFlag(RAW_TOOL_CALLS_KEY) ?? RAW_TOOL_CALLS_DEFAULT;
+}
+
+export function saveRawToolCalls(value: boolean) {
+  writeFlag(RAW_TOOL_CALLS_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(RAW_TOOL_CALLS_CHANGE_EVENT, { detail: value }),
+  );
+}
+
+export function subscribeRawToolCalls(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(RAW_TOOL_CALLS_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(RAW_TOOL_CALLS_CHANGE_EVENT, onStoreChange);
 }
 
 export function subscribeShowExcludedFiles(onStoreChange: () => void) {

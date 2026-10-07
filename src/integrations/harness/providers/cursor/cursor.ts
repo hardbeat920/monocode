@@ -43,6 +43,7 @@ import {
 import {
   agentToolTitle,
   composeToolTitle,
+  describeToolInput,
   extractSearchQuery,
   extractShellCommand,
   extractSkillName,
@@ -696,6 +697,14 @@ async function handlePermission(live: Live, id: number, params: unknown) {
     stringField(tool, "tool_call_id") ??
     stringField(rec ?? {}, "toolCallId") ??
     stringField(subject ?? {}, "toolCallId");
+  const input = describeToolInput(
+    tool.rawInput ??
+      tool.raw_input ??
+      tool.input ??
+      (command ? { command } : undefined),
+    kind,
+    title,
+  );
   if (callId) {
     live.onEvent({
       type: "tool.updated",
@@ -703,6 +712,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
       title,
       kind,
       status: live.toolStatuses.get(callId),
+      input,
       preview,
     });
     if (preview?.path || preview?.query) {
@@ -747,6 +757,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
     title,
     kind,
     callId,
+    input,
     preview,
   });
 
@@ -876,6 +887,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
         kind: toolKind,
         status,
         detail: toolOutput(update, tool),
+        input: describeToolInput(rawInput, toolKind, rawTitle),
         preview,
       });
       return;
@@ -898,6 +910,7 @@ function handleSessionUpdate(live: Live, params: unknown) {
         ? { agentModel: stringField(asRecord(rawInput) ?? {}, "model") }
         : {}),
       detail,
+      input: describeToolInput(rawInput, toolKind, rawTitle),
       preview,
     });
     if (agent) {
@@ -1213,6 +1226,7 @@ function applyStoredCursorToolCall(
     title,
     kind: mappedKind,
     status: live.toolStatuses.get(stored.toolCallId),
+    input: describeToolInput(stored.args, mappedKind, stored.toolName),
     preview,
   });
   const cached = live.subagentRuns.get(stored.toolCallId);

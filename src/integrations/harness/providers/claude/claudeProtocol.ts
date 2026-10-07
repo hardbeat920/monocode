@@ -22,6 +22,7 @@ import {
   type UserQuestionReply,
 } from "../../../../features/sessions/model/userQuestion";
 import {
+  describeToolInput,
   extractToolPreview,
   isAgentToolName,
   titleFromToolInput,
@@ -1037,6 +1038,14 @@ export function toolTitle(
   input: Record<string, unknown>,
 ): string {
   return titleFromToolInput(name, toolKindFromName(name), input);
+}
+
+/** The full call, untruncated, for the row's disclosure. */
+export function inputFromTool(
+  name: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  return describeToolInput(input, toolKindFromName(name), name);
 }
 
 export function previewFromTool(

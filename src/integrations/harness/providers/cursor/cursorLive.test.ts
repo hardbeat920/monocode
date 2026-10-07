@@ -367,6 +367,7 @@ describe("cursor background subagents", () => {
         title: "npm test",
         kind: "execute",
         status: "in_progress",
+        rawInput: { command: "cd web && npm test" },
       },
     });
     notify("session/update", {
@@ -378,6 +379,12 @@ describe("cursor background subagents", () => {
         content: [{ type: "text", text: "Tests failed: assertion error" }],
       },
     });
+    expect(
+      events.find(
+        (event) =>
+          event.type === "agent.step" && event.stepId === "tool:child_bash",
+      ),
+    ).toMatchObject({ input: "cd web && npm test" });
     expect(
       events.filter((event) => event.type === "agent.step").at(-1),
     ).toMatchObject({
@@ -491,6 +498,28 @@ describe("cursor background subagents", () => {
       () => parse().some((message) => message.id === 72 && "result" in message),
       "partial cursor/update_todos response",
     );
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("carries a tool's whole script as its input", async () => {
+    const { events, promptId, turn } = await startTurn("cursor-live");
+    notify("session/update", {
+      sessionId: "cursor_1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_sh",
+        title: "Run",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "cd web\nnpm test" },
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "tool.updated",
+      callId: "call_sh",
+      input: "cd web\nnpm test",
+    });
     reply(promptId, { stopReason: "end_turn" });
     await turn;
   });

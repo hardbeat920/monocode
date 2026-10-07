@@ -88,6 +88,8 @@ import {
   innerScrollerTakes,
   useLockOverscroll,
 } from "../../../shared/hooks/useLockOverscroll";
+import { useTruncated } from "../../../shared/hooks/useTruncated";
+import { useRawToolCalls } from "../hooks/useRawToolCalls";
 import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useBottomChatMotion } from "../hooks/useBottomChatMotion";
@@ -123,6 +125,7 @@ import {
   subagentModelName,
   subagentName,
   subagentReport,
+  toolCallInput,
   toolCallLabel,
   toolCallState,
   turnCopyText,
@@ -3508,6 +3511,7 @@ function agentStepBlock(step: AgentStep): Block {
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
       ...(step.detail ? { detail: step.detail } : {}),
+      ...(step.input ? { input: step.input } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
@@ -3871,78 +3875,95 @@ function ActivityToolRow({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  const [errorOpen, setErrorOpen] = useState(false);
+  const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   const appCall = monoCodeToolCall(block);
+  const label = toolCallLabel(block, cwd);
+  const pending = needsApproval(block);
+  // An approval may always open onto the raw command, readable or not: that
+  // is what the user is agreeing to run. Any row shows it only once it has
+  // something to add: lines the label leaves out, or a one-liner the row
+  // cuts off.
+  const raw = useRawToolCalls();
+  const call = toolCallInput(block, label, raw || pending);
+  const truncated = useTruncated(rowRef, !!call && !call.hidden, label);
+  const callInput = call && (call.hidden || truncated) ? call.text : undefined;
   if (appCall) {
     return (
       <MonoCodeCallRow block={block} call={appCall} onApproval={onApproval} />
     );
   }
-  const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
-  const pending = needsApproval(block);
   const errorDetail =
     !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
-  const summary = (
-    <ToolCallSummary
-      label={label}
-      preview={block.tool?.preview}
-      cwd={cwd}
-      chip={bare}
-      failed={state === "rejected"}
-      status={state}
-      onOpenFile={onOpenFile}
-      onOpenDiff={onOpenDiff}
-    />
-  );
+  // Waiting on approval, the full command is already open above the buttons.
+  const expandable = !pending && (!!errorDetail || !!callInput);
+  const toggle = () => setOpen((value) => !value);
 
   return (
     <div className="flex min-w-0 flex-col">
-      {errorDetail ? (
+      <div
+        ref={rowRef}
+        aria-label={`${errorDetail ? "Failed tool call" : "Tool call"}: ${label}`}
+        className="group flex min-w-0 items-center gap-1.5 py-1"
+      >
+        {bare ? null : <ActivityToolIcon state={state} live={live} />}
         <div
-          aria-label={`Failed tool call: ${label}`}
-          className="group flex min-w-0 items-center gap-1.5 py-1"
+          className={`flex min-w-0 flex-1 ${expandable ? "cursor-pointer" : ""}`}
+          onClick={expandable ? toggle : undefined}
         >
-          {bare ? null : <ActivityToolIcon state={state} live={live} />}
-          <div
-            className="flex min-w-0 flex-1 cursor-pointer"
-            onClick={() => setErrorOpen((value) => !value)}
-          >
-            {summary}
-          </div>
-          <ToolCallStatusIcon state={state} />
+          <ToolCallSummary
+            label={label}
+            preview={block.tool?.preview}
+            cwd={cwd}
+            chip={bare}
+            failed={state === "rejected"}
+            status={state}
+            onOpenFile={onOpenFile}
+            onOpenDiff={onOpenDiff}
+          />
+        </div>
+        {pending ? null : <ToolCallStatusIcon state={state} />}
+        {expandable ? (
           <button
             type="button"
-            aria-expanded={errorOpen}
-            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
-            onClick={() => setErrorOpen((value) => !value)}
+            aria-expanded={open}
+            aria-label={`${open ? "Hide" : "Show"} ${errorDetail ? "error" : "call"} details for ${label}`}
+            onClick={toggle}
             className="-m-1 shrink-0 rounded p-1"
           >
             <ChevronRight
-              className={`size-3.5 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+              className={`size-3.5 transition-transform ${
+                errorDetail ? "text-red-400/60" : "text-content/35"
+              } ${open ? "rotate-90" : ""}`}
               strokeWidth={1.75}
             />
           </button>
-        </div>
-      ) : (
+        ) : null}
+      </div>
+      {(pending && callInput) || (open && expandable) ? (
+        // The call exactly as the agent made it, then the error if it failed:
+        // plain selectable text, so it can be read and copied.
         <div
-          aria-label={`Tool call: ${label}`}
-          className="flex min-w-0 items-center gap-1.5 py-1"
+          className={`flex min-w-0 flex-col gap-1 pb-2 ${bare ? "" : "pl-5"}`}
         >
-          {bare ? null : <ActivityToolIcon state={state} live={live} />}
-          {summary}
-          {pending ? null : <ToolCallStatusIcon state={state} />}
+          {callInput ? (
+            <pre
+              aria-label="Full tool call"
+              className="max-h-64 min-w-0 cursor-text select-text overflow-auto whitespace-pre-wrap break-all font-mono text-[12px] leading-5 text-content/50"
+            >
+              {callInput}
+            </pre>
+          ) : null}
+          {errorDetail ? (
+            <pre className="min-w-0 select-text whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80">
+              {errorDetail}
+            </pre>
+          ) : null}
         </div>
-      )}
+      ) : null}
       {pending ? (
         <ApprovalControls block={block} onApproval={onApproval} />
-      ) : null}
-      {errorOpen && errorDetail ? (
-        <pre
-          className={`min-w-0 whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80 ${bare ? "" : "pl-5"}`}
-        >
-          {errorDetail}
-        </pre>
       ) : null}
     </div>
   );
@@ -3965,9 +3986,12 @@ function MonoCodeCallRow({
   const state = toolCallState(block);
   const output =
     block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
-  const [errorOpen, setErrorOpen] = useState(false);
+  const [open, setOpen] = useState(false);
   const hasError = state === "rejected" && !!output;
   const pendingApproval = needsApproval(block);
+  // The row names only the action; raw commands let it open onto the call.
+  const showCall = useRawToolCalls() && !pendingApproval;
+  const expandable = hasError || showCall;
   const command = `monocode app ${call.action}`;
   const verb = pendingApproval
     ? "Run"
@@ -3989,9 +4013,11 @@ function MonoCodeCallRow({
         <span className="min-w-0 truncate">{command}</span>
       </span>
       <ToolCallStatusIcon state={state} />
-      {hasError ? (
+      {expandable ? (
         <ChevronRight
-          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          className={`size-3.5 shrink-0 transition-transform ${
+            hasError ? "text-red-400/60" : "text-content/35"
+          } ${open ? "rotate-90" : ""}`}
           strokeWidth={1.75}
         />
       ) : null}
@@ -3999,12 +4025,12 @@ function MonoCodeCallRow({
   );
   return (
     <div data-monocode-tool-call={call.action} className="min-w-0">
-      {hasError ? (
+      {expandable ? (
         <button
           type="button"
-          aria-expanded={errorOpen}
-          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
-          onClick={() => setErrorOpen((value) => !value)}
+          aria-expanded={open}
+          aria-label={`${open ? "Hide" : "Show"} ${hasError ? "error" : "call"} details for MonoCode: ${call.label}`}
+          onClick={() => setOpen((value) => !value)}
           className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
         >
           {summary}
@@ -4012,7 +4038,15 @@ function MonoCodeCallRow({
       ) : (
         <div className="flex min-w-0 items-center gap-1.5 py-1">{summary}</div>
       )}
-      {errorOpen && hasError ? (
+      {open && showCall ? (
+        <pre
+          aria-label="Full tool call"
+          className="max-h-64 min-w-0 select-text overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/50"
+        >
+          {call.command}
+        </pre>
+      ) : null}
+      {open && hasError ? (
         <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
           {output}
         </pre>
@@ -4137,10 +4171,18 @@ function ToolCall({
   embedded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
   const preview = block.tool?.preview;
   const label = toolCallLabel(block, cwd);
   const detail = block.tool?.detail?.trim();
   const expanded = detail && detail !== label ? detail : label;
+  // A Mono chat renders its pending approvals here. Like the trail, the
+  // row shows the raw command it is asking to run once the label hides any
+  // of it: lines left out, or a one-liner the row cuts off.
+  const pending = needsApproval(block);
+  const call = pending ? toolCallInput(block, label, true) : undefined;
+  const truncated = useTruncated(frameRef, !!call && !call.hidden, label);
+  const callInput = call && (call.hidden || truncated) ? call.text : undefined;
   const state = toolCallState(block);
   const stateLabel =
     state === "accepted"
@@ -4201,7 +4243,7 @@ function ToolCall({
   if (isIncompleteTool(block, label, state)) return null;
 
   return (
-    <div className={frame}>
+    <div ref={frameRef} className={frame}>
       {expandable ? (
         <button
           type="button"
@@ -4241,6 +4283,14 @@ function ToolCall({
       {open && expandable ? (
         <pre className="mt-1.5 min-w-0 whitespace-pre-wrap break-words px-2.5 font-mono text-[12px] leading-5 text-content/55">
           {expanded}
+        </pre>
+      ) : null}
+      {callInput ? (
+        <pre
+          aria-label="Full tool call"
+          className="mt-1.5 max-h-64 min-w-0 select-text overflow-auto whitespace-pre-wrap break-all px-2.5 font-mono text-[12px] leading-5 text-content/50"
+        >
+          {callInput}
         </pre>
       ) : null}
       <ApprovalControls block={block} onApproval={onApproval} />

@@ -48,6 +48,7 @@ describe.each([
       kind: "read",
       title: "Read auth.ts",
       status: "in_progress",
+      rawInput: { path: "auth.ts" },
     });
     // Sparse completions may omit the parent metadata entirely.
     push({
@@ -67,7 +68,10 @@ describe.each([
     expect(block.text).toBe("Check auth");
     expect(block.agentRun?.steps).toHaveLength(2);
     expect(block.agentRun?.steps[0].text).toBe("Checking auth.");
-    expect(block.agentRun?.steps[1].status).toBe("completed");
+    expect(block.agentRun?.steps[1]).toMatchObject({
+      status: "completed",
+      input: "auth.ts",
+    });
     expect(
       session.blocks
         .filter((entry) => entry.role === "assistant")

@@ -206,6 +206,8 @@ export type AgentStep = {
   toolKind?: string;
   status?: string;
   detail?: string;
+  /** The full call, so a step can open onto it like a row in the main trail. */
+  input?: string;
   preview?: ToolPreview;
 };
 
@@ -333,6 +335,8 @@ export type Block = {
     kind?: string;
     status?: string;
     detail?: string;
+    /** The full call as the agent made it: a shell script, or its arguments. */
+    input?: string;
     preview?: ToolPreview;
     /** Left running by the agent when it yielded; the turn waits on it. */
     background?: boolean;

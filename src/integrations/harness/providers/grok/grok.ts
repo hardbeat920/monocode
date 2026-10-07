@@ -560,6 +560,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
       callId: request.callId,
       title: request.title,
       kind: request.kind,
+      input: request.input,
       preview: request.preview,
     });
   }
@@ -594,6 +595,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
     title: request.title,
     kind: request.kind,
     callId: request.callId,
+    input: request.input,
     preview: request.preview,
   });
 

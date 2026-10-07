@@ -570,6 +570,7 @@ async function handlePermission(
       callId: request.callId,
       title: request.title,
       kind: request.kind,
+      input: request.input,
       preview: request.preview,
     });
   }
@@ -600,6 +601,7 @@ async function handlePermission(
     title: request.title,
     kind: request.kind,
     callId: request.callId,
+    input: request.input,
     preview: request.preview,
   });
   const decision = await new Promise<ApprovalDecision>((resolve) => {

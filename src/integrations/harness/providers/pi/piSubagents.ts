@@ -1,6 +1,7 @@
 import type { HarnessEvent } from "../../core/types";
 import {
   asRecord,
+  inputFromTool,
   previewFromTool,
   stringField,
   textFromContent,
@@ -144,6 +145,7 @@ export function piSubagentEvents(
             // Only a failure earns detail: a preview's output is never shown
             // on the row, so this is the one place the error can be read.
             ...(outcome?.isError && output ? { detail: output } : {}),
+            input: inputFromTool(tool, args),
             preview: previewFromTool(tool, args, output),
           });
         }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tool call rows open onto the full call.** Clicking a truncated tool call or shell command in the activity trail shows the exact call below the row: multi-line scripts, cut-off one-liners, and subagent steps. Rows MonoCode already summarises, like “Read main.ts” or “List /usr/bin”, stay quiet unless the new Settings → Chat → **Show raw commands** toggle is on. A pending approval shows the command it is asking to run above Allow/Deny, in regular and Mono chats.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added

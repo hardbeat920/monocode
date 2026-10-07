@@ -66,6 +66,7 @@ describe("Pi subagent snapshots", () => {
         kind: "tool",
         status: "failed",
         text: "Read auth.ts",
+        input: "auth.ts",
         // The step's only readable copy of why it failed.
         detail: "Missing file",
       }),

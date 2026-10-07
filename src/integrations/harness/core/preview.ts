@@ -240,6 +240,40 @@ export function extractShellCommand(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+/**
+ * The call as the agent made it, untruncated, for the row to open onto: a
+ * shell call's script, otherwise its arguments. Edits already open onto their
+ * diff and subagents onto their own trail, so neither gets one. The session
+ * caps it on the way in, like detail.
+ */
+export function describeToolInput(
+  input: unknown,
+  kind?: string,
+  title?: string,
+): string | undefined {
+  if (isAgentTool(kind, title) || isEditTool(kind, title)) return undefined;
+  if (isExecuteTool(kind, title)) {
+    const command = extractShellCommand(input);
+    return command ? unwrapShellCommand(command, { lossless: true }) : undefined;
+  }
+  const record = parseRecord(input);
+  const entries = Object.entries(record).filter(
+    ([, value]) => value !== undefined && value !== null && value !== "",
+  );
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) {
+    // A lone argument reads as itself, unless edge whitespace would be lost
+    // to trimming: then its JSON form keeps it visible.
+    const [, value] = entries[0];
+    if (typeof value === "string" && value.trim() === value) return value;
+  }
+  try {
+    return JSON.stringify(Object.fromEntries(entries), null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The skill a Skill tool is invoking, if the harness sent it. */
 export function extractSkillName(...values: unknown[]): string | undefined {
   for (const raw of inputRecords(...values)) {
@@ -1022,13 +1056,19 @@ function commandField(value: unknown): string | undefined {
     value.length > 0 &&
     value.every((item) => typeof item === "string")
   ) {
-    const joined = value.join(" ").trim();
+    // Quote argv so a wrapped script stays one word for unwrapShellCommand.
+    const joined = value.map(quoteArg).join(" ").trim();
     if (joined) return joined;
   }
   return undefined;
 }
 
-function firstLine(value: string | undefined): string {
+function quoteArg(arg: string): string {
+  if (/^[\w@%+=:,./-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+export function firstLine(value: string | undefined): string {
   const text = value?.trim() ?? "";
   if (!text) return "";
   return text.split(/\r?\n/)[0]?.trim() ?? "";

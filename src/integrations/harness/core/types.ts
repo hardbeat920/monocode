@@ -60,6 +60,8 @@ export type HarnessEvent =
       status?: string;
       /** Work the agent left running when it yielded. */
       background?: boolean;
+      /** The full call, untruncated, from describeToolInput. */
+      input?: string;
       preview?: ToolPreview;
       /** Every path affected when one structured edit changes multiple files. */
       paths?: string[];
@@ -72,6 +74,7 @@ export type HarnessEvent =
       kind?: string;
       status?: string;
       detail?: string;
+      input?: string;
       preview?: ToolPreview;
       /** Every path affected when one structured edit changes multiple files. */
       paths?: string[];
@@ -89,6 +92,7 @@ export type HarnessEvent =
       toolKind?: string;
       status?: string;
       detail?: string;
+      input?: string;
       preview?: ToolPreview;
       /** The subagent's own name, when the provider only reveals it here. */
       agentName?: string;
@@ -100,6 +104,8 @@ export type HarnessEvent =
       title: string;
       kind?: string;
       callId?: string;
+      /** The full call being approved, so it can be read before allowing it. */
+      input?: string;
       preview?: ToolPreview;
     }
   | {

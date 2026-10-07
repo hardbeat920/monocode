@@ -8,6 +8,7 @@ import type { UserQuestion, UserQuestionReply } from "../../../../features/sessi
 import { questionsFromUnknown, selectedAnswerLabels } from "../../../../features/sessions/model/userQuestion";
 import {
   composeToolTitle,
+  describeToolInput,
   extractSearchQuery,
   extractShellCommand,
   extractSkillName,
@@ -52,6 +53,7 @@ export type GrokPermissionRequest = {
   title: string;
   kind?: string;
   callId?: string;
+  input?: string;
   preview?: ToolPreview;
   optionIds: string[];
 };
@@ -281,6 +283,7 @@ export function permissionRequestFromAcp(
       stringField(tool, "toolCallId") ??
       stringField(tool, "tool_call_id") ??
       stringField(rec ?? {}, "toolCallId"),
+    input: describeToolInput(grok.input, kind, title),
     preview: mergePreview(preview, grok.path, grok.query, kind),
     optionIds,
   };
@@ -405,6 +408,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         kind: toolKind,
         status,
         detail: cap(toolDetail(update, tool) ?? "") || undefined,
+        input: describeToolInput(grok.input, toolKind, title),
         preview,
         ...acpAgentInfo(update, tool, toolKind, title, grok.input),
       },

@@ -192,6 +192,20 @@ describe("unwrapShellCommand", () => {
     );
   });
 
+  it("keeps the whole call in lossless mode when more follows the script", () => {
+    expect(
+      unwrapShellCommand("bash -c 'echo ok' && npm test", { lossless: true }),
+    ).toBe("bash -c 'echo ok' && npm test");
+    expect(
+      unwrapShellCommand('sh -c "cd web && npm test" | tee log', {
+        lossless: true,
+      }),
+    ).toBe('sh -c "cd web && npm test" | tee log');
+    expect(
+      unwrapShellCommand("/bin/zsh -lc 'git status'", { lossless: true }),
+    ).toBe("git status");
+  });
+
   it("unwraps PowerShell command remainders", () => {
     expect(
       unwrapShellCommand(

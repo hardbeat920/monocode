@@ -22,6 +22,9 @@ import {
   subagentBrief,
   subagentFailureSummary,
   subagentName,
+  isIncompleteTool,
+  isReadableToolCall,
+  toolCallInput,
   toolCallLabel,
   turnCopyText,
   subagentModelName,
@@ -1680,5 +1683,127 @@ describe("subagent model labels", () => {
     expect(subagentModelName(row("custom-model-v2"))).toBe("custom-model-v2");
     for (const model of [undefined, "", "auto", "inherit", "default"])
       expect(subagentModelName(row(model))).toBeUndefined();
+  });
+});
+
+describe("toolCallInput", () => {
+  const tool = (text: string, extra: Block["tool"]): Block => ({
+    id: text,
+    role: "tool",
+    text,
+    tool: { title: text, ...extra },
+  });
+
+  it("opens onto what the label leaves out", () => {
+    const script = "python3 - <<'PY'\nprint(1)\nPY";
+    const block = tool("python3 - <<'PY'", { kind: "execute", input: script });
+    expect(toolCallInput(block, toolCallLabel(block))).toEqual({
+      text: script,
+      hidden: true,
+    });
+  });
+
+  it("leaves a call the label shows whole to be measured", () => {
+    const shell = tool("git status", { kind: "execute", input: "git status" });
+    expect(toolCallInput(shell, toolCallLabel(shell))).toEqual({
+      text: "git status",
+      hidden: false,
+    });
+  });
+
+  it("keeps readable rows quiet unless raw commands are on", () => {
+    const list = tool("ls -la /usr/bin | head -80", {
+      kind: "execute",
+      input: "ls -la /usr/bin | head -80",
+    });
+    const label = toolCallLabel(list);
+    expect(label).not.toBe("ls -la /usr/bin | head -80");
+    expect(isReadableToolCall(list, label)).toBe(true);
+    expect(toolCallInput(list, label)).toBeUndefined();
+    expect(toolCallInput(list, label, true)).toEqual({
+      text: "ls -la /usr/bin | head -80",
+      hidden: true,
+    });
+
+    const args = '{\n  "file_path": "/repo/src/a.ts",\n  "offset": 40\n}';
+    const read = tool("Read src/a.ts", {
+      kind: "read",
+      input: args,
+      preview: { kind: "read", path: "/repo/src/a.ts", fileName: "a.ts" },
+    });
+    expect(toolCallInput(read, toolCallLabel(read, "/repo"))).toBeUndefined();
+  });
+
+  it("keeps a readable row quiet even when its script runs past one line", () => {
+    const script = "sed -n 1,10p package.json\nsed -n 1,10p tsconfig.json";
+    const block = tool(script, { kind: "execute", input: script });
+    const label = toolCallLabel(block);
+    expect(label).toBe("Read tsconfig.json");
+    expect(toolCallInput(block, label)).toBeUndefined();
+    expect(toolCallInput(block, label, true)?.text).toBe(script);
+  });
+
+  it("still opens a raw multi-line script", () => {
+    const script = "cat > notes.txt <<'EOF'\nhello\nEOF";
+    const block = tool(script, { kind: "execute", input: script });
+    expect(toolCallInput(block, toolCallLabel(block))?.text).toBe(script);
+  });
+
+  it("does not count a lone path the row already names as hidden", () => {
+    const read = tool("Read src/a.ts", {
+      kind: "read",
+      input: "/repo/src/a.ts",
+      preview: { kind: "read", path: "/repo/src/a.ts", fileName: "a.ts" },
+    });
+    expect(
+      toolCallInput(read, toolCallLabel(read, "/repo"), true)?.hidden,
+    ).toBe(false);
+  });
+
+  it("keeps a raw command raw when the label carries it with a suffix", () => {
+    // Codex folds an approval's reason into the title: `cmd — reason`.
+    const block = tool("git status — Inspect the app", {
+      kind: "execute",
+      input: "git status",
+    });
+    const label = toolCallLabel(block);
+    expect(label).toBe("git status — Inspect the app");
+    expect(isReadableToolCall(block, label)).toBe(false);
+    expect(toolCallInput(block, label)).toEqual({
+      text: "git status",
+      hidden: false,
+    });
+  });
+
+  it("keeps a compound call raw when the label reads only its launcher's script", () => {
+    const command = "bash -c 'echo ok' && npm test";
+    const block = tool(command, { kind: "execute", input: command });
+    const label = toolCallLabel(block);
+    expect(label).toBe("echo ok");
+    expect(isReadableToolCall(block, label)).toBe(false);
+    expect(toolCallInput(block, label)).toEqual({ text: command, hidden: true });
+  });
+
+  it("does not count a lone argument the label ends with as hidden", () => {
+    const fetch = tool("Fetch https://example.com", {
+      kind: "fetch",
+      input: "https://example.com",
+    });
+    expect(toolCallInput(fetch, toolCallLabel(fetch))?.hidden).toBe(false);
+  });
+});
+
+describe("isIncompleteTool", () => {
+  it("never hides a thin call that is waiting on approval", () => {
+    const block: Block = {
+      id: "mcp",
+      role: "tool",
+      text: "Tool",
+      tool: { kind: "other", title: "Tool", status: "pending" },
+    };
+    expect(isIncompleteTool(block, "Tool", "pending")).toBe(true);
+    expect(
+      isIncompleteTool({ ...block, approval: { requestId: 1 } }, "Tool", "pending"),
+    ).toBe(false);
   });
 });

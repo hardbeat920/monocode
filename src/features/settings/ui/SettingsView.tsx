@@ -86,6 +86,7 @@ import {
   loadThemeSaturation,
   loadTranscriptLayout,
   loadTranscriptAnchor,
+  loadRawToolCalls,
   saveBodyGlass,
   saveAccentColor,
   saveChatBackgroundEmptyOpacity,
@@ -103,6 +104,7 @@ import {
   isLightScheme,
   saveTranscriptLayout,
   saveTranscriptAnchor,
+  saveRawToolCalls,
   syncNativeGlass,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
   loadShowExcludedFiles,
@@ -959,6 +961,7 @@ function ChatPage() {
     useState<TranscriptLayout>(loadTranscriptLayout);
   const [transcriptAnchor, setTranscriptAnchor] =
     useState(loadTranscriptAnchor);
+  const [rawToolCalls, setRawToolCalls] = useState(loadRawToolCalls);
   const [followUpBehavior, setFollowUpBehavior] =
     useState<FollowUpBehavior>(loadFollowUpBehavior);
   const [modelControls, setModelControls] =
@@ -988,6 +991,11 @@ function ChatPage() {
   const onTranscriptAnchor = (next: boolean) => {
     saveTranscriptAnchor(next);
     setTranscriptAnchor(next);
+  };
+
+  const onRawToolCalls = (next: boolean) => {
+    saveRawToolCalls(next);
+    setRawToolCalls(next);
   };
 
   const onFollowUpBehavior = (next: FollowUpBehavior) => {
@@ -1050,6 +1058,17 @@ function ChatPage() {
             label="Anchor prompts to top"
             on={transcriptAnchor}
             onChange={onTranscriptAnchor}
+          />
+        </Row>
+        <Row
+          id="raw-tool-calls"
+          label="Show raw commands"
+          description="Let rows MonoCode summarises, like “Read main.ts” or “List /usr/bin”, also open onto the exact command the agent ran. Long commands and approvals show it either way."
+        >
+          <Toggle
+            label="Show raw commands"
+            on={rawToolCalls}
+            onChange={onRawToolCalls}
           />
         </Row>
       </Group>

@@ -398,6 +398,29 @@ describe("mapCodexNotification", () => {
     expect(event.preview?.title).toBe("rg --files -g AGENTS.md");
   });
 
+  it("carries the whole script as the call's input", () => {
+    const script = "cd web\nnpm test -- --run";
+    const mapped = mapCodexNotification("item/started", {
+      item: {
+        id: "cmd_multi",
+        type: "commandExecution",
+        command: ["/bin/zsh", "-lc", script],
+        status: "inProgress",
+      },
+    });
+    expect(mapped.events[0]).toMatchObject({ input: script });
+  });
+
+  it("carries a web search's query as its input", () => {
+    const mapped = mapCodexNotification("item/started", {
+      item: { id: "ws", type: "webSearch", query: "vitest resize observer", status: "inProgress" },
+    });
+    expect(mapped.events[0]).toMatchObject({
+      kind: "search",
+      input: "vitest resize observer",
+    });
+  });
+
   it("finds the command flag past an intervening option", () => {
     const mapped = mapCodexNotification("item/started", {
       item: {

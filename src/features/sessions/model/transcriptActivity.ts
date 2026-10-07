@@ -1,5 +1,6 @@
 import {
   composeToolTitle,
+  firstLine,
   isAgentTool,
   isEditTool,
   isExecuteTool,
@@ -7,6 +8,7 @@ import {
   isSearchTool,
   isWeakToolTitle,
 } from "../../../integrations/harness/core/preview";
+import { unwrapShellCommand } from "../../../integrations/harness/core/shellIntent";
 import { leafName } from "../../files/model/fileName";
 import {
   displayPath,
@@ -80,12 +82,57 @@ export function toolCallLabel(block: Block, cwd?: string): string {
   );
 }
 
+/**
+ * Whether the row's label is MonoCode's readable summary of the call rather
+ * than the call itself: `ls -la /usr/bin | head -80` reads "List /usr/bin",
+ * and a read or search tool is named by its target.
+ */
+export function isReadableToolCall(block: Block, label: string): boolean {
+  const kind = block.tool?.kind;
+  const preview = block.tool?.preview;
+  if (isExecuteTool(kind, block.text || block.tool?.title)) {
+    // A provider may suffix the command (Codex appends the approval reason),
+    // so the label has to contain the first line, not equal it. The label
+    // also reads a launcher's script alone, where the input keeps the whole
+    // call: `bash -c 'x' && y` is labelled `x`.
+    const input = block.tool?.input ?? "";
+    const lines = [firstLine(input), firstLine(unwrapShellCommand(input))];
+    return !!lines[0] && !lines.some((line) => label.includes(line));
+  }
+  return isReadTool(kind, label, preview) || isSearchTool(kind, label, preview);
+}
+
+type ToolCallInput = {
+  text: string;
+  /** The label leaves part of it out, so the row opens without measuring. */
+  hidden: boolean;
+};
+
+/**
+ * The full call a row can open onto. A readable row would only repeat itself,
+ * so it opens only when `raw` asks for the command.
+ */
+export function toolCallInput(
+  block: Block,
+  label: string,
+  raw = false,
+): ToolCallInput | undefined {
+  const text = block.tool?.input?.trim();
+  if (!text) return undefined;
+  if (!raw && isReadableToolCall(block, label)) return undefined;
+  const first = firstLine(text);
+  const shown = label.includes(first) || block.tool?.preview?.path === text;
+  return { text, hidden: first !== text || !shown };
+}
+
 export function isIncompleteTool(
   block: Block,
   label: string,
   state: ToolCallState,
 ): boolean {
   if (state !== "pending") return false;
+  // A call waiting on the user is never noise, however thin its label.
+  if (block.approval && !block.approval.decided) return false;
   const kind = block.tool?.kind?.toLowerCase();
   if (kind && kind !== "other") return false;
   if (

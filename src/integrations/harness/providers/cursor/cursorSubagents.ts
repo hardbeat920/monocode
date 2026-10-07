@@ -6,6 +6,7 @@ import {
   type StoredCursorSubagentRun,
 } from "./cursorStore";
 import {
+  describeToolInput,
   extractToolPreview,
   formatAgentType,
   titleFromToolInput,
@@ -86,6 +87,7 @@ export function cursorSubagentEvents(
             ...(step.status === "failed" && step.output
               ? { detail: step.output }
               : {}),
+            input: describeToolInput(args, kind, toolName),
             preview: step.output
               ? {
                   ...(preview ?? { kind: "read" as const, contentOnly: true }),

@@ -5,6 +5,7 @@ import { normalizeTaskListStatus } from "../../../../features/sessions/model/tas
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 import {
   composeToolTitle,
+  describeToolInput,
   extractSearchQuery,
   extractShellCommand,
   extractSkillName,
@@ -19,6 +20,7 @@ export type FxPermissionRequest = {
   title: string;
   kind?: string;
   callId?: string;
+  input?: string;
   preview?: ToolPreview;
   optionIds: string[];
 };
@@ -151,6 +153,14 @@ export function permissionRequestFromAcp(
       stringField(tool, "tool_call_id") ??
       stringField(rec ?? {}, "toolCallId") ??
       stringField(subject ?? {}, "toolCallId"),
+    input: describeToolInput(
+      tool.rawInput ??
+        tool.raw_input ??
+        tool.input ??
+        (command ? { command } : undefined),
+      kind,
+      title,
+    ),
     preview,
     optionIds,
   };
@@ -243,6 +253,24 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
       fx.title ||
       toolLabel(update) ||
       toolLabel(tool);
+    // fx only names the command it ran in its result.
+    const ran =
+      update.command_result ??
+      update.commandResult ??
+      tool.command_result ??
+      tool.commandResult;
+    const input = ran
+      ? describeToolInput(ran, "execute")
+      : describeToolInput(
+          update.rawInput ??
+            tool.rawInput ??
+            update.raw_input ??
+            tool.raw_input ??
+            update.input ??
+            tool.input,
+          toolKind,
+          title,
+        );
     return [
       {
         type: "tool.updated",
@@ -251,6 +279,7 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         kind: toolKind,
         status,
         detail: cap(fx.detail ?? "") || toolDetail(update, tool),
+        input,
         preview,
         ...acpAgentInfo(update, tool, toolKind, title),
       },

@@ -183,6 +183,42 @@ describe("OpenCode subagent trails", () => {
     state: { status: "running", title: `Task ${callID}`, metadata: { sessionId: child } },
   });
 
+  it("keeps a row's whole script when a bash permission names one pattern", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    message("session_1", "msg_main");
+    part("session_1", { id: "sh", type: "tool", tool: "bash", callID: "sh", messageID: "msg_main",
+      state: { status: "running", input: { command: "git status\nnpm test" } } });
+    onSseEvent?.({
+      type: "permission.asked",
+      properties: {
+        id: "permission_sh", sessionID: "session_1", permission: "bash",
+        patterns: ["git status", "npm test"], metadata: {},
+        tool: { messageID: "msg_main", callID: "sh" },
+      },
+    });
+    await waitFor(() => events.some((event) => event.type === "approval.requested"), "approval");
+    const approval = events.find((event) => event.type === "approval.requested")!;
+    respondOpenCodeApproval("opencode-live", approval.requestId, "allow");
+    idle();
+    await done;
+    const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
+    expect(session.blocks.find((block) => block.tool?.callId === "sh")?.tool?.input)
+      .toBe("git status\nnpm test");
+  });
+
+  it("carries a tool's whole script as its input", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    message("session_1", "msg_main");
+    part("session_1", { id: "sh", type: "tool", tool: "bash", callID: "sh", messageID: "msg_main",
+      state: { status: "running", input: { command: "cd web\nnpm test" } } });
+    idle();
+    await done;
+    expect(events.find((event) => event.type === "tool.updated" && event.callId === "sh"))
+      .toMatchObject({ input: "cd web\nnpm test" });
+  });
+
   it("pairs concurrent children by metadata and replays their latest parts after creating the row", async () => {
     const events: HarnessEvent[] = [];
     const { done } = await startTurn(events);
@@ -245,6 +281,7 @@ describe("OpenCode subagent trails", () => {
     expect(steps?.find((step) => step.toolKind === "read")?.detail).toBe(
       "File missing",
     );
+    expect(steps?.find((step) => step.toolKind === "read")?.input).toBe("auth.ts");
     expect(session.blocks.filter((block) => block.role === "assistant")).toEqual([]);
   });
 });

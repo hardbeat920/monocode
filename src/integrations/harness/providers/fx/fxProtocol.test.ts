@@ -112,12 +112,14 @@ describe("fx protocol", () => {
       kind: "read",
       title: "Read README.md",
       status: "in_progress",
+      rawInput: { path: "README.md" },
     });
     expect(tools[0]).toMatchObject({
       type: "tool.updated",
       callId: "t1",
       kind: "read",
       status: "in_progress",
+      input: "README.md",
     });
   });
 
@@ -337,7 +339,11 @@ describe("fx protocol", () => {
         },
       },
     });
-    expect(event).toMatchObject({ title: "echo hi", detail: "hi" });
+    expect(event).toMatchObject({
+      title: "echo hi",
+      detail: "hi",
+      input: "echo hi",
+    });
   });
 
   it("keeps stderr and the exit code for a failed shell call", () => {

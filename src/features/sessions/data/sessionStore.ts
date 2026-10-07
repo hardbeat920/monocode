@@ -1283,6 +1283,7 @@ function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
         ...(typeof row.toolKind === "string" ? { toolKind: row.toolKind } : {}),
         ...(typeof row.status === "string" ? { status: row.status } : {}),
         ...(typeof row.detail === "string" ? { detail: row.detail } : {}),
+        ...(typeof row.input === "string" ? { input: row.input } : {}),
         ...(row.preview && typeof row.preview === "object"
           ? { preview: row.preview as AgentStep["preview"] }
           : {}),

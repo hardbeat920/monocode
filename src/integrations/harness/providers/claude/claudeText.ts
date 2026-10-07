@@ -12,6 +12,7 @@ import {
   assistantTextBlocks,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  inputFromTool,
   inputJsonDeltaFromEvent,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -400,6 +401,7 @@ function handleStreamEvent(
         ? { agentModel: stringField(tool.input, "model") }
         : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
+      input: inputFromTool(tool.name, tool.input),
       preview: previewFromTool(tool.name, tool.input),
     });
     return;
@@ -424,6 +426,7 @@ function handleStreamEvent(
       : {}),
     status: "pending",
     detail: summarizeToolRequest(tool.name, parsed),
+    input: inputFromTool(tool.name, parsed),
     preview: previewFromTool(tool.name, parsed),
   });
 }

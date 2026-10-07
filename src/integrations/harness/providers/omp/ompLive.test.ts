@@ -256,6 +256,7 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
         expect(row?.tool).toMatchObject({
           status: "completed",
           detail: "built",
+          input: "make",
         });
         expect(events).toContainEqual(
           expect.objectContaining({

@@ -6,7 +6,11 @@ import {
 import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
-import { extractToolPreview, titleFromToolInput } from "../../core/preview";
+import {
+  describeToolInput,
+  extractToolPreview,
+  titleFromToolInput,
+} from "../../core/preview";
 import { streamTextDelta } from "../../core/streamText";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
@@ -671,6 +675,14 @@ export function toolTitle(
   input: Record<string, unknown>,
 ): string {
   return titleFromToolInput(name, toolKindFromName(name), input);
+}
+
+/** The full call, untruncated, for the row's disclosure. */
+export function inputFromTool(
+  name: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  return describeToolInput(input, toolKindFromName(name), name);
 }
 
 export function previewFromTool(

@@ -51,6 +51,7 @@ import {
   parseTaskUpdated,
   parseToolProgress,
   taskListFromTodos,
+  inputFromTool,
   previewFromTool,
   resolveClaudeApiModelId,
   runtimeModeToPermission,
@@ -780,6 +781,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
         ? { agentModel: stringField(tool.input, "model") }
         : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
+      input: inputFromTool(tool.name, tool.input),
       preview: previewFromTool(tool.name, tool.input),
     });
     emitTaskListIfNeeded(live, tool.name, tool.input);
@@ -806,6 +808,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
         : {}),
       status: "pending",
       detail: summarizeToolRequest(tool.name, parsed),
+      input: inputFromTool(tool.name, parsed),
       preview: previewFromTool(tool.name, parsed),
     });
     emitTaskListIfNeeded(live, tool.name, parsed);
@@ -851,6 +854,7 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
             ? { agentModel: stringField(use.input, "model") }
             : {}),
           status: isAgentToolName(streamed.name) ? "in_progress" : "pending",
+          input: inputFromTool(streamed.name, use.input),
           preview: previewFromTool(streamed.name, use.input),
         });
         emitTaskListIfNeeded(live, streamed.name, use.input);
@@ -878,6 +882,7 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
         ? { agentModel: stringField(tool.input, "model") }
         : {}),
       status: isAgentToolName(tool.name) ? "in_progress" : "pending",
+      input: inputFromTool(tool.name, tool.input),
       preview: previewFromTool(tool.name, tool.input),
     });
     if (use.name === "ExitPlanMode") {
@@ -1107,6 +1112,7 @@ async function handleControlRequest(
     title: toolTitle(toolName, input),
     kind: toolKindFromName(toolName),
     callId: control.toolUseId,
+    input: inputFromTool(toolName, input),
     preview: previewFromTool(toolName, input),
   });
   const decision = await pending;
@@ -1139,6 +1145,7 @@ function applyKnownToolInput(
     title: toolTitle(toolName, input),
     kind: toolKindFromName(toolName),
     status: "pending",
+    input: inputFromTool(toolName, input),
     preview: previewFromTool(toolName, input),
   });
 }
@@ -1399,6 +1406,7 @@ function noteSubagentTool(
     text: title,
     toolKind: toolKindFromName(name),
     status: "in_progress",
+    input: inputFromTool(name, input),
     ...(preview ? { preview } : {}),
   });
 }
@@ -1620,7 +1628,10 @@ function showBackgroundRows(live: Live): void {
       status: "in_progress",
       background: true,
       ...(source
-        ? { preview: previewFromTool(source.name, source.input) }
+        ? {
+            input: inputFromTool(source.name, source.input),
+            preview: previewFromTool(source.name, source.input),
+          }
         : {}),
     });
   }

@@ -344,6 +344,50 @@ describe("claude streamed tool inputs", () => {
     );
     expect(tool?.text).toBe("git status --short");
     expect(tool?.tool?.status).toBe("completed");
+    expect(tool?.tool?.input).toBe("git status --short");
+  });
+
+  it("keeps the whole streamed script as the call's input", async () => {
+    const script = "cd web\nnpm test -- --run";
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_sh", name: "Bash", input: {} },
+      },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify({ command: script }),
+        },
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "toolu_sh", content: "ok" }],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const tool = session.blocks.find((block) => block.tool?.callId === "toolu_sh");
+    expect(tool?.tool?.status).toBe("completed");
+    expect(tool?.tool?.input).toBe(script);
   });
 });
 
@@ -1538,6 +1582,7 @@ describe("claude subagents", () => {
       ["toolu_sub_read", "tool", "Read /repo/src/App.tsx", "in_progress"],
       ["toolu_sub_read", "tool", "", "completed"],
     ]);
+    expect(steps[2]).toMatchObject({ input: "/repo/src/App.tsx" });
   });
 
   it("keeps a failed subagent tool result on its tool row", async () => {

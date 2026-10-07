@@ -33,6 +33,7 @@ import {
   extensionUiResponse,
   extensionUiTitle,
   forkMessagesFromRpcData,
+  inputFromTool,
   isAgentSettled,
   isPiThinkingLevel,
   mergeToolInput,
@@ -910,6 +911,7 @@ function handleFrame(
         title: tool.title,
         kind: toolKindFromName(tool.name),
         status: "running",
+        input: inputFromTool(tool.name, tool.input),
         preview: previewFromTool(tool.name, tool.input),
       });
     }
@@ -932,6 +934,7 @@ function handleFrame(
         kind: toolKindFromName(tool.name),
         status: "running",
         detail: execUpdate.detail,
+        input: inputFromTool(tool.name, tool.input),
         preview: previewFromTool(tool.name, tool.input, execUpdate.detail),
       });
       if (toolKindFromName(tool.name) === "agent") {
@@ -1257,6 +1260,7 @@ function upsertTool(
       title: tool.title,
       kind: toolKindFromName(name),
       status: "pending",
+      input: inputFromTool(name, input),
       preview: previewFromTool(name, input),
     });
     emitTaskListIfNeeded(live, tool);
@@ -1280,6 +1284,7 @@ function updateTool(
     kind: toolKindFromName(tool.name),
     status: "pending",
     detail: summarizeToolRequest(tool.name, tool.input),
+    input: inputFromTool(tool.name, tool.input),
     preview: previewFromTool(tool.name, tool.input),
   });
   emitTaskListIfNeeded(live, tool);

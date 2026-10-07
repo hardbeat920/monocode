@@ -23,6 +23,9 @@ import {
   loadShowExcludedFiles,
   saveShowExcludedFiles,
   SHOW_EXCLUDED_FILES_DEFAULT,
+  loadRawToolCalls,
+  saveRawToolCalls,
+  RAW_TOOL_CALLS_DEFAULT,
   loadThemePreference,
   loadThemeDarkLightness,
   saveThemeDarkLightness,
@@ -139,6 +142,25 @@ describe("transcript prompt-to-top setting", () => {
     expect(loadTranscriptAnchor()).toBe(true);
     saveTranscriptAnchor(false);
     expect(loadTranscriptAnchor()).toBe(false);
+  });
+});
+
+describe("raw tool calls setting", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.removeItem("monocode.rawToolCalls");
+  });
+
+  it("defaults to off", () => {
+    expect(RAW_TOOL_CALLS_DEFAULT).toBe(false);
+    expect(loadRawToolCalls()).toBe(false);
+  });
+
+  it("persists across loads", () => {
+    saveRawToolCalls(true);
+    expect(loadRawToolCalls()).toBe(true);
+    saveRawToolCalls(false);
+    expect(loadRawToolCalls()).toBe(false);
   });
 });
 

@@ -357,6 +357,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "scroll position sticky message",
   },
   {
+    id: "raw-tool-calls",
+    section: "chat",
+    label: "Show raw commands",
+    keywords: "tool call shell command bash expand full input arguments",
+  },
+  {
     id: "follow-up",
     section: "chat",
     label: "Follow-up behavior",

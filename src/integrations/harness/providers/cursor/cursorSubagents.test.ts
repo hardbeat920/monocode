@@ -67,6 +67,7 @@ describe("Cursor stored subagents", () => {
       text: "git diff",
       toolKind: "execute",
       status: "completed",
+      input: "git diff",
     });
     expect(recovered.busy).toBeFalsy();
     expect((await recoverCursorSubagents(recovered)).blocks).toEqual(
