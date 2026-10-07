@@ -25,6 +25,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSH setup still installs the verified release archive with its bundled Node, then runs the same `connect` command, so SSH machines also get a pinned TLS address and pushed updates. Update Host restarts the host through `connect --yes`.
 - Pairing by host URL and raw device token is replaced by the pairing link.
 
+## [0.9.0] - 2026-10-07
+
+### Added
+
+- Monos can create persistent **document artifacts** for reports, plans, and other Markdown deliverables. Document cards appear beneath the originating reply and open a reader with formatting, file links, copy, and delete controls. Documents survive app restarts and the reader refreshes when a document is revised.
+- Monos and habit runs can use `app artifacts.list`, `artifacts.read`, and `artifacts.write` to find, read, create, or revise documents and attach them to the chat or habit report. Retrying a creation request reuses the saved document instead of creating a duplicate. Deleting a document removes its cards from saved conversations, and later saves from another window cannot restore them.
+- On macOS, the **Monos menu bar** lists each Mono with its mascot and opens a resizable floating chat that stays above other windows and follows across Spaces. Floating chats share the main conversation, accept messages and attachments, handle approvals and questions, and offer controls to stop a reply or open the conversation in MonoCode.
+- A Mono's **Details → Permissions** picker saves its permission mode alongside its model settings. New Mono conversations start with **Auto** permissions.
+- Mono replies have a **Sessions** control for work launched during that turn. Its panel shows each session's provider, model, project, and current status, including requests for input, drafts, and archived sessions. Launch records survive chat restoration, so saved sessions remain accessible after their tabs close.
+- Settings → Monos adds a separate sidebar visibility preference for sessions started by each Mono. Hidden sessions remain saved and can be opened from the Mono's chat; the preference applies to newly started sessions.
+- The opt-in `app` CLI adds `sessions.stop`, `sessions.archive`, and `sessions.delete` to manage another regular session in the chosen project. Stop cancels the active turn and pauses queued messages; archive saves the conversation for later restoration; delete permanently removes it. Open files, terminals, and worktrees are kept. `sessions.list` also reports archived status.
+
+### Changed
+
+- Account emails are **masked by default** when no display preference has been saved. Existing choices are preserved, and Settings → Providers → Usage and privacy → **Mask account emails** controls the display.
+- Mono chats keep opening narration and intermediate progress in the activity trail, show live status beneath the Mono's name, and reveal the final answer when work finishes. The activity control sits beside the reply actions, and copying or saving a reply uses its final answer.
+- Automatic Mono replies after delegated sessions finish continue the preceding answer with one header and one set of reply actions. A new day or a break of more than an hour starts a separate message with its own timestamp.
+- Max and Ultra effort animations now apply to every provider whose effort or variant controls expose those options, including keyboard highlighting. In #672 by @shxntanu.
+- Regression coverage now includes document persistence and deletion, floating-chat delivery and motion, Mono permission settings, launched-session history and visibility, session lifecycle actions, and completion-report ordering.
+- Host integration test suites run serially with longer timeouts on every platform, reducing failures and teardown races under load. In #683 by @shxntanu.
+
+### Fixed
+
+- Replies to delivered mid-turn Mono follow-ups appear immediately and stay visible when more tool work arrives. Queued or failed messages are not treated as delivered follow-ups, and replies already shown remain available when background work resumes.
+- Mono completion reports wait for launch acceptance, including sessions that finish before their launch is acknowledged. Rejected launches and follow-ups do not produce a second report. When a Mono stops, archives, or deletes a monitored session, its pending or queued report is dismissed while reports for other sessions and other Monos are retained.
+- Selecting an IME candidate with Enter no longer sends a Mono message or submits the memory fact, Mono name, or new habit name fields prematurely on WebKit. In #790 by @king20300.
+- Codex turns can start before a model has been explicitly selected. The adapter omits the collaboration-mode override until a model is known, allowing Codex to use the thread's selected model without rejecting a null model setting. In #771 by @Slowper.
+- Notes created without a title receive a title-based filename slug when title editing finishes or the editor closes, instead of retaining an `untitled` slug. Later title edits discard stale finalization requests, and existing or user-chosen slugs stay stable. In #788 by @nwoolls.
+- **⌘W / Ctrl+W** closes the active project-dock terminal and **⌘T / Ctrl+T** adds a dock terminal while that dock has keyboard focus. Elsewhere the shortcuts retain their workspace behavior, and macOS New Tab and Close Tab menu actions affect only the focused window. In #774 by @50BytesOfJohn.
+- Settings refreshes live provider model catalogs even when built-in fallback models are already present, fixing stale Pi and Antigravity model lists after restart. In #783 by @rxchitrx; fixes #738.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
@@ -1317,7 +1348,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/hardbeat920/monocode/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hardbeat920/monocode/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/hardbeat920/monocode/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/hardbeat920/monocode/compare/v0.6.0...v0.7.0
