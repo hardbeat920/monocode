@@ -82,8 +82,9 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 29] = [
+const APP_ACTIONS: [&str; 30] = [
     "models.list",
+    "usage.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
@@ -123,6 +124,15 @@ left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
+  usage.list     {"provider":"claude","accountId":"default","refresh":false}
+                  All fields optional. Read cached limits for all providers and
+                  accounts, independently of this session's harness. Filters
+                  narrow the rows; unsupported providers stay explicit.
+                  refresh:true starts a shared, deduplicated refresh with
+                  cooldown/backoff; loading rows can be read again without
+                  refresh. Cached reads never probe. Stale/reset-past data is
+                  not renewed quota. Times are Unix milliseconds; windows keep
+                  their scope, duration and percentage units. No account switch.
   sessions.list  {}  Project sessions with IDs, busy status, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
@@ -611,6 +621,7 @@ mod tests {
         assert_eq!(quoted("/Users/a\\b/MonoCode"), "'/Users/a\\b/MonoCode'");
         assert_eq!(quoted("/Users/it's/MonoCode"), r"'/Users/it'\''s/MonoCode'");
     }
+    /// Check app-action parsing/help and request-ID rejection without running a command.
     #[test]
     fn app_mode_exposes_only_app_actions_and_safe_request_ids() {
         assert!(matches!(
@@ -640,7 +651,7 @@ mod tests {
         );
         assert!(app_help().contains("notes.read"));
         assert!(app_help().contains("notes.write"));
-        for action in ["worktrees.list", "worktrees.create"] {
+        for action in ["worktrees.list", "worktrees.create", "usage.list"] {
             assert!(matches!(
                 parse_args_for(&args(&[action]), true),
                 Ok(Parsed::Call(_, _, _))

@@ -114,6 +114,11 @@ export async function fetchClaudeRateLimits(
   }
 }
 
+/**
+ * Read one account's limits through the serialized, short-lived Codex app-server.
+ * Missing CLI/auth or empty records become unavailable snapshots; request failures
+ * become error snapshots. Home-directory resolution can reject before the request.
+ */
 export async function fetchCodexRateLimits(
   accountId = "default",
 ): Promise<ProviderRateLimits> {
@@ -134,7 +139,14 @@ export async function fetchCodexRateLimits(
       accountId,
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
+    if (
+      parsed.session ||
+      parsed.weekly ||
+      parsed.monthly ||
+      parsed.resetCredits ||
+      parsed.windows?.length ||
+      parsed.credits?.length
+    ) {
       return parsed;
     }
     const rec = asRecord(result);

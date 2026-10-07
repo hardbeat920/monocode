@@ -65,6 +65,7 @@ import {
   supersedeMemoryEntry,
   topicName,
 } from "../../monos/model/monoMemory";
+import { usageSnapshot } from "./usageSnapshot";
 
 export type AppSessionListing = {
   id: string;
@@ -161,6 +162,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
+  ["usage.list", ["provider", "accountId", "refresh"]],
   [
     "sessions.start",
     [
@@ -810,6 +812,8 @@ export async function handleAgentApp(
     };
   }
   switch (action) {
+    case "usage.list":
+      return usageSnapshot(source, input);
     case "models.list":
       return {
         runtimeModes: RUNTIME_MODES.map((id) => ({
