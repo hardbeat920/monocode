@@ -3,8 +3,14 @@ import { createHash } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { AddressInfo, Server } from "node:net";
+import { networkInterfaces } from "node:os";
 import type { TLSSocket } from "node:tls";
-import { isLoopback, listenHost } from "./listener";
+import {
+  isLoopback,
+  listenHost,
+  listenHostWithLoopback,
+  needsLoopbackListener,
+} from "./listener";
 import { createHostCertificate } from "./tls";
 
 const identity = createHostCertificate();
@@ -96,3 +102,32 @@ it("recognizes IPv4, IPv6, and mapped loopback addresses", () => {
   for (const address of ["10.0.0.5", "::ffff:10.0.0.5", "fe80::1", undefined])
     expect(isLoopback(address)).toBe(false);
 });
+
+it("adds a loopback listener only for a single network address", () => {
+  for (const bind of ["10.0.0.5", "192.168.1.20", "fe80::1"])
+    expect(needsLoopbackListener(bind)).toBe(true);
+  for (const bind of ["0.0.0.0", "::", "127.0.0.1", "::1", "localhost"])
+    expect(needsLoopbackListener(bind)).toBe(false);
+});
+
+const lanAddress = Object.values(networkInterfaces())
+  .flat()
+  .find((entry) => entry && !entry.internal && entry.family === "IPv4")?.address;
+
+it.skipIf(!lanAddress)(
+  "answers loopback lifecycle requests when bound to one network address",
+  async () => {
+    const app = createServer((_request, response) => response.end("{}"));
+    const listeners = await listenHostWithLoopback(app, {
+      port: 0,
+      bind: lanAddress!,
+      identity,
+    });
+    servers.push(...listeners.servers, app);
+    expect(listeners.servers).toHaveLength(2);
+    const port = (listeners.servers[0].address() as AddressInfo).port;
+    expect((listeners.servers[1].address() as AddressInfo).port).toBe(port);
+    const reply = await send(port, false, Buffer.from("{}"));
+    expect(reply.status).toBe(200);
+  },
+);

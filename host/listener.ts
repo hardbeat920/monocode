@@ -1,4 +1,9 @@
-import { createServer, type Server as NetServer, type Socket } from "node:net";
+import {
+  createServer,
+  type AddressInfo,
+  type Server as NetServer,
+  type Socket,
+} from "node:net";
 import type { Server as HttpServer } from "node:http";
 import { createServer as createTlsServer } from "node:tls";
 import type { HostIdentity } from "./tls";
@@ -69,4 +74,52 @@ export function listenHost(
       resolve(front);
     });
   });
+}
+
+/**
+ * Whether a host bound to `bind` leaves 127.0.0.1 unserved. The CLI's
+ * lifecycle requests and SSH forwards always connect there, and wildcard and
+ * loopback binds already cover it.
+ */
+export function needsLoopbackListener(bind: string): boolean {
+  return (
+    bind !== "0.0.0.0" &&
+    bind !== "::" &&
+    bind !== "localhost" &&
+    !isLoopback(bind)
+  );
+}
+
+export type HostListeners = { servers: NetServer[]; close: () => void };
+
+/**
+ * `listenHost` on `options.bind`, plus 127.0.0.1 on the same port when the
+ * bind is one network address, so `status`, `stop`, the post-start check, and
+ * SSH forwards keep working with `connect --bind <address>`.
+ */
+export async function listenHostWithLoopback(
+  server: HttpServer,
+  options: HostListenerOptions,
+): Promise<HostListeners> {
+  const main = await listenHost(server, options);
+  if (!needsLoopbackListener(options.bind))
+    return { servers: [main], close: () => main.close() };
+  try {
+    const local = await listenHost(server, {
+      ...options,
+      bind: "127.0.0.1",
+      // The actual port, for callers that asked for any free one.
+      port: (main.address() as AddressInfo).port,
+    });
+    return {
+      servers: [main, local],
+      close: () => {
+        main.close();
+        local.close();
+      },
+    };
+  } catch (error) {
+    main.close();
+    throw error;
+  }
 }

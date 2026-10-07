@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import type { Server as NetServer } from "node:net";
 import {
   configureChildBackend,
   acquireHarnessBridge,
@@ -29,7 +28,7 @@ import {
   connectStatus,
   startDetached,
 } from "./connect";
-import { listenHost } from "./listener";
+import { listenHostWithLoopback, type HostListeners } from "./listener";
 import {
   networkEndpoints,
   readNetworkSettings,
@@ -248,7 +247,7 @@ async function serve(store: HostStore) {
     let network: NetworkSettings & { error?: string } = readNetworkSettings(directory);
     let magicDns: string | undefined;
     void tailscaleName().then((name) => (magicDns = name));
-    let front: NetServer | undefined;
+    let front: HostListeners | undefined;
     let stopping = false;
     let networkRetry: ReturnType<typeof setTimeout> | undefined;
     let networkChange = Promise.resolve();
@@ -311,7 +310,7 @@ async function serve(store: HostStore) {
       },
     );
     const open = (settings: NetworkSettings) =>
-      listenHost(server, {
+      listenHostWithLoopback(server, {
         port,
         bind: settings.enabled ? settings.bind : "127.0.0.1",
         identity,
