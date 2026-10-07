@@ -18,6 +18,7 @@ import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
+import { stopSessionProcesses } from "./model/stopSessionProcesses";
 import {
   handleAgentApp,
   canAccessAgentAppProject,
@@ -10297,25 +10298,18 @@ function Workspace({
       stop: async (id) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
         onStop(id, true);
-        try {
-          if (session)
-            await Promise.all(
-              sessionChildHarnesses(session).map((harness) =>
+        await stopSessionProcesses({
+          stopChildren: () =>
+            Promise.all(
+              (session ? sessionChildHarnesses(session) : []).map((harness) =>
                 stopHarnessSession(harness, id),
               ),
-            );
-        } finally {
+            ),
           // Also reap processes left behind by a renderer reload, before the
           // corresponding session has been restored in this window.
-          const killed = await invoke("harness_kill", { sessionId: id }).then(
-            () => ({ ok: true as const }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-          await invoke("control_turn_finished", { sessionId: id });
-          // A process that outlived the kill may still be writing files, so the
-          // caller must not treat the worker as stopped.
-          if (!killed.ok) throw killed.error;
-        }
+          kill: () => invoke("harness_kill", { sessionId: id }),
+          finishTurn: () => invoke("control_turn_finished", { sessionId: id }),
+        });
       },
     });
   }, [checkOpenWorktreeFiles, submitSession, onStop, flushHarnessEvents]);

@@ -4448,6 +4448,7 @@ mod tests {
         assert!(path_contains_symlink(&root.0, "link"));
     }
 
+    #[cfg(unix)]
     fn temp_files(dir: &Path) -> Vec<String> {
         names(dir)
             .into_iter()
