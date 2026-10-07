@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    WebviewWindowBuilder, Window,
 };
 use tauri_plugin_global_shortcut::{
     GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
@@ -141,7 +141,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 /// the application on webview creation, so recheck native focus at execution
 /// time: the user may have switched apps since the frontend scheduled it.
 #[tauri::command]
-pub async fn quick_composer_prepare(app: AppHandle, window: WebviewWindow) -> Result<bool, String> {
+pub async fn quick_composer_prepare(app: AppHandle, window: Window) -> Result<bool, String> {
     if !crate::window::is_workspace_window(window.label()) {
         return Err("Only a workspace can prepare the composer.".into());
     }
@@ -425,7 +425,7 @@ fn capture_screenshot() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn quick_composer_take(
     app: AppHandle,
-    window: WebviewWindow,
+    window: Window,
     state: State<'_, QuickComposerState>,
 ) -> Result<Option<delivery::Delivery>, String> {
     if !crate::window::is_workspace_window(window.label()) {
@@ -436,13 +436,13 @@ pub fn quick_composer_take(
         .lock()
         .map_err(|err| err.to_string())?
         .claim(window.label(), |label| {
-            app.get_webview_window(label).is_some()
+            app.get_window(label).is_some()
         }))
 }
 
 #[tauri::command]
 pub fn quick_composer_ack(
-    window: WebviewWindow,
+    window: Window,
     state: State<'_, QuickComposerState>,
     id: String,
 ) -> Result<(), String> {

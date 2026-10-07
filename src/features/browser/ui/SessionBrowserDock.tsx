@@ -10,6 +10,7 @@ import { DockPanel } from "../../workspace/ui/DockPanel";
 import { applyDockGridStyle } from "../../projects/model/projectTerminal";
 import {
   onBrowserEvent,
+  readBrowserUrl,
   retainBrowserViews,
 } from "../../../platform/tauri/browser";
 import {
@@ -34,7 +35,11 @@ import {
   noteLoadFinished,
   noteLoadStarted,
 } from "../model/browserStore";
+import { syncNativeUrl, trackedBrowserTabIds } from "../model/nativeUrl";
 import { BrowserSurface, BrowserToolbar } from "./BrowserView";
+
+/** How often live pages are asked for a URL that changed without a load. */
+const URL_POLL_MS = 1_000;
 
 /** Size of the off-window page an agent works in while the panel is hidden. */
 const BACKGROUND_SIZE = { width: 1280, height: 800 };
@@ -118,7 +123,19 @@ function useBrowserEvents() {
         });
       }
     });
+    // pushState, replaceState and hash changes emit no native load event.
+    let polling = false;
+    const poll = setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void Promise.all(
+        trackedBrowserTabIds().map((id) => syncNativeUrl(id, readBrowserUrl)),
+      ).finally(() => {
+        polling = false;
+      });
+    }, URL_POLL_MS);
     return () => {
+      clearInterval(poll);
       void unlisten.then((fn) => fn());
     };
   }, []);

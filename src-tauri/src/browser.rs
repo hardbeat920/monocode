@@ -2,7 +2,7 @@
 //! placeholder in its workspace window; the page owns layout and tells us
 //! where to draw. Browsed pages never get IPC: they load remote origins, and
 //! no capability grants remote URLs access.
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,10 @@ const EVENT: &str = "browser-event";
 const CONSOLE_CAPTURE: &str = include_str!("browser_console.js");
 const EVAL_TIMEOUT_MAX: Duration = Duration::from_secs(25);
 const EVAL_POLL: Duration = Duration::from_millis(40);
+
+/// Serializes "is the tab already open?" with creating its child webview, so
+/// two opens of one id cannot both miss the lookup and race on the label.
+static OPEN_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Deserialize)]
 pub struct Bounds {
@@ -155,8 +159,10 @@ fn place(webview: &Webview, bounds: Bounds) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Async so creation runs off the main thread: on Windows, building a child
+/// webview from a synchronous command (which runs on the main thread) deadlocks.
 #[tauri::command]
-pub fn browser_open(
+pub async fn browser_open(
     app: AppHandle,
     window: Window,
     id: String,
@@ -165,6 +171,7 @@ pub fn browser_open(
     visible: bool,
 ) -> Result<(), String> {
     let label = label(&id)?;
+    let _open = OPEN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(webview) = app.get_webview(&label) {
         place(&webview, bounds)?;
         return if visible {
@@ -243,6 +250,18 @@ pub fn browser_open(
         webview.hide().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The page's current URL. Same-document navigation (`pushState`, hash
+/// changes) emits no load event, so the page is asked directly.
+#[tauri::command]
+pub async fn browser_url(app: AppHandle, id: String) -> Result<String, String> {
+    let webview = find(&app, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        eval_string(&webview, "location.href".into(), Duration::from_secs(2))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

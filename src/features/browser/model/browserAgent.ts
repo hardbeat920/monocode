@@ -77,6 +77,22 @@ function summary(id: string) {
   return { tabId: id, url: tab?.url, title: tab?.title || undefined };
 }
 
+/** Whether `to` differs from `from` only by its fragment. */
+function isSameDocument(from: string | undefined, to: string): boolean {
+  if (!from) return false;
+  try {
+    const a = new URL(from);
+    const b = new URL(to);
+    if (!b.hash) return false;
+    a.hash = "";
+    const target = new URL(b);
+    target.hash = "";
+    return a.href === target.href;
+  } catch {
+    return false;
+  }
+}
+
 function pageUrl(input: Input): string {
   const url = browserUrlFromInput(required(input, "url"));
   if (!isBrowsableUrl(url)) throw new Error("Only http(s) pages can be opened");
@@ -85,18 +101,31 @@ function pageUrl(input: Input): string {
 
 type LoadResult = { timedOut?: true };
 
+type LoadOptions = {
+  startWithinMs?: number;
+  timeoutMs?: number;
+  /**
+   * The load generation before an explicit document navigation, open or
+   * reload. A load must then start and finish: a missing start is not success,
+   * so the wait ends `timedOut` instead of passing early.
+   */
+  since?: number;
+};
+
 /**
- * Resolve once a load that starts within `startWithinMs` finishes, or right
- * away when none starts (a hash change, a click that did not navigate, a
- * reused view that already finished). Rejects if the tab goes away and reports
+ * Resolve once a load finishes. Without `since`, a load that never starts
+ * within `startWithinMs` resolves right away (a hash change, a click that did
+ * not navigate, a reused view that already finished). With `since`, the load
+ * is awaited for the whole timeout. Rejects if the tab goes away and reports
  * `timedOut` if the load outlasts `timeoutMs`.
  */
 function waitForLoad(
   id: string,
-  { startWithinMs = 1_500, timeoutMs = LOAD_TIMEOUT_MS } = {},
+  { startWithinMs = 1_500, timeoutMs = LOAD_TIMEOUT_MS, since }: LoadOptions = {},
 ): Promise<LoadResult> {
   return new Promise((resolve, reject) => {
-    let started = !!tabSource(id)?.loading;
+    const sawLoad = () => since !== undefined && loadGeneration(id) > since;
+    let started = !!tabSource(id)?.loading || sawLoad();
     let unsubscribe = () => {};
     const finish = (result: LoadResult, closed = false) => {
       unsubscribe();
@@ -108,12 +137,15 @@ function waitForLoad(
     const check = () => {
       const tab = tabSource(id);
       if (!tab) return finish({}, true);
-      if (tab.loading) started = true;
-      else if (started) finish({});
+      if (tab.loading || sawLoad()) started = true;
+      if (started && !tab.loading) finish({});
     };
-    const startTimer = setTimeout(() => {
-      if (!started) finish({});
-    }, startWithinMs);
+    const startTimer =
+      since === undefined
+        ? setTimeout(() => {
+            if (!started) finish({});
+          }, startWithinMs)
+        : undefined;
     const timer = setTimeout(() => finish({ timedOut: true }), timeoutMs);
     unsubscribe = subscribeBrowser(check);
     check();
@@ -150,9 +182,15 @@ function waitForNative(id: string, timeoutMs = 8_000): Promise<void> {
 async function reconcileLoad(
   id: string,
   load: LoadResult,
+  since?: number,
 ): Promise<LoadResult> {
   if (!load.timedOut) return load;
   const generation = loadGeneration(id);
+  // An explicit navigation that never started a load has no stale flag to
+  // clear, and the old document's readyState says nothing about it.
+  if (since !== undefined && generation === since && !tabSource(id)?.loading) {
+    return load;
+  }
   let state: unknown;
   try {
     state = await evalInBrowser(id, "document.readyState", 2_000);
@@ -172,9 +210,9 @@ async function reconcileLoad(
 /** Wait for a load, then settle a timeout against the page's real state. */
 async function waitForPage(
   id: string,
-  options?: Parameters<typeof waitForLoad>[1],
+  options?: LoadOptions,
 ): Promise<LoadResult> {
-  return reconcileLoad(id, await waitForLoad(id, options));
+  return reconcileLoad(id, await waitForLoad(id, options), options?.since);
 }
 
 /** Throw unless a wait ended with the page loaded. */
@@ -268,16 +306,24 @@ export function createBrowserAgent(sessionId: string) {
       const id = openBrowserTab(url, { sessionId, background: true });
       if (!id) throw new Error("This session cannot open a browser tab");
       touchAgentTab(id);
+      const since = loadGeneration(id);
       await waitForNative(id);
-      const load = await waitForPage(id, { startWithinMs: 3_000 });
+      const load = await waitForPage(id, { since });
       return { ...summary(id), ...load };
     },
 
     async browser_navigate(input) {
       const id = await useTab(input);
       const url = pageUrl(input);
+      // A fragment-only change stays in the document and emits no load.
+      const sameDocument = isSameDocument(tabSource(id)?.url, url);
+      const since = loadGeneration(id);
       await navigateBrowserTab(id, url);
-      return { ...summary(id), ...(await waitForPage(id)) };
+      const load = await waitForPage(
+        id,
+        sameDocument ? undefined : { since },
+      );
+      return { ...summary(id), ...load };
     },
 
     async browser_history(input) {
@@ -286,8 +332,14 @@ export function createBrowserAgent(sessionId: string) {
         throw new Error("action must be back, forward, or reload");
       }
       const id = await useTab(input);
+      const since = loadGeneration(id);
       await browserHistory(id, action);
-      return { ...summary(id), ...(await waitForPage(id)) };
+      // Back and forward may stay in the document; only a reload must load.
+      const load = await waitForPage(
+        id,
+        action === "reload" ? { since } : undefined,
+      );
+      return { ...summary(id), ...load };
     },
 
     async browser_select(input) {

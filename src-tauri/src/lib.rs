@@ -263,6 +263,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             browser::browser_open,
+            browser::browser_url,
             browser::browser_set_bounds,
             browser::browser_set_visible,
             browser::browser_focus,

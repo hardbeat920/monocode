@@ -22,6 +22,11 @@ export function openBrowserView(
   return invoke("browser_open", { id, url, bounds, visible });
 }
 
+/** The page's current URL, including same-document (pushState, hash) changes. */
+export function readBrowserUrl(id: string): Promise<string> {
+  return invoke("browser_url", { id });
+}
+
 export function setBrowserBounds(
   id: string,
   bounds: BrowserBounds,

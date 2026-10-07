@@ -23,6 +23,11 @@ interface Inflight {
 
 const inflight = new Map<string, Inflight>();
 
+/** Whether a navigation request for the tab is still unsettled. */
+export function isNavigating(id: string): boolean {
+  return inflight.has(id);
+}
+
 /** Native load events own loading: hash changes and rejected loads may emit none. */
 export async function navigateBrowserTab(
   id: string,

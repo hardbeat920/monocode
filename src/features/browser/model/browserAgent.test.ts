@@ -434,7 +434,7 @@ describe("browser tools waiting on a tab", () => {
     expect(call.value).not.toHaveProperty("timedOut");
   });
 
-  it("reloads without load events and leaves the tab usable", async () => {
+  it("does not report a reload as loaded until the load runs", async () => {
     const id = openTab();
     setNativeTabReady(id, true);
     const call = track(
@@ -443,13 +443,122 @@ describe("browser tools waiting on a tab", () => {
         action: "reload",
       }),
     );
-    await vi.advanceTimersByTimeAsync(1_600);
-    expect(call.done).toBe(true);
-    expect(call.error).toBeUndefined();
+    // No load event within the old start window: not success yet.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(call.done).toBe(false);
     expect(browserHistory).toHaveBeenCalledWith(id, "reload");
+    noteLoadStarted(id);
+    patchBrowserTab(id, { loading: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(call.done).toBe(false);
+    patchBrowserTab(id, { loading: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.error).toBeUndefined();
+    expect(call.value).not.toHaveProperty("timedOut");
+  });
+
+  it("reports timedOut when a reload never starts loading", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    const call = track(
+      createBrowserAgent("s1")("browser_history", {
+        tabId: id,
+        action: "reload",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect(call.error).toBeUndefined();
+    expect(call.value).toMatchObject({ tabId: id, timedOut: true });
     expect(tab(id)?.loading).toBeFalsy();
-    await evalCall(id);
-    expect(evals).toEqual([id]);
+  });
+
+  it("does not miss a navigation load that finished before the wait began", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    vi.mocked(navigateBrowser).mockImplementationOnce(async () => {
+      noteLoadStarted(id);
+      patchBrowserTab(id, { loading: true });
+      patchBrowserTab(id, { loading: false });
+    });
+    const call = track(
+      createBrowserAgent("s1")("browser_navigate", {
+        tabId: id,
+        url: "https://example.com/fast",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.done).toBe(true);
+    expect(call.value).not.toHaveProperty("timedOut");
+  });
+
+  it("holds a cross-document navigation open when no load starts", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    const call = track(
+      createBrowserAgent("s1")("browser_navigate", {
+        tabId: id,
+        url: "https://example.com/other",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(call.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_200);
+    expect(call.value).toMatchObject({ timedOut: true });
+  });
+
+  it.each(["browser_navigate", "browser_history"])(
+    "%s summarizes the page after its load finishes",
+    async (action) => {
+      const id = openTab();
+      setNativeTabReady(id, true);
+      const call = track(
+        createBrowserAgent("s1")(action, {
+          tabId: id,
+          url: "https://example.com/final",
+          action: "reload",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      noteLoadStarted(id);
+      patchBrowserTab(id, { loading: true });
+      await vi.advanceTimersByTimeAsync(100);
+      patchBrowserTab(id, {
+        url: "https://example.com/redirected",
+        title: "Final",
+        loading: false,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call.value).toMatchObject({
+        tabId: id,
+        url: "https://example.com/redirected",
+        title: "Final",
+      });
+    },
+  );
+
+  it("summarizes a browser_open after its load finishes", async () => {
+    const call = track(
+      createBrowserAgent("s1")("browser_open", { url: "https://example.com" }),
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    const id = getBrowserState().docks.flatMap((d) =>
+      d.pane.files.map((f) => f.id),
+    )[0];
+    opened.push(id);
+    setNativeTabReady(id, true);
+    await vi.advanceTimersByTimeAsync(10);
+    noteLoadStarted(id);
+    patchBrowserTab(id, { loading: true });
+    patchBrowserTab(id, {
+      url: "https://example.com/landed",
+      title: "Landed",
+      loading: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.value).toMatchObject({
+      url: "https://example.com/landed",
+      title: "Landed",
+    });
   });
 
   it("clears loading when native navigation rejects", async () => {

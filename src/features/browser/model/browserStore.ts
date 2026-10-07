@@ -501,7 +501,13 @@ const loadGenerations = new Map<string, number>();
 
 /** Drop counters of tabs that left the store; suspended tabs stay in it. */
 function pruneLoadGenerations(current: BrowserState) {
-  if (loadGenerations.size === 0 && nativeUrlEpochs.size === 0) return;
+  if (
+    loadGenerations.size === 0 &&
+    nativeUrlEpochs.size === 0 &&
+    urlRevisions.size === 0
+  ) {
+    return;
+  }
   const live = new Set(
     current.docks.flatMap((dock) => dock.pane.files.map((file) => file.id)),
   );
@@ -510,6 +516,9 @@ function pruneLoadGenerations(current: BrowserState) {
   }
   for (const id of [...nativeUrlEpochs.keys()]) {
     if (!live.has(id)) nativeUrlEpochs.delete(id);
+  }
+  for (const id of [...urlRevisions.keys()]) {
+    if (!live.has(id)) urlRevisions.delete(id);
   }
 }
 
@@ -524,10 +533,22 @@ export function nativeUrlEpoch(fileId: string): number {
   return nativeUrlEpochs.get(fileId) ?? 0;
 }
 
-/** Record a native load finish: its URL (e.g. a redirect) is authoritative. */
-export function noteLoadFinished(fileId: string) {
+/** Counts every write to a tab's URL, so a slow native read can tell it is stale. */
+const urlRevisions = new Map<string, number>();
+
+export function urlRevision(fileId: string): number {
+  return urlRevisions.get(fileId) ?? 0;
+}
+
+/** Record a native URL report: it is authoritative over any earlier guess. */
+export function noteNativeUrl(fileId: string) {
   if (!dockOfTab(getBrowserState(), fileId)) return;
   nativeUrlEpochs.set(fileId, nativeUrlEpoch(fileId) + 1);
+}
+
+/** Record a native load finish: its URL (e.g. a redirect) is authoritative. */
+export function noteLoadFinished(fileId: string) {
+  noteNativeUrl(fileId);
 }
 
 /** Record a native load start; includes same-URL reloads. */
@@ -551,6 +572,9 @@ export function patchBrowserTab(
   fileId: string,
   patch: Partial<BrowserTabSource>,
 ) {
+  if (patch.url !== undefined) {
+    urlRevisions.set(fileId, urlRevision(fileId) + 1);
+  }
   update((current) => patchBrowserTabIn(current, fileId, patch));
 }
 
