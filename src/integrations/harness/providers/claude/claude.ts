@@ -58,6 +58,7 @@ import {
   statusTextFromSystem,
   compactionEventFromSystem,
   compactionErrorFromSystem,
+  compactSummaryFromUser,
   streamDeltaFromEvent,
   stringField,
   summarizeToolRequest,
@@ -179,6 +180,8 @@ type Live = {
   compactionConfirmed: boolean;
   /** Claude's reason for refusing the running compaction, if it did. */
   compactionError?: string;
+  /** A boundary landed; the next synthetic user message is its summary. */
+  awaitingCompactSummary: boolean;
 };
 
 type Resume = {
@@ -520,6 +523,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    awaitingCompactSummary: false,
   };
   liveRef.current = live;
 
@@ -706,6 +710,17 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
+  // Read before the manual-compaction filter below, which drops user records.
+  if (live.awaitingCompactSummary) {
+    const summary = compactSummaryFromUser(rec);
+    if (summary) {
+      live.awaitingCompactSummary = false;
+      live.onEvent({ type: "context.summarized", summary });
+      return;
+    }
+    if (type === "result") live.awaitingCompactSummary = false;
+  }
+
   if (live.manualCompaction && type !== "system" && type !== "result") {
     return;
   }
@@ -743,6 +758,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     const compaction = main ? compactionEventFromSystem(rec) : undefined;
     if (compaction?.type === "context.compacted") {
       live.compactionConfirmed = true;
+      live.awaitingCompactSummary = true;
     }
     if (main) {
       live.compactionError =

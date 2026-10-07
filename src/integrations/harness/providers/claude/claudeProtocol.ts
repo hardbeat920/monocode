@@ -480,6 +480,36 @@ export function statusTextFromSystem(
   return notable ? text : undefined;
 }
 
+const SUMMARY_PREAMBLE = /^This session is being continued[\s\S]*?\nSummary:\n/;
+const SUMMARY_TRAILER = /\nContinue the conversation from where it left off[\s\S]*$/;
+
+/**
+ * The summary Claude Code carries past a compaction. It streams as a synthetic
+ * user message right after `compact_boundary`, wrapped in a preamble and a
+ * resume instruction meant for the model; both are stripped when they match,
+ * and the text is kept whole when they don't. The replayed "Compacted" command
+ * output is also synthetic-looking but marked `isReplay`.
+ */
+export function compactSummaryFromUser(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "user") return undefined;
+  if (rec.isSynthetic !== true || rec.isReplay === true) return undefined;
+  const content = asRecord(rec.message)?.content;
+  const text = (
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) => stringField(asRecord(part), "text") ?? "")
+            .join("\n")
+        : ""
+  ).trim();
+  if (!text) return undefined;
+  const body = text.replace(SUMMARY_PREAMBLE, "").replace(SUMMARY_TRAILER, "");
+  return body.trim() || text;
+}
+
 /**
  * Why Claude Code gave up on a compaction, from the status that ends it with
  * `compact_result: "failed"` (for example "Not enough messages to compact.").

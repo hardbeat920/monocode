@@ -33,6 +33,7 @@ import {
   statusTextFromSystem,
   compactionEventFromSystem,
   compactionErrorFromSystem,
+  compactSummaryFromUser,
   streamDeltaFromEvent,
   toClaudePermissionResult,
   toolKindFromName,
@@ -1099,6 +1100,56 @@ describe("compactionEventFromSystem", () => {
     ).toBeUndefined();
     expect(
       compactionEventFromSystem({ type: "system", subtype: "init" }),
+    ).toBeUndefined();
+  });
+});
+
+// Recorded from Claude Code 2.1.292 right after a manual compact_boundary.
+const SUMMARY_BODY =
+  "1. Primary Request and Intent:\n   The user asked how DNS resolution works.\n\n9. Optional Next Step:\n   None.";
+const SUMMARY_RECORD = {
+  type: "user",
+  isSynthetic: true,
+  isReplay: false,
+  message: {
+    role: "user",
+    content:
+      "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+      SUMMARY_BODY +
+      '\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.',
+  },
+};
+
+describe("compactSummaryFromUser", () => {
+  it("reads the summary out of Claude's continuation message", () => {
+    expect(compactSummaryFromUser(SUMMARY_RECORD)).toBe(SUMMARY_BODY);
+  });
+
+  it("keeps the whole text when the wrapper is not the one it knows", () => {
+    expect(
+      compactSummaryFromUser({
+        ...SUMMARY_RECORD,
+        message: { role: "user", content: [{ type: "text", text: "Different shape." }] },
+      }),
+    ).toBe("Different shape.");
+  });
+
+  it("skips the replayed command output and real user messages", () => {
+    expect(
+      compactSummaryFromUser({
+        type: "user",
+        isReplay: true,
+        message: {
+          role: "user",
+          content: "<local-command-stdout>Compacted </local-command-stdout>",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      compactSummaryFromUser({
+        type: "user",
+        message: { role: "user", content: "hello" },
+      }),
     ).toBeUndefined();
   });
 });

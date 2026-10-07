@@ -1980,6 +1980,77 @@ describe("claude manual compaction", () => {
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 
+  it("carries Claude's summary onto the boundary of a manual compaction", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "manual", pre_tokens: 31_356 },
+    });
+    emit({
+      type: "user",
+      isSynthetic: true,
+      isReplay: false,
+      session_id: "sess_1",
+      message: {
+        role: "user",
+        content:
+          "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nThe user asked about DNS.\nContinue the conversation from where it left off without asking the user any further questions.",
+      },
+    });
+    emit({
+      type: "user",
+      isReplay: true,
+      session_id: "sess_1",
+      message: {
+        role: "user",
+        content: "<local-command-stdout>Compacted </local-command-stdout>",
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await compact;
+
+    expect(
+      events.filter((event) => event.type.startsWith("context.")),
+    ).toEqual([
+      expect.objectContaining({ type: "context.compacted" }),
+      { type: "context.summarized", summary: "The user asked about DNS." },
+    ]);
+  });
+
+  it("takes only the message that follows a boundary as its summary", async () => {
+    const { turn, events } = await startTurn("s1");
+    // A synthetic user message with no compaction before it is not a summary.
+    emit({
+      type: "user",
+      isSynthetic: true,
+      session_id: "sess_1",
+      message: { role: "user", content: "Unrelated synthetic note" },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(events.some((event) => event.type === "context.summarized")).toBe(
+      false,
+    );
+  });
+
   it("fails a refused manual compaction with Claude's reason", async () => {
     const { turn } = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
