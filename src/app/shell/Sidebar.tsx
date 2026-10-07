@@ -40,11 +40,13 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   loadSidebarTabOrder,
@@ -61,6 +63,7 @@ import { copyText } from "../../platform/tauri/clipboard";
 import { resolveModel } from "../../features/sessions/model/models";
 import type { OpenFileFn } from "../../features/search/model/search";
 import { sessionDisplayTitle } from "../../features/sessions/model/session";
+import { ParticleText } from "../../shared/ui/ParticleText";
 import { nextUnseenFinishedSessions } from "../../features/sessions/model/sessionDone";
 import { orchestrationTaskLabel } from "../../features/orchestration/model/orchestrationSummary";
 import {
@@ -174,6 +177,16 @@ import { SessionsEmpty } from "../../features/sessions/ui/SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "../../features/source-control/ui/SourceControl";
 import { GithubStarPrompt } from "./GithubStarPrompt";
+import {
+  isMonoSession,
+  listMonos,
+  monoLook,
+  monosSnapshot,
+  subscribeMonos,
+} from "../../features/monos/model/mono";
+import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
+import { isHabitRun } from "../../features/monos/model/monoHabits";
+import type { MonoRailProps } from "./MonoRailSection";
 import {
   refreshRemoteProjectSessions,
   remoteRequest,
@@ -323,6 +336,10 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
+  /** The Monos on the rail; absent while Monos are off. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area, which has no project sidebar. */
+  monoViewActive?: boolean;
 };
 
 function SidebarComponent({
@@ -414,6 +431,8 @@ function SidebarComponent({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
+  monos,
+  monoViewActive = false,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
   const tab: SidebarTabId = requestedTab;
@@ -620,13 +639,19 @@ function SidebarComponent({
     : pending && sessions.length === 0;
   const worktreeFocus = useWorktreeFocus(cwd);
   const focusedWorktree = remoteProject ? undefined : worktreeFocus;
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
   const listedSessions = mergeFolderSessionSummaries(
     projectSessions,
     remoteProject ? [] : openSessions,
     sessionFolders,
   ).filter(
     (session) =>
-      !session.orchestrationLeadId && inWorktreeFocus(session, focusedWorktree),
+      !isMonoSession(session.id) &&
+      !session.sidebarHidden &&
+      !("ephemeral" in session && session.ephemeral) &&
+      !isHabitRun(session.id) &&
+      !session.orchestrationLeadId &&
+      inWorktreeFocus(session, focusedWorktree),
   );
   const visibleSessions = [
     ...filterSessionsByQuery(
@@ -754,15 +779,20 @@ function SidebarComponent({
     compactProjectRail && showProjectRail && !railVisible;
   const inProject = looksLikeProject(cwd);
   const showSidebarFooter = !projectRailOpen;
+  const otherViewActive =
+    searchActive ||
+    inboxActive ||
+    notesActive ||
+    automationsActive ||
+    settingsOpen;
+  // A remembered Mono sits underneath these views; select it only while visible.
+  const railMonos = monos
+    ? { ...monos, activeId: otherViewActive ? undefined : monos.activeId }
+    : undefined;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
   const sidebarAvailable =
-    !searchActive &&
-    !inboxActive &&
-    !notesActive &&
-    !automationsActive &&
-    !settingsOpen &&
-    inProject;
+    !otherViewActive && !monoViewActive && inProject;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
   // open the sidebar temporarily until the user clicks away.
@@ -778,6 +808,12 @@ function SidebarComponent({
   const drawerRendered = drawerVisible || drawerClosing;
   const drawerAnimation = useRef<Animation | null>(null);
   const panelOpen = open || drawerVisible;
+  // Keep the hidden explorer intact when a chat tab changes worktrees. Its
+  // rows and file icons only need rebuilding when Files is actually shown.
+  const explorer = useRef<{ cwd: string; rootLabel?: string } | null>(null);
+  if (panelOpen && tab === "files") {
+    explorer.current = { cwd: gitRoot, rootLabel: explorerRootLabel };
+  }
   const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
   const changeStats = useProjectDiffStats(gitRoot, panelOpen);
 
@@ -1453,6 +1489,18 @@ function SidebarComponent({
     [],
   );
 
+  const sessionInsertMotion = useRef<SessionInsertMotion>({
+    cwd: "",
+    seen: new Set(),
+  });
+  // Runs after the rows' mount effects: a project's first paint never animates,
+  // and rows that mount later (drawer opened, folder expanded) are not new.
+  useLayoutEffect(() => {
+    const motion = sessionInsertMotion.current;
+    motion.cwd = cwd;
+    for (const session of listedSessions) motion.seen.add(session.id);
+  });
+
   const renderSessionCard = (session: SessionSummary, compact = false) =>
     renamingSessionId === session.id && onRenameSession ? (
       <SessionRenameRow
@@ -1601,6 +1649,30 @@ function SidebarComponent({
     );
   });
 
+  const workspaceHeader = (
+    <div
+      className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
+      data-tauri-drag-region="deep"
+    >
+      <div className="flex min-w-0 flex-1 items-center">
+        {!remoteProject && cwd && cwd !== "~" ? (
+          <SidebarWorktreeSwitcher
+            cwd={cwd}
+            tabStats={worktreeTabStats}
+            onSelect={onSelectWorkspace}
+            pending={workspaceSwitchPending}
+            switchError={workspaceSwitchError}
+          />
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium leading-tight">
+            Workspace
+          </span>
+        )}
+      </div>
+      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+    </div>
+  );
+
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
@@ -1608,27 +1680,7 @@ function SidebarComponent({
     >
       {railVisible ? (
         <>
-          <div
-            className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
-            data-tauri-drag-region="deep"
-          >
-            <div className="flex min-w-0 flex-1 items-center">
-              {!remoteProject && cwd && cwd !== "~" ? (
-                <SidebarWorktreeSwitcher
-                  cwd={cwd}
-                  tabStats={worktreeTabStats}
-                  onSelect={onSelectWorkspace}
-                  pending={workspaceSwitchPending}
-                  switchError={workspaceSwitchError}
-                />
-              ) : (
-                <span className="min-w-0 truncate text-sm font-medium leading-tight">
-                  Workspace
-                </span>
-              )}
-            </div>
-            <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
-          </div>
+          {workspaceHeader}
           <div
             role="tablist"
             aria-label="Workspace"
@@ -1657,6 +1709,7 @@ function SidebarComponent({
               />
             </div>
           )}
+          {compactRailVisible ? workspaceHeader : null}
           {onSelectProject && !compactRailVisible ? (
             <SidebarProjectPicker
               cwd={cwd}
@@ -1704,17 +1757,19 @@ function SidebarComponent({
             />
           ) : cwd && cwd !== "~" ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <FileTree
-                key={gitRoot}
-                cwd={gitRoot}
-                rootLabel={explorerRootLabel}
-                onOpenFile={onOpenFile}
-                onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
-                onFileMoved={onFileMoved}
-                onFileDeleted={onFileDeleted}
-                onSearch={onOpenFilesSearch}
-                gitStatuses={gitStatuses}
-              />
+              {explorer.current ? (
+                <FileTree
+                  key={explorer.current.cwd}
+                  cwd={explorer.current.cwd}
+                  rootLabel={explorer.current.rootLabel}
+                  onOpenFile={onOpenFile}
+                  onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
+                  onFileMoved={onFileMoved}
+                  onFileDeleted={onFileDeleted}
+                  onSearch={onOpenFilesSearch}
+                  gitStatuses={gitStatuses}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="px-3 py-2 text-[12px] text-content/50">
@@ -1744,7 +1799,7 @@ function SidebarComponent({
             sessionsLock(el);
             sessionsScrollRef.current = el;
           }}
-          className={`min-h-0 flex-1 overflow-y-auto overscroll-none ${
+          className={`sidebar-session-scroll min-h-0 flex-1 overflow-y-auto overscroll-none ${
             tab === "sessions" ? "" : "hidden"
           }`}
         >
@@ -1784,7 +1839,7 @@ function SidebarComponent({
                   <SessionsEmpty message="Sessions you start will show up here" />
                 )
               ) : (
-                <ul className="flex flex-col gap-0.5 p-1.5">
+                <ul data-session-list className="flex flex-col gap-0.5 p-1.5 pb-10">
                   {sessionListEntries.map((entry, index) => {
                     if (entry.kind === "pinned" || entry.kind === "reminders") {
                       const isReminders = entry.kind === "reminders";
@@ -1850,9 +1905,14 @@ function SidebarComponent({
                             {expanded ? (
                               <ul className="flex flex-col gap-px p-1">
                                 {entry.sessions.map((session) => (
-                                  <li key={session.id}>
+                                  <SessionListItem
+                                    key={session.id}
+                                    session={session}
+                                    cwd={cwd}
+                                    motion={sessionInsertMotion}
+                                  >
                                     {renderSessionCard(session, true)}
-                                  </li>
+                                  </SessionListItem>
                                 ))}
                               </ul>
                             ) : null}
@@ -1976,9 +2036,14 @@ function SidebarComponent({
                               <>
                                 <ul className="flex flex-col gap-px p-1">
                                   {entry.sessions.map((session) => (
-                                    <li key={session.id}>
+                                    <SessionListItem
+                                      key={session.id}
+                                      session={session}
+                                      cwd={cwd}
+                                      motion={sessionInsertMotion}
+                                    >
                                       {renderSessionCard(session, true)}
-                                    </li>
+                                    </SessionListItem>
                                   ))}
                                 </ul>
                                 {onNew ? (
@@ -2011,9 +2076,14 @@ function SidebarComponent({
                       );
                     }
                     return (
-                      <li key={entry.session.id}>
+                      <SessionListItem
+                        key={entry.session.id}
+                        session={entry.session}
+                        cwd={cwd}
+                        motion={sessionInsertMotion}
+                      >
                         {renderSessionCard(entry.session)}
-                      </li>
+                      </SessionListItem>
                     );
                   })}
                   {hasMoreSessions ? (
@@ -2181,6 +2251,8 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
           titleBarAbove={titleBarAbove}
+          monos={railMonos}
+          monoViewActive={monoViewActive}
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
@@ -2219,6 +2291,7 @@ function SidebarComponent({
           updateNotice={updateNotice}
           onOpenWhatsNew={onOpenWhatsNew}
           onDismissUpdate={onDismissUpdate}
+          monos={railMonos}
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
@@ -2421,6 +2494,8 @@ function CompactProjectRail({
   onTogglePanel,
   onLeaveActive,
   titleBarAbove,
+  monos,
+  monoViewActive = false,
 }: {
   cwd: string;
   recents: RecentProject[];
@@ -2448,7 +2523,26 @@ function CompactProjectRail({
   onTogglePanel?: () => void;
   onLeaveActive?: () => void;
   titleBarAbove: boolean;
+  /** Monos have no row here, so the project button lists them too. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area: no workspace tab is the current one. */
+  monoViewActive?: boolean;
 }) {
+  const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const pickerMonos = useMemo((): PickerMonos | undefined => {
+    if (!monos) return undefined;
+    return {
+      items: listMonos().map((mono) => ({
+        id: mono.id,
+        ...monoLook(mono),
+        status: monos.states.get(mono.id)?.status ?? "idle",
+      })),
+      activeId: monos.activeId,
+      onOpen: monos.onOpen,
+      onCreate: monos.onCreate,
+    };
+    // The roster is read through its snapshot.
+  }, [monos, monosSnap]);
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -2456,7 +2550,11 @@ function CompactProjectRail({
   const action = (active: boolean, open?: () => void) =>
     active && onLeaveActive ? onLeaveActive : open;
   const workspaceActive =
-    !searchActive && !inboxActive && !notesActive && !automationsActive;
+    !searchActive &&
+    !inboxActive &&
+    !notesActive &&
+    !automationsActive &&
+    !monoViewActive;
   const openWorkspaceTab = (nextTab: SidebarTab) => {
     if (!workspaceActive) onLeaveActive?.();
     onTabChange(nextTab);
@@ -2501,6 +2599,7 @@ function CompactProjectRail({
             onOpenProject={onOpenProject}
             onRemoveProject={onRemoveProject}
             onOpenNotificationSettings={onOpenNotificationSettings}
+            monos={pickerMonos}
           />
         ) : null}
         <div
@@ -2949,6 +3048,81 @@ function FolderRenameRow({
 }
 
 const SESSION_PREFETCH_DELAY_MS = 120;
+/** Rows created this recently slide in; older ones are just being listed. */
+const SESSION_INSERT_WINDOW_MS = 15_000;
+
+type SessionInsertMotion = { cwd: string; seen: Set<string> };
+
+/** List row that grows open when a new session lands, pushing rows below it down. */
+function SessionListItem({
+  session,
+  cwd,
+  motion,
+  children,
+}: {
+  session: SessionSummary;
+  cwd: string;
+  motion: RefObject<SessionInsertMotion>;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLLIElement>(null);
+  // Decided once per row: effects can replay (StrictMode, reordering), and a
+  // row that already slid in must not do it again.
+  const played = useRef(false);
+  useLayoutEffect(() => {
+    if (played.current) return;
+    played.current = true;
+    const state = motion.current;
+    const fresh =
+      state.cwd === cwd &&
+      !state.seen.has(session.id) &&
+      (session.createdAt === 0 ||
+        Date.now() - session.createdAt < SESSION_INSERT_WINDOW_MS);
+    state.seen.add(session.id);
+    const el = ref.current;
+    const content = el?.firstElementChild;
+    if (
+      !fresh ||
+      !el ||
+      !(content instanceof HTMLElement) ||
+      typeof el.animate !== "function" ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    // The card takes its place at once; everything below starts where it was
+    // and slides down, uncovering it as it fades in.
+    const offset =
+      el.offsetHeight +
+      (parseFloat(getComputedStyle(el.parentElement ?? el).rowGap) || 0);
+    const timing = {
+      duration: 380,
+      easing: "cubic-bezier(0.32, 0.72, 0, 1)",
+    };
+    for (
+      let node: Element | null = el;
+      node && !node.hasAttribute("data-session-list");
+      node = node.parentElement
+    ) {
+      for (
+        let below = node.nextElementSibling;
+        below;
+        below = below.nextElementSibling
+      ) {
+        if (!(below instanceof HTMLElement)) continue;
+        below.animate(
+          [{ transform: `translateY(${-offset}px)` }, { transform: "none" }],
+          // Stack with a push already in flight instead of restarting it.
+          { ...timing, composite: "add" },
+        );
+      }
+    }
+    content.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: 220,
+      easing: "ease-out",
+    });
+  }, []);
+  return <li ref={ref}>{children}</li>;
+}
 
 const SessionCard = memo(function SessionCard({
   session,
@@ -3354,9 +3528,10 @@ const SessionCard = memo(function SessionCard({
                 strokeWidth={1.75}
               />
             ) : null}
-            <span className="min-w-0 flex-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-              {title}
-            </span>
+            <ParticleText
+              text={title}
+              className="line-clamp-1 text-[13px] font-semibold leading-snug text-content"
+            />
             {compact && !orchestrationExpanded ? (
               <span className="flex shrink-0 items-center gap-1.5">
                 {linkedUpdateDot}
@@ -3593,6 +3768,44 @@ function DiffStat({
   additions: number;
   deletions: number;
 }) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+
+    const fit = () => {
+      const availableWidth = container.getBoundingClientRect().width;
+      if (availableWidth <= 0) return;
+
+      // Measure at the normal size so the text can grow again after resizing.
+      let maxFontSize = 11;
+      content.style.fontSize = `${maxFontSize}px`;
+      if (content.getBoundingClientRect().width <= availableWidth) return;
+
+      // Font metrics can change at small sizes, so check the rendered width.
+      let minFontSize = 0;
+      while (maxFontSize - minFontSize > 0.1) {
+        const fontSize = (minFontSize + maxFontSize) / 2;
+        content.style.fontSize = `${fontSize}px`;
+        if (content.getBoundingClientRect().width > availableWidth) {
+          maxFontSize = fontSize;
+        } else {
+          minFontSize = fontSize;
+        }
+      }
+      content.style.fontSize = `${minFontSize}px`;
+    };
+
+    fit();
+    // Sidebar dragging writes its width directly to the DOM, without a render.
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [additions, deletions]);
+
   if (additions <= 0 && deletions <= 0) return null;
 
   const label = [
@@ -3604,19 +3817,25 @@ function DiffStat({
 
   return (
     <span
+      ref={containerRef}
       title={`${label} uncommitted`}
-      className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums"
+      className="flex h-full w-full min-w-0 items-center justify-center overflow-hidden"
     >
-      {additions > 0 ? (
-        <span className="text-emerald-400">
-          +<TightDiffNumber value={additions} />
-        </span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">
-          -<TightDiffNumber value={deletions} />
-        </span>
-      ) : null}
+      <span
+        ref={contentRef}
+        className="flex shrink-0 items-center gap-[0.55em] whitespace-nowrap font-sans text-[11px] font-semibold tabular-nums"
+      >
+        {additions > 0 ? (
+          <span className="text-diff-add-fg">
+            +<TightDiffNumber value={additions} />
+          </span>
+        ) : null}
+        {deletions > 0 ? (
+          <span className="text-diff-del-fg">
+            -<TightDiffNumber value={deletions} />
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }
