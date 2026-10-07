@@ -710,15 +710,20 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
-  // Read before the manual-compaction filter below, which drops user records.
-  if (live.awaitingCompactSummary) {
+  // The summary is the main session's first user record after a boundary.
+  // Read it before the manual-compaction filter below, which drops user
+  // records; whatever that record is, nothing later is taken for it.
+  if (
+    live.awaitingCompactSummary &&
+    (type === "user" || type === "result") &&
+    !isSubagentMessage(rec)
+  ) {
+    live.awaitingCompactSummary = false;
     const summary = compactSummaryFromUser(rec);
     if (summary) {
-      live.awaitingCompactSummary = false;
       live.onEvent({ type: "context.summarized", summary });
       return;
     }
-    if (type === "result") live.awaitingCompactSummary = false;
   }
 
   if (live.manualCompaction && type !== "system" && type !== "result") {

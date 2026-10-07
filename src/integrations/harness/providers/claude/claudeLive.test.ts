@@ -2035,6 +2035,33 @@ describe("claude manual compaction", () => {
     ]);
   });
 
+  it("takes the summary only from the record right after the boundary", async () => {
+    const { turn, events } = await startTurn("s1");
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto" },
+    });
+    // Something else lands first; a later synthetic note is not the summary.
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] },
+    });
+    emit({
+      type: "user",
+      isSynthetic: true,
+      session_id: "sess_1",
+      message: { role: "user", content: "<task-notification>done</task-notification>" },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(events.some((event) => event.type === "context.summarized")).toBe(
+      false,
+    );
+  });
+
   it("takes only the message that follows a boundary as its summary", async () => {
     const { turn, events } = await startTurn("s1");
     // A synthetic user message with no compaction before it is not a summary.
