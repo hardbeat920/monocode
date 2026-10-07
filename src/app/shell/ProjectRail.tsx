@@ -693,6 +693,7 @@ function ProjectSectionHeader({
   );
 }
 
+/** One collapsible group in the rail; its header row is the drag handle for reordering groups. */
 function ProjectGroupSection({
   group,
   groupSortable,

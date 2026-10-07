@@ -10,6 +10,7 @@ const ids = ["sessions", "changes", "explorer"];
 
 type Row = { top: number; height: number; marginBottom?: number };
 
+/** Creates a stubbed item whose rect and margins are fixed for layout tests. */
 function tabAt(
   left: number,
   { top, height, marginBottom = 0 }: Row,

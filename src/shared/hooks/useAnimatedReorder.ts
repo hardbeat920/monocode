@@ -87,6 +87,7 @@ export function useAnimatedReorder<T extends string>(
       const gap =
         rects[1].start - rects[0].end - margins[0].after - margins[1].before;
       const origin = rects[0].start - margins[0].before;
+      /** Start position of each item when the dragged item is moved to index `to`. */
       const layout = (to: number) => {
         const starts: number[] = [];
         let position = origin;
@@ -172,6 +173,7 @@ export function useAnimatedReorder<T extends string>(
         setDraggingId(null);
       }
 
+      /** Shifts every other item to where it sits when the dragged item occupies slot `to`. */
       function preview(to: number) {
         const starts = layout(to);
         for (let index = 0; index < tabs.length; index++) {

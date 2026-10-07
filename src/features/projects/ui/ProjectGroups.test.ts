@@ -49,6 +49,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Renders the project rail with the mocked project groups. */
 async function renderRail(
   visible = true,
   recents = [
@@ -233,6 +234,7 @@ describe("dragging groups of different heights", () => {
   // contract: groups stack in a `gap-px` column and expanded groups add
   // `mb-1.5`. Heights and margins come from the rendered markup, so a change
   // to either side of that contract shows up here.
+  /** Stubs measured rects so groups stack with their expanded/collapsed heights. */
   function layoutGroups() {
     const groups = [
       ...container.querySelectorAll<HTMLElement>("[data-project-group]"),
@@ -260,12 +262,14 @@ describe("dragging groups of different heights", () => {
     return groups;
   }
 
+  /** The group element for `id`. */
   function group(id: string) {
     return container.querySelector<HTMLElement>(
       `[data-project-group="${id}"]`,
     )!;
   }
 
+  /** Current translateY, in pixels, of the group element for `id`. */
   function translateY(id: string) {
     const match = /translate3d\(0, (-?[\d.]+)px, 0\)/.exec(
       group(id).style.transform,
@@ -273,6 +277,7 @@ describe("dragging groups of different heights", () => {
     return match ? Number(match[1]) : 0;
   }
 
+  /** Dispatches a pointer event at vertical position `clientY`. */
   function pointer(target: EventTarget, type: string, clientY: number) {
     act(() => {
       target.dispatchEvent(
@@ -337,6 +342,7 @@ describe("dragging groups of different heights", () => {
     vi.restoreAllMocks();
   });
 
+  /** Presses the group header of `id` and moves it `by` pixels; returns the pointer position. */
   function drag(id: string, by: number) {
     const start = tops.get(id)! + 16;
     pointer(group(id).firstElementChild!, "pointerdown", start);
