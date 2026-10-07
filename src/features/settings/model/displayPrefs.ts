@@ -5,7 +5,7 @@ const SHOW_REMAINING_USAGE_KEY = "monocode.showRemainingUsage";
 const MASK_EMAILS_KEY = "monocode.maskEmails";
 
 export const SHOW_REMAINING_USAGE_DEFAULT = false;
-export const MASK_EMAILS_DEFAULT = false;
+export const MASK_EMAILS_DEFAULT = true;
 
 /** Fired on `window` whenever the usage meter direction flips (detail: boolean). */
 export const SHOW_REMAINING_USAGE_CHANGE_EVENT =

@@ -48,6 +48,7 @@ export function ProjectTerminalDock({
     <DockPanel
       dock={dock}
       name="Terminal"
+      marker="data-project-terminal-dock"
       tabsLabel="Terminals"
       addLabel={`New Terminal (${MOD}\`)`}
       hideLabel={`Hide Terminal (${MOD}J)`}

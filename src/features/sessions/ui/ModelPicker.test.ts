@@ -688,76 +688,115 @@ describe("model picker", () => {
     expect(serviceTierPill.querySelectorAll("svg")).toHaveLength(2);
   });
 
-  it("shimmers only Codex max and ultra effort options", () => {
-    setHarnessModels("codex", [
-      {
-        id: "codex:gpt-5.6",
-        harness: "codex",
-        name: "GPT-5.6",
-        nativeId: "gpt-5.6",
-        settings: [
-          {
-            id: "reasoningEffort",
-            label: "Reasoning",
-            kind: "select",
-            value: "high",
-            options: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-              { value: "max", label: "Max" },
-              { value: "ultra", label: "Ultra" },
-            ],
-          },
-        ],
-      },
-    ]);
+  it.each([
+    {
+      harness: "codex" as const,
+      modelId: "codex:gpt-5.6",
+      settingId: "reasoningEffort",
+      settingLabel: "Reasoning",
+      values: { reasoningEffort: "high" },
+    },
+    {
+      harness: "opencode" as const,
+      modelId: "opencode:spark/spark-1",
+      settingId: "variant",
+      settingLabel: "Variant",
+      values: { variant: "high" },
+    },
+    {
+      harness: "claude" as const,
+      modelId: "claude:opus",
+      settingId: "effort",
+      settingLabel: "Effort",
+      values: { effort: "high" },
+    },
+    {
+      harness: "cursor" as const,
+      modelId: "cursor:gpt-5",
+      settingId: "effort",
+      settingLabel: "Effort",
+      values: { effort: "high" },
+    },
+  ])(
+    "shimmers max and ultra effort options for $harness",
+    ({ harness, modelId, settingId, settingLabel, values }) => {
+      const effortOptions = [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+        { value: "max", label: "Max" },
+        { value: "ultra", label: "Ultra" },
+      ];
+      setHarnessModels(harness, [
+        {
+          id: modelId,
+          harness,
+          name: "Test model",
+          nativeId: modelId.split(":")[1] ?? modelId,
+          settings: [
+            {
+              id: settingId,
+              label: settingLabel,
+              kind: "select",
+              value: "high",
+              options: effortOptions,
+            },
+          ],
+        },
+      ]);
 
-    act(() =>
-      root.render(
-        createElement(ModelPicker, {
-          harness: "codex",
-          model: "codex:gpt-5.6",
-          values: { reasoningEffort: "high" },
-          onChange: vi.fn(),
-          onSettingsChange: vi.fn(),
-        }),
-      ),
-    );
+      act(() =>
+        root.render(
+          createElement(ModelPicker, {
+            harness,
+            model: modelId,
+            values,
+            onChange: vi.fn(),
+            onSettingsChange: vi.fn(),
+          }),
+        ),
+      );
 
-    act(() =>
-      container
-        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
-        ?.click(),
-    );
-    const effortRow = [
-      ...container.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent?.startsWith("Reasoning"))!;
-    hover(effortRow);
+      act(() =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
+          ?.click(),
+      );
+      const effortRow = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) =>
+        button.textContent?.startsWith(settingLabel),
+      )!;
+      hover(effortRow);
 
-    expect(container.querySelectorAll('[data-effort-tone="max"]')).toHaveLength(
-      1,
-    );
-    expect(
-      container.querySelectorAll('[data-effort-tone="ultra"]'),
-    ).toHaveLength(1);
-    expect(
-      container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
-    ).not.toBeNull();
-    expect(
-      container.querySelectorAll('[data-effort-tone="max"] .codex-effort-tile'),
-    ).toHaveLength(160);
-    const filledTiles = container.querySelectorAll(
-      '[data-effort-tone="max"] .codex-effort-tile--filled',
-    );
-    expect(filledTiles.length).toBeGreaterThanOrEqual(96);
-    expect(filledTiles.length).toBeLessThanOrEqual(112);
-    const high = [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitemradio"]',
-      ),
-    ].find((button) => button.textContent === "High")!;
-    expect(high.classList.contains("codex-effort-option")).toBe(false);
-  });
+      expect(
+        container.querySelectorAll('[data-effort-tone="max"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelectorAll('[data-effort-tone="ultra"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
+      ).not.toBeNull();
+      if (harness === "codex") {
+        expect(
+          container.querySelectorAll(
+            '[data-effort-tone="max"] .codex-effort-tile',
+          ),
+        ).toHaveLength(160);
+        const filledTiles = container.querySelectorAll(
+          '[data-effort-tone="max"] .codex-effort-tile--filled',
+        );
+        expect(filledTiles.length).toBeGreaterThanOrEqual(96);
+        expect(filledTiles.length).toBeLessThanOrEqual(112);
+      }
+      const high = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitemradio"]',
+        ),
+      ].find((button) => button.textContent === "High")!;
+      expect(high.classList.contains("codex-effort-option")).toBe(false);
+    },
+  );
 
   it("groups the service tier inside the effort popover", () => {
     setHarnessModels("codex", [

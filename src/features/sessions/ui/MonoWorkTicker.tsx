@@ -15,7 +15,13 @@ const TICK_MS = 340;
 const HOLD_MS = 850;
 
 /** One fixed-height line: the new status pushes the previous one upward. */
-export function MonoWorkTicker({ status }: { status: MonoWorkStatus }) {
+export function MonoWorkTicker({
+  status,
+  showIcon = true,
+}: {
+  status: MonoWorkStatus;
+  showIcon?: boolean;
+}) {
   const [frame, setFrame] = useState(() => ({
     current: status,
     previous: null as MonoWorkStatus | null,
@@ -81,14 +87,22 @@ export function MonoWorkTicker({ status }: { status: MonoWorkStatus }) {
         data-moving={!!frame.previous}
         aria-hidden="true"
       >
-        {frame.previous ? <StatusRow status={frame.previous} /> : null}
-        <StatusRow status={frame.current} />
+        {frame.previous ? (
+          <StatusRow status={frame.previous} showIcon={showIcon} />
+        ) : null}
+        <StatusRow status={frame.current} showIcon={showIcon} />
       </div>
     </div>
   );
 }
 
-function StatusRow({ status }: { status: MonoWorkStatus }) {
+function StatusRow({
+  status,
+  showIcon,
+}: {
+  status: MonoWorkStatus;
+  showIcon: boolean;
+}) {
   const Icon = {
     run: Terminal,
     edit: PenLine,
@@ -100,10 +114,12 @@ function StatusRow({ status }: { status: MonoWorkStatus }) {
   }[status.kind];
   return (
     <div className="mono-work-ticker-row flex min-w-0 items-center gap-1.5">
-      <Icon
-        className="size-3.5 shrink-0 text-content/45 transition-colors duration-200 group-hover/mono-work:text-content/80"
-        strokeWidth={1.75}
-      />
+      {showIcon ? (
+        <Icon
+          className="size-3.5 shrink-0 text-content/45 transition-colors duration-200 group-hover/mono-work:text-content/80"
+          strokeWidth={1.75}
+        />
+      ) : null}
       {status.active ? (
         <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1.6}>
           {status.label}

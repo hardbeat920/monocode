@@ -41,6 +41,8 @@ type Props = {
    * covers the DOM, so a sash that overlaps it could not be grabbed there.
    */
   sashOutside?: boolean;
+  /** A `data-` attribute set on the dock's root, so callers can find it in the DOM. */
+  marker?: `data-${string}`;
   onFocus?: () => void;
   onHide: () => void;
   onSideChange: (side: DockSide) => void;
@@ -100,6 +102,7 @@ export function DockPanel({
   hideLabel,
   defaultSize,
   sashOutside = false,
+  marker,
   onFocus,
   onHide,
   onSideChange,
@@ -209,7 +212,9 @@ export function DockPanel({
               ? "border-r"
               : "border-l"
       } border-stroke`}
+      {...(marker ? { [marker]: "" } : {})}
       onMouseDown={onFocus}
+      onFocus={onFocus}
     >
       <div
         role="separator"
