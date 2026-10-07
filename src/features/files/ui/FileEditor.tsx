@@ -602,6 +602,7 @@ export function CodeMirrorEditor({
   const canStage = onStageGit !== undefined;
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
+  const symbolSearchTokenRef = useRef(0);
   const navigationTokenRef = useRef<number | undefined>(undefined);
   const pendingNavigationRef = useRef<EditorNavigationRequest | null>(null);
   const gitOriginalRef = useRef(gitOriginal);
@@ -646,6 +647,7 @@ export function CodeMirrorEditor({
         view.state.selection.main.head,
       );
       if (!symbol) return false;
+      const token = ++symbolSearchTokenRef.current;
       try {
         const result = await searchProject({
           cwd,
@@ -653,6 +655,7 @@ export function CodeMirrorEditor({
           wholeWord: true,
           searchId: crypto.randomUUID(),
         });
+        if (token !== symbolSearchTokenRef.current) return true;
         if (mode === "definition") {
           const definition = definitionFor(symbol.name, result.matches);
           if (definition) onOpenFile?.(definition.path, definition);
@@ -670,13 +673,15 @@ export function CodeMirrorEditor({
               ? result.matches.filter(
                   (match) =>
                     match.path !== definition.path ||
-                    match.line !== definition.line,
+                    match.line !== definition.line ||
+                    match.column !== definition.column,
                 )
               : result.matches,
             error: null,
           });
         }
       } catch (error) {
+        if (token !== symbolSearchTokenRef.current) return true;
         setReferences({
           symbol: symbol.name,
           matches: [],

@@ -33,4 +33,44 @@ describe("editor symbol navigation", () => {
     ]);
     expect(definition).toMatchObject({ path: "/repo/b.ts", line: 12 });
   });
+
+  it("does not match an identifier prefix that ends in a dollar sign", () => {
+    const definition = definitionFor("foo", [
+      {
+        path: "/repo/a.ts",
+        relative: "a.ts",
+        line: 1,
+        column: 1,
+        preview: "function foo$() {}",
+      },
+      {
+        path: "/repo/b.ts",
+        relative: "b.ts",
+        line: 2,
+        column: 1,
+        preview: "function foo() {}",
+      },
+    ]);
+    expect(definition).toMatchObject({ path: "/repo/b.ts", line: 2 });
+  });
+
+  it("does not treat commented declarations as definitions", () => {
+    const definition = definitionFor("foo", [
+      {
+        path: "/repo/a.ts",
+        relative: "a.ts",
+        line: 1,
+        column: 4,
+        preview: "// function foo() {}",
+      },
+      {
+        path: "/repo/b.ts",
+        relative: "b.ts",
+        line: 2,
+        column: 1,
+        preview: "function foo() {}",
+      },
+    ]);
+    expect(definition).toMatchObject({ path: "/repo/b.ts", line: 2 });
+  });
 });

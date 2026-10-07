@@ -21,12 +21,29 @@ export function definitionFor(
   matches: readonly ProjectSearchMatch[],
 ): ProjectSearchMatch | null {
   const escaped = escapeRegex(name);
+  const identifierEnd = String.raw`(?=$|[^A-Za-z0-9_$])`;
   const declaration = new RegExp(
-    String.raw`(?:^|\s)(?:export\s+)?(?:async\s+)?(?:function|fn|def|func|class|interface|type|struct|enum)\s+${escaped}\b|(?:^|\s)(?:const|let|var|val)\s+${escaped}\s*=|\b${escaped}\s*\([^)]*\)\s*(?::[^=]+)?(?:=>|\{)`,
+    String.raw`(?:^|\s)(?:export\s+)?(?:async\s+)?(?:function|fn|def|func|class|interface|type|struct|enum)\s+${escaped}${identifierEnd}|(?:^|\s)(?:const|let|var|val)\s+${escaped}${identifierEnd}\s*=|\b${escaped}${identifierEnd}\s*\([^)]*\)\s*(?::[^=]+)?(?:=>|\{)`,
   );
-  return matches.find((match) => declaration.test(match.preview)) ?? null;
+  return (
+    matches.find((match) => {
+      const declarationMatch = declaration.exec(match.preview);
+      return (
+        declarationMatch &&
+        !isCommentedOut(match.preview, declarationMatch.index)
+      );
+    }) ?? null
+  );
 }
 
+/** Escapes a symbol before it is embedded in a declaration-matching regex. */
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Rejects declarations whose matched text begins within a line comment or block comment. */
+function isCommentedOut(line: string, index: number): boolean {
+  const prefix = line.slice(0, index);
+  if (prefix.includes("//") || prefix.includes("#")) return true;
+  return prefix.lastIndexOf("/*") > prefix.lastIndexOf("*/");
 }
