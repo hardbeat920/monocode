@@ -2,7 +2,7 @@
 //! Requests remain queued until that workspace is ready; only its owner can
 //! publish or acknowledge them. Closing either view never stops the runtime.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
@@ -24,6 +24,8 @@ const TRAY: &str = "mono-menu-bar";
 const SELECT: &str = "mono-chat:";
 const CHANGED: &str = "mono_chat_changed";
 const REQUEST: &str = "mono_chat_request";
+/// A 464pt conversation plus the 56pt Mono rail beside it.
+const WIDTH: f64 = 520.0;
 
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -49,9 +51,6 @@ pub struct View {
     mono_id: Option<String>,
     session: Option<Value>,
     error: Option<String>,
-    /// Only present a newly created webview once its loading UI has mounted.
-    #[serde(skip)]
-    renderer_ready: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -76,11 +75,24 @@ struct Inner {
     views: HashMap<String, View>,
     hosts: HashMap<String, Vec<HostedMono>>,
     owners: HashMap<String, String>,
+    /// Floating windows switched by their rail to a Mono other than their own.
+    shown: HashMap<String, String>,
+    /// Floating windows whose loading UI has mounted, so they may be shown.
+    ready: HashSet<String>,
     pending: VecDeque<Pending>,
     counter: u32,
 }
 
 impl Inner {
+    /// The Mono a floating window shows; it starts as the one it was built for.
+    fn shown<'a>(&'a self, label: &'a str) -> Option<&'a str> {
+        self.shown.get(label).map(String::as_str).or_else(|| {
+            label
+                .strip_prefix(MONO_CHAT_PREFIX)
+                .filter(|id| !id.is_empty())
+        })
+    }
+
     fn view(&mut self, mono_id: &str) -> &mut View {
         self.views
             .entry(mono_id.to_owned())
@@ -166,8 +178,8 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
             let id = event.id().as_ref();
             if let Some(mono_id) = id.strip_prefix(SELECT) {
                 let _ = open(app, mono_id.to_owned());
-            } else if id == "mono-chat-show" {
-                let _ = crate::window::show_hidden_or_open_new(app);
+            } else if id == "mono-chat-composer" {
+                crate::quick_composer::open(app);
             } else if id == "mono-chat-quit" {
                 crate::window::request_quit(app);
             }
@@ -175,6 +187,40 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     tray = tray.icon(menu_bar_icon().map_err(std::io::Error::other)?);
     let tray = tray.build(app)?;
     menu_bar::decorate(&tray)?;
+    // Read natively so a hidden icon never flashes in before a window loads.
+    if menu_bar_hidden_marker(app).is_some_and(|marker| marker.exists()) {
+        tray.set_visible(false)?;
+    }
+    Ok(())
+}
+
+fn menu_bar_hidden_marker(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("menu-bar-icon-hidden"))
+}
+
+/// Show or hide the menu bar icon, remembering the choice for next launch.
+#[tauri::command]
+pub fn mono_menu_bar_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    let marker = menu_bar_hidden_marker(&app).ok_or("No app data directory.")?;
+    if visible {
+        match std::fs::remove_file(&marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(error.to_string())
+            }
+            _ => {}
+        }
+    } else {
+        if let Some(dir) = marker.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&marker, b"").map_err(|e| e.to_string())?;
+    }
+    if let Some(tray) = app.tray_by_id(TRAY) {
+        tray.set_visible(visible).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -246,13 +292,31 @@ fn menu(
             builder = builder.item(&item);
         }
     }
-    let show = MenuItemBuilder::with_id("mono-chat-show", "Open MonoCode").build(app)?;
-    let quit = MenuItemBuilder::with_id("mono-chat-quit", "Quit MonoCode").build(app)?;
-    builder.separator().items(&[&show, &quit]).build()
+    for action in &menu_bar::ACTIONS {
+        builder = builder
+            .separator()
+            .item(&MenuItemBuilder::with_id(action.id, action.title).build(app)?);
+    }
+    builder.build()
 }
 
 fn label(mono_id: &str) -> String {
     format!("{MONO_CHAT_PREFIX}{mono_id}")
+}
+
+/// Every floating window currently showing this Mono.
+fn panels(app: &AppHandle, mono_id: &str) -> Vec<WebviewWindow> {
+    let windows: Vec<_> = app
+        .webview_windows()
+        .into_values()
+        .filter(|w| w.label().starts_with(MONO_CHAT_PREFIX))
+        .collect();
+    let state = app.state::<MonoChatState>();
+    let inner = state.0.lock().unwrap();
+    windows
+        .into_iter()
+        .filter(|w| inner.shown(w.label()) == Some(mono_id))
+        .collect()
 }
 
 fn changed(app: &AppHandle, mono_id: &str) {
@@ -265,7 +329,13 @@ fn changed(app: &AppHandle, mono_id: &str) {
         .get(mono_id)
         .cloned();
     if let Some(view) = view {
-        let _ = app.emit_to(EventTarget::webview_window(label(mono_id)), CHANGED, view);
+        for panel in panels(app, mono_id) {
+            let _ = app.emit_to(
+                EventTarget::webview_window(panel.label()),
+                CHANGED,
+                view.clone(),
+            );
+        }
     }
 }
 
@@ -277,11 +347,13 @@ fn workspace(window: &WebviewWindow) -> Result<(), String> {
     }
 }
 
-fn panel(window: &WebviewWindow) -> Result<&str, String> {
-    window
-        .label()
-        .strip_prefix(MONO_CHAT_PREFIX)
-        .filter(|id| !id.is_empty())
+fn panel(app: &AppHandle, window: &WebviewWindow) -> Result<String, String> {
+    app.state::<MonoChatState>()
+        .0
+        .lock()
+        .unwrap()
+        .shown(window.label())
+        .map(str::to_owned)
         .ok_or_else(|| "This action belongs to the floating chat.".into())
 }
 
@@ -414,16 +486,25 @@ pub fn open(app: &AppHandle, mono_id: String) -> Result<(), String> {
 
 fn select(app: &AppHandle, mono_id: &str) -> Result<(), String> {
     let owner = owner(app, mono_id)?;
-    let window = match app.get_webview_window(&label(mono_id)) {
+    let mut showing = panels(app, mono_id);
+    showing.sort_by_key(|w| !w.is_visible().unwrap_or(false));
+    // A window switched away still answers for the Mono it was built for.
+    let window = match showing
+        .into_iter()
+        .next()
+        .or_else(|| app.get_webview_window(&label(mono_id)))
+    {
         Some(window) => window,
         None => build(app, mono_id).map_err(|e| e.to_string())?,
     };
     let renderer_ready = {
         let state = app.state::<MonoChatState>();
         let mut inner = state.0.lock().unwrap();
-        let view = inner.view(mono_id);
-        view.error = None;
-        let renderer_ready = view.renderer_ready;
+        inner
+            .shown
+            .insert(window.label().to_owned(), mono_id.to_owned());
+        let renderer_ready = inner.ready.contains(window.label());
+        inner.view(mono_id).error = None;
         inner.enqueue(
             owner.clone(),
             mono_id.to_owned(),
@@ -438,6 +519,60 @@ fn select(app: &AppHandle, mono_id: &str) -> Result<(), String> {
     }
     let _ = app.emit_to(EventTarget::webview_window(owner), REQUEST, ());
     Ok(())
+}
+
+/// Point a floating window at another Mono. The window stays put; only its
+/// conversation changes, and a Mono opened before shows its last snapshot.
+fn switch(app: &AppHandle, window: &WebviewWindow, to: &str) -> Result<(), String> {
+    let owner = owner(app, to)?;
+    {
+        let state = app.state::<MonoChatState>();
+        let mut inner = state.0.lock().unwrap();
+        inner.shown.insert(window.label().to_owned(), to.to_owned());
+        inner.view(to).error = None;
+        inner.enqueue(owner.clone(), to.to_owned(), json!({"kind": "open"}), None);
+    }
+    changed(app, to);
+    let _ = app.emit_to(EventTarget::webview_window(owner), REQUEST, ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn mono_chat_switch(
+    app: AppHandle,
+    window: WebviewWindow,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let target = if is_workspace_window(window.label()) {
+        // A Mono added from a floating chat: switch the window that asked.
+        let mut showing = panels(&app, &from);
+        showing.sort_by_key(|w| !w.is_visible().unwrap_or(false));
+        showing.into_iter().next()
+    } else if panel(&app, &window)? == from {
+        Some(window)
+    } else {
+        return Err("This action belongs to a different Mono.".into());
+    };
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = match &target {
+            Some(window) => switch(&handle, window, &to),
+            None => select(&handle, &to),
+        };
+        if let Err(error) = result {
+            eprintln!("monocode: switch floating Mono: {error}");
+            handle
+                .state::<MonoChatState>()
+                .0
+                .lock()
+                .unwrap()
+                .view(&from)
+                .error = Some(error);
+            changed(&handle, &from);
+        }
+    })
+    .map_err(|e| e.to_string())
 }
 
 fn present(window: &WebviewWindow) -> Result<(), String> {
@@ -466,8 +601,8 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
         WebviewUrl::App("mono-chat.html".into()),
     )
     .title("Mono chat")
-    .inner_size(390.0, height)
-    .min_inner_size(320.0, 420.0)
+    .inner_size(WIDTH, height)
+    .min_inner_size(370.0, 420.0)
     .resizable(true)
     .maximizable(false)
     .minimizable(false)
@@ -497,7 +632,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
     }
     if let Some(monitor) = monitor {
         let area = monitor.work_area();
-        let width = (390.0 * monitor.scale_factor()) as i32;
+        let width = (WIDTH * monitor.scale_factor()) as i32;
         let margin = (12.0 * monitor.scale_factor()) as i32;
         let count = app
             .webview_windows()
@@ -535,7 +670,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
 
 #[tauri::command]
 pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
-    let id = panel(&window)?.to_owned();
+    panel(&app, &window)?;
     let (tx, mut rx) = tauri::async_runtime::channel(1);
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -544,8 +679,8 @@ pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<()
             .0
             .lock()
             .unwrap()
-            .view(&id)
-            .renderer_ready;
+            .ready
+            .contains(window.label());
         let result = if already_ready {
             Ok(())
         } else {
@@ -557,8 +692,8 @@ pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<()
                 .0
                 .lock()
                 .unwrap()
-                .view(&id)
-                .renderer_ready = true;
+                .ready
+                .insert(window.label().to_owned());
         } else if let Err(error) = &result {
             eprintln!("monocode: {error}");
         }
@@ -572,13 +707,13 @@ pub async fn mono_chat_ready(app: AppHandle, window: WebviewWindow) -> Result<()
 
 #[tauri::command]
 pub fn mono_chat_state(app: AppHandle, window: WebviewWindow) -> Result<View, String> {
-    let id = panel(&window)?;
+    let id = panel(&app, &window)?;
     Ok(app
         .state::<MonoChatState>()
         .0
         .lock()
         .unwrap()
-        .view(id)
+        .view(&id)
         .clone())
 }
 
@@ -653,13 +788,13 @@ pub fn mono_chat_reply(
         let reveal = result.is_ok()
             && matches!(
                 request.action.get("kind").and_then(Value::as_str),
-                Some("reveal" | "openFile")
+                Some("reveal" | "openFile" | "openArtifact")
             );
         inner.finish(id, window.label(), result);
         (request.mono_id, reveal)
     };
     if reveal {
-        if let Some(panel) = app.get_webview_window(&label(&mono_id)) {
+        for panel in panels(&app, &mono_id) {
             let _ = panel.hide();
         }
         let _ = window.unminimize();
@@ -677,7 +812,7 @@ pub async fn mono_chat_action(
     mono_id: String,
     action: Value,
 ) -> Result<(), String> {
-    if panel(&window)? != mono_id {
+    if panel(&app, &window)? != mono_id {
         return Err("This action belongs to a different Mono.".into());
     }
     let kind = action
@@ -687,12 +822,14 @@ pub async fn mono_chat_action(
     if !matches!(
         kind,
         "submit"
+            | "create"
             | "stop"
             | "approval"
             | "question"
             | "questionInteraction"
             | "reveal"
             | "openFile"
+            | "openArtifact"
             | "resume"
     ) {
         return Err("Unknown chat action.".into());
@@ -754,10 +891,12 @@ pub fn mono_chat_keep_alive(app: AppHandle, window: WebviewWindow) -> bool {
 pub fn window_closed(app: &AppHandle, label: &str) {
     let state = app.state::<MonoChatState>();
     let mut inner = state.0.lock().unwrap();
-    if let Some(id) = label.strip_prefix(MONO_CHAT_PREFIX) {
-        inner.views.remove(id);
-        inner.owners.remove(id);
+    if let Some(id) = inner.shown(label).map(str::to_owned) {
+        inner.views.remove(&id);
+        inner.owners.remove(&id);
     }
+    inner.shown.remove(label);
+    inner.ready.remove(label);
     inner.hosts.remove(label);
     inner.owners.retain(|_, owner| owner != label);
     let ids: Vec<_> = inner
@@ -798,6 +937,16 @@ mod tests {
             .0
             .iter()
             .any(|pixel| pixel[3] == 0));
+    }
+
+    #[test]
+    fn a_floating_window_shows_its_own_mono_until_the_rail_switches_it() {
+        let mut inner = Inner::default();
+        let window = label("first");
+        assert_eq!(inner.shown(&window), Some("first"));
+        assert_eq!(inner.shown("main"), None);
+        inner.shown.insert(window.clone(), "second".into());
+        assert_eq!(inner.shown(&window), Some("second"));
     }
 
     #[test]
