@@ -107,3 +107,10 @@ it("drops the previous account's models when the new account finds none", async 
   });
   expect(hasLiveCatalog("claude")).toBe(false);
 });
+
+it("keeps the current account's models when its own refresh fails", async () => {
+  await refreshHarnessCatalogs(["claude"], { cwd: "/audit-project" });
+  fixture.fail = true;
+  await refreshHarnessCatalogs(["claude"], { cwd: "/audit-project" });
+  expect(hasLiveCatalog("claude")).toBe(true);
+});

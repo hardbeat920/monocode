@@ -224,6 +224,8 @@ type CatalogScope = {
 };
 const inflight = new Map<string, Promise<void>>();
 let catalogGeneration = 0;
+/** Scope key of the refresh that produced the current Claude overlay. */
+let publishedKey: string | null = null;
 
 export function refreshClaudeCatalog(scope: CatalogScope = {}): Promise<void> {
   const key = JSON.stringify([
@@ -243,9 +245,15 @@ export function refreshClaudeCatalog(scope: CatalogScope = {}): Promise<void> {
     })
     .then((models) => {
       if (generation !== catalogGeneration) return;
-      // An empty result must not leave the previous account's models listed.
-      if (models.length > 0) setHarnessModels("claude", models);
-      else clearHarnessModels("claude");
+      if (models.length > 0) {
+        setHarnessModels("claude", models);
+        publishedKey = key;
+      } else if (publishedKey !== key) {
+        // A failed refresh keeps its own scope's list, but must not leave
+        // another account's or folder's models listed.
+        clearHarnessModels("claude");
+        publishedKey = null;
+      }
     })
     .finally(() => {
       if (inflight.get(key) === run) inflight.delete(key);
