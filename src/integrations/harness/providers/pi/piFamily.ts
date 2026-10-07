@@ -44,6 +44,7 @@ import {
   providerSessionIdFromState,
   sessionFromState,
   statusFromPiEvent,
+  compactionEventFromPiEvent,
   stringField,
   summarizeToolRequest,
   toolCallDeltaFromEvent,
@@ -261,7 +262,13 @@ export async function compactContext(
   }
   if (state.cancelledThreads.delete(input.sessionId)) return;
 
-  live.onEvent = input.onEvent;
+  // Pi streams compaction_end for a manual pass too, but older builds only
+  // answer the RPC; mark the boundary from the result if no event did.
+  let marked = false;
+  live.onEvent = (event) => {
+    if (event.type === "context.compacted") marked = true;
+    input.onEvent(event);
+  };
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
@@ -272,6 +279,16 @@ export async function compactContext(
         COMPACT_TIMEOUT_MS,
       );
       const data = asRecord(response.data);
+      const boundary =
+        data &&
+        compactionEventFromPiEvent({
+          type: "compaction_end",
+          reason: "manual",
+          result: data,
+        });
+      if (!marked && boundary?.type === "context.compacted") {
+        live.onEvent(boundary);
+      }
       const used = data?.estimatedTokensAfter;
       if (typeof used === "number" && Number.isFinite(used) && used > 0) {
         live.onEvent({
@@ -857,6 +874,8 @@ function handleFrame(
   if (type === "auto_retry_start") live.retrying = true;
   if (type === "auto_retry_end") live.retrying = false;
 
+  const compaction = compactionEventFromPiEvent(rec);
+  if (compaction) live.onEvent(compaction);
   const status = statusFromPiEvent(rec);
   if (status) live.onEvent({ type: "status", text: status });
 

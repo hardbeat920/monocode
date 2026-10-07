@@ -1961,6 +1961,70 @@ describe("codex live turn sequence", () => {
     expect(settled).toBe(true);
   });
 
+  it("marks a compaction it asked for as manual", async () => {
+    const { turn } = await startTurn("codex-live");
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactCodexContext({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () =>
+        parse().some((message) => message.method === "thread/compact/start"),
+      "thread/compact/start",
+    );
+    const request = parse().find(
+      (message) => message.method === "thread/compact/start",
+    )!;
+    reply(request.id as number, {});
+    notify("turn/started", {
+      turn: { id: "compact_1", status: "inProgress" },
+    });
+    notify("item/completed", {
+      threadId: "thr_1",
+      turnId: "compact_1",
+      item: { id: "cc_1", type: "contextCompaction" },
+    });
+    notify("turn/completed", {
+      turn: { id: "compact_1", status: "completed" },
+    });
+    await compact;
+
+    expect(
+      events.filter((event) => event.type === "context.compacted"),
+    ).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "user-messages" },
+    ]);
+  });
+
+  it("marks a compaction Codex started mid-turn as automatic", async () => {
+    const { turn, events } = await startTurn("codex-live");
+    notify("item/completed", {
+      threadId: "thr_1",
+      turnId: "turn_1",
+      item: { id: "cc_1", type: "contextCompaction" },
+    });
+    notify("turn/completed", {
+      turn: { id: "turn_1", status: "completed" },
+    });
+    await turn;
+
+    expect(
+      events.filter((event) => event.type === "context.compacted"),
+    ).toEqual([
+      { type: "context.compacted", trigger: "auto", kept: "user-messages" },
+    ]);
+  });
+
   it("reverts before the latest user turn after compaction", async () => {
     const { turn } = await startTurn("codex-live");
     notify("turn/completed", {

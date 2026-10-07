@@ -11,6 +11,10 @@ import {
 } from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
 import {
+  COMPACTING_TEXT,
+  COMPACTION_STATUS_KEY,
+} from "../../../../features/sessions/model/contextBoundary";
+import {
   isTaskListToolName,
   normalizeTaskListStatus,
   taskListFromToolInput,
@@ -466,15 +470,50 @@ export function statusTextFromSystem(
 ): string | undefined {
   if (stringField(rec, "type") !== "system") return undefined;
   const subtype = stringField(rec, "subtype") ?? "";
-  const compact = subtype.startsWith("compact");
-  if (subtype !== "status" && !compact) return undefined;
+  // The boundary gets its own row; see `compactionEventFromSystem`.
+  if (subtype === "compact_boundary") return undefined;
+  if (subtype !== "status" && !subtype.startsWith("compact")) return undefined;
   // Prose lives in `message`; `status` carries the bare lifecycle token.
   const text = (stringField(rec, "message") ?? "").trim();
   const notable =
     text && !LIFECYCLE_STATUSES.has(text.toLowerCase().replace(/[\s.…]+$/, ""));
-  if (notable) return text;
-  // Compaction is worth one row even when the CLI sends no prose with it.
-  return compact ? "Compacted context" : undefined;
+  return notable ? text : undefined;
+}
+
+/**
+ * Compaction as Claude Code streams it: `status: "compacting"` while it runs,
+ * then a `compact_boundary`. The stream writes its metadata in snake_case and
+ * the session file in camelCase, so both are read. A preserved segment means
+ * Claude kept a recent tail alongside its summary.
+ */
+export function compactionEventFromSystem(
+  rec: Record<string, unknown>,
+): HarnessEvent | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  const subtype = stringField(rec, "subtype");
+  if (subtype === "status") {
+    return stringField(rec, "status") === "compacting"
+      ? { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT }
+      : undefined;
+  }
+  if (subtype !== "compact_boundary") return undefined;
+  const meta = asRecord(rec.compact_metadata) ?? asRecord(rec.compactMetadata);
+  if (!meta) return { type: "context.compacted", trigger: "auto", kept: "unknown" };
+  const read = (snake: string, camel: string) => meta[snake] ?? meta[camel];
+  const tokens = (snake: string, camel: string) => {
+    const value = read(snake, camel);
+    return typeof value === "number" && value > 0 ? value : undefined;
+  };
+  const preserved = read("preserved_segment", "preservedSegment");
+  const preTokens = tokens("pre_tokens", "preTokens");
+  const postTokens = tokens("post_tokens", "postTokens");
+  return {
+    type: "context.compacted",
+    trigger: stringField(meta, "trigger") === "manual" ? "manual" : "auto",
+    kept: preserved != null ? "recent" : "none",
+    ...(preTokens != null ? { preTokens } : {}),
+    ...(postTokens != null ? { postTokens } : {}),
+  };
 }
 
 export function turnStatusFromResult(rec: Record<string, unknown>): {

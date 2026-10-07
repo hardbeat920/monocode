@@ -309,6 +309,23 @@ export type TurnMetrics = {
   cacheHitPercent?: number;
 };
 
+/**
+ * What the agent still holds from before a context boundary. Harnesses differ:
+ * some keep only their summary, Codex keeps your recent prompts word for word,
+ * others keep a recent tail we cannot yet map onto transcript blocks.
+ */
+export type ContextKept = "none" | "user-messages" | "recent" | "unknown";
+
+/** Where the harness compacted its context; earlier blocks may be gone from it. */
+export type ContextBoundaryMeta = {
+  kind: "compaction";
+  trigger: "manual" | "auto";
+  at: number;
+  kept: ContextKept;
+  preTokens?: number;
+  postTokens?: number;
+};
+
 export type Block = {
   id: string;
   role: BlockRole;
@@ -382,6 +399,8 @@ export type Block = {
    */
   notice?: "error" | "interrupt";
   statusKey?: string;
+  /** A context boundary row; system blocks only. */
+  contextBoundary?: ContextBoundaryMeta;
   /** Posted to a Mono's chat by one of its habits, outside any turn. */
   monoHabit?: { id: string; name: string; at: number };
   /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */

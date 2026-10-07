@@ -8,6 +8,11 @@ import { isTaskListToolName } from "../../../../features/sessions/model/taskList
 import type { PiFlavor } from "./piFlavor";
 import { extractToolPreview, titleFromToolInput } from "../../core/preview";
 import { streamTextDelta } from "../../core/streamText";
+import type { HarnessEvent } from "../../core/types";
+import {
+  COMPACTING_TEXT,
+  COMPACTION_STATUS_KEY,
+} from "../../../../features/sessions/model/contextBoundary";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
 export const SUPPORTED_PI_IMAGE_MIME_TYPES = new Set([
@@ -586,9 +591,34 @@ export function agentEndWillRetry(
   return rec.willRetry === true;
 }
 
+/**
+ * Compaction as Pi reports it. `compaction_end` carries a result only when it
+ * compacted; an aborted or failed pass has none, so its progress row clears.
+ * Pi keeps the entries from `firstKeptEntryId` on alongside its summary.
+ */
+export function compactionEventFromPiEvent(
+  rec: Record<string, unknown>,
+): HarnessEvent | null {
+  const type = stringField(rec, "type");
+  if (type === "compaction_start") {
+    return { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT };
+  }
+  if (type !== "compaction_end") return null;
+  const result = asRecord(rec.result);
+  if (!result || rec.aborted === true) {
+    return { type: "status", key: COMPACTION_STATUS_KEY, text: "" };
+  }
+  const preTokens = numberField(result, "tokensBefore");
+  return {
+    type: "context.compacted",
+    trigger: stringField(rec, "reason") === "manual" ? "manual" : "auto",
+    kept: stringField(result, "firstKeptEntryId") ? "recent" : "none",
+    ...(preTokens ? { preTokens } : {}),
+  };
+}
+
 export function statusFromPiEvent(rec: Record<string, unknown>): string | null {
   const type = stringField(rec, "type");
-  if (type === "compaction_start") return "Compacting context…";
   if (type === "auto_retry_start") {
     const attempt = numberField(rec, "attempt");
     const max = numberField(rec, "maxAttempts");

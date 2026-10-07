@@ -492,6 +492,41 @@ describe("headless session ownership", () => {
     await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
   });
 
+  it("persists the context boundary a remote compaction marks", async () => {
+    const { engine, store, provider, id } = setup();
+    let finish = () => {};
+    provider.compact = vi.fn(
+      (input) =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            input.onEvent({
+              type: "context.compacted",
+              trigger: "manual",
+              kept: "user-messages",
+            });
+            resolve();
+          };
+        }),
+    );
+    engine.command({ type: "compact", commandId: "compact", sessionId: id });
+    await vi.waitFor(() =>
+      expect(store.session(id).session.blocks.map((block) => block.text)).toEqual(
+        ["/compact", "Compacting context…"],
+      ),
+    );
+    finish();
+    await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    const blocks = store.session(id).session.blocks;
+    expect(blocks.map((block) => block.text)).toEqual([
+      "/compact",
+      "Context compacted",
+    ]);
+    expect(blocks[1].contextBoundary).toMatchObject({
+      trigger: "manual",
+      kept: "user-messages",
+    });
+  });
+
   it("persists model and permission changes for the next turn and rejects changes mid-turn", async () => {
     const { engine, store, turns, id } = setup();
     const change = {

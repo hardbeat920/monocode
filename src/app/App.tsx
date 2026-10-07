@@ -477,6 +477,10 @@ import {
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
+  COMPACTING_TEXT,
+  COMPACTION_STATUS_KEY,
+} from "../features/sessions/model/contextBoundary";
+import {
   discardDraftSessionRecord,
   deleteSession,
   getSession,
@@ -9656,7 +9660,13 @@ function Workspace({
         session.id === sessionId
           ? applyHarnessEvent(
               { ...session, busy: true },
-              { type: "status", text: "Compacting context…" },
+              // Shown before the queued compaction starts; it keeps the key
+              // the harness's boundary replaces.
+              {
+                type: "status",
+                key: COMPACTION_STATUS_KEY,
+                text: COMPACTING_TEXT,
+              },
             )
           : session,
       );
@@ -9681,11 +9691,6 @@ function Workspace({
               if (turnGen.current.get(sessionId) !== gen) return;
               enqueueHarnessEvent(sessionId, event);
             },
-          });
-          if (turnGen.current.get(sessionId) !== gen) return;
-          enqueueHarnessEvent(sessionId, {
-            type: "status",
-            text: "Compacted context",
           });
         } catch (error: unknown) {
           if (turnGen.current.get(sessionId) !== gen) return;

@@ -1399,6 +1399,36 @@ describe("the settled work trail", () => {
     expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual(["t1"]);
   });
 
+  it("keeps a context boundary outside the trail, live or settled", () => {
+    const boundary: Block = {
+      id: "b1",
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: { kind: "compaction", trigger: "auto", at: 1, kept: "none" },
+    };
+    const turn: Block[] = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      boundary,
+      shell("t2"),
+      { id: "done", role: "assistant", text: "Done." },
+    ];
+    for (const options of [{ settled: false }, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "activity",
+        "block",
+      ]);
+      expect(items[2]).toMatchObject({ type: "block", block: { id: "b1" } });
+    }
+    expect(
+      groupMonoTurnItems(turn.slice(1, 4)).map((item) => item.type),
+    ).toEqual(["activity", "block", "activity"]);
+  });
+
   it("keeps a persisted interrupt outside the trail even without the tag", () => {
     const items = groupTurnItems(
       [

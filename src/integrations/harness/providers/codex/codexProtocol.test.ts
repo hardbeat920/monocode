@@ -1051,3 +1051,26 @@ describe("mapCodexSubagentSteps", () => {
     expect(steps[0]).not.toHaveProperty("detail");
   });
 });
+
+describe("context compaction items", () => {
+  const item = { id: "compact-1", type: "contextCompaction" };
+
+  it("shows a compacting status while the compaction runs", () => {
+    expect(mapCodexNotification("item/started", { item }).events).toEqual([
+      { type: "status", key: "compaction", text: "Compacting context…" },
+    ]);
+  });
+
+  it("marks the boundary once it lands, keeping recent prompts", () => {
+    // Codex rebuilds history from your recent prompts plus its summary.
+    expect(mapCodexNotification("item/completed", { item }).events).toEqual([
+      { type: "context.compacted", trigger: "auto", kept: "user-messages" },
+    ]);
+  });
+
+  it("never marks the parent when a child thread compacts", () => {
+    expect(
+      mapCodexSubagentSteps("spawn-1", "item/completed", { item }),
+    ).toEqual([]);
+  });
+});

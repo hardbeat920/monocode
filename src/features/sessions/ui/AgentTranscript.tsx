@@ -79,6 +79,7 @@ import {
   HARNESS_TITLE,
   type AgentStep,
   type Block,
+  type ContextKept,
   type HarnessId,
   type InterjectionMeta,
   type ModelTarget,
@@ -140,6 +141,8 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
+import { outOfContextIds } from "../model/contextBoundary";
+import { formatTokens } from "../model/contextUsage";
 import {
   monoCodeToolCall,
   monoCodeWorkSummary,
@@ -316,6 +319,7 @@ function AgentTranscriptComponent({
       ? sourceBlocks
       : visibleBlocks;
   }, [harness, sourceBlocks]);
+  const outOfContext = useMemo(() => outOfContextIds(blocks), [blocks]);
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -1096,6 +1100,16 @@ function AgentTranscriptComponent({
             item.type === "block"
               ? item.block.id === searchCurrent
               : item.blocks.some((block) => block.id === searchCurrent);
+          // Dimmed rows stay readable; hover brings them back to full.
+          const dim = (entries: TurnItem[]) =>
+            entries.length > 0 &&
+            entries.every((entry) =>
+              entry.type === "block"
+                ? outOfContext.has(entry.block.id)
+                : entry.blocks.every((block) => outOfContext.has(block.id)),
+            )
+              ? " opacity-55 transition-opacity hover:opacity-100"
+              : "";
           const isCompactFollowUp = (item: TurnItem, index: number) => {
             const next = items[index + 1];
             return (
@@ -1299,7 +1313,7 @@ function AgentTranscriptComponent({
                                 offset === foldWork.length - 1
                                   ? "zen-fold-tail"
                                   : ""
-                              }${
+                              }${dim([entry])}${
                                 // Prose the trail holds is the agent talking
                                 // while it works; the marker lets it read as
                                 // process, not result.
@@ -1325,7 +1339,7 @@ function AgentTranscriptComponent({
                           data-transcript-search-current={
                             isCurrentItem(entry) || undefined
                           }
-                          className="flow-root pb-1"
+                          className={`flow-root pb-1${dim([entry])}`}
                         >
                           {renderItem(entry, index)}
                         </div>
@@ -1339,7 +1353,7 @@ function AgentTranscriptComponent({
                       data-transcript-search-current={
                         isCurrentItem(item) || undefined
                       }
-                      className={`flow-root ${isCompactFollowUp(item, itemIndex) ? "pb-0" : "pb-1"}`}
+                      className={`flow-root ${isCompactFollowUp(item, itemIndex) ? "pb-0" : "pb-1"}${dim([item])}`}
                     >
                       {renderItem(item, itemIndex)}
                     </div>
@@ -2123,6 +2137,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
   }
 
   if (block.role === "system") {
+    if (block.contextBoundary) {
+      return <ContextBoundaryDivider block={block} />;
+    }
     if (block.interjection) {
       return <InterjectionDivider block={block} />;
     }
@@ -4575,6 +4592,55 @@ function ApprovalControls({
       >
         Deny
       </button>
+    </div>
+  );
+}
+
+/** What survived, in the reader's terms; silent when the harness never said. */
+const CONTEXT_KEPT_NOTE: Record<ContextKept, string | undefined> = {
+  none: "Earlier messages were summarized",
+  "user-messages":
+    "Your recent prompts were kept; earlier replies were summarized",
+  recent: "Older messages were summarized; recent ones were kept",
+  unknown: undefined,
+};
+
+/**
+ * Where the harness compacted its context. Everything above it stays in the
+ * transcript, but the agent may now hold only a summary of it.
+ */
+function ContextBoundaryDivider({ block }: { block: Block }) {
+  const meta = block.contextBoundary;
+  if (!meta) return null;
+  const tokens =
+    meta.preTokens != null
+      ? meta.postTokens != null
+        ? `${formatTokens(meta.preTokens)} → ${formatTokens(meta.postTokens)} tokens`
+        : `${formatTokens(meta.preTokens)} tokens`
+      : undefined;
+  const label = [
+    block.text,
+    meta.trigger === "auto" ? "automatic" : undefined,
+    tokens,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const note = CONTEXT_KEPT_NOTE[meta.kept];
+
+  return (
+    <div className="px-4 py-5" data-context-boundary>
+      <div className="flex items-center gap-3">
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+        <div
+          role="separator"
+          aria-label={note ? `${label}. ${note}` : label}
+          className="max-w-[min(100%,28rem)] px-1.5 text-center font-sans text-[12px] text-content/55"
+        >
+          <div>{label}</div>
+          {note ? <div className="text-[11px] text-content/40">{note}</div> : null}
+        </div>
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+      </div>
     </div>
   );
 }

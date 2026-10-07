@@ -1,6 +1,7 @@
 import type {
   AgentStepKind,
   Attachment,
+  ContextKept,
   InterjectionMeta,
   RuntimeMode,
   TaskListItem,
@@ -147,6 +148,17 @@ export type HarnessEvent =
       append?: boolean;
       /** False marks the plan ready for review. */
       streaming?: boolean;
+    }
+  /**
+   * The harness compacted its context. Emitted once the compaction lands, never
+   * for a failed or aborted one.
+   */
+  | {
+      type: "context.compacted";
+      trigger: "manual" | "auto";
+      kept: ContextKept;
+      preTokens?: number;
+      postTokens?: number;
     }
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number }

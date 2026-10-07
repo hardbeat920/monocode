@@ -1582,3 +1582,124 @@ describe("subagent steps", () => {
     expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
   });
 });
+
+describe("context boundaries", () => {
+  it("marks where the harness compacted its context", () => {
+    now = 5_000;
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+    });
+    expect(session.blocks[1]).toMatchObject({
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: {
+        kind: "compaction",
+        trigger: "auto",
+        at: 5_000,
+        kept: "user-messages",
+      },
+    });
+  });
+
+  it("keeps back-to-back compactions as separate boundaries", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    for (let i = 0; i < 2; i++) {
+      session = applyHarnessEvent(session, {
+        type: "context.compacted",
+        trigger: "manual",
+        kept: "none",
+      });
+    }
+    expect(
+      session.blocks.filter((block) => block.contextBoundary),
+    ).toHaveLength(2);
+  });
+
+  it("replaces the turn's compacting status with the boundary", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+    const id = session.blocks[1].id;
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "recent",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+    ]);
+    expect(session.blocks[1]).toMatchObject({ id, contextBoundary: { kept: "recent" } });
+    expect(session.blocks[1].statusKey).toBeUndefined();
+
+    // A later compaction in the same turn starts its own status row.
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+      "Compacting context…",
+    ]);
+  });
+
+  it("seals open prose so text after the boundary starts its own message", () => {
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Before." });
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "none",
+    });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "After." });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "Before.",
+      "Context compacted",
+      "After.",
+    ]);
+    expect(session.blocks[0].streaming).toBe(false);
+  });
+
+  it("survives a save", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+      preTokens: 180_000,
+    });
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[1].contextBoundary).toEqual(
+      session.blocks[1].contextBoundary,
+    );
+  });
+
+  it("drops the context meter to the post-compaction level when known", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 204_481,
+      window: 1_000_000,
+    });
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "recent",
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
+    expect(session.context).toEqual({ used: 15_071, window: 1_000_000 });
+    expect(session.blocks[1].contextBoundary).toMatchObject({
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
+  });
+});

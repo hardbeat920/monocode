@@ -8,6 +8,10 @@ import type {
   ToolPreview,
 } from "../../../features/sessions/model/session";
 import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import {
+  COMPACTED_TEXT,
+  COMPACTION_STATUS_KEY,
+} from "../../../features/sessions/model/contextBoundary";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -139,6 +143,8 @@ export function applyHarnessEvent(
           window: event.window,
         }),
       };
+    case "context.compacted":
+      return appendContextBoundary(session, event);
     case "turn.metrics":
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
@@ -737,12 +743,8 @@ function appendStatus(session: Session, text: string): Session {
   });
 }
 
-function upsertKeyedStatus(
-  session: Session,
-  key: string,
-  text: string,
-): Session {
-  const trimmed = text.trim();
+/** The current turn's status row for `key`, or -1. */
+function keyedStatusIndex(session: Session, key: string): number {
   const turnStart = lastMatchingBlock(
     session.blocks,
     // Mono outbox bubbles and mid-turn follow-ups do not start a new turn.
@@ -751,10 +753,19 @@ function upsertKeyedStatus(
       (block.sentAt == null || block.startedAt != null) &&
       !session.queuedMessages?.some((message) => message.blockId === block.id),
   );
-  const index = lastMatchingBlock(
+  return lastMatchingBlock(
     session.blocks,
     (block, at) => at > turnStart && block.statusKey === key,
   );
+}
+
+function upsertKeyedStatus(
+  session: Session,
+  key: string,
+  text: string,
+): Session {
+  const trimmed = text.trim();
+  const index = keyedStatusIndex(session, key);
   if (index < 0) {
     if (!trimmed) return session;
     return appendBlock(session, {
@@ -769,6 +780,44 @@ function upsertKeyedStatus(
   if (trimmed) blocks[index] = { ...blocks[index], text: trimmed };
   else blocks.splice(index, 1);
   return { ...session, blocks };
+}
+
+/**
+ * A boundary is a row the reader must find again, so unlike a status it never
+ * deduplicates. It takes over the turn's "Compacting context…" row, which then
+ * stops being keyed so a later compaction starts its own.
+ */
+function appendContextBoundary(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "context.compacted" }>,
+): Session {
+  const block: Block = {
+    id: crypto.randomUUID(),
+    role: "system",
+    text: COMPACTED_TEXT,
+    contextBoundary: {
+      kind: "compaction",
+      trigger: event.trigger,
+      at: Date.now(),
+      kept: event.kept,
+      ...(event.preTokens != null ? { preTokens: event.preTokens } : {}),
+      ...(event.postTokens != null ? { postTokens: event.postTokens } : {}),
+    },
+  };
+  const next =
+    event.postTokens != null
+      ? {
+          ...session,
+          context: mergeContextUsage(session.context, {
+            used: event.postTokens,
+          }),
+        }
+      : session;
+  const index = keyedStatusIndex(next, COMPACTION_STATUS_KEY);
+  if (index < 0) return appendBlock(next, block);
+  const blocks = next.blocks.slice();
+  blocks[index] = { ...block, id: blocks[index].id };
+  return { ...next, blocks };
 }
 
 function appendImage(
@@ -793,7 +842,7 @@ function appendBlock(session: Session, block: Block): Session {
   return {
     ...session,
     blocks: [
-      ...(block.role === "system" && !block.interjection
+      ...(block.role === "system" && !isHardDivider(block)
         ? session.blocks
         : sealLastStream(session.blocks)),
       block,
@@ -817,7 +866,7 @@ function patchStreaming(
   while (
     index >= 0 &&
     session.blocks[index].role === "system" &&
-    !session.blocks[index].interjection
+    !isHardDivider(session.blocks[index])
   )
     index--;
   const last = session.blocks[index];
@@ -1207,12 +1256,20 @@ function findToolIndex(
   });
 }
 
+/**
+ * Prose continues through a status row, but never across an interjection or a
+ * context boundary: what follows one is a new message.
+ */
+function isHardDivider(block: Block): boolean {
+  return !!block.interjection || !!block.contextBoundary;
+}
+
 function sealLastStream(blocks: Block[]): Block[] {
   let index = blocks.length - 1;
   while (
     index >= 0 &&
     blocks[index].role === "system" &&
-    !blocks[index].interjection
+    !isHardDivider(blocks[index])
   )
     index--;
   const last = blocks[index];

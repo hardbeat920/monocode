@@ -56,6 +56,7 @@ import {
   runtimeModeToPermission,
   sessionIdFromMessage,
   statusTextFromSystem,
+  compactionEventFromSystem,
   streamDeltaFromEvent,
   stringField,
   summarizeToolRequest,
@@ -730,13 +731,17 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
-    const text = statusTextFromSystem(rec);
-    if (text) {
-      if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {
-        live.compactionConfirmed = true;
-      }
-      live.onEvent({ type: "status", text });
+    const compaction = compactionEventFromSystem(rec);
+    if (compaction?.type === "context.compacted") {
+      live.compactionConfirmed = true;
+      live.onEvent(
+        live.manualCompaction ? { ...compaction, trigger: "manual" } : compaction,
+      );
+    } else if (compaction) {
+      live.onEvent(compaction);
     }
+    const text = statusTextFromSystem(rec);
+    if (text) live.onEvent({ type: "status", text });
   }
 }
 

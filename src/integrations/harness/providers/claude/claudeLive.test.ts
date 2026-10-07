@@ -1968,10 +1968,48 @@ describe("claude manual compaction", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await compact;
 
-    expect(events).toContainEqual({
-      type: "status",
-      text: "Compacted context",
-    });
+    // The CLI sent no metadata, but MonoCode asked for this one.
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" || event.type === "status",
+      ),
+    ).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "unknown" },
+    ]);
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+
+  it("marks one boundary when Claude compacts mid-turn", async () => {
+    const { turn, events } = await startTurn("s1");
+    emit({
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      session_id: "sess_1",
+    });
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto", pre_tokens: 180_000 },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" || event.type === "status",
+      ),
+    ).toEqual([
+      { type: "status", key: "compaction", text: "Compacting context…" },
+      {
+        type: "context.compacted",
+        trigger: "auto",
+        kept: "none",
+        preTokens: 180_000,
+      },
+    ]);
   });
 });

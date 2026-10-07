@@ -26,6 +26,7 @@ import type {
   AgentRunMeta,
   AgentStep,
   Block,
+  ContextBoundaryMeta,
   BtwMessage,
   BtwThread,
   GeneratedImageMeta,
@@ -997,6 +998,8 @@ function sanitizeBlock(
     if (block.notice === "error" || block.notice === "interrupt") {
       next.notice = block.notice;
     }
+    const contextBoundary = sanitizeContextBoundary(block.contextBoundary);
+    if (contextBoundary) next.contextBoundary = contextBoundary;
   }
   return next;
 }
@@ -1230,6 +1233,41 @@ function sanitizeInterjection(
     ...(severity === "nit" || severity === "concern" || severity === "blocker"
       ? { severity }
       : {}),
+  };
+}
+
+function sanitizeContextBoundary(
+  value: unknown,
+): ContextBoundaryMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const { trigger, kept, at } = record;
+  if (record.kind !== "compaction") return undefined;
+  if (trigger !== "manual" && trigger !== "auto") return undefined;
+  if (
+    kept !== "none" &&
+    kept !== "user-messages" &&
+    kept !== "recent" &&
+    kept !== "unknown"
+  ) {
+    return undefined;
+  }
+  if (typeof at !== "number" || !Number.isFinite(at)) return undefined;
+  const tokens = (count: unknown) =>
+    typeof count === "number" && Number.isFinite(count) && count > 0
+      ? count
+      : undefined;
+  const preTokens = tokens(record.preTokens);
+  const postTokens = tokens(record.postTokens);
+  return {
+    kind: "compaction",
+    trigger,
+    at,
+    kept,
+    ...(preTokens ? { preTokens } : {}),
+    ...(postTokens ? { postTokens } : {}),
   };
 }
 

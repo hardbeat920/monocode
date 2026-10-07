@@ -7,6 +7,7 @@ let onChildExit: ((code: number | null) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
 let sessionMessages: unknown[] = [];
+let onSummarize: (() => void) | undefined;
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -28,6 +29,7 @@ const harnessHttp = vi.fn(
         body: JSON.stringify({ id: "session_1", directory: "/repo" }),
       };
     }
+    if (url.pathname.endsWith("/summarize")) onSummarize?.();
     if (
       input.method === "GET" &&
       url.pathname === "/session/session_1/message"
@@ -70,6 +72,7 @@ const {
   __openCodeTestReset,
   bindOpenCodeSession,
   cancelOpenCodeTurn,
+  compactOpenCodeContext,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
   rewindOpenCodeLastTurn,
@@ -148,6 +151,7 @@ beforeEach(() => {
   onSseEvent = undefined;
   onSseEnd = undefined;
   sessionMessages = [];
+  onSummarize = undefined;
   spawnChild.mockClear();
   killChild.mockClear();
   closeHarnessSse.mockClear();
@@ -211,6 +215,36 @@ describe("OpenCode subagent trails", () => {
     expect(events.filter((event) => event.type === "message.delta")).toEqual([]);
   });
 
+  it("marks a compaction OpenCode runs mid-turn, but not a child's", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    sessionCreated("child", "session_1");
+    onSseEvent?.({ type: "session.compacted", properties: { sessionID: "child" } });
+    onSseEvent?.({ type: "session.compacted", properties: { sessionID: "session_1" } });
+    idle();
+    await done;
+    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted", trigger: "auto", kept: "none" },
+    ]);
+  });
+  it("marks a compaction it asked for as manual", async () => {
+    const events: HarnessEvent[] = [];
+    const { done } = await startTurn(events);
+    idle();
+    await done;
+    onSummarize = () =>
+      onSseEvent?.({ type: "session.compacted", properties: { sessionID: "session_1" } });
+    await compactOpenCodeContext({
+      sessionId: "opencode-live",
+      cwd: "/repo",
+      model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "none" },
+    ]);
+  });
   it("streams child reasoning and tools, including nested tasks, without user or hidden text", async () => {
     const events: HarnessEvent[] = [];
     const { done } = await startTurn(events);

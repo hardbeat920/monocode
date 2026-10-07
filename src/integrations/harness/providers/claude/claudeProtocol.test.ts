@@ -31,6 +31,7 @@ import {
   runtimeModeToPermission,
   sessionIdFromMessage,
   statusTextFromSystem,
+  compactionEventFromSystem,
   streamDeltaFromEvent,
   toClaudePermissionResult,
   toolKindFromName,
@@ -723,14 +724,14 @@ describe("helpers", () => {
     ).toBe("Compacted context to 40k tokens");
   });
 
-  it("still marks a compact boundary that carries no prose", () => {
+  it("leaves the compact boundary to the context boundary row", () => {
     expect(
       statusTextFromSystem({
         type: "system",
         subtype: "compact_boundary",
         compact_metadata: { trigger: "auto" },
       }),
-    ).toBe("Compacted context");
+    ).toBeUndefined();
   });
 
   it("ignores system messages that are not status or compact", () => {
@@ -983,5 +984,79 @@ describe("applyClaudeTaskTool", () => {
     expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
     expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
     expect(tasks.size).toBe(0);
+  });
+});
+
+describe("compactionEventFromSystem", () => {
+  it("reads the boundary the stream reports", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 204_481,
+          post_tokens: 15_071,
+        },
+      }),
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "none",
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
+  });
+
+  it("knows a preserved segment keeps recent messages, in either casing", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: {
+          trigger: "manual",
+          preTokens: 107_731,
+          preservedSegment: { headUuid: "a", anchorUuid: "b", tailUuid: "c" },
+        },
+      }),
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "recent",
+      preTokens: 107_731,
+    });
+  });
+
+  it("still marks a boundary that arrives without metadata", () => {
+    expect(
+      compactionEventFromSystem({ type: "system", subtype: "compact_boundary" }),
+    ).toEqual({ type: "context.compacted", trigger: "auto", kept: "unknown" });
+  });
+
+  it("shows a compacting status while Claude works on it", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+      }),
+    ).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+  });
+
+  it("ignores everything else", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "requesting",
+      }),
+    ).toBeUndefined();
+    expect(
+      compactionEventFromSystem({ type: "system", subtype: "init" }),
+    ).toBeUndefined();
   });
 });

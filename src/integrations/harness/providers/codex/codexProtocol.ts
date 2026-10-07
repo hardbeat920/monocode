@@ -16,6 +16,10 @@ import {
 import { displayPath } from "../../../../shared/lib/paths";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
 import {
+  COMPACTING_TEXT,
+  COMPACTION_STATUS_KEY,
+} from "../../../../features/sessions/model/contextBoundary";
+import {
   composeToolTitle,
   extractToolPreview,
   formatAgentType,
@@ -518,11 +522,7 @@ export function mapCodexNotification(
 }
 
 /** Codex thread items MonoCode already renders elsewhere or that are internal metadata. */
-const SILENT_ITEM_TYPES = new Set([
-  "userMessage",
-  "contextCompaction",
-  "enteredReviewMode",
-]);
+const SILENT_ITEM_TYPES = new Set(["userMessage", "enteredReviewMode"]);
 
 /**
  * Codex reports both `last` (the most recent request) and `total` (cumulative
@@ -625,6 +625,19 @@ function mapItemLifecycle(
 
   if (SILENT_ITEM_TYPES.has(itemType)) {
     return { events: [] };
+  }
+
+  // The item carries no trigger, so this reads as automatic; the live session
+  // knows when it asked for one. Codex rebuilds history from your recent
+  // prompts, word for word, plus its summary of everything else.
+  if (itemType === "contextCompaction") {
+    return {
+      events: [
+        completed
+          ? { type: "context.compacted", trigger: "auto", kept: "user-messages" }
+          : { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT },
+      ],
+    };
   }
 
   if (itemType === "exitedReviewMode" && completed) {

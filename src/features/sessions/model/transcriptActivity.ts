@@ -118,14 +118,17 @@ export function isHiddenTool(block: Block): boolean {
 }
 
 /**
- * A system row the reader must not miss — an error, or the note that a quit
- * cut the turn short. Sessions persisted before the `notice` tag still carry
- * the interrupt's literal text, so it is recognised by content as well.
+ * A system row the reader must not miss — an error, the note that a quit cut
+ * the turn short, or where the agent's context was compacted. Sessions
+ * persisted before the `notice` tag still carry the interrupt's literal text,
+ * so it is recognised by content as well.
  */
 export function isNoticeBlock(block: Block): boolean {
   return (
     block.role === "system" &&
-    (!!block.notice || block.text === INTERRUPT_MESSAGE)
+    (!!block.notice ||
+      !!block.contextBoundary ||
+      block.text === INTERRUPT_MESSAGE)
   );
 }
 
