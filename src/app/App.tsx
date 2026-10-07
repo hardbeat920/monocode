@@ -12608,11 +12608,22 @@ function Workspace({
   // each other another round of messages.
   const onComposerSubmit = useCallback(
     (...args: Parameters<Submit>): boolean => {
-      const accepted = onSubmit(...args);
-      if (accepted) resetLinkBudget(args[0]);
-      return accepted;
+      if (workspaceNavigation.isSwitching(args[0])) return false;
+      const result = submitSession(...args);
+      if (typeof result === "boolean") {
+        if (result) resetLinkBudget(args[0]);
+        return result;
+      }
+      // A deferred submission resets the budget only once it is accepted.
+      // Its errors have already been displayed by submitAfterProjectSync.
+      void result
+        .then((accepted) => {
+          if (accepted) resetLinkBudget(args[0]);
+        })
+        .catch(() => undefined);
+      return true;
     },
-    [onSubmit],
+    [submitSession],
   );
 
   useFloatingMono(sessions, monosSnap, monosEnabled, {
