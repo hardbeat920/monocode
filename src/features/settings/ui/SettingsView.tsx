@@ -382,6 +382,8 @@ import {
 } from "../../notifications/model/notifications";
 import {
   installPendingUpdate,
+  packageManagedInstall,
+  packageManagerHint,
   readAppVersion,
   runUpdateFlow,
   type UpdaterSnapshot,
@@ -1747,10 +1749,16 @@ function UpdateRow({
 
   useEffect(() => {
     let cancelled = false;
-    void readAppVersion().then((currentVersion) => {
-      if (cancelled) return;
-      setSnapshot((current) => ({ ...current, currentVersion }));
-    });
+    void Promise.all([readAppVersion(), packageManagedInstall()]).then(
+      ([currentVersion, packageManaged]) => {
+        if (cancelled) return;
+        setSnapshot((current) => ({
+          ...current,
+          currentVersion,
+          packageManaged: packageManaged ?? undefined,
+        }));
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -1780,7 +1788,9 @@ function UpdateRow({
             ? "You're on the latest version."
             : snapshot.phase === "error"
               ? (snapshot.error ?? "Update check failed.")
-              : "MonoCode updates itself from the release feed.";
+              : snapshot.packageManaged
+                ? packageManagerHint(snapshot.packageManaged)
+                : "MonoCode updates itself from the release feed.";
 
   return (
     <Row

@@ -1,4 +1,4 @@
-import { getVersion } from "@tauri-apps/api/app";
+import { BundleType, getBundleType, getVersion } from "@tauri-apps/api/app";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
@@ -19,9 +19,45 @@ export type UpdaterSnapshot = {
   availableVersion?: string;
   progress?: number;
   error?: string;
+  /** Set on Linux .deb/.rpm installs, which update through apt/dnf. */
+  packageManaged?: PackageManagedInstall;
 };
 
 let pendingUpdate: Update | null = null;
+
+const RELEASES_URL = "https://github.com/hardbeat920/monocode/releases/latest";
+
+/**
+ * Linux `.deb` and `.rpm` installs belong to apt/dnf. The release feed only
+ * publishes an AppImage target, so the plugin reports no matching platform
+ * for them; surface that as "update through your package manager" instead of
+ * a raw error, and never self-install.
+ */
+export type PackageManagedInstall = "deb" | "rpm";
+
+export async function packageManagedInstall(): Promise<PackageManagedInstall | null> {
+  let type: string | null;
+  try {
+    type = await getBundleType();
+  } catch {
+    return null;
+  }
+  if (type === BundleType.Deb) return "deb";
+  if (type === BundleType.Rpm) return "rpm";
+  return null;
+}
+
+export function packageManagerHint(kind: PackageManagedInstall): string {
+  return kind === "deb"
+    ? "Update MonoCode with your package manager (sudo apt install ./MonoCode_*.deb)."
+    : "Update MonoCode with your package manager (sudo dnf install ./MonoCode-*.rpm).";
+}
+
+function isTargetMissingError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  // tauri-plugin-updater Error::TargetsNotFound / Error::TargetNotFound.
+  return /none of the fallback platforms|the platform `[^`]*` was not found/i.test(text);
+}
 
 function isUpdaterNotConfiguredError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
@@ -37,6 +73,10 @@ export async function readAppVersion(): Promise<string> {
 }
 
 export async function probeForUpdate(): Promise<Update | null> {
+  if (await packageManagedInstall()) {
+    pendingUpdate = null;
+    return null;
+  }
   const update = await check();
   pendingUpdate = update;
   if (update) announceUpdateAvailable(update.version);
@@ -50,6 +90,23 @@ export async function runUpdateFlow(
   const currentVersion = await readAppVersion();
   const base: UpdaterSnapshot = { phase: "checking", currentVersion };
   onProgress?.(base);
+
+  const managed = await packageManagedInstall();
+  if (managed) {
+    pendingUpdate = null;
+    const idle: UpdaterSnapshot = {
+      phase: "idle",
+      currentVersion,
+      packageManaged: managed,
+    };
+    onProgress?.(idle);
+    if (manual) {
+      await message(`${packageManagerHint(managed)}\n\nReleases: ${RELEASES_URL}`, {
+        title: "MonoCode",
+      });
+    }
+    return idle;
+  }
 
   try {
     const update = await check();
@@ -90,7 +147,21 @@ export async function runUpdateFlow(
       onProgress?.(idle);
       if (manual) {
         await message(
-          "Automatic updates aren't configured for this build.\n\nDownload releases at https://github.com/hardbeat920/monocode/releases/latest",
+          `Automatic updates aren't configured for this build.\n\nDownload releases at ${RELEASES_URL}`,
+          { title: "MonoCode" },
+        );
+      }
+      return idle;
+    }
+
+    if (isTargetMissingError(err)) {
+      // The feed has no build for this platform/installer yet.
+      pendingUpdate = null;
+      const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
+      onProgress?.(idle);
+      if (manual) {
+        await message(
+          `Automatic updates aren't available for this install yet.\n\nDownload releases at ${RELEASES_URL}`,
           { title: "MonoCode" },
         );
       }
