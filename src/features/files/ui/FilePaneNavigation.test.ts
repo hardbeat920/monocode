@@ -217,7 +217,9 @@ describe("file pane source navigation", () => {
     "cancels a clamped pending navigation on %s before its line arrives",
     async (interaction) => {
       const path = `/repo/pending-${interaction}.txt`;
-      invoke.mockResolvedValueOnce("first line");
+      // Model the file itself: a one-shot mock can be consumed by a watcher
+      // call, or a second read can complete the navigation before the blur.
+      disk.content = "first line";
       const view = await render(path, 3);
       await act(async () =>
         vi.waitFor(() => expect(view.state.selection.main.head).toBe(1)),
