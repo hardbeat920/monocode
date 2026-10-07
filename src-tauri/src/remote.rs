@@ -670,7 +670,9 @@ fn exchange(
                     && s.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
             })
-            .ok_or_else(|| Failure::Rejected("Host returned an invalid device credential".into()))?;
+            .ok_or_else(|| {
+                Failure::Rejected("Host returned an invalid device credential".into())
+            })?;
         Ok(Paired {
             token: token.into(),
             route,
