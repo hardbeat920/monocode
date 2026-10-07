@@ -1,0 +1,56 @@
+language: "en-US"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: false
+  review_status: true
+  review_details: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  suggested_reviewers: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: |
+        Review TypeScript for correctness, state and lifecycle behavior, error handling,
+        and unnecessary complexity. Do not request comments or docstrings for private
+        helpers solely to increase documentation coverage.
+    - path: "src/**/*.tsx"
+      instructions: |
+        Review React changes for rendering behavior, effect dependencies, accessibility,
+        keyboard and pointer interactions, and avoidable re-renders. Treat intentional
+        visual styling and platform-specific branches as design decisions unless the
+        diff shows a concrete regression.
+    - path: "src-tauri/**/*.rs"
+      instructions: |
+        Review Tauri commands and Rust modules for error propagation, async and
+        concurrency mistakes, process and filesystem safety, platform-specific behavior,
+        and accidental panics. Do not request docstrings for private helpers unless they
+        explain a non-obvious safety or platform constraint.
+    - path: "**/*.test.ts"
+      instructions: |
+        Check that tests assert observable behavior, cover failure paths where relevant,
+        and remain deterministic in the repository's Vitest environment. Do not require
+        tests that only duplicate the implementation.
+    - path: "**/*.test.tsx"
+      instructions: |
+        Check user-visible behavior, accessibility semantics, and deterministic cleanup.
+        Prefer focused regression coverage over snapshots or implementation-detail tests.
+    - path: "README.md"
+      instructions: |
+        Check installation, platform-specific behavior, troubleshooting steps, and
+        commands against the repository's actual scripts and package outputs.
