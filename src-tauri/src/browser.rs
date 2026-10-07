@@ -412,16 +412,6 @@ fn judge_probe(answer: &Result<String, String>) -> Probed {
     }
 }
 
-/// Whether `target` differs from `current` only by its fragment. Used only when
-/// the page did not answer: the webview's own URL can lag the page's
-/// same-document changes, so it is not trusted over the page.
-fn fragment_only_change(current: &Url, target: &Url) -> bool {
-    let (mut a, mut b) = (current.clone(), target.clone());
-    a.set_fragment(None);
-    b.set_fragment(None);
-    a == b
-}
-
 fn now_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -463,17 +453,10 @@ pub async fn browser_navigate(
         match judge_probe(&answer) {
             Probed::Settled(navigation) => return Ok(navigation),
             Probed::Document => {}
-            Probed::Unanswered => {
-                // A hung or blank page is most likely elsewhere entirely; only
-                // a target in the webview's current document may land without
-                // a load.
-                if webview
-                    .url()
-                    .map_or(true, |current| fragment_only_change(&current, &url))
-                {
-                    outcome = Outcome::Unknown;
-                }
-            }
+            // Whether the target stays in the current document is not known.
+            // The webview's own URL cannot settle it: `Webview::url` panics on
+            // macOS while a hung or blank page has no URL yet.
+            Probed::Unanswered => outcome = Outcome::Unknown,
         }
     }
     webview.navigate(url).map_err(|e| e.to_string())?;
@@ -810,27 +793,6 @@ mod tests {
             serde_json::to_value(Navigation::of(Outcome::Unknown)).unwrap(),
             serde_json::json!({ "outcome": "unknown" })
         );
-    }
-
-    #[test]
-    fn only_a_fragment_change_of_the_current_document_is_unknown() {
-        let u = |s: &str| Url::parse(s).unwrap();
-        assert!(fragment_only_change(
-            &u("https://a.test/p"),
-            &u("https://a.test/p#x")
-        ));
-        assert!(fragment_only_change(
-            &u("https://a.test/p#y"),
-            &u("https://a.test/p#x")
-        ));
-        assert!(!fragment_only_change(
-            &u("about:blank"),
-            &u("https://a.test/p#x")
-        ));
-        assert!(!fragment_only_change(
-            &u("https://a.test/q"),
-            &u("https://a.test/p#x")
-        ));
     }
 
     /// Run the generated probe in Node against a stub `location` whose setter
