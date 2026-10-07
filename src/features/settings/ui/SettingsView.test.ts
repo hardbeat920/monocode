@@ -144,8 +144,7 @@ describe("settings pages", () => {
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
-    saveMaskEmails(true);
+  it("blurs account emails by default and hides them when settings reopen", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "provider_account_identity") {
         const { provider } = args as { provider: string };
@@ -182,6 +181,7 @@ describe("settings pages", () => {
   });
 
   it("shows used usage and plain emails until the options are turned on", async () => {
+    saveMaskEmails(false);
     vi.mocked(invoke).mockImplementation(async (command) =>
       command === "provider_account_identity"
         ? { email: "user@example.com", plan: "Pro" }

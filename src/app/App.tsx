@@ -610,6 +610,14 @@ import {
   type NoteComposerCard,
 } from "../features/notes";
 import {
+  getArtifact,
+  saveArtifact,
+  recordArtifactCard,
+  removeArtifactCard,
+  ARTIFACT_DELETED_EVENT,
+} from "../features/artifacts/artifacts";
+import { ArtifactPanel } from "../features/artifacts/ui/ArtifactPanel";
+import {
   claimDueAutomations,
   listAutomations,
   recoverAutomationRuns,
@@ -1072,6 +1080,39 @@ function Workspace({
   );
   const [monoViewId, setMonoViewId] = useState<string | null>(null);
   const [monoDetailsOpen, setMonoDetailsOpen] = useState(false);
+  const [monoArtifact, setMonoArtifact] = useState<{
+    sessionId: string;
+    id: string;
+  } | null>(null);
+  const monoArtifactOpener = useRef<HTMLElement | null>(null);
+  const onOpenMonoArtifact = useCallback((sessionId: string, id: string) => {
+    monoArtifactOpener.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setMonoDetailsOpen(false);
+    setMonoActivity(null);
+    setMonoSessions(null);
+    setMonoArtifact({ sessionId, id });
+  }, []);
+  const onCloseMonoArtifact = useCallback(() => {
+    setMonoArtifact(null);
+    monoArtifactOpener.current?.focus();
+  }, []);
+  useEffect(() => {
+    const listening = listen<string>(ARTIFACT_DELETED_EVENT, ({ payload: id }) => {
+      const previous = sessionsRef.current;
+      const updated = previous.map((session) => removeArtifactCard(session, id));
+      if (updated.some((session, index) => session !== previous[index])) {
+        sessionsRef.current = updated;
+        setSessions(updated);
+      }
+      setMonoArtifact((current) => (current?.id === id ? null : current));
+    });
+    return () => {
+      void listening.then((unlisten) => unlisten());
+    };
+  }, []);
   const [monoActivity, setMonoActivity] =
     useState<MonoActivitySelection | null>(null);
   const [monoSessions, setMonoSessions] =
@@ -1079,6 +1120,7 @@ function Workspace({
   const onShowMonoActivity = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
       setMonoDetailsOpen(false);
+      setMonoArtifact(null);
       setMonoSessions(null);
       setMonoActivity((previous) =>
         previous?.sessionId === sessionId && previous.turnId === turnId
@@ -1091,6 +1133,7 @@ function Workspace({
   const onShowMonoSessions = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
       setMonoDetailsOpen(false);
+      setMonoArtifact(null);
       setMonoActivity(null);
       setMonoSessions((previous) =>
         previous?.sessionId === sessionId && previous.turnId === turnId
@@ -1109,6 +1152,7 @@ function Workspace({
     setMonoViewId(null);
     setMonoActivity(null);
     setMonoSessions(null);
+    setMonoArtifact(null);
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
     if (windowTransfer) return true;
@@ -8022,7 +8066,7 @@ function Workspace({
       );
       setSessions(sessionsRef.current);
     },
-    post: (monoId, habit, text, name) =>
+    post: (monoId, habit, text, name, artifacts) =>
       appendToMono(
         monoId,
         {
@@ -8030,6 +8074,7 @@ function Workspace({
           role: "assistant",
           text,
           monoHabit: { id: habit.id, name: habit.name, at: Date.now() },
+          ...(artifacts?.length ? { artifactCards: artifacts } : {}),
         },
         (posted) =>
           void announceSessionFinished(
@@ -10679,6 +10724,34 @@ function Workspace({
               window.dispatchEvent(new Event(NOTES_CHANGED_EVENT));
               return saved;
             },
+            artifacts: () => invoke("artifacts_list"),
+            artifact: getArtifact,
+            saveArtifact,
+            postArtifact: async (sessionId, card) => {
+              const latest = sessionsRef.current.find(
+                (session) => session.id === sessionId,
+              );
+              const anchor =
+                sourceTurnId ??
+                latest?.blocks
+                  .slice()
+                  .reverse()
+                  .find((block) => block.role === "user")?.id;
+              if (
+                !latest ||
+                !anchor ||
+                !latest.blocks.some((block) => block.id === anchor)
+              )
+                throw new Error(
+                  "The artifact's conversation turn is no longer available",
+                );
+              const updated = recordArtifactCard(latest, anchor, card);
+              sessionsRef.current = sessionsRef.current.map((session) =>
+                session.id === sessionId ? updated : session,
+              );
+              setSessions(sessionsRef.current);
+              if (!isHabitRun(sessionId)) await upsertSession(updated);
+            },
             isMono: (id) => isMonoSession(id),
             isHabitRun: (id) => isHabitRun(id),
             monoOf: (id) => {
@@ -12018,6 +12091,11 @@ function Workspace({
     question: onQuestionReply,
     questionInteraction: onQuestionInteraction,
     reveal: onOpenMono,
+    openArtifact: async (monoId, id) => {
+      await onOpenMono(monoId);
+      const sessionId = findMono(monoId)?.sessionId;
+      if (sessionId) onOpenMonoArtifact(sessionId, id);
+    },
     openFile: onOpenFile,
     resume: onUsageLimitResume,
   });
@@ -12090,12 +12168,20 @@ function Workspace({
     monoViewSession,
   );
   const monoSidebarOpen =
-    monoDetailsOpen || !!selectedMonoActivity || !!selectedMonoSessions;
+    monoDetailsOpen ||
+    !!selectedMonoActivity ||
+    !!selectedMonoSessions ||
+    (monoArtifact?.sessionId === monoViewSession?.id && !!monoArtifact);
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
         key={monoViewMono.id}
-        open={monoDetailsOpen && !selectedMonoActivity && !selectedMonoSessions}
+        open={
+          monoDetailsOpen &&
+          !selectedMonoActivity &&
+          !selectedMonoSessions &&
+          monoArtifact?.sessionId !== monoViewSession.id
+        }
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
@@ -12193,6 +12279,7 @@ function Workspace({
               setMonoActivity(null);
               setMonoSessions(null);
               setMonoDetailsOpen(true);
+              setMonoArtifact(null);
             }
           : undefined
       }
@@ -12578,6 +12665,7 @@ function Workspace({
                                       }
                                       composerFocusToken={composerFocusToken}
                                       onShowMonoActivity={onShowMonoActivity}
+                                      onOpenArtifact={onOpenMonoArtifact}
                                       monoActivityTurnId={
                                         selectedMonoActivity?.turnId
                                       }
@@ -12624,6 +12712,20 @@ function Workspace({
                   {monoCovers ? monoDetailsPanel : null}
                   {monoCovers ? monoActivityPanel : null}
                   {monoCovers ? monoSessionsPanel : null}
+                  {monoViewMono &&
+                  monoArtifact &&
+                  monoArtifact.sessionId === monoViewSession?.id ? (
+                    <ArtifactPanel
+                      key={monoArtifact.id}
+                      id={monoArtifact.id}
+                      color={monoViewMono.color}
+                      onClose={onCloseMonoArtifact}
+                      onOpenFile={onOpenFile}
+                      windowControls={
+                        monoCovers && !IS_MAC ? <WindowControls /> : undefined
+                      }
+                    />
+                  ) : null}
                 </div>
               </div>
               {searchViewOpen ? (
