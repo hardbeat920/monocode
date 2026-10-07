@@ -327,6 +327,39 @@ describe("rateLimitWindowTooltip", () => {
       ),
     ).toBe("42% used · Resets in 2h 33m");
   });
+
+  it("shows remaining percent with a reset countdown", () => {
+    const now = Date.parse("2026-08-27T08:00:00Z");
+    expect(
+      rateLimitWindowTooltip(
+        {
+          usedPercent: 42.4,
+          windowMinutes: 300,
+          resetsAt: now + 2 * 3_600_000,
+        },
+        now,
+        true,
+      ),
+    ).toBe("58% remaining · Resets in 2h");
+  });
+
+  it.each([
+    [0, "100%"],
+    [100, "0%"],
+    [-10, "100%"],
+    [110, "0%"],
+  ])(
+    "clamps %s used before showing remaining usage",
+    (usedPercent, remaining) => {
+      expect(
+        rateLimitWindowTooltip(
+          { usedPercent, windowMinutes: 10_080, resetsAt: null },
+          0,
+          true,
+        ),
+      ).toBe(`${remaining} remaining · wk window`);
+    },
+  );
 });
 
 it("preserves Claude's additional weekly/model windows and native extra usage without raw data", () => {
