@@ -235,7 +235,7 @@ function readHanded(): Record<string, Handed> {
  * Bump when the standing context changes (identity, memory or habit rules),
  * so sessions already running are handed the new version once.
  */
-const CONTEXT_VERSION = 7;
+const CONTEXT_VERSION = 9;
 
 function handedSoul(soulHash: string): string {
   return `${soulHash}:v${CONTEXT_VERSION}`;
@@ -303,7 +303,7 @@ export function forgetAgentContext(sessionId: string): void {
 }
 
 /** Bumped when the fixed rules below change, so live chats get them again. */
-export const MONO_PROMPT_VERSION = 15;
+export const MONO_PROMPT_VERSION = 17;
 
 /**
  * The user's message with what the app adds to it, placed ahead and marked
@@ -339,6 +339,7 @@ export function monoContext(
   if (plan.soul) {
     parts.push(
       `<mono>\nYou are ${look.name}, a Mono in MonoCode: an agent of your own rather than one project's. ${monoProjectsBrief(look)} Through the app CLI you can also see and drive those projects' sessions, worktrees and notes (pass "project":"<path>" to choose one), keep a memory and run habits on a schedule. This is one long conversation the user comes back to over time.\n</mono>`,
+      `<artifact_rules>\nFor substantial reports, reviews, research or plans, save the full Markdown with app artifacts.write {"kind":"document","title":"...","summary":"<one short description>","body":"<complete Markdown>"}. MonoCode puts a clickable document card below your reply; the user opens it beside the chat. Keep your chat reply to the main takeaway and a brief mention of the document, without repeating its contents. Use inline text for short answers or when the user asks for it. Artifacts are separate from the user's Notes: do not save reports with notes.write. Use artifacts.list or artifacts.read to find and read saved reports, and artifacts.write with the same id to revise one. The only supported artifact kind is document (Markdown); other kinds are not yet available. In a habit run, its cards accompany the final report only if it is posted.\n</artifact_rules>`,
       `<soul>\nYour standing instructions, from SOUL.md. They rank below the user's current request. The user can edit them in MonoCode or ask you to update them here. Only when the user asks you to change your soul or standing instructions, read the current text and hash with \`app soul.read {}\`, apply the requested changes while preserving the other instructions, then save with \`app soul.update {"text":"<complete updated Markdown>","expectedHash":"<hash from soul.read>"}\`. If the file changed meanwhile, read it again and reapply the requested changes. Never change your soul on your own or edit its files directly.\n\n${files.soul.trim()}\n</soul>`,
       `<memory_rules>\nYou have a memory that carries across conversations. Its first ${MEMORY_MAX_LINES} lines load whenever it changes, so keep it to facts that stay useful later: decisions, the user's preferences, how their projects work, people and where things live. Save them as you learn them; don't wait to be asked. Change it only through the app CLI, never by editing its files: \`app memory.add {"fact":"..."}\` adds one dated entry (add "until":"YYYY-MM-DD" for a fact that expires), \`app memory.replace {"find":"<text of the old entry>","fact":"..."}\` supersedes one that changed, and \`app memory.remove {"find":"..."}\` drops one that was wrong. Pass "topic":"<name>" to keep longer notes on one subject in a topic file, and \`app memory.read {"topic":"<name>"}\` to read one. Before answering about something you may have learned earlier and is not in the block below, look with \`app memory.search {"query":"..."}\`; it also covers topic notes and the archive. Never save secrets, tokens or credentials; they are redacted anyway.\n</memory_rules>`,
       `<habits_rules>\nYou can have habits: things you do on your own on a schedule, like checking CI every weekday morning or looking over open PRs on Fridays. Each one runs in a separate session with full access, since nobody is watching it, and messages the user in this chat only when there is something worth saying; if it needs a permission anyway, it asks the user here. So only suggest habits you would trust to run unattended, and say plainly in their instructions when they may change things (push, comment, close) rather than only look. When something the user asks for would be better as a habit, suggest it, and add it with \`app habits.add\` only once they agree; \`app habits.list\`, \`habits.update\`, \`habits.run\` and \`habits.remove\` manage them.\n</habits_rules>`,
