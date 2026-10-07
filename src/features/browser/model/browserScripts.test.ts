@@ -29,11 +29,15 @@ describe("page scripts", () => {
   it("reads text or HTML, whole page or one element, with truncation", async () => {
     const page = (await run(readScript({}))) as { content: string };
     expect(page.content).toContain("Hello");
-    const html = (await run(readScript({ format: "html", selector: "h1" }))) as {
+    const html = (await run(
+      readScript({ format: "html", selector: "h1" }),
+    )) as {
       content: string;
     };
     expect(html.content).toBe("<h1>Hello</h1>");
-    const short = (await run(readScript({ selector: "main", maxChars: 3 }))) as {
+    const short = (await run(
+      readScript({ selector: "main", maxChars: 3 }),
+    )) as {
       content: string;
       truncated: boolean;
     };
@@ -70,33 +74,43 @@ describe("page scripts", () => {
     expect(events).toEqual(["input", "change", "input", "change"]);
 
     await run(typeScript({ selector: "#size", text: "Large" }));
-    expect((document.getElementById("size") as HTMLSelectElement).value).toBe("l");
-    await expect(run(typeScript({ selector: "h1", text: "x" }))).rejects.toThrow(
-      "is not editable",
+    expect((document.getElementById("size") as HTMLSelectElement).value).toBe(
+      "l",
     );
+    await expect(
+      run(typeScript({ selector: "h1", text: "x" })),
+    ).rejects.toThrow("is not editable");
   });
 
   it("waits for elements and text", async () => {
     setTimeout(() => {
-      document.body.insertAdjacentHTML("beforeend", "<div class='late'>Done!</div>");
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        "<div class='late'>Done!</div>",
+      );
     }, 50);
-    await expect(run(waitScript({ selector: ".late", timeoutMs: 2000 }))).resolves.toMatchObject({
+    await expect(
+      run(waitScript({ selector: ".late", timeoutMs: 2000 })),
+    ).resolves.toMatchObject({
       found: true,
     });
-    await expect(run(waitScript({ text: "Done!", timeoutMs: 500 }))).resolves.toMatchObject({
+    await expect(
+      run(waitScript({ text: "Done!", timeoutMs: 500 })),
+    ).resolves.toMatchObject({
       found: true,
     });
-    await expect(run(waitScript({ text: "never", timeoutMs: 150 }))).rejects.toThrow(
-      "Timed out",
-    );
+    await expect(
+      run(waitScript({ text: "never", timeoutMs: 150 })),
+    ).rejects.toThrow("Timed out");
   });
 
   it("reads and clears captured console entries", async () => {
     expect(await run(consoleScript({}))).toMatchObject({ entries: [] });
-    (window as unknown as { __monocodeConsole: unknown[] }).__monocodeConsole = [
-      { level: "log", text: "a" },
-      { level: "error", text: "b" },
-    ];
+    (window as unknown as { __monocodeConsole: unknown[] }).__monocodeConsole =
+      [
+        { level: "log", text: "a" },
+        { level: "error", text: "b" },
+      ];
     expect(await run(consoleScript({ limit: 1, clear: true }))).toEqual({
       entries: [{ level: "error", text: "b" }],
       total: 2,

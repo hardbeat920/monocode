@@ -69,17 +69,73 @@ fn parse_url(value: &str) -> Result<Url, String> {
     }
 }
 
-/// In dev the app itself is served from localhost. A tab pointed there would
-/// load the app with the app's own IPC permissions, so refuse that origin.
-fn is_app_origin(app: &AppHandle, url: &Url) -> bool {
-    if !cfg!(debug_assertions) {
-        return false;
+/// The app's own origins: the dev server and any external URL a window is
+/// configured with. Read from config, not from live webviews: `Webview::url`
+/// can fail (and panics on macOS before the native URL exists).
+fn app_origins(app: &AppHandle) -> Vec<Url> {
+    let config = app.config();
+    let mut own: Vec<Url> = config.build.dev_url.iter().cloned().collect();
+    for window in &config.app.windows {
+        if let WebviewUrl::External(url) = &window.url {
+            own.push(url.clone());
+        }
     }
-    app.config()
-        .build
-        .dev_url
-        .as_ref()
-        .is_some_and(|dev| dev.origin() == url.origin())
+    own
+}
+
+/// A tab on any app origin would run with the app's IPC permissions, so none
+/// may be browsed to, in any build or on any platform.
+fn is_app_origin(app: &AppHandle, url: &Url) -> bool {
+    matches_app_origin(url, &app_origins(app))
+}
+
+fn matches_app_origin(url: &Url, own: &[Url]) -> bool {
+    is_internal_origin(url) || own.iter().any(|app| app.origin() == url.origin())
+}
+
+/// Origins Tauri serves bundled assets and IPC from: `tauri://localhost`,
+/// `ipc://`/`asset:`, and `http(s)://{tauri,ipc,asset}.localhost`
+/// (Windows/Android), including subdomains.
+fn is_internal_origin(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" | "ipc" | "asset" => true,
+        _ => url.host_str().is_some_and(|host| {
+            ["tauri", "ipc", "asset"].iter().any(|name| {
+                let internal = format!("{name}.localhost");
+                host == internal || host.ends_with(&format!(".{internal}"))
+            })
+        }),
+    }
+}
+
+/// Every navigation, including redirects and link clicks, passes through here.
+fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
+    parse_url(url.as_str()).is_ok() && !is_app_origin(app, url)
+}
+
+/// Run in every frame before page scripts. Wry's navigation hook only sees
+/// main-frame navigations on Windows (WebView2 `NavigationStarting`), so a
+/// frame pointed at an app origin would load it; empty such frames instead.
+fn frame_guard_script(own: &[Url]) -> String {
+    let origins: Vec<String> = own
+        .iter()
+        .map(|url| url.origin().ascii_serialization())
+        .collect();
+    let origins = serde_json::to_string(&origins).unwrap_or_else(|_| "[]".into());
+    format!(
+        r#"(function () {{
+  if (window.top === window) return;
+  var own = {origins};
+  var p = location.protocol, h = location.hostname;
+  var internal = p === "tauri:" || p === "ipc:" || p === "asset:" ||
+    /(^|\.)(tauri|ipc|asset)\.localhost$/.test(h);
+  if (!internal && own.indexOf(location.origin) < 0) return;
+  try {{ window.stop(); }} catch (e) {{}}
+  // Runs before the document is parsed, so there may be no root yet.
+  try {{ location.replace("about:blank"); }} catch (e) {{}}
+  if (document.documentElement) document.documentElement.textContent = "";
+}})();"#
+    )
 }
 
 fn find(app: &AppHandle, id: &str) -> Result<Webview, String> {
@@ -166,7 +222,7 @@ pub fn browser_open(
     };
     let on_navigation = {
         let app = app.clone();
-        move |url: &Url| !is_app_origin(&app, url)
+        move |url: &Url| allow_navigation(&app, url)
     };
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
@@ -174,6 +230,7 @@ pub fn browser_open(
         .on_document_title_changed(on_title)
         .on_new_window(on_new_window)
         .on_navigation(on_navigation)
+        .initialization_script_for_all_frames(frame_guard_script(&app_origins(&app)))
         .initialization_script(CONSOLE_CAPTURE);
     let webview = window
         .add_child(
@@ -263,13 +320,20 @@ fn eval_string(webview: &Webview, js: String, timeout: Duration) -> Result<Strin
     Ok(serde_json::from_str::<String>(&raw).unwrap_or_default())
 }
 
-/// Wrap an agent script as the body of an async function. A script with no
-/// `return` is treated as one expression so `document.title` just works.
-fn agent_script(key: &str, script: &str) -> String {
-    let body = if script.contains("return") {
-        script.to_string()
+/// Wrap an agent script as the body of an async function. With `expression`
+/// the script is returned as one expression (`document.title`,
+/// `[1,2].map(x => { return x * 2; })`); otherwise it runs as a function body
+/// (statements, an explicit `return`). Whether a script is an expression is for
+/// the page's JavaScript parser to say, so `run_agent_script` tries the
+/// expression form first and falls back when the page cannot compile it.
+fn agent_script(key: &str, script: &str, expression: bool) -> String {
+    let body = if expression {
+        let expr = script
+            .trim()
+            .trim_end_matches(|c: char| c == ';' || c.is_whitespace());
+        format!("return (\n{expr}\n);")
     } else {
-        format!("return (\n{script}\n);")
+        script.to_string()
     };
     let key = serde_json::to_string(key).unwrap_or_default();
     format!(
@@ -323,7 +387,17 @@ fn result_poll(key: &str) -> String {
 
 fn run_agent_script(webview: &Webview, script: &str, timeout: Duration) -> Result<Value, String> {
     let key = uuid::Uuid::new_v4().simple().to_string();
-    let started = eval_string(webview, agent_script(&key, script), Duration::from_secs(5))?;
+    let mut started = String::new();
+    for expression in [true, false] {
+        started = eval_string(
+            webview,
+            agent_script(&key, script, expression),
+            Duration::from_secs(5),
+        )?;
+        if started == "started" {
+            break;
+        }
+    }
     if started != "started" {
         return Err("The script did not start. Check it for syntax errors.".into());
     }
@@ -454,14 +528,201 @@ mod tests {
     }
 
     #[test]
-    fn agent_scripts_are_async_bodies_and_expressions_return() {
-        let wrapped = agent_script("k1", "document.title");
-        assert!(wrapped.contains("return (\ndocument.title\n);"));
-        assert!(wrapped.contains("var key = \"k1\";"));
-        let body = agent_script("k2", "const a = 1;\nreturn a;");
+    fn agent_scripts_wrap_expressions_and_bodies() {
+        let expr = agent_script("k1", "document.title;\n", true);
+        assert!(expr.contains("return (\ndocument.title\n);"));
+        assert!(expr.contains("var key = \"k1\";"));
+        let call = agent_script("k1", "[1,2].map(x => { return x*2; })", true);
+        assert!(call.contains("return (\n[1,2].map(x => { return x*2; })\n);"));
+        let body = agent_script("k2", "const a = 1;\nreturn a;", false);
         assert!(body.contains("const a = 1;\nreturn a;"));
         assert!(!body.contains("return (\nconst"));
         assert!(result_poll("k\"x").contains(r#"key = "k\"x""#));
+    }
+
+    fn run_node(driver: &str, args: &str) -> Option<std::process::Output> {
+        match std::process::Command::new("node")
+            .args(["-e", driver, args])
+            .output()
+        {
+            Ok(out) => {
+                assert!(
+                    out.status.success(),
+                    "Node execution failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                Some(out)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                assert!(std::env::var_os("CI").is_none(), "Node is required in CI");
+                eprintln!("Skipping Node execution test: node is unavailable ({error})");
+                None
+            }
+            Err(error) => panic!("Failed to run Node: {error}"),
+        }
+    }
+
+    /// Run the wrapped script in Node the way `run_agent_script` runs it in a
+    /// page: expression form first, body form when that will not compile.
+    /// `None` when Node is unavailable.
+    fn execute(script: &str) -> Option<Value> {
+        let driver = r#"
+          globalThis.window = globalThis;
+          const [first, second, poll] = JSON.parse(process.argv[1]);
+          let started = "";
+          for (const wrapper of [first, second]) {
+            try { started = (0, eval)(wrapper); } catch (e) { started = ""; }
+            if (started === "started") break;
+          }
+          setTimeout(() => console.log(started === "started" ? (0, eval)(poll) : "not started"), 50);
+        "#;
+        let args = serde_json::to_string(&[
+            agent_script("k", script, true),
+            agent_script("k", script, false),
+            result_poll("k"),
+        ])
+        .unwrap();
+        let out = run_node(driver, &args)?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Some(match serde_json::from_str::<Value>(&line) {
+            Ok(entry) => entry,
+            Err(_) => Value::String(line),
+        })
+    }
+
+    #[test]
+    fn expressions_and_bodies_execute() {
+        let result = |script: &str| execute(script).map(|v| v["json"].clone());
+        if execute("1").is_none() {
+            return;
+        }
+        let ok = |json: &str| Some(Value::String(json.to_string()));
+        assert_eq!(result("1 + 2;\n"), ok("3"));
+        assert_eq!(result("[1,2].map(x => { return x * 2; })"), ok("[2,4]"));
+        assert_eq!(result("const a = 2;\nreturn a * 3;"), ok("6"));
+        assert_eq!(result("return 'return'"), ok("\"return\""));
+        assert_eq!(result("await Promise.resolve(7)"), ok("7"));
+    }
+
+    #[test]
+    fn runtime_errors_report_once_and_do_not_rerun() {
+        if execute("1").is_none() {
+            return;
+        }
+        // An expression that throws must not fall through to the body form
+        // and run its side effects a second time.
+        let entry = execute(
+            "(globalThis.n = (globalThis.n || 0) + 1, (() => { throw new Error('boom'); })())",
+        )
+        .unwrap();
+        assert_eq!(entry["ok"], Value::Bool(false));
+        assert!(entry["error"].as_str().unwrap().contains("boom"));
+        let count =
+            execute("globalThis.n = (globalThis.n || 0) + 1; return globalThis.n;").unwrap();
+        assert_eq!(count["json"], Value::String("1".into()));
+        let broken = execute("let = = ;").unwrap();
+        assert_eq!(broken, Value::String("not started".into()));
+    }
+
+    #[test]
+    fn app_and_internal_origins_never_browse() {
+        let own = [Url::parse("tauri://localhost/index.html").unwrap()];
+        let dev = [Url::parse("http://localhost:1420").unwrap()];
+        for blocked in [
+            "tauri://localhost/",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/x",
+            "https://a.tauri.localhost/",
+            "http://asset.localhost/f",
+            "https://asset.localhost/f",
+            "http://ipc.localhost/cmd",
+            "https://ipc.localhost/cmd",
+            "ipc://localhost/cmd",
+            "asset://localhost/f",
+        ] {
+            assert!(
+                matches_app_origin(&Url::parse(blocked).unwrap(), &own),
+                "{blocked}"
+            );
+        }
+        assert!(matches_app_origin(
+            &Url::parse("http://localhost:1420/a").unwrap(),
+            &dev
+        ));
+        assert!(!matches_app_origin(
+            &Url::parse("http://localhost:3000").unwrap(),
+            &dev
+        ));
+        assert!(!matches_app_origin(
+            &Url::parse("https://example.com").unwrap(),
+            &own
+        ));
+    }
+
+    #[test]
+    fn frame_guard_lists_app_origins() {
+        let script = frame_guard_script(&[Url::parse("http://localhost:1420/a").unwrap()]);
+        assert!(script.contains(r#"["http://localhost:1420"]"#));
+        assert!(script.contains("window.top === window"));
+        assert!(frame_guard_script(&[]).contains("var own = [];"));
+    }
+
+    #[test]
+    fn frame_guard_blanks_only_app_subframes() {
+        let script = frame_guard_script(&[Url::parse("http://localhost:1420/a").unwrap()]);
+        let driver = r#"
+          const script = JSON.parse(process.argv[1]);
+          const urls = [
+            "tauri://localhost/index.html", "http://ipc.localhost/cmd",
+            "https://asset.localhost/file", "http://localhost:1420/a",
+            "https://example.com/", "http://localhost:3000/"
+          ];
+          const results = [];
+          for (const top of [false, true]) {
+            for (const url of urls) {
+              let stopped = false;
+              globalThis.window = { stop() { stopped = true; } };
+              window.top = top ? window : {};
+              globalThis.location = new URL(url);
+              globalThis.document = { documentElement: { textContent: "page" } };
+              let replaced = null;
+              location.replace = (to) => { replaced = to; };
+              (0, eval)(script);
+              const blank = document.documentElement.textContent === "";
+              // Document start: no root yet; must not throw or skip the reload.
+              globalThis.document = { documentElement: null };
+              replaced = null;
+              let threw = false;
+              try { (0, eval)(script); } catch (e) { threw = true; }
+              results.push({ stopped, blank, early: !threw && replaced === "about:blank" });
+            }
+          }
+          console.log(JSON.stringify(results));
+        "#;
+        let Some(out) = run_node(driver, &serde_json::to_string(&script).unwrap()) else {
+            return;
+        };
+        let results: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(results.len(), 12);
+        for (index, result) in results.iter().enumerate() {
+            let blocked = index < 4;
+            assert_eq!(result["stopped"], Value::Bool(blocked), "case {index}");
+            assert_eq!(result["blank"], Value::Bool(blocked), "case {index}");
+            assert_eq!(result["early"], Value::Bool(blocked), "case {index}");
+        }
+    }
+
+    #[test]
+    fn redirect_targets_are_vetted_like_typed_urls() {
+        // `allow_navigation` applies `parse_url` to every redirect target.
+        for blocked in [
+            "file:///etc/passwd",
+            "javascript:1",
+            "data:text/html,x",
+            "blob:https://a/b",
+        ] {
+            assert!(parse_url(blocked).is_err(), "{blocked}");
+        }
     }
 
     #[test]

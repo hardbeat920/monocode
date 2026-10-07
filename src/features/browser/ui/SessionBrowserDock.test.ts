@@ -20,11 +20,15 @@ vi.mock("@tauri-apps/api/window", () => ({
   },
 }));
 
+import { browserHistory } from "../../../platform/tauri/browser";
 import { BrowserDockLayout } from "./SessionBrowserDock";
 import {
   closeBrowserTab,
   forgetBrowserSessions,
+  dockOfTab,
+  getBrowserState,
   hideBrowser,
+  noteLoadStarted,
   openBrowserTab,
   patchBrowserTab,
   selectBrowserTab,
@@ -95,5 +99,62 @@ describe("BrowserDockLayout", () => {
     ).toHaveLength(0);
     await act(async () => toggleBrowser());
     expectAddress("https://b.test/");
+  });
+
+  describe("Stop", () => {
+    const loadingOf = (id: string) =>
+      dockOfTab(getBrowserState(), id)?.pane.files.find((f) => f.id === id)
+        ?.browser?.loading;
+
+    async function startStop() {
+      await act(async () =>
+        root.render(
+          createElement(BrowserDockLayout, {
+            sessionId: "chat-a",
+            hidden: false,
+            children: null,
+          }),
+        ),
+      );
+      let id!: string;
+      await act(async () => {
+        id = openBrowserTab("https://a.test/")!;
+      });
+      await act(async () => patchBrowserTab(id, { loading: true }));
+      const button = container.querySelector(
+        'button[aria-label="Stop"]',
+      ) as HTMLButtonElement;
+      expect(button).toBeTruthy();
+      return { id, button };
+    }
+
+    it("clears loading once the stop is acknowledged", async () => {
+      const { id, button } = await startStop();
+      await act(async () => button.click());
+      expect(browserHistory).toHaveBeenLastCalledWith(id, "stop");
+      expect(loadingOf(id)).toBe(false);
+    });
+
+    it("keeps loading when the stop is rejected", async () => {
+      vi.mocked(browserHistory).mockRejectedValueOnce(new Error("no view"));
+      const { id, button } = await startStop();
+      await act(async () => button.click());
+      expect(loadingOf(id)).toBe(true);
+    });
+
+    it("keeps a newer load that starts before the stop resolves", async () => {
+      let resolve!: () => void;
+      vi.mocked(browserHistory).mockImplementationOnce(
+        () => new Promise<void>((r) => (resolve = r)),
+      );
+      const { id, button } = await startStop();
+      await act(async () => button.click());
+      await act(async () => {
+        noteLoadStarted(id);
+        patchBrowserTab(id, { loading: true });
+      });
+      await act(async () => resolve());
+      expect(loadingOf(id)).toBe(true);
+    });
   });
 });

@@ -31,6 +31,8 @@ import {
   setBrowserSize,
   useBrowserState,
   type BrowserDock,
+  noteLoadFinished,
+  noteLoadStarted,
 } from "../model/browserStore";
 import { BrowserSurface, BrowserToolbar } from "./BrowserView";
 
@@ -97,6 +99,8 @@ function useBrowserEvents() {
     );
     const unlisten = onBrowserEvent((event) => {
       if (event.kind === "load") {
+        if (event.loading) noteLoadStarted(event.id);
+        else noteLoadFinished(event.id);
         patchBrowserTab(event.id, {
           url: event.url,
           loading: event.loading,
@@ -183,7 +187,7 @@ export function BrowserDockLayout({
       {show ? (
         <div
           key={current.sessionId}
-          className="h-full min-h-0 min-w-0 w-full overflow-hidden"
+          className="h-full min-h-0 min-w-0 w-full"
           style={{ gridArea: "dock" }}
         >
           <SessionBrowserDock

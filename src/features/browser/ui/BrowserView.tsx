@@ -19,21 +19,22 @@ import { IconButton } from "../../../app/shell/TitleBar";
 import {
   browserHistory,
   closeBrowserView,
-  navigateBrowser,
   openBrowserView,
   setBrowserBounds,
   setBrowserVisible,
   type BrowserBounds,
 } from "../../../platform/tauri/browser";
-import {
-  loadUiScale,
-  subscribeUiScale,
-} from "../../settings/model/uiScale";
+import { loadUiScale, subscribeUiScale } from "../../settings/model/uiScale";
 import type { BrowserTabSource } from "../../workspace/model/layout";
 import { BLANK_URL, browserUrlFromInput } from "../model/browserUrl";
-import { patchBrowserTab } from "../model/browserStore";
+import {
+  loadGeneration,
+  patchBrowserTab,
+  settleLoad,
+} from "../model/browserStore";
 import { useOverlayOcclusion } from "../hooks/useOverlayOcclusion";
 import { setNativeTabReady } from "../model/nativeTabs";
+import { navigateBrowserTab } from "../model/browserNavigation";
 
 /**
  * React StrictMode, dock moves and tab switches unmount and remount a surface
@@ -99,6 +100,7 @@ export function BrowserSurface({
     const bounds = measure() ?? { x: 0, y: 0, width: 1, height: 1 };
     placed.current = bounds;
     let alive = true;
+    patchBrowserTab(id, { error: undefined });
     openBrowserView(id, tab.url, bounds, false)
       .then(() => {
         if (!alive) return;
@@ -215,10 +217,7 @@ export function BrowserToolbar({
     const url = browserUrlFromInput(address);
     setEditing(false);
     input.current?.blur();
-    patchBrowserTab(id, { url, loading: true, error: undefined });
-    void navigateBrowser(id, url).catch((reason: unknown) => {
-      patchBrowserTab(id, { loading: false, error: String(reason) });
-    });
+    void navigateBrowserTab(id, url).catch(() => undefined);
   };
 
   return (
@@ -242,11 +241,16 @@ export function BrowserToolbar({
       </IconButton>
       <IconButton
         label={tab.loading ? "Stop" : "Reload"}
-        onClick={() =>
-          void browserHistory(id, tab.loading ? "stop" : "reload").catch(
-            () => undefined,
-          )
-        }
+        onClick={() => {
+          // Stopping may emit no Finished event, so settle loading here.
+          const stopping = !!tab.loading;
+          const generation = loadGeneration(id);
+          void browserHistory(id, stopping ? "stop" : "reload")
+            .then(() => {
+              if (stopping) settleLoad(id, generation);
+            })
+            .catch(() => undefined);
+        }}
       >
         {tab.loading ? (
           <X className="size-3.5" strokeWidth={1.75} />
@@ -279,7 +283,8 @@ export function BrowserToolbar({
       <IconButton
         label="Open in Default Browser"
         onClick={() => {
-          if (tab.url !== BLANK_URL) void openUrl(tab.url).catch(() => undefined);
+          if (tab.url !== BLANK_URL)
+            void openUrl(tab.url).catch(() => undefined);
         }}
       >
         <ExternalLink className="size-3.5" strokeWidth={1.75} />

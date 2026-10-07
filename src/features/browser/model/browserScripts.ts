@@ -40,7 +40,10 @@ export function readScript(input: {
   };`;
 }
 
-export function consoleScript(input: { limit?: number; clear?: boolean }): string {
+export function consoleScript(input: {
+  limit?: number;
+  clear?: boolean;
+}): string {
   return `
   var entries = window.__monocodeConsole;
   if (!entries) return { entries: [], note: "Console capture starts with pages loaded after the browser tab opened." };
@@ -50,7 +53,10 @@ export function consoleScript(input: { limit?: number; clear?: boolean }): strin
   return { entries: recent, total: total };`;
 }
 
-export function clickScript(input: { selector?: string; text?: string }): string {
+export function clickScript(input: {
+  selector?: string;
+  text?: string;
+}): string {
   return `${DESCRIBE}
   var selector = ${json(input.selector)};
   var text = ${json(input.text)};

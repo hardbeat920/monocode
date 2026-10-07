@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  closeBrowserTab,
+  closeOtherBrowserTabs,
+  forgetBrowserSessions,
+  openBrowserTab,
   addBrowserTab,
   AGENT_TAB_TTL_MS,
   forgetBrowserSessionsIn,
   liveBrowserTabIds,
+  loadGeneration,
+  noteLoadStarted,
+  settleLoad,
   MAX_LIVE_TABS,
   newBrowserTab,
   parseBrowserState,
@@ -76,9 +83,7 @@ describe("session browsers", () => {
 
   it("adds background tabs without opening the panel", () => {
     const a = newBrowserTab("https://a.test/");
-    const hidden = toggleBrowserDock(
-      addBrowserTab(empty, "chat-a", a),
-    );
+    const hidden = toggleBrowserDock(addBrowserTab(empty, "chat-a", a));
     expect(hidden.docks[0].open).toBe(false);
     const next = addBrowserTab(hidden, "chat-a", newBrowserTab("https://x/"), {
       open: false,
@@ -167,9 +172,9 @@ describe("live and suspended tabs", () => {
     let state = addBrowserTab(empty, "chat-b", a, { open: false });
     state = touchAgentTabIn(state, a.id, 1_000);
     expect(pruneAgentTabsIn(state, 2_000)).toBe(state);
-    expect(
-      pruneAgentTabsIn(state, 1_000 + AGENT_TAB_TTL_MS).agentTabs,
-    ).toEqual({});
+    expect(pruneAgentTabsIn(state, 1_000 + AGENT_TAB_TTL_MS).agentTabs).toEqual(
+      {},
+    );
     const closed = forgetBrowserSessionsIn(state, ["chat-b"]);
     expect(pruneAgentTabsIn(closed, 2_000).agentTabs).toEqual({});
   });
@@ -223,5 +228,36 @@ describe("browser persistence", () => {
     expect(docks).toHaveLength(1);
     expect(docks[0].pane.files.map((file) => file.id)).toEqual(["ok-1"]);
     expect(docks[0].pane.activeFileId).toBe("ok-1");
+  });
+});
+
+describe("load generations", () => {
+  it("settles only while no newer load has started", () => {
+    const id = openBrowserTab("https://a.test", { sessionId: "gen-s" })!;
+    expect(settleLoad(id, loadGeneration(id))).toBe(true);
+    const seen = loadGeneration(id);
+    noteLoadStarted(id);
+    expect(loadGeneration(id)).toBe(seen + 1);
+    expect(settleLoad(id, seen)).toBe(false);
+    forgetBrowserSessions(["gen-s"]);
+  });
+
+  it("ignores starts for tabs that are not in the store", () => {
+    noteLoadStarted("ghost-tab");
+    expect(loadGeneration("ghost-tab")).toBe(0);
+  });
+
+  it("forgets generations when tabs close, close others, or sessions go", () => {
+    const a = openBrowserTab("https://a.test", { sessionId: "gen-c" })!;
+    const b = openBrowserTab("https://b.test", { sessionId: "gen-c" })!;
+    const c = openBrowserTab("https://c.test", { sessionId: "gen-c" })!;
+    for (const id of [a, b, c]) noteLoadStarted(id);
+    closeBrowserTab(a);
+    expect(loadGeneration(a)).toBe(0);
+    closeOtherBrowserTabs(b);
+    expect(loadGeneration(b)).toBe(1);
+    expect(loadGeneration(c)).toBe(0);
+    forgetBrowserSessions(["gen-c"]);
+    expect(loadGeneration(b)).toBe(0);
   });
 });

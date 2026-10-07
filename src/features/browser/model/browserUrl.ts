@@ -1,4 +1,5 @@
-const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i;
+const LOCAL_HOST =
+  /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i;
 const HAS_SCHEME = /^[a-z][a-z\d+.-]*:/i;
 const LOOKS_LIKE_HOST = /^[^\s/]+\.[^\s/]+(\/|$)|^[^\s/]+:\d+(\/|$)/;
 

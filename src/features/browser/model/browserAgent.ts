@@ -2,7 +2,6 @@ import {
   browserHistory,
   closeBrowserView,
   evalInBrowser,
-  navigateBrowser,
   screenshotBrowser,
 } from "../../../platform/tauri/browser";
 import { loadAgentBrowser } from "../../settings/model/displayPrefs";
@@ -10,6 +9,8 @@ import type { BrowserTabSource } from "../../workspace/model/layout";
 import {
   closeBrowserTab,
   dockOfTab,
+  loadGeneration,
+  settleLoad,
   findBrowserDock,
   getBrowserState,
   openBrowserTab,
@@ -26,7 +27,8 @@ import {
   waitScript,
 } from "./browserScripts";
 import { browserUrlFromInput, isBrowsableUrl } from "./browserUrl";
-import { whenNativeTabReady } from "./nativeTabs";
+import { isNativeTabReady, whenNativeTabReady } from "./nativeTabs";
+import { navigateBrowserTab } from "./browserNavigation";
 
 type Input = Record<string, unknown>;
 
@@ -81,26 +83,31 @@ function pageUrl(input: Input): string {
   return url;
 }
 
+type LoadResult = { timedOut?: true };
+
 /**
  * Resolve once a load that starts within `startWithinMs` finishes, or right
- * away when none starts (a hash change, a click that did not navigate).
+ * away when none starts (a hash change, a click that did not navigate, a
+ * reused view that already finished). Rejects if the tab goes away and reports
+ * `timedOut` if the load outlasts `timeoutMs`.
  */
 function waitForLoad(
   id: string,
   { startWithinMs = 1_500, timeoutMs = LOAD_TIMEOUT_MS } = {},
-): Promise<{ timedOut?: true }> {
-  return new Promise((resolve) => {
+): Promise<LoadResult> {
+  return new Promise((resolve, reject) => {
     let started = !!tabSource(id)?.loading;
     let unsubscribe = () => {};
-    const finish = (result: { timedOut?: true }) => {
+    const finish = (result: LoadResult, closed = false) => {
       unsubscribe();
       clearTimeout(startTimer);
       clearTimeout(timer);
-      resolve(result);
+      if (closed) reject(new Error("The browser tab was closed"));
+      else resolve(result);
     };
     const check = () => {
       const tab = tabSource(id);
-      if (!tab) return finish({});
+      if (!tab) return finish({}, true);
       if (tab.loading) started = true;
       else if (started) finish({});
     };
@@ -111,6 +118,97 @@ function waitForLoad(
     unsubscribe = subscribeBrowser(check);
     check();
   });
+}
+
+/**
+ * Resolve when the tab's native page exists. Rejects if the tab is closed or
+ * its creation reports an error, rather than waiting out the timeout.
+ */
+function waitForNative(id: string, timeoutMs = 8_000): Promise<void> {
+  const abort = new AbortController();
+  patchBrowserTab(id, { error: undefined });
+  const check = () => {
+    const tab = tabSource(id);
+    if (!tab) abort.abort(new Error("The browser tab was closed"));
+    else if (tab.error) {
+      abort.abort(new Error(tab.error));
+    }
+  };
+  const unsubscribe = subscribeBrowser(check);
+  check();
+  return whenNativeTabReady(id, timeoutMs, abort.signal).finally(unsubscribe);
+}
+
+/**
+ * A native Started can arrive without its Finished (a stopped or superseded
+ * load), which would leave `loading` set forever. When a wait times out, ask
+ * the page itself. Policy: a parsed document ("interactive" or "complete")
+ * counts as usable, so the stale flag is cleared; subresources may still be
+ * loading. The reply is applied only if the tab still exists and no newer load
+ * started while the probe was in flight.
+ */
+async function reconcileLoad(
+  id: string,
+  load: LoadResult,
+): Promise<LoadResult> {
+  if (!load.timedOut) return load;
+  const generation = loadGeneration(id);
+  let state: unknown;
+  try {
+    state = await evalInBrowser(id, "document.readyState", 2_000);
+  } catch {
+    // An unresponsive page really is still loading, unless it went away.
+  }
+  if (!tabSource(id)) throw new Error("The browser tab was closed");
+  if (
+    (state === "complete" || state === "interactive") &&
+    settleLoad(id, generation)
+  ) {
+    return {};
+  }
+  return load;
+}
+
+/** Wait for a load, then settle a timeout against the page's real state. */
+async function waitForPage(
+  id: string,
+  options?: Parameters<typeof waitForLoad>[1],
+): Promise<LoadResult> {
+  return reconcileLoad(id, await waitForLoad(id, options));
+}
+
+/** Throw unless a wait ended with the page loaded. */
+function assertLoaded(load: LoadResult) {
+  if (load.timedOut) {
+    throw new Error(
+      "The page is still loading. Try again shortly, or use browser_wait.",
+    );
+  }
+}
+
+/** Calls that need the same tab live share one wait. */
+const readying = new Map<string, Promise<void>>();
+
+/**
+ * Make a tab's page usable: create it if suspended, then wait out any load.
+ * Concurrent callers share the in-flight wait instead of racing past it.
+ */
+function ensureLive(id: string): Promise<void> {
+  const pending = readying.get(id);
+  if (pending) return pending;
+  const work = (async () => {
+    if (!isNativeTabReady(id)) {
+      // Resuming creates the webview, which then loads the saved URL.
+      await waitForNative(id);
+      assertLoaded(await waitForPage(id, { startWithinMs: 3_000 }));
+    } else if (tabSource(id)?.loading) {
+      assertLoaded(await waitForPage(id));
+    }
+  })().finally(() => {
+    if (readying.get(id) === work) readying.delete(id);
+  });
+  readying.set(id, work);
+  return work;
 }
 
 /** Run browser tools for one session against its own tabs only. */
@@ -130,7 +228,7 @@ export function createBrowserAgent(sessionId: string) {
       );
     }
     touchAgentTab(id);
-    await whenNativeTabReady(id, 8_000);
+    await ensureLive(id);
     return id;
   };
 
@@ -146,7 +244,7 @@ export function createBrowserAgent(sessionId: string) {
       if (!String(error).includes("navigated away")) throw error;
       result = { navigated: true };
     }
-    const load = await waitForLoad(id);
+    const load = await waitForPage(id);
     return { ...(result as object), page: summary(id), ...load };
   };
 
@@ -170,21 +268,16 @@ export function createBrowserAgent(sessionId: string) {
       const id = openBrowserTab(url, { sessionId, background: true });
       if (!id) throw new Error("This session cannot open a browser tab");
       touchAgentTab(id);
-      patchBrowserTab(id, { loading: true });
-      await whenNativeTabReady(id, 8_000);
-      const load = await waitForLoad(id);
+      await waitForNative(id);
+      const load = await waitForPage(id, { startWithinMs: 3_000 });
       return { ...summary(id), ...load };
     },
 
     async browser_navigate(input) {
       const id = await useTab(input);
       const url = pageUrl(input);
-      patchBrowserTab(id, { url, loading: true, error: undefined });
-      await navigateBrowser(id, url).catch((error: unknown) => {
-        patchBrowserTab(id, { loading: false });
-        throw error;
-      });
-      return { ...summary(id), ...(await waitForLoad(id)) };
+      await navigateBrowserTab(id, url);
+      return { ...summary(id), ...(await waitForPage(id)) };
     },
 
     async browser_history(input) {
@@ -194,7 +287,7 @@ export function createBrowserAgent(sessionId: string) {
       }
       const id = await useTab(input);
       await browserHistory(id, action);
-      return { ...summary(id), ...(await waitForLoad(id)) };
+      return { ...summary(id), ...(await waitForPage(id)) };
     },
 
     async browser_select(input) {

@@ -234,9 +234,7 @@ export function pruneAgentTabsIn(
 ): BrowserState {
   const open = new Set(browserTabIds(state));
   const entries = Object.entries(state.agentTabs);
-  const kept = entries.filter(
-    ([id, used]) => open.has(id) && now - used < ttl,
-  );
+  const kept = entries.filter(([id, used]) => open.has(id) && now - used < ttl);
   if (kept.length === entries.length) return state;
   return { ...state, agentTabs: Object.fromEntries(kept) };
 }
@@ -382,6 +380,7 @@ function setState(next: BrowserState) {
   const previous = getBrowserState();
   if (next === previous) return;
   state = next;
+  if (next.docks !== previous.docks) pruneLoadGenerations(next);
   for (const listener of listeners) listener();
   if (next.docks === previous.docks && next.lastSide === previous.lastSide) {
     return;
@@ -495,6 +494,57 @@ export function setBrowserSize(size: number) {
       withDockSize(dock, size, viewport()),
     ),
   );
+}
+
+/** Counts native load starts per tab, so a late reply can tell it is stale. */
+const loadGenerations = new Map<string, number>();
+
+/** Drop counters of tabs that left the store; suspended tabs stay in it. */
+function pruneLoadGenerations(current: BrowserState) {
+  if (loadGenerations.size === 0 && nativeUrlEpochs.size === 0) return;
+  const live = new Set(
+    current.docks.flatMap((dock) => dock.pane.files.map((file) => file.id)),
+  );
+  for (const id of [...loadGenerations.keys()]) {
+    if (!live.has(id)) loadGenerations.delete(id);
+  }
+  for (const id of [...nativeUrlEpochs.keys()]) {
+    if (!live.has(id)) nativeUrlEpochs.delete(id);
+  }
+}
+
+export function loadGeneration(fileId: string): number {
+  return loadGenerations.get(fileId) ?? 0;
+}
+
+/** Counts every native URL report (load start or finish) per tab. */
+const nativeUrlEpochs = new Map<string, number>();
+
+export function nativeUrlEpoch(fileId: string): number {
+  return nativeUrlEpochs.get(fileId) ?? 0;
+}
+
+/** Record a native load finish: its URL (e.g. a redirect) is authoritative. */
+export function noteLoadFinished(fileId: string) {
+  if (!dockOfTab(getBrowserState(), fileId)) return;
+  nativeUrlEpochs.set(fileId, nativeUrlEpoch(fileId) + 1);
+}
+
+/** Record a native load start; includes same-URL reloads. */
+export function noteLoadStarted(fileId: string) {
+  if (!dockOfTab(getBrowserState(), fileId)) return;
+  loadGenerations.set(fileId, loadGeneration(fileId) + 1);
+  noteLoadFinished(fileId);
+}
+
+/**
+ * Clear a tab's loading flag only if no newer load has started since
+ * `generation` was read. Returns whether it was cleared.
+ */
+export function settleLoad(fileId: string, generation: number): boolean {
+  if (loadGeneration(fileId) !== generation) return false;
+  patchBrowserTab(fileId, { loading: false });
+  return true;
 }
 
 export function patchBrowserTab(
