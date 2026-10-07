@@ -2,10 +2,12 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Session } from "../../sessions/model/session";
 import { usageSnapshot } from "../../agent-app/model/usageSnapshot";
 import { ChevronDown } from "../../../shared/ui/icons";
+import { subscribeProviderAccounts } from "../../providers/model/providerAccounts";
 import {
   getAllRateLimits,
   subscribeRateLimits,
 } from "../../providers/model/rateLimitsCache";
+import { formatWindowLabel } from "../../providers/model/rateLimits";
 
 const MINUTE = 60_000;
 
@@ -14,11 +16,21 @@ export function MonoUsage({ session }: { session: Session }) {
   useSyncExternalStore(subscribeRateLimits, getAllRateLimits, getAllRateLimits);
   // Freshness can change without another cache write.
   const [, setNow] = useState(() => Date.now());
+  const [, setAccountsVersion] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), MINUTE);
     return () => window.clearInterval(timer);
   }, []);
-  const accounts = usageSnapshot(session, {}).accounts;
+  useEffect(
+    () =>
+      subscribeProviderAccounts(() =>
+        setAccountsVersion((version) => version + 1),
+      ),
+    [],
+  );
+  const accounts = usageSnapshot(session, {}).accounts.filter(
+    (account) => account.status !== "unsupported" || account.cliAvailable,
+  );
   const counts = accounts.reduce<Record<string, number>>((result, account) => {
     const status =
       account.status === "ok" && account.stale ? "stale" : account.status;
@@ -79,7 +91,7 @@ export function MonoUsage({ session }: { session: Session }) {
                     {window.scope === "account" ? "Shared" : window.scope}
                     {window.id ? ` · ${window.id}` : ""}
                     {window.windowMinutes != null
-                      ? ` · ${windowDuration(window.windowMinutes)}`
+                      ? ` · ${formatWindowLabel(window.windowMinutes)}`
                       : ""}
                     {`: ${window.usedPercent}% used, ${window.remainingPercent}% remaining`}
                     {window.resetsAt != null
@@ -91,7 +103,13 @@ export function MonoUsage({ session }: { session: Session }) {
             ) : null}
             {account.extraUsage ? (
               <p className="mt-1">
-                Extra usage:{" "}
+                Extra usage (
+                {account.extraUsage.enabled === false
+                  ? "disabled"
+                  : account.extraUsage.enabled === true
+                    ? "enabled"
+                    : "availability unknown"}
+                ):{" "}
                 {account.extraUsage.usedPercent != null
                   ? `${account.extraUsage.usedPercent}% used`
                   : account.extraUsage.usedCredits != null
@@ -176,12 +194,6 @@ function providerLabel(provider: string): string {
       pi: "Pi",
     }[provider] ?? provider
   );
-}
-
-function windowDuration(minutes: number): string {
-  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
 }
 
 function dateTime(timestamp: number): string {
