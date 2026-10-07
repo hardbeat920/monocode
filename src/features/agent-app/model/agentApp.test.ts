@@ -10,6 +10,7 @@ import {
   saveSessionFolders,
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
+import type { Artifact } from "../../artifacts/artifacts";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
@@ -23,6 +24,15 @@ const note: Note = {
   title: "Plan",
   body: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph should stay out of list.",
   tags: ["work"],
+  slugPending: false,
+  createdAt: 1,
+  updatedAt: 2,
+};
+const artifact: Artifact = {
+  id: "artifact-1",
+  kind: "document",
+  title: note.title,
+  body: note.body,
   createdAt: 1,
   updatedAt: 2,
 };
@@ -87,6 +97,7 @@ function fixture() {
         model: "codex:test",
         busy: false,
         hasDraft: false,
+        archived: false,
       },
     ]),
     session: vi.fn(async (id) =>
@@ -94,6 +105,8 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
+    stop: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
     worktrees: vi.fn(async () => ({
       worktrees: [
         { ...featureWorktree },
@@ -111,6 +124,216 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it.each([undefined, true, false])(
+    "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
+    async (showStartedSessionsInSidebar) => {
+      const { source, host } = fixture();
+      host.isMono = () => true;
+      host.monoOf = () => ({
+        id: "mono",
+        projects: [source.cwd],
+        showStartedSessionsInSidebar,
+      });
+      for (const draft of [false, true]) {
+        await handleAgentApp(source, `launch-${draft}`, "sessions.start", {
+          prompt: "Review the project",
+          draft,
+          notifyOnComplete: false,
+        }, host);
+        const launch = vi.mocked(host.start).mock.calls.at(-1)![0];
+        expect(launch.sidebarHidden).toBe(
+          showStartedSessionsInSidebar === false ? true : undefined,
+        );
+      }
+    },
+  );
+
+  it("uses the owning Mono's preference when a habit starts a session", async () => {
+    const { source, host } = fixture();
+    host.isHabitRun = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      showStartedSessionsInSidebar: false,
+    });
+    await handleAgentApp(source, "habit-launch", "sessions.start", {
+      prompt: "Review the project",
+      notifyOnComplete: false,
+    }, host);
+    expect(host.start).toHaveBeenCalledWith(
+      expect.objectContaining({ sidebarHidden: true }),
+      "app-lead-habit-launch",
+    );
+  });
+
+  describe.each([
+    ["sessions.stop", "stopped"],
+    ["sessions.archive", "archived"],
+    ["sessions.delete", "deleted"],
+  ] as const)("%s", (action, resultField) => {
+    it("manages a running session in the caller's project", async () => {
+      const { source, host } = fixture();
+      vi.mocked(host.session).mockResolvedValue({
+        ...newSession("codex", source.cwd),
+        id: "other",
+        busy: true,
+      });
+      expect(
+        await handleAgentApp(
+          source,
+          "manage",
+          action,
+          { sessionId: "other" },
+          host,
+        ),
+      ).toEqual({ sessionId: "other", [resultField]: true });
+      if (action === "sessions.stop") {
+        expect(host.stop).toHaveBeenCalledExactlyOnceWith("other");
+        expect(host.remove).not.toHaveBeenCalled();
+      } else {
+        expect(host.remove).toHaveBeenCalledExactlyOnceWith(
+          "other",
+          action === "sessions.archive" ? "archive" : "delete",
+        );
+        expect(host.stop).not.toHaveBeenCalled();
+      }
+    });
+
+    it("lets a Mono manage sessions in a selected assigned project", async () => {
+      const { source, host } = fixture();
+      source.cwd = "/home/user";
+      host.isMono = (id) => id === source.id;
+      host.monoOf = () => ({
+        id: "mono",
+        projects: ["/code/app", "/code/site"],
+      });
+      vi.mocked(host.session).mockResolvedValue({
+        ...newSession("codex", "/code/site"),
+        id: "other",
+      });
+      expect(
+        await handleAgentApp(
+          source,
+          "manage",
+          action,
+          {
+            sessionId: "other",
+            project: "site",
+          },
+          host,
+        ),
+      ).toEqual({ sessionId: "other", [resultField]: true });
+      expect(host.sessions).toHaveBeenCalledWith("/code/site");
+      await expect(
+        handleAgentApp(
+          source,
+          "outside",
+          action,
+          {
+            sessionId: "other",
+            project: "/code/unassigned",
+          },
+          host,
+        ),
+      ).rejects.toThrow("Not one of your projects");
+      await expect(
+        handleAgentApp(
+          source,
+          "wrong-project",
+          action,
+          {
+            sessionId: "other",
+            project: "/code/app",
+          },
+          host,
+        ),
+      ).rejects.toThrow("not found in this project");
+      expect(
+        vi.mocked(host.stop).mock.calls.length +
+          vi.mocked(host.remove).mock.calls.length,
+      ).toBe(1);
+    });
+
+    it("rejects the caller, missing sessions and sessions outside the selected project", async () => {
+      const { source, host } = fixture();
+      await expect(
+        handleAgentApp(source, "self", action, { sessionId: source.id }, host),
+      ).rejects.toThrow("calling session");
+      await expect(
+        handleAgentApp(
+          source,
+          "missing",
+          action,
+          { sessionId: "missing" },
+          host,
+        ),
+      ).rejects.toThrow("not found in this project");
+      vi.mocked(host.session).mockResolvedValue({
+        ...newSession("codex", "/another-project"),
+        id: "other",
+      });
+      await expect(
+        handleAgentApp(source, "outside", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("not found in this project");
+      expect(host.stop).not.toHaveBeenCalled();
+      expect(host.remove).not.toHaveBeenCalled();
+    });
+
+    it("does not manage Mono chats, habit runs or orchestration workers", async () => {
+      const { source, host } = fixture();
+      host.isMono = () => true;
+      await expect(
+        handleAgentApp(source, "mono", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("Only regular project sessions");
+      host.isMono = () => false;
+      host.isHabitRun = () => true;
+      await expect(
+        handleAgentApp(source, "habit", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("Only regular project sessions");
+      host.isHabitRun = () => false;
+      vi.mocked(host.session).mockResolvedValue({
+        ...newSession("codex", source.cwd),
+        id: "other",
+        orchestrationLeadId: "orchestrator",
+      });
+      await expect(
+        handleAgentApp(source, "worker", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("Only regular project sessions");
+      expect(host.stop).not.toHaveBeenCalled();
+      expect(host.remove).not.toHaveBeenCalled();
+    });
+
+    it("rejects invalid request IDs and unsupported fields before making changes", async () => {
+      const { source, host } = fixture();
+      await expect(
+        handleAgentApp(source, "bad/id", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("Invalid request ID");
+      await expect(
+        handleAgentApp(
+          source,
+          "extra",
+          action,
+          {
+            sessionId: "other",
+            deleteWorktree: true,
+          },
+          host,
+        ),
+      ).rejects.toThrow("Unknown");
+      expect(host.stop).not.toHaveBeenCalled();
+      expect(host.remove).not.toHaveBeenCalled();
+    });
+
+    it("reports lifecycle failures instead of claiming success", async () => {
+      const { source, host } = fixture();
+      vi.mocked(host.stop).mockRejectedValue(new Error("operation failed"));
+      vi.mocked(host.remove).mockRejectedValue(new Error("operation failed"));
+      await expect(
+        handleAgentApp(source, "failed", action, { sessionId: "other" }, host),
+      ).rejects.toThrow("operation failed");
+    });
+  });
+
   it("allows session inspection in a Mono's projects when its chat lives at home", () => {
     const { source } = fixture();
     source.cwd = "/home/user";
@@ -934,6 +1157,213 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("Request ID was already used");
+  });
+
+  it("saves artifacts separately, returns metadata, and attaches one reference on retries", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    let created: Artifact | null = null;
+    host.artifact = vi.fn(async (id) => (id === created?.id ? created : null));
+    host.saveArtifact = vi.fn(async (input) => {
+      created = { ...artifact, ...input };
+      return created;
+    });
+    host.postArtifact = vi.fn();
+    const input = {
+      kind: "document",
+      title: "PR review",
+      body: "# PR review\n\nFull report",
+      summary: "Merge queue and blockers",
+    };
+    const result = await handleAgentApp(
+      source,
+      "report-1",
+      "artifacts.write",
+      input,
+      host,
+    );
+    expect(result).toEqual({
+      id: "artifact-lead-report-1",
+      kind: "document",
+      title: input.title,
+      summary: input.summary,
+      saved: true,
+      attached: true,
+    });
+    expect(result).not.toHaveProperty("body");
+    expect(host.saveNote).not.toHaveBeenCalled();
+    expect(host.saveArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionId: source.id,
+        body: input.body,
+        kind: "document",
+      }),
+    );
+    expect(
+      await handleAgentApp(source, "report-1", "artifacts.write", input, host),
+    ).toEqual(result);
+    expect(host.saveArtifact).toHaveBeenCalledTimes(1);
+    await expect(
+      handleAgentApp(
+        source,
+        "report-1",
+        "artifacts.write",
+        { ...input, body: "Different" },
+        host,
+      ),
+    ).rejects.toThrow("Request ID was already used");
+    expect(host.postArtifact).toHaveBeenCalledWith(source.id, {
+      id: "artifact-lead-report-1",
+      kind: "document",
+      title: input.title,
+      summary: input.summary,
+    });
+  });
+
+  it("revises a document without changing omitted fields and refuses note IDs", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async (id) =>
+      id === "artifact-1" ? { ...artifact, id } : null,
+    );
+    host.saveArtifact = vi.fn(async (input) => ({ ...artifact, ...input }));
+    host.postArtifact = vi.fn();
+    await handleAgentApp(
+      source,
+      "edit",
+      "artifacts.write",
+      { id: "artifact-1", body: "Revised" },
+      host,
+    );
+    expect(host.saveArtifact).toHaveBeenCalledWith({
+      id: "artifact-1",
+      title: note.title,
+      body: "Revised",
+      kind: "document",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "bad",
+        "artifacts.write",
+        { id: note.id, body: "Oops" },
+        host,
+      ),
+    ).rejects.toThrow("Artifact was not found");
+    expect(host.saveNote).not.toHaveBeenCalled();
+  });
+
+  it("allows habit artifacts and recovers an attachment failure without saving twice", async () => {
+    const { source, host } = fixture();
+    host.isHabitRun = () => true;
+    let created: Artifact | null = null;
+    host.artifact = vi.fn(async () => created);
+    host.saveArtifact = vi.fn(async (input) => {
+      created = { ...artifact, ...input };
+      return created;
+    });
+    host.postArtifact = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Attachment failed"))
+      .mockResolvedValue(undefined);
+    const input = { body: "# Habit report\n\nDetails" };
+    await expect(
+      handleAgentApp(source, "report", "artifacts.write", input, host),
+    ).rejects.toThrow("Attachment failed");
+    await expect(
+      handleAgentApp(source, "report", "artifacts.write", input, host),
+    ).resolves.toMatchObject({ attached: true });
+    expect(host.saveArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("restricts artifact actions to Monos and lists only document metadata", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "report",
+        "artifacts.write",
+        { body: "Report" },
+        host,
+      ),
+    ).rejects.toThrow("Only a Mono");
+    host.isMono = () => true;
+    host.artifact = vi.fn(async () => artifact);
+    host.artifacts = vi.fn(async () => [{ ...artifact, id: "artifact-1" }]);
+    const result = await handleAgentApp(
+      source,
+      "list",
+      "artifacts.list",
+      {},
+      host,
+    );
+    expect(result).toEqual({
+      total: 1,
+      offset: 0,
+      artifacts: [
+        {
+          id: "artifact-1",
+          kind: "document",
+          title: artifact.title,
+          updatedAt: 2,
+        },
+      ],
+    });
+    expect(host.notes).not.toHaveBeenCalled();
+    await expect(
+      handleAgentApp(
+        source,
+        "list-bad",
+        "artifacts.list",
+        { limit: 101 },
+        host,
+      ),
+    ).rejects.toThrow("limit");
+    await expect(
+      handleAgentApp(
+        source,
+        "read",
+        "artifacts.read",
+        { id: "artifact-1" },
+        host,
+      ),
+    ).resolves.toMatchObject({ body: note.body });
+  });
+
+  it("rejects unsupported artifact kinds before saving or posting a card", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async () => null);
+    host.artifacts = vi.fn(async () => []);
+    host.saveArtifact = vi.fn();
+    host.postArtifact = vi.fn();
+    for (const kind of ["code", "preview", "note", null]) {
+      await expect(
+        handleAgentApp(
+          source,
+          "bad",
+          "artifacts.write",
+          {
+            kind,
+            body: "Content",
+          },
+          host,
+        ),
+      ).rejects.toThrow("Unsupported artifact kind");
+    }
+    await expect(
+      handleAgentApp(
+        source,
+        "bad",
+        "artifacts.list",
+        {
+          kind: "code",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Unsupported artifact kind");
+    expect(host.saveArtifact).not.toHaveBeenCalled();
+    expect(host.postArtifact).not.toHaveBeenCalled();
   });
 
   it("edits only supplied note fields and refuses missing or malformed notes", async () => {

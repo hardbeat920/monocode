@@ -27,6 +27,20 @@ function summary(id: string, cwd: string, updatedAt = 1): SessionSummary {
 }
 
 describe("historyWithLiveSessions", () => {
+  it("carries visibility into both new and already-saved live summaries", () => {
+    const session = newSession("codex", "/tmp/project-a");
+    session.sidebarHidden = true;
+    session.blocks = [{ id: "u", role: "user", text: "Review" }];
+    const live = historyWithLiveSessions([], [session], session.cwd);
+    expect(live[0].sidebarHidden).toBe(true);
+    const merged = historyWithLiveSessions(
+      [{ ...live[0], sidebarHidden: undefined }],
+      [session],
+      session.cwd,
+    );
+    expect(merged[0].sidebarHidden).toBe(true);
+  });
+
   const run: OrchestrationRun = {
     version: 1,
     leadId: "lead",
