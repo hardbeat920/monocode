@@ -665,6 +665,7 @@ mod tests {
         for action in [
             "worktrees.list",
             "worktrees.create",
+            "usage.list",
             "artifacts.list",
             "artifacts.read",
             "artifacts.write",
