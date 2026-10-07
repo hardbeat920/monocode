@@ -4280,28 +4280,34 @@ fn git_cmd() -> Command {
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
     let mut cmd = git_cmd();
-    let action = args.iter().copied().find(|arg| !arg.starts_with('-'));
-    if matches!(
-        action,
-        Some(
-            "commit"
-                | "push"
-                | "pull"
-                | "fetch"
-                | "clone"
-                | "add"
-                | "checkout"
-                | "switch"
-                | "restore"
-                | "reset"
-                | "stash"
-                | "merge"
-                | "rebase"
-                | "cherry-pick"
-                | "revert"
-                | "worktree"
+    let action_index = args.iter().position(|arg| !arg.starts_with('-'));
+    let action = action_index.map(|index| args[index]);
+    // Of the worktree subcommands only `add` checks files out. `list`, `lock`,
+    // `remove`, and the rest keep the inherited PATH.
+    let worktree_add = action == Some("worktree")
+        && action_index.and_then(|index| args.get(index + 1)).copied() == Some("add");
+    if worktree_add
+        || matches!(
+            action,
+            Some(
+                "commit"
+                    | "push"
+                    | "pull"
+                    | "fetch"
+                    | "clone"
+                    | "add"
+                    | "checkout"
+                    | "switch"
+                    | "restore"
+                    | "reset"
+                    | "stash"
+                    | "merge"
+                    | "rebase"
+                    | "cherry-pick"
+                    | "revert"
+            )
         )
-    ) {
+    {
         // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
         // Anything that writes the work tree runs LFS filters and the post-checkout hook,
         // which fail when a Finder-launched app cannot find `git-lfs`.
@@ -8714,8 +8720,16 @@ mod tests {
 
     #[test]
     fn read_only_git_never_resolves_login_shell_path() {
-        for action in ["status", "diff", "rev-parse", "ls-files", "cat-file"] {
-            let cmd = git_cmd_for_args_with_path(&[action], || {
+        for args in [
+            &["status"][..],
+            &["diff"],
+            &["rev-parse"],
+            &["ls-files"],
+            &["cat-file"],
+            &["worktree", "list", "--porcelain", "-z"],
+            &["worktree", "lock", "../wt"],
+        ] {
+            let cmd = git_cmd_for_args_with_path(args, || {
                 panic!("read-only git must not resolve the login-shell PATH")
             });
             assert!(!cmd
@@ -8735,6 +8749,15 @@ mod tests {
             &["checkout", "-b", "feature"],
             &["switch", "main"],
             &["worktree", "add", "../wt"],
+            &[
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                "feature",
+                "--",
+                "../wt",
+            ],
             &["--literal-pathspecs", "add", "--", "a.txt"],
         ] {
             let cmd = git_cmd_for_args_with_path(args, || "gui-git-path".into());
