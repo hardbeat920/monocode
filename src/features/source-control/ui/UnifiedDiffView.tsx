@@ -75,6 +75,8 @@ type Props = {
   fileLayout?: FileLayout;
   /** Applied when a new set of files is loaded. */
   initialExpansion?: InitialExpansion;
+  /** Concrete checkout that owns comments created from this diff. */
+  workspace?: string;
   onStageFile?: (id: string) => void;
   onDiscardFile?: (id: string) => void;
   onStageHunk?: (id: string, pos: number) => void;
@@ -91,6 +93,7 @@ export function UnifiedDiffView({
   fill = true,
   fileLayout = "stacked",
   initialExpansion = "all",
+  workspace,
   onStageFile,
   onDiscardFile,
   onStageHunk,
@@ -262,6 +265,7 @@ export function UnifiedDiffView({
               busy={busyId === file.id}
               reveals={reveals[file.id] ?? EMPTY_REVEALS}
               fileLayout={fileLayout}
+              workspace={workspace}
               colorScheme={colorScheme}
               scrollerRef={scrollerRef}
               onToggle={toggleFile}
@@ -285,6 +289,7 @@ type FileSectionProps = {
   busy: boolean;
   reveals: Record<string, FoldReveal>;
   fileLayout: FileLayout;
+  workspace?: string;
   colorScheme: ColorScheme;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   onToggle: (id: string) => void;
@@ -307,6 +312,7 @@ const FileSection = memo(function FileSection({
   busy,
   reveals,
   fileLayout,
+  workspace,
   colorScheme,
   scrollerRef,
   onToggle,
@@ -429,6 +435,7 @@ const FileSection = memo(function FileSection({
       {expanded ? (
         <FileBody
           file={file}
+          workspace={workspace}
           reveals={reveals}
           near={near}
           tokens={tokens}
@@ -460,6 +467,7 @@ function equalFileSectionProps(
     previous.busy === next.busy &&
     previous.reveals === next.reveals &&
     previous.fileLayout === next.fileLayout &&
+    previous.workspace === next.workspace &&
     previous.colorScheme === next.colorScheme &&
     previous.scrollerRef === next.scrollerRef &&
     previous.onToggle === next.onToggle &&
@@ -494,6 +502,7 @@ function equalFileModel(
 
 function FileBody({
   file,
+  workspace,
   reveals,
   near,
   tokens,
@@ -502,6 +511,7 @@ function FileBody({
   onStageHunk,
 }: {
   file: UnifiedDiffFileModel;
+  workspace?: string;
   reveals: Record<string, FoldReveal>;
   near: boolean;
   tokens: Map<UnifiedLine, SyntaxToken[]> | null;
@@ -518,6 +528,7 @@ function FileBody({
     <VirtualRows
       fileId={file.id}
       filePath={file.path}
+      workspace={workspace}
       blocks={file.blocks}
       reveals={reveals}
       near={near}
@@ -533,6 +544,7 @@ function FileBody({
 function VirtualRows({
   fileId,
   filePath,
+  workspace,
   blocks,
   reveals,
   near,
@@ -544,6 +556,7 @@ function VirtualRows({
 }: {
   fileId: string;
   filePath: string;
+  workspace?: string;
   blocks: UnifiedBlock[];
   reveals: Record<string, FoldReveal>;
   near: boolean;
@@ -792,6 +805,7 @@ function VirtualRows({
       {commentTarget ? (
         <DiffCommentComposer
           path={filePath}
+          workspace={workspace ?? ""}
           target={commentTarget}
           onDismiss={() => setCommentTarget(null)}
         />

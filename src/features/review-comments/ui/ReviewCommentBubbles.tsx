@@ -14,11 +14,13 @@ type Bubble = { comment: ReviewComment; top: number };
 
 export function ReviewCommentBubbles({
   path,
+  workspace,
   host,
   view,
   revision,
 }: {
   path: string;
+  workspace: string;
   host: HTMLDivElement | null;
   view: EditorView | null;
   /** Changes whenever the editor document changes, including reflow-only edits. */
@@ -38,7 +40,10 @@ export function ReviewCommentBubbles({
       const hostRect = host.getBoundingClientRect();
       setBubbles(
         comments
-          .filter((comment) => comment.path === path)
+          .filter(
+            (comment) =>
+              comment.workspace === workspace && comment.path === path,
+          )
           .flatMap((comment) => {
             const line = Math.min(
               Math.max(1, comment.startLine),
@@ -56,7 +61,7 @@ export function ReviewCommentBubbles({
       view.scrollDOM.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
     };
-  }, [comments, host, path, revision, view]);
+  }, [comments, host, path, revision, view, workspace]);
 
   return (
     <>

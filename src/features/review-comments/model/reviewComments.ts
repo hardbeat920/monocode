@@ -1,5 +1,7 @@
 export type ReviewComment = {
   id: string;
+  /** Concrete checkout that owns this comment. */
+  workspace: string;
   path: string;
   startLine: number;
   endLine: number;
@@ -61,12 +63,18 @@ export function clearReviewComments(ids?: ReadonlySet<string>) {
 
 /** Keeps review comment locations aligned with edits to their source file. */
 export function remapReviewCommentLines(
+  workspace: string,
   path: string,
   remapLine: (line: number) => number,
 ) {
   let changed = false;
   comments = comments.map((comment) => {
-    if (comment.path !== path || comment.startLine === 0) return comment;
+    if (
+      comment.workspace !== workspace ||
+      comment.path !== path ||
+      comment.startLine === 0
+    )
+      return comment;
     const startLine = remapLine(comment.startLine);
     const endLine = remapLine(comment.endLine);
     if (startLine === comment.startLine && endLine === comment.endLine) {
@@ -79,10 +87,15 @@ export function remapReviewCommentLines(
 }
 
 /** Marks comments as stale when an external full-file reload has no line map. */
-export function markReviewCommentsStale(path: string) {
+export function markReviewCommentsStale(workspace: string, path: string) {
   let changed = false;
   comments = comments.map((comment) => {
-    if (comment.path !== path || comment.deleted) return comment;
+    if (
+      comment.workspace !== workspace ||
+      comment.path !== path ||
+      comment.deleted
+    )
+      return comment;
     changed = true;
     return { ...comment, deleted: true };
   });

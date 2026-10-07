@@ -13,10 +13,12 @@ export type DiffCommentComposerTarget = {
 
 export function DiffCommentComposer({
   path,
+  workspace,
   target,
   onDismiss,
 }: {
   path: string;
+  workspace: string;
   target: DiffCommentComposerTarget;
   onDismiss: () => void;
 }) {
@@ -28,6 +30,7 @@ export function DiffCommentComposer({
     const number = line.kind === "del" ? line.oldNumber : line.newNumber;
     if (!body || number == null) return;
     addReviewComment({
+      workspace,
       path,
       startLine: number,
       endLine: number,

@@ -493,6 +493,7 @@ export function FileEditor({
               <CodeMirrorEditor
                 key={`${path}:${reloadKey}`}
                 path={path}
+                workspace={cwd}
                 commentPath={relativePath}
                 value={loadState.content}
                 showDiff={showDiff}
@@ -516,8 +517,9 @@ export function FileEditor({
       ) : (
         <CodeMirrorEditor
           key={`${path}:${reloadKey}`}
-          path={path}
-          commentPath={relativePath}
+                path={path}
+                workspace={cwd}
+                commentPath={relativePath}
           value={loadState.content}
           showDiff={showDiff}
           gitOriginal={gitOriginal}
@@ -555,6 +557,7 @@ export function FileEditor({
 
 export function CodeMirrorEditor({
   path,
+  workspace,
   commentPath,
   value,
   showDiff,
@@ -570,6 +573,7 @@ export function CodeMirrorEditor({
   formatOnSave = true,
 }: {
   path: string;
+  workspace: string;
   commentPath: string;
   value: string;
   showDiff: boolean;
@@ -846,11 +850,11 @@ export function CodeMirrorEditor({
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
-            markReviewCommentsStale(commentPath);
+            markReviewCommentsStale(workspace, commentPath);
             setDocumentRevision((current) => current + 1);
             return;
           }
-          remapReviewCommentLines(commentPath, (line) => {
+          remapReviewCommentLines(workspace, commentPath, (line) => {
             const previous = update.startState.doc.line(
               Math.min(line, update.startState.doc.lines),
             );
@@ -1037,6 +1041,7 @@ export function CodeMirrorEditor({
           <div ref={hostRef} className="size-full" />
           <ReviewCommentBubbles
             path={commentPath}
+            workspace={workspace}
             host={hostRef.current}
             view={editorView}
             revision={documentRevision}
@@ -1047,6 +1052,7 @@ export function CodeMirrorEditor({
         <DiffCommentComposer
           path={commentPath}
           target={commentTarget}
+          workspace={workspace}
           onDismiss={() => setCommentTarget(null)}
         />
       ) : null}
@@ -1058,6 +1064,7 @@ export function CodeMirrorEditor({
           if (!view) return;
           const range = view.state.selection.main;
           setReviewTarget({
+            workspace,
             path: selection.path,
             startLine: selection.wholeFile ? 0 : selection.startLine,
             endLine: selection.wholeFile ? 0 : selection.endLine,

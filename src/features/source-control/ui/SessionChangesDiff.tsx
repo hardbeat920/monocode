@@ -177,7 +177,7 @@ export function SessionChangesDiff({ cwd, sessionId, focusPath }: Props) {
   }
 
   return (
-    <UnifiedDiffView files={models} focusPath={focusPath} totals={totals} />
+    <UnifiedDiffView files={models} workspace={cwd} focusPath={focusPath} totals={totals} />
   );
 }
 

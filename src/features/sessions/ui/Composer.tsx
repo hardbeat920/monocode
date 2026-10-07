@@ -418,10 +418,13 @@ export function Composer({
   children,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
-  const reviewComments = useSyncExternalStore(
+  const allReviewComments = useSyncExternalStore(
     subscribeReviewComments,
     reviewCommentsSnapshot,
     reviewCommentsSnapshot,
+  );
+  const reviewComments = allReviewComments.filter(
+    (comment) => comment.workspace === executionCwd,
   );
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);

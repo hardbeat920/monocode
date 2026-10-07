@@ -5,6 +5,7 @@ import { addReviewComment } from "../model/reviewComments";
 import { MOD } from "../../../platform/tauri/platform";
 
 export type ReviewCommentTarget = {
+  workspace: string;
   path: string;
   startLine: number;
   endLine: number;

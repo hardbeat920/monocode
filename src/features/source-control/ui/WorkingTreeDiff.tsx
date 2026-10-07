@@ -296,6 +296,7 @@ export function WorkingTreeDiff({ cwd, focusPath, focusKind }: Props) {
   return (
     <UnifiedDiffView
       files={models}
+      workspace={cwd}
       fileCount={focusKind ? entries.length : files.length}
       focusId={focusId}
       busyId={busyId}
