@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
 import type { Attachment } from "../../sessions/model/session";
@@ -280,7 +281,7 @@ export function MonoComposer({
               if (
                 event.key !== "Enter" ||
                 event.shiftKey ||
-                event.nativeEvent.isComposing
+                isImeComposition(event.nativeEvent)
               ) {
                 return;
               }
