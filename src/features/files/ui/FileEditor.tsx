@@ -57,6 +57,7 @@ import {
   type GitFileDiffKind,
 } from "../../../platform/tauri/fs";
 import {
+  editorPathsEqual,
   type EditorNavigation,
   searchProject,
   type ProjectSearchMatch,
@@ -641,7 +642,7 @@ export function CodeMirrorEditor({
   gitOriginalRef.current = gitOriginal;
 
   const findSymbol = useCallback(
-    async (view: EditorView, mode: "definition" | "references") => {
+    async (view: EditorView, mode: "auto" | "definition" | "references") => {
       const symbol = symbolAt(
         view.state.doc.toString(),
         view.state.selection.main.head,
@@ -656,8 +657,14 @@ export function CodeMirrorEditor({
           searchId: crypto.randomUUID(),
         });
         if (token !== symbolSearchTokenRef.current) return true;
-        if (mode === "definition") {
-          const definition = definitionFor(symbol.name, result.matches);
+        const definition = definitionFor(symbol.name, result.matches);
+        const line = view.state.doc.lineAt(symbol.from);
+        const clickedDefinition =
+          definition &&
+          editorPathsEqual(path, definition.path) &&
+          definition.line === line.number &&
+          definition.column === symbol.from - line.from + 1;
+        if (mode === "definition" || (mode === "auto" && !clickedDefinition)) {
           if (definition) onOpenFile?.(definition.path, definition);
           else
             setReferences({
@@ -666,7 +673,6 @@ export function CodeMirrorEditor({
               error: "No definition found",
             });
         } else {
-          const definition = definitionFor(symbol.name, result.matches);
           setReferences({
             symbol: symbol.name,
             matches: definition
@@ -690,7 +696,7 @@ export function CodeMirrorEditor({
       }
       return true;
     },
-    [cwd, onOpenFile],
+    [cwd, onOpenFile, path],
   );
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
@@ -985,7 +991,7 @@ export function CodeMirrorEditor({
             if (position === null) return false;
             view.dispatch({ selection: { anchor: position } });
             event.preventDefault();
-            void findSymbol(view, event.shiftKey ? "references" : "definition");
+            void findSymbol(view, event.shiftKey ? "references" : "auto");
             return true;
           },
           mousemove: (event) => {
