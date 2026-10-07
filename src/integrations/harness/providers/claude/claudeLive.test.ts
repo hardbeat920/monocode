@@ -2020,6 +2020,29 @@ describe("claude manual compaction", () => {
     );
   });
 
+  it("never marks the parent when a subagent compacts", async () => {
+    const { turn, events } = await startTurn("s1");
+    for (const record of [
+      { type: "system", subtype: "status", status: "compacting" },
+      {
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 90_000 },
+      },
+    ]) {
+      emit({ ...record, session_id: "sess_1", parent_tool_use_id: "toolu_agent" });
+    }
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" ||
+          (event.type === "status" && event.key === "compaction"),
+      ),
+    ).toEqual([]);
+  });
+
   it("marks one boundary when Claude compacts mid-turn", async () => {
     const { turn, events } = await startTurn("s1");
     emit({

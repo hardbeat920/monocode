@@ -738,12 +738,16 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
-    const compaction = compactionEventFromSystem(rec);
+    // A subagent compacts its own context, not the one this transcript holds.
+    const main = !isSubagentMessage(rec);
+    const compaction = main ? compactionEventFromSystem(rec) : undefined;
     if (compaction?.type === "context.compacted") {
       live.compactionConfirmed = true;
     }
-    live.compactionError =
-      compactionErrorFromSystem(rec) ?? live.compactionError;
+    if (main) {
+      live.compactionError =
+        compactionErrorFromSystem(rec) ?? live.compactionError;
+    }
     if (compaction) live.onEvent(compaction);
     const text = statusTextFromSystem(rec);
     if (text) live.onEvent({ type: "status", text });
