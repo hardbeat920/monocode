@@ -111,6 +111,8 @@ That emits a `.rpm` under `target/release/bundle/rpm/`, installable with `sudo d
 
 The portable AppImage bundles Ubuntu-built Wayland libraries that can fail against newer Mesa drivers: the app aborts at startup with `Could not create default EGL display: EGL_BAD_PARAMETER`, or opens a blank window. The native `.rpm` above links the system WebKitGTK stack and does not have this problem — prefer it on Fedora.
 
+The AppImage disables WebKitGTK's DMA-BUF renderer automatically on launch to avoid the same startup abort on Mesa/Wayland systems. If it still fails to start, use the native `.deb` or `.rpm` package instead.
+
 ### Windows packages
 
 ```bash
