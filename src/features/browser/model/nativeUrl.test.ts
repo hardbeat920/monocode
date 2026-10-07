@@ -34,6 +34,8 @@ afterEach(() => {
   }
 });
 
+const at = (url: string) => async () => url;
+
 describe("same-document URL tracking", () => {
   it.each([
     ["pushState", "https://example.com/app/items/7"],
@@ -43,7 +45,7 @@ describe("same-document URL tracking", () => {
     const id = openLive();
     patchBrowserTab(id, { title: "App" });
     const epoch = nativeUrlEpoch(id);
-    expect(await syncNativeUrl(id, async () => url)).toBe(true);
+    expect(await syncNativeUrl(id, at(url))).toBe(true);
     expect(tab(id)).toMatchObject({ url, title: "App", loading: false });
     expect(nativeUrlEpoch(id)).toBe(epoch + 1);
   });
@@ -51,7 +53,7 @@ describe("same-document URL tracking", () => {
   it("changes nothing when the URL is the same", async () => {
     const id = openLive();
     const epoch = nativeUrlEpoch(id);
-    expect(await syncNativeUrl(id, async () => tab(id)!.url)).toBe(false);
+    expect(await syncNativeUrl(id, at(tab(id)!.url))).toBe(false);
     expect(nativeUrlEpoch(id)).toBe(epoch);
   });
 
@@ -102,9 +104,7 @@ describe("same-document URL tracking", () => {
         throw new Error("Browser tab is not open");
       }),
     ).toBe(false);
-    expect(await syncNativeUrl(id, async () => "file:///etc/passwd")).toBe(
-      false,
-    );
+    expect(await syncNativeUrl(id, at("file:///etc/passwd"))).toBe(false);
   });
 
   it("tracks only live tabs with a native page", () => {
@@ -124,7 +124,7 @@ describe("same-document URL tracking", () => {
 
   it("restores a suspended tab at its pushState URL", async () => {
     const id = openLive();
-    await syncNativeUrl(id, async () => "https://example.com/app/items/7");
+    await syncNativeUrl(id, at("https://example.com/app/items/7"));
     setNativeTabReady(id, false); // suspended: the view is gone
     const restored = parseBrowserState(
       JSON.parse(JSON.stringify(serializeBrowserState(getBrowserState()))),

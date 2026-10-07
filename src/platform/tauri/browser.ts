@@ -42,8 +42,48 @@ export function focusBrowserView(id: string): Promise<void> {
   return invoke("browser_focus", { id });
 }
 
-export function navigateBrowser(id: string, url: string): Promise<void> {
-  return invoke("browser_navigate", { id, url });
+export type BrowserNavigation = {
+  /**
+   * - applied: the page stayed in its document; no load follows, and `url` is
+   *   where its synchronous handlers left it.
+   * - document: the webview was told to load a document; load events report
+   *   what happens next, though one that fails before committing may report none.
+   * - unknown: not known whether a load follows (the page refused the target,
+   *   replaced it with a load not yet committed, or did not answer).
+   */
+  outcome: "applied" | "document" | "unknown";
+  url?: string;
+};
+
+/** Per tab, the last navigation handed to the native side, settled or not. */
+const dispatching = new Map<string, Promise<unknown>>();
+
+/**
+ * Navigations for one tab reach the native side one at a time, so the page
+ * applies them in the order they were made whatever order replies come in.
+ * `onDispatch` runs when this navigation's turn comes, before it is sent: the
+ * moment to read state (such as load counters) that earlier navigations of the
+ * tab can still change while this one waits. A promise it returns holds the
+ * navigation, and the tab's later ones, until it settles.
+ */
+export function navigateBrowser(
+  id: string,
+  url: string,
+  onDispatch?: () => void | Promise<void>,
+): Promise<BrowserNavigation> {
+  const turn = (dispatching.get(id) ?? Promise.resolve()).then(async () => {
+    await onDispatch?.();
+    return invoke<BrowserNavigation>("browser_navigate", { id, url });
+  });
+  const tail = turn.then(
+    () => undefined,
+    () => undefined,
+  );
+  dispatching.set(id, tail);
+  void tail.then(() => {
+    if (dispatching.get(id) === tail) dispatching.delete(id);
+  });
+  return turn;
 }
 
 export function browserHistory(

@@ -77,22 +77,6 @@ function summary(id: string) {
   return { tabId: id, url: tab?.url, title: tab?.title || undefined };
 }
 
-/** Whether `to` differs from `from` only by its fragment. */
-function isSameDocument(from: string | undefined, to: string): boolean {
-  if (!from) return false;
-  try {
-    const a = new URL(from);
-    const b = new URL(to);
-    if (!b.hash) return false;
-    a.hash = "";
-    const target = new URL(b);
-    target.hash = "";
-    return a.href === target.href;
-  } catch {
-    return false;
-  }
-}
-
 function pageUrl(input: Input): string {
   const url = browserUrlFromInput(required(input, "url"));
   if (!isBrowsableUrl(url)) throw new Error("Only http(s) pages can be opened");
@@ -110,6 +94,11 @@ type LoadOptions = {
    * so the wait ends `timedOut` instead of passing early.
    */
   since?: number;
+  /**
+   * With `since`: the navigation may not load at all, so a load that does not
+   * start within `startWithinMs` ends the wait without a timeout.
+   */
+  maybeLoads?: boolean;
 };
 
 /**
@@ -121,7 +110,12 @@ type LoadOptions = {
  */
 function waitForLoad(
   id: string,
-  { startWithinMs = 1_500, timeoutMs = LOAD_TIMEOUT_MS, since }: LoadOptions = {},
+  {
+    startWithinMs = 1_500,
+    timeoutMs = LOAD_TIMEOUT_MS,
+    since,
+    maybeLoads = false,
+  }: LoadOptions = {},
 ): Promise<LoadResult> {
   return new Promise((resolve, reject) => {
     const sawLoad = () => since !== undefined && loadGeneration(id) > since;
@@ -141,7 +135,7 @@ function waitForLoad(
       if (started && !tab.loading) finish({});
     };
     const startTimer =
-      since === undefined
+      since === undefined || maybeLoads
         ? setTimeout(() => {
             if (!started) finish({});
           }, startWithinMs)
@@ -315,15 +309,28 @@ export function createBrowserAgent(sessionId: string) {
     async browser_navigate(input) {
       const id = await useTab(input);
       const url = pageUrl(input);
-      // A fragment-only change stays in the document and emits no load.
-      const sameDocument = isSameDocument(tabSource(id)?.url, url);
-      const since = loadGeneration(id);
-      await navigateBrowserTab(id, url);
+      // A fragment-only change stays in the document and emits no load; the
+      // page itself says whether this one did. The baseline is the one taken
+      // when the navigation was dispatched, not when it was requested.
+      const { outcome, since, overlapped } = await navigateBrowserTab(id, url);
       const load = await waitForPage(
         id,
-        sameDocument ? undefined : { since },
+        outcome === "document"
+          ? { since }
+          : outcome === "unknown"
+            ? { since, maybeLoads: true }
+            : undefined,
       );
-      return { ...summary(id), ...load };
+      return {
+        ...summary(id),
+        ...load,
+        ...(overlapped
+          ? {
+              warning:
+                "An earlier navigation of this tab had not started loading; this result may reflect it instead.",
+            }
+          : {}),
+      };
     },
 
     async browser_history(input) {

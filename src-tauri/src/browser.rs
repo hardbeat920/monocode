@@ -285,13 +285,189 @@ pub fn browser_focus(app: AppHandle, id: String) -> Result<(), String> {
     find(&app, &id)?.set_focus().map_err(|e| e.to_string())
 }
 
+/// How long a fragment target waits for the page to say whether it stays in the
+/// document. A page that does not answer (hung, still blank) cannot apply a
+/// fragment either, so it is sent to the webview like any other target.
+const FRAGMENT_PROBE: Duration = Duration::from_secs(1);
+
+/// The page refuses to start a probe this much before the native side gives up
+/// on it, so a probe that was submitted but ran late does not begin changing
+/// the page after the target was handed to the webview instead. It cannot stop
+/// a probe that started in time from finishing late: the page's synchronous
+/// handlers run inside it for as long as they take.
+const PROBE_MARGIN: Duration = Duration::from_millis(200);
+
+/// Runs in the page. When `target` differs from the page's URL only by its
+/// fragment, the page applies it itself and reports what its URL is afterwards.
+/// `location.href` changes synchronously only for same-document navigations
+/// (fragments, `pushState`, `replaceState`); a document load changes it when it
+/// commits, later. So:
+///
+/// - "same:<url>": the URL changed, so the page stayed in its document, at
+///   `<url>`: the target, or wherever its handlers rewrote it to.
+/// - "unchanged": the URL did not change. A handler refused the navigation,
+///   or replaced it with a document load that has not committed yet.
+/// - "unknown": the assignment threw; the page may have done anything.
+/// - "other": the target is a different document; nothing was changed.
+/// - "expired": the probe started after `deadline` (ms since the epoch) and
+///   did nothing.
+///
+/// Both sides are normalized by the page, so the comparison cannot be fooled by
+/// how the target was spelled. The page's own scripts can replace `Date`, `URL`
+/// or `location` behavior, and handlers that react later change the URL
+/// unseen; the answer is only as good as the page's built-ins.
+fn fragment_probe(target: &Url, deadline_ms: u128) -> String {
+    let target = serde_json::to_string(target.as_str()).unwrap_or_default();
+    format!(
+        r##"(function () {{
+  var assigned = false;
+  try {{
+    if (Date.now() > {deadline_ms}) return "expired";
+    var to = new URL({target}), from = new URL(location.href);
+    var toBase = new URL(to.href), fromBase = new URL(from.href);
+    toBase.hash = ""; fromBase.hash = "";
+    if (to.href.indexOf("#") < 0 || toBase.href !== fromBase.href) return "other";
+    assigned = true;
+    location.href = {target};
+    var now = new URL(location.href).href;
+    return now === from.href && now !== to.href ? "unchanged" : "same:" + now;
+  }} catch (e) {{
+    return assigned ? "unknown" : "other";
+  }}
+}})()"##
+    )
+}
+
+/// What the native side knows about a navigation it was asked to make.
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    /// The page stayed in its document: no load follows, and `url` is where
+    /// the page's synchronous handlers left it.
+    Applied,
+    /// The webview was told to load a document. Load events report what
+    /// happens next, but a load that fails before it commits or is denied may
+    /// report none.
+    Document,
+    /// It is not known whether a load follows: the page refused the target or
+    /// replaced it with a load not yet committed, or the native navigation of a
+    /// fragment target may land in the same document without any event.
+    Unknown,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct Navigation {
+    outcome: Outcome,
+    /// The page's URL right after an applied navigation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+impl Navigation {
+    fn of(outcome: Outcome) -> Self {
+        Navigation { outcome, url: None }
+    }
+}
+
+/// What to do with the page's answer to a probe.
+#[derive(Debug, PartialEq, Eq)]
+enum Probed {
+    /// The page's answer is the outcome; the webview is not navigated.
+    Settled(Navigation),
+    /// The target is another document: navigate the webview.
+    Document,
+    /// No usable answer (none in time, expired, unexpected): navigate the
+    /// webview without knowing whether the page stays in its document.
+    Unanswered,
+}
+
+fn judge_probe(answer: &Result<String, String>) -> Probed {
+    match answer.as_deref() {
+        Ok(answer) => {
+            if let Some(url) = answer.strip_prefix("same:") {
+                return Probed::Settled(Navigation {
+                    outcome: Outcome::Applied,
+                    url: Some(url.to_string()),
+                });
+            }
+            match answer {
+                // The page already acted (or refused); navigating natively
+                // would be a second action.
+                "unchanged" | "unknown" => Probed::Settled(Navigation::of(Outcome::Unknown)),
+                "other" => Probed::Document,
+                _ => Probed::Unanswered,
+            }
+        }
+        Err(_) => Probed::Unanswered,
+    }
+}
+
+/// Whether `target` differs from `current` only by its fragment. Used only when
+/// the page did not answer: the webview's own URL can lag the page's
+/// same-document changes, so it is not trusted over the page.
+fn fragment_only_change(current: &Url, target: &Url) -> bool {
+    let (mut a, mut b) = (current.clone(), target.clone());
+    a.set_fragment(None);
+    b.set_fragment(None);
+    a == b
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
+/// Point the tab at `url`. A target with a fragment is first offered to the
+/// page, because the webview's navigation hook is not told about same-document
+/// navigations on every platform and reports only a URL, never which request or
+/// frame it belongs to; the page's own answer is the one completion that is
+/// known. Everything else, including an unanswered probe, is handed to the
+/// webview.
+///
+/// The frontend sends one navigation per tab at a time, so they are dispatched
+/// in the order they were made. That orders dispatch only: it does not order
+/// every eventual effect on the page, such as a load that starts after the next
+/// navigation was dispatched.
 #[tauri::command]
-pub fn browser_navigate(app: AppHandle, id: String, url: String) -> Result<(), String> {
+pub async fn browser_navigate(
+    app: AppHandle,
+    id: String,
+    url: String,
+) -> Result<Navigation, String> {
     let url = parse_url(&url)?;
     if is_app_origin(&app, &url) {
         return Err("That address serves MonoCode itself".into());
     }
-    find(&app, &id)?.navigate(url).map_err(|e| e.to_string())
+    let webview = find(&app, &id)?;
+    let mut outcome = Outcome::Document;
+    if url.fragment().is_some() {
+        let deadline = now_ms() + (FRAGMENT_PROBE - PROBE_MARGIN).as_millis();
+        let probe = fragment_probe(&url, deadline);
+        let page = webview.clone();
+        let answer =
+            tauri::async_runtime::spawn_blocking(move || eval_string(&page, probe, FRAGMENT_PROBE))
+                .await
+                .map_err(|e| e.to_string())?;
+        match judge_probe(&answer) {
+            Probed::Settled(navigation) => return Ok(navigation),
+            Probed::Document => {}
+            Probed::Unanswered => {
+                // A hung or blank page is most likely elsewhere entirely; only
+                // a target in the webview's current document may land without
+                // a load.
+                if webview
+                    .url()
+                    .map_or(true, |current| fragment_only_change(&current, &url))
+                {
+                    outcome = Outcome::Unknown;
+                }
+            }
+        }
+    }
+    webview.navigate(url).map_err(|e| e.to_string())?;
+    Ok(Navigation::of(outcome))
 }
 
 #[derive(Deserialize)]
@@ -570,6 +746,180 @@ pub fn browser_retain(window: Window, ids: Vec<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fragment_probe_embeds_the_target_as_a_json_string() {
+        let target = Url::parse("https://a.test/p?q=\"x\"#frag\"</script>").unwrap();
+        let script = fragment_probe(&target, 123);
+        let quoted = serde_json::to_string(target.as_str()).unwrap();
+        assert_eq!(script.matches(&quoted).count(), 2);
+        assert!(script.contains("location.href = "));
+        assert!(script.contains("Date.now() > 123"));
+    }
+
+    #[test]
+    fn probe_answers_map_to_outcomes() {
+        let ok = |s: &str| Ok::<String, String>(s.to_string());
+        assert_eq!(
+            judge_probe(&ok("same:https://a.test/#c")),
+            Probed::Settled(Navigation {
+                outcome: Outcome::Applied,
+                url: Some("https://a.test/#c".into()),
+            })
+        );
+        for unknown in ["unchanged", "unknown"] {
+            assert_eq!(
+                judge_probe(&ok(unknown)),
+                Probed::Settled(Navigation::of(Outcome::Unknown))
+            );
+        }
+        assert_eq!(judge_probe(&ok("other")), Probed::Document);
+        assert_eq!(judge_probe(&ok("expired")), Probed::Unanswered);
+        assert_eq!(judge_probe(&ok("")), Probed::Unanswered);
+        assert_eq!(
+            judge_probe(&Err("The page did not respond".into())),
+            Probed::Unanswered
+        );
+    }
+
+    #[test]
+    fn navigation_serializes_like_the_frontend_expects() {
+        let applied = Navigation {
+            outcome: Outcome::Applied,
+            url: Some("https://a.test/#b".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::json!({ "outcome": "applied", "url": "https://a.test/#b" })
+        );
+        assert_eq!(
+            serde_json::to_value(Navigation::of(Outcome::Document)).unwrap(),
+            serde_json::json!({ "outcome": "document" })
+        );
+        assert_eq!(
+            serde_json::to_value(Navigation::of(Outcome::Unknown)).unwrap(),
+            serde_json::json!({ "outcome": "unknown" })
+        );
+    }
+
+    #[test]
+    fn only_a_fragment_change_of_the_current_document_is_unknown() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(fragment_only_change(
+            &u("https://a.test/p"),
+            &u("https://a.test/p#x")
+        ));
+        assert!(fragment_only_change(
+            &u("https://a.test/p#y"),
+            &u("https://a.test/p#x")
+        ));
+        assert!(!fragment_only_change(
+            &u("about:blank"),
+            &u("https://a.test/p#x")
+        ));
+        assert!(!fragment_only_change(
+            &u("https://a.test/q"),
+            &u("https://a.test/p#x")
+        ));
+    }
+
+    /// Run the generated probe in Node against a stub `location` whose setter
+    /// behaves like the page's handlers would. `None` when Node is unavailable.
+    fn run_probe(cases: &[(&str, &str, &str, u128)]) -> Option<Vec<Value>> {
+        let driver = r##"
+          const cases = JSON.parse(process.argv[1]);
+          const results = [];
+          for (const { start, handler, script } of cases) {
+            let href = start, assigned = 0;
+            globalThis.location = {
+              get href() { return href; },
+              set href(to) {
+                assigned++;
+                const next = new URL(to, href).href;
+                if (handler === "apply") href = next;
+                else if (handler === "rewrite-fragment") href = new URL("#c", href).href;
+                else if (handler === "rewrite-path") href = new URL("/other#x", href).href;
+                else if (handler === "throw") { href = next; throw new Error("handler"); }
+                // "refuse": the URL stays; a document load would commit later.
+              },
+            };
+            results.push({ answer: (0, eval)(script), href, assigned });
+          }
+          console.log(JSON.stringify(results));
+        "##;
+        let payload: Vec<Value> = cases
+            .iter()
+            .map(|(start, target, handler, deadline)| {
+                serde_json::json!({
+                    "start": start,
+                    "handler": handler,
+                    "script": fragment_probe(&Url::parse(target).unwrap(), *deadline),
+                })
+            })
+            .collect();
+        let out = run_node(driver, &serde_json::to_string(&payload).unwrap())?;
+        Some(serde_json::from_slice(&out.stdout).unwrap())
+    }
+
+    #[test]
+    fn fragment_probe_executes() {
+        let future = now_ms() + 60_000;
+        let Some(results) = run_probe(&[
+            ("https://a.test/p", "https://a.test/p#b", "apply", future),
+            ("https://a.test/p", "https://a.test/p#b", "refuse", future),
+            (
+                "https://a.test/p",
+                "https://a.test/p#b",
+                "rewrite-fragment",
+                future,
+            ),
+            (
+                "https://a.test/p",
+                "https://a.test/p#b",
+                "rewrite-path",
+                future,
+            ),
+            ("https://a.test/p", "https://a.test/p#b", "throw", future),
+            ("https://a.test/p", "https://b.test/p#b", "apply", future),
+            ("https://a.test/p#b", "https://a.test/p#b", "refuse", future),
+            ("https://a.test/p", "https://a.test/p#", "apply", future),
+            ("https://a.test/p", "https://a.test/p#b", "apply", 0),
+        ]) else {
+            return;
+        };
+        let got: Vec<(String, u64)> = results
+            .iter()
+            .map(|r| {
+                (
+                    r["answer"].as_str().unwrap().to_string(),
+                    r["assigned"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        let want = [
+            ("same:https://a.test/p#b", 1),
+            ("unchanged", 1),
+            ("same:https://a.test/p#c", 1),
+            ("same:https://a.test/other#x", 1),
+            ("unknown", 1),
+            ("other", 0),
+            // Already at the target: nothing to refuse.
+            ("same:https://a.test/p#b", 1),
+            ("same:https://a.test/p#", 1),
+            // A probe that starts late does not touch the page.
+            ("expired", 0),
+        ];
+        let want: Vec<(String, u64)> = want.iter().map(|(a, n)| (a.to_string(), *n)).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn only_targets_with_a_fragment_are_probed() {
+        let has = |s: &str| Url::parse(s).unwrap().fragment().is_some();
+        assert!(has("https://a.test/#"));
+        assert!(has("https://a.test/p#x"));
+        assert!(!has("https://a.test/p"));
+    }
 
     #[test]
     fn labels_reject_anything_but_plain_ids() {

@@ -394,9 +394,48 @@ describe("browser tools waiting on a tab", () => {
     expect(String(call.error)).toMatch(/webview failed/);
   });
 
+  it("does not wait out the full timeout when an unknown outcome never loads", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    vi.mocked(navigateBrowser).mockResolvedValueOnce({ outcome: "unknown" });
+    const call = track(
+      createBrowserAgent("s1")("browser_navigate", {
+        tabId: id,
+        url: "https://example.com/#hash",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(call.done).toBe(true);
+    expect(call.value).not.toHaveProperty("timedOut");
+  });
+
+  it("does not count a load that began before the navigation was dispatched", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    vi.mocked(navigateBrowser).mockImplementationOnce(
+      async (_id, _url, onDispatch) => {
+        // An earlier navigation's load started while this one was queued.
+        noteLoadStarted(id);
+        onDispatch?.();
+        return { outcome: "document" };
+      },
+    );
+    const call = track(
+      createBrowserAgent("s1")("browser_navigate", {
+        tabId: id,
+        url: "https://example.com/next",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    // The earlier load does not complete this navigation's wait.
+    expect(call.done).toBe(false);
+  });
+
   it("navigates without load events and leaves the tab usable", async () => {
     const id = openTab();
     setNativeTabReady(id, true);
+    // The page applied the fragment itself and said so.
+    vi.mocked(navigateBrowser).mockResolvedValueOnce({ outcome: "applied" });
     const call = track(
       createBrowserAgent("s1")("browser_navigate", {
         tabId: id,
@@ -410,9 +449,32 @@ describe("browser tools waiting on a tab", () => {
     expect(navigateBrowser).toHaveBeenCalledWith(
       id,
       "https://example.com/#hash",
+      expect.any(Function),
     );
     await evalCall(id);
     expect(evals).toEqual([id]);
+  });
+
+  it("waits for a load when the page leaves a fragment target to the webview", async () => {
+    const id = openTab();
+    setNativeTabReady(id, true);
+    patchBrowserTab(id, { url: "https://example.com/a" });
+    // The page was already somewhere else (pushState the store has not seen),
+    // so the fragment target is a document navigation.
+    vi.mocked(navigateBrowser).mockResolvedValueOnce({ outcome: "document" });
+    const call = track(
+      createBrowserAgent("s1")("browser_navigate", {
+        tabId: id,
+        url: "https://example.com/a#section",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(call.done).toBe(false);
+    patchBrowserTab(id, { loading: true });
+    await vi.advanceTimersByTimeAsync(0);
+    patchBrowserTab(id, { loading: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.done).toBe(true);
   });
 
   it("waits for normal navigation load events", async () => {
