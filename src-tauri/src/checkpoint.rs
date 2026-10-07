@@ -3803,6 +3803,8 @@ mod tests {
         assert!(!store.cleanup_safe("worker", &from).unwrap());
     }
 
+    // Windows rejects `>` in file names, so these names only exist on Unix.
+    #[cfg(unix)]
     #[test]
     fn isolated_worker_applies_names_with_spaces_and_arrows_literally() {
         let lead = tmp("isolated-literal");
@@ -3828,6 +3830,8 @@ mod tests {
         assert_eq!(read(&lead.0.join("notes.txt")), "lead notes\n");
     }
 
+    // Windows rejects `>` in file names, so these names only exist on Unix.
+    #[cfg(unix)]
     #[test]
     fn isolated_worker_deletes_a_tracked_arrow_name_literally() {
         let lead = tmp("isolated-literal-delete");
