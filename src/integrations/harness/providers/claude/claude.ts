@@ -734,12 +734,8 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     const compaction = compactionEventFromSystem(rec);
     if (compaction?.type === "context.compacted") {
       live.compactionConfirmed = true;
-      live.onEvent(
-        live.manualCompaction ? { ...compaction, trigger: "manual" } : compaction,
-      );
-    } else if (compaction) {
-      live.onEvent(compaction);
     }
+    if (compaction) live.onEvent(compaction);
     const text = statusTextFromSystem(rec);
     if (text) live.onEvent({ type: "status", text });
   }

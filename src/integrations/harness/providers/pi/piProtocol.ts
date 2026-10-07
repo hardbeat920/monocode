@@ -10,8 +10,8 @@ import { extractToolPreview, titleFromToolInput } from "../../core/preview";
 import { streamTextDelta } from "../../core/streamText";
 import type { HarnessEvent } from "../../core/types";
 import {
-  COMPACTING_TEXT,
-  COMPACTION_STATUS_KEY,
+  compactingStatus,
+  compactingStatusCleared,
 } from "../../../../features/sessions/model/contextBoundary";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
@@ -594,25 +594,26 @@ export function agentEndWillRetry(
 /**
  * Compaction as Pi reports it. `compaction_end` carries a result only when it
  * compacted; an aborted or failed pass has none, so its progress row clears.
- * Pi keeps the entries from `firstKeptEntryId` on alongside its summary.
+ * Pi keeps the entries from `firstKeptEntryId` on alongside its summary;
+ * without one we cannot tell what it kept.
  */
 export function compactionEventFromPiEvent(
   rec: Record<string, unknown>,
 ): HarnessEvent | null {
   const type = stringField(rec, "type");
   if (type === "compaction_start") {
-    return { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT };
+    return compactingStatus();
   }
   if (type !== "compaction_end") return null;
   const result = asRecord(rec.result);
   if (!result || rec.aborted === true) {
-    return { type: "status", key: COMPACTION_STATUS_KEY, text: "" };
+    return compactingStatusCleared();
   }
   const preTokens = numberField(result, "tokensBefore");
   return {
     type: "context.compacted",
     trigger: stringField(rec, "reason") === "manual" ? "manual" : "auto",
-    kept: stringField(result, "firstKeptEntryId") ? "recent" : "none",
+    kept: stringField(result, "firstKeptEntryId") ? "recent" : "unknown",
     ...(preTokens ? { preTokens } : {}),
   };
 }

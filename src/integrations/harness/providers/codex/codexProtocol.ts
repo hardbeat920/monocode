@@ -15,10 +15,7 @@ import {
 } from "../../../../features/sessions/model/attachments";
 import { displayPath } from "../../../../shared/lib/paths";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
-import {
-  COMPACTING_TEXT,
-  COMPACTION_STATUS_KEY,
-} from "../../../../features/sessions/model/contextBoundary";
+import { compactingStatus } from "../../../../features/sessions/model/contextBoundary";
 import {
   composeToolTitle,
   extractToolPreview,
@@ -627,15 +624,15 @@ function mapItemLifecycle(
     return { events: [] };
   }
 
-  // The item carries no trigger, so this reads as automatic; the live session
-  // knows when it asked for one. Codex rebuilds history from your recent
-  // prompts, word for word, plus its summary of everything else.
+  // The item carries no trigger, so this reads as automatic; a compaction the
+  // user asked for is marked manual by `runManualCompaction`. Codex rebuilds
+  // history from your recent prompts, word for word, plus its summary.
   if (itemType === "contextCompaction") {
     return {
       events: [
         completed
           ? { type: "context.compacted", trigger: "auto", kept: "user-messages" }
-          : { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT },
+          : compactingStatus(),
       ],
     };
   }

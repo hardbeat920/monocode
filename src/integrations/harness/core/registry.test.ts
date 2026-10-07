@@ -211,6 +211,32 @@ describe("harness registry", () => {
     ]);
   });
 
+  it("marks the boundary of a compaction it asked for as manual", async () => {
+    // Codex and OpenCode report the boundary without saying who started it.
+    registerHarness(
+      stub("codex", {
+        compactContext: async (input) =>
+          input.onEvent({
+            type: "context.compacted",
+            trigger: "auto",
+            kept: "user-messages",
+          }),
+      }),
+    );
+    const events: HarnessEvent[] = [];
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-manual",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "user-messages" },
+    ]);
+  });
+
   it("clears compaction progress when no boundary lands", async () => {
     // A cancelled compaction resolves quietly; a failed one rejects.
     registerHarness(stub("codex", { compactContext: async () => undefined }));

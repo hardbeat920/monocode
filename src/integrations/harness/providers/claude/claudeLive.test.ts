@@ -1968,14 +1968,14 @@ describe("claude manual compaction", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await compact;
 
-    // The CLI sent no metadata, but MonoCode asked for this one.
+    // With no metadata, what Claude kept is unknown.
     expect(
       events.filter(
         (event) =>
           event.type === "context.compacted" || event.type === "status",
       ),
     ).toEqual([
-      { type: "context.compacted", trigger: "manual", kept: "unknown" },
+      expect.objectContaining({ type: "context.compacted", kept: "unknown" }),
     ]);
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });

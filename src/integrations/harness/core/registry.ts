@@ -19,7 +19,7 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
-import { compactWithProgress } from "./compaction";
+import { runManualCompaction } from "./compaction";
 
 export type TitleInput = {
   sessionId: string;
@@ -261,9 +261,7 @@ export function compactHarnessContext(
     }
     cancelIdlePark(input.sessionId);
     try {
-      await compactWithProgress(input, (next) =>
-        adapter.compactContext!(next),
-      );
+      await runManualCompaction(input, (next) => adapter.compactContext!(next));
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }

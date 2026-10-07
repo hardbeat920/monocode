@@ -4637,7 +4637,9 @@ function ContextBoundaryDivider({ block }: { block: Block }) {
           className="max-w-[min(100%,28rem)] px-1.5 text-center font-sans text-[12px] text-content/55"
         >
           <div>{label}</div>
-          {note ? <div className="text-[11px] text-content/40">{note}</div> : null}
+          {note ? (
+            <div className="text-[11px] text-content/40">{note}</div>
+          ) : null}
         </div>
         <div className="h-px min-w-4 flex-1 bg-content/12" />
       </div>

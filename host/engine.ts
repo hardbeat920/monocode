@@ -30,7 +30,7 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import type { HostProvider } from "./providers";
-import { compactWithProgress } from "../src/integrations/harness/core/compaction";
+import { runManualCompaction } from "../src/integrations/harness/core/compaction";
 import { HostStore } from "./store";
 import { parseRemoteAttachments, resolveAttachments } from "./attachments";
 
@@ -802,7 +802,7 @@ export class HostEngine {
               onEvent: (event) => this.event(session.id, runId!, event),
             };
             if (prompt === null)
-              await compactWithProgress(input, (next) =>
+              await runManualCompaction(input, (next) =>
                 provider.compact!(next),
               );
             else

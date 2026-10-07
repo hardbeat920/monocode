@@ -1961,7 +1961,7 @@ describe("codex live turn sequence", () => {
     expect(settled).toBe(true);
   });
 
-  it("marks a compaction it asked for as manual", async () => {
+  it("marks one boundary for a compaction it asked for", async () => {
     const { turn } = await startTurn("codex-live");
     notify("turn/completed", {
       turn: { id: "turn_1", status: "completed" },
@@ -1999,10 +1999,14 @@ describe("codex live turn sequence", () => {
     });
     await compact;
 
+    // `runManualCompaction` marks it manual; see registry.test.
     expect(
       events.filter((event) => event.type === "context.compacted"),
     ).toEqual([
-      { type: "context.compacted", trigger: "manual", kept: "user-messages" },
+      expect.objectContaining({
+        type: "context.compacted",
+        kept: "user-messages",
+      }),
     ]);
   });
 

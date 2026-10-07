@@ -1,3 +1,4 @@
+import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import type { Block } from "./session";
 
 /**
@@ -6,8 +7,20 @@ import type { Block } from "./session";
  */
 export const COMPACTION_STATUS_KEY = "compaction";
 
-export const COMPACTING_TEXT = "Compacting context…";
+const COMPACTING_TEXT = "Compacting context…";
 export const COMPACTED_TEXT = "Context compacted";
+
+type CompactionProgress = Extract<HarnessEvent, { type: "status" }>;
+
+/** The keyed row a harness shows while it compacts. */
+export function compactingStatus(): CompactionProgress {
+  return { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT };
+}
+
+/** Removes that row when a compaction ends without landing. */
+export function compactingStatusCleared(): CompactionProgress {
+  return { type: "status", key: COMPACTION_STATUS_KEY, text: "" };
+}
 
 /**
  * Blocks the agent no longer holds, judged by the latest boundary alone: an

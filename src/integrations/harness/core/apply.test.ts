@@ -1668,6 +1668,36 @@ describe("context boundaries", () => {
     expect(session.blocks[0].streaming).toBe(false);
   });
 
+  it("drops a compacting row the turn ended without resolving", () => {
+    // An automatic compaction that failed or was aborted never sends a boundary.
+    const compacting = (session: Session) =>
+      applyHarnessEvent(session, {
+        type: "status",
+        key: "compaction",
+        text: "Compacting context…",
+      });
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(compacting(session), {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+    });
+    session = compacting(session);
+    expect(stopStreaming(session).blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+    ]);
+
+    const failed = applyHarnessEvent(compacting(appendUser(newSession("claude", "/tmp"), "go")), {
+      type: "session.error",
+      message: "Claude Code could not compact this context",
+    });
+    expect(failed.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Claude Code could not compact this context",
+    ]);
+  });
+
   it("survives a save", () => {
     let session = appendUser(newSession("codex", "/tmp"), "go");
     session = applyHarnessEvent(session, {

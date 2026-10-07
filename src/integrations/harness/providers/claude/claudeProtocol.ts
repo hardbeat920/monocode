@@ -10,10 +10,7 @@ import {
   promptText,
 } from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
-import {
-  COMPACTING_TEXT,
-  COMPACTION_STATUS_KEY,
-} from "../../../../features/sessions/model/contextBoundary";
+import { compactingStatus } from "../../../../features/sessions/model/contextBoundary";
 import {
   isTaskListToolName,
   normalizeTaskListStatus,
@@ -493,7 +490,7 @@ export function compactionEventFromSystem(
   const subtype = stringField(rec, "subtype");
   if (subtype === "status") {
     return stringField(rec, "status") === "compacting"
-      ? { type: "status", key: COMPACTION_STATUS_KEY, text: COMPACTING_TEXT }
+      ? compactingStatus()
       : undefined;
   }
   if (subtype !== "compact_boundary") return undefined;

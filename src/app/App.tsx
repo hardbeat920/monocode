@@ -476,10 +476,7 @@ import {
 } from "../features/providers/model/rateLimitsFetch";
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
-import {
-  COMPACTING_TEXT,
-  COMPACTION_STATUS_KEY,
-} from "../features/sessions/model/contextBoundary";
+import { compactingStatus } from "../features/sessions/model/contextBoundary";
 import {
   discardDraftSessionRecord,
   deleteSession,
@@ -9662,11 +9659,7 @@ function Workspace({
               { ...session, busy: true },
               // Shown before the queued compaction starts; it keeps the key
               // the harness's boundary replaces.
-              {
-                type: "status",
-                key: COMPACTION_STATUS_KEY,
-                text: COMPACTING_TEXT,
-              },
+              compactingStatus(),
             )
           : session,
       );

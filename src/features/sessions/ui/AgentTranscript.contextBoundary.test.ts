@@ -52,8 +52,9 @@ function render(kept: ContextKept) {
 }
 
 function dimmed(text: string): boolean {
-  const row = [...container.querySelectorAll("[data-transcript-search-item]")]
-    .find((element) => element.textContent?.includes(text));
+  const row = [
+    ...container.querySelectorAll("[data-transcript-search-item]"),
+  ].find((element) => element.textContent?.includes(text));
   return !!row?.classList.contains("opacity-55");
 }
 

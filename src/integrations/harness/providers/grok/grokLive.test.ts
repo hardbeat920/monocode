@@ -280,7 +280,9 @@ describe("grok live turn sequence", () => {
     reply(request.id, {});
     await compact;
     // Grok reports nothing about what it kept.
-    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+    expect(
+      events.filter((event) => event.type === "context.compacted"),
+    ).toEqual([
       { type: "context.compacted", trigger: "manual", kept: "unknown" },
     ]);
     await stopGrokSession("t4");

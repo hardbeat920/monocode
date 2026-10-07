@@ -606,8 +606,15 @@ describe("turnErrorFromEvent", () => {
 describe("compactionEventFromPiEvent", () => {
   it("shows a compacting status while compaction runs", () => {
     expect(
-      compactionEventFromPiEvent({ type: "compaction_start", reason: "threshold" }),
-    ).toEqual({ type: "status", key: "compaction", text: "Compacting context…" });
+      compactionEventFromPiEvent({
+        type: "compaction_start",
+        reason: "threshold",
+      }),
+    ).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
   });
 
   it("marks the boundary with what Pi kept", () => {
@@ -636,7 +643,12 @@ describe("compactionEventFromPiEvent", () => {
         reason: "manual",
         result: { summary: "…" },
       }),
-    ).toEqual({ type: "context.compacted", trigger: "manual", kept: "none" });
+      // No cut point reported: we cannot tell what Pi kept, so claim nothing.
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "unknown",
+    });
   });
 
   it("clears the status when compaction is aborted or fails", () => {

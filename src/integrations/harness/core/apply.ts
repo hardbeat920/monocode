@@ -537,7 +537,13 @@ export function stopStreaming(session: Session, endedAt = Date.now()): Session {
     busy: false,
     turnReady: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
+    blocks: stampTurnDuration(
+      settled.blocks
+        // A compaction still "in progress" when the turn ends never landed.
+        .filter((block) => block.statusKey !== COMPACTION_STATUS_KEY)
+        .map(stopBlockProgress),
+      endedAt,
+    ),
   };
 }
 

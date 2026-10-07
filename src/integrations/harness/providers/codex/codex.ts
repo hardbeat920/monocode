@@ -108,8 +108,6 @@ type Live = {
   emittedAssistantByItem: Map<string, string>;
   emittedReasoningByItem: Map<string, string>;
   emittedGeneratedImages: Set<string>;
-  /** A compaction MonoCode asked for is running; its boundary is manual. */
-  manualCompaction: boolean;
   emittedAsyncQuestions: Set<string>;
   turnGeneration: number;
   notificationQueue: Promise<void> | null;
@@ -686,7 +684,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       emittedAssistantByItem: new Map(),
       emittedReasoningByItem: new Map(),
       emittedGeneratedImages: new Set(),
-      manualCompaction: false,
       emittedAsyncQuestions: new Set(),
       turnGeneration: 0,
       notificationQueue: null,
@@ -787,7 +784,6 @@ async function runCompaction(live: Live): Promise<void> {
   });
   settlePendingTurn(live);
 
-  live.manualCompaction = true;
   try {
     await live.rpc.request("thread/compact/start", {
       threadId: live.threadId,
@@ -795,7 +791,6 @@ async function runCompaction(live: Live): Promise<void> {
     settlePendingTurn(live);
     await turnPromise;
   } finally {
-    live.manualCompaction = false;
     live.turnDone = null;
     live.turnFailed = null;
   }
@@ -867,10 +862,6 @@ function handleNotification(
         continue;
       }
       live.onEvent(event);
-      continue;
-    }
-    if (event.type === "context.compacted" && live.manualCompaction) {
-      live.onEvent({ ...event, trigger: "manual" });
       continue;
     }
     trackAgentRow(live, event);

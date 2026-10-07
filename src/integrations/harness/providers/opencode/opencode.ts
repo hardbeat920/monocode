@@ -108,8 +108,6 @@ type Live = {
   turnMetricsByMessageId: Map<string, TurnMetrics>;
   cancelled: boolean;
   muteUpdates: boolean;
-  /** A compaction MonoCode asked for is running; its boundary is manual. */
-  manualCompaction: boolean;
   turns: Promise<void>;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
@@ -468,7 +466,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnMetricsByMessageId: new Map(),
       cancelled: false,
       muteUpdates: false,
-      manualCompaction: false,
       turns: Promise.resolve(),
       turnDone: null,
       turnFailed: null,
@@ -619,12 +616,7 @@ async function runCompaction(
   // Unlike prompt_async, summarize responds only after the compaction pass.
   // Keep this outside the normal turn latch: its eventual session.status=idle
   // must not become a pending completion for the next user turn.
-  live.manualCompaction = true;
-  try {
-    await live.client.summarizeSession(live.openCodeSessionId, model);
-  } finally {
-    live.manualCompaction = false;
-  }
+  await live.client.summarizeSession(live.openCodeSessionId, model);
 }
 
 async function handleEvent(
@@ -664,13 +656,10 @@ async function handleEvent(
   }
 
   switch (type) {
-    // OpenCode carries only the summary forward past a compaction.
+    // OpenCode carries only the summary forward past a compaction. It does
+    // not say who started one; `runManualCompaction` marks the user's own.
     case "session.compacted":
-      live.onEvent({
-        type: "context.compacted",
-        trigger: live.manualCompaction ? "manual" : "auto",
-        kept: "none",
-      });
+      live.onEvent({ type: "context.compacted", trigger: "auto", kept: "none" });
       break;
     case "message.updated": {
       const info = asRecord(properties.info);

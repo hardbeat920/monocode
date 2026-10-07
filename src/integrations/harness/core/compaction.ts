@@ -1,35 +1,31 @@
 import {
-  COMPACTING_TEXT,
-  COMPACTION_STATUS_KEY,
+  compactingStatus,
+  compactingStatusCleared,
 } from "../../../features/sessions/model/contextBoundary";
 import type { CompactContextInput, HarnessEvent } from "./types";
 
 /**
- * Run a manual compaction with the same transcript chrome locally and on a
- * remote host: a "Compacting context…" row while it runs, which the harness's
- * own boundary replaces. A cancelled compaction resolves quietly and a failed
- * one rejects; neither compacted anything, so the row is cleared instead of
- * standing in for a boundary that never happened.
+ * Run a compaction the user asked for, the same way locally and on a remote
+ * host. A "Compacting context…" row shows while it runs and the harness's own
+ * boundary replaces it, marked manual: not every harness says who started a
+ * compaction, but nothing else runs on the session meanwhile. A cancelled
+ * compaction resolves quietly and a failed one rejects; neither compacted
+ * anything, so the row is cleared instead of standing in for a boundary.
  */
-export async function compactWithProgress(
+export async function runManualCompaction(
   input: CompactContextInput,
   compact: (input: CompactContextInput) => Promise<void>,
 ): Promise<void> {
   let marked = false;
   const onEvent = (event: HarnessEvent) => {
-    if (event.type === "context.compacted") marked = true;
-    input.onEvent(event);
+    if (event.type !== "context.compacted") return input.onEvent(event);
+    marked = true;
+    input.onEvent({ ...event, trigger: "manual" });
   };
   const clear = () => {
-    if (!marked) {
-      input.onEvent({ type: "status", key: COMPACTION_STATUS_KEY, text: "" });
-    }
+    if (!marked) input.onEvent(compactingStatusCleared());
   };
-  input.onEvent({
-    type: "status",
-    key: COMPACTION_STATUS_KEY,
-    text: COMPACTING_TEXT,
-  });
+  input.onEvent(compactingStatus());
   try {
     await compact({ ...input, onEvent });
   } catch (error) {
