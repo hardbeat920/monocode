@@ -176,7 +176,7 @@ export type InboxListResult = {
   errors: InboxProviderErrors;
 };
 
-const INBOX_CACHE_FRESH_MS = 30_000;
+const INBOX_CACHE_FRESH_MS = 2 * 60_000;
 
 /** Closed history competes for the same slots, so an unfiltered fetch needs the wider page. */
 const INBOX_ALL_LIMIT = 100;
@@ -194,10 +194,22 @@ const repositoriesByPath = new Map<string, string[]>();
 const workItemByKey = new Map<string, GithubWorkItem>();
 const workItemInflight = new Map<string, Promise<GithubWorkItem>>();
 const detailsByKey = new Map<string, GithubWorkItemDetails>();
+const detailsInflight = new Map<string, Promise<GithubWorkItemDetails>>();
 const threadByKey = new Map<string, GithubWorkItemThread>();
 const threadInflight = new Map<string, Promise<GithubWorkItemThread>>();
 const prDiffByKey = new Map<string, GithubPrDiff>();
 const prDiffInflight = new Map<string, Promise<GithubPrDiff>>();
+/** When each details, thread and diff entry last arrived, by cache map key. */
+const fetchedAt = new Map<string, number>();
+
+/** Work item views can reuse anything fetched this recently instead of refetching. */
+export const GITHUB_WORK_ITEM_FRESH_MS = 30_000;
+
+function freshEnough(key: string, maxAgeMs: number | undefined): boolean {
+  if (maxAgeMs == null) return false;
+  const at = fetchedAt.get(key);
+  return at != null && Date.now() - at < maxAgeMs;
+}
 
 export function clearInboxCache() {
   inboxCacheGeneration += 1;
@@ -210,6 +222,8 @@ export function clearInboxCache() {
   workItemByKey.clear();
   workItemInflight.clear();
   detailsByKey.clear();
+  detailsInflight.clear();
+  fetchedAt.clear();
   threadByKey.clear();
   threadInflight.clear();
   prDiffByKey.clear();
@@ -446,13 +460,29 @@ export async function githubWorkItemDetails(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  options?: { maxAgeMs?: number },
 ): Promise<GithubWorkItemDetails> {
-  const details = await invoke<GithubWorkItemDetails>(
+  const key = detailsCacheKey(repo, kind, number);
+  const cached = detailsByKey.get(key);
+  if (cached && freshEnough(`details:${key}`, options?.maxAgeMs)) {
+    return cached;
+  }
+  const pending = detailsInflight.get(key);
+  if (pending) return pending;
+  const promise = invoke<GithubWorkItemDetails>(
     "git_github_work_item_details",
     { cwd, repo, kind, number },
-  );
-  detailsByKey.set(detailsCacheKey(repo, kind, number), details);
-  return details;
+  )
+    .then((details) => {
+      detailsByKey.set(key, details);
+      fetchedAt.set(`details:${key}`, Date.now());
+      return details;
+    })
+    .finally(() => {
+      if (detailsInflight.get(key) === promise) detailsInflight.delete(key);
+    });
+  detailsInflight.set(key, promise);
+  return promise;
 }
 
 export function peekGithubWorkItemThread(
@@ -468,12 +498,16 @@ export async function githubWorkItemThread(
   repo: string,
   kind: GithubTaskKind,
   number: number,
-  options?: { force?: boolean },
+  options?: { force?: boolean; maxAgeMs?: number },
 ): Promise<GithubWorkItemThread> {
   const key = detailsCacheKey(repo, kind, number);
   if (options?.force) {
     threadByKey.delete(key);
     threadInflight.delete(key);
+  }
+  const cached = threadByKey.get(key);
+  if (cached && freshEnough(`thread:${key}`, options?.maxAgeMs)) {
+    return cached;
   }
   const pending = threadInflight.get(key);
   if (pending) return pending;
@@ -485,6 +519,7 @@ export async function githubWorkItemThread(
   })
     .then((thread) => {
       threadByKey.set(key, thread);
+      fetchedAt.set(`thread:${key}`, Date.now());
       return thread;
     })
     .finally(() => {
@@ -632,10 +667,12 @@ export async function githubPrDiff(
   cwd: string,
   repo: string,
   number: number,
-  options?: { fullContext?: boolean },
+  options?: { fullContext?: boolean; maxAgeMs?: number },
 ): Promise<GithubPrDiff> {
   const fullContext = options?.fullContext === true;
   const key = prDiffCacheKey(repo, number, fullContext);
+  const cached = prDiffByKey.get(key);
+  if (cached && freshEnough(`diff:${key}`, options?.maxAgeMs)) return cached;
   const pending = prDiffInflight.get(key);
   if (pending) return pending;
   const promise = invoke<GithubPrDiff>("git_github_pr_diff", {
@@ -646,6 +683,7 @@ export async function githubPrDiff(
   })
     .then((diff) => {
       prDiffByKey.set(key, diff);
+      fetchedAt.set(`diff:${key}`, Date.now());
       return diff;
     })
     .finally(() => {
@@ -669,6 +707,22 @@ export async function listInboxItems(
   const generation = inboxCacheGeneration;
   const promise = fetchInboxItems(projects, query)
     .then((result) => {
+      // Keep the last GitHub snapshot usable while the backend waits for a
+      // rate-limit reset. Other providers can continue refreshing normally.
+      if (result.errors.github && inboxListCache?.key === key) {
+        result = {
+          ...result,
+          items: dedupeInboxItems(
+            [
+              ...result.items,
+              ...inboxListCache.items.filter(
+                (item) => item.provider === "github",
+              ),
+            ],
+            projects.map((project) => project.path),
+          ),
+        };
+      }
       if (generation === inboxCacheGeneration) {
         inboxListCache = { key, ...result, fetchedAt: Date.now() };
       }
@@ -841,9 +895,7 @@ async function fetchRepositoryInboxItems(
         state: query.state,
         limit: query.state === "all" ? INBOX_ALL_LIMIT : undefined,
       });
-      return items.map((item) =>
-        toInboxItem(item, project.path, project.repo),
-      );
+      return items.map((item) => toInboxItem(item, project.path, project.repo));
     }),
   );
   return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);

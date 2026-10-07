@@ -2424,7 +2424,7 @@ fn git_commit_file_diff_for(root: &Path, sha: &str, relative: &str) -> Result<Gi
 
 fn git_stage_file_for(root: &Path, relative: &str) -> Result<(), String> {
     let relative = resolve_repo_path(root, relative)?;
-    git_checked(root, &["add", "--", &relative])
+    git_checked(root, &["--literal-pathspecs", "add", "--", &relative])
 }
 
 fn git_stage_contents_for(root: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
@@ -2499,7 +2499,16 @@ fn git_hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<Strin
 
 fn git_unstage_file_for(root: &Path, relative: &str) -> Result<(), String> {
     let relative = resolve_repo_path(root, relative)?;
-    git_checked(root, &["restore", "--staged", "--", &relative])
+    git_checked(
+        root,
+        &[
+            "--literal-pathspecs",
+            "restore",
+            "--staged",
+            "--",
+            &relative,
+        ],
+    )
 }
 
 fn git_discard_file_for(root: &Path, relative: &str) -> Result<(), String> {
@@ -4097,7 +4106,119 @@ fn gh_checked(root: &Path, args: &[&str]) -> Result<String, String> {
     gh_run(root, args, false)
 }
 
+struct GitHubRateLimitBackoff {
+    until: SystemTime,
+    error: String,
+}
+
+// Shared by all webviews, including background Inbox and PR checks requests.
+static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
+
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+    gh_with_backoff(
+        &GITHUB_RATE_LIMIT_BACKOFF,
+        args,
+        allow_empty,
+        |args, allow_empty| gh_run_raw(root, args, allow_empty),
+    )
+}
+
+fn github_rate_limit_error(
+    backoff: &mut Option<GitHubRateLimitBackoff>,
+    now: SystemTime,
+) -> Option<String> {
+    if let Some(active) = backoff.as_ref().filter(|active| now < active.until) {
+        return Some(active.error.clone());
+    }
+    *backoff = None;
+    None
+}
+
+fn gh_with_backoff(
+    backoff: &Mutex<Option<GitHubRateLimitBackoff>>,
+    args: &[&str],
+    allow_empty: bool,
+    mut run: impl FnMut(&[&str], bool) -> Result<String, String>,
+) -> Result<String, String> {
+    if let Ok(mut slot) = backoff.lock() {
+        if let Some(error) = github_rate_limit_error(&mut slot, SystemTime::now()) {
+            return Err(error);
+        }
+    }
+    let result = run(args, allow_empty);
+    let Err(error) = &result else {
+        return result;
+    };
+    let message = error.to_lowercase();
+    let primary = message.contains("api rate limit") && message.contains("exceeded");
+    let secondary = message.contains("secondary rate limit") || message.contains("abuse detection");
+    if !primary && !secondary {
+        return result;
+    }
+    // Stop other requests immediately and resolve the reset once. If GitHub
+    // cannot return it, retry after a minute rather than hammering the API.
+    if let Ok(mut slot) = backoff.lock() {
+        if github_rate_limit_error(&mut slot, SystemTime::now()).is_some() {
+            return result;
+        }
+        *slot = Some(GitHubRateLimitBackoff {
+            until: SystemTime::now() + Duration::from_secs(60),
+            error: error.clone(),
+        });
+    } else {
+        return result;
+    }
+    if primary && message.contains("graphql") {
+        // The REST /rate_limit endpoint can disagree with the live GraphQL
+        // quota. Query the same resource that reported the exhausted budget.
+        let reset = run(
+            &[
+                "api",
+                "graphql",
+                "-f",
+                "query=query { rateLimit { remaining resetAt } }",
+            ],
+            false,
+        )
+        .and_then(|json| parse_github_rate_limit_backoff(&json));
+        if let Ok(until) = reset {
+            if let Ok(mut slot) = backoff.lock() {
+                *slot = until
+                    .filter(|until| *until > SystemTime::now())
+                    .map(|until| GitHubRateLimitBackoff {
+                        until,
+                        error: error.clone(),
+                    });
+            }
+        }
+    }
+    result
+}
+
+fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, String> {
+    let response: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let rate = &response["data"]["rateLimit"];
+    let remaining = rate["remaining"]
+        .as_u64()
+        .ok_or("GitHub did not return its remaining quota")?;
+    if remaining > 0 {
+        return Ok(None);
+    }
+    let reset = rate["resetAt"]
+        .as_str()
+        .ok_or("GitHub did not return its rate-limit reset")?;
+    let reset = time::OffsetDateTime::parse(reset, &time::format_description::well_known::Rfc3339)
+        .map_err(|error| error.to_string())?
+        .unix_timestamp();
+    let seconds = u64::try_from(reset).map_err(|error| error.to_string())?;
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds.saturating_add(1)))
+        .map(Some)
+        .ok_or_else(|| "Invalid GitHub rate-limit reset".into())
+}
+
+fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
@@ -5769,10 +5890,14 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // explorer.exe returns 1 even when it opened the folder.
         let path_str = path.to_string_lossy().replace('/', "\\");
+        // `.arg` would wrap the whole `/select,...` switch in quotes when the
+        // path has spaces; explorer ignores a quoted switch and opens its
+        // default folder instead. Only the path itself may be quoted.
         Command::new("explorer")
-            .arg(format!("/select,{path_str}"))
+            .raw_arg(format!("/select,\"{path_str}\""))
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -5817,6 +5942,107 @@ mod tests {
     use std::sync::Arc;
 
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn github_rate_limit_blocks_other_commands_until_reset() {
+        let backoff = Mutex::new(None);
+        let error = "GraphQL: API rate limit already exceeded for user ID 1.";
+        let mut calls = 0;
+        let result = gh_with_backoff(&backoff, &["pr", "list"], false, |args, _| {
+            calls += 1;
+            if args[0] == "api" {
+                Ok(
+                    r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2099-01-01T00:00:00Z"}}}"#
+                        .into(),
+                )
+            } else {
+                Err(error.into())
+            }
+        });
+        assert_eq!(result.unwrap_err(), error);
+        assert_eq!(calls, 2);
+        assert_eq!(
+            gh_with_backoff(&backoff, &["issue", "view", "42"], false, |_, _| {
+                panic!("No command may reach GitHub before the reset")
+            })
+            .unwrap_err(),
+            error
+        );
+        backoff.lock().unwrap().as_mut().unwrap().until =
+            SystemTime::now() - Duration::from_secs(1);
+        assert_eq!(
+            gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| Ok("fresh".into())).unwrap(),
+            "fresh"
+        );
+        assert!(backoff.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn github_rate_limit_probe_failure_still_pauses_requests() {
+        let backoff = Mutex::new(None);
+        let mut calls = 0;
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            calls += 1;
+            if calls == 1 {
+                Err("GraphQL: API rate limit already exceeded".into())
+            } else {
+                Err("offline".into())
+            }
+        })
+        .is_err());
+        assert_eq!(calls, 2);
+        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
+            panic!("A failed reset lookup must not cause a request storm")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn github_secondary_rate_limit_pauses_without_a_quota_probe() {
+        let backoff = Mutex::new(None);
+        let mut calls = 0;
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            calls += 1;
+            Err("You have exceeded a secondary rate limit".into())
+        })
+        .is_err());
+        assert_eq!(calls, 1);
+        assert!(backoff.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn github_network_errors_do_not_pause_other_commands() {
+        let backoff = Mutex::new(None);
+        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
+            Err("error connecting to api.github.com".into())
+        })
+        .is_err());
+        assert!(backoff.lock().unwrap().is_none());
+        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
+            Ok("fresh".into())
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn github_rate_limit_reset_parser_requires_valid_quota_data() {
+        let reset = parse_github_rate_limit_backoff(
+            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2026-10-06T13:48:40Z"}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(reset, UNIX_EPOCH + Duration::from_secs(1791294521));
+        assert!(
+            parse_github_rate_limit_backoff(r#"{"data":{"rateLimit":{"remaining":10}}}"#)
+                .unwrap()
+                .is_none()
+        );
+        assert!(parse_github_rate_limit_backoff(r#"{"errors":[{"message":"offline"}]}"#).is_err());
+        assert!(parse_github_rate_limit_backoff(
+            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"invalid"}}}"#
+        )
+        .is_err());
+    }
 
     #[test]
     fn claude_shell_commands_match_only_requested_bash_tool_ids() {
@@ -7036,6 +7262,124 @@ mod tests {
             .unwrap();
         assert!(!unstaged.staged);
         assert!(unstaged.unstaged);
+    }
+
+    #[test]
+    fn git_stage_and_unstage_directory() {
+        let dir = tmp("git-stage-directory");
+        std::fs::create_dir_all(dir.0.join("src/nested")).unwrap();
+        std::fs::create_dir_all(dir.0.join("src-other")).unwrap();
+        if !init_git_commit(
+            &dir.0,
+            &[
+                ("src/app.ts", "before\n"),
+                ("src/nested/deleted.ts", "delete me\n"),
+                ("src-other/app.ts", "before\n"),
+                ("ready.txt", "before\n"),
+                (".gitignore", "src/ignored.txt\n"),
+            ],
+        ) {
+            return;
+        }
+        std::fs::write(dir.0.join("src/app.ts"), "after\n").unwrap();
+        std::fs::remove_dir_all(dir.0.join("src/nested")).unwrap();
+        std::fs::create_dir_all(dir.0.join("src/added")).unwrap();
+        std::fs::write(dir.0.join("src/added/new.ts"), "new\n").unwrap();
+        std::fs::write(dir.0.join("src/ignored.txt"), "ignored\n").unwrap();
+        std::fs::write(dir.0.join("src-other/app.ts"), "outside\n").unwrap();
+        std::fs::write(dir.0.join("ready.txt"), "ready\n").unwrap();
+        git_stage_file_for(&dir.0, "ready.txt").unwrap();
+
+        git_stage_file_for(&dir.0, "src").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 5);
+        for file in &index.files {
+            let in_folder = file.relative.starts_with("src/");
+            assert_eq!(file.staged, in_folder || file.relative == "ready.txt");
+            assert_eq!(file.unstaged, file.relative == "src-other/app.ts");
+        }
+
+        git_unstage_file_for(&dir.0, "src").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 5);
+        for file in &index.files {
+            assert_eq!(file.staged, file.relative == "ready.txt");
+            assert_eq!(file.unstaged, file.relative != "ready.txt");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("src/app.ts")).unwrap(),
+            "after\n"
+        );
+        assert!(!dir.0.join("src/nested").exists());
+    }
+
+    #[test]
+    fn git_stage_and_unstage_deleted_directory() {
+        let dir = tmp("git-stage-deleted-directory");
+        std::fs::create_dir_all(dir.0.join("deleted/nested")).unwrap();
+        if !init_git_commit(&dir.0, &[("deleted/nested/file.ts", "before\n")]) {
+            return;
+        }
+        std::fs::remove_dir_all(dir.0.join("deleted")).unwrap();
+        git_stage_file_for(&dir.0, "deleted").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 1);
+        assert!(index.files[0].staged);
+        assert!(!index.files[0].unstaged);
+
+        git_unstage_file_for(&dir.0, "deleted").unwrap();
+        let index = git_diff_index_for(&dir.0);
+        assert_eq!(index.files.len(), 1);
+        assert!(!index.files[0].staged);
+        assert!(index.files[0].unstaged);
+        assert!(!dir.0.join("deleted").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_stage_and_unstage_literal_directory_names() {
+        for folder in ["*", "folder?", "[ab]", ":(glob)*"] {
+            let dir = tmp("git-stage-literal-directory");
+            for directory in [folder, "a", "folderx"] {
+                std::fs::create_dir(dir.0.join(directory)).unwrap();
+            }
+            let inside = format!("{folder}/inside.txt");
+            let tracked = [
+                inside.as_str(),
+                "a/other.txt",
+                "folderx/other.txt",
+                "ready.txt",
+            ];
+            let initial: Vec<_> = tracked.iter().map(|path| (*path, "before\n")).collect();
+            if !init_git_commit(&dir.0, &initial) {
+                return;
+            }
+            for path in tracked {
+                std::fs::write(dir.0.join(path), "after\n").unwrap();
+            }
+            std::fs::write(dir.0.join("private.txt"), "unrelated untracked data\n").unwrap();
+            let staged_paths = || {
+                git_run(&dir.0, &["diff", "--cached", "--name-only", "-z"])
+                    .unwrap()
+                    .split('\0')
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            };
+
+            git_stage_file_for(&dir.0, "ready.txt").unwrap();
+            git_stage_file_for(&dir.0, folder).unwrap();
+            let mut expected = vec![inside.clone(), "ready.txt".to_string()];
+            expected.sort();
+            assert_eq!(staged_paths(), expected, "stage folder {folder}");
+
+            git_unstage_file_for(&dir.0, folder).unwrap();
+            assert_eq!(staged_paths(), vec!["ready.txt"], "unstage folder {folder}");
+            assert_eq!(
+                std::fs::read_to_string(dir.0.join(&inside)).unwrap(),
+                "after\n"
+            );
+        }
     }
 
     #[test]

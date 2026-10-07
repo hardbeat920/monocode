@@ -51,7 +51,10 @@ describe("inbox transition tracker", () => {
   it("reports an issue closing and then reopening when closed items stay listed", () => {
     const tracker = new InboxTransitionTracker();
     tracker.observe([issue()], "all");
-    const closed = issue({ state: "closed", updatedAt: "2026-10-01T09:00:00Z" });
+    const closed = issue({
+      state: "closed",
+      updatedAt: "2026-10-01T09:00:00Z",
+    });
     expect(tracker.observe([closed], "all")).toEqual({
       transitions: [{ item: closed, transition: "closed" }],
       missing: [],
@@ -101,11 +104,16 @@ describe("inbox transition tracker", () => {
       transitions: [],
       missing: [open],
     });
-    const closed = issue({ state: "closed", updatedAt: "2026-10-01T09:00:00Z" });
-    expect(tracker.resolve(closed)).toEqual([{
-      item: closed,
-      transition: "closed",
-    }]);
+    const closed = issue({
+      state: "closed",
+      updatedAt: "2026-10-01T09:00:00Z",
+    });
+    expect(tracker.resolve(closed)).toEqual([
+      {
+        item: closed,
+        transition: "closed",
+      },
+    ]);
     expect(tracker.observe([], "open")).toEqual(QUIET);
   });
 
@@ -179,9 +187,9 @@ describe("inbox transition tracker", () => {
     const tracker = new InboxTransitionTracker();
     const gitlab = issue({ provider: "gitlab" });
     tracker.observe([gitlab], "all");
-    expect(
-      tracker.observe([{ ...gitlab, state: "closed" }], "all"),
-    ).toEqual(QUIET);
+    expect(tracker.observe([{ ...gitlab, state: "closed" }], "all")).toEqual(
+      QUIET,
+    );
     expect(tracker.observe([], "all")).toEqual(QUIET);
   });
 });
@@ -221,6 +229,26 @@ describe("resolving missing inbox items", () => {
     expect(tracker.observe([], "open").missing).toEqual([open]);
   });
 
+  it("ignores a lookup that completes after a newer observation", async () => {
+    const tracker = new InboxTransitionTracker();
+    const open = issue();
+    tracker.observe([open], "open");
+    const { missing } = tracker.observe([], "open");
+    let finish!: (item: InboxItem) => void;
+    const late = resolveMissingTransitions(
+      tracker,
+      missing,
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    tracker.observe([open], "open");
+    finish(issue({ state: "closed" }));
+    expect(await late).toEqual([]);
+    expect(tracker.observe([open], "open").transitions).toEqual([]);
+  });
+
   it("caps lookups per poll and leaves the rest for later", async () => {
     const tracker = new InboxTransitionTracker();
     const items = [1, 2, 3, 4].map((number) => issue({ number }));
@@ -240,7 +268,6 @@ describe("resolving missing inbox items", () => {
     expect(tracker.observe([], "open").missing).toEqual([items[3]]);
   });
 });
-
 
 describe("PR head observations", () => {
   const a = pr({ headRefOid: "a".repeat(40) });

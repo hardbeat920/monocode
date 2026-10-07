@@ -67,14 +67,14 @@ let activity: InboxActivity;
 const recents = [];
 const sessions = [session];
 
-function Harness() {
-  activity = useInboxActivity(recents, "/tmp/app", sessions);
+function Harness({ rows = sessions }: { rows?: SessionSummary[] }) {
+  activity = useInboxActivity(recents, "/tmp/app", rows);
   return null;
 }
 
-async function mount() {
+async function mount(rows = sessions) {
   await act(async () => {
-    root.render(createElement(Harness));
+    root.render(createElement(Harness, { rows }));
   });
 }
 
@@ -91,6 +91,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete (document as { hidden?: boolean }).hidden;
   act(() => root.unmount());
   container.remove();
   localStorage.clear();
@@ -207,20 +208,68 @@ describe("Inbox activity polling", () => {
     expect(githubWorkItem).not.toHaveBeenCalled();
   });
 
-  it("falls back to an exact lookup only when the Inbox omits the item", async () => {
+  it("does not individually poll linked items omitted by the Inbox", async () => {
     listInboxItems.mockResolvedValue({ items: [], errors: {} });
     githubWorkItem.mockResolvedValue(remote);
     await mount();
 
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+    expect(listInboxItems).toHaveBeenCalledTimes(1);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("bounds an hour of background traffic regardless of linked-session history", async () => {
+    vi.useFakeTimers();
+    listInboxItems.mockResolvedValue({ items: [], errors: {} });
+    const history = Array.from({ length: 200 }, (_, index) => ({
+      ...session,
+      id: `old-${index}`,
+      linkedWorkItem: { ...session.linkedWorkItem!, number: index + 1000 },
+    }));
+    await mount(history);
+    await act(async () => vi.advanceTimersByTimeAsync(60 * 60_000));
+
+    expect(listInboxItems).toHaveBeenCalledTimes(31);
+    expect(githubWorkItem).not.toHaveBeenCalled();
+  });
+
+  it("slows tray polling and coalesces repeated visibility changes", async () => {
+    vi.useFakeTimers();
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    await act(async () => vi.advanceTimersByTimeAsync(119_999));
+    expect(listInboxItems).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(listInboxItems).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(299_999));
+    expect(listInboxItems).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(listInboxItems).toHaveBeenCalledTimes(3);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+    });
+    expect(listInboxItems).toHaveBeenCalledTimes(3);
+  });
+
+  it("links a newly loaded session using the existing snapshot without refetching", async () => {
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount([]);
+    await mount([session]);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
     expect(listInboxItems).toHaveBeenCalledTimes(1);
-    expect(githubWorkItem).toHaveBeenCalledExactlyOnceWith(
-      "/tmp/app",
-      "acme/app",
-      "pr",
-      42,
-      { force: true },
-    );
+    expect(githubWorkItem).not.toHaveBeenCalled();
   });
 
   it("clears a linked-session update as soon as its remote snapshot is read", async () => {
@@ -268,7 +317,7 @@ describe("Inbox activity polling", () => {
 });
 
 describe("Inbox activity for automations", () => {
-  const POLL_MS = 30_000;
+  const POLL_MS = 2 * 60_000;
   const onActivity = vi.fn();
 
   function AutomationHarness() {
@@ -372,16 +421,25 @@ describe("Inbox activity for automations", () => {
     listInboxItems.mockResolvedValue({ items: [a], errors: {} });
     await mountForAutomations();
     expect(reportedTransitions()).toEqual([]);
-    expect(localStorage.getItem("monocode.inbox-pr-heads.v1")).toContain(a.headRefOid);
-    await act(async () => { root.render(null); });
+    expect(localStorage.getItem("monocode.inbox-pr-heads.v1")).toContain(
+      a.headRefOid,
+    );
+    await act(async () => {
+      root.render(null);
+    });
     listInboxItems.mockResolvedValue({ items: [b], errors: {} });
     await mountForAutomations();
-    expect(reportedTransitions()).toEqual([{ item: b, transition: "head_changed", previousHead: a.headRefOid }]);
+    expect(reportedTransitions()).toEqual([
+      { item: b, transition: "head_changed", previousHead: a.headRefOid },
+    ]);
     expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([b]);
     await nextPoll();
     expect(reportedTransitions()).toHaveLength(1);
     expect(githubWorkItem).not.toHaveBeenCalled();
-    listInboxItems.mockResolvedValue({ items: [b], errors: { github: "offline" } });
+    listInboxItems.mockResolvedValue({
+      items: [b],
+      errors: { github: "offline" },
+    });
     await nextPoll();
     expect(onActivity.mock.calls.at(-1)?.[2]).toEqual([]);
   });
@@ -398,4 +456,3 @@ describe("Inbox activity for automations", () => {
     expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
-

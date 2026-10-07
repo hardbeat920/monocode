@@ -7,10 +7,10 @@ import {
   useState,
 } from "react";
 import {
-  githubWorkItem,
   inboxListCacheKey,
   inboxItemKey,
   inboxProjectsForRail,
+  githubWorkItem,
   listInboxItems,
   type GithubWorkItem,
   type InboxItem,
@@ -33,10 +33,8 @@ import {
 } from "../model/inboxSeen";
 import {
   linkedSessionUpdates,
-  linkedWorkItemTargets,
   linkedWorkItemUpdateKey,
   type LinkedSessionUpdate,
-  type LinkedWorkItemTarget,
 } from "../model/linkedSessionUpdates";
 import {
   markLinkedSessionUpdateSeen,
@@ -72,9 +70,9 @@ import {
   subscribeInboxSelfActivity,
 } from "../model/inboxSelfActivity";
 
-const POLL_MS = 30_000;
-const FALLBACK_REFRESH_MS = 60_000;
-const MAX_CONCURRENT_LOOKUPS = 3;
+const POLL_MS = 2 * 60_000;
+const HIDDEN_POLL_MS = 5 * 60_000;
+const POLL_TICK_MS = 30_000;
 
 type ProjectSeenEntry = InboxSeenEntry & NotificationSubject;
 
@@ -97,41 +95,6 @@ function mergeSnapshots(
     next.set(key, item);
   }
   return next ?? current;
-}
-
-async function fetchFallbackUpdates(
-  cwd: string,
-  targets: readonly LinkedWorkItemTarget[],
-): Promise<Array<readonly [string, GithubWorkItem]>> {
-  const results: Array<readonly [string, GithubWorkItem]> = [];
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < targets.length) {
-      const target = targets[cursor++];
-      if (!target) return;
-      try {
-        const item = await githubWorkItem(
-          cwd,
-          target.item.repo,
-          target.item.kind,
-          target.item.number,
-          { force: true },
-        );
-        if (Number.isFinite(Date.parse(item.updatedAt))) {
-          results.push([target.key, item]);
-        }
-      } catch {
-        // The next shared Inbox poll retries missing items.
-      }
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(MAX_CONCURRENT_LOOKUPS, targets.length) },
-      worker,
-    ),
-  );
-  return results;
 }
 
 export type InboxActivity = {
@@ -165,10 +128,7 @@ export function useInboxActivity(
   const transitions = useRef(new InboxTransitionTracker());
   const sessionsRef = useRef(sessions);
   const onActivityRef = useRef(options?.onActivity);
-  const fallbackFetchedAt = useRef(new Map<string, number>());
-  const targetKey = linkedWorkItemTargets(sessions)
-    .map((target) => target.key)
-    .join("\0");
+  const lastPulledAt = useRef<number | null>(null);
 
   const applyUnseen = useCallback(() => {
     const preferences = loadNotificationPreferences();
@@ -228,6 +188,7 @@ export function useInboxActivity(
         return;
       }
       pulling = true;
+      lastPulledAt.current = Date.now();
       const projectPaths = projects.map((project) => project.path);
       const filters = pruneInboxFilters(loadInboxFilters(), projectPaths);
       const query: InboxQuery = {
@@ -279,11 +240,13 @@ export function useInboxActivity(
         }
         const entries = seenEntries(visible);
         entriesRef.current = entries;
-        rememberInboxItems(listed.items.map((item) => ({
-          key: inboxItemKey(item),
-          updatedAt: item.updatedAt,
-          projectPath: item.projectPath,
-        })));
+        rememberInboxItems(
+          listed.items.map((item) => ({
+            key: inboxItemKey(item),
+            updatedAt: item.updatedAt,
+            projectPath: item.projectPath,
+          })),
+        );
         seedInboxSeenIfNeeded(entries);
         const selfAuthoredEntries = entries.filter((entry) =>
           selfAuthoredKeys.has(entry.key),
@@ -295,7 +258,8 @@ export function useInboxActivity(
           if (
             item.provider !== "github" ||
             (item.kind !== "issue" && item.kind !== "pr")
-          ) continue;
+          )
+            continue;
           const updatedAt = Date.parse(item.updatedAt);
           if (!Number.isFinite(updatedAt)) continue;
           const key = linkedWorkItemUpdateKey({
@@ -314,9 +278,8 @@ export function useInboxActivity(
         }
         applyUnseen();
 
-        const targets = linkedWorkItemTargets(sessionsRef.current);
-        const targetKeys = new Set(targets.map((target) => target.key));
-        const listedKeys = new Set<string>();
+        // Linked badges reuse this list. Fetching every omitted historical
+        // item individually makes background traffic grow with session history.
         const snapshots: Array<readonly [string, GithubWorkItem]> = [];
         for (const item of listed.items) {
           const kind = item.kind;
@@ -331,8 +294,6 @@ export function useInboxActivity(
             kind,
             number: item.number,
           });
-          if (!targetKeys.has(key)) continue;
-          listedKeys.add(key);
           if (Number.isFinite(Date.parse(item.updatedAt))) {
             snapshots.push([key, { ...item, kind }]);
           }
@@ -340,25 +301,8 @@ export function useInboxActivity(
         if (snapshots.length > 0) {
           setWorkItems((current) => mergeSnapshots(current, snapshots));
         }
-
-        const now = Date.now();
-        const missing = targets.filter((target) => {
-          if (listedKeys.has(target.key)) return false;
-          const last = fallbackFetchedAt.current.get(target.key) ?? 0;
-          if (now - last < FALLBACK_REFRESH_MS) return false;
-          fallbackFetchedAt.current.set(target.key, now);
-          return true;
-        });
-        if (missing.length > 0) {
-          const fallback = await fetchFallbackUpdates(cwd, missing);
-          if (!cancelled && fallback.length > 0) {
-            setWorkItems((current) => mergeSnapshots(current, fallback));
-          }
-        }
-
         // A closed item just leaves an open-only list, so ask GitHub what
-        // happened to it. Report even if this effect was replaced meanwhile:
-        // the tracker has already recorded the change and will not repeat it.
+        // happened to it. The tracker discards stale lookup completions.
         const confirmed = await resolveMissingTransitions(
           transitions.current,
           moved.missing,
@@ -371,8 +315,12 @@ export function useInboxActivity(
               { force: true },
             ),
         );
-        if (confirmed.length > 0) {
-          onActivityRef.current?.([], confirmed, confirmed.map(({ item }) => item));
+        if (!cancelled && confirmed.length > 0) {
+          onActivityRef.current?.(
+            [],
+            confirmed,
+            confirmed.map(({ item }) => item),
+          );
         }
         transitions.current.checkpoint();
       } catch {
@@ -388,11 +336,21 @@ export function useInboxActivity(
 
     void pull(false);
     const stopSelfActivity = subscribeInboxSelfActivity(() => void pull(true));
-    // Keep polling while minimized or closed-to-tray: the webview is still
-    // alive, and Inbox automation triggers ride this same refresh.
-    const timer = window.setInterval(() => void pull(true), POLL_MS);
+    // Automation triggers still run in the tray, at a slower cadence. Resume
+    // events share the cadence so frequent focus changes cannot flood GitHub.
+    const poll = () => {
+      if (pulling) return;
+      const interval = document.hidden ? HIDDEN_POLL_MS : POLL_MS;
+      if (
+        lastPulledAt.current != null &&
+        Date.now() - lastPulledAt.current < interval
+      )
+        return;
+      void pull(true);
+    };
+    const timer = window.setInterval(poll, POLL_TICK_MS);
     const onVis = () => {
-      if (!document.hidden) void pull(true);
+      if (!document.hidden) poll();
     };
     document.addEventListener("visibilitychange", onVis);
     const onJiraChange = () => void pull(true);
@@ -404,7 +362,7 @@ export function useInboxActivity(
       window.removeEventListener(JIRA_CHANGE_EVENT, onJiraChange);
       stopSelfActivity();
     };
-  }, [applyUnseen, cwd, recents, targetKey]);
+  }, [applyUnseen, cwd, recents]);
 
   const updates = useMemo(
     () => linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt),

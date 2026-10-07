@@ -85,6 +85,7 @@ export class InboxTransitionTracker {
   private snapshots = new Map<string, Snapshot>();
   private scope: string | undefined;
   private heads = loadHeads();
+  revision = 0;
 
   /** Call only after handing transitions to the durable automation retry queue. */
   checkpoint(): void {
@@ -120,6 +121,7 @@ export class InboxTransitionTracker {
     scope: string,
     failedProviders: readonly InboxProvider[] = [],
   ): InboxTransitionObservation {
+    this.revision += 1;
     const scopeChanged = this.scope !== undefined && scope !== this.scope;
     this.scope = scope;
     const transitions: InboxTransition[] = [];
@@ -154,10 +156,15 @@ export class InboxTransitionTracker {
   }
 
   /** Records the looked-up state of an item that left the list. */
-  resolve(item: InboxItem): InboxTransition[] {
+  resolve(item: InboxItem, expectedRevision?: number): InboxTransition[] {
     const key = snapshotKey(item);
     const previous = this.snapshots.get(key);
-    if (!previous) return [];
+    if (
+      !previous ||
+      (expectedRevision !== undefined &&
+        (this.revision !== expectedRevision || !previous.listed))
+    )
+      return [];
     const transition = transitionBetween(previous.item, item);
     this.snapshots.set(key, { item, listed: false, failedLookups: 0 });
     const head = this.headChange(item);
@@ -168,10 +175,15 @@ export class InboxTransitionTracker {
   }
 
   /** Records a failed lookup so a deleted item is not retried forever. */
-  unresolved(item: InboxItem): void {
+  unresolved(item: InboxItem, expectedRevision?: number): void {
     const key = snapshotKey(item);
     const snapshot = this.snapshots.get(key);
-    if (!snapshot) return;
+    if (
+      !snapshot ||
+      (expectedRevision !== undefined &&
+        (this.revision !== expectedRevision || !snapshot.listed))
+    )
+      return;
     snapshot.failedLookups += 1;
     if (snapshot.failedLookups >= MAX_FAILED_LOOKUPS)
       this.snapshots.delete(key);
@@ -185,14 +197,16 @@ export async function resolveMissingTransitions(
   limit = MAX_LOOKUPS_PER_POLL,
 ): Promise<InboxTransition[]> {
   const transitions: InboxTransition[] = [];
+  const revision = tracker.revision;
   for (const item of missing.slice(0, limit)) {
+    if (tracker.revision !== revision) break;
     try {
       const fresh = await lookup(item);
       transitions.push(
-        ...tracker.resolve({ ...item, ...fresh, kind: item.kind }),
+        ...tracker.resolve({ ...item, ...fresh, kind: item.kind }, revision),
       );
     } catch {
-      tracker.unresolved(item);
+      tracker.unresolved(item, revision);
     }
   }
   return transitions;
