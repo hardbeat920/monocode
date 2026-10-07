@@ -55,9 +55,13 @@ import {
   writeTextFile,
   type GitFileDiffKind,
 } from "../../../platform/tauri/fs";
+import {
+  type EditorNavigation,
+  searchProject,
+  type ProjectSearchMatch,
+} from "../../search/model/search";
 import { syncWatchedMtime, watchFile } from "../model/fileWatch";
 import { displayPath } from "../../../shared/lib/paths";
-import type { EditorNavigation } from "../../search/model/search";
 import { MarkdownDocumentPreview } from "../../sessions/ui/MarkdownDocumentPreview";
 import {
   DiffCommentComposer,
@@ -95,6 +99,7 @@ import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
 import { FilePreviewSearch } from "./FilePreviewSearch";
+import { definitionFor, symbolAt } from "../editor/editorSymbolNavigation";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -484,6 +489,7 @@ export function FileEditor({
               <CodeMirrorEditor
                 key={`${path}:${reloadKey}`}
                 path={path}
+                cwd={cwd}
                 commentPath={relativePath}
                 value={loadState.content}
                 showDiff={showDiff}
@@ -500,6 +506,7 @@ export function FileEditor({
                     : undefined
                 }
                 onDocChange={setDraft}
+                onOpenFile={onOpenFile}
               />
             </div>
           }
@@ -508,6 +515,7 @@ export function FileEditor({
         <CodeMirrorEditor
           key={`${path}:${reloadKey}`}
           path={path}
+          cwd={cwd}
           commentPath={relativePath}
           value={loadState.content}
           showDiff={showDiff}
@@ -521,6 +529,7 @@ export function FileEditor({
           onStageGit={
             showDiff && gitDiff?.kind === "unstaged" ? stageGit : undefined
           }
+          onOpenFile={onOpenFile}
         />
       )}
       <footer className="flex h-6 shrink-0 items-center border-t border-stroke px-2.5 font-mono text-[10.5px] text-content/40">
@@ -546,6 +555,7 @@ export function FileEditor({
 
 export function CodeMirrorEditor({
   path,
+  cwd,
   commentPath,
   value,
   showDiff,
@@ -558,9 +568,11 @@ export function CodeMirrorEditor({
   canAutosave,
   onStageGit,
   onDocChange,
+  onOpenFile,
   formatOnSave = true,
 }: {
   path: string;
+  cwd: string;
   commentPath: string;
   value: string;
   showDiff: boolean;
@@ -573,6 +585,7 @@ export function CodeMirrorEditor({
   canAutosave: () => boolean;
   onStageGit?: (contents: string) => Promise<void>;
   onDocChange?: (content: string) => void;
+  onOpenFile?: (path: string, navigation?: EditorNavigation) => void;
   formatOnSave?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -604,6 +617,11 @@ export function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  const [references, setReferences] = useState<{
+    symbol: string;
+    matches: ProjectSearchMatch[];
+    error: string | null;
+  } | null>(null);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -619,6 +637,55 @@ export function CodeMirrorEditor({
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+
+  const findSymbol = useCallback(
+    async (view: EditorView, mode: "definition" | "references") => {
+      const symbol = symbolAt(
+        view.state.doc.toString(),
+        view.state.selection.main.head,
+      );
+      if (!symbol) return false;
+      try {
+        const result = await searchProject({
+          cwd,
+          query: symbol.name,
+          wholeWord: true,
+          searchId: crypto.randomUUID(),
+        });
+        if (mode === "definition") {
+          const definition = definitionFor(symbol.name, result.matches);
+          if (definition) onOpenFile?.(definition.path, definition);
+          else
+            setReferences({
+              symbol: symbol.name,
+              matches: [],
+              error: "No definition found",
+            });
+        } else {
+          const definition = definitionFor(symbol.name, result.matches);
+          setReferences({
+            symbol: symbol.name,
+            matches: definition
+              ? result.matches.filter(
+                  (match) =>
+                    match.path !== definition.path ||
+                    match.line !== definition.line,
+                )
+              : result.matches,
+            error: null,
+          });
+        }
+      } catch (error) {
+        setReferences({
+          symbol: symbol.name,
+          matches: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return true;
+    },
+    [cwd, onOpenFile],
+  );
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -761,11 +828,7 @@ export function CodeMirrorEditor({
       if (!loadAutosave()) return;
       autosaveTimer = window.setTimeout(() => {
         autosaveTimer = 0;
-        if (
-          dirtyRef.current &&
-          loadAutosave() &&
-          canAutosaveRef.current()
-        ) {
+        if (dirtyRef.current && loadAutosave() && canAutosaveRef.current()) {
           save(true);
         }
       }, FILE_EDITOR_AUTOSAVE_DELAY_MS);
@@ -798,6 +861,20 @@ export function CodeMirrorEditor({
           keymap.of([
             ...foldKeymap,
             { key: "Mod-s", run: () => save(), preventDefault: true },
+            {
+              key: "F12",
+              run: (view) => {
+                void findSymbol(view, "definition");
+                return true;
+              },
+            },
+            {
+              key: "Shift-F12",
+              run: (view) => {
+                void findSymbol(view, "references");
+                return true;
+              },
+            },
             {
               key: "Tab",
               run: (view) => {
@@ -839,6 +916,18 @@ export function CodeMirrorEditor({
           scheduleAutosave();
         }),
         EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (!event.metaKey && !event.ctrlKey) return false;
+            const position = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (position === null) return false;
+            view.dispatch({ selection: { anchor: position } });
+            event.preventDefault();
+            void findSymbol(view, event.shiftKey ? "references" : "definition");
+            return true;
+          },
           blur: () => {
             pendingNavigationRef.current = null;
           },
@@ -1009,6 +1098,37 @@ export function CodeMirrorEditor({
           />
         ) : null}
         <div ref={hostRef} className="min-h-0 flex-1" />
+        {references ? (
+          <div
+            className="max-h-48 shrink-0 overflow-auto border-t border-stroke bg-background-base p-2"
+            role="region"
+            aria-label={`References for ${references.symbol}`}
+          >
+            <div className="mb-1 flex items-center justify-between text-[11px] text-content/55">
+              <span>
+                {references.error ??
+                  `${references.matches.length} reference${references.matches.length === 1 ? "" : "s"} for ${references.symbol}`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setReferences(null)}
+                className="px-1 hover:text-content"
+              >
+                Close
+              </button>
+            </div>
+            {references.matches.map((match) => (
+              <button
+                key={`${match.path}:${match.line}:${match.column}`}
+                type="button"
+                onClick={() => onOpenFile?.(match.path, match)}
+                className="block w-full truncate rounded px-1 py-0.5 text-left font-mono text-[11px] text-content/70 hover:bg-content/10"
+              >
+                {match.relative}:{match.line} {match.preview.trim()}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
       {commentTarget ? (
         <DiffCommentComposer
