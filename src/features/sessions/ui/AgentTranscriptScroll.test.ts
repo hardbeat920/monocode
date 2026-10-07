@@ -38,7 +38,79 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("Mono transcript pages", () => {
+  const messages = (start: number, count: number): Block[] => Array.from({ length: count }, (_, i) => ({ id: `user-${start + i}`, role: "user", text: `Message ${start + i}` }));
+
+  it("renders ten Mono turns while ordinary sessions retain twenty", () => {
+    const blocks = messages(0, 30);
+    act(() => root.render(createElement(AgentTranscript, { key: "normal", blocks })));
+    expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
+    expect(container.textContent).toContain("Load earlier messages");
+    act(() => root.render(createElement(AgentTranscript, { key: "mono", blocks, initialTurns: 10, pageSize: 10, loadEarlierOnScroll: true, bottomAligned: true })));
+    expect(container.querySelectorAll(".transcript-turn")).toHaveLength(10);
+    expect(container.textContent).not.toContain("Message 19");
+    expect(container.textContent).not.toContain("Load earlier messages");
+    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    act(() => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+    expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
+  });
+
+  it("awaits an older database page, prevents duplicate loads, and preserves scroll position", async () => {
+    let blocks = messages(10, 10);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const render = () => root.render(createElement(AgentTranscript, { blocks, initialTurns: 10, pageSize: 10, hasEarlier: true, loadEarlierOnScroll: true, bottomAligned: true, onLoadEarlier: load }));
+    const load = vi.fn(async (beforePrepend: () => void) => { await pending; beforePrepend(); blocks = [...messages(0, 10), ...blocks]; render(); });
+    act(render);
+    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    let top = 600;
+    let streamedHeight = 0;
+    Object.defineProperties(scroller, {
+      scrollHeight: { get: () => blocks.length * 100 + streamedHeight },
+      clientHeight: { get: () => 400 },
+      scrollTop: { get: () => top, set: (value: number) => { top = value; } },
+    });
+    for (const turn of scroller.querySelectorAll<HTMLElement>(".transcript-turn")) {
+      turn.getBoundingClientRect = () => {
+        const y = blocks.findIndex((block) => block.id === turn.dataset.transcriptTurn) * 100 - top;
+        return { top: y, bottom: y + 100 } as DOMRect;
+      };
+    }
+    // Opening at the bottom and scrolling away from the top fetch nothing.
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+    expect(load).not.toHaveBeenCalled();
+    act(() => {
+      top = 100;
+      scroller.dispatchEvent(new Event("scroll"));
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    });
+    expect(load).toHaveBeenCalledOnce();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading earlier");
+    // While the database request is pending, the reader keeps scrolling and
+    // the live reply grows below them. Neither belongs to the prepend shift.
+    top = 40;
+    streamedHeight = 100;
+    await act(async () => { finish(); await pending; });
+    expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
+    expect(top).toBe(1040);
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the page available to retry after a failed load", async () => {
+    const load = vi.fn().mockRejectedValueOnce(new Error("Disk busy")).mockResolvedValueOnce(undefined);
+    act(() => root.render(createElement(AgentTranscript, { blocks: messages(0, 10), initialTurns: 10, pageSize: 10, hasEarlier: true, loadEarlierOnScroll: true, bottomAligned: true, onLoadEarlier: load })));
+    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Scroll up to retry");
+    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
 });
 
 describe("subagent scrolling", () => {
@@ -146,6 +218,34 @@ describe("subagent scrolling", () => {
     height = 1100;
     act(() => observer.resize());
     expect(top).toBe(300);
+
+    act(() => {
+      top = 820;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    height = 1140;
+    act(() => observer.resize());
+    expect(top).toBe(860);
+
+    // A resize can precede the scroll event from a manual upward move.
+    top = 856;
+    height = 1180;
+    act(() => observer.resize());
+    expect(top).toBe(856);
+
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+      top = 900;
+      scroller.dispatchEvent(new Event("scroll"));
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -4 }));
+      top = 896;
+      scroller.dispatchEvent(new Event("scroll"));
+      top = 898;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    height = 1220;
+    act(() => observer.resize());
+    expect(top).toBe(898);
   });
 });
 
@@ -177,7 +277,7 @@ describe("transcript scrolling", () => {
     const observer = observers.find((item) => item.targets.includes(scroller))!;
     act(() => observer.resize());
     expect(geometry.top).toBe(600);
-    return { scroller, geometry, observer };
+    return { scroller, geometry, observer, blocks };
   }
 
   it("keeps following when a queued scroll event lands after content grows", () => {
@@ -197,6 +297,57 @@ describe("transcript scrolling", () => {
     geometry.height = 1100;
     act(() => observer.resize());
     expect(geometry.top).toBe(596);
+  });
+
+  it.each(["resize", "stream update"])(
+    "respects an upward move before its scroll event arrives during a %s",
+    (change) => {
+      const { scroller, geometry, observer, blocks } = mountScroller();
+      // The browser moves first; a streaming commit or resize can run before
+      // its asynchronous scroll event is dispatched.
+      geometry.top = 560;
+      geometry.height = 1100;
+      act(() => {
+        if (change === "resize") observer.resize();
+        else
+          root.render(
+            createElement(AgentTranscript, {
+              blocks: [blocks[0], { ...blocks[1], text: "One\n\nTwo" }],
+              busy: true,
+            }),
+          );
+      });
+      expect(geometry.top).toBe(560);
+
+      act(() => scroller.dispatchEvent(new Event("scroll")));
+      geometry.height = 1200;
+      act(() => observer.resize());
+      expect(geometry.top).toBe(560);
+    },
+  );
+
+  it("waits for the bottom before resuming after small downward movement", () => {
+    const { scroller, geometry, observer } = mountScroller();
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -4 }));
+      geometry.top = 596;
+      scroller.dispatchEvent(new Event("scroll"));
+      // A slight reversal inside the follow margin still leaves the reader
+      // above the end. The next token must not pull them back down.
+      geometry.top = 598;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    geometry.height = 1100;
+    act(() => observer.resize());
+    expect(geometry.top).toBe(598);
+
+    act(() => {
+      geometry.top = 700;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    geometry.height = 1200;
+    act(() => observer.resize());
+    expect(geometry.top).toBe(800);
   });
 
   it.each(["viewport grows", "content shrinks"])(
@@ -276,7 +427,131 @@ describe("transcript scrolling", () => {
     expect(geometry.top).toBe(700);
   });
 
-  it("lets a wheel up inside the bottom margin leave a streaming reply", () => {
+  it("keeps an opening Mono pinned through scroll events queued before layout settles", () => {
+    const showJump = vi.fn();
+    act(() => root.render(createElement(AgentTranscript, {
+      blocks: Array.from({ length: 10 }, (_, i): Block => ({ id: `u${i}`, role: "user", text: `Question ${i}` })),
+      initialTurns: 10,
+      bottomAligned: true,
+      onJumpToBottomChange: showJump,
+    })));
+    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    let height = 1000;
+    let top = 0;
+    Object.defineProperties(scroller, {
+      scrollHeight: { get: () => height },
+      clientHeight: { get: () => 400 },
+      scrollTop: { get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - 400)); } },
+    });
+    const resize = () => act(() => {
+      for (const observer of observers) {
+        if (observer.targets.includes(scroller)) observer.resize();
+      }
+    });
+    resize();
+    expect(top).toBe(600);
+    height = 1040;
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+    resize();
+    expect(top).toBe(640);
+    expect(showJump).toHaveBeenLastCalledWith(false);
+    expect(scroller.querySelector<HTMLElement>("[data-transcript-content]")!.style.transform).toBe("");
+  });
+
+  it.each([false, true])(
+    "keeps manual Mono scrolling near the bottom unpinned (busy: %s)",
+    (busy) => {
+      const blocks: Block[] = [
+        { id: "user", role: "user", text: "Explain auth" },
+        { id: "reply", role: "assistant", text: "Answer" },
+      ];
+      const showJump = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(
+        () => ({ cancel: vi.fn() }) as unknown as Animation,
+      );
+      const render = () =>
+        act(() =>
+          root.render(
+            createElement(AgentTranscript, {
+              blocks: [...blocks],
+              bottomAligned: true,
+              busy,
+              onJumpToBottomChange: showJump,
+            }),
+          ),
+        );
+      render();
+      const scroller =
+        container.querySelector<HTMLDivElement>(".agent-transcript")!;
+      const content = scroller.querySelector<HTMLElement>(
+        "[data-transcript-content]",
+      )!;
+      const turn = content.lastElementChild!;
+      let height = 1000;
+      let top = 0;
+      Object.defineProperties(scroller, {
+        scrollHeight: { get: () => height },
+        clientWidth: { get: () => 640 },
+        clientHeight: { get: () => 400 },
+        scrollTop: {
+          get: () => top,
+          set: (value: number) => {
+            top = Math.max(0, Math.min(value, height - 400));
+          },
+        },
+      });
+      turn.getBoundingClientRect = () => {
+        const offset = Number.parseFloat(
+          content.style.transform.match(/translateY\((.*)px\)/)?.[1] ?? "0",
+        );
+        return { top: 100 - top + offset } as DOMRect;
+      };
+      const resize = () =>
+        act(() => {
+          for (const observer of observers) {
+            if (observer.targets.includes(scroller)) observer.resize();
+          }
+        });
+      resize();
+      expect(top).toBe(600);
+
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+        top = 300;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      resize();
+      for (const distance of [20, 10, 2]) {
+        act(() => {
+          top = 600 - distance;
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+        render();
+        resize();
+        expect(top).toBe(600 - distance);
+        expect(content.style.transform).toBe("");
+        expect(showJump).toHaveBeenLastCalledWith(true);
+      }
+
+      act(() => {
+        top = 600;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      render();
+      resize();
+      expect(content.style.transform).toBe("");
+      expect(showJump).toHaveBeenLastCalledWith(false);
+
+      height += 40;
+      resize();
+      expect(top).toBe(640);
+      expect(content.style.transform).toBe(busy ? "translateY(40px)" : "");
+    },
+  );
+
+    it("lets a wheel up inside the bottom margin leave a streaming reply", () => {
     const blocks = (text: string): Block[] => [
       { id: "user", role: "user", text: "Explain auth" },
       { id: "reply", role: "assistant", text },
