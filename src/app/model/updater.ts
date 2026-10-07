@@ -49,8 +49,8 @@ export async function packageManagedInstall(): Promise<PackageManagedInstall | n
 
 export function packageManagerHint(kind: PackageManagedInstall): string {
   return kind === "deb"
-    ? "Update MonoCode with your package manager (sudo apt install ./MonoCode_*.deb)."
-    : "Update MonoCode with your package manager (sudo dnf install ./MonoCode-*.rpm).";
+    ? `Download one .deb from ${RELEASES_URL} and install that file: sudo apt install ./MonoCode_<version>_amd64.deb`
+    : `Download one .rpm from ${RELEASES_URL} and install that file: sudo dnf install ./MonoCode-<version>-1.x86_64.rpm`;
 }
 
 function isTargetMissingError(error: unknown): boolean {
@@ -101,7 +101,7 @@ export async function runUpdateFlow(
     };
     onProgress?.(idle);
     if (manual) {
-      await message(`${packageManagerHint(managed)}\n\nReleases: ${RELEASES_URL}`, {
+      await message(packageManagerHint(managed), {
         title: "MonoCode",
       });
     }

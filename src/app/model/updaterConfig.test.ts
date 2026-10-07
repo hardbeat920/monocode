@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask, message }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch }));
 vi.mock("../../features/settings/model/sounds", () => ({ announceUpdateAvailable: vi.fn() }));
 
-import { probeForUpdate, runUpdateFlow } from "./updater";
+import { packageManagerHint, probeForUpdate, runUpdateFlow } from "./updater";
 
 describe("updater", () => {
   beforeEach(() => {
@@ -64,6 +64,13 @@ describe("updater", () => {
       error: "network failed",
     });
     expect(message).toHaveBeenCalledOnce();
+  });
+
+  it.each(["deb", "rpm"] as const)("names one %s installer and the releases URL", (kind) => {
+    const hint = packageManagerHint(kind);
+    expect(hint).toContain("https://github.com/hardbeat920/monocode/releases/latest");
+    expect(hint).not.toContain("*");
+    expect(hint).toContain(kind === "deb" ? "sudo apt install ./MonoCode_<version>_amd64.deb" : "sudo dnf install ./MonoCode-<version>-1.x86_64.rpm");
   });
 
   it.each([
