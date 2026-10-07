@@ -777,8 +777,11 @@ export function CodeMirrorEditor({
       extensions: [
         minimalSetup,
         showDiff ? editorGitConfig.of(editorGit(gitOptions)) : [],
-        lineNumbers(),
-        foldGutter(),
+        // Diff tabs put the fold arrows first so each line number sits right
+        // beside its +/- glyph.
+        showDiff
+          ? [foldGutter(), lineNumbers()]
+          : [lineNumbers(), foldGutter()],
         highlightActiveLine(),
         highlightActiveLineGutter(),
         EditorView.lineWrapping,
