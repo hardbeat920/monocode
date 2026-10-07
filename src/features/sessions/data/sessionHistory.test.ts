@@ -27,6 +27,20 @@ function summary(id: string, cwd: string, updatedAt = 1): SessionSummary {
 }
 
 describe("historyWithLiveSessions", () => {
+  it("carries visibility into both new and already-saved live summaries", () => {
+    const session = newSession("codex", "/tmp/project-a");
+    session.sidebarHidden = true;
+    session.blocks = [{ id: "u", role: "user", text: "Review" }];
+    const live = historyWithLiveSessions([], [session], session.cwd);
+    expect(live[0].sidebarHidden).toBe(true);
+    const merged = historyWithLiveSessions(
+      [{ ...live[0], sidebarHidden: undefined }],
+      [session],
+      session.cwd,
+    );
+    expect(merged[0].sidebarHidden).toBe(true);
+  });
+
   const run: OrchestrationRun = {
     version: 1,
     leadId: "lead",
@@ -53,6 +67,18 @@ describe("historyWithLiveSessions", () => {
       delivered: false,
     })),
   };
+
+  it("never lists an ephemeral session, even while it is working", () => {
+    const run = {
+      ...newSession("codex", "/tmp/project-a"),
+      id: "habit-run",
+      title: "Skull · Daily useful PR check",
+      ephemeral: true,
+      busy: true,
+      blocks: [{ id: "u", role: "user" as const, text: "check PRs" }],
+    };
+    expect(historyWithLiveSessions([], [run], "/tmp/project-a")).toEqual([]);
+  });
 
   it("groups live and already-saved workers under their lead before adoption effects run", () => {
     const sessions = ["lead", "worker-a", "worker-b"].map((id) => ({

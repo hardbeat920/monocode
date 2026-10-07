@@ -39,7 +39,6 @@ describe("first provider request preflight", () => {
       approvedPlan: "Implement the approved change.\n".repeat(2_000),
       inboxAsk,
       orchestratorPrompt: (request) => `Orchestrator instructions\n${request}`,
-      operatorCli: "monocode app",
     });
     expect(() =>
       buildPortableContext(source, {
@@ -50,7 +49,6 @@ describe("first provider request preflight", () => {
     expect(text).toContain("<approved_plan>");
     expect(text).toContain("INBOX ITEM");
     expect(text).toContain("Orchestrator instructions");
-    expect(text).toContain("<monocode_app>");
     expect(() => {
       const context = buildPortableContext(source, {
         windowTokens: 40_000,

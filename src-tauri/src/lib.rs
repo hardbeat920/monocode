@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod artifacts;
 mod automations;
 mod azure_devops;
 mod chat_background;
@@ -24,6 +25,10 @@ mod macos;
 mod macos_background;
 mod mcp;
 mod menu;
+mod mono;
+#[cfg(target_os = "macos")]
+mod mono_chat;
+mod mono_transcript;
 mod notes;
 mod notifications;
 mod pasteboard;
@@ -219,10 +224,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[
-                    window::QUICK_COMPOSER_LABEL,
-                    window::QUICK_COMPOSER_GIT_LABEL,
-                ])
+                .with_filter(window::is_workspace_window)
                 .build(),
         )
         .manage(harness::HarnessHost::new())
@@ -241,6 +243,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 quick_composer::init(app.handle())?;
+                mono_chat::init(app.handle())?;
                 macos::install_dock_menu(app.handle());
                 if let Some(window) = app.get_webview_window("main") {
                     macos::install(&window);
@@ -468,6 +471,10 @@ pub fn run() {
             session_store::session_get,
             session_store::session_context_snapshot,
             context_assets::session_context_assets,
+            mono_transcript::mono_session_get,
+            mono_transcript::mono_session_page,
+            mono_transcript::mono_session_upsert,
+            mono_transcript::mono_session_find,
             session_store::session_delete,
             session_store::session_discard_draft,
             session_store::session_set_archived,
@@ -481,9 +488,16 @@ pub fn run() {
             notes::notes_list,
             notes::notes_get,
             notes::notes_upsert,
+            artifacts::artifacts_list,
+            artifacts::artifacts_get,
+            artifacts::artifacts_upsert,
+            artifacts::artifacts_delete,
             notes::notes_delete,
             notes::notes_save_image,
             notes::notes_image_path,
+            mono::mono_load,
+            mono::mono_read,
+            mono::mono_save,
             checkpoint::session_checkpoint_ensure,
             checkpoint::session_checkpoint_prepare,
             checkpoint::session_checkpoint_capture,
@@ -534,6 +548,24 @@ pub fn run() {
             quick_composer::git_popup::quick_git_complete,
             #[cfg(target_os = "macos")]
             quick_composer::git_popup::quick_composer_dismiss,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_sync,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_publish,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_state,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_ready,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_action,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_take,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_accept,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_reply,
+            #[cfg(target_os = "macos")]
+            mono_chat::mono_chat_keep_alive,
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             chat_background::save_chat_background,
@@ -549,11 +581,15 @@ pub fn run() {
 
     app.run(|handle, event| match event {
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen {
-            has_visible_windows: false,
-            ..
-        } => {
-            let _ = window::show_hidden_or_open_new(handle);
+        tauri::RunEvent::Reopen { .. } => {
+            // A visible floating panel must not make a hidden workspace
+            // unreachable from the Dock.
+            if !window::workspace_windows(handle)
+                .iter()
+                .any(|window| window.is_visible().unwrap_or(false))
+            {
+                let _ = window::show_hidden_or_open_new(handle);
+            }
         }
         tauri::RunEvent::Ready => {
             #[cfg(target_os = "macos")]
@@ -575,6 +611,8 @@ pub fn run() {
                 .iter()
                 .any(|window| window.label() != label);
             control::window_closed(handle, &label);
+            #[cfg(target_os = "macos")]
+            mono_chat::window_closed(handle, &label);
             if !other_window {
                 reap_harness_children(handle);
             }

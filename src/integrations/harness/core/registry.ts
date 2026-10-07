@@ -229,7 +229,17 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       });
     activeTurnSessions.add(input.sessionId);
     try {
-      await adapter.sendTurn(prepareContextTransferInput(input, adapter.contextTransferCapabilities));
+      const prepared = prepareContextTransferInput(
+        input,
+        adapter.contextTransferCapabilities,
+      );
+      await adapter.sendTurn({
+        ...prepared,
+        onAccepted: () => {
+          input.onEvent({ type: "turn.ready" });
+          prepared.onAccepted?.();
+        },
+      });
     } finally {
       activeTurnSessions.delete(input.sessionId);
       if (controlled)

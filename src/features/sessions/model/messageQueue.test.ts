@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { appendPreparingHandoff } from "./handoff";
 import {
   canDispatchQueuedHead,
+  canSteerQueuedHead,
   dequeueQueuedMessage,
   isEditingQueuedHead,
   queuedHead,
@@ -116,6 +117,56 @@ describe("canDispatchQueuedHead", () => {
       false,
     );
   });
+});
+
+describe("canSteerQueuedHead", () => {
+  it("still takes follow-ups while an optional asynchronous question is open", () => {
+    expect(
+      canSteerQueuedHead(
+        chat({
+          busy: true,
+          turnReady: true,
+          pendingQuestion: { requestId: 1, questions: [], autoResolveAt: 1000 },
+        }),
+      ),
+    ).toBe(true);
+  });
+  it("holds during startup and allows delivery once the busy turn is ready", () => {
+    expect(canSteerQueuedHead(chat({ busy: true }))).toBe(false);
+    expect(canSteerQueuedHead(chat({ busy: true, turnReady: true }))).toBe(
+      true,
+    );
+    expect(canSteerQueuedHead(chat({ turnReady: true }))).toBe(false);
+  });
+
+  it.each([
+    { queueStatus: "paused" as const },
+    { queueStatus: "resuming" as const },
+    { editingQueuedMessageId: "a" },
+    { worktreePreparing: true },
+    { worktreeRemoved: true },
+    { usageLimit: { resetsAt: 1000 } },
+    { pendingQuestion: { requestId: 1, questions: [] } },
+  ])("holds an unavailable session: %j", (patch) => {
+    expect(
+      canSteerQueuedHead(chat({ busy: true, turnReady: true, ...patch })),
+    ).toBe(false);
+  });
+
+  it.each(["plan", "orchestrate"] as const)(
+    "waits for an idle turn for %s",
+    (intent) => {
+      expect(
+        canSteerQueuedHead(
+          chat({
+            busy: true,
+            turnReady: true,
+            queuedMessages: [{ ...queued("a"), intent }],
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("dequeueQueuedMessage", () => {
