@@ -623,6 +623,8 @@ import { PaneTree } from "../features/workspace/ui/PaneTree";
 import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
+import { BrowserDockLayout } from "../features/browser/ui/ProjectBrowserDock";
+
 import { lazySurface } from "../shared/ui/lazySurface";
 import { preloadNavigationWhenIdle } from "./model/preloadNavigation";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
@@ -12188,6 +12190,17 @@ function Workspace({
                     {compactTitleBar ? null : workspaceTitleBar}
 
                     <main className="relative flex min-h-0 min-w-0 flex-1">
+                      <BrowserDockLayout
+                        projectPath={projectCwd}
+                        hidden={
+                          monoCovers ||
+                          searchViewOpen ||
+                          settingsOpen ||
+                          inboxViewOpen ||
+                          notesViewOpen ||
+                          automationsViewOpen
+                        }
+                      >
                       <div
                         ref={dockGridRef}
                         className="grid h-full min-h-0 min-w-0 flex-1"
@@ -12345,6 +12358,7 @@ function Workspace({
                           </div>
                         </div>
                       </div>
+                      </BrowserDockLayout>
                       {[...linkedWorkItemPanels.values()].map((panel) => (
                         <LinkedWorkItemPanel
                           repairSessions={repairSessions}
@@ -12527,6 +12541,7 @@ function Workspace({
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
                   }
+                  showBrowser={!monoCovers}
                 />
               )}
             </div>

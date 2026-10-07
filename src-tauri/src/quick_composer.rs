@@ -294,6 +294,7 @@ pub async fn quick_composer_submit(
             // a second submission sees the first submission's mounting window.
             let target = target_or_create(launch_target(&handle), request.reveal, |reveal| {
                 crate::window::open_session_window(&handle, reveal)
+                    .map(|window| window.as_ref().window())
             })?;
             screenshots::persist(&handle, &mut request.attachments)?;
             let reveal = request.reveal;
@@ -469,7 +470,7 @@ fn target_or_create<T>(
 
 /// The window the user last looked at, else the first one. Hidden windows
 /// count: close-to-dock keeps them running.
-fn launch_target(app: &AppHandle) -> Option<WebviewWindow> {
+fn launch_target(app: &AppHandle) -> Option<tauri::Window> {
     let windows = workspace_windows(app);
     windows
         .iter()

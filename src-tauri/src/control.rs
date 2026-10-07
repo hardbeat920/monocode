@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
 
@@ -283,7 +283,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
 
 #[tauri::command]
 pub fn control_enable(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
@@ -333,7 +333,7 @@ pub fn control_enable(
 
 #[tauri::command]
 pub fn control_disable(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
 ) -> Result<(), String> {
@@ -356,7 +356,7 @@ pub fn control_disable(
 
 #[tauri::command]
 pub fn control_attach_worker(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     lead_id: String,
     session_id: String,
@@ -404,7 +404,7 @@ fn configure_worker_scratch(cmd: &mut Command, path: &Path) {
 
 #[tauri::command]
 pub fn control_authorize_turn(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
@@ -493,7 +493,7 @@ pub fn app_cli_path() -> Result<String, String> {
 
 #[tauri::command]
 pub fn control_reply(
-    window: WebviewWindow,
+    window: Window,
     host: State<'_, ControlHost>,
     id: String,
     response: Value,

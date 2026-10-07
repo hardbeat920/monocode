@@ -75,10 +75,19 @@ export type FilePaneTab = {
   /** Read-only transcript of an orchestration worker. Live only — not persisted. */
   agent?: AgentTabSource;
   terminal?: boolean;
+  /** Embedded browser page. Only browser docks hold these. */
+  browser?: BrowserTabSource;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
   /** Temporary tab: the next preview open in its pane replaces it. */
   preview?: boolean;
+};
+
+export type BrowserTabSource = {
+  url: string;
+  title?: string;
+  /** Live only — not persisted. */
+  loading?: boolean;
 };
 
 export type EditorPane = {
@@ -424,6 +433,12 @@ export function isTerminalTab(file: FilePaneTab): boolean {
   return !!file.terminal;
 }
 
+export function isBrowserTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { browser: BrowserTabSource } {
+  return !!file.browser;
+}
+
 export function isAgentTab(
   file: FilePaneTab,
 ): file is FilePaneTab & { agent: AgentTabSource } {
@@ -441,7 +456,10 @@ export function isVirtualDocumentTab(file: FilePaneTab): boolean {
 
 export function isFilesystemTab(file: FilePaneTab): boolean {
   return (
-    !isTerminalTab(file) && !isVirtualDocumentTab(file) && !file.sessionChanges
+    !isTerminalTab(file) &&
+    !isBrowserTab(file) &&
+    !isVirtualDocumentTab(file) &&
+    !file.sessionChanges
   );
 }
 

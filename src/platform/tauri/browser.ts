@@ -1,0 +1,66 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+export type BrowserBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type BrowserEvent =
+  | { kind: "load"; id: string; url: string; loading: boolean }
+  | { kind: "title"; id: string; title: string }
+  | { kind: "openTab"; id: string; url: string };
+
+export function openBrowserView(
+  id: string,
+  url: string,
+  bounds: BrowserBounds,
+  visible: boolean,
+): Promise<void> {
+  return invoke("browser_open", { id, url, bounds, visible });
+}
+
+export function setBrowserBounds(
+  id: string,
+  bounds: BrowserBounds,
+): Promise<void> {
+  return invoke("browser_set_bounds", { id, bounds });
+}
+
+export function setBrowserVisible(id: string, visible: boolean): Promise<void> {
+  return invoke("browser_set_visible", { id, visible });
+}
+
+export function focusBrowserView(id: string): Promise<void> {
+  return invoke("browser_focus", { id });
+}
+
+export function navigateBrowser(id: string, url: string): Promise<void> {
+  return invoke("browser_navigate", { id, url });
+}
+
+export function browserHistory(
+  id: string,
+  action: "back" | "forward" | "reload" | "stop",
+): Promise<void> {
+  return invoke("browser_history", { id, action });
+}
+
+export function closeBrowserView(id: string): Promise<void> {
+  return invoke("browser_close", { id });
+}
+
+/** Close this window's native tabs that are not in `ids`. */
+export function retainBrowserViews(ids: string[]): Promise<void> {
+  return invoke("browser_retain", { ids });
+}
+
+export function onBrowserEvent(
+  handler: (event: BrowserEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<BrowserEvent>("browser-event", (event) =>
+    handler(event.payload),
+  );
+}

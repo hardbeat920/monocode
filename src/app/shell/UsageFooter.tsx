@@ -1,4 +1,5 @@
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
+import { BrowserStatusButton } from "../../features/browser/ui/BrowserStatusButton";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
@@ -65,6 +66,7 @@ export function UsageFooter({
   onNewTerminal,
   onShowTerminal,
   projectTerminalActive = false,
+  showBrowser = false,
   onSelectAccount,
   onManageAccounts,
 }: {
@@ -77,6 +79,7 @@ export function UsageFooter({
   onNewTerminal?: () => void;
   onShowTerminal?: () => void;
   projectTerminalActive?: boolean;
+  showBrowser?: boolean;
   onSelectAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
@@ -369,8 +372,9 @@ export function UsageFooter({
       ) : session ? (
         <SessionChip key={session.id ?? session.harness} session={session} />
       ) : null}
-      {showTerminals || showTerminalButton ? (
+      {showTerminals || showTerminalButton || showBrowser ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {showBrowser ? <BrowserStatusButton /> : null}
           {showTerminals ? (
             <RunningTerminalChip
               terminals={terminals}
