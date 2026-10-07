@@ -3,6 +3,7 @@ import type {
   AgentStep,
   Attachment,
   Block,
+  ContextBoundaryMeta,
   Session,
   TaskListItem,
   ToolPreview,
@@ -11,6 +12,7 @@ import { mergeContextUsage } from "../../../features/sessions/model/contextUsage
 import {
   COMPACTED_TEXT,
   COMPACTION_STATUS_KEY,
+  ROTATED_TEXT,
 } from "../../../features/sessions/model/contextBoundary";
 import { displayPath } from "../../../shared/lib/paths";
 import {
@@ -751,9 +753,9 @@ function appendStatus(session: Session, text: string): Session {
   });
 }
 
-/** The current turn's status row for `key`, or -1. */
-function keyedStatusIndex(session: Session, key: string): number {
-  const turnStart = lastMatchingBlock(
+/** The user block that started the current turn, or -1. */
+function turnStartIndex(session: Session): number {
+  return lastMatchingBlock(
     session.blocks,
     // Mono outbox bubbles and mid-turn follow-ups do not start a new turn.
     (block) =>
@@ -761,6 +763,11 @@ function keyedStatusIndex(session: Session, key: string): number {
       (block.sentAt == null || block.startedAt != null) &&
       !session.queuedMessages?.some((message) => message.blockId === block.id),
   );
+}
+
+/** The current turn's status row for `key`, or -1. */
+function keyedStatusIndex(session: Session, key: string): number {
+  const turnStart = turnStartIndex(session);
   return lastMatchingBlock(
     session.blocks,
     (block, at) => at > turnStart && block.statusKey === key,
@@ -787,6 +794,28 @@ function upsertKeyedStatus(
   const blocks = session.blocks.slice();
   if (trimmed) blocks[index] = { ...blocks[index], text: trimmed };
   else blocks.splice(index, 1);
+  return { ...session, blocks };
+}
+
+/**
+ * Mark a context boundary the app made itself, such as a Mono moving to a
+ * fresh provider session: it lands just before the user block of the turn
+ * that starts there, since that turn is the first the new context sees.
+ */
+export function insertContextBoundaryBeforeTurn(
+  session: Session,
+  meta: ContextBoundaryMeta,
+): Session {
+  const block: Block = {
+    id: crypto.randomUUID(),
+    role: "system",
+    text: meta.kind === "rotation" ? ROTATED_TEXT : COMPACTED_TEXT,
+    contextBoundary: meta,
+  };
+  const index = turnStartIndex(session);
+  if (index < 0) return { ...session, blocks: [...session.blocks, block] };
+  const blocks = session.blocks.slice();
+  blocks.splice(index, 0, block);
   return { ...session, blocks };
 }
 

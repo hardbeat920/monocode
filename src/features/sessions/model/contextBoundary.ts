@@ -9,6 +9,7 @@ export const COMPACTION_STATUS_KEY = "compaction";
 
 const COMPACTING_TEXT = "Compacting context…";
 export const COMPACTED_TEXT = "Context compacted";
+export const ROTATED_TEXT = "Fresh session started";
 
 type CompactionProgress = Extract<HarnessEvent, { type: "status" }>;
 

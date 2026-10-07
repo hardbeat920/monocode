@@ -11,6 +11,7 @@ export {
   applyHarnessEvents,
   appendUser,
   appendSteerUser,
+  insertContextBoundaryBeforeTurn,
   promoteLastAssistantToPlan,
   stopStreaming,
 } from "./core/apply";

@@ -267,6 +267,7 @@ import {
   appendUser,
   appendSteerUser,
   bindHarnessSession,
+  insertContextBoundaryBeforeTurn,
   cancelHarnessTurn,
   canCompactHarnessContext,
   canRewindHarnessLastTurn,
@@ -7640,13 +7641,17 @@ function Workspace({
           );
           if (monoRotation) {
             await forgetHarnessSession(current.harness, sessionId);
+            // The chat marks where the fresh session starts, before this turn.
             const fresh = (session: Session) =>
               session.id === sessionId
-                ? {
-                    ...session,
-                    providerSessionId: undefined,
-                    context: undefined,
-                  }
+                ? insertContextBoundaryBeforeTurn(
+                    {
+                      ...session,
+                      providerSessionId: undefined,
+                      context: undefined,
+                    },
+                    monoRotation.boundary,
+                  )
                 : session;
             current = fresh(current);
             sessionsRef.current = sessionsRef.current.map(fresh);

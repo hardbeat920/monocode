@@ -13,6 +13,7 @@ import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
   applyHarnessEvent,
+  insertContextBoundaryBeforeTurn,
   appendSteerUser,
   promoteLastAssistantToPlan,
   stopStreaming,
@@ -1718,6 +1719,47 @@ describe("context boundaries", () => {
     expect(
       applyHarnessEvent(session, { type: "context.summarized", summary: "Stray" }),
     ).toBe(session);
+  });
+
+  it("puts a rotation boundary just before the turn it starts", () => {
+    const rotation = {
+      kind: "rotation",
+      trigger: "auto",
+      reason: "context",
+      at: 9,
+      kept: "recent",
+    } as const;
+    let session = appendUser(newSession("claude", "/tmp"), "first");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "One." });
+    session = stopStreaming(session);
+    session = appendUser(session, "second");
+    // A follow-up queued behind this turn does not start it.
+    session = enqueueMonoMessage(session, {
+      id: "later",
+      text: "and then this",
+      attachments: [],
+    });
+    session = insertContextBoundaryBeforeTurn(session, rotation);
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "first",
+      "One.",
+      "Fresh session started",
+      "second",
+      "and then this",
+    ]);
+    expect(session.blocks[2].contextBoundary).toEqual(rotation);
+  });
+
+  it("appends a rotation boundary when no turn has started", () => {
+    const session = insertContextBoundaryBeforeTurn(newSession("claude", "/tmp"), {
+      kind: "rotation",
+      trigger: "auto",
+      at: 9,
+      kept: "none",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "Fresh session started",
+    ]);
   });
 
   it("keeps a Mono rotation boundary through a save", () => {
