@@ -737,7 +737,6 @@ import {
 import {
   CHATS_CWD,
   isChatSession,
-  setChatWorkspaceDir,
 } from "../features/sessions/model/chatSession";
 import {
   planProjectOpenRun,
@@ -2316,22 +2315,18 @@ function Workspace({
     void invoke<string>("default_cwd")
       .then((cwd) => {
         if (!looksLikeProject(cwd)) return;
+        // Only the untouched boot tab adopts the folder. A chat the user
+        // opened, or restored with a conversation, stays projectless, and so
+        // does a project they already navigated to.
+        const boot = sessionsRef.current.find((s) => s.id === seed.session.id);
+        if (!boot || !isChatSession(boot) || !isBlankSession(boot)) return;
+        if (projectCwdRef.current !== CHATS_CWD) return;
         setProjectCwd(cwd);
         setRecents((prev) => (prev.length > 0 ? prev : rememberProject(cwd)));
-        // Only the untouched boot tab adopts the folder. A restored chat with
-        // a conversation stays projectless.
         setSessions((prev) =>
-          prev.map((s) =>
-            isChatSession(s) && isBlankSession(s) ? { ...s, cwd } : s,
-          ),
+          prev.map((s) => (s.id === seed.session.id ? { ...s, cwd } : s)),
         );
       })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    void invoke<string>("chat_workspace_dir")
-      .then(setChatWorkspaceDir)
       .catch(() => {});
   }, []);
 
@@ -2564,6 +2559,8 @@ function Workspace({
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
+      setSettingsOpen(false);
+      closeMonoView();
       workspaceNavigation.cancel();
       setProjectCwd(CHATS_CWD);
       const sessions = sessionsRef.current;
@@ -2611,6 +2608,7 @@ function Workspace({
     [
       activateTab,
       appendTab,
+      closeMonoView,
       sessionDefaults?.runtimeMode,
       workspaceNavigation.cancel,
     ],

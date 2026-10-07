@@ -14,7 +14,8 @@ import {
   loadBootWorkspace,
   reportQuitPoll,
 } from "./app/model/appLifecycle";
-import { homeDir } from "./platform/tauri/fs";
+import { chatWorkspaceDir, homeDir } from "./platform/tauri/fs";
+import { setChatWorkspaceDir } from "./features/sessions/model/chatSession";
 import { setHomeDir } from "./shared/lib/paths";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import { initializeProviderBinaryPaths } from "./features/providers/model/providerBinaryPaths";
@@ -33,6 +34,12 @@ initSounds();
 // best-effort, falling back to inference from a session's cwd.
 const homeDirPrimed = homeDir()
   .then(setHomeDir)
+  .catch(() => {});
+// Projectless chats run in an app folder, not the home directory. Restored
+// chats bind their provider thread on the first render, so the folder has to
+// be known by then. If it cannot be made, chats keep running in the home folder.
+const chatWorkspacePrimed = chatWorkspaceDir()
+  .then(setChatWorkspaceDir)
   .catch(() => {});
 const providerBinaryPathsPrimed = initializeProviderBinaryPaths().catch(
   () => undefined,
@@ -89,11 +96,13 @@ void listen("quit_aborted", () => {
 
 void Promise.all([
   homeDirPrimed,
+  chatWorkspacePrimed,
   providerBinaryPathsPrimed,
   loadBootWorkspace(),
   appLoaded,
 ]).then(
   ([
+    ,
     ,
     ,
     { windowTransfer, resumed, history, historyCwd },

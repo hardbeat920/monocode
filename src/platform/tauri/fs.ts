@@ -485,6 +485,11 @@ export function homeDir(): Promise<string> {
   return invoke<string>("home_dir");
 }
 
+/** The folder projectless chats run in; the backend creates it on demand. */
+export function chatWorkspaceDir(): Promise<string> {
+  return invoke<string>("chat_workspace_dir");
+}
+
 /**
  * Folders chosen from the system picker. Multi-select is on, so several
  * projects can be opened in one pass; the dialog still returns a bare string
