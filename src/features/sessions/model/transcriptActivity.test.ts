@@ -1896,3 +1896,41 @@ describe("subagent model labels", () => {
       expect(subagentModelName(row(model))).toBeUndefined();
   });
 });
+
+describe("context boundaries between turns", () => {
+  const compacted = (trigger: "manual" | "auto"): Block => ({
+    id: `b-${trigger}`,
+    role: "system",
+    text: "Context compacted",
+    contextBoundary: { kind: "compaction", trigger, at: 1, kept: "recent" },
+  });
+  const turnOf = (id: string): Block[] => [
+    { id: `${id}-u`, role: "user", text: id },
+    { id: `${id}-a`, role: "assistant", text: `${id} reply` },
+  ];
+  const ids = (turns: Block[][]) => turns.map((turn) => turn.map((b) => b.id));
+
+  it("stands alone when the next turn starts right after it", () => {
+    expect(
+      ids(groupTurns([...turnOf("one"), compacted("auto"), ...turnOf("two")])),
+    ).toEqual([["one-u", "one-a"], ["b-auto"], ["two-u", "two-a"]]);
+  });
+
+  it("stands alone after the last turn when it was asked for", () => {
+    expect(ids(groupTurns([...turnOf("one"), compacted("manual")]))).toEqual([
+      ["one-u", "one-a"],
+      ["b-manual"],
+    ]);
+  });
+
+  it("stays inside the turn it interrupted", () => {
+    const [user, reply] = turnOf("one");
+    expect(ids(groupTurns([user, compacted("auto"), reply]))).toEqual([
+      ["one-u", "b-auto", "one-a"],
+    ]);
+    // Still running: the reply has not arrived yet.
+    expect(ids(groupTurns([user, compacted("auto")]))).toEqual([
+      ["one-u", "b-auto"],
+    ]);
+  });
+});

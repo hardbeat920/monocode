@@ -332,6 +332,23 @@ export function groupTurns(blocks: Block[], managed = false): Block[][] {
   return groupTranscriptTurns(blocks, managed, false);
 }
 
+/**
+ * A context boundary between two turns stands on its own, like a handoff,
+ * rather than sitting inside the turn above it, under its reply but above
+ * its footer. One inside a turn stays there: an automatic compaction lands
+ * mid-turn and the reply follows. A manual compaction only ever happens
+ * between turns, so as the last block it already stands alone.
+ */
+function isBoundaryBetweenTurns(
+  block: Block,
+  next: Block | undefined,
+): boolean {
+  const boundary = block.contextBoundary;
+  if (!boundary) return false;
+  if (next) return next.role === "user";
+  return boundary.trigger === "manual";
+}
+
 function groupTranscriptTurns(
   blocks: Block[],
   managed: boolean,
@@ -339,7 +356,7 @@ function groupTranscriptTurns(
 ): Block[][] {
   const turns: Block[][] = [];
   let current: Block[] = [];
-  for (const block of blocks) {
+  for (const [index, block] of blocks.entries()) {
     // A turn the app wrote to keep an orchestration moving is not a user
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
@@ -352,7 +369,11 @@ function groupTranscriptTurns(
       }
       continue;
     }
-    if (block.role === "handoff" || block.monoHabit) {
+    if (
+      block.role === "handoff" ||
+      block.monoHabit ||
+      isBoundaryBetweenTurns(block, blocks[index + 1])
+    ) {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
       current = [];
