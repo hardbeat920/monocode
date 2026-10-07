@@ -356,15 +356,21 @@ fn agent_script(key: &str, script: &str, expression: bool) -> String {
       return v;
     }});
   }}
-  store[key] = {{ pending: true }};
+  var pending = {{ pending: true }};
+  store[key] = pending;
+  function settle(entry) {{
+    // Publish only while this run still owns the key; an abandoned run (entry
+    // deleted) or a reused key must not be overwritten by a late result.
+    if (store[key] === pending) store[key] = entry;
+  }}
   (async function () {{
 {body}
   }})().then(
     function (value) {{
-      try {{ store[key] = {{ ok: true, json: encode(value) }}; }}
-      catch (e) {{ store[key] = {{ ok: false, error: "Result is not serializable: " + e }}; }}
+      try {{ settle({{ ok: true, json: encode(value) }}); }}
+      catch (e) {{ settle({{ ok: false, error: "Result is not serializable: " + e }}); }}
     }},
-    function (e) {{ store[key] = {{ ok: false, error: String((e && e.stack) || e) }}; }}
+    function (e) {{ settle({{ ok: false, error: String((e && e.stack) || e) }}); }}
   );
   return "started";
 }})()"#
@@ -385,8 +391,35 @@ fn result_poll(key: &str) -> String {
     )
 }
 
+/// Forget a run the caller stopped waiting for. The entry is deleted at once;
+/// a run still going sees it is no longer the owner and drops its late result.
+fn result_abandon(key: &str) -> String {
+    let key = serde_json::to_string(key).unwrap_or_default();
+    format!(
+        r#"(function () {{
+  var store = window.__monocodeResults, key = {key};
+  if (store) delete store[key];
+  return "";
+}})()"#
+    )
+}
+
 fn run_agent_script(webview: &Webview, script: &str, timeout: Duration) -> Result<Value, String> {
     let key = uuid::Uuid::new_v4().simple().to_string();
+    let result = run_agent_script_keyed(webview, &key, script, timeout);
+    if result.is_err() {
+        let _ = eval_string(webview, result_abandon(&key), Duration::from_secs(1));
+    }
+    result
+}
+
+fn run_agent_script_keyed(
+    webview: &Webview,
+    key: &str,
+    script: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let key = key.to_string();
     let mut started = String::new();
     for expression in [true, false] {
         started = eval_string(
