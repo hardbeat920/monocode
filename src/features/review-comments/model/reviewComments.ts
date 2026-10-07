@@ -57,36 +57,13 @@ export function clearReviewComments() {
 
 export function formatReviewComments(items = comments) {
   if (items.length === 0) return "";
-  return [
-    "Please address these review comments:",
-    "",
-    ...items.flatMap((comment, index) => {
-      const lines =
+  return items
+    .map((comment) => {
+      const reference =
         comment.startLine === 0
-          ? "file"
-          : comment.startLine === comment.endLine
-          ? `${comment.startLine}`
-          : `${comment.startLine}-${comment.endLine}`;
-      const deleted = comment.deleted ? " (deleted line)" : "";
-      const snippet = truncateSnippet(comment.snippet);
-      return [
-        `${index + 1}. \`${escapeTicks(comment.path)}\`${lines === "file" ? " (file)" : `:${lines}`}${deleted}`,
-        `   ${comment.body.replace(/\n/g, "\n   ")}`,
-        ...(snippet ? ["", "   ```", ...snippet.split("\n").map((line) => `   ${line}`), "   ```"] : []),
-        "",
-      ];
-    }),
-  ]
-    .join("\n")
-    .trim();
-}
-
-function truncateSnippet(text: string) {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  const limited = lines.slice(0, 20).join("\n").slice(0, 2_000);
-  return limited === text ? limited : `${limited}\n…`;
-}
-
-function escapeTicks(value: string) {
-  return value.replace(/`/g, "\\`");
+          ? `@${comment.path} (file)`
+          : `@${comment.path} (${comment.startLine === comment.endLine ? `line ${comment.startLine}` : `lines ${comment.startLine}-${comment.endLine}`})`;
+      return `${reference}\n${comment.body}`;
+    })
+    .join("\n\n");
 }

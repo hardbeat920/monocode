@@ -26,12 +26,10 @@ describe("review comments", () => {
     });
 
     expect(formatReviewComments()).toBe(
-      "Please address these review comments:\n\n" +
-        "1. `src/auth.ts`:4-5\n" +
-        "   Return an explicit error.\n\n" +
-        "   ```\n   if (!token) {\n     return;\n   }\n   ```\n\n" +
-        "2. `src/session.ts` (file)\n" +
-        "   Keep its public errors aligned with auth.",
+      "@src/auth.ts (lines 4-5)\n" +
+        "Return an explicit error.\n\n" +
+        "@src/session.ts (file)\n" +
+        "Keep its public errors aligned with auth.",
     );
   });
 

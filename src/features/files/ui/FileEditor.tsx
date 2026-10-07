@@ -86,7 +86,7 @@ import {
   ReviewCommentComposer,
   type ReviewCommentTarget,
 } from "../../review-comments/ui/ReviewCommentComposer";
-import { ReviewCommentsPanel } from "../../review-comments/ui/ReviewCommentsPanel";
+import { ReviewCommentBubbles } from "../../review-comments/ui/ReviewCommentBubbles";
 import {
   diffActiveChunkIndex,
   diffLineStatsForView,
@@ -611,6 +611,7 @@ export function CodeMirrorEditor({
     useState<EditorSelectionTarget | null>(null);
   const [reviewTarget, setReviewTarget] =
     useState<ReviewCommentTarget | null>(null);
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -862,6 +863,7 @@ export function CodeMirrorEditor({
     savedDocumentRef.current = view.state.doc;
     dirtyRef.current = false;
     viewRef.current = view;
+    setEditorView(view);
     lockOverscroll(view.scrollDOM as HTMLDivElement);
     if (showDiff) {
       if (gitOriginalRef.current) {
@@ -890,6 +892,7 @@ export function CodeMirrorEditor({
       onErrorCountChangeRef.current(0);
       lockOverscroll(null);
       viewRef.current = null;
+      setEditorView(null);
       savedDocumentRef.current = null;
       setChunkNav(null);
       setSelectionTarget(null);
@@ -1005,19 +1008,6 @@ export function CodeMirrorEditor({
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {active ? (
-          <ReviewCommentsPanel
-            onAddFileComment={(anchor) =>
-              setReviewTarget({
-                path: commentPath,
-                startLine: 0,
-                endLine: 0,
-                snippet: "",
-                anchor,
-              })
-            }
-          />
-        ) : null}
         {showDiff ? (
           <DiffChunkNav
             index={chunkNav?.index ?? 0}
@@ -1028,7 +1018,14 @@ export function CodeMirrorEditor({
             onNext={() => stepChunkNav(1)}
           />
         ) : null}
-        <div ref={hostRef} className="min-h-0 flex-1" />
+        <div className="relative min-h-0 flex-1">
+          <div ref={hostRef} className="size-full" />
+          <ReviewCommentBubbles
+            path={commentPath}
+            host={hostRef.current}
+            view={editorView}
+          />
+        </div>
       </div>
       {commentTarget ? (
         <DiffCommentComposer
@@ -1046,9 +1043,11 @@ export function CodeMirrorEditor({
           const range = view.state.selection.main;
           setReviewTarget({
             path: selection.path,
-            startLine: selection.startLine,
-            endLine: selection.endLine,
-            snippet: view.state.sliceDoc(range.from, range.to),
+            startLine: selection.wholeFile ? 0 : selection.startLine,
+            endLine: selection.wholeFile ? 0 : selection.endLine,
+            snippet: selection.wholeFile
+              ? ""
+              : view.state.sliceDoc(range.from, range.to),
             anchor: selection.anchor,
           });
         }}
@@ -1094,6 +1093,7 @@ function editorSelectionTarget(
     path,
     startLine: view.state.doc.lineAt(selection.from).number,
     endLine: view.state.doc.lineAt(lastSelectedPosition).number,
+    wholeFile: selection.from === 0 && selection.to === view.state.doc.length,
     anchor: new DOMRect(
       coordinates.left,
       coordinates.top,
