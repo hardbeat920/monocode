@@ -33,7 +33,10 @@ export async function renameSession(
   };
   const updated = { ...current, ...patch };
   // Blank tabs are retained by the workspace snapshot, not project history.
-  if (shouldPersistSession(updated) && !(await upsertSession(updated)))
+  if (
+    shouldPersistSession(updated) &&
+    !(await upsertSession(updated, { explicitTitleUpdate: true }))
+  )
     throw new Error("Session title could not be saved");
   updateSessions((sessions) =>
     sessions.map((session) =>

@@ -56,7 +56,6 @@ function chat(): Session {
 
 it("patches a busy session without losing queued harness events and awaits storage", async () => {
   let sessions = [chat()];
-  let render = sessions;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -69,7 +68,7 @@ it("patches a busy session without losing queued harness events and awaits stora
   let saved = false;
   const renaming = renameSession(
     "chat",
-    "Fix tracking",
+    "Operator title",
     () => sessions,
     (update) => {
       sessions = update(sessions);
@@ -78,25 +77,26 @@ it("patches a busy session without losing queued harness events and awaits stora
   ).then(() => {
     saved = true;
   });
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
   expect(sessions[0].titleIsExplicit).toBeUndefined();
-  render = [
+  sessions = [
     applyHarnessEvent(sessions[0], {
       type: "message.delta",
       text: "Still working",
     }),
   ];
-  sessions = render;
+  const autosave = upsertSession(sessions[0]);
   await Promise.resolve();
   expect(saved).toBe(false);
   release();
-  await renaming;
-  await upsertSession(sessions[0]);
+  await Promise.all([renaming, autosave]);
   expect(canReplaceSessionTitle(sessions[0], sessions[0].title)).toBe(false);
+  expect(sessions[0].title).toBe("codex · Operator title");
   expect(sessions[0].busy).toBe(true);
   expect(sessions[0].blocks.at(-1)?.text).toBe("Still working");
   const restored = await getSession("chat");
   expect(restored).toMatchObject({
-    title: sessions[0].title,
+    title: "codex · Operator title",
     titleIsExplicit: true,
   });
   expect(restored?.blocks.at(-1)?.text).toBe("Still working");

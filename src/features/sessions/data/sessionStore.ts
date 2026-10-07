@@ -45,7 +45,12 @@ import type {
   TurnMetrics,
 } from "../model/session";
 
-import { HARNESSES, RUNTIME_MODES } from "../model/session";
+import {
+  formatSessionTitle,
+  HARNESSES,
+  RUNTIME_MODES,
+  sessionDisplayTitle,
+} from "../model/session";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
@@ -357,6 +362,8 @@ export function sanitizeSessionForPersist(
 const sessionWriteQueues = new Map<string, Promise<unknown>>();
 const sessionWriteLeadById = new Map<string, string>();
 const deletedSessionIds = new Set<string>();
+/** Keep successful explicit titles ahead of stale snapshots already in the queue. */
+const explicitSessionTitles = new Map<string, string>();
 
 function enqueueSessionWrite<T>(
   sessionId: string,
@@ -380,6 +387,7 @@ function enqueueSessionWrite<T>(
 
 export async function upsertSession(
   session: Session,
+  options: { explicitTitleUpdate?: boolean } = {},
 ): Promise<SessionSummary | null> {
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
@@ -399,6 +407,20 @@ export async function upsertSession(
   }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
+    const displayTitle = options.explicitTitleUpdate
+      ? sessionDisplayTitle(session.title, session.harness)
+      : (explicitSessionTitles.get(session.id) ??
+        (session.titleIsExplicit
+          ? sessionDisplayTitle(session.title, session.harness)
+          : undefined));
+    const writePayload =
+      displayTitle !== undefined
+        ? {
+            ...payload,
+            title: formatSessionTitle(session.harness, displayTitle),
+            titleIsExplicit: true,
+          }
+        : payload;
     if (mono) {
       const previous = monoSavedBlocks.get(session.id);
       let same = 0;
@@ -414,7 +436,7 @@ export async function upsertSession(
         !previous || same !== previous.length || same !== snapshot.length;
       const summary = await invoke<SessionSummary>("mono_session_upsert", {
         session: {
-          ...payload,
+          ...writePayload,
           blocks: changed
             ? snapshot.slice(same).map((block) => monoPersistedBlock(block)!)
             : [],
@@ -430,12 +452,14 @@ export async function upsertSession(
         appendOnly: previous?.length === 0,
       });
       monoSavedBlocks.set(session.id, snapshot);
+      if (displayTitle !== undefined)
+        explicitSessionTitles.set(session.id, displayTitle);
       return summary;
     }
-    return invoke<SessionSummary>("session_upsert", {
+    const summary = await invoke<SessionSummary>("session_upsert", {
       session: {
-        ...payload,
-        blocks: (payload as SessionUpsertPayload).blocks.map((block) =>
+        ...writePayload,
+        blocks: (writePayload as SessionUpsertPayload).blocks.map((block) =>
           block.orchestrationLeadId &&
           deletedSessionIds.has(block.orchestrationLeadId)
             ? { ...block, orchestrationLeadId: undefined }
@@ -443,6 +467,9 @@ export async function upsertSession(
         ),
       },
     });
+    if (displayTitle !== undefined)
+      explicitSessionTitles.set(session.id, displayTitle);
+    return summary;
   });
   return summary ? normalizeSummary(summary) : null;
 }
@@ -760,6 +787,7 @@ export async function deleteSession(
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
     monoSavedBlocks.delete(sessionId);
+    explicitSessionTitles.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
       60_000,
@@ -779,6 +807,7 @@ export async function discardDraftSessionRecord(
     invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
   monoSavedBlocks.delete(sessionId);
+  explicitSessionTitles.delete(sessionId);
 }
 
 export async function setSessionArchived(
