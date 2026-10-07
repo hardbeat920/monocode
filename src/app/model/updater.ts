@@ -49,8 +49,8 @@ export async function packageManagedInstall(): Promise<PackageManagedInstall | n
 
 export function packageManagerHint(kind: PackageManagedInstall): string {
   return kind === "deb"
-    ? `Download one .deb from ${RELEASES_URL} and install that file: sudo apt install ./MonoCode_<version>_amd64.deb`
-    : `Download one .rpm from ${RELEASES_URL} and install that file: sudo dnf install ./MonoCode-<version>-1.x86_64.rpm`;
+    ? `Download one .deb from ${RELEASES_URL} and run: sudo apt install ./MonoCode_X.Y.Z_amd64.deb\nReplace the file name with the one you downloaded.`
+    : `Download one .rpm from ${RELEASES_URL} and run: sudo dnf install ./MonoCode-X.Y.Z-1.x86_64.rpm\nReplace the file name with the one you downloaded.`;
 }
 
 function isTargetMissingError(error: unknown): boolean {
