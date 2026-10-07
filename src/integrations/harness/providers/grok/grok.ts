@@ -335,12 +335,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     let setup: unknown;
     let acpSessionId: string | undefined;
     let didLoad = false;
+    const mcpServers = await acpBrowserMcpServersFor(input.sessionId);
 
     if (canLoad && resume) {
       try {
         setup = await acp.request(
           "session/resume",
-          { sessionId: resume.acpSessionId },
+          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers },
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
@@ -353,7 +354,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
             {
               sessionId: resume.acpSessionId,
               cwd: input.cwd,
-              mcpServers: await acpBrowserMcpServersFor(input.sessionId),
+              mcpServers,
             },
             SESSION_TIMEOUT_MS,
           );
@@ -376,7 +377,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           grokSessionNewParams(
             input.cwd,
             input.runtimeMode,
-            await acpBrowserMcpServersFor(input.sessionId),
+            mcpServers,
           ),
           SESSION_TIMEOUT_MS,
         );

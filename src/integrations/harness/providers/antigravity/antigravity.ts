@@ -489,12 +489,14 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     let setup: SessionSetupResult | undefined;
     let acpSessionId: string | undefined;
     let didLoad = false;
+    const mcpServers = await acpBrowserMcpServersFor(input.sessionId);
+    if (retired()) throw new Error("Antigravity session stopped during startup");
 
     if (canLoad && resume) {
       try {
         setup = await acp.request<SessionSetupResult>(
           "session/resume",
-          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers: await acpBrowserMcpServersFor(input.sessionId) },
+          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers },
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
@@ -513,7 +515,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
             {
               sessionId: resume.acpSessionId,
               cwd: input.cwd,
-              mcpServers: await acpBrowserMcpServersFor(input.sessionId),
+              mcpServers,
             },
             SESSION_TIMEOUT_MS,
           );
@@ -534,7 +536,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       const droppedBinding = canLoad && resume != null;
       setup = await acp.request<SessionSetupResult>(
         "session/new",
-        { cwd: input.cwd, mcpServers: await acpBrowserMcpServersFor(input.sessionId) },
+        { cwd: input.cwd, mcpServers },
         SESSION_TIMEOUT_MS,
       );
       acpSessionId = sessionIdFromResult(setup);
