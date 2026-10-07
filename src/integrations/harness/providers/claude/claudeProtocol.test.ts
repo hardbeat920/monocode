@@ -32,6 +32,7 @@ import {
   sessionIdFromMessage,
   statusTextFromSystem,
   compactionEventFromSystem,
+  compactionErrorFromSystem,
   streamDeltaFromEvent,
   toClaudePermissionResult,
   toolKindFromName,
@@ -987,6 +988,39 @@ describe("applyClaudeTaskTool", () => {
   });
 });
 
+// Recorded from Claude Code 2.1.292 on `/compact` in a near-empty session.
+const REFUSED = {
+  type: "system",
+  subtype: "status",
+  status: null,
+  compact_result: "failed",
+  compact_error: "Not enough messages to compact.",
+};
+
+describe("compactionErrorFromSystem", () => {
+  it("reads why Claude refused to compact", () => {
+    expect(compactionErrorFromSystem(REFUSED)).toBe(
+      "Not enough messages to compact.",
+    );
+  });
+
+  it("still reports a failure that gives no reason", () => {
+    expect(
+      compactionErrorFromSystem({ ...REFUSED, compact_error: undefined }),
+    ).toBe("Claude Code could not compact this context");
+  });
+
+  it("ignores a status that is not a failed compaction", () => {
+    expect(
+      compactionErrorFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("compactionEventFromSystem", () => {
   it("reads the boundary the stream reports", () => {
     expect(
@@ -1044,6 +1078,14 @@ describe("compactionEventFromSystem", () => {
       type: "status",
       key: "compaction",
       text: "Compacting context…",
+    });
+  });
+
+  it("clears the compacting status when Claude reports a failure", () => {
+    expect(compactionEventFromSystem(REFUSED)).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "",
     });
   });
 

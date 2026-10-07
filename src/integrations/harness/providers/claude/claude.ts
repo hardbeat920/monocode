@@ -57,6 +57,7 @@ import {
   sessionIdFromMessage,
   statusTextFromSystem,
   compactionEventFromSystem,
+  compactionErrorFromSystem,
   streamDeltaFromEvent,
   stringField,
   summarizeToolRequest,
@@ -176,6 +177,8 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** Claude's reason for refusing the running compaction, if it did. */
+  compactionError?: string;
 };
 
 type Resume = {
@@ -262,6 +265,7 @@ export async function compactClaudeContext(
       live.muteUpdates = false;
       live.manualCompaction = true;
       live.compactionConfirmed = false;
+      live.compactionError = undefined;
       try {
         await runTurn(live, {
           ...input,
@@ -270,7 +274,10 @@ export async function compactClaudeContext(
           attachments: [],
         });
         if (!live.compactionConfirmed) {
-          throw new Error("Claude Code did not confirm context compaction");
+          throw new Error(
+            live.compactionError ??
+              "Claude Code did not confirm context compaction",
+          );
         }
       } catch (error) {
         if (live.cancelled) return;
@@ -735,6 +742,8 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     if (compaction?.type === "context.compacted") {
       live.compactionConfirmed = true;
     }
+    live.compactionError =
+      compactionErrorFromSystem(rec) ?? live.compactionError;
     if (compaction) live.onEvent(compaction);
     const text = statusTextFromSystem(rec);
     if (text) live.onEvent({ type: "status", text });

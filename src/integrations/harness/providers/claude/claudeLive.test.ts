@@ -1980,6 +1980,46 @@ describe("claude manual compaction", () => {
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 
+  it("fails a refused manual compaction with Claude's reason", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      session_id: "sess_1",
+    });
+    emit({
+      type: "system",
+      subtype: "status",
+      status: null,
+      compact_result: "failed",
+      compact_error: "Not enough messages to compact.",
+      session_id: "sess_1",
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await expect(compact).rejects.toThrow("Not enough messages to compact.");
+    expect(events.some((event) => event.type === "context.compacted")).toBe(
+      false,
+    );
+  });
+
   it("marks one boundary when Claude compacts mid-turn", async () => {
     const { turn, events } = await startTurn("s1");
     emit({

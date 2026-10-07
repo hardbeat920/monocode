@@ -10,7 +10,10 @@ import {
   promptText,
 } from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
-import { compactingStatus } from "../../../../features/sessions/model/contextBoundary";
+import {
+  compactingStatus,
+  compactingStatusCleared,
+} from "../../../../features/sessions/model/contextBoundary";
 import {
   isTaskListToolName,
   normalizeTaskListStatus,
@@ -478,8 +481,24 @@ export function statusTextFromSystem(
 }
 
 /**
+ * Why Claude Code gave up on a compaction, from the status that ends it with
+ * `compact_result: "failed"` (for example "Not enough messages to compact.").
+ */
+export function compactionErrorFromSystem(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  if (stringField(rec, "subtype") !== "status") return undefined;
+  if (stringField(rec, "compact_result") !== "failed") return undefined;
+  return (
+    stringField(rec, "compact_error")?.trim() ||
+    "Claude Code could not compact this context"
+  );
+}
+
+/**
  * Compaction as Claude Code streams it: `status: "compacting"` while it runs,
- * then a `compact_boundary`. The stream writes its metadata in snake_case and
+ * then a `compact_boundary`, or a status with `compact_result: "failed"`. The stream writes its metadata in snake_case and
  * the session file in camelCase, so both are read. A preserved segment means
  * Claude kept a recent tail alongside its summary.
  */
@@ -489,6 +508,7 @@ export function compactionEventFromSystem(
   if (stringField(rec, "type") !== "system") return undefined;
   const subtype = stringField(rec, "subtype");
   if (subtype === "status") {
+    if (compactionErrorFromSystem(rec)) return compactingStatusCleared();
     return stringField(rec, "status") === "compacting"
       ? compactingStatus()
       : undefined;
