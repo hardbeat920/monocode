@@ -78,9 +78,11 @@ it("returns a tab without a host conversation as it is", async () => {
 });
 
 it("refuses to read when the machine is not connected", async () => {
-  await expect(
-    readRemoteShell({ ...shell("tab"), cwd: "remote://other/home/me/repo" }),
-  ).rejects.toThrow();
+  connections.remoteMachineFor.mockResolvedValueOnce(undefined);
+  await expect(readRemoteShell(shell("tab"))).rejects.toThrow(
+    "The machine for this remote project isn't connected on this computer",
+  );
+  expect(connections.loadRemoteSession).not.toHaveBeenCalled();
 });
 
 it("lists remote tabs with the host's titles and run state", async () => {
@@ -133,4 +135,16 @@ it("falls back to the last host list while the machine is unreachable", async ()
     cwd,
     "host-session",
   );
+});
+
+it("keeps the tab's own draft when the host has no summary for it", async () => {
+  connections.remoteRequest.mockRejectedValue(new Error("SSH dropped"));
+  connections.cachedRemoteSessionSummary.mockReturnValue(undefined);
+  const drafted = {
+    ...shell("tab"),
+    blocks: [{ id: "d", role: "user" as const, text: "Later", draft: true }],
+  };
+  expect(await remoteShellListings(cwd, [drafted])).toMatchObject([
+    { id: "tab", hasDraft: true },
+  ]);
 });

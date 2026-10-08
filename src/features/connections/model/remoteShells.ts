@@ -1,4 +1,7 @@
-import type { Session } from "../../sessions/model/session";
+import {
+  sessionDraftBlock,
+  type Session,
+} from "../../sessions/model/session";
 import type { AppSessionListing } from "../../agent-app/model/agentApp";
 import {
   cachedRemoteSessionSummary,
@@ -63,7 +66,7 @@ export async function remoteShellListings(
       harness: summary?.harness ?? shell.harness,
       model: summary?.model ?? shell.model,
       busy: summary ? summary.status === "running" : !!shell.busy,
-      hasDraft: !!summary?.draft,
+      hasDraft: summary?.draft ?? !!sessionDraftBlock(shell),
     };
   });
 }
