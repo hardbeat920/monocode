@@ -144,8 +144,7 @@ describe("settings pages", () => {
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
-    saveMaskEmails(true);
+  it("blurs account emails by default and hides them when settings reopen", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "provider_account_identity") {
         const { provider } = args as { provider: string };
@@ -182,6 +181,7 @@ describe("settings pages", () => {
   });
 
   it("shows used usage and plain emails until the options are turned on", async () => {
+    saveMaskEmails(false);
     vi.mocked(invoke).mockImplementation(async (command) =>
       command === "provider_account_identity"
         ? { email: "user@example.com", plan: "Pro" }
@@ -412,7 +412,7 @@ describe("settings pages", () => {
         return { path: payload?.binaryPath ?? "/auto/opencode" };
       }
       if (command === "harness_exec") {
-        if (payload?.binaryPath === "/v2/opencode") return "opencode 2.0.20";
+        if (payload?.binaryPath === "/v3/opencode") return "opencode 3.0.0";
         if (payload?.binaryPath === "/bad/codex") {
           throw new Error("Codex failed to start");
         }
@@ -532,7 +532,7 @@ describe("settings pages", () => {
     expect(document.body.textContent).toContain("/auto/codex");
     expect(document.body.textContent).toContain("Auto-detected");
     await act(async () => details.click());
-    await save("OpenCode", "/v2/opencode");
+    await save("OpenCode", "/v3/opencode");
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("not supported");
     expect(JSON.parse(localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}").opencode).toBe("/opt/opencode/bin/opencode");
 

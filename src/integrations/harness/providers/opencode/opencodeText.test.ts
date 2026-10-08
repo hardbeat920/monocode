@@ -134,6 +134,12 @@ it("forwards OpenCode assistant part snapshots", async () => {
   });
 
   await expect(result).resolves.toBe("Hello");
+  expect(harnessHttp).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "DELETE",
+      url: "http://127.0.0.1:4096/session/text_session?directory=%2Frepo",
+    }),
+  );
   expect(events).toEqual([snapshot("Hel"), snapshot("Hello")]);
 });
 
@@ -331,4 +337,43 @@ it("kills the owned server when its abort request fails", async () => {
   });
   await expect(result).resolves.toBe("Answer");
   expect(cleanup.kill).toHaveBeenCalledWith("monocode-opencode-text");
+});
+
+it("deletes the generated-text session when the provider returns an error", async () => {
+  const result = runOpenCodeTextPrompt({
+    cwd: "/repo",
+    model: "openai/test",
+    prompt: "Generate text",
+  });
+  await waitFor(() => promptStarted, "prompt");
+  finishPrompt?.({
+    status: 200,
+    body: JSON.stringify({ info: { error: { message: "Generation failed" } } }),
+  });
+  await expect(result).rejects.toThrow("Generation failed");
+  expect(harnessHttp).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "DELETE",
+      url: "http://127.0.0.1:4096/session/text_session?directory=%2Frepo",
+    }),
+  );
+});
+
+it("deletes the generated-text session when generation is cancelled", async () => {
+  const controller = new AbortController();
+  const result = runOpenCodeTextPrompt({
+    cwd: "/repo",
+    model: "openai/test",
+    prompt: "Generate text",
+    signal: controller.signal,
+  });
+  await waitFor(() => promptStarted, "prompt");
+  controller.abort();
+  await expect(result).rejects.toThrow("By-the-way request cancelled");
+  expect(harnessHttp).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "DELETE",
+      url: "http://127.0.0.1:4096/session/text_session?directory=%2Frepo",
+    }),
+  );
 });

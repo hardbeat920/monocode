@@ -21,16 +21,40 @@ import {
 } from "./opencode-config";
 
 const exec = promisify(execFile);
-const ALLOWED_EXEC_ARGS = new Set([
-  "--version",
-  "--list-models",
-  "models --verbose",
-  "models --json",
-  "models",
-  "status --json",
-  "agent list",
-  "debug paths",
-]);
+const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["--version"],
+  ["--list-models"],
+  ["models", "--verbose"],
+  ["models", "--json"],
+  ["models"],
+  ["status", "--json"],
+  ["agent", "list"],
+];
+// OpenCode 2.x runs as a background service, and `debug paths` reports the
+// owned data directory. Other providers' CLIs may give these subcommands
+// unrelated meanings, so they stay OpenCode-only.
+const OPENCODE_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["service", "status"],
+  ["service", "start"],
+  ["service", "get", "password"],
+  ["debug", "paths"],
+];
+
+function execArgsAllowed(provider: RemoteProvider, args: string[]): boolean {
+  const matches = (allowed: readonly string[]) =>
+    allowed.length === args.length &&
+    allowed.every((arg, index) => arg === args[index]);
+  return (
+    ALLOWED_EXEC_ARGS.some(matches) ||
+    (provider === "opencode" && OPENCODE_EXEC_ARGS.some(matches)) ||
+    (provider === "grok" &&
+      args.length === 4 &&
+      args[0] === "--no-auto-update" &&
+      args[1] === "sessions" &&
+      args[2] === "delete" &&
+      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(args[3]))
+  );
+}
 
 function loopbackUrl(value: unknown): string {
   const url = new URL(String(value));
@@ -131,9 +155,7 @@ export class HostChildBackend implements ChildBackend {
           args.command !== commandPath ||
           !Array.isArray(args.args) ||
           !args.args.every((arg) => typeof arg === "string") ||
-          !ALLOWED_EXEC_ARGS.has(args.args.join(" ")) ||
-          (args.args.join(" ") === "debug paths" &&
-            (provider !== "opencode" || args.args.length !== 2))
+          !execArgsAllowed(provider, args.args as string[])
         )
           throw new Error("Unsupported headless catalog command");
         const launch = await providerLaunch(commandPath, args.args as string[]);

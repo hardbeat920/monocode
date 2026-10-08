@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 import { act, createElement, type ComponentProps } from "react";
+import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import type { Block } from "../model/session";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
+import { WORD_FADE_MS } from "./wordFade";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyMessage: vi.fn().mockResolvedValue(undefined),
@@ -13,6 +15,7 @@ vi.mock("../../settings/model/sounds", () => ({ playCue: vi.fn() }));
 
 let container: HTMLDivElement;
 let root: Root;
+let resultStyles: HTMLStyleElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -42,12 +45,19 @@ beforeEach(() => {
   );
   container = document.createElement("div");
   document.body.append(container);
+  // Exercise the shipped visibility rule with the real Markdown reveal.
+  resultStyles = document.createElement("style");
+  resultStyles.textContent = readFileSync("src/styles/index.css", "utf8").match(
+    /\.transcript-turn:has\(\[data-artifact-results\]\)[^{]+\{[^}]+\}/,
+  )![0];
+  document.head.append(resultStyles);
   root = createRoot(container);
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  resultStyles.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -82,6 +92,47 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(850));
   act(() => vi.advanceTimersByTime(340));
 }
+
+it("shows a document below its reply in the originating turn and opens it", () => {
+  const onOpenArtifact = vi.fn();
+  const card = {
+    id: "artifact-report",
+    kind: "document" as const,
+    title: "PR review",
+    summary: "Merge queue and blockers",
+  };
+  render(
+    [
+      {
+        id: "old",
+        role: "user",
+        text: "Review",
+        durationMs: 1000,
+        artifactCards: [card],
+      },
+      {
+        id: "old-answer",
+        role: "assistant",
+        text: "I created a document for you.",
+      },
+      { id: "new", role: "user", text: "Thanks", durationMs: 1000 },
+      { id: "new-answer", role: "assistant", text: "You're welcome." },
+    ],
+    { onOpenArtifact },
+  );
+  const button = container.querySelector<HTMLButtonElement>(
+    '[data-artifact-card="artifact-report"]',
+  )!;
+  expect(
+    button
+      .closest("[data-transcript-turn]")
+      ?.getAttribute("data-transcript-turn"),
+  ).toBe("old");
+  expect(container.querySelectorAll("[data-artifact-card]")).toHaveLength(1);
+  expect(button.textContent).not.toContain(card.summary);
+  act(() => button.click());
+  expect(onOpenArtifact).toHaveBeenCalledWith(card.id);
+});
 
 it("shows sessions beside the footer actions only for the turn that launched them", () => {
   const onShowSessions = vi.fn();
@@ -139,12 +190,13 @@ it("shows sessions beside the footer actions only for the turn that launched the
   ).toBe("true");
 });
 
-it("keeps the action row hidden until the final response is delivered, then places it beneath the answer", () => {
+it("waits for the final reply's reveal, then shows its artifact before the actions", () => {
   const user: Block = {
     id: "user",
     role: "user",
     text: "Review",
     startedAt: 1000,
+    artifactCards: [{ id: "review", kind: "document", title: "PR review" }],
     monoSpawnedSessions: [
       {
         sessionId: "app-review",
@@ -162,8 +214,11 @@ it("keeps the action row hidden until the final response is delivered, then plac
   };
   render([user, tool("call", "in_progress")], { ...actions, busy: true });
   expect(container.querySelector("[data-turn-actions]")).toBeNull();
+  expect(container.querySelector("[data-artifact-results]")).toBeNull();
   expect(container.querySelector('[aria-label="Show sessions"]')).toBeNull();
-  expect(container.querySelector('[aria-label="Show activity"]')).toBeNull();
+  expect(
+    container.querySelector('[data-mono-work] [aria-label="Show activity"]'),
+  ).not.toBeNull();
 
   const reply: Block = {
     id: "answer",
@@ -171,8 +226,13 @@ it("keeps the action row hidden until the final response is delivered, then plac
     text: "Started your reviewer.",
     streaming: true,
   };
-  render([user, tool("call"), reply], { ...actions, busy: true });
+  // The reply and completion can arrive together after the artifact was saved.
+  render([user, tool("call"), { ...reply, text: "" }], {
+    ...actions,
+    busy: true,
+  });
   expect(container.querySelector("[data-turn-actions]")).toBeNull();
+  expect(container.querySelector("[data-artifact-results]")).toBeNull();
   expect(container.textContent).not.toContain(reply.text);
 
   render(
@@ -183,14 +243,40 @@ it("keeps the action row hidden until the final response is delivered, then plac
     ],
     actions,
   );
-  act(() => vi.advanceTimersByTime(2500));
   const answer = container.querySelector('[data-chat-message="answer"]')!;
+  const cards = container.querySelector("[data-artifact-results]")!;
   const footer = container.querySelector("[data-turn-actions]")!;
+  expect(answer.textContent).toBe("");
+  expect(getComputedStyle(cards).display).toBe("none");
+  expect(getComputedStyle(footer).display).toBe("none");
+  act(() => vi.advanceTimersByTime(100));
+  expect(answer.textContent!.length).toBeGreaterThan(0);
+  expect(answer.textContent!.length).toBeLessThan(reply.text.length);
+  expect(getComputedStyle(cards).display).toBe("none");
+  act(() => vi.advanceTimersByTime(2500));
   expect(answer.textContent).toBe(reply.text);
+  expect(getComputedStyle(cards).display).toBe("none");
+  act(() => vi.advanceTimersByTime(WORD_FADE_MS));
+  expect(container.querySelector(".word-fading")).toBeNull();
+  // happy-dom caches :has matches after descendant changes; evaluate the
+  // finished DOM afresh to check the shipped rule after the fade ends.
+  const finished = cards.parentElement!.cloneNode(true) as HTMLElement;
+  document.body.append(finished);
+  expect(
+    getComputedStyle(finished.querySelector("[data-artifact-results]")!)
+      .display,
+  ).not.toBe("none");
+  expect(
+    getComputedStyle(finished.querySelector("[data-turn-actions]")!).display,
+  ).not.toBe("none");
+  finished.remove();
   expect(footer.querySelector('[aria-label="Show sessions"]')).not.toBeNull();
   expect(footer.querySelector('[aria-label="Show activity"]')).not.toBeNull();
   expect(
-    answer.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    answer.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    cards.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
 });
 
@@ -346,7 +432,7 @@ it("keeps pending edit approvals actionable beside the compact status", () => {
   expect(onApproval).toHaveBeenCalledWith(42, "allow");
 });
 
-it("keeps the header ticker visible before any tool, while a direct answer waits for completion", () => {
+it("opens live activity from the header ticker before any tool, while a direct answer waits for completion", () => {
   const user: Block = { id: "user", role: "user", text: "Hello" };
   const props = {
     busy: true,
@@ -360,7 +446,18 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
   expect(header.textContent).toContain("Captain");
   expect(status()).toBe("Thinking…");
   expect(container.textContent).not.toContain("working for");
-  expect(container.querySelector('[aria-label="Show activity"]')).toBeNull();
+  const activity = header.querySelector<HTMLButtonElement>(
+    '[aria-label="Show activity"]',
+  )!;
+  expect(activity.contains(header.querySelector('[role="status"]'))).toBe(true);
+  expect(activity.getAttribute("aria-expanded")).toBe("false");
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenCalledWith("user", [user]);
+  render([user], { ...props, activeWorkTurnId: "user" });
+  expect(activity.getAttribute("aria-label")).toBe("Hide activity");
+  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenCalledTimes(2);
 
   const answer: Block = {
     id: "answer",
@@ -373,6 +470,8 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
   expect(container.querySelector("[data-mono-work]")).toBe(header);
   expect(container.textContent).not.toContain(answer.text);
   expect(container.querySelector('[aria-label="Copy response"]')).toBeNull();
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenLastCalledWith("user", [user, answer]);
 
   render(
     [
@@ -382,8 +481,9 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
     { ...props, busy: false },
   );
   expect(container.textContent).toContain(answer.text);
+  expect(header.querySelector("button")).toBeNull();
   expect(
-    container.querySelector('[aria-label="Show activity"]'),
+    container.querySelector('[data-turn-actions] [aria-label="Show activity"]'),
   ).not.toBeNull();
 });
 

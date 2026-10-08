@@ -26,12 +26,11 @@ import {
 import {
   appendOpenCodeAssistantTextDelta,
   asRecord,
+  assertSupportedOpenCodeVersion,
   buildOpenCodePermissionRules,
-  isSupportedOpenCodeVersion,
   managedOpenCodeConfig,
   verifyManagedOpenCodePolicy,
   nextOpenCodeMessageId,
-  unsupportedOpenCodeVersionMessage,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -46,13 +45,20 @@ import {
   parseServerUrlFromOutput,
   permissionTitle,
   previewFromToolPart,
+  sameDirectory,
   sessionErrorMessage,
   stringField,
   toOpenCodePromptParts,
   toOpenCodePermissionReply,
   toolKindFromName,
+  type OpenCodeApiGeneration,
   type OpenCodePart,
 } from "./opencodeProtocol";
+import { resolveOpenCodeV2Service } from "./opencodeService";
+import {
+  OpenCodeV2InboxTracker,
+  type OpenCodeV2InboxOutcome,
+} from "./opencodeV2Events";
 import {
   composeToolTitle,
   extractShellCommand,
@@ -136,6 +142,18 @@ type Live = {
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
   activeTurn: boolean;
+  inbox: OpenCodeV2InboxTracker;
+  /**
+   * The v2 prompt or compaction whose completion the current latch waits
+   * for. `id` is unset until the server admits it; `uncorrelated` marks an
+   * admission that returned no id, so the next completion has to count.
+   */
+  awaitedInbox: {
+    kind: "turn" | "compaction";
+    id?: string;
+    uncorrelated?: boolean;
+    early?: OpenCodeV2InboxOutcome;
+  } | null;
 };
 
 type Resume = {
@@ -144,11 +162,20 @@ type Resume = {
 };
 
 const SERVER_TIMEOUT_MS = 30_000;
+// Matches the v1 summarize request timeout.
+const COMPACTION_TIMEOUT_MS = 30 * 60_000;
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 const openingThreads = new Map<string, number>();
 const lifecycleByThread = new Map<string, Promise<void>>();
+/**
+ * v2 inbox trackers by OpenCode session id. Cancel drops the Live, but the
+ * shared service keeps running, so a stopped run's late terminal event can
+ * reach the next Live. Reusing the tracker keeps that event attributed to
+ * the stopped run.
+ */
+const v2InboxBySession = new Map<string, OpenCodeV2InboxTracker>();
 
 let resolveOpenCodeBinaryImpl: () => Promise<{ path: string }> =
   resolveOpenCodeBinary;
@@ -323,9 +350,11 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
-  const messageID = nextOpenCodeMessageId();
+  // v2 assigns its own message ids, so only v1 prompts are correlated here.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
   const prompt = live.prompt;
-  prompt?.messageIDs.add(messageID);
+  if (messageID) prompt?.messageIDs.add(messageID);
   if (prompt?.pendingError) prompt.pendingError.progressAt = Date.now();
   try {
     await live.client.promptAsync({
@@ -335,9 +364,10 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
       messageID,
       variant: input.modelSettings?.variant,
       parts,
+      delivery: "steer",
     });
   } catch (error) {
-    prompt?.messageIDs.delete(messageID);
+    if (messageID) prompt?.messageIDs.delete(messageID);
     throw error;
   }
 }
@@ -450,6 +480,8 @@ async function stopLive(sessionId: string): Promise<void> {
 }
 
 export async function forgetOpenCodeSession(sessionId: string): Promise<void> {
+  const resume = resumeByThread.get(sessionId);
+  if (resume) v2InboxBySession.delete(resume.sessionId);
   resumeByThread.delete(sessionId);
   await stopOpenCodeSession(sessionId);
 }
@@ -504,76 +536,107 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const { path } = await resolveOpenCodeBinaryImpl();
-  await assertOpenCodeVersion(path, input.cwd);
-  const agents = await execChild(
-    path,
-    ["agent", "list"],
-    input.cwd,
-    "opencode",
-  );
-  const toolOutputGlob =
-    planning || input.runtimeMode !== "full-access"
+  const generation = await assertOpenCodeVersion(path, input.cwd);
+  const restricted = planning || input.runtimeMode !== "full-access";
+  let toolOutputGlob: string | undefined;
+  let policy: Record<string, unknown> | undefined;
+  if (generation === "v1") {
+    const agents = await execChild(
+      path,
+      ["agent", "list"],
+      input.cwd,
+      "opencode",
+    );
+    toolOutputGlob = restricted
       ? parseOpenCodeToolOutputGlob(
           await execChild(path, ["debug", "paths"], input.cwd, "opencode"),
         )
       : undefined;
-  const policy = managedOpenCodeConfig(
-    agents,
-    input.runtimeMode,
-    planning,
-    toolOutputGlob,
-  );
+    policy = managedOpenCodeConfig(
+      agents,
+      input.runtimeMode,
+      planning,
+      toolOutputGlob,
+    );
+  } else if (restricted) {
+    // The v2 service is shared, so MonoCode cannot start it with a managed
+    // config. Its sessions still get the tool-output read rule when the CLI
+    // reports a data directory; without one the rules only deny more.
+    toolOutputGlob = await execChild(
+      path,
+      ["debug", "paths"],
+      input.cwd,
+      "opencode",
+    )
+      .then(parseOpenCodeToolOutputGlob)
+      .catch(() => undefined);
+  }
 
   const liveRef: { current: Live | null } = { current: null };
-  let serverUrl = "";
+  const service =
+    generation === "v2"
+      ? await resolveOpenCodeV2Service(path, input.cwd)
+      : undefined;
+  let serverUrl = service?.url ?? "";
   let serverExited: number | null | undefined;
 
-  watchChild(
-    input.sessionId,
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-    (code) => {
-      serverExited = code;
-      const live = liveRef.current;
-      if (live && liveByThread.get(input.sessionId) === live)
-        liveByThread.delete(input.sessionId);
-      if (!live?.muteUpdates) {
-        (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
-      }
-      if (live) live.muteUpdates = true;
-      live?.turnFailed?.(new Error("OpenCode server exited"));
-      if (live) {
-        live.turnDone = null;
-        live.turnFailed = null;
-      }
-    },
-    (line) => {
-      const parsed = parseServerUrlFromOutput(line);
-      if (parsed) serverUrl = parsed;
-    },
-  );
+  if (generation === "v1") {
+    watchChild(
+      input.sessionId,
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+      (code) => {
+        serverExited = code;
+        const live = liveRef.current;
+        if (live && liveByThread.get(input.sessionId) === live)
+          liveByThread.delete(input.sessionId);
+        if (!live?.muteUpdates) {
+          (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
+        }
+        if (live) live.muteUpdates = true;
+        live?.turnFailed?.(new Error("OpenCode server exited"));
+        if (live) {
+          live.turnDone = null;
+          live.turnFailed = null;
+        }
+      },
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+    );
 
-  const port = await freeHarnessPort();
-  await spawnChild(
-    input.sessionId,
-    path,
-    ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
-    input.cwd,
-    undefined,
-    "opencode",
-    { OPENCODE_CONFIG_CONTENT: JSON.stringify(policy) },
-  );
+    const port = await freeHarnessPort();
+    await spawnChild(
+      input.sessionId,
+      path,
+      ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
+      input.cwd,
+      undefined,
+      "opencode",
+      undefined,
+      { OPENCODE_CONFIG_CONTENT: JSON.stringify(policy) },
+    );
+  }
 
   try {
-    const url = await waitForServerUrl(
-      () => serverUrl,
-      () => serverExited,
-      SERVER_TIMEOUT_MS,
+    const url =
+      generation === "v2"
+        ? serverUrl
+        : await waitForServerUrl(
+            () => serverUrl,
+            () => serverExited,
+            SERVER_TIMEOUT_MS,
+          );
+    const client = new OpenCodeClient(
+      url,
+      input.cwd,
+      generation,
+      service?.password,
     );
-    const client = new OpenCodeClient(url, input.cwd);
-    if (planning || input.runtimeMode !== "full-access") {
+    if (generation === "v1" && restricted) {
       const agents = await client.getAgents();
       const config = await client.getConfig();
       verifyManagedOpenCodePolicy(
@@ -627,6 +690,11 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
       turnDone: null,
       turnFailed: null,
       activeTurn: false,
+      inbox:
+        generation === "v2"
+          ? v2InboxTracker(openCodeSession.id)
+          : new OpenCodeV2InboxTracker(),
+      awaitedInbox: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
@@ -722,10 +790,24 @@ async function resolveSession(
       await client.updateSession(forked.id, { permission });
       return forked;
     } catch (error) {
-      if (!isOpenCodeNotFound(error) && !isHttpNotFound(error)) throw error;
+      if (
+        !isOpenCodeNotFound(error) &&
+        !isHttpNotFound(error) &&
+        !isEmptySessionFork(error)
+      )
+        throw error;
     }
   }
   return client.createSession({ permission });
+}
+
+/** v2 refuses to fork a session without history; nothing is lost by starting fresh. */
+function isEmptySessionFork(error: unknown): boolean {
+  return (
+    error instanceof OpenCodeHttpError &&
+    error.status === 400 &&
+    stringField(asRecord(error.body), "kind") === "empty_session"
+  );
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
@@ -742,21 +824,27 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
-  const messageID = nextOpenCodeMessageId();
-  live.prompt = {
-    messageIDs: new Set([messageID]),
-    assistantIDs: new Set(),
-    accepted: false,
-    observed: false,
-    idleSeen: false,
-    checking: null,
-  };
+  // v1 turns settle from the durable messages that answer this message id.
+  // v2 assigns its own ids and settles through the awaited inbox item.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
+  live.prompt = messageID
+    ? {
+        messageIDs: new Set([messageID]),
+        assistantIDs: new Set(),
+        accepted: false,
+        observed: false,
+        idleSeen: false,
+        checking: null,
+      }
+    : null;
   live.activeTurn = true;
   live.activeAgent = openCodeAgentForTurn(input);
   live.turnMetricsByMessageId.clear();
+  live.awaitedInbox = live.client.generation === "v2" ? { kind: "turn" } : null;
 
   try {
-    await live.client.promptAsync({
+    const inboxID = await live.client.promptAsync({
       sessionID: live.openCodeSessionId,
       messageID,
       model: parsed,
@@ -765,6 +853,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       parts,
     });
     input.onAccepted?.();
+    if (live.client.generation === "v2") admitAwaitedInbox(live, inboxID);
     if (live.prompt) live.prompt.accepted = true;
     if (live.prompt?.pendingError)
       scheduleBufferedErrorCheck(live, live.prompt, 0);
@@ -781,6 +870,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     if (live.prompt?.errorTimer) clearTimeout(live.prompt.errorTimer);
     live.activeTurn = false;
     live.prompt = null;
+    live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
   }
@@ -790,6 +880,10 @@ async function runCompaction(
   live: Live,
   model: { providerID: string; modelID: string },
 ): Promise<void> {
+  if (live.client.generation === "v2") {
+    await runV2Compaction(live, model);
+    return;
+  }
   const before = new Set(
     (await live.client.getMessages(live.openCodeSessionId)).map((message) =>
       stringField(asRecord(message.info), "id"),
@@ -799,6 +893,9 @@ async function runCompaction(
   live.compacting = true;
   live.compactionError = undefined;
   try {
+    // Unlike prompt_async, summarize responds only after the compaction pass.
+    // Keep this outside the normal turn latch: its eventual session.status=idle
+    // must not become a pending completion for the next user turn.
     await live.client.summarizeSession(live.openCodeSessionId, model);
     const messages = await live.client.getMessages(live.openCodeSessionId);
     const failed = messages.find((message) => {
@@ -813,6 +910,149 @@ async function runCompaction(
     live.compacting = false;
     live.compactionError = undefined;
   }
+}
+
+async function runV2Compaction(
+  live: Live,
+  model: { providerID: string; modelID: string },
+): Promise<void> {
+  // v2 only queues the compaction. Hold the turn chain until it actually
+  // ends so the next prompt is not sent into a context being rewritten.
+  const finished = new Promise<void>((resolve, reject) => {
+    live.turnDone = resolve;
+    live.turnFailed = reject;
+  });
+  // Rejections can land before the admission request returns.
+  finished.catch(() => undefined);
+  live.awaitedInbox = { kind: "compaction" };
+  live.compacting = true;
+  const timer = setTimeout(
+    () => live.turnFailed?.(new Error("OpenCode compaction timed out")),
+    COMPACTION_TIMEOUT_MS,
+  );
+  try {
+    const inboxID = await live.client.summarizeSession(
+      live.openCodeSessionId,
+      model,
+    );
+    admitAwaitedInbox(live, inboxID);
+    await finished;
+  } finally {
+    clearTimeout(timer);
+    live.compacting = false;
+    live.awaitedInbox = null;
+    live.turnDone = null;
+    live.turnFailed = null;
+  }
+}
+
+function admitAwaitedInbox(live: Live, inboxID: string | undefined): void {
+  const awaited = live.awaitedInbox;
+  if (!awaited) return;
+  awaited.id = inboxID;
+  awaited.uncorrelated = !inboxID;
+  // Fast runs can finish before the admission response. Prefer the tracked
+  // result; an early uncorrelated event might belong to a previously stopped
+  // run, so only use it when inbox correlation is unavailable.
+  finishAwaitedInbox(
+    live,
+    !inboxID || !live.inbox.reportsDelivery ? awaited.early : undefined,
+  );
+}
+
+/**
+ * Routes v2 completion events through the awaited inbox item. Returns true
+ * when the event belongs to that gate, settling the waiter only when the
+ * event finished the item it waits for; earlier runs' late events are dropped.
+ */
+function gateAwaitedInbox(
+  live: Live,
+  type: string,
+  properties: Record<string, unknown>,
+): boolean {
+  const awaited = live.awaitedInbox;
+  if (!awaited) return false;
+  const terminal =
+    type === "session.idle" ||
+    stringField(properties, "execution") !== undefined ||
+    (type === "session.status" &&
+      stringField(asRecord(properties.status), "type") === "idle");
+  const compactionEnd =
+    type === "session.compaction.ended" || type === "session.compaction.failed";
+  if (!terminal && !compactionEnd) return false;
+  if (!awaited.id) {
+    if (awaited.uncorrelated) {
+      finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+    } else {
+      awaited.early ??= inboxFallbackOutcome(type, properties, awaited);
+    }
+    return true;
+  }
+  if (live.inbox.outcome(awaited.id)) {
+    finishAwaitedInbox(live);
+  } else if (!live.inbox.reportsDelivery) {
+    // Servers that never report inbox delivery cannot be correlated; keep the
+    // uncorrelated completion so a turn cannot wait forever.
+    finishAwaitedInbox(live, inboxFallbackOutcome(type, properties, awaited));
+  }
+  return true;
+}
+
+function inboxFallbackOutcome(
+  type: string,
+  properties: Record<string, unknown>,
+  awaited: NonNullable<Live["awaitedInbox"]>,
+): OpenCodeV2InboxOutcome | undefined {
+  if (type === "session.compaction.ended") {
+    return awaited.kind === "compaction" ? { kind: "succeeded" } : undefined;
+  }
+  if (type === "session.compaction.failed") {
+    return awaited.kind === "compaction"
+      ? { kind: "failed", error: properties.error }
+      : undefined;
+  }
+  const execution = stringField(properties, "execution");
+  if (execution === "failed")
+    return { kind: "failed", error: properties.error };
+  return { kind: execution === "interrupted" ? "interrupted" : "succeeded" };
+}
+
+function finishAwaitedInbox(
+  live: Live,
+  fallback?: OpenCodeV2InboxOutcome,
+): void {
+  const awaited = live.awaitedInbox;
+  const outcome = (awaited?.id && live.inbox.outcome(awaited.id)) || fallback;
+  if (!awaited || !outcome) return;
+  live.awaitedInbox = null;
+  if (awaited.kind === "compaction") {
+    const done = live.turnDone;
+    const failed = live.turnFailed;
+    live.turnDone = null;
+    live.turnFailed = null;
+    if (outcome.kind === "succeeded") done?.();
+    else
+      failed?.(
+        new Error(
+          outcome.kind === "failed"
+            ? sessionErrorMessage(outcome.error)
+            : "OpenCode compaction was interrupted",
+        ),
+      );
+    return;
+  }
+  if (outcome.kind === "failed") {
+    live.onEvent({
+      type: "session.error",
+      message: sessionErrorMessage(outcome.error),
+    });
+    finishActiveTurn(live);
+    return;
+  }
+  finishActiveTurn(live, [
+    { type: "message.completed" },
+    { type: "reasoning.completed" },
+  ]);
 }
 
 async function handleEvent(
@@ -849,6 +1089,9 @@ async function handleEvent(
     const turn = live.turnDone;
     if (!(await isDescendantSession(live, payloadSessionId))) return;
     if (live.muteUpdates || live.turnDone !== turn) return;
+  } else if (live.client.generation === "v2") {
+    live.inbox.observe(type, properties);
+    if (gateAwaitedInbox(live, type, properties)) return;
   }
 
   switch (type) {
@@ -1060,11 +1303,36 @@ async function handleEvent(
       }
       break;
     }
+    case "session.idle": {
+      // v1 also emits this deprecated event; its turns end on session.status.
+      if (live.client.generation === "v2" && live.activeTurn) {
+        finishActiveTurn(live, [
+          { type: "message.completed" },
+          { type: "reasoning.completed" },
+        ]);
+      }
+      break;
+    }
     case "session.error": {
       const message = sessionErrorMessage(properties.error);
       const errorName = stringField(asRecord(properties.error), "name");
       if (live.compacting) {
         live.compactionError = message;
+        // A v2 compaction is still waiting on its latch, not on a response,
+        // so fail it here instead of letting it settle as a success.
+        if (live.client.generation === "v2") {
+          const failed = live.turnFailed;
+          live.awaitedInbox = null;
+          live.turnDone = null;
+          live.turnFailed = null;
+          failed?.(new Error(message));
+        }
+        break;
+      }
+      if (live.client.generation === "v2") {
+        live.onEvent({ type: "session.error", message });
+        // A stale v2 failure with nothing waiting must not end the next turn.
+        if (live.turnDone) finishActiveTurn(live);
         break;
       }
       if (!live.activeTurn || !live.prompt) break;
@@ -1773,19 +2041,16 @@ function roleForPart(
   if (part.messageID) {
     const known = live.messageRoleById.get(part.messageID);
     if (known) return known;
-    return undefined;
+    // v1 also streams user parts, so wait for the message role. The v2
+    // translator builds parts only from assistant step events, so a part
+    // whose step start was missed still belongs to an assistant.
+    if (live.client.generation !== "v2") return undefined;
   }
   return part.type === "tool" ||
     part.type === "text" ||
     part.type === "reasoning"
     ? "assistant"
     : undefined;
-}
-
-function sameDirectory(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value.replace(/\/+$/, "").replace(/\\/g, "/");
-  return normalize(left) === normalize(right);
 }
 
 function isHttpNotFound(error: unknown): boolean {
@@ -1856,13 +2121,15 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
     ?.toLowerCase();
 }
 
-async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
+async function assertOpenCodeVersion(
+  path: string,
+  cwd: string,
+): Promise<OpenCodeApiGeneration> {
   const output = await execChild(path, ["--version"], cwd, "opencode").catch(
     () => "",
   );
   const version = parseOpenCodeVersion(output);
-  if (!version || !isSupportedOpenCodeVersion(version))
-    throw new Error(unsupportedOpenCodeVersionMessage(version ?? undefined));
+  return assertSupportedOpenCodeVersion(version);
 }
 
 function waitForServerUrl(
@@ -1897,7 +2164,17 @@ function waitForServerUrl(
 }
 
 /** Exported for tests. */
+function v2InboxTracker(openCodeSessionId: string): OpenCodeV2InboxTracker {
+  let tracker = v2InboxBySession.get(openCodeSessionId);
+  if (!tracker) {
+    tracker = new OpenCodeV2InboxTracker();
+    v2InboxBySession.set(openCodeSessionId, tracker);
+  }
+  return tracker;
+}
+
 export function __openCodeTestReset(): void {
+  v2InboxBySession.clear();
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();

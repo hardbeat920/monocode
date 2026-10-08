@@ -15,7 +15,7 @@ import { extractToolPreview } from "../../core/preview";
 import type { HarnessEvent } from "../../core/types";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
-export const MAXIMUM_OPENCODE_MAJOR_VERSION = 1;
+export const MINIMUM_OPENCODE_V2_VERSION = "2.0.15";
 export const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 export const KNOWN_HIDDEN_AGENTS = new Set(["compaction", "summary", "title"]);
 let lastMessageTimestamp = 0;
@@ -41,6 +41,8 @@ export function nextOpenCodeMessageId(timestamp = Date.now()): string {
   return `msg_${time}${suffix}`;
 }
 
+export type OpenCodeApiGeneration = "v1" | "v2";
+
 const OPENCODE_DEFAULT_TITLE_PATTERN =
   /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -53,6 +55,12 @@ export type OpenCodePermissionRule = {
   permission: string;
   pattern: string;
   action: "allow" | "deny" | "ask";
+};
+
+export type OpenCodeV2PermissionRule = {
+  action: string;
+  resource: string;
+  effect: "allow" | "deny" | "ask";
 };
 
 export type OpenCodePart = {
@@ -124,22 +132,77 @@ export function compareSemver(left: string, right: string): number {
   return 0;
 }
 
-export function isSupportedOpenCodeVersion(version: string): boolean {
-  return (
-    Number.parseInt(version.split(".")[0] ?? "", 10) ===
-      MAXIMUM_OPENCODE_MAJOR_VERSION &&
-    compareSemver(version, MINIMUM_OPENCODE_VERSION) >= 0
-  );
+export function openCodeApiGeneration(
+  version: string,
+): OpenCodeApiGeneration | null {
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  if (major === 1) {
+    return compareSemver(version, MINIMUM_OPENCODE_VERSION) >= 0 ? "v1" : null;
+  }
+  if (major === 2) {
+    return compareSemver(version, MINIMUM_OPENCODE_V2_VERSION) >= 0
+      ? "v2"
+      : null;
+  }
+  return null;
 }
 
-export function unsupportedOpenCodeVersionMessage(version?: string): string {
-  return version
-    ? `OpenCode v${version} is unsupported. MonoCode requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer within major version 1. OpenCode 2 uses a different API.`
-    : `Unable to determine OpenCode version. MonoCode requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer within major version 1.`;
+export function assertSupportedOpenCodeVersion(
+  version: string | null,
+): OpenCodeApiGeneration {
+  if (!version) {
+    throw new Error(
+      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    );
+  }
+  const generation = openCodeApiGeneration(version);
+  if (generation) return generation;
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  if (major === 1) {
+    throw new Error(
+      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
+    );
+  }
+  if (major === 2) {
+    throw new Error(
+      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_V2_VERSION} or newer.`,
+    );
+  }
+  throw new Error(
+    `OpenCode v${version} is not supported. MonoCode supports OpenCode v1 and v2.`,
+  );
 }
 
 export function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
+}
+
+export function sameDirectory(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalize(left) === normalize(right);
+}
+
+/** Inserts into an insertion-ordered map, dropping the oldest entry past `limit`. */
+export function rememberBounded<K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+  limit: number,
+): void {
+  map.set(key, value);
+  dropOldest(map, limit);
+}
+
+export function rememberBoundedSet<K>(set: Set<K>, key: K, limit: number): void {
+  set.add(key);
+  dropOldest(set, limit);
+}
+
+function dropOldest<K>(collection: Map<K, unknown> | Set<K>, limit: number): void {
+  if (collection.size <= limit) return;
+  const oldest = collection.keys().next();
+  if (!oldest.done) collection.delete(oldest.value);
 }
 
 export function isOpenCodeNotFound(cause: unknown): boolean {
@@ -494,6 +557,16 @@ export function verifyManagedOpenCodePolicy(
       later.push(rule);
     }
   }
+}
+
+export function toOpenCodeV2PermissionRules(
+  rules: OpenCodePermissionRule[],
+): OpenCodeV2PermissionRule[] {
+  return rules.map((rule) => ({
+    action: rule.permission,
+    resource: rule.pattern,
+    effect: rule.action,
+  }));
 }
 
 export function toOpenCodePermissionReply(
@@ -863,14 +936,27 @@ export function eventSessionId(
   if (!properties) return undefined;
   const sessionID = stringField(properties, "sessionID");
   if (sessionID) return sessionID;
+  const form = asRecord(properties.form);
+  const request = asRecord(properties.request);
   const info = asRecord(properties.info);
   return (
+    stringField(form, "sessionID") ??
+    stringField(request, "sessionID") ??
     stringField(info, "sessionID") ??
     stringField(asRecord(properties.part), "sessionID") ??
     (typeof event.type === "string" && event.type.startsWith("session.")
       ? stringField(info, "id")
       : undefined)
   );
+}
+
+export function normalizeOpenCodeV2Event(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  if ("properties" in event) return event;
+  const data = asRecord(event.data);
+  if (!data) return event;
+  return { ...event, properties: data };
 }
 
 export function textDeltaEvent(
