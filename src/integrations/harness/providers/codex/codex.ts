@@ -1,3 +1,4 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -5,10 +6,14 @@ import {
   parseCodexRateLimits,
 } from "../../../../features/providers/model/rateLimits";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
-import { questionPromptTitle, type UserQuestionReply } from "../../../../features/sessions/model/userQuestion";
+import {
+  questionPromptTitle,
+  type UserQuestionReply,
+} from "../../../../features/sessions/model/userQuestion";
 import {
   killChild,
   resolveCodexBinary,
+  restoreMonoCodexAgentState,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -29,10 +34,19 @@ import {
   type CodexApprovalKind,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import { deleteGeneratedImages, saveGeneratedImage } from "../../../../platform/tauri/fs";
-import { codexQuestions, codexQuestionResponse } from "./codexQuestions";
+import {
+  deleteGeneratedImages,
+  saveGeneratedImage,
+} from "../../../../platform/tauri/fs";
+import {
+  codexAsyncQuestions,
+  codexAsyncQuestionResponse,
+  codexQuestions,
+  codexQuestionResponse,
+} from "./codexQuestions";
 import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
+import { prepareCodexMonoContext } from "./codexStore";
 import type {
   ApprovalDecision,
   CompactContextInput,
@@ -54,8 +68,11 @@ type PendingApproval = {
 };
 
 type PendingQuestion = {
-  rpcId: JsonRpcId;
+  /** Async agentMessage questions have no pending server request. */
+  rpcId: JsonRpcId | null;
   threadId: string;
+  turnId?: string;
+  sending?: boolean;
   event: Extract<HarnessEvent, { type: "question.asked" }>;
   isBlocking: boolean;
   timer?: ReturnType<typeof setTimeout>;
@@ -73,6 +90,8 @@ type Live = {
   providerAccountId?: string;
   /** Thread-level network policy used when this app-server opened the thread. */
   controlsAgents: boolean;
+  ephemeral: boolean;
+  codexStore?: "mono";
   runtimeMode: RuntimeMode;
   planning: boolean;
   onEvent: (event: HarnessEvent) => void;
@@ -93,6 +112,7 @@ type Live = {
   emittedAssistantByItem: Map<string, string>;
   emittedReasoningByItem: Map<string, string>;
   emittedGeneratedImages: Set<string>;
+  emittedAsyncQuestions: Set<string>;
   turnGeneration: number;
   notificationQueue: Promise<void> | null;
   /** Child thread id -> the agent tool row that spawned it. */
@@ -107,10 +127,7 @@ type Live = {
   usageLimited: boolean;
 };
 
-function trackNotificationQueue(
-  live: Live,
-  queued: Promise<void>,
-): void {
+function trackNotificationQueue(live: Live, queued: Promise<void>): void {
   live.notificationQueue = queued;
   void queued.then(() => {
     if (live.notificationQueue === queued) live.notificationQueue = null;
@@ -121,6 +138,8 @@ type Resume = {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  ephemeral?: boolean;
+  codexStore?: "mono";
 };
 
 const liveByThread = new Map<string, Live>();
@@ -168,6 +187,9 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
 export async function compactCodexContext(
   input: CompactContextInput,
 ): Promise<void> {
+  if (input.ephemeral && !hasLiveCodexSession(input.sessionId, true)) {
+    throw new Error("Send a message before compacting this chat");
+  }
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -196,6 +218,10 @@ export async function compactCodexContext(
 export async function rewindCodexLastTurn(
   input: RewindLastTurnInput,
 ): Promise<RewindLastTurnResult> {
+  // An ephemeral helper has no native turn to revert after its process exits.
+  if (input.ephemeral && !hasLiveCodexSession(input.sessionId, true)) {
+    return { submitted: false };
+  }
   let live: Live;
   try {
     live = await ensureLive(input);
@@ -253,9 +279,9 @@ async function lastUserTurnId(
 
 export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live) throw new Error("No active Codex session");
+  if (!live) throw new TurnNotReadyError("No active Codex session");
   const turnId = live.activeTurnId;
-  if (!turnId) throw new Error("No active turn to steer");
+  if (!turnId) throw new TurnNotReadyError("No active turn to steer");
 
   const params = buildTurnSteerParams({
     threadId: live.threadId,
@@ -270,7 +296,15 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
     return;
   }
 
-  await live.rpc.request("turn/steer", params);
+  try {
+    await live.rpc.request("turn/steer", params);
+  } catch (error) {
+    if (live.activeTurnId !== turnId)
+      throw new TurnNotReadyError(
+        "The Codex turn ended before the follow-up arrived",
+      );
+    throw error;
+  }
   live.onEvent({ type: "turn.started", providerTurnId: turnId });
 }
 
@@ -290,7 +324,45 @@ export function respondCodexQuestion(
   requestId: number,
   reply: UserQuestionReply,
 ): void {
-  liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(reply);
+  const live = liveByThread.get(sessionId);
+  const pending = live?.questions.get(requestId);
+  if (!live || !pending || pending.sending) return;
+  if (pending.rpcId !== null || reply.kind === "skipped") {
+    pending.resolve(reply);
+    return;
+  }
+  const text = codexAsyncQuestionResponse(pending.event.questions, reply);
+  if (!text) {
+    pending.resolve({ kind: "skipped" });
+    return;
+  }
+  const turnId = pending.turnId;
+  if (!turnId || live.activeTurnId !== turnId) {
+    pending.resolve("cancelled");
+    return;
+  }
+  pending.sending = true;
+  keepCodexQuestionOpen(sessionId, requestId);
+  void live.rpc
+    .request(
+      "turn/steer",
+      buildTurnSteerParams({
+        threadId: pending.threadId,
+        expectedTurnId: turnId,
+        prompt: text,
+      }),
+    )
+    .then(() => {
+      if (live.questions.get(requestId) === pending) pending.resolve(reply);
+    })
+    .catch((error: unknown) => {
+      pending.sending = false;
+      if (live.questions.get(requestId) !== pending) return;
+      live.onEvent({
+        type: "status",
+        text: `Could not send your answer to Codex: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
 }
 
 export function keepCodexQuestionOpen(
@@ -398,14 +470,51 @@ export function bindCodexSession(
   });
 }
 
+export async function migrateMonoCodexSession(input: {
+  sessionId: string;
+  threadId: string;
+  cwd: string;
+  providerAccountId?: string;
+}): Promise<void> {
+  const { path } = await resolveCodexBinaryImpl();
+  await prepareCodexMonoContext({ ...input, path, migrationOnly: true });
+}
+
+/** Ephemeral context exists only while its app-server is alive. */
+export function hasLiveCodexSession(
+  sessionId: string,
+  ephemeral?: boolean,
+): boolean {
+  const live = liveByThread.get(sessionId);
+  return (
+    !!live &&
+    !live.rpc.isClosed &&
+    (ephemeral === undefined || live.ephemeral === ephemeral)
+  );
+}
+
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
+  const ephemeral =
+    input.ephemeral ??
+    existing?.ephemeral ??
+    resumeByThread.get(input.sessionId)?.ephemeral ??
+    false;
+  const codexStore =
+    input.codexStore ??
+    existing?.codexStore ??
+    resumeByThread.get(input.sessionId)?.codexStore;
   if (
     existing &&
     existing.cwd === input.cwd &&
-    sameProviderAccountId(existing.providerAccountId, input.providerAccountId) &&
-    existing.controlsAgents === controlsAgents
+    sameProviderAccountId(
+      existing.providerAccountId,
+      input.providerAccountId,
+    ) &&
+    existing.controlsAgents === controlsAgents &&
+    existing.ephemeral === ephemeral &&
+    existing.codexStore === codexStore
   ) {
     existing.onEvent = input.onEvent;
     return existing;
@@ -416,7 +525,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     // control, so its local CLI socket matches the current policy.
     if (
       existing.cwd !== input.cwd ||
-      !sameProviderAccountId(existing.providerAccountId, input.providerAccountId)
+      !sameProviderAccountId(
+        existing.providerAccountId,
+        input.providerAccountId,
+      )
     ) {
       resumeByThread.delete(input.sessionId);
     }
@@ -425,6 +537,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
   const resume = resumeByThread.get(input.sessionId);
   const canResume =
+    !ephemeral &&
     resume != null &&
     resume.cwd === input.cwd &&
     sameProviderAccountId(resume.providerAccountId, input.providerAccountId);
@@ -437,6 +550,17 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const { path } = await resolveCodexBinaryImpl();
+  const store =
+    codexStore === "mono"
+      ? await prepareCodexMonoContext({
+          sessionId: input.sessionId,
+          path,
+          cwd: input.cwd,
+          providerAccountId: input.providerAccountId,
+          threadId: canResume ? resume?.threadId : undefined,
+        })
+      : undefined;
+  const storeConfig = store?.config;
   const liveRef: { current: Live | null } = { current: null };
 
   const rpc = new JsonRpcClient(
@@ -459,12 +583,18 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
               }
               return handleNotification(live, method, params);
             });
-          trackNotificationQueue(live, queued.catch(() => undefined));
+          trackNotificationQueue(
+            live,
+            queued.catch(() => undefined),
+          );
           return;
         }
         const result = handleNotification(live, method, params);
         if (!result) return;
-        trackNotificationQueue(live, result.catch(() => undefined));
+        trackNotificationQueue(
+          live,
+          result.catch(() => undefined),
+        );
       },
       onRequest: (id, method, params) => {
         const live = liveRef.current;
@@ -524,6 +654,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       id: input.providerAccountId ?? "default",
     },
     "codex",
+    codexStore,
   );
 
   try {
@@ -540,6 +671,12 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
     });
     await rpc.notify("initialized", undefined);
+    if (store?.hasThread && canResume && resume) {
+      await restoreMonoCodexAgentState(
+        input.providerAccountId,
+        resume.threadId,
+      );
+    }
 
     const model = nativeModelId(input.model);
     const serviceTier = input.modelSettings?.serviceTier;
@@ -550,37 +687,62 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
     if (canResume && resume) {
       try {
+        const params = buildThreadStartParams({
+          cwd: input.cwd,
+          runtimeMode: input.runtimeMode,
+          controlsAgents: input.controlsAgents,
+          model,
+          serviceTier,
+        });
         const opened = await rpc.request<{ thread?: { id?: string } }>(
           "thread/resume",
           {
             threadId: resume.threadId,
-            ...buildThreadStartParams({
-              cwd: input.cwd,
-              runtimeMode: input.runtimeMode,
-              controlsAgents: input.controlsAgents,
-              model,
-              serviceTier,
-            }),
+            ...params,
+            ...(storeConfig
+              ? {
+                  config: {
+                    ...storeConfig,
+                    ...(params.config as Record<string, unknown> | undefined),
+                  },
+                }
+              : {}),
           },
         );
         threadId = opened.thread?.id ?? resume.threadId;
         didResume = true;
       } catch (error) {
+        if (store?.hasThread)
+          throw new Error(
+            "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+          );
         if (!isRecoverableThreadResumeError(error)) throw error;
         threadId = undefined;
       }
     }
 
     if (!threadId) {
+      const params = buildThreadStartParams({
+        cwd: input.cwd,
+        runtimeMode: input.runtimeMode,
+        controlsAgents: input.controlsAgents,
+        model,
+        serviceTier,
+      });
       const opened = await rpc.request<{ thread?: { id?: string } }>(
         "thread/start",
-        buildThreadStartParams({
-          cwd: input.cwd,
-          runtimeMode: input.runtimeMode,
-          controlsAgents: input.controlsAgents,
-          model,
-          serviceTier,
-        }),
+        {
+          ...params,
+          ...(storeConfig
+            ? {
+                config: {
+                  ...storeConfig,
+                  ...(params.config as Record<string, unknown> | undefined),
+                },
+              }
+            : {}),
+          ...(ephemeral ? { ephemeral: true } : {}),
+        },
       );
       threadId = opened.thread?.id?.trim();
     }
@@ -596,6 +758,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
       controlsAgents,
+      ephemeral,
+      codexStore,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       onEvent: input.onEvent,
@@ -610,12 +774,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turnDone: null,
       turnFailed: null,
       turnEndPending: false,
-       emittedAssistantByItem: new Map(),
-       emittedReasoningByItem: new Map(),
-       emittedGeneratedImages: new Set(),
-       turnGeneration: 0,
-       notificationQueue: null,
-       subagentThreads: new Map(),
+      emittedAssistantByItem: new Map(),
+      emittedReasoningByItem: new Map(),
+      emittedGeneratedImages: new Set(),
+      emittedAsyncQuestions: new Set(),
+      turnGeneration: 0,
+      notificationQueue: null,
+      subagentThreads: new Map(),
       pendingSubagent: new Map(),
       openAgentRows: new Map(),
       rateLimits: new Map(),
@@ -627,6 +792,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      ephemeral,
+      codexStore,
     });
     live.onEvent({
       type: "session.providerBound",
@@ -665,6 +832,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
+  live.emittedAsyncQuestions.clear();
   live.turnGeneration += 1;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
@@ -802,6 +970,7 @@ function handleNotification(
     }
     live.onEvent(event);
   }
+  if (method === "item/completed") showCodexAsyncQuestion(live, rec);
   // Metadata and steps can arrive before the spawn. Create its row first.
   let replay: Promise<void> | undefined;
   for (const childId of codexSubagentThreadIds(asRecord(rec?.item) ?? {})) {
@@ -847,6 +1016,69 @@ function handleNotification(
   };
   if (pending) return pending.then(afterImages);
   return afterImages();
+}
+
+function showCodexAsyncQuestion(
+  live: Live,
+  rec: Record<string, unknown> | null,
+): void {
+  const item = asRecord(rec?.item);
+  const itemId = stringField(item, "id");
+  const turnId = stringField(rec, "turnId") ?? live.activeTurnId;
+  if (
+    !itemId ||
+    !turnId ||
+    turnId !== live.activeTurnId ||
+    live.emittedAsyncQuestions.has(itemId)
+  )
+    return;
+  let questions;
+  try {
+    questions = codexAsyncQuestions(item);
+  } catch (error) {
+    live.onEvent({
+      type: "status",
+      text: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  if (!questions.length) return;
+  live.emittedAsyncQuestions.add(itemId);
+  const uiId = live.nextApprovalUiId++;
+  const event: Extract<HarnessEvent, { type: "question.asked" }> = {
+    type: "question.asked",
+    requestId: uiId,
+    title: questionPromptTitle(questions),
+    questions,
+    callId: itemId,
+  };
+  const outcome = new Promise<UserQuestionReply | "cancelled">((resolve) => {
+    live.questions.set(uiId, {
+      rpcId: null,
+      threadId: live.threadId,
+      turnId,
+      event,
+      isBlocking: false,
+      resolve,
+    });
+  }).finally(() => {
+    clearTimeout(live.questions.get(uiId)?.timer);
+    live.questions.delete(uiId);
+  });
+  showNextQuestion(live);
+  void outcome.then((reply) => {
+    live.onEvent({
+      type: "question.resolved",
+      requestId: uiId,
+      decision:
+        reply === "cancelled"
+          ? "cancelled"
+          : reply.kind === "answered"
+            ? "answered"
+            : "skipped",
+    });
+    showNextQuestion(live);
+  });
 }
 
 async function materializeGeneratedImage(
@@ -1113,6 +1345,7 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.emittedAssistantByItem.clear();
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
+  live.emittedAsyncQuestions.clear();
   live.subagentThreads.clear();
   live.pendingSubagent.clear();
   for (const event of extraEvents) {

@@ -31,6 +31,8 @@ export {
   stopCodexSession,
   forgetCodexSession,
   bindCodexSession,
+  hasLiveCodexSession,
+  migrateMonoCodexSession,
 } from "./providers/codex/codex";
 export {
   sendOpenCodeTurn,
@@ -198,6 +200,7 @@ export type {
   HarnessEvent,
   SteerTurnInput,
 } from "./core/types";
+export { TurnNotReadyError } from "./core/types";
 export type {
   UserQuestion,
   UserQuestionPrompt,

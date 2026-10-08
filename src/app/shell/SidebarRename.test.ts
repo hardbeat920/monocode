@@ -1,13 +1,20 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps } from "react";
+import { act, createElement, StrictMode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
-import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
+import {
+  loadSessionFolders,
+  saveSessionFolders,
+} from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
+import {
+  createMono,
+  saveMonoSessionId,
+} from "../../features/monos/model/mono";
 
 // Keep native services out of these menu/input interaction tests.
 vi.mock("../../features/source-control/hooks/useProjectDiffStats", () => ({
@@ -17,7 +24,10 @@ vi.mock("../../features/source-control/hooks/useGitFileStatuses", () => ({
   useGitFileStatuses: () => ({ files: new Map(), dirs: new Map() }),
 }));
 vi.mock("./SidebarUpdate", () => ({ SidebarUpdateFooter: () => null }));
-vi.mock("../../features/files/ui/FileTree", () => ({ FileTree: () => null }));
+vi.mock("../../features/files/ui/FileTree", () => ({
+  FileTree: ({ cwd, rootLabel }: { cwd: string; rootLabel?: string }) =>
+    createElement("div", { "data-explorer-cwd": cwd }, rootLabel),
+}));
 vi.mock("../../platform/tauri/clipboard", () => ({
   copyText: vi.fn().mockResolvedValue(undefined),
 }));
@@ -141,6 +151,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("leaves the resident agent and its description out of the session list", () => {
+  saveMonoSessionId(createMono(["/workspace/project"]).id, "resident");
+  props.sessions = [
+    ...props.sessions,
+    {
+      ...props.sessions[0],
+      id: "resident",
+      title: "Resident agent description",
+    },
+  ];
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
+  expect(container.querySelector("[data-mono]")).toBeNull();
+  expect(container.textContent).not.toContain("Resident agent description");
+});
+
+it("omits hidden Mono launches from history, open sessions and folders", () => {
+  const hidden = {
+    ...props.sessions[0],
+    id: "hidden-launch",
+    title: "Mono background work",
+    sidebarHidden: true,
+  };
+  props.sessions = [...props.sessions, hidden];
+  props.openSessions = [hidden];
+  saveSessionFolders("/workspace/project", [
+    { id: "folder", name: "Work", sessionIds: [hidden.id], collapsed: false },
+  ]);
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+  expect(container.textContent).not.toContain(hidden.title);
+  props.sessions = props.sessions.filter((session) => session.id !== hidden.id);
+  act(() => render());
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+});
+
 describe("project rail visibility", () => {
   it("keeps the mounted rail and its scroll state when collapsed", async () => {
     props = {
@@ -164,6 +212,106 @@ describe("project rail visibility", () => {
     await act(async () => render());
     expect(container.querySelector('nav[aria-label="Projects"]')).toBe(rail);
     expect(rail?.scrollTop).toBe(37);
+  });
+});
+
+describe("worktree explorer visibility", () => {
+  it("does not mount the file tree while browsing chat tabs", () => {
+    props = { ...props, gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBeNull();
+  });
+
+  it("retains the hidden tree and catches up when Files opens", () => {
+    props = {
+      ...props,
+      tab: "files",
+      gitCwd: "/worktrees/first",
+      explorerRootLabel: "first-branch",
+    };
+    act(() => render());
+    const first = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    first.scrollTop = 73;
+    props = {
+      ...props,
+      tab: "sessions",
+      gitCwd: "/worktrees/second",
+      explorerRootLabel: "second-branch",
+    };
+    act(() => render());
+    expect(container.querySelector("[data-explorer-cwd]")).toBe(first);
+    expect(first.scrollTop).toBe(73);
+    expect(first.dataset.explorerCwd).toBe("/worktrees/first");
+
+    props = { ...props, tab: "files" };
+    act(() => render());
+    const second = container.querySelector<HTMLElement>("[data-explorer-cwd]")!;
+    expect(second.dataset.explorerCwd).toBe("/worktrees/second");
+    expect(second.textContent).toBe("second-branch");
+    expect(second).not.toBe(first);
+  });
+
+  it("updates the visible explorer on a worktree switch", () => {
+    props = { ...props, tab: "files", gitCwd: "/worktrees/first" };
+    act(() => render());
+    props = { ...props, gitCwd: "/worktrees/second" };
+    act(() => render());
+    expect(
+      container.querySelector<HTMLElement>("[data-explorer-cwd]")!.dataset
+        .explorerCwd,
+    ).toBe("/worktrees/second");
+  });
+});
+
+describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
+  it.each([
+    ["Inbox", "inboxActive", "onOpenInbox"],
+    ["Notes", "notesActive", "onOpenNotes"],
+    ["Automations", "automationsActive", "onOpenAutomations"],
+    ["Search", "searchActive", "onSearch"],
+  ] as const)("selects only %s while it covers a Mono", async (label, active, open) => {
+    const mono = createMono();
+    props = {
+      ...props,
+      projectRailOpen: !compact,
+      compactProjectRail: compact,
+      onSelectProject: vi.fn(),
+      onOpenProject: vi.fn(),
+      monoViewActive: true,
+      monos: {
+        activeId: mono.id,
+        states: new Map(),
+        onOpen: vi.fn(),
+        onCreate: vi.fn(),
+        onDelete: vi.fn(),
+      },
+      [open]: () => {
+        props = { ...props, [active]: true };
+        render();
+      },
+    };
+    await act(async () => render());
+    const monoSelected = () => compact
+      ? container.querySelector('[aria-label^="Switch project"]')!
+          .getAttribute("aria-label")!.includes("current mono")
+      : !!container.querySelector('[data-mono-rail] [aria-current="true"]');
+    expect(monoSelected()).toBe(true);
+
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!.click(),
+    );
+    expect(container.querySelector(`button[aria-label^="${label}"]`)!.classList)
+      .toContain("bg-selection");
+    expect(monoSelected()).toBe(false);
+    expect(container.querySelector('[data-mono-rail] [data-selected="true"]')).toBeNull();
+    expect(props.monos?.activeId).toBe(mono.id);
+
+    // Back reveals the same conversation and restores its rail selection.
+    props = { ...props, [active]: false };
+    await act(async () => render());
+    expect(monoSelected()).toBe(true);
   });
 });
 
@@ -719,6 +867,66 @@ describe("sidebar reorder affordances", () => {
           .className,
       ).not.toContain("cursor-grab");
     }
+  });
+});
+
+describe("sidebar new session rows", () => {
+  it("grows in only for a session that arrives after the list has rendered", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(() => ({ cancel: vi.fn() }) as unknown as Animation);
+    const animated = (property: string) =>
+      animate.mock.calls.flatMap(([keyframes], index) =>
+        property in (keyframes as Keyframe[])[0]
+          ? [animate.mock.contexts[index] as HTMLElement]
+          : [],
+      );
+    // Dev builds replay mount effects; the row must still animate, once.
+    const render = () =>
+      root.render(createElement(StrictMode, null, createElement(Sidebar, props)));
+    act(() => render());
+    expect(animate).not.toHaveBeenCalled();
+
+    props = {
+      ...props,
+      sessions: [
+        {
+          ...props.sessions[0],
+          id: "session-2",
+          createdAt: Date.now(),
+          updatedAt: props.sessions[0].updatedAt + 1,
+        },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    // The new card fades in where it lands; the row below slides down.
+    expect(animated("opacity")).toHaveLength(1);
+    expect(
+      animated("opacity")[0].closest("li")?.querySelector(
+        '[data-session-card="session-2"]',
+      ),
+    ).not.toBeNull();
+    expect(animated("transform")).toHaveLength(1);
+    expect(
+      animated("transform")[0].querySelector('[data-session-card="session-1"]'),
+    ).not.toBeNull();
+    const calls = animate.mock.calls.length;
+
+    props = {
+      ...props,
+      sessions: [
+        { ...props.sessions[0], id: "session-old", createdAt: 1 },
+        ...props.sessions,
+      ],
+    };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
+
+    // Reordering existing rows must not replay their entrance.
+    props = { ...props, sessions: [...props.sessions].reverse() };
+    act(() => render());
+    expect(animate).toHaveBeenCalledTimes(calls);
   });
 });
 
@@ -1876,123 +2084,4 @@ it("labels preserved sessions as having no branch selected", () => {
   act(render);
   expect(card().textContent).not.toContain("No branch selected");
   expect(card().textContent).toContain("project/main");
-});
-
-describe("session title rename reveal", () => {
-  function titleEl(): HTMLElement {
-    return card().querySelector(".line-clamp-1")!;
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("reveals the new title character by character left to right, then settles to plain text", () => {
-    act(render);
-    expect(titleEl().className).not.toContain("session-title-renamed");
-
-    const next = "A whole new title";
-    props.sessions = [
-      { ...props.sessions[0], title: formatSessionTitle("codex", next) },
-    ];
-    act(render);
-    expect(titleEl().className).toContain("session-title-renamed");
-
-    const chars = titleEl().querySelectorAll(".session-title-char");
-    expect(chars).toHaveLength(next.length);
-    expect([...chars].map((el) => el.textContent).join("")).toBe(next);
-    // The first character starts its animation immediately (no delay); each
-    // one after it is delayed a little further, ending with the last
-    // character — the reveal sweeps left to right.
-    const first = chars[0] as HTMLElement;
-    const last = chars[chars.length - 1] as HTMLElement;
-    expect(first.style.getPropertyValue("--char-distance")).toBe("0");
-    expect(Number(last.style.getPropertyValue("--char-distance"))).toBe(1);
-    const distances = [...chars].map((el) =>
-      Number((el as HTMLElement).style.getPropertyValue("--char-distance")),
-    );
-    expect(distances).toEqual([...distances].sort((a, b) => a - b));
-    // Hidden from assistive tech per-character; the real string is exposed
-    // once, separately, for screen readers and for copy/selection.
-    expect(titleEl().querySelector('[aria-hidden="true"]')).not.toBeNull();
-    expect(titleEl().querySelector(".sr-only")?.textContent).toBe(next);
-
-    act(() => vi.advanceTimersByTime(1000));
-    expect(titleEl().className).not.toContain("session-title-renamed");
-    expect(titleEl().querySelectorAll(".session-title-char")).toHaveLength(0);
-    expect(titleEl().textContent).toBe(next);
-  });
-
-  it("replays the reveal on a second, successive rename", () => {
-    act(render);
-
-    const first = "A whole new title";
-    props.sessions = [
-      { ...props.sessions[0], title: formatSessionTitle("codex", first) },
-    ];
-    act(render);
-    // Advance partway through the reveal — enough to observe the animating
-    // characters, but before the 1000ms clear timeout settles them back to
-    // plain text, so the second rename below still has something to replace.
-    act(() => vi.advanceTimersByTime(500));
-    const firstTitleEl = titleEl();
-    const firstCharEl = titleEl().querySelectorAll(".session-title-char")[0];
-    expect(firstCharEl.textContent).toBe("A");
-
-    // Same length as `first`, so the per-character spans share every index
-    // with the previous reveal — the exact case a plain index `key` would
-    // have reused rather than remounted, leaving the second reveal's
-    // animation never actually applied.
-    const second = "B whole new title";
-    props.sessions = [
-      { ...props.sessions[0], title: formatSessionTitle("codex", second) },
-    ];
-    act(render);
-    expect(titleEl().className).toContain("session-title-renamed");
-    // The element hosting the ripple (::after on this same span) must
-    // itself be a fresh node too, not just its character children — a
-    // CSS animation only replays on an element that was actually
-    // (re)mounted, and this span is what the ripple lives on.
-    expect(titleEl()).not.toBe(firstTitleEl);
-    const secondCharEl = titleEl().querySelectorAll(".session-title-char")[0];
-    expect(secondCharEl.textContent).toBe("B");
-    // A genuinely new element, not the same node with its text swapped —
-    // only a fresh mount makes the browser replay the CSS animation.
-    expect(secondCharEl).not.toBe(firstCharEl);
-
-    act(() => vi.advanceTimersByTime(1000));
-    expect(titleEl().className).not.toContain("session-title-renamed");
-    expect(titleEl().querySelectorAll(".session-title-char")).toHaveLength(0);
-    expect(titleEl().textContent).toBe(second);
-  });
-
-  it("does not reveal on mount or on an unrelated re-render", () => {
-    act(render);
-    expect(titleEl().className).not.toContain("session-title-renamed");
-
-    // Same title, different unrelated field — re-renders the card without
-    // the title itself changing.
-    props.sessions = [{ ...props.sessions[0], updatedAt: Date.now() + 1 }];
-    act(render);
-    expect(titleEl().className).not.toContain("session-title-renamed");
-  });
-
-  it("reveals a joined emoji as one character, not split across code points", () => {
-    act(render);
-
-    // A family emoji ("\u{1F469}‍\u{1F467}") is several UTF-16 code
-    // points joined by zero-width joiners — `[...text]` would split it into
-    // multiple spans, each animating (and rendering) independently.
-    const next = "\u{1F469}‍\u{1F467} Family trip";
-    props.sessions = [
-      { ...props.sessions[0], title: formatSessionTitle("codex", next) },
-    ];
-    act(render);
-
-    const chars = titleEl().querySelectorAll(".session-title-char");
-    expect([...chars].map((el) => el.textContent)[0]).toBe(
-      "\u{1F469}‍\u{1F467}",
-    );
-    expect([...chars].map((el) => el.textContent).join("")).toBe(next);
-  });
 });
