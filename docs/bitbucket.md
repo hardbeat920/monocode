@@ -19,8 +19,8 @@ head commit: Pipelines and third-party builds such as SonarCloud. It is called
 Builds rather than Checks because Bitbucket's own merge checks (such as "no
 commits behind") are a different thing, and they are not available through the
 API. Each row shows its result and duration and opens the build on Bitbucket.
-This uses the same `read:pullrequest:bitbucket` scope, and it refreshes every 30
-seconds while the tab is open.
+This reads commit statuses, so it uses the `read:repository:bitbucket` scope, and
+it refreshes every 30 seconds while the tab is open.
 
 Pipelines builds can be expanded to show their steps. That needs one more,
 optional, scope: `read:pipeline:bitbucket`. Atlassian API tokens cannot be
