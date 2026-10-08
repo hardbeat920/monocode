@@ -642,6 +642,7 @@ export function CodeMirrorEditor({
   useEffect(() => {
     workspaceRef.current = workspace;
     commentPathRef.current = commentPath;
+    setSelectionTarget(null);
   }, [workspace, commentPath]);
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
