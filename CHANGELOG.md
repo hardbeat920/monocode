@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Factory Droid is available through ACP, with model discovery, per-model reasoning levels, attachments, approvals, spec mode, skills, saved-session resume, remote host sessions, and local usage.
 
+## [0.10.0] - 2026-10-08
+
+### Added
+
+- Floating Mono chats have a **Mono rail** for switching conversations and creating a new Mono without closing the window. The wider window keeps the rail beside the chat, and its selection stays in sync with the macOS menu bar.
+- Document artifacts open in an animated sheet inside a floating Mono chat, with the same formatted reader and file links as the main window.
+- Settings → Monos → **Menu bar icon** can hide or restore the macOS Mono menu bar icon. The choice survives app restarts.
+- The Explorer file tree supports **keyboard navigation**: arrow keys, Home/End, and PageUp/PageDown move the selection; Right/Left enter, expand, or collapse folders; Enter opens files or toggles folders; and Space activates the selected row. Typing a filename prefix jumps to a match, repeating a letter cycles matches, and focused rows have a visible outline.
+- The Mono's live activity ticker can expand or collapse the current turn's activity directly from the reply header, with keyboard access and an expanded-state indicator.
+- **OpenCode 2.x** servers are supported for local and remote sessions alongside OpenCode 1.x. Version detection selects the matching server, catalog, and event protocol, including approvals, questions, multi-select answers, compaction, cancellation, and resuming a session in its current project folder. In #434 by @puri-adityakumar.
+- The Linux **AppImage updates itself** from Settings → General using signed release downloads. Keep it in a writable directory so it can replace itself and relaunch. `.deb` and `.rpm` installations instead show instructions for updating through apt or dnf; a feed without an AppImage update reports that no update is available. In #825 by @sambhavthakkar.
+- The chat composer enables native **macOS spell checking**, including spelling suggestions in its context menu. Existing macOS spell-checking preferences are preserved. In #829 by @nwoolls.
+
+### Changed
+
+- Mono Codex conversations retain their native context in **isolated MonoCode storage** for the selected account, sharing its provider configuration and credentials. Existing Mono threads migrate with their rollout files, fork dependencies, and delegated-agent state, preserving context across restarts while keeping Mono conversation storage separate from the ordinary Codex session list.
+- Mono provider sessions rotate when reported context reaches **80%** of the model's window. Idle time and app restarts no longer trigger a rotation. A fresh session receives recent exchanges and a bounded brief of earlier work, while the full transcript remains available in the chat.
+- Habits can work for **up to one hour** per run, increased from 15 minutes. Time spent waiting for an approval does not count toward that limit, and overdue runs still stop and record a failure.
+- Active Mono names use compact signature pills beside the work ticker; settled replies use lighter, muted name styling. The floating Mono rail dims when its window loses focus.
+- The macOS Mono menu uses system-style rows, hover feedback, SF Symbols, and red styling for destructive actions.
+- Zen phase live content hides scrollbars while retaining scrolling.
+- Prerelease tags publish to a separate **beta updater feed**, and beta builds use that feed without changing the stable updater feed or macOS download links. AppImage releases are signed after repacking so signatures cover the distributed file. Linux dependency installation bounds APT retries. In #825.
+- Regression coverage now includes real-browser transcript scrolling in Chromium and WebKit, floating-chat navigation and artifacts, file-tree keyboard navigation, long-running habits, remote-tab restoration, Codex storage and temporary-session cleanup, OpenCode 2.x transport, and release-channel isolation. CI checks AppImage packaging for bundled libraries and GTK hooks. Temporary transcript scroll diagnostics and an accidental document-preview mockup were removed. In #818 and #824.
+
+### Fixed
+
+- Scrolling settled chat history keeps the scroll range stable instead of resizing turns during a gesture. Small reversals do not restart following, directionless trackpad events do not snap the reader back, and reopening or reattaching a transcript follows the latest turn without restoring a stale offset. In #818 by @nwoolls.
+- Opening a local project preserves remote sessions instead of reusing their tabs as blank local sessions. Remote tabs are reused only for the matching project, including while their saved transcript is still loading.
+- Files in the Changes list respond across the full row height and open their exact diff path without an unnecessary path-resolution request, reducing selection latency. In #830 by @nwoolls.
+- Opening a provider's model dropdown in Settings explicitly refreshes its catalog even when a live catalog is already cached, so newly available models can appear without restarting.
+- Linux AppImages use the host's **WebKitGTK 4.1 and system libraries**, avoiding EGL display failures caused by bundled Ubuntu libraries on current Mesa systems. Install `libwebkit2gtk-4.1-0` on Debian/Ubuntu, `webkit2gtk4.1` on Fedora, or `webkit2gtk-4.1` on Arch. Native Wayland is supported, and `GDK_BACKEND=x11` remains available when needed. In #824 by @sambhavthakkar.
+- Windows Codex Mono storage creates directory junctions against canonical source paths and opens copied rollout files with write access before flushing, fixing configuration-link creation and file-sync failures.
+- Temporary Grok and OpenCode text-generation sessions are deleted after completion, failure, or cancellation. Generated Codex text uses unsaved threads by default, while side questions retain resumable context. Grok cleanup accepts only valid session UUIDs.
+
 ## [0.9.0] - 2026-10-07
 
 ### Added
@@ -1334,7 +1368,8 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/hardbeat920/monocode/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hardbeat920/monocode/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hardbeat920/monocode/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/hardbeat920/monocode/compare/v0.7.0...v0.7.1
