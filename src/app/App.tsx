@@ -26,6 +26,7 @@ import {
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
+  getOrStartProjectLocationSync,
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
@@ -7111,15 +7112,12 @@ function Workspace({
         !current.worktreeCwd
       ) {
         const key = pathKey(current.cwd);
-        let sync = projectLocationSyncs.current.get(key);
-        if (!sync) {
-          sync = synchronizeProjectLocation(current.cwd);
-          projectLocationSyncs.current.set(key, sync);
-          void sync.then(
-            () => projectLocationSyncs.current.delete(key),
-            () => projectLocationSyncs.current.delete(key),
-          );
-        }
+        const sync = getOrStartProjectLocationSync(
+          projectLocationSyncs.current,
+          key,
+          () => synchronizeProjectLocation(current.cwd),
+          options?.abortSignal,
+        );
         return submitAfterProjectSync({
           cwd: current.cwd,
           sync,

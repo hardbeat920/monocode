@@ -4,6 +4,36 @@ import { ProjectNotFoundError } from "../../features/projects/model/projectLocat
 /** Resolves when the user turn is accepted, not when the agent finishes. */
 export type SubmissionAcceptance = boolean | Promise<boolean>;
 
+export function getOrStartProjectLocationSync<T>(
+  syncs: Map<string, Promise<T>>,
+  key: string,
+  start: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  let sync = syncs.get(key);
+  if (!sync) {
+    sync = start();
+    syncs.set(key, sync);
+    const clear = () => {
+      if (syncs.get(key) === sync) syncs.delete(key);
+    };
+    void sync.then(clear, clear);
+  }
+
+  if (signal) {
+    const invalidate = () => {
+      if (syncs.get(key) === sync) syncs.delete(key);
+    };
+    signal.addEventListener("abort", invalidate, { once: true });
+    void sync.then(
+      () => signal.removeEventListener("abort", invalidate),
+      () => signal.removeEventListener("abort", invalidate),
+    );
+    if (signal.aborted) invalidate();
+  }
+  return sync;
+}
+
 export async function submitAfterProjectSync(options: {
   cwd: string;
   sync: Promise<ProjectLocationSync | null>;

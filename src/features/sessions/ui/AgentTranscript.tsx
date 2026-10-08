@@ -1272,15 +1272,14 @@ function AgentTranscriptComponent({
                   workExpanded={activeWorkTurnId === turnId}
                   searchCurrent={
                     turn.some((block) => block.id === searchCurrent) &&
-                    !items.some(
-                      (item) =>
-                        item.type === "block"
-                          ? item.block.id === searchCurrent
-                          : item.blocks.some(
-                              (block) =>
-                                block.id === searchCurrent &&
-                                needsApproval(block),
-                            ),
+                    !items.some((item) =>
+                      item.type === "block"
+                        ? item.block.id === searchCurrent
+                        : item.blocks.some(
+                            (block) =>
+                              block.id === searchCurrent &&
+                              needsApproval(block),
+                          ),
                     )
                   }
                 />
@@ -3030,7 +3029,10 @@ function MonoTurnHeader({
     () => blocks.filter((block) => !block.internal && !block.draft),
     [blocks],
   );
-  let status = useMemo(() => monoWorkStatus(activity, active), [activity, active]);
+  let status = useMemo(
+    () => monoWorkStatus(activity, active),
+    [activity, active],
+  );
   if (active && waitingForAnswers && !activity.some(needsApproval)) {
     status = { ...status, key: "question", label: "Waiting for answers…" };
   } else if (active && backgroundTasks?.length && status.kind === "think") {

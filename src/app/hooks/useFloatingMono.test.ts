@@ -16,7 +16,10 @@ import {
 } from "../../features/monos/model/floatingMono";
 import { useFloatingMono } from "./useFloatingMono";
 import { saveMonoMenuBarIcon } from "../../features/settings/model/settings";
-import { submitAfterProjectSync } from "../model/submissionAcceptance";
+import {
+  getOrStartProjectLocationSync,
+  submitAfterProjectSync,
+} from "../model/submissionAcceptance";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -278,16 +281,43 @@ it("recovers a timed-out preparation before retrying and ignores its late sync",
     identity: string;
     moved: boolean;
   }) => void;
+  let finishRetrySync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
   let buildCount = 0;
+  let syncCount = 0;
+  const projectLocationSyncs = new Map<
+    string,
+    Promise<{
+      path: string;
+      identity: string;
+      moved: boolean;
+    }>
+  >();
+  const startSync = vi.fn(() => {
+    syncCount += 1;
+    return new Promise<{
+      path: string;
+      identity: string;
+      moved: boolean;
+    }>((resolve) => {
+      if (syncCount === 1) finishFirstSync = resolve;
+      else finishRetrySync = resolve;
+    });
+  });
   const submitted: string[] = [];
   host.buildPlan = vi.fn((_session, _block, _target, signal) => {
     buildCount += 1;
     return submitAfterProjectSync({
       cwd: "/tmp",
-      sync:
-        buildCount === 1
-          ? new Promise((resolve) => (finishFirstSync = resolve))
-          : Promise.resolve({ path: "/tmp", identity: "repo", moved: false }),
+      sync: getOrStartProjectLocationSync(
+        projectLocationSyncs,
+        "/tmp",
+        startSync,
+        signal,
+      ),
       applyLocationChange: vi.fn(async () => {}),
       submit: () => {
         submitted.push(buildCount === 1 ? "original" : "retry");
@@ -334,15 +364,23 @@ it("recovers a timed-out preparation before retrying and ignores its late sync",
     requestBuilds();
     await flush();
   });
+  expect(submitted).toEqual([]);
+  expect(startSync).toHaveBeenCalledTimes(2);
+  const retrySync = projectLocationSyncs.get("/tmp");
+  expect(retrySync).toBeDefined();
+
+  finishFirstSync({ path: "/tmp", identity: "repo", moved: false });
+  await act(async () => flush());
+  expect(submitted).toEqual([]);
+  expect(projectLocationSyncs.get("/tmp")).toBe(retrySync);
+
+  finishRetrySync({ path: "/tmp", identity: "repo", moved: false });
+  await act(async () => flush());
   expect(submitted).toEqual(["retry"]);
   expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
     id: 22,
     error: null,
   });
-
-  finishFirstSync({ path: "/tmp", identity: "repo", moved: false });
-  await act(async () => flush());
-  expect(submitted).toEqual(["retry"]);
   expect(host.buildPlan).toHaveBeenCalledTimes(2);
 });
 
