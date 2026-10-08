@@ -7,6 +7,7 @@ mod azure_devops;
 mod bitbucket;
 mod chat_background;
 mod checkpoint;
+mod codex_mono_store;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -215,6 +216,8 @@ fn should_request_quit(code: Option<i32>) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    macos::register_spellcheck_default();
     #[cfg(windows)]
     windows::initialize().expect("Failed to initialize Windows process safety");
     let app = tauri::Builder::default()
@@ -451,6 +454,9 @@ pub fn run() {
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
+            codex_mono_store::codex_mono_store_prepare,
+            codex_mono_store::codex_mono_store_copy,
+            codex_mono_store::codex_mono_store_restore_agent_state,
             harness::harness_write,
             harness::harness_kill,
             harness::harness_kill_all,
