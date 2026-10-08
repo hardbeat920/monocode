@@ -62,8 +62,6 @@ export function codexBrowserMcpArgs(launch: BrowserMcpLaunch): string[] {
     `${key}.args=${JSON.stringify(launch.args)}`,
     "-c",
     `${key}.env_vars=${JSON.stringify(CREDENTIAL_ENV)}`,
-    "-c",
-    `${key}.required=true`,
   ];
 }
 

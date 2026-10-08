@@ -54,8 +54,6 @@ describe("browser MCP launch", () => {
       'mcp_servers.monocode_browser.args=["browser-mcp"]',
       "-c",
       'mcp_servers.monocode_browser.env_vars=["MONOCODE_APP_ENDPOINT","MONOCODE_APP_TOKEN"]',
-      "-c",
-      "mcp_servers.monocode_browser.required=true",
     ]);
     expect(args.join(" ")).not.toContain("secret");
   });
