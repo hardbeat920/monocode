@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetHarnessModelOverlays,
+  savePickerProviderVisible,
   setHarnessModels,
 } from "../../../features/sessions/model/models";
 import type { HarnessId } from "../../../features/sessions/model/session";
@@ -46,6 +47,7 @@ describe("harness registry", () => {
     resetHarnessModelOverlays();
     resetHarnessIdlePark();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("tracks live adapters", () => {
@@ -325,6 +327,29 @@ describe("harness registry", () => {
     registerHarness(stub("pi", { refreshCatalog: pi }));
     await refreshHarnessCatalogs([]);
     expect(pi).not.toHaveBeenCalled();
+  });
+
+  it("skips hidden picker providers unless the refresh is forced", async () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+      clear: () => data.clear(),
+    });
+    savePickerProviderVisible("cursor", false);
+    const cursor = vi.fn(async () => undefined);
+    registerHarness(stub("cursor", { refreshCatalog: cursor }));
+
+    await refreshHarnessCatalogs(["cursor"]);
+    expect(cursor).not.toHaveBeenCalled();
+
+    await refreshHarnessCatalogs(["cursor"], { force: true });
+    expect(cursor).toHaveBeenCalledOnce();
   });
 
   it("parks a live child a few minutes after the turn settles", async () => {

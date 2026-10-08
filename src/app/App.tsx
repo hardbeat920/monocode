@@ -7525,34 +7525,40 @@ function Workspace({
 
           const branchMessage =
             harnessText || attachments.map((file) => file.name).join(", ");
-          void generateHarnessBranchName(
-            pickTextHarness(current.harness),
-            workCwd,
-            branchMessage,
-          )
-            .then(async (fragment) => {
-              const branch = fragment ? namedWorktreeBranch(fragment) : null;
-              if (!branch) return;
-              const renamed = await renameWorktreeBranch(
-                current.cwd,
-                tree.path,
-                branch,
-              );
-              setSessions((prev) =>
-                prev.map((session) =>
-                  session.id === sessionId &&
-                  pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
-                    ? { ...session, branch: renamed.branch ?? undefined }
-                    : session,
-                ),
-              );
-            })
-            .catch(() => undefined);
+          const branchTextHarness = pickTextHarness(
+            current.harness,
+            current.cwd,
+          );
+          if (branchTextHarness) {
+            void generateHarnessBranchName(
+              branchTextHarness,
+              workCwd,
+              branchMessage,
+            )
+              .then(async (fragment) => {
+                const branch = fragment ? namedWorktreeBranch(fragment) : null;
+                if (!branch) return;
+                const renamed = await renameWorktreeBranch(
+                  current.cwd,
+                  tree.path,
+                  branch,
+                );
+                setSessions((prev) =>
+                  prev.map((session) =>
+                    session.id === sessionId &&
+                    pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
+                      ? { ...session, branch: renamed.branch ?? undefined }
+                      : session,
+                  ),
+                );
+              })
+              .catch(() => undefined);
+          }
         }
         launchTitleGeneration(workCwd);
         if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
-          const settings = await discoverOrchestrationSettings();
+          const settings = await discoverOrchestrationSettings(current.cwd);
           if (turnGen.current.get(sessionId) !== gen) return;
           proposalDraft = { ...proposalDraft, settings };
           const discovering = proposalDraft;
@@ -12562,7 +12568,11 @@ function Workspace({
               selectedCommitSha={
                 activeTab ? selectedCommitSha(activeTab) : undefined
               }
-              textHarness={pickTextHarness(active?.harness)}
+              textHarness={
+                active && pathKey(active.cwd) === pathKey(sidebarCwd)
+                  ? active.harness
+                  : undefined
+              }
               recents={recents}
               busyProjectPaths={promptableSessions.flatMap((session) =>
                 session.busy && session.cwd ? [session.cwd] : [],

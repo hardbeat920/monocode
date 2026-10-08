@@ -88,9 +88,7 @@ async function discoverViaAcp(workingDirectory?: string): Promise<AgentModel[]> 
         },
         REQUEST_TIMEOUT_MS,
       );
-      await acp
-        .request("authenticate", { methodId: "cursor_login" }, REQUEST_TIMEOUT_MS)
-        .catch(() => undefined);
+      // A catalog probe must not start Cursor OAuth.
       const listed = await acp.request<unknown>(
         "cursor/list_available_models",
         {},

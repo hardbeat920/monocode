@@ -2,6 +2,7 @@
 import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { QuickGitPopup } from "./QuickGitPopup";
 import { gitBranches, type GitBranches } from "../../../platform/tauri/fs";
 import type { QuickGitRequest } from "../model/quickGitPopup";
@@ -16,8 +17,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   ),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: async (_name: string, callback: typeof bridge.receive) => {
-    bridge.receive = callback;
+  listen: async (name: string, callback: typeof bridge.receive) => {
+    if (name === "quick_git_request") bridge.receive = callback;
     return () => {};
   },
 }));
@@ -128,4 +129,26 @@ it("uses the new project's snapshot when reusing the popup", async () => {
   expect(container.textContent).toContain("develop");
   expect(container.textContent).not.toContain("main");
   expect(container.textContent).not.toContain("Loading branches");
+});
+
+it("clears the popup request after native completion", async () => {
+  bridge.request = {
+    id: "completed-project",
+    kind: "branch",
+    choice: { cwd: "/repo", mode: "current" },
+    branches: snapshot,
+    anchor: { x: 0, y: 0, width: 100, height: 24 },
+  };
+  await act(async () => root.render(createElement(QuickGitPopup, { onShown })));
+
+  const current = document.querySelector<HTMLButtonElement>(
+    '[role="option"][aria-selected="true"]',
+  )!;
+  await act(async () => current.click());
+
+  expect(invoke).toHaveBeenCalledWith(
+    "quick_git_complete",
+    expect.objectContaining({ id: "completed-project" }),
+  );
+  expect(container.querySelector('[role="option"]')).toBeNull();
 });

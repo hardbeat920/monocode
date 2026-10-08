@@ -8,6 +8,12 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
+import {
+  registerBuiltinHarnesses,
+  startHarnessBridge,
+  stopHarnessTextPrompts,
+} from "../../../integrations/harness";
+import { probeHarnessAvailability } from "../../../integrations/harness/core/availability";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import {
   seedProjectBranches,
@@ -24,6 +30,17 @@ export function QuickGitPopup({ onShown }: { onShown: () => void }) {
   const [request, setRequest] = useState<QuickGitRequest | null>(null);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (!request) return;
+    registerBuiltinHarnesses();
+    const stopBridge = startHarnessBridge();
+    void probeHarnessAvailability();
+    return () => {
+      void stopHarnessTextPrompts();
+      stopBridge();
+    };
+  }, [request]);
+
   useEffect(() => {
     let disposed = false;
     let received = false;
@@ -95,6 +112,7 @@ export function QuickGitPopup({ onShown }: { onShown: () => void }) {
         choice: choice ?? null,
         restoreFocus: true,
       });
+      setRequest((current) => (current?.id === id ? null : current));
     } catch (error) {
       if (errorRef.current) errorRef.current.textContent = String(error);
       throw error;
@@ -181,6 +199,7 @@ export function QuickGitPopupPicker({
     return (
       <BranchPicker
         cwd={cwd}
+        project={choice.cwd ?? cwd}
         worktree={!!choice.tree && !choice.tree.isMain}
         initialOpen
         onDismiss={() => finish()}

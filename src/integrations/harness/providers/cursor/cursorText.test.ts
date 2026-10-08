@@ -60,8 +60,6 @@ it("forwards Cursor text deltas without duplicating snapshots", async () => {
 
   await waitFor(() => !!outbound("initialize"), "initialize");
   reply("initialize", {});
-  await waitFor(() => !!outbound("authenticate"), "authenticate");
-  reply("authenticate", {});
   await waitFor(() => !!outbound("session/new"), "session/new");
   reply("session/new", {
     sessionId: "cursor_text",
@@ -103,4 +101,29 @@ it("forwards Cursor text deltas without duplicating snapshots", async () => {
     { type: "message.delta", text: "Hel" },
     { type: "message.delta", text: "lo" },
   ]);
+  // `cursor_login` opens a browser; background text must never send it.
+  expect(outbound("authenticate")).toBeUndefined();
+});
+
+it("fails with Cursor's auth error instead of opening the login browser", async () => {
+  const result = runCursorTextPrompt({ cwd: "/repo", prompt: "title" });
+
+  await waitFor(() => !!outbound("initialize"), "initialize");
+  reply("initialize", {});
+  await waitFor(() => !!outbound("session/new"), "session/new");
+  const request = outbound("session/new");
+  onLine?.(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: request?.id,
+      error: {
+        code: -32000,
+        message:
+          "Authentication required. Please run 'cursor-agent login' first, then call authenticate() with methodId 'cursor_login'.",
+      },
+    }),
+  );
+
+  await expect(result).rejects.toThrow(/Authentication required/);
+  expect(outbound("authenticate")).toBeUndefined();
 });

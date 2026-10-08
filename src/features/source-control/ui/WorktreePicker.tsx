@@ -114,6 +114,7 @@ export function WorktreePicker({
     return (
       <BranchPicker
         cwd={executionCwd}
+        project={cwd}
         enabled={enabled}
         worktree={inWorktree}
         initialOpen

@@ -1,9 +1,13 @@
 import type { HarnessId } from "../../sessions/model/session";
-import type { GitFileDiffKind, GitHistoryCommit } from "../../../platform/tauri/fs";
+import type {
+  GitFileDiffKind,
+  GitHistoryCommit,
+} from "../../../platform/tauri/fs";
 import { GitChangesPanel } from "./GitChangesPanel";
 
 type Props = {
   cwd: string;
+  project?: string;
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
@@ -16,6 +20,7 @@ type Props = {
 
 export function SourceControl({
   cwd,
+  project,
   enabled,
   textHarness,
   selectedPath,
@@ -30,6 +35,7 @@ export function SourceControl({
       <GitChangesPanel
         key={cwd}
         cwd={cwd}
+        project={project}
         enabled={enabled}
         textHarness={textHarness}
         selectedPath={selectedPath}
