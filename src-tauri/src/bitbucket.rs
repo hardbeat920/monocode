@@ -374,8 +374,9 @@ fn bitbucket_list_work_items_for(
     } else {
         "&state=OPEN"
     };
-    let mut path =
-        format!("/repositories/{repo_path}/pullrequests?sort=-updated_on&pagelen={page_size}{states}");
+    let mut path = format!(
+        "/repositories/{repo_path}/pullrequests?sort=-updated_on&pagelen={page_size}{states}"
+    );
     if assigned_to_me {
         let query = format!(
             "(reviewers.account_id=\"{account_id}\" OR author.account_id=\"{account_id}\")"
