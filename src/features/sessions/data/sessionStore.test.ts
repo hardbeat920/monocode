@@ -725,8 +725,12 @@ describe("sanitizeSessionForPersist", () => {
       model: "claude-opus-5-5",
       status: "failed",
     });
-    expect(persisted.blocks[1]?.interjection).toEqual({ customType: "advisor" });
-    expect(persisted.blocks[2]?.interjection).toEqual({ customType: "advisor" });
+    expect(persisted.blocks[1]?.interjection).toEqual({
+      customType: "advisor",
+    });
+    expect(persisted.blocks[2]?.interjection).toEqual({
+      customType: "advisor",
+    });
   });
 
   it("drops malformed interjection metadata without dropping its system row", () => {
