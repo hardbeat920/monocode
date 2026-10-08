@@ -1025,7 +1025,11 @@ async function handleEvent(
     case "session.error": {
       const message = sessionErrorMessage(properties.error);
       live.onEvent({ type: "session.error", message });
-      finishActiveTurn(live);
+      // A stale v2 failure with nothing waiting must not be saved as the next
+      // turn's completion. v1 relies on that saved completion.
+      if (live.client.generation !== "v2" || live.turnDone) {
+        finishActiveTurn(live);
+      }
       break;
     }
     default:

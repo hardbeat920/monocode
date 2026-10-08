@@ -623,6 +623,47 @@ describe("OpenCode 2.x completion correlation", () => {
     expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
   });
 
+  it("ends the active turn on a v2 session error and shows the message", async () => {
+    admittedIds[PROMPT] = ["msg_boom"];
+    const events: HarnessEvent[] = [];
+    const done = turn(events);
+    await waitFor(() => calls(PROMPT) === 1, "prompt");
+    await drain();
+    v2("session.error", { error: { message: "Provider exploded" } });
+    await done;
+    expect(events).toContainEqual({ type: "session.error", message: "Provider exploded" });
+  });
+
+  it("shows a stale failed run between turns without finishing the next turn", async () => {
+    admittedIds[PROMPT] = ["msg_first", "msg_second"];
+    const firstEvents: HarnessEvent[] = [];
+    const first = turn(firstEvents);
+    await waitFor(() => calls(PROMPT) === 1, "first prompt");
+    await drain();
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_first" });
+    v2("session.execution.succeeded");
+    await first;
+
+    v2("session.execution.failed", { error: { message: "Late failure" } });
+    expect(firstEvents).toContainEqual({ type: "session.error", message: "Late failure" });
+
+    const events: HarnessEvent[] = [];
+    const second = turn(events);
+    const secondDone = settled(second);
+    await waitFor(() => calls(PROMPT) === 2, "second prompt");
+    await drain();
+    expect(secondDone()).toBe(false);
+
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_second" });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "SECOND_DONE" });
+    v2("session.execution.succeeded");
+    await second;
+    expect(replyText(events)).toBe("SECOND_DONE");
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "session.error" }));
+  });
+
   it("keeps uncorrelated completion when the server never reports delivery", async () => {
     admittedIds[PROMPT] = ["msg_untracked"];
     const done = turn([]);
