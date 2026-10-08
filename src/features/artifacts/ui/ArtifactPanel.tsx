@@ -2,15 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Copy, Trash2 } from "../../../shared/ui/icons";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
-import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { MonoSidebar, MonoSidebarHeader } from "../../monos/ui/MonoSidebar";
-import {
-  ARTIFACTS_CHANGED_EVENT,
-  artifactLabel,
-  deleteArtifact,
-  getArtifact,
-  type Artifact,
-} from "../artifacts";
+import { artifactLabel, deleteArtifact } from "../artifacts";
+import { ArtifactContent, useArtifact } from "./ArtifactContent";
 
 export function ArtifactPanel({
   id,
@@ -25,9 +19,7 @@ export function ArtifactPanel({
   onOpenFile?: (path: string) => void;
   windowControls?: ReactNode;
 }) {
-  const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { artifact, loaded, error, setError } = useArtifact(id);
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const mounted = useRef(true);
@@ -37,38 +29,7 @@ export function ArtifactPanel({
       mounted.current = false;
     };
   }, []);
-  useEffect(() => {
-    let live = true;
-    let request = 0;
-    setArtifact(null);
-    setLoaded(false);
-    setError(null);
-    setCopied(false);
-    const refresh = () => {
-      const token = ++request;
-      void getArtifact(id).then(
-        (saved) => {
-          if (!live || token !== request) return;
-          setArtifact(saved);
-          setError(null);
-          setLoaded(true);
-        },
-        () => {
-          if (!live || token !== request) return;
-          setError("Could not load this document.");
-          setLoaded(true);
-        },
-      );
-    };
-    refresh();
-    window.addEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
-    window.addEventListener("focus", refresh);
-    return () => {
-      live = false;
-      window.removeEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
-      window.removeEventListener("focus", refresh);
-    };
-  }, [id]);
+  useEffect(() => setCopied(false), [id]);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented) {
@@ -169,25 +130,4 @@ export function ArtifactPanel({
       </div>
     </MonoSidebar>
   );
-}
-
-/** Each kind owns its presentation inside the shared reader frame. */
-function ArtifactContent({
-  artifact,
-  onOpenFile,
-}: {
-  artifact: Artifact;
-  onOpenFile?: (path: string) => void;
-}) {
-  switch (artifact.kind) {
-    case "document":
-      return (
-        <AgentMarkdown
-          text={artifact.body}
-          cwd={artifact.sourceCwd}
-          onOpenFile={onOpenFile}
-          hardBreaks
-        />
-      );
-  }
 }
