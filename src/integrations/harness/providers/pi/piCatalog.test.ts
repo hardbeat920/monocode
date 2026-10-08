@@ -58,12 +58,12 @@ it("loads Pi extensions when discovering package-provided models", async () => {
   );
 });
 
-it("preserves extension isolation for omp catalog probes", async () => {
+it("loads extensions for omp catalog probes so registered providers appear", async () => {
   await discoverOmpModels("/workspace");
   expect(mocks.spawnChild).toHaveBeenCalledWith(
     expect.any(String),
     "/fake/pi",
-    expect.arrayContaining(["--no-extensions"]),
+    ["--mode", "rpc", "--no-session"],
     "/workspace",
     undefined,
     "omp",
