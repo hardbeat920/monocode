@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  INBOX_MEDIA_PREFIXES,
-  isInboxMediaUrl,
-  sniffInboxMedia,
-} from "./inboxMedia";
+import { isInboxMediaUrl, sniffInboxMedia } from "./inboxMedia";
 
 describe("isInboxMediaUrl", () => {
   it("allows GitHub and Linear attachment hosts", () => {
@@ -23,6 +19,28 @@ describe("isInboxMediaUrl", () => {
     ).toBe(true);
   });
 
+  it("allows repo files and release downloads PR bodies embed", () => {
+    expect(
+      isInboxMediaUrl(
+        "https://github.com/acme/web/releases/download/v1.0/before.png",
+      ),
+    ).toBe(true);
+    expect(
+      isInboxMediaUrl(
+        "https://github.com/acme/web/blob/main/docs/shot.png?raw=true",
+      ),
+    ).toBe(true);
+    expect(
+      isInboxMediaUrl("https://github.com/acme/web/raw/main/docs/shot.png"),
+    ).toBe(true);
+    expect(
+      isInboxMediaUrl("https://github.com/acme/web/releases/tag/v1.0"),
+    ).toBe(false);
+    expect(isInboxMediaUrl("https://github.com/acme/web/blob/main")).toBe(
+      false,
+    );
+  });
+
   it("rejects pages, other hosts, and traversal", () => {
     expect(isInboxMediaUrl("https://github.com/acme/web/issues/1")).toBe(false);
     expect(
@@ -35,19 +53,6 @@ describe("isInboxMediaUrl", () => {
     expect(
       isInboxMediaUrl("https://github.com.evil.com/user-attachments/assets/x"),
     ).toBe(false);
-  });
-});
-
-describe("INBOX_MEDIA_PREFIXES", () => {
-  it("stays on HTTPS attachment hosts", () => {
-    expect(
-      INBOX_MEDIA_PREFIXES.every((prefix) => prefix.startsWith("https://")),
-    ).toBe(true);
-    expect(
-      INBOX_MEDIA_PREFIXES.some((prefix) =>
-        prefix.startsWith("https://github.com/user-attachments/"),
-      ),
-    ).toBe(true);
   });
 });
 

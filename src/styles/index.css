@@ -2102,13 +2102,32 @@ header[data-tauri-drag-region] button {
   margin-inline: auto;
 }
 
-.agent-markdown .inbox-media {
-  vertical-align: middle;
+@keyframes image-lightbox-in {
+  from {
+    opacity: 0;
+  }
 }
 
-.agent-markdown .inbox-media img,
-.agent-markdown .inbox-media video {
-  vertical-align: middle;
+@keyframes image-lightbox-image-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.image-lightbox {
+  animation: image-lightbox-in 160ms ease-out;
+}
+
+.image-lightbox-image {
+  animation: image-lightbox-image-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-lightbox,
+  .image-lightbox-image {
+    animation: none;
+  }
 }
 
 @keyframes approval-toast-in {

@@ -43,10 +43,11 @@ import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
-import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import { isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import { isImagePath } from "../../files/model/filePreview";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
-import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { MarkdownMedia } from "./MarkdownMedia";
 import { rehypeHardBreaks } from "./hardBreaks";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 
@@ -71,24 +72,9 @@ const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   [
     harden,
     {
-      // MarkdownImage remains the final allowlist. The wildcard lets app-owned
-      // relative note URLs reach that component without changing link parsing.
+      // MarkdownImage remains the final allowlist. The wildcard lets note URLs,
+      // local paths and unfetched hosts reach it, so each can render its way.
       allowedImagePrefixes: ["*"],
-      allowedLinkPrefixes: ["*"],
-      allowDataImages: true,
-      imageBlockPolicy: "remove" as const,
-    },
-  ],
-];
-
-const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  defaultRehypePlugins.raw,
-  defaultRehypePlugins.sanitize,
-  [
-    harden,
-    {
-      defaultOrigin: "https://inbox.invalid",
-      allowedImagePrefixes: INBOX_MEDIA_PREFIXES,
       allowedLinkPrefixes: ["*"],
       allowDataImages: true,
       imageBlockPolicy: "remove" as const,
@@ -99,11 +85,6 @@ const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
 // A reply that streams renders its words as spans that fade in as they land.
 const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   ...MARKDOWN_REHYPE_PLUGINS,
-  rehypeWordFade,
-];
-
-const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
-  ...INBOX_MEDIA_REHYPE_PLUGINS,
   rehypeWordFade,
 ];
 
@@ -239,7 +220,7 @@ function MarkdownLink({
   const file = href ? resolveWorkspaceFileReference(href, cwd) : undefined;
   const label = textContent(children);
   if (allowRemoteMedia && href && isInboxMediaUrl(href)) {
-    return <InboxMedia src={href} alt={label} />;
+    return <MarkdownMedia src={href} alt={label} />;
   }
 
   return (
@@ -462,10 +443,12 @@ function NoteAssetImage({
 function MarkdownImage({
   src,
   alt,
+  width,
   node: _node,
   ...props
 }: MarkdownImageProps) {
   const allowRemoteMedia = useContext(RemoteMediaContext);
+  const { cwd } = useContext(FileOpenContext);
   const url = typeof src === "string" ? src.trim() : "";
   if (url.startsWith("data:image/")) {
     return <img {...props} src={url} alt={alt ?? ""} />;
@@ -473,8 +456,23 @@ function MarkdownImage({
   if (isNoteImagePath(url)) {
     return <NoteAssetImage {...props} asset={url} alt={alt} />;
   }
-  if (!allowRemoteMedia || !url || !isInboxMediaUrl(url)) return null;
-  return <InboxMedia src={url} alt={alt} />;
+  if (!url) return null;
+  if (isInboxMediaUrl(url)) {
+    return <MarkdownMedia src={url} alt={alt} width={width} />;
+  }
+  // Agents show screenshots by path. Issue and PR bodies are written by
+  // others, so they never get to read files from this machine.
+  const file = allowRemoteMedia
+    ? undefined
+    : resolveWorkspaceFileReference(url, cwd);
+  if (file && isImagePath(file.path)) {
+    return <MarkdownMedia src={file.path} alt={alt} width={width} local />;
+  }
+  // Other hosts are not fetched, but the image should not vanish silently.
+  if (/^https?:\/\//i.test(url)) {
+    return <MarkdownLink href={url}>{alt?.trim() || url}</MarkdownLink>;
+  }
+  return null;
 }
 
 const MARKDOWN_COMPONENTS = {
@@ -552,12 +550,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   // the fade is over they come off, or a finished reply would keep a span per
   // word for as long as this transcript stays mounted.
   const baseRehypePlugins = fading
-    ? remoteMedia
-      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
-      : FADING_MARKDOWN_REHYPE_PLUGINS
-    : remoteMedia
-      ? INBOX_MEDIA_REHYPE_PLUGINS
-      : MARKDOWN_REHYPE_PLUGINS;
+    ? FADING_MARKDOWN_REHYPE_PLUGINS
+    : MARKDOWN_REHYPE_PLUGINS;
   // Hard breaks go last, so nothing after them undoes them, and after the word
   // fade, whose word spans would otherwise hide the newlines from them.
   const rehypePlugins = useMemo(
