@@ -216,7 +216,9 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   expect(container.querySelector("[data-turn-actions]")).toBeNull();
   expect(container.querySelector("[data-artifact-results]")).toBeNull();
   expect(container.querySelector('[aria-label="Show sessions"]')).toBeNull();
-  expect(container.querySelector('[aria-label="Show activity"]')).toBeNull();
+  expect(
+    container.querySelector('[data-mono-work] [aria-label="Show activity"]'),
+  ).not.toBeNull();
 
   const reply: Block = {
     id: "answer",
@@ -430,7 +432,7 @@ it("keeps pending edit approvals actionable beside the compact status", () => {
   expect(onApproval).toHaveBeenCalledWith(42, "allow");
 });
 
-it("keeps the header ticker visible before any tool, while a direct answer waits for completion", () => {
+it("opens live activity from the header ticker before any tool, while a direct answer waits for completion", () => {
   const user: Block = { id: "user", role: "user", text: "Hello" };
   const props = {
     busy: true,
@@ -444,7 +446,18 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
   expect(header.textContent).toContain("Captain");
   expect(status()).toBe("Thinking…");
   expect(container.textContent).not.toContain("working for");
-  expect(container.querySelector('[aria-label="Show activity"]')).toBeNull();
+  const activity = header.querySelector<HTMLButtonElement>(
+    '[aria-label="Show activity"]',
+  )!;
+  expect(activity.contains(header.querySelector('[role="status"]'))).toBe(true);
+  expect(activity.getAttribute("aria-expanded")).toBe("false");
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenCalledWith("user", [user]);
+  render([user], { ...props, activeWorkTurnId: "user" });
+  expect(activity.getAttribute("aria-label")).toBe("Hide activity");
+  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenCalledTimes(2);
 
   const answer: Block = {
     id: "answer",
@@ -457,6 +470,8 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
   expect(container.querySelector("[data-mono-work]")).toBe(header);
   expect(container.textContent).not.toContain(answer.text);
   expect(container.querySelector('[aria-label="Copy response"]')).toBeNull();
+  act(() => activity.click());
+  expect(props.onShowWork).toHaveBeenLastCalledWith("user", [user, answer]);
 
   render(
     [
@@ -466,8 +481,9 @@ it("keeps the header ticker visible before any tool, while a direct answer waits
     { ...props, busy: false },
   );
   expect(container.textContent).toContain(answer.text);
+  expect(header.querySelector("button")).toBeNull();
   expect(
-    container.querySelector('[aria-label="Show activity"]'),
+    container.querySelector('[data-turn-actions] [aria-label="Show activity"]'),
   ).not.toBeNull();
 });
 
