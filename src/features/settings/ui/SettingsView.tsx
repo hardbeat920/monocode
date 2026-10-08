@@ -233,6 +233,16 @@ import {
 } from "../../providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
+  getHarnessRuntimeSnapshot,
+  getHarnessRuntimeOverride,
+  clearHarnessRuntimeOverride,
+  inspectHarnessRuntime,
+  setHarnessRuntimeOverride,
+  harnessRuntimeRevision,
+  subscribeHarnessRuntime,
+  type HarnessRuntimeSnapshot,
+} from "../../providers/model/harnessRuntime";
+import {
   saveMaskEmails,
   saveShowRemainingUsage,
   useMaskEmails,
@@ -3132,6 +3142,11 @@ function ProvidersPage({
     getHarnessAvailabilitySnapshot,
     getHarnessAvailabilitySnapshot,
   );
+  useSyncExternalStore(
+    subscribeHarnessRuntime,
+    harnessRuntimeRevision,
+    harnessRuntimeRevision,
+  );
   const providersRevision = useSyncExternalStore(
     subscribeProjectProviders,
     projectProvidersRevision,
@@ -3736,6 +3751,7 @@ function ProviderRow({
           <HarnessIcon harness={harness} className="size-4 shrink-0" />
           {HARNESS_TITLE[harness]}
           <ProviderBinaryControl provider={harness} />
+          <ProviderRuntimeControl harness={harness} />
           {isDefault ? (
             <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
               Default
@@ -3780,6 +3796,111 @@ function ProviderRow({
         </div>
       ) : null}
     </Row>
+  );
+}
+
+function ProviderRuntimeControl({ harness }: { harness: HarnessId }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const runtime = getHarnessRuntimeSnapshot(harness);
+  const override = getHarnessRuntimeOverride(harness) ?? {};
+  const [baseUrl, setBaseUrl] = useState(override.baseUrl ?? "");
+  const [environment, setEnvironment] = useState<{ name: string; value: string }[]>(
+    Object.entries(override.environment ?? {}).map(([name, value]) => ({ name, value })).concat(
+      (override.environmentNames ?? [])
+        .filter((name) => !override.environment?.[name])
+        .map((name) => ({ name, value: "" })),
+    ),
+  );
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!runtime) void inspectHarnessRuntime(harness).catch(() => undefined);
+  }, [harness, runtime]);
+
+  const reloadConfig = () => {
+    setSaved(false);
+    void inspectHarnessRuntime(harness, { refreshModels: true, force: true })
+      .then((next) => {
+        setBaseUrl(next.baseUrl ?? "");
+        setEnvironment([]);
+      })
+      .catch(() => undefined);
+  };
+  const label = runtime ? "Setup" : "Detecting runtime";
+  return (
+    <span className="relative">
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={`${HARNESS_TITLE[harness]} runtime configuration`}
+        className="rounded-full border border-border/60 px-2 py-0.5 text-[10px] text-content/60 hover:text-content"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {label}
+      </button>
+      {open ? <Popover
+        anchor={trigger}
+        side="bottom"
+        align="start"
+        width={320}
+        className="p-3"
+        onDismiss={() => setOpen(false)}
+      >
+       <div className="space-y-2 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="font-medium text-content">{HARNESS_TITLE[harness]} setup</span>
+          <SecondaryButton onClick={reloadConfig} aria-label="Reload harness config and models">
+            <RefreshCw className="size-3.5" strokeWidth={1.75} />
+            Reload config
+          </SecondaryButton>
+        </div>
+        <label className="block"><span className="text-content/45">Endpoint override</span><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={runtime?.baseUrl ?? "https://api.example.com/v1"} className="mt-1 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 text-content" /></label>
+        <div className="space-y-1"><div className="flex items-center justify-between"><span className="text-content/45">Environment overrides</span><button type="button" className="text-[11px] text-content/70" onClick={() => setEnvironment((rows) => [...rows, { name: "", value: "" }])}>+ Add variable</button></div>{environment.map((entry, index) => <div key={`${index}-${entry.name}`} className="flex gap-1"><input value={entry.name} onChange={(event) => setEnvironment((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="OPENAI_API_KEY" className="h-8 min-w-0 flex-1 rounded-md border border-content/10 bg-content/[0.04] px-2 text-content" /><input type="password" value={entry.value} onChange={(event) => setEnvironment((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, value: event.target.value } : row))} placeholder="Value" className="h-8 min-w-0 flex-1 rounded-md border border-content/10 bg-content/[0.04] px-2 text-content" /><button type="button" aria-label="Remove variable" onClick={() => setEnvironment((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}>×</button></div>)}</div>
+        <SecondaryButton onClick={() => { const values = Object.fromEntries(environment.filter((entry) => entry.name.trim()).map((entry) => [entry.name.trim(), entry.value])); if (baseUrl.trim()) values.OPENAI_BASE_URL = baseUrl.trim(); setHarnessRuntimeOverride(harness, { baseUrl: baseUrl.trim() || undefined, environment: values, environmentNames: Object.keys(values) }); setSaved(true); }}>Save Monocode overrides</SecondaryButton>
+        <SecondaryButton onClick={() => { clearHarnessRuntimeOverride(harness); setBaseUrl(""); setEnvironment([]); setSaved(true); }}>Clear Monocode overrides</SecondaryButton>
+        {saved ? <span className="text-[11px] text-emerald-400">Saved. New harness launches will use these overrides.</span> : null}
+        {runtime ? <RuntimeDetails runtime={runtime} /> : <span className="text-content/50">Detecting runtime…</span>}
+       </div>
+      </Popover> : null}
+    </span>
+  );
+}
+
+function runtimeLabel(runtime: HarnessRuntimeSnapshot | null): string {
+  if (!runtime) return "Detecting runtime";
+  if (runtime.authMode === "api") {
+    return runtime.authStatus === "configured" ? "API key configured" : "API key missing";
+  }
+  if (runtime.authMode === "oauth" && runtime.authStatus === "authenticated") return "OAuth authenticated";
+  return "Runtime not configured";
+}
+
+function RuntimeDetails({ runtime }: { runtime: HarnessRuntimeSnapshot }) {
+  const rows = [
+    ["Auth", runtimeLabel(runtime)],
+    ["Provider", runtime.providerName],
+    ["Endpoint", runtime.baseUrl],
+    ["Config", runtime.configPath],
+    ["Model", runtime.model],
+    ["Models", runtime.models.length ? `${runtime.models.length} from ${runtime.modelSource ?? "runtime"}` : "Not loaded"],
+  ].filter(([, value]) => value);
+  return (
+    <div className="space-y-1.5">
+      {rows.map(([key, value]) => (
+        <div key={key} className="grid grid-cols-[4.5rem_1fr] gap-2">
+          <span className="text-content/45">{key}</span>
+          <span className="break-all text-content/75">{value}</span>
+        </div>
+      ))}
+      {runtime.environment.filter((entry) => entry.sensitive).map((entry) => (
+        <div key={entry.name} className="grid grid-cols-[4.5rem_1fr] gap-2">
+          <span className="text-content/45">Env</span>
+          <span className="text-content/75">{entry.name} {entry.configured ? "configured" : "missing"}</span>
+        </div>
+      ))}
+      {runtime.error ? <span className="block text-red-400">{runtime.error}</span> : null}
+    </div>
   );
 }
 
