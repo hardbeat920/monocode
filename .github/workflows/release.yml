@@ -24,6 +24,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -79,11 +82,8 @@ jobs:
             process.exit(1);
           }
           const pubkey = process.env.TAURI_UPDATER_PUBKEY || "";
-          const endpoint =
-            process.env.TAURI_UPDATER_ENDPOINT ||
-            (process.env.R2_PUBLIC_BASE_URL
-              ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/latest.json`
-              : "");
+          const { updaterEndpoint } = require("./scripts/release-channel.cjs");
+          const endpoint = updaterEndpoint(process.env);
           if (!pubkey || !endpoint) {
             console.error("TAURI_UPDATER_PUBKEY and an updater endpoint are required");
             process.exit(1);
@@ -301,8 +301,10 @@ jobs:
           aws s3 cp "$LINUX_APPIMAGE_SIGNATURE" "s3://${R2_BUCKET_NAME}/${LINUX_APPIMAGE_SIGNATURE_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           # Keep stable links for both architectures, but never let the CDN
           # retain an older release under these mutable names.
-          aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          if [[ "$RELEASE_PRERELEASE" != true ]]; then
+            aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+            aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          fi
 
       - name: GitHub Release
         env:
@@ -364,18 +366,23 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
               --draft \
+              --prerelease="$RELEASE_PRERELEASE" \
               --title "MonoCode $VERSION" \
               --notes "See CHANGELOG.md for details."
           fi
           verify_release() {
             local expected_draft="$1"
-            gh release view "$GITHUB_REF_NAME" --json isDraft,assets > "$RUNNER_TEMP/release-state.json"
+            gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets > "$RUNNER_TEMP/release-state.json"
             node - "$RUNNER_TEMP/release-state.json" "$expected_draft" "${RELEASE_FILES[@]}" <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
           const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
           if (release.isDraft !== (process.argv[3] === "true")) {
             console.error("GitHub Release publication state is unexpected.");
+            process.exit(1);
+          }
+          if (release.isPrerelease !== (process.env.RELEASE_PRERELEASE === "true")) {
+            console.error("GitHub Release channel is unexpected.");
             process.exit(1);
           }
           const names = new Set(release.assets.map((asset) => asset.name));
@@ -394,7 +401,7 @@ jobs:
             # published release is immutable, so only resume drafts.
             gh release upload "$GITHUB_REF_NAME" "${RELEASE_FILES[@]}" --clobber
             verify_release true
-            gh release edit "$GITHUB_REF_NAME" --draft=false
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$RELEASE_PRERELEASE"
           elif [[ "$IS_DRAFT" != false ]]; then
             echo "Unexpected GitHub Release state: $IS_DRAFT" >&2
             exit 1
@@ -411,7 +418,7 @@ jobs:
         run: |
           set -euo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" \
+          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/${UPDATER_FEED_KEY}" \
             --content-type "application/json" \
             --cache-control "no-store,max-age=0,must-revalidate" \
             --endpoint-url "$ENDPOINT"
@@ -456,6 +463,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux system dependencies
@@ -472,11 +482,8 @@ jobs:
           node <<'NODE'
           const { writeFileSync } = require("node:fs");
           const pubkey = process.env.TAURI_UPDATER_PUBKEY || "";
-          const endpoint =
-            process.env.TAURI_UPDATER_ENDPOINT ||
-            (process.env.R2_PUBLIC_BASE_URL
-              ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/latest.json`
-              : "");
+          const { updaterEndpoint } = require("./scripts/release-channel.cjs");
+          const endpoint = updaterEndpoint(process.env);
           if (!pubkey || !endpoint) {
             console.error("TAURI_UPDATER_PUBKEY and an updater endpoint are required");
             process.exit(1);
@@ -617,6 +624,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
 
       - run: npm ci
@@ -627,12 +637,9 @@ jobs:
           TAURI_UPDATER_ENDPOINT: ${{ secrets.TAURI_UPDATER_ENDPOINT }}
           R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
         run: |
-          $endpoint = $env:TAURI_UPDATER_ENDPOINT
-          if ([string]::IsNullOrWhiteSpace($endpoint)) {
-            if ([string]::IsNullOrWhiteSpace($env:R2_PUBLIC_BASE_URL)) {
-              throw "TAURI_UPDATER_ENDPOINT or R2_PUBLIC_BASE_URL is required"
-            }
-            $endpoint = "$($env:R2_PUBLIC_BASE_URL.TrimEnd('/'))/latest.json"
+          $endpoint = node -p "require('./scripts/release-channel.cjs').updaterEndpoint(process.env)"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not select the updater endpoint"
           }
           if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBKEY)) {
             throw "TAURI_UPDATER_PUBKEY is required"
