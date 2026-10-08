@@ -839,6 +839,8 @@ type SubmitOptions = ComposerTurnOptions & {
   refreshTitle?: boolean;
   /** Internal guard for the retry after resolving a renamed project. */
   projectLocationReady?: boolean;
+  /** Cancel a floating Build before project preparation submits its turn. */
+  abortSignal?: AbortSignal;
 };
 
 type Submit = (
@@ -6622,6 +6624,7 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (options?.abortSignal?.aborted) return false;
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7115,6 +7118,7 @@ function Workspace({
         return submitAfterProjectSync({
           cwd: current.cwd,
           sync,
+          signal: options?.abortSignal,
           applyLocationChange: applyProjectLocationChange,
           submit: async () => {
             const accepted = await submitAfterProjectSyncRef.current(
@@ -8625,7 +8629,13 @@ function Workspace({
   );
 
   const onBuildPlan = useCallback(
-    (sessionId: string, blockId: string, target?: PlanBuildTarget) => {
+    (
+      sessionId: string,
+      blockId: string,
+      target?: PlanBuildTarget,
+      signal?: AbortSignal,
+    ) => {
+      if (signal?.aborted) return false;
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
@@ -8656,6 +8666,7 @@ function Workspace({
         planBlockId: blockId,
         buildTarget: target,
         approvedPlanBuild: true,
+        abortSignal: signal,
       });
       const finish = (didAccept: boolean) => {
         if (mono)

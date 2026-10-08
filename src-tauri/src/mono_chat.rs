@@ -24,6 +24,7 @@ const TRAY: &str = "mono-menu-bar";
 const SELECT: &str = "mono-chat:";
 const CHANGED: &str = "mono_chat_changed";
 const REQUEST: &str = "mono_chat_request";
+const CANCEL_BUILD: &str = "mono_chat_cancel_build";
 const BUILD_PENDING: &str = "Build is still pending; its outcome is unknown.";
 /// A 464pt conversation plus the 56pt Mono rail beside it.
 const WIDTH: f64 = 520.0;
@@ -971,6 +972,7 @@ pub async fn mono_chat_action(
                 Timeout::BuildPending => {
                     inner.view(&mono_id).error = Some(BUILD_PENDING.into());
                     drop(inner);
+                    let _ = app.emit_to(EventTarget::webview_window(&owner), CANCEL_BUILD, id);
                     changed(&app, &mono_id);
                     Err(format!(
                         "{BUILD_PENDING} Check the Mono conversation before trying again."
@@ -1116,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn a_timed_out_build_stays_reserved_until_its_actual_outcome() {
+    fn a_timed_out_build_stays_reserved_until_owner_confirms_cancellation() {
         let mut inner = Inner::default();
         let (sender, receiver) = mpsc::channel();
         let id = inner.enqueue(
@@ -1135,7 +1137,7 @@ mod tests {
         assert!(inner.has_pending_build("mono", "plan"));
         assert!(!inner.accept(id, "main"));
 
-        inner.finish(id, "main", Err("Build rejected".into()));
+        inner.finish(id, "main", Err("This Build was canceled before start.".into()));
         assert!(!inner.has_pending_build("mono", "plan"));
     }
 

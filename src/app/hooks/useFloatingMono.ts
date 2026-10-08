@@ -13,6 +13,7 @@ import {
   floatingMonoRoster,
   floatingMonoMenuMascots,
   floatingMonoSession,
+  FLOATING_MONO_CANCEL_BUILD,
   FLOATING_MONO_REQUEST,
   type FloatingMonoHost,
   type FloatingMonoRequest,
@@ -43,6 +44,8 @@ export function useFloatingMono(
     let draining = false;
     let again = false;
     let unlisten: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+    const builds = new Map<number, AbortController>();
     const lastSessions = new Map<string, Session>();
     const publishSession = (monoId: string, fallback?: Session) => {
       const sessionId = findMono(monoId)?.sessionId;
@@ -83,6 +86,11 @@ export function useFloatingMono(
           for (const request of requests) {
             if (disposed) break;
             let error: string | null = null;
+            const build =
+              request.action.kind === "buildPlan"
+                ? new AbortController()
+                : undefined;
+            if (build) builds.set(request.id, build);
             try {
               const session = await deliverFloatingMonoRequest(
                 request,
@@ -91,6 +99,7 @@ export function useFloatingMono(
                   disposed
                     ? Promise.resolve(false)
                     : invoke<boolean>("mono_chat_accept", { id: request.id }),
+                build?.signal,
               );
               if (session) {
                 active.current.add(request.monoId);
@@ -98,6 +107,8 @@ export function useFloatingMono(
               }
             } catch (reason) {
               error = reason instanceof Error ? reason.message : String(reason);
+            } finally {
+              builds.delete(request.id);
             }
             await invoke("mono_chat_reply", { id: request.id, error });
           }
@@ -135,16 +146,23 @@ export function useFloatingMono(
         })
         .catch(console.error);
     };
-    void getCurrentWebviewWindow()
-      .listen(FLOATING_MONO_REQUEST, () => {
+    const webview = getCurrentWebviewWindow();
+    void Promise.all([
+      webview.listen(FLOATING_MONO_REQUEST, () => {
         void drain().catch(console.error);
-      })
-      .then((stop) => {
+      }),
+      webview.listen<number>(FLOATING_MONO_CANCEL_BUILD, (event) => {
+        builds.get(event.payload)?.abort();
+      }),
+    ])
+      .then(([stop, stopCancel]) => {
         if (disposed) {
           stop();
+          stopCancel();
           return;
         }
         unlisten = stop;
+        unlistenCancel = stopCancel;
         refresh.current = sync;
         sync();
       })
@@ -154,6 +172,8 @@ export function useFloatingMono(
       refresh.current = () => {};
       publish.current = () => {};
       unlisten?.();
+      unlistenCancel?.();
+      for (const build of builds.values()) build.abort();
     };
   }, []);
 

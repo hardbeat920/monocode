@@ -11,6 +11,7 @@ import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
 export const FLOATING_MONO_REQUEST = "mono_chat_request";
+export const FLOATING_MONO_CANCEL_BUILD = "mono_chat_cancel_build";
 export type FloatingMonoEntry = {
   id: string;
   name: string;
@@ -101,6 +102,7 @@ export type FloatingMonoHost = {
     sessionId: string,
     blockId: string,
     target?: PlanBuildTarget,
+    signal?: AbortSignal,
   ): boolean | Promise<boolean>;
   submit(
     sessionId: string,
@@ -141,6 +143,7 @@ export async function deliverFloatingMonoRequest(
   request: FloatingMonoRequest,
   host: FloatingMonoHost,
   accept: () => Promise<boolean>,
+  signal?: AbortSignal,
 ): Promise<Session | undefined> {
   const session = await host.open(request.monoId);
   if (!session) throw new Error("That Mono is no longer available.");
@@ -168,9 +171,20 @@ export async function deliverFloatingMonoRequest(
         throw new Error("That plan is no longer available.");
       break;
     case "buildPlan":
-      if (!(await host.buildPlan(session.id, action.blockId, action.target)))
+      if (signal?.aborted)
+        throw new Error("This Build was canceled before it could start.");
+      if (
+        !(await host.buildPlan(
+          session.id,
+          action.blockId,
+          action.target,
+          signal,
+        ))
+      )
         throw new Error(
-          "The plan could not be built. Check the main Mono for details.",
+          signal?.aborted
+            ? "This Build was canceled before it could start."
+            : "The plan could not be built. Check the main Mono for details.",
         );
       break;
     case "stop":

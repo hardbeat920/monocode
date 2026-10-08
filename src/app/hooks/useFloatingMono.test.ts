@@ -10,8 +10,13 @@ import type {
   FloatingMonoHost,
   FloatingMonoRequest,
 } from "../../features/monos/model/floatingMono";
+import {
+  FLOATING_MONO_CANCEL_BUILD,
+  FLOATING_MONO_REQUEST,
+} from "../../features/monos/model/floatingMono";
 import { useFloatingMono } from "./useFloatingMono";
 import { saveMonoMenuBarIcon } from "../../features/settings/model/settings";
+import { submitAfterProjectSync } from "../model/submissionAcceptance";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -37,6 +42,8 @@ let root: Root;
 let requests: FloatingMonoRequest[];
 let sessions: Session[];
 let host: FloatingMonoHost;
+let cancelBuild: (event: { payload: number }) => void;
+let requestBuilds: () => void;
 
 function Harness({
   sessions,
@@ -75,7 +82,11 @@ beforeEach(() => {
     openFile: vi.fn(),
     resume: vi.fn(),
   };
-  native.listen.mockReset().mockResolvedValue(() => {});
+  native.listen.mockReset().mockImplementation(async (event, handler) => {
+    if (event === FLOATING_MONO_CANCEL_BUILD) cancelBuild = handler;
+    if (event === FLOATING_MONO_REQUEST) requestBuilds = handler;
+    return () => {};
+  });
   native.invoke.mockReset().mockImplementation(async (command) => {
     if (command === "mono_chat_take") {
       const queued = requests;
@@ -260,6 +271,80 @@ it.each(["success", "reject", "false"] as const)(
     });
   },
 );
+
+it("recovers a timed-out preparation before retrying and ignores its late sync", async () => {
+  let finishFirstSync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
+  let buildCount = 0;
+  const submitted: string[] = [];
+  host.buildPlan = vi.fn((_session, _block, _target, signal) => {
+    buildCount += 1;
+    return submitAfterProjectSync({
+      cwd: "/tmp",
+      sync:
+        buildCount === 1
+          ? new Promise((resolve) => (finishFirstSync = resolve))
+          : Promise.resolve({ path: "/tmp", identity: "repo", moved: false }),
+      applyLocationChange: vi.fn(async () => {}),
+      submit: () => {
+        submitted.push(buildCount === 1 ? "original" : "retry");
+        return true;
+      },
+      onError: vi.fn(),
+      signal,
+    });
+  });
+  requests = [
+    {
+      id: 21,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  const flush = async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  };
+  await act(async () => {
+    root.render(createElement(Harness, { sessions }));
+    await flush();
+  });
+  expect(host.buildPlan).toHaveBeenCalledTimes(1);
+  expect(submitted).toEqual([]);
+
+  await act(async () => {
+    cancelBuild({ payload: 21 });
+    await flush();
+  });
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 21,
+    error: expect.stringContaining("Build was canceled"),
+  });
+
+  requests = [
+    {
+      id: 22,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  await act(async () => {
+    requestBuilds();
+    await flush();
+  });
+  expect(submitted).toEqual(["retry"]);
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 22,
+    error: null,
+  });
+
+  finishFirstSync({ path: "/tmp", identity: "repo", moved: false });
+  await act(async () => flush());
+  expect(submitted).toEqual(["retry"]);
+  expect(host.buildPlan).toHaveBeenCalledTimes(2);
+});
 
 it("shows or hides the menu bar icon to match the setting", async () => {
   const stored = new Map<string, string>();

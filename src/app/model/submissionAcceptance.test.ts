@@ -51,3 +51,27 @@ it("rejects acceptance if applying a moved project fails", async () => {
   expect(submit).not.toHaveBeenCalled();
   expect(onError).toHaveBeenCalledWith(error);
 });
+
+it("cancels pending project preparation and ignores its late result", async () => {
+  let finishSync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
+  const controller = new AbortController();
+  const submit = vi.fn(() => true);
+  const accepted = submitAfterProjectSync({
+    cwd: "/repo",
+    sync: new Promise((resolve) => (finishSync = resolve)),
+    applyLocationChange: vi.fn(),
+    submit,
+    onError: vi.fn(),
+    signal: controller.signal,
+  });
+
+  controller.abort();
+  await expect(accepted).resolves.toBe(false);
+  finishSync({ path: "/repo", identity: "repo", moved: false });
+  await Promise.resolve();
+  expect(submit).not.toHaveBeenCalled();
+});

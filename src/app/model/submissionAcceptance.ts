@@ -10,15 +10,36 @@ export async function submitAfterProjectSync(options: {
   applyLocationChange: (from: string, to: string) => Promise<void>;
   submit: () => SubmissionAcceptance;
   onError: (error: unknown) => void;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   try {
-    const location = await options.sync;
+    let location: ProjectLocationSync | null;
+    if (options.signal) {
+      const signal = options.signal;
+      if (signal.aborted) return false;
+      const aborted = Symbol("aborted");
+      let onAbort!: () => void;
+      const abort = new Promise<typeof aborted>((resolve) => {
+        onAbort = () => resolve(aborted);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      try {
+        const result = await Promise.race([options.sync, abort]);
+        if (result === aborted || signal.aborted) return false;
+        location = result;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    } else {
+      location = await options.sync;
+    }
     if (!location) {
       throw new ProjectNotFoundError(options.cwd);
     }
     if (location.moved) {
       await options.applyLocationChange(options.cwd, location.path);
     }
+    if (options.signal?.aborted) return false;
     return await options.submit();
   } catch (error: unknown) {
     options.onError(error);

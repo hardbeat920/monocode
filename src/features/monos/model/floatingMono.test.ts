@@ -128,6 +128,7 @@ describe("floating Mono delivery", () => {
       session.id,
       "plan",
       undefined,
+      undefined,
     );
   });
 
@@ -148,6 +149,7 @@ describe("floating Mono delivery", () => {
     expect(runtime.buildPlan).toHaveBeenCalledWith(
       session.id,
       "plan",
+      undefined,
       undefined,
     );
   });
