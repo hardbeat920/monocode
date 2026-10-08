@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { DockPanel } from "../../workspace/ui/DockPanel";
 import { applyDockGridStyle } from "../../projects/model/projectTerminal";
 import {
@@ -220,31 +221,36 @@ export function BrowserDockLayout({
       >
         {children}
       </div>
-      {background.length > 0 ? (
-        <div
-          aria-hidden
-          inert
-          className="pointer-events-none fixed top-0 flex"
-          style={{
-            left: -(BACKGROUND_SIZE.width + 10_000),
-            width: BACKGROUND_SIZE.width,
-            height: BACKGROUND_SIZE.height,
-          }}
-        >
-          {background.map((file) =>
-            file.browser ? (
-              <BrowserSurface
-                key={file.id}
-                id={file.id}
-                tab={file.browser}
-                visible
-                offWindow
-                className="absolute inset-0"
-              />
-            ) : null,
-          )}
-        </div>
-      ) : null}
+      {/* Outside the workspace: settings, search and the inbox hide it with
+          display: none, which would measure these pages at 1x1. */}
+      {background.length > 0
+        ? createPortal(
+            <div
+              aria-hidden
+              inert
+              className="pointer-events-none fixed top-0 flex"
+              style={{
+                left: -(BACKGROUND_SIZE.width + 10_000),
+                width: BACKGROUND_SIZE.width,
+                height: BACKGROUND_SIZE.height,
+              }}
+            >
+              {background.map((file) =>
+                file.browser ? (
+                  <BrowserSurface
+                    key={file.id}
+                    id={file.id}
+                    tab={file.browser}
+                    visible
+                    offWindow
+                    className="absolute inset-0"
+                  />
+                ) : null,
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

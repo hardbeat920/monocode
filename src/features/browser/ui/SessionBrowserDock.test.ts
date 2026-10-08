@@ -101,6 +101,30 @@ describe("BrowserDockLayout", () => {
     expectAddress("https://b.test/");
   });
 
+  it("keeps background pages outside a hidden workspace", async () => {
+    // Settings, search and the inbox hide the workspace with display: none,
+    // where a page would measure 1x1.
+    container.style.display = "none";
+    await act(async () =>
+      root.render(
+        createElement(BrowserDockLayout, {
+          sessionId: "chat-a",
+          hidden: true,
+          children: null,
+        }),
+      ),
+    );
+    await act(async () => {
+      openBrowserTab("https://a.test/");
+    });
+    const host = document.body.querySelector<HTMLElement>(
+      "[inert][aria-hidden]",
+    );
+    expect(host).not.toBeNull();
+    expect(host!.childElementCount).toBe(1);
+    expect(container.contains(host)).toBe(false);
+  });
+
   describe("Stop", () => {
     const loadingOf = (id: string) =>
       dockOfTab(getBrowserState(), id)?.pane.files.find((f) => f.id === id)
