@@ -124,6 +124,30 @@ npm run build:windows
 The Windows build emits an NSIS installer under `target/release/bundle/nsis/`.
 Tauri loads `src-tauri/tauri.windows.conf.json` automatically for Windows development and builds.
 
+### macOS packages
+
+Build on macOS with the Node.js and Rust prerequisites above and [Xcode Command Line Tools](https://v2.tauri.app/start/prerequisites/#macos) installed (`xcode-select --install`):
+
+```bash
+npm ci
+npm run tauri -- build --bundles app,dmg
+```
+
+This builds for your Mac's architecture and emits `MonoCode.app` under `target/release/bundle/macos/` and a `.dmg` under `target/release/bundle/dmg/`.
+
+The repository enables updater artifacts by default. That build also generates an updater archive and signature, requiring `TAURI_SIGNING_PRIVATE_KEY` and, if the key is password-protected, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. See [Tauri's updater signing instructions](https://v2.tauri.app/plugin/updater/#signing-updates).
+
+For a local package without updater artifacts or an updater signing key, use this build command instead:
+
+```bash
+npm run tauri -- build --bundles app,dmg \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+This override still produces the `.app` and `.dmg`; it skips updater archive and signature generation for this build. The app's updater UI and runtime configuration are separate.
+
+Local builds use the configured ad-hoc macOS signing identity (`-`). Updater signing is separate from Apple code signing and notarization; the [release workflow](.github/workflows/release.yml) supplies those credentials and the updater configuration for published packages.
+
 ## Contributors
 
 Thanks to everyone who contributes to MonoCode!
