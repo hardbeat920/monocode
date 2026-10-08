@@ -1633,8 +1633,15 @@ function BitbucketSettings() {
       setConnected(status.connected);
       clearInboxCache();
     } catch (err: unknown) {
-      setConnected(false);
       setError(err instanceof Error ? err.message : String(err));
+      // A failed save leaves any stored config untouched, so restore its state.
+      try {
+        const stored = await bitbucketConnected();
+        setConnected(stored.connected);
+        if (stored.email) setEmail(stored.email);
+      } catch {
+        setConnected(false);
+      }
     } finally {
       setBusy(false);
     }
