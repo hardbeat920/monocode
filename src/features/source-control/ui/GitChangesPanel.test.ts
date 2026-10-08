@@ -30,6 +30,18 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitRangeContext: vi.fn(),
   notifyGitChanged: vi.fn(),
   subscribeGitChanged: () => () => {},
+  gitBranches: vi.fn(async () => ({
+    current: "feature/pull",
+    detached: false,
+    branches: [
+      { name: "feature/pull", current: true, remote: null },
+      { name: "main", current: false, remote: null },
+    ],
+  })),
+  gitCheckout: vi.fn(async () => ""),
+  gitCreateBranch: vi.fn(async () => ""),
+  gitStash: vi.fn(async () => ""),
+  isCheckoutBlockedByChanges: () => false,
   basename: (path: string) => path.split("/").pop() ?? path,
 }));
 
@@ -49,6 +61,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
 
 import { GitChangesPanel } from "./GitChangesPanel";
 import {
+  gitCheckout,
   gitDiffIndex,
   gitPrCreate,
   gitPull,
@@ -499,4 +512,157 @@ describe("GitChangesPanel remote pull request", () => {
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
   });
+});
+
+describe("GitChangesPanel branch picker", () => {
+  function branchTrigger() {
+    return container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Branch feature/pull"]',
+    )!;
+  }
+
+  it("locks the panel's Git actions while a checkout runs", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        remote: "origin",
+        upstream: "origin/feature/pull",
+        files: [changedFile("src/app.ts")],
+      }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitCheckout).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = () => resolve("");
+        }),
+    );
+    await renderPanel("/repo-checkout-lock");
+    const stage = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Stage Changes"]',
+    )!;
+    const actions = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Branch actions"]',
+    )!;
+    expect(stage.disabled).toBe(false);
+    expect(actions.disabled).toBe(false);
+
+    await act(async () => branchTrigger().click());
+    const main = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes("main"))!;
+    invalidateWatchedFiles.mockClear();
+    await act(async () => main.click());
+
+    expect(gitCheckout).toHaveBeenCalledWith(
+      "/repo-checkout-lock",
+      "main",
+      null,
+    );
+    expect(stage.disabled).toBe(true);
+    expect(actions.disabled).toBe(true);
+    // The picker itself stays usable so its own dialogs aren't torn down.
+    expect(branchTrigger().disabled).toBe(false);
+    await act(async () => stage.click());
+    expect(gitStageFile).not.toHaveBeenCalled();
+
+    await act(async () => finish());
+    expect(stage.disabled).toBe(false);
+    expect(actions.disabled).toBe(false);
+    expect(invalidateWatchedFiles).toHaveBeenCalledWith();
+  });
+
+  it("disables the branch picker while a panel Git action runs", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ remote: "origin", upstream: "origin/feature/pull" }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitPull).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel("/repo-pull-lock");
+    expect(branchTrigger().disabled).toBe(false);
+
+    const pull = await openBranchMenu();
+    await act(async () => pull.click());
+    expect(branchTrigger().disabled).toBe(true);
+    await act(async () => branchTrigger().click());
+    expect(document.querySelector("[data-branch-picker]")).toBeNull();
+
+    await act(async () => finish());
+    expect(branchTrigger().disabled).toBe(false);
+  });
+});
+
+type Dismissal = "Escape" | "outside click" | "trigger click";
+
+async function dismissPicker(how: Dismissal, trigger: HTMLButtonElement) {
+  await act(async () => {
+    if (how === "Escape") {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    } else if (how === "outside click") {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    } else {
+      trigger.click();
+    }
+  });
+  expect(document.querySelector("[data-branch-picker]")).toBeNull();
+}
+
+const DISMISSALS: Dismissal[] = ["Escape", "outside click", "trigger click"];
+
+describe("GitChangesPanel dismissed checkout", () => {
+  it.each(DISMISSALS)(
+    "keeps panel actions locked after %s until the checkout settles",
+    async (how) => {
+      vi.mocked(gitDiffIndex).mockResolvedValue(
+        index({
+          remote: "origin",
+          upstream: "origin/feature/pull",
+          files: [changedFile("src/app.ts")],
+        }),
+      );
+      vi.mocked(gitCheckout).mockClear();
+      let finish!: () => void;
+      vi.mocked(gitCheckout).mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            finish = () => resolve("");
+          }),
+      );
+      await renderPanel(`/repo-dismiss-${how}`);
+      const trigger = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Branch feature/pull"]',
+      )!;
+      const stage = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stage Changes"]',
+      )!;
+      const actions = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Branch actions"]',
+      )!;
+
+      await act(async () => trigger.click());
+      const main = [
+        ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+      ].find((option) => option.textContent?.includes("main"))!;
+      await act(async () => main.click());
+      await dismissPicker(how, trigger);
+
+      expect(stage.disabled).toBe(true);
+      expect(actions.disabled).toBe(true);
+      await act(async () => stage.click());
+      expect(gitStageFile).not.toHaveBeenCalled();
+      await act(async () => trigger.click());
+      expect(document.querySelector("[data-branch-picker]")).toBeNull();
+      expect(gitCheckout).toHaveBeenCalledTimes(1);
+
+      await act(async () => finish());
+      expect(stage.disabled).toBe(false);
+      expect(actions.disabled).toBe(false);
+    },
+  );
 });

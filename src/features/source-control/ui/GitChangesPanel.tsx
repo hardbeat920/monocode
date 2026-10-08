@@ -8,7 +8,6 @@ import {
   ExternalLink,
   FileDiff,
   FolderTree,
-  GitBranch,
   GitPullRequest,
   ListBullet,
   Loader,
@@ -30,6 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { BranchPicker } from "./BranchPicker";
 import {
   GitHistoryGraph,
   GraphResizeSash,
@@ -155,6 +155,12 @@ export function GitChangesPanel({
 
   const canPull = Boolean(index?.remote) && Boolean(index?.upstream);
 
+  const onCheckoutBusy = useCallback((working: boolean) => {
+    setBusy((current) =>
+      working ? "checkout" : current === "checkout" ? null : current,
+    );
+  }, []);
+
   const pull = async () => {
     if (!canPull) return;
     setStatus(null);
@@ -207,8 +213,14 @@ export function GitChangesPanel({
             className="relative ml-auto flex min-w-0 items-center gap-1"
           >
             <span className="flex min-w-0 items-center gap-1 text-[11px] text-content/50">
-              <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-              <span className="min-w-0 truncate">{index.branch}</span>
+              <BranchPicker
+                cwd={cwd}
+                branch={index.branch}
+                enabled={enabled && (busy === null || busy === "checkout")}
+                onBusyChange={onCheckoutBusy}
+                popoverSide="bottom"
+                compact
+              />
               {index.ahead > 0 ? (
                 <span className="shrink-0 tabular-nums text-content/40">
                   ↑{index.ahead}

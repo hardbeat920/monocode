@@ -11,6 +11,8 @@ type Props = Omit<
   loading?: boolean;
   worktree?: boolean;
   dimWhenDisabled?: boolean;
+  /** Match the 11px metadata line in panel headers. */
+  compact?: boolean;
 };
 
 /** Keep working-copy and branch modes visually identical in the composer. */
@@ -19,6 +21,7 @@ export function GitPickerTrigger({
   loading = false,
   worktree = false,
   dimWhenDisabled = true,
+  compact = false,
   ...props
 }: Props) {
   const host = useContext(NativePopupHost);
@@ -28,9 +31,12 @@ export function GitPickerTrigger({
     <button
       type="button"
       {...props}
-      className={`-ml-1.5 flex h-6 min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:hover:bg-transparent disabled:hover:text-content/55 active:scale-[0.97] ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
+      className={`-ml-1.5 flex min-w-0 max-w-64 items-center rounded-md px-1.5 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content active:scale-[0.97] ${compact ? "h-5 gap-1 text-[11px] text-content/50 disabled:hover:text-content/50" : "h-6 gap-1.5 text-[12px] text-content/55 disabled:hover:text-content/55"} disabled:hover:bg-transparent ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
     >
-      <Icon className="size-3.5 shrink-0" />
+      <Icon
+        className={`${compact ? "size-3" : "size-3.5"} shrink-0`}
+        strokeWidth={compact ? 1.75 : undefined}
+      />
       <span className="relative min-w-0 flex-1 truncate">
         {loading ? (
           <>

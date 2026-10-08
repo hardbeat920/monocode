@@ -1,12 +1,19 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { lazySurface } from "../../../shared/ui/lazySurface";
-import { ChevronDown, Folder, GitBranch } from "../../../shared/ui/icons";
+import { ChevronDown, Folder } from "../../../shared/ui/icons";
 import {
   gitLocateFiles,
   subscribeGitChanged,
   type GitDiffIndex,
 } from "../../../platform/tauri/fs";
 import { projectName } from "../../../shared/lib/paths";
+import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import {
   sessionCheckpointStatus,
   subscribeReviewChanged,
@@ -63,6 +70,14 @@ export function MonoChangesPanel({
       : undefined) ??
     projects[0];
   const { index, reload } = useProjectIndex(project?.root);
+  // One lock for the header's branch picker and the Commit tab's actions, so
+  // a checkout never overlaps a commit, push or discard in the same panel.
+  const [busy, setBusy] = useState<string | null>(null);
+  const onCheckoutBusy = useCallback((working: boolean) => {
+    setBusy((current) =>
+      working ? "checkout" : current === "checkout" ? null : current,
+    );
+  }, []);
 
   useEffect(() => {
     setTab(request.tab);
@@ -105,6 +120,8 @@ export function MonoChangesPanel({
               index={index}
               projects={projects.map((entry) => entry.root)}
               onSelect={setSelectedRoot}
+              branchEnabled={busy === null || busy === "checkout"}
+              onCheckoutBusy={onCheckoutBusy}
             />
           ) : undefined
         }
@@ -165,6 +182,8 @@ export function MonoChangesPanel({
               files={project.files}
               index={index}
               reloadIndex={reload}
+              busy={busy}
+              setBusy={setBusy}
               textHarness={textHarness}
               onOpenFile={(path) => {
                 setFocusPath(path);
@@ -218,11 +237,15 @@ function ProjectHeading({
   index,
   projects,
   onSelect,
+  branchEnabled,
+  onCheckoutBusy,
 }: {
   root: string;
   index: GitDiffIndex | null;
   projects: string[];
   onSelect: (root: string) => void;
+  branchEnabled: boolean;
+  onCheckoutBusy: (busy: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -304,8 +327,14 @@ function ProjectHeading({
       </div>
       {index?.branch ? (
         <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal text-content/50">
-          <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-          <span className="min-w-0 truncate">{index.branch}</span>
+          <BranchPicker
+            cwd={root}
+            branch={index.branch}
+            enabled={branchEnabled}
+            onBusyChange={onCheckoutBusy}
+            popoverSide="bottom"
+            compact
+          />
           {index.ahead > 0 ? (
             <span className="shrink-0 tabular-nums text-content/40">
               ↑{index.ahead}

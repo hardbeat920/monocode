@@ -15,8 +15,12 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitCreateBranch: vi.fn(),
   gitStageAll: vi.fn(),
   gitStash: vi.fn(),
-  isCheckoutBlockedByChanges: () => false,
+  isCheckoutBlockedByChanges: vi.fn(() => false),
   notifyGitChanged: vi.fn(),
+}));
+
+vi.mock("../../files/model/fileWatch", () => ({
+  invalidateWatchedFiles: vi.fn(),
 }));
 
 import { BranchPicker } from "./BranchPicker";
@@ -24,7 +28,11 @@ import {
   gitBranches,
   gitCheckout,
   gitCreateBranch,
+  gitStash,
+  isCheckoutBlockedByChanges,
+  notifyGitChanged,
 } from "../../../platform/tauri/fs";
+import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -196,9 +204,8 @@ it("checks out the highlighted matching branch when Enter is pressed", async () 
   });
 
   const picker = document.querySelector<HTMLElement>("[data-branch-picker]")!;
-  const highlighted = picker.querySelector<HTMLButtonElement>(
-    '[role="option"]',
-  )!;
+  const highlighted =
+    picker.querySelector<HTMLButtonElement>('[role="option"]')!;
   expect(highlighted.textContent).toContain("feature/picker");
   expect(
     [...picker.querySelectorAll<HTMLButtonElement>("button")].some(
@@ -221,4 +228,176 @@ it("checks out the highlighted matching branch when Enter is pressed", async () 
     "/repo-enter-existing",
     "picker",
   );
+});
+
+async function openPickerWithFeature(
+  cwd: string,
+  props: Record<string, unknown> = {},
+) {
+  vi.mocked(gitBranches).mockResolvedValueOnce({
+    current: "main",
+    detached: false,
+    branches: [
+      { name: "main", current: true, remote: null },
+      { name: "feature/picker", current: false, remote: null },
+    ],
+  });
+  act(() =>
+    root.render(createElement(BranchPicker, { cwd, branch: "main", ...props })),
+  );
+  await act(async () => {});
+  await act(async () => container.querySelector("button")!.click());
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes("feature/picker"))!;
+}
+
+function buttonNamed(label: string) {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
+
+it("reports busy for the whole checkout so a host can lock its Git actions", async () => {
+  let finish!: () => void;
+  vi.mocked(gitCheckout).mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = () => resolve("");
+      }),
+  );
+  const onBusyChange = vi.fn();
+  const option = await openPickerWithFeature("/repo-busy", { onBusyChange });
+  expect(onBusyChange).not.toHaveBeenCalled();
+
+  await act(async () => option.click());
+  expect(onBusyChange.mock.calls).toEqual([[true]]);
+
+  await act(async () => finish());
+  expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+});
+
+it("reloads open editors after switching branches", async () => {
+  vi.mocked(gitCheckout).mockResolvedValueOnce("");
+  vi.mocked(invalidateWatchedFiles).mockClear();
+  vi.mocked(notifyGitChanged).mockClear();
+  const option = await openPickerWithFeature("/repo-reload");
+
+  await act(async () => option.click());
+
+  expect(gitCheckout).toHaveBeenCalledWith(
+    "/repo-reload",
+    "feature/picker",
+    null,
+  );
+  expect(notifyGitChanged).toHaveBeenCalled();
+  // No paths: every open editor may now show a different file.
+  expect(invalidateWatchedFiles).toHaveBeenCalledWith();
+});
+
+it("reloads open editors after stashing and switching, even if the switch then fails", async () => {
+  vi.mocked(isCheckoutBlockedByChanges).mockReturnValue(true);
+  vi.mocked(gitCheckout)
+    .mockRejectedValueOnce(new Error("would be overwritten"))
+    .mockRejectedValueOnce(new Error("checkout failed"))
+    .mockResolvedValueOnce("");
+  vi.mocked(gitStash).mockResolvedValue("");
+  const onBusyChange = vi.fn();
+  try {
+    const option = await openPickerWithFeature("/repo-stash", {
+      onBusyChange,
+    });
+    await act(async () => option.click());
+    vi.mocked(invalidateWatchedFiles).mockClear();
+
+    // The stash lands but the switch fails: the stash still moved files.
+    await act(async () => buttonNamed("Stash & switch").click());
+    expect(gitStash).toHaveBeenCalledTimes(1);
+    expect(invalidateWatchedFiles).toHaveBeenCalledWith();
+    expect(onBusyChange.mock.calls.at(-1)).toEqual([false]);
+
+    vi.mocked(invalidateWatchedFiles).mockClear();
+    await act(async () => buttonNamed("Stash & switch").click());
+    expect(gitStash).toHaveBeenCalledTimes(2);
+    expect(invalidateWatchedFiles).toHaveBeenCalledWith();
+    expect(
+      document.querySelector('[aria-label="Switch to feature/picker"]'),
+    ).toBeNull();
+    expect(onBusyChange.mock.calls.at(-1)).toEqual([false]);
+  } finally {
+    vi.mocked(isCheckoutBlockedByChanges).mockReturnValue(false);
+  }
+});
+
+type Dismissal = "Escape" | "outside click" | "trigger click";
+
+async function dismissPicker(how: Dismissal, trigger: HTMLButtonElement) {
+  await act(async () => {
+    if (how === "Escape") {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    } else if (how === "outside click") {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    } else {
+      trigger.click();
+    }
+  });
+  expect(document.querySelector("[data-branch-picker]")).toBeNull();
+}
+
+const DISMISSALS: Dismissal[] = ["Escape", "outside click", "trigger click"];
+
+it.each(DISMISSALS)(
+  "keeps the checkout lock after %s until Git settles",
+  async (how) => {
+    let finish!: () => void;
+    vi.mocked(gitCheckout).mockClear();
+    vi.mocked(gitCheckout).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = () => resolve("");
+        }),
+    );
+    const onBusyChange = vi.fn();
+    const option = await openPickerWithFeature(`/repo-dismiss-${how}`, {
+      onBusyChange,
+    });
+    const trigger = container.querySelector("button")!;
+    await act(async () => option.click());
+    expect(onBusyChange.mock.calls).toEqual([[true]]);
+
+    await dismissPicker(how, trigger);
+    expect(onBusyChange.mock.calls).toEqual([[true]]);
+
+    // Reopening can't start a second checkout while the first runs.
+    expect(trigger.disabled).toBe(true);
+    await act(async () => trigger.click());
+    expect(document.querySelector("[data-branch-picker]")).toBeNull();
+    expect(gitCheckout).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+    expect(trigger.disabled).toBe(false);
+  },
+);
+
+it("keeps the lock for a checkout that outlives the picker", async () => {
+  let finish!: () => void;
+  vi.mocked(gitCheckout).mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = () => resolve("");
+      }),
+  );
+  const onBusyChange = vi.fn();
+  const option = await openPickerWithFeature("/repo-unmount", {
+    onBusyChange,
+  });
+  await act(async () => option.click());
+  act(() => root.render(null));
+  expect(onBusyChange.mock.calls).toEqual([[true]]);
+
+  await act(async () => finish());
+  expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
 });

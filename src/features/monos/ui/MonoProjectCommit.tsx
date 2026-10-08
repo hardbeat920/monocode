@@ -107,6 +107,8 @@ export function MonoProjectCommit({
   files,
   index,
   reloadIndex,
+  busy,
+  setBusy,
   textHarness,
   onOpenFile,
 }: {
@@ -117,12 +119,14 @@ export function MonoProjectCommit({
   files: MonoProjectFile[];
   index: GitDiffIndex | null;
   reloadIndex: () => void;
+  /** Owned by the panel so its branch picker shares the same Git lock. */
+  busy: string | null;
+  setBusy: (busy: string | null) => void;
   textHarness?: HarnessId;
   onOpenFile: (path: string) => void;
 }) {
   const { pr, reload: reloadPr } = usePrStatus(root, index?.branch);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   // Session files are in by default and other changes out; keep exceptions.
