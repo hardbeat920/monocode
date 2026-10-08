@@ -327,7 +327,7 @@ function AgentTranscriptComponent({
   );
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
-  const stickToBottom = useDebugStickRef(scroller); // TEMP scroll debug
+  const stickToBottom = useRef(true);
   const refreshChatMotion = useRef<(() => void) | null>(null);
   const showJumpRef = useRef(false);
   const distanceFromBottom = useRef(0);
@@ -510,7 +510,6 @@ function AgentTranscriptComponent({
   useEffect(() => {
     if (!visible || !scrollerEl) return;
     const onScroll = () => {
-      scrollLog("scroll", scrollerEl, { last: lastScrollTop.current }); // TEMP
       if (scrollerEl.isConnected && scrollerEl.clientHeight > 0)
         syncPinned(scrollerEl);
     };
@@ -1095,7 +1094,7 @@ function AgentTranscriptComponent({
               />
             ) : agentMascot && agentName ? (
               // A Mono signs its settled turns with just its mascot and name.
-              <span className="font-semibold">{agentName}</span>
+              <span className="font-medium text-content/80">{agentName}</span>
             ) : durationMs != null ? (
               formatWorkingDuration(durationMs, turnModelName, true)
             ) : inlineWork && turnModelName ? (
@@ -1267,17 +1266,20 @@ function AgentTranscriptComponent({
                   live={live}
                   waitingForAnswers={!!pendingQuestion}
                   backgroundTasks={backgroundTasks}
+                  onShowWork={
+                    onShowWork ? () => onShowWork(turnId, turn) : undefined
+                  }
+                  workExpanded={activeWorkTurnId === turnId}
                   searchCurrent={
                     turn.some((block) => block.id === searchCurrent) &&
-                    !items.some(
-                      (item) =>
-                        item.type === "block"
-                          ? item.block.id === searchCurrent
-                          : item.blocks.some(
-                              (block) =>
-                                block.id === searchCurrent &&
-                                needsApproval(block),
-                            ),
+                    !items.some((item) =>
+                      item.type === "block"
+                        ? item.block.id === searchCurrent
+                        : item.blocks.some(
+                            (block) =>
+                              block.id === searchCurrent &&
+                              needsApproval(block),
+                          ),
                     )
                   }
                 />
@@ -3006,6 +3008,8 @@ function MonoTurnHeader({
   live,
   waitingForAnswers,
   backgroundTasks,
+  onShowWork,
+  workExpanded,
   searchCurrent,
 }: {
   blocks: Block[];
@@ -3017,13 +3021,18 @@ function MonoTurnHeader({
   live: boolean;
   waitingForAnswers: boolean;
   backgroundTasks?: string[];
+  onShowWork?: () => void;
+  workExpanded?: boolean;
   searchCurrent: boolean;
 }) {
   const activity = useMemo(
     () => blocks.filter((block) => !block.internal && !block.draft),
     [blocks],
   );
-  let status = useMemo(() => monoWorkStatus(activity, active), [activity, active]);
+  let status = useMemo(
+    () => monoWorkStatus(activity, active),
+    [activity, active],
+  );
   if (active && waitingForAnswers && !activity.some(needsApproval)) {
     status = { ...status, key: "question", label: "Waiting for answers…" };
   } else if (active && backgroundTasks?.length && status.kind === "think") {
@@ -3048,6 +3057,9 @@ function MonoTurnHeader({
   ) : (
     <ActivityPhaseIcon kind={status.kind} />
   );
+  const ticker = (
+    <MonoWorkTicker status={{ ...status, active: live }} showIcon={false} />
+  );
   return (
     <div
       data-mono-work
@@ -3065,7 +3077,7 @@ function MonoTurnHeader({
                 <MonoSignaturePill>
                   {mark}
                   {name ? (
-                    <span className="min-w-0 truncate font-semibold">
+                    <span className="min-w-0 truncate font-medium text-content/80">
                       {name}
                     </span>
                   ) : null}
@@ -3088,12 +3100,20 @@ function MonoTurnHeader({
               ) : null}
             </>
           )}
-          <div className="min-w-0 flex-1">
-            <MonoWorkTicker
-              status={{ ...status, active: live }}
-              showIcon={false}
-            />
-          </div>
+          {onShowWork ? (
+            <button
+              type="button"
+              title={workExpanded ? "Hide activity" : "Show activity"}
+              aria-label={workExpanded ? "Hide activity" : "Show activity"}
+              aria-expanded={!!workExpanded}
+              onClick={onShowWork}
+              className="min-w-0 flex-1 cursor-pointer text-left outline-none transition-opacity duration-150 hover:opacity-70 focus-visible:opacity-70"
+            >
+              {ticker}
+            </button>
+          ) : (
+            <div className="min-w-0 flex-1">{ticker}</div>
+          )}
         </>
       ) : agentMascot ? (
         <MonoSignaturePill>
@@ -4927,44 +4947,7 @@ function scrollClampedToBottom(el: HTMLElement, previousTop: number): boolean {
   return previousTop > bottom && Math.abs(el.scrollTop - bottom) < 1;
 }
 
-// TEMP scroll debug: remove once the mid-chat open is found.
-type ScrollLogEntry = Record<string, unknown>;
-function scrollLog(event: string, el: HTMLElement | null, extra = {}) {
-  const log = ((window as unknown as { __scrollLog?: ScrollLogEntry[] })
-    .__scrollLog ??= []);
-  const entry = {
-    t: Math.round(performance.now()),
-    event,
-    top: el ? Math.round(el.scrollTop) : null,
-    height: el?.scrollHeight ?? null,
-    client: el?.clientHeight ?? null,
-    connected: el?.isConnected ?? null,
-    turns: el?.querySelectorAll(".transcript-turn").length ?? null,
-    ...extra,
-    stack: new Error().stack?.split("\n").slice(2, 9).join(" | "),
-  };
-  log.push(entry);
-  if (log.length > 400) log.shift();
-  console.debug("[transcript-scroll]", entry);
-}
-function useDebugStickRef(scroller: RefObject<HTMLDivElement | null>) {
-  const [ref] = useState(() => {
-    let value = true;
-    return {
-      get current() {
-        return value;
-      },
-      set current(next: boolean) {
-        if (next !== value) scrollLog(`stick=${next}`, scroller.current);
-        value = next;
-      },
-    };
-  });
-  return ref;
-}
-
 function pinToBottom(el: HTMLElement | null) {
-  if (el) scrollLog("pin", el);
   if (!el) return;
   el.scrollTop = el.scrollHeight;
 }
