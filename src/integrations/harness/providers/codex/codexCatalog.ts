@@ -107,7 +107,35 @@ export async function discoverCodexModels(
           );
         }
 
-        return await listAllModels(rpc);
+        const [models, configResponse] = await Promise.all([
+          listAllModels(rpc),
+          rpc
+            .request<{ config?: unknown }>(
+              "config/read",
+              {},
+              REQUEST_TIMEOUT_MS,
+            )
+            .catch(() => null),
+        ]);
+        const config = asRecord(configResponse?.config);
+        const provider = stringField(config, "model_provider");
+        const model = stringField(config, "model");
+        if (
+          !provider ||
+          provider === "openai" ||
+          !model ||
+          models.some((entry) => entry.nativeId === model)
+        ) {
+          return models;
+        }
+
+        // Custom providers may omit their configured default from model/list.
+        const effort = stringField(config, "model_reasoning_effort");
+        const configured = parseModel({
+          model,
+          ...(effort ? { supportedReasoningEfforts: [effort] } : {}),
+        });
+        return configured ? [configured, ...models] : models;
       },
       () => {
         void stop();
