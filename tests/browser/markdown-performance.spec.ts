@@ -1,10 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+// Opt in on a controlled host: MARKDOWN_PERFORMANCE=1 npm run test:browser -- markdown-performance
+const checkFrameTimes = process.env.MARKDOWN_PERFORMANCE === "1";
+
 test("streaming a large Markdown fence keeps animations responsive", async ({
   page,
 }, testInfo) => {
   test.setTimeout(60_000);
-  if (testInfo.project.name === "chromium") {
+  if (checkFrameTimes && testInfo.project.name === "chromium") {
     const session = await page.context().newCDPSession(page);
     await session.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   }
@@ -66,11 +69,15 @@ test("streaming a large Markdown fence keeps animations responsive", async ({
   // Fixed runs are ~33-50ms p95 in Chromium and ~35ms max in WebKit. These
   // limits allow scheduling headroom; they are a local regression check,
   // not a hardware-independent benchmark or a model-streaming simulation.
-  if (testInfo.project.name === "chromium") {
-    expect(metrics.p95).toBeLessThan(75);
-    expect(metrics.max).toBeLessThan(150);
-  } else {
-    expect(metrics.max).toBeLessThan(90);
+  // Shared CI scheduling can exceed these host-specific limits. Keep the
+  // functional assertions below enabled regardless of the performance flag.
+  if (checkFrameTimes) {
+    if (testInfo.project.name === "chromium") {
+      expect(metrics.p95).toBeLessThan(75);
+      expect(metrics.max).toBeLessThan(150);
+    } else {
+      expect(metrics.max).toBeLessThan(90);
+    }
   }
   expect(sawWordFade).toBe(true);
   const expected = await page.evaluate(() =>
