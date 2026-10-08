@@ -301,6 +301,7 @@ import {
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
 import { refreshProjectOpenCodeCatalog } from "../integrations/harness/providers/opencode/opencodeCatalog";
+import { refreshStartupCatalogs } from "./model/startupCatalogs";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
@@ -1737,22 +1738,7 @@ function Workspace({
     void probeHarnessAvailability();
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
-    const harnesses = [
-      ...new Set(sessionsRef.current.map((session) => session.harness)),
-    ];
-    const openCodeDirectories = [
-      ...new Set(
-        sessionsRef.current
-          .filter((session) => session.harness === "opencode")
-          .map((session) => session.worktreeCwd ?? session.cwd),
-      ),
-    ];
-    void Promise.all([
-      refreshHarnessCatalogs(
-        harnesses.filter((harness) => harness !== "opencode"),
-      ),
-      ...openCodeDirectories.map(refreshProjectOpenCodeCatalog),
-    ]).then(() => {
+    void refreshStartupCatalogs(sessionsRef.current).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
