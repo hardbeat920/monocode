@@ -27,6 +27,20 @@ function summary(id: string, cwd: string, updatedAt = 1): SessionSummary {
 }
 
 describe("historyWithLiveSessions", () => {
+  it("carries visibility into both new and already-saved live summaries", () => {
+    const session = newSession("codex", "/tmp/project-a");
+    session.sidebarHidden = true;
+    session.blocks = [{ id: "u", role: "user", text: "Review" }];
+    const live = historyWithLiveSessions([], [session], session.cwd);
+    expect(live[0].sidebarHidden).toBe(true);
+    const merged = historyWithLiveSessions(
+      [{ ...live[0], sidebarHidden: undefined }],
+      [session],
+      session.cwd,
+    );
+    expect(merged[0].sidebarHidden).toBe(true);
+  });
+
   const run: OrchestrationRun = {
     version: 1,
     leadId: "lead",
@@ -53,6 +67,18 @@ describe("historyWithLiveSessions", () => {
       delivered: false,
     })),
   };
+
+  it("never lists an ephemeral session, even while it is working", () => {
+    const run = {
+      ...newSession("codex", "/tmp/project-a"),
+      id: "habit-run",
+      title: "Skull · Daily useful PR check",
+      ephemeral: true,
+      busy: true,
+      blocks: [{ id: "u", role: "user" as const, text: "check PRs" }],
+    };
+    expect(historyWithLiveSessions([], [run], "/tmp/project-a")).toEqual([]);
+  });
 
   it("groups live and already-saved workers under their lead before adoption effects run", () => {
     const sessions = ["lead", "worker-a", "worker-b"].map((id) => ({
@@ -102,6 +128,29 @@ describe("historyWithLiveSessions", () => {
     );
     expect(replacement.map((row) => row.id)).toEqual(["lead"]);
     expect(replacement[0].orchestration?.tasks).toEqual([]);
+  });
+
+  it("shows a live generated title and work item before the next persist", () => {
+    const cwd = "/tmp/project-a";
+    const linkedWorkItem = {
+      kind: "pr" as const,
+      repo: "acme/app",
+      number: 42,
+      url: "https://github.com/acme/app/pull/42",
+    };
+    const session = {
+      ...newSession("cursor", cwd),
+      id: "live",
+      title: "cursor · Fix tab title refresh",
+      linkedWorkItem,
+      blocks: [{ id: "u", role: "user" as const, text: "Fix PR #42" }],
+      busy: true,
+    };
+    const rows = historyWithLiveSessions([summary("live", cwd)], [session], cwd);
+    expect(rows[0]).toMatchObject({
+      title: "cursor · Fix tab title refresh",
+      linkedWorkItem,
+    });
   });
 
   it("does not inject an internal worker without a loaded run", () => {

@@ -53,3 +53,6 @@ lerna-debug.log*
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Local document preview mockup
+/work/mono-document-preview.html
