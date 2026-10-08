@@ -43,6 +43,8 @@ export type Mono = {
   projects: string[];
   /** New sessions appear in the project sidebar unless explicitly disabled. */
   showStartedSessionsInSidebar?: boolean;
+  /** Keep turns in the Mono's conversation in read-only plan mode. */
+  planMode?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
   instructions?: string;
   /**
@@ -167,6 +169,9 @@ function parseMono(value: unknown): Mono | undefined {
       : [],
     ...(typeof entry.showStartedSessionsInSidebar === "boolean"
       ? { showStartedSessionsInSidebar: entry.showStartedSessionsInSidebar }
+      : {}),
+    ...(typeof entry.planMode === "boolean"
+      ? { planMode: entry.planMode }
       : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
@@ -306,6 +311,10 @@ export function saveMonoSessionId(monoId: string, sessionId: string): void {
 
 export function saveMonoName(monoId: string, name: string): void {
   updateMono(monoId, (mono) => ({ ...mono, name }));
+}
+
+export function saveMonoPlanMode(monoId: string, planMode: boolean): void {
+  updateMono(monoId, (mono) => ({ ...mono, planMode }));
 }
 
 export function saveMonoMascot(monoId: string, mascot: string): void {

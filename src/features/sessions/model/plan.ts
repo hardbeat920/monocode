@@ -1,4 +1,5 @@
 import type { BuiltinSkill } from "../../skills/model/skills";
+import type { Session, TurnIntent } from "./session";
 
 export const PLAN_COMMAND: BuiltinSkill = {
   kind: "builtin",
@@ -8,6 +9,34 @@ export const PLAN_COMMAND: BuiltinSkill = {
   scope: "builtin",
   source: "monocode",
 };
+
+export function monoTurnIntent(
+  planMode: boolean,
+  requested: TurnIntent = "default",
+): TurnIntent {
+  return planMode && requested === "default" ? "plan" : requested;
+}
+
+export function canUseMonoTurnIntent(
+  planMode: boolean,
+  intent: TurnIntent,
+): boolean {
+  return !planMode || intent === "default" || intent === "plan";
+}
+
+export function canUseMonoDelegation(planMode: boolean): boolean {
+  return !planMode;
+}
+
+export function hasActivePlanTurn(session: Session): boolean {
+  const latestUser = [...session.blocks]
+    .reverse()
+    .find((block) => block.role === "user" && !block.draft);
+  return (
+    (session.busy || !!session.backgroundTasks?.length) &&
+    latestUser?.intent === "plan"
+  );
+}
 
 /** Consume `/plan` when it is used as the leading composer command. */
 export function consumePlanCommand(text: string): {
@@ -31,7 +60,7 @@ export function planTurnKey(gen: number): string {
 
 export function planTurnPrompt(request: string): string {
   return [
-    "You are in plan mode. Investigate the request and the repository, but do not modify files, run destructive commands, or start implementing.",
+    "You are in plan mode. Investigate the request and the repository, but do not modify files, run destructive commands, start implementation sessions, or delegate implementation.",
     "Resolve important implementation details and finish with one self-contained Markdown plan. The plan must be specific enough to build after explicit user approval.",
     "Structure the final plan with a Markdown heading and concrete implementation steps.",
     "Do not ask the user to approve inside the response; the application provides a separate Build action.",

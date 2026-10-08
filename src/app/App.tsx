@@ -366,7 +366,11 @@ import {
 
 import {
   buildPlanPrompt,
+  canUseMonoDelegation,
+  canUseMonoTurnIntent,
+  hasActivePlanTurn,
   isProviderFailureText,
+  monoTurnIntent,
   planTitle,
   planTurnKey,
   planTurnPrompt,
@@ -551,6 +555,7 @@ import {
   monosSnapshot,
   monoState,
   removeMono,
+  saveMonoPlanMode,
   subscribeMonos,
   type MonoState,
 } from "../features/monos/model/mono";
@@ -6705,7 +6710,21 @@ function Workspace({
       if (editedResend) {
         current = { ...current, blocks: editedResend.blocks };
       }
-      const intent = options?.intent ?? "default";
+      const mono = isMonoSession(sessionId);
+      const monoPlanMode =
+        mono &&
+        (monoForSession(sessionId)?.planMode === true ||
+          hasActivePlanTurn(current));
+      const requestedIntent = options?.intent ?? "default";
+      const intent = monoTurnIntent(monoPlanMode, requestedIntent);
+      if (!canUseMonoTurnIntent(monoPlanMode, requestedIntent)) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Turn off Plan mode before starting implementation or delegated work.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       if (intent === "orchestrate") {
         try {
           const run = orchestrator.forSession(sessionId);
@@ -6792,7 +6811,6 @@ function Workspace({
         return false;
       }
       // The Mono has app access in every turn, without the command.
-      const mono = isMonoSession(sessionId);
       const queuedMonoMessage =
         mono && options?.queuedMessageId
           ? current.queuedMessages?.find(
@@ -6813,6 +6831,14 @@ function Workspace({
       const rawCommand =
         !operatorCommand.matched &&
         isNativeCommandPrompt(submittedText, current.harness);
+      if (monoPlanMode && rawCommand) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Native commands are unavailable in Mono Plan mode. Turn it off to run commands.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
       const harnessText =
         options?.ciRepair?.prompt ??
@@ -7680,8 +7706,9 @@ function Workspace({
                 ephemeral: current.ephemeral === true,
                 codexStore: mono ? "mono" : undefined,
                 controlsAgents:
-                  operatorAccess ||
-                  orchestrator.run(sessionId)?.status === "active",
+                  intent !== "plan" &&
+                  (operatorAccess ||
+                    orchestrator.run(sessionId)?.status === "active"),
                 ...(editedProviderTurnId
                   ? { providerTurnId: editedProviderTurnId }
                   : {}),
@@ -7737,8 +7764,9 @@ function Workspace({
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
               controlsAgents:
-                operatorAccess ||
-                orchestrator.run(sessionId)?.status === "active",
+                intent !== "plan" &&
+                (operatorAccess ||
+                  orchestrator.run(sessionId)?.status === "active"),
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
@@ -7827,9 +7855,15 @@ function Workspace({
           }
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            appContext.push(
-              `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
-            );
+            if (intent === "plan") {
+              appContext.push(
+                `<monocode_app>\nPlan mode allows read-only app commands. Do not modify MonoCode data, start or send sessions, or delegate implementation. The app rejects writes and session launches in Plan mode. Run \`${cli} --help\` for the available read commands. The CLI uses a session credential already in your environment; never print it.\n</monocode_app>`,
+              );
+            } else {
+              appContext.push(
+                `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
+              );
+            }
           }
           // A Mono reads who it is ahead of the message, so it never takes it
           // for something the user pasted. A command must stay first.
@@ -8578,7 +8612,9 @@ function Workspace({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
+      const mono = monoForSession(sessionId);
       if (session && remoteProjectFor(session.cwd)) {
+        if (mono?.planMode) saveMonoPlanMode(mono.id, false);
         buildRemotePlan(sessionId, blockId, target);
         return;
       }
@@ -8595,6 +8631,7 @@ function Workspace({
       ) {
         return;
       }
+      if (mono?.planMode) saveMonoPlanMode(mono.id, false);
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
       }
@@ -10431,6 +10468,23 @@ function Workspace({
       input: Record<string, unknown>;
     }>("monocode-control-request", ({ payload }) => {
       const handle = async () => {
+        const requestSource = sessionsRef.current.find(
+          (session) => session.id === payload.sessionId,
+        );
+        const requestMono = requestSource
+          ? monoForSession(requestSource.id) ??
+            findMono(habitRunMono(requestSource.id) ?? "")
+          : undefined;
+        const planning =
+          requestMono?.planMode === true ||
+          (requestSource ? hasActivePlanTurn(requestSource) : false);
+        if (
+          payload.namespace === "control" &&
+          !canUseMonoDelegation(planning)
+        )
+          throw new Error(
+            "Delegation is unavailable while Mono Plan mode is on",
+          );
         if (payload.namespace === "control") {
           return orchestrator.handle(
             payload.sessionId,
@@ -10823,6 +10877,9 @@ function Workspace({
             isMono: (id) => isMonoSession(id),
             isHabitRun: (id) => isHabitRun(id),
             monoOf: (id) => {
+              const session = sessionsRef.current.find(
+                (entry) => entry.id === id,
+              );
               const mono =
                 monoForSession(id) ?? findMono(habitRunMono(id) ?? "");
               return (
@@ -10831,6 +10888,9 @@ function Workspace({
                   projects: mono.projects,
                   showStartedSessionsInSidebar:
                     mono.showStartedSessionsInSidebar,
+                  planMode:
+                    mono.planMode ||
+                    (session ? hasActivePlanTurn(session) : false),
                 }
               );
             },
@@ -12154,6 +12214,8 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       }),
+    setPlanMode: (monoId, enabled) =>
+      saveMonoPlanMode(monoId, enabled),
     submit: onSubmit,
     stop: onStop,
     approval: onApproval,
@@ -12260,7 +12322,11 @@ function Workspace({
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
         runtimeMode={monoViewSession.runtimeMode}
-        busy={!!monoViewSession.busy}
+        planMode={!!monoViewMono.planMode}
+        busy={
+          !!monoViewSession.busy ||
+          !!monoViewSession.backgroundTasks?.length
+        }
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }
@@ -12269,6 +12335,9 @@ function Workspace({
         }
         onRuntimeModeChange={(mode) =>
           onRuntimeModeChange(monoViewSession.id, mode)
+        }
+        onPlanModeChange={(mode) =>
+          saveMonoPlanMode(monoViewMono.id, mode)
         }
         onClose={() => setMonoDetailsOpen(false)}
         onReset={() => onResetMono(monoViewSession.id)}

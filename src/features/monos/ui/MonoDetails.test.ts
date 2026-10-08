@@ -36,6 +36,7 @@ vi.mock("../model/monoHabits", async (original) => ({
 let container: HTMLDivElement;
 let root: Root;
 const onRuntimeModeChange = vi.fn();
+const onPlanModeChange = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -64,7 +65,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function render(runtimeMode: RuntimeMode, busy = false) {
+async function render(
+  runtimeMode: RuntimeMode,
+  busy = false,
+  planMode = false,
+) {
   await act(async () =>
     root.render(
       createElement(MonoDetails, {
@@ -77,10 +82,12 @@ async function render(runtimeMode: RuntimeMode, busy = false) {
         model: "codex:gpt-5.4",
         modelSettings: {},
         runtimeMode,
+        planMode,
         busy,
         onModelChange: vi.fn(),
         onModelSettingsChange: vi.fn(),
         onRuntimeModeChange,
+        onPlanModeChange,
         onClose: vi.fn(),
       }),
     ),
@@ -120,3 +127,23 @@ it("explains when permissions take effect while the Mono is working", async () =
     "Access changes apply to the next turn. Stop and resend to apply them now.",
   );
 });
+
+it(
+  "shows and changes persistent Plan mode, disabling the switch while busy",
+  async () => {
+    await render("auto", false, true);
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!;
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    act(() => toggle.click());
+    expect(onPlanModeChange).toHaveBeenCalledWith(false);
+
+    await render("auto", true, true);
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Plan mode"]',
+      )!.disabled,
+    ).toBe(true);
+  },
+);

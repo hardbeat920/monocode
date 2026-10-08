@@ -11,6 +11,8 @@ import {
   removeMono,
   removeMonoProject,
   reorderMonos,
+  saveMonoPlanMode,
+  saveMonoSessionId,
 } from "./mono";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
@@ -42,6 +44,18 @@ it("adds each project once and takes one away by its path", () => {
   expect(monoWorksOn(findMono(id)!, "/code/site/")).toBe(true);
   removeMonoProject(id, "/code/app/");
   expect(findMono(id)?.projects).toEqual(["/code/site"]);
+});
+
+it("persists Plan mode with the Mono across reloads", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  expect(findMono(id)?.planMode).toBe(true);
+  expect(listMonos()[0].planMode).toBe(true);
+  saveMonoSessionId(id, "rotated-session");
+  expect(findMono(id)?.planMode).toBe(true);
+  expect(findMono(id)?.sessionId).toBe("rotated-session");
+  saveMonoPlanMode(id, false);
+  expect(findMono(id)?.planMode).toBe(false);
 });
 
 it("keeps the rail's order and forgets a removed Mono", () => {

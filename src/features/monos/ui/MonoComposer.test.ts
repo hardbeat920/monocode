@@ -104,6 +104,23 @@ it("sends consecutive messages without duplicating rapid Enter presses", () => {
   expect(field().value).toBe("");
 });
 
+it("shows Plan mode in the floating composer and changes its saved setting", () => {
+  const onPlanModeChange = vi.fn();
+  render({ planMode: true, onPlanModeChange });
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Plan mode"]',
+  )!;
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  act(() => toggle.click());
+  expect(onPlanModeChange).toHaveBeenCalledWith(false);
+  render({ planMode: true, planModeDisabled: true, onPlanModeChange });
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+});
+
 it("retains text and attachments if the message is rejected", async () => {
   const onSubmit = vi.fn(() => false);
   render({ onSubmit });

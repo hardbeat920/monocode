@@ -134,6 +134,7 @@ export type AgentAppHost = {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
+    planMode?: boolean;
   } | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
@@ -914,6 +915,13 @@ export async function handleAgentApp(
   input: Record<string, unknown>,
   host: AgentAppHost,
 ): Promise<unknown> {
+  if (
+    host.monoOf?.(source.id)?.planMode &&
+    !PLAN_MODE_READ_ACTIONS.has(action)
+  )
+    throw new Error(
+      "Plan mode allows read-only app commands. Turn off Plan mode before making changes or starting sessions.",
+    );
   fields(action, input);
   if (action.startsWith("artifacts."))
     return handleArtifacts(source, requestId, action, input, host);
@@ -1221,3 +1229,19 @@ export async function handleAgentApp(
     }
   }
 }
+
+const PLAN_MODE_READ_ACTIONS = new Set([
+  "models.list",
+  "sessions.list",
+  "sessions.read",
+  "worktrees.list",
+  "folders.list",
+  "notes.list",
+  "notes.read",
+  "memory.search",
+  "memory.read",
+  "soul.read",
+  "habits.list",
+  "artifacts.list",
+  "artifacts.read",
+]);

@@ -482,6 +482,13 @@ function FloatingConversation({
           sessionId={`floating:${session.id}`}
           name={mono.name}
           enabled={!session.worktreeRemoved}
+          planMode={!!mono.planMode}
+          planModeDisabled={
+            !!session.busy || !!session.backgroundTasks?.length
+          }
+          onPlanModeChange={(enabled) => {
+            void action({ kind: "planMode", enabled });
+          }}
           focusToken={focus}
           onSubmit={async (text, attachments) => {
             const accepted = await action({

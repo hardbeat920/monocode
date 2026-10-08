@@ -124,6 +124,43 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("keeps a Mono's app CLI read-only in Plan mode", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      planMode: true,
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "start",
+        "sessions.start",
+        { prompt: "Build it" },
+        host,
+      ),
+    ).rejects.toThrow("read-only app commands");
+    await expect(
+      handleAgentApp(
+        source,
+        "send",
+        "sessions.send",
+        { sessionId: "other", prompt: "Build it" },
+        host,
+      ),
+    ).rejects.toThrow("read-only app commands");
+    await expect(
+      handleAgentApp(source, "edit", "notes.write", { body: "Changed" }, host),
+    ).rejects.toThrow("read-only app commands");
+    expect(host.start).not.toHaveBeenCalled();
+    expect(host.send).not.toHaveBeenCalled();
+    expect(host.saveNote).not.toHaveBeenCalled();
+    await expect(
+      handleAgentApp(source, "models", "models.list", {}, host),
+    ).resolves.toHaveProperty("harnesses");
+  });
+
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {

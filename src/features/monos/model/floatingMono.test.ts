@@ -10,6 +10,7 @@ const session = newSession("codex", "/tmp", "default", "auto");
 function host(): FloatingMonoHost {
   return {
     open: vi.fn().mockResolvedValue(session),
+    setPlanMode: vi.fn(),
     submit: vi.fn().mockReturnValue(true),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -74,6 +75,16 @@ describe("floating Mono delivery", () => {
       accept,
     );
     expect(runtime.approval).toHaveBeenCalledWith(session.id, 7, "deny");
+  });
+
+  it("saves Plan mode changes from the floating chat", async () => {
+    const runtime = host();
+    await deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "planMode", enabled: true } },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.setPlanMode).toHaveBeenCalledWith("mono", true);
   });
 
   it("does not deliver a request that expired while its Mono was loading", async () => {

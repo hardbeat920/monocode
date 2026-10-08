@@ -38,10 +38,12 @@ type Props = {
   model: string;
   modelSettings: Record<string, string>;
   runtimeMode: RuntimeMode;
+  planMode: boolean;
   busy?: boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onPlanModeChange: (mode: boolean) => void;
   onClose: () => void;
   onReset?: () => Promise<void>;
   windowControls?: ReactNode;
@@ -61,10 +63,12 @@ export function MonoDetails({
   model,
   modelSettings,
   runtimeMode,
+  planMode,
   busy = false,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onPlanModeChange,
   onClose,
   onReset,
   windowControls,
@@ -215,6 +219,20 @@ export function MonoDetails({
                 side="bottom"
                 variant="plain"
               />
+            </Property>
+            <Property label="Plan mode">
+              <button
+                type="button"
+                role="switch"
+                aria-label="Plan mode"
+                aria-checked={planMode}
+                disabled={busy}
+                onClick={() => onPlanModeChange(!planMode)}
+                className={`rounded-md px-2 py-1 text-[11px] ${planMode ? "bg-accent/15 text-accent" : "bg-content/5 text-content/55"} disabled:opacity-50`}
+                title="Plan turns investigate and prepare a plan without implementing it."
+              >
+                {planMode ? "On" : "Off"}
+              </button>
             </Property>
             <Property label="Projects">
               <MonoProjects monoId={monoId} projects={agent.projects} />

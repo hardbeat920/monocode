@@ -13,6 +13,7 @@ export type FloatingMonoEntry = {
   mascot: string;
   color: string;
   sessionId: string | null;
+  planMode?: boolean;
 };
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
@@ -23,6 +24,7 @@ export type FloatingMonoView = {
 export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
+  | { kind: "planMode"; enabled: boolean }
   | { kind: "stop" }
   | { kind: "create" }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
@@ -44,6 +46,7 @@ export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
         id: mono.id,
         ...monoLook(mono),
         sessionId: mono.sessionId ?? null,
+        planMode: mono.planMode === true,
       }))
     : [];
 }
@@ -82,6 +85,7 @@ export function floatingMonoAttachments(
 
 export type FloatingMonoHost = {
   open(monoId: string): Promise<Session | undefined>;
+  setPlanMode(monoId: string, enabled: boolean): void;
   submit(
     sessionId: string,
     text: string,
@@ -125,6 +129,9 @@ export async function deliverFloatingMonoRequest(
         throw new Error(
           "The message could not be sent. Try again in a moment.",
         );
+      break;
+    case "planMode":
+      host.setPlanMode(request.monoId, action.enabled);
       break;
     case "stop":
       host.stop(session.id);
