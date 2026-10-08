@@ -2,6 +2,7 @@ import { modelsFor } from "../../../../features/sessions/model/models";
 import {
   killChild,
   resolveCodexBinary,
+  restoreMonoCodexAgentState,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -16,7 +17,8 @@ import {
 } from "./codexProtocol";
 import type { HarnessEvent } from "../../core/types";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
-import type { TurnIntent } from "../../../../features/sessions/model/session";
+import { prepareCodexMonoContext } from "./codexStore";
+import type { TextPromptInput } from "../../core/registry";
 
 import { mergeStream, streamTextDelta } from "../../core/streamText";
 
@@ -32,6 +34,9 @@ type LiveText = {
   cwd: string;
   providerAccountId?: string;
   threadId: string;
+  ephemeral: boolean;
+  codexStore?: "mono";
+  storeConfig?: Record<string, unknown>;
   model: string;
   effort: string;
   serviceTier?: string;
@@ -103,19 +108,9 @@ export function warmupCodexText(cwd: string): Promise<void> {
 }
 
 /** Codex app-server turn that reuses a warm process, like Cursor text generation. */
-export async function runCodexTextPrompt(input: {
-  cwd: string;
-  providerAccountId?: string;
-  model?: string;
-  modelSettings?: Record<string, string>;
-  threadId?: string;
-  onThreadId?: (threadId: string) => void;
-  intent?: TurnIntent;
-  prompt: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  onEvent?: (event: HarnessEvent) => void;
-}): Promise<string> {
+export async function runCodexTextPrompt(
+  input: TextPromptInput,
+): Promise<string> {
   if (input.model !== undefined && !input.model.trim()) {
     throw new Error("The selected Codex model is unavailable.");
   }
@@ -127,19 +122,7 @@ export async function runCodexTextPrompt(input: {
   return run;
 }
 
-async function promptOnLive(input: {
-  cwd: string;
-  providerAccountId?: string;
-  model?: string;
-  modelSettings?: Record<string, string>;
-  threadId?: string;
-  onThreadId?: (threadId: string) => void;
-  intent?: TurnIntent;
-  prompt: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  onEvent?: (event: HarnessEvent) => void;
-}): Promise<string> {
+async function promptOnLive(input: TextPromptInput): Promise<string> {
   input.signal?.throwIfAborted();
   const session = await ensureLive(input);
   input.signal?.throwIfAborted();
@@ -215,13 +198,20 @@ async function ensureLive(input: {
   providerAccountId?: string;
   model?: string;
   modelSettings?: Record<string, string>;
+  ephemeral?: boolean;
+  codexStore?: "mono";
   threadId?: string;
   onThreadId?: (threadId: string) => void;
 }): Promise<LiveText> {
   const model = pickTextModel(input.model);
   const effort = pickTextEffort(model, input.modelSettings);
   const serviceTier = pickTextServiceTier(input.modelSettings);
-  const requestedThreadId = input.threadId?.trim() || undefined;
+  // Titles, commit messages, branch names, and PR content must never become
+  // saved Codex conversations. Only resumable side questions opt into storage.
+  const ephemeral = input.ephemeral ?? true;
+  const requestedThreadId = ephemeral
+    ? undefined
+    : input.threadId?.trim() || undefined;
   if (live && !live.closed) {
     if (
       live.cwd === input.cwd &&
@@ -229,12 +219,17 @@ async function ensureLive(input: {
       live.effort === effort &&
       live.serviceTier === serviceTier &&
       live.providerAccountId === input.providerAccountId &&
+      live.ephemeral === ephemeral &&
+      live.codexStore === input.codexStore &&
       (!requestedThreadId || live.threadId === requestedThreadId)
     ) {
       input.onThreadId?.(live.threadId);
       return live;
     }
-    if (live.providerAccountId !== input.providerAccountId) {
+    if (
+      live.providerAccountId !== input.providerAccountId ||
+      live.codexStore !== input.codexStore
+    ) {
       await dropLive();
       const started = await startLive(
         input.cwd,
@@ -243,6 +238,8 @@ async function ensureLive(input: {
         effort,
         serviceTier,
         requestedThreadId,
+        ephemeral,
+        input.codexStore,
       );
       input.onThreadId?.(started.threadId);
       return started;
@@ -251,7 +248,7 @@ async function ensureLive(input: {
       live.model = model;
       live.effort = effort;
       live.serviceTier = serviceTier;
-      await openThread(live, input.cwd, requestedThreadId);
+      await openThread(live, input.cwd, requestedThreadId, ephemeral);
       input.onThreadId?.(live.threadId);
       return live;
     } catch (error) {
@@ -266,6 +263,8 @@ async function ensureLive(input: {
     effort,
     serviceTier,
     requestedThreadId,
+    ephemeral,
+    input.codexStore,
   );
   input.onThreadId?.(started.threadId);
   return started;
@@ -278,9 +277,21 @@ async function startLive(
   effort = pickTextEffort(model),
   serviceTier?: string,
   requestedThreadId?: string,
+  ephemeral = true,
+  codexStore?: "mono",
 ): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
+  const store =
+    codexStore === "mono"
+      ? await prepareCodexMonoContext({
+          sessionId: TEXT_CHILD_ID,
+          path,
+          cwd,
+          providerAccountId,
+          threadId: requestedThreadId,
+        })
+      : undefined;
   const sessionRef: { session: LiveText | null } = { session: null };
   const rpc = new JsonRpcClient(
     TEXT_CHILD_ID,
@@ -300,6 +311,8 @@ async function startLive(
     cwd,
     providerAccountId,
     threadId: "",
+    ephemeral,
+    codexStore,
     model,
     effort,
     serviceTier,
@@ -336,6 +349,7 @@ async function startLive(
         id: providerAccountId ?? "default",
       },
       "codex",
+      codexStore,
     );
     await rpc.request(
       "initialize",
@@ -350,7 +364,7 @@ async function startLive(
       INIT_TIMEOUT_MS,
     );
     await rpc.notify("initialized", undefined);
-    await openThread(session, cwd, requestedThreadId);
+    await openThread(session, cwd, requestedThreadId, ephemeral, store);
     live = session;
     return session;
   } catch (error) {
@@ -365,25 +379,54 @@ async function startLive(
 async function openThread(
   session: LiveText,
   cwd: string,
-  requestedThreadId?: string,
+  requestedThreadId: string | undefined,
+  ephemeral: boolean,
+  preparedStore?: Awaited<ReturnType<typeof prepareCodexMonoContext>>,
 ): Promise<void> {
   let opened: { thread?: { id?: string } } | undefined;
+  let hasSavedContext = false;
+  if (session.codexStore === "mono") {
+    const { path } = await resolveCodexBinary();
+    const store =
+      preparedStore ??
+      (await prepareCodexMonoContext({
+        sessionId: TEXT_CHILD_ID,
+        path,
+        cwd,
+        providerAccountId: session.providerAccountId,
+        threadId: requestedThreadId,
+      }));
+    session.storeConfig = store.config;
+    hasSavedContext = store.hasThread;
+    if (requestedThreadId && hasSavedContext)
+      await restoreMonoCodexAgentState(
+        session.providerAccountId,
+        requestedThreadId,
+      );
+  }
+  const params = buildThreadStartParams({
+    cwd,
+    runtimeMode: TEXT_RUNTIME_MODE,
+    model: session.model || undefined,
+    serviceTier: session.serviceTier,
+  });
+  if (session.storeConfig)
+    params.config = {
+      ...session.storeConfig,
+      ...(params.config as Record<string, unknown> | undefined),
+    };
   if (requestedThreadId) {
     try {
       opened = await session.rpc.request<{ thread?: { id?: string } }>(
         "thread/resume",
         {
           threadId: requestedThreadId,
-          ...buildThreadStartParams({
-            cwd,
-            runtimeMode: TEXT_RUNTIME_MODE,
-            model: session.model || undefined,
-            serviceTier: session.serviceTier,
-          }),
+          ...params,
         },
         INIT_TIMEOUT_MS,
       );
     } catch (error) {
+      if (hasSavedContext) throw error;
       if (!isRecoverableThreadResumeError(error)) throw error;
       opened = undefined;
     }
@@ -392,12 +435,10 @@ async function openThread(
   if (!opened) {
     opened = await session.rpc.request<{ thread?: { id?: string } }>(
       "thread/start",
-      buildThreadStartParams({
-        cwd,
-        runtimeMode: TEXT_RUNTIME_MODE,
-        model: session.model || undefined,
-        serviceTier: session.serviceTier,
-      }),
+      {
+        ...params,
+        ...(ephemeral ? { ephemeral: true } : {}),
+      },
       INIT_TIMEOUT_MS,
     );
   }
@@ -405,6 +446,7 @@ async function openThread(
   if (!threadId) throw new Error("Codex did not return a thread id");
   session.cwd = cwd;
   session.threadId = threadId;
+  session.ephemeral = ephemeral;
 }
 async function dropLive(): Promise<void> {
   const current = live;

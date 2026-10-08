@@ -2097,8 +2097,8 @@ export function InboxDetail({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"summary" | "code" | "checks">("summary");
   const [diffMode, setDiffMode] = useState<"hunks" | "full">("hunks");
-  // The side panel often opens right after a hover prefetch, so it reuses
-  // recent GitHub data. Inbox keeps refetching so its refresh stays live.
+  // Reopening the side panel reuses recent GitHub data. Inbox keeps refetching
+  // so its explicit refresh stays live.
   const panelMaxAge = panel ? GITHUB_WORK_ITEM_FRESH_MS : undefined;
   const [diffFocusPath, setDiffFocusPath] = useState<string | undefined>();
   // The panel summary lists changed files, so it shares the Code tab's fetch.
@@ -2175,7 +2175,7 @@ export function InboxDetail({
     number: item.number,
     enabled: prChecksEnabled,
     open: isPr && item.state.trim().toLowerCase() === "open",
-    poll: visible,
+    poll: visible && tab === "checks",
     revision,
   });
   const prChecksOverall = prChecksEnabled
