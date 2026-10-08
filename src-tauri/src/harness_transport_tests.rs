@@ -231,6 +231,33 @@ fn sse_socket_idle_polls_preserve_partial_chunk_headers_and_data() {
 }
 
 #[test]
+fn sse_connect_falls_through_to_an_ipv4_only_listener() {
+    // An IPv4-only server, reached through an address list that puts `::1`
+    // first, the way `localhost` resolves on many machines.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let ipv6: SocketAddr = format!("[::1]:{}", address.port()).parse().unwrap();
+    let remote: SocketAddr = "192.0.2.1:80".parse().unwrap();
+    let stop = AtomicBool::new(false);
+    let socket = connect_loopback([remote, ipv6, address], &stop).unwrap();
+    assert_eq!(socket.peer_addr().unwrap(), address);
+    listener.accept().unwrap();
+    assert_ne!(
+        connect_loopback([ipv6], &stop).unwrap_err(),
+        "OpenCode host did not resolve to loopback"
+    );
+    assert_eq!(
+        connect_loopback([remote], &stop).unwrap_err(),
+        "OpenCode host did not resolve to loopback"
+    );
+    stop.store(true, Ordering::SeqCst);
+    assert_eq!(
+        connect_loopback([address], &stop).unwrap_err(),
+        "OpenCode event stream was cancelled"
+    );
+}
+
+#[test]
 fn rejects_non_sse_and_redirected_handshakes() {
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n",

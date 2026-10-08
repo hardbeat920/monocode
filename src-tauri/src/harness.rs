@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1586,6 +1586,29 @@ impl Read for SseBody {
     }
 }
 
+/// Connect to the first reachable loopback address, the way ureq tries every
+/// resolved address for `harness_http`. `localhost` can resolve to `::1`
+/// before `127.0.0.1`, and an IPv4-only server refuses the first attempt.
+fn connect_loopback(
+    addresses: impl IntoIterator<Item = SocketAddr>,
+    stop: &AtomicBool,
+) -> Result<TcpStream, String> {
+    let mut last_error = "OpenCode host did not resolve to loopback".to_string();
+    for address in addresses
+        .into_iter()
+        .filter(|address| address.ip().is_loopback())
+    {
+        if stop.load(Ordering::SeqCst) {
+            return Err("OpenCode event stream was cancelled".into());
+        }
+        match TcpStream::connect_timeout(&address, Duration::from_secs(10)) {
+            Ok(socket) => return Ok(socket),
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    Err(last_error)
+}
+
 fn open_sse_body(
     url: &str,
     headers: Option<&HashMap<String, String>>,
@@ -1597,13 +1620,10 @@ fn open_sse_body(
         let port = parsed
             .port_or_known_default()
             .ok_or("Missing OpenCode port")?;
-        let address = (host, port)
+        let addresses = (host, port)
             .to_socket_addrs()
-            .map_err(|error| error.to_string())?
-            .find(|address| address.ip().is_loopback())
-            .ok_or("OpenCode host did not resolve to loopback")?;
-        let socket = TcpStream::connect_timeout(&address, Duration::from_secs(10))
             .map_err(|error| error.to_string())?;
+        let socket = connect_loopback(addresses, &live.stop)?;
         socket
             .set_read_timeout(Some(Duration::from_secs(10)))
             .map_err(|error| error.to_string())?;
