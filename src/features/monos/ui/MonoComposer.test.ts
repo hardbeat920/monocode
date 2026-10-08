@@ -144,3 +144,33 @@ it("waits for attachment reads so they cannot leak into the next message", async
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith("With this file", [file]);
   expect(container.querySelector('[title="/tmp/note.txt"]')).toBeNull();
 });
+
+it("waits for delivery and keeps a rejected message available to retry", async () => {
+  let acknowledge!: (accepted: boolean) => void;
+  const onSubmit = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        acknowledge = resolve;
+      }),
+  );
+  render({ onSubmit });
+  type("Keep this draft");
+  act(() => {
+    submit();
+    submit();
+  });
+  expect(onSubmit).toHaveBeenCalledTimes(1);
+  expect(field().value).toBe("Keep this draft");
+  expect(field().disabled).toBe(true);
+  await act(async () => {
+    acknowledge(false);
+  });
+  expect(field().value).toBe("Keep this draft");
+  expect(field().disabled).toBe(false);
+  act(() => submit());
+  await act(async () => {
+    acknowledge(true);
+  });
+  expect(field().value).toBe("");
+  expect(onSubmit).toHaveBeenCalledTimes(2);
+});

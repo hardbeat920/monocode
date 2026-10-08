@@ -174,6 +174,7 @@ import {
   defaultModelId,
   firstEnabledHarness,
   getModelSnapshot,
+  hasLiveCatalog,
   loadDefaultModels,
   loadHiddenPickerProviders,
   loadLastModelChoice,
@@ -300,6 +301,7 @@ import {
   monoProjectsPhrase,
   monosSnapshot,
   subscribeMonos,
+  updateMono,
   type Mono,
 } from "../../monos/model/mono";
 import { resetMonoDefaults } from "../../monos/model/monoFiles";
@@ -320,7 +322,10 @@ import {
   loadModelControls,
   loadNotesEnabled,
   loadMonosEnabled,
+  loadMonoMenuBarIcon,
   loadKeybindingOverrides,
+  saveMonoMenuBarIcon,
+  subscribeMonoMenuBarIcon,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
@@ -573,9 +578,7 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "monos" ? (
-                <MonosPage />
-              ) : null}
+              {section === "monos" ? <MonosPage /> : null}
               {section === "mcp" ? (
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
@@ -3722,9 +3725,9 @@ function ProviderRow({
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
 
   useEffect(() => {
-    if (!available || models.length > 0) return;
+    if (!available || hasLiveCatalog(harness)) return;
     void refreshHarnessCatalogs([harness]);
-  }, [available, harness, models.length]);
+  }, [available, harness]);
 
   return (
     <Row
@@ -3966,6 +3969,11 @@ function MonosPage() {
     loadMonosEnabled,
     () => true,
   );
+  const menuBarIcon = useSyncExternalStore(
+    subscribeMonoMenuBarIcon,
+    loadMonoMenuBarIcon,
+    () => true,
+  );
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
 
@@ -3979,11 +3987,24 @@ function MonosPage() {
         >
           <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
         </Row>
+        {IS_MAC && (
+          <Row
+            id="mono-menu-bar-icon"
+            label="Menu bar icon"
+            description="Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon."
+          >
+            <Toggle
+              label="Menu bar icon"
+              on={menuBarIcon}
+              onChange={saveMonoMenuBarIcon}
+            />
+          </Row>
+        )}
       </Group>
       <Group
         id="mono-list"
         title="Your monos"
-        description="Add one with the plus beside Monos on the rail. Choose its projects from its details."
+        description="Choose whether new sessions started by each Mono appear in the sidebar. Hidden sessions remain saved and can be opened from the Mono's chat. Add a Mono with the plus on the rail and choose its projects from its details."
       >
         {monos.length ? (
           monos.map((mono) => <MonoRow key={mono.id} mono={mono} />)
@@ -4018,6 +4039,19 @@ function MonoRow({ mono }: { mono: Mono }) {
           : "No projects yet"
       }
     >
+      <span className="text-[12px] leading-5 text-content/50">
+        Show Mono spawned session on the sidebar
+      </span>
+      <Toggle
+        label={`Show sessions started by ${look.name} in sidebar`}
+        on={mono.showStartedSessionsInSidebar !== false}
+        onChange={(on) =>
+          updateMono(mono.id, (entry) => ({
+            ...entry,
+            showStartedSessionsInSidebar: on,
+          }))
+        }
+      />
       <ConfirmReset
         label="Reset Mono"
         title={`Reset ${look.name} to its defaults?`}
