@@ -2118,7 +2118,7 @@ export function Composer({
               data-composer-empty={navigationEmpty ? "true" : undefined}
               style={{ textIndent: modeIndent }}
               rows={1}
-              spellCheck={false}
+              spellCheck
               defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
