@@ -2090,6 +2090,52 @@ describe("OpenCode review regressions", () => {
     },
   );
 
+  it.each([
+    { permission: "read", reply: "once" },
+    { permission: "codesearch", reply: "once" },
+    { permission: "list", reply: "once" },
+    { permission: "spreadsheet_delete", reply: "reject" },
+    { permission: "search_and_delete", reply: "reject" },
+    { permission: "find_and_replace", reply: "reject" },
+  ])(
+    "replies $reply to a Plan $permission permission by exact name",
+    async ({ permission, reply }) => {
+      const events: HarnessEvent[] = [];
+      const done = sendOpenCodeTurn({
+        ...sessionInput((event) => events.push(event)),
+        intent: "plan",
+        runtimeMode: "full-access",
+        text: "Explore the change",
+      });
+      await waitFor(() => promptMessageID !== undefined, "Plan prompt");
+      onSseEvent?.({
+        type: "permission.asked",
+        properties: {
+          id: "plan_tool_request",
+          sessionID: "session_1",
+          permission,
+          patterns: ["*"],
+        },
+      });
+      await waitFor(
+        () =>
+          harnessHttp.mock.calls.some(([input]) =>
+            input.url.includes("/permission/plan_tool_request/reply"),
+          ),
+        "Plan tool reply",
+      );
+      const request = harnessHttp.mock.calls.find(([input]) =>
+        input.url.includes("/permission/plan_tool_request/reply"),
+      )![0];
+      expect(JSON.parse(request.body!)).toEqual({ reply });
+      expect(events.some((event) => event.type === "approval.requested")).toBe(
+        false,
+      );
+      idle();
+      await done;
+    },
+  );
+
   it("keeps the Plan agent on a steered follow-up", async () => {
     const done = sendOpenCodeTurn({
       ...sessionInput(),

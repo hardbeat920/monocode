@@ -262,6 +262,17 @@ export function parseOpenCodeToolOutputGlob(output: string): string {
   return `${directory}${separator}tool-output${separator}*`;
 }
 
+/** The read-only permissions Plan mode allows. Match these names exactly:
+ * a substring match would let a custom `spreadsheet_delete` tool through. */
+export const OPENCODE_PLAN_READ_ONLY_PERMISSIONS: readonly string[] = [
+  "read",
+  "grep",
+  "glob",
+  "list",
+  "websearch",
+  "codesearch",
+];
+
 export function buildOpenCodePermissionRules(
   runtimeMode: RuntimeMode,
   planning = false,
@@ -279,19 +290,13 @@ export function buildOpenCodePermissionRules(
   if (planning) {
     return [
       { permission: "*", pattern: "*", action: "deny" },
-      ...[
-        "read",
-        "grep",
-        "glob",
-        "list",
-        "websearch",
-        "codesearch",
-        "question",
-      ].map((permission): OpenCodePermissionRule => ({
-        permission,
-        pattern: "*",
-        action: "allow",
-      })),
+      ...[...OPENCODE_PLAN_READ_ONLY_PERMISSIONS, "question"].map(
+        (permission): OpenCodePermissionRule => ({
+          permission,
+          pattern: "*",
+          action: "allow",
+        }),
+      ),
       ...outputRules,
       { permission: "task", pattern: "explore", action: "allow" },
     ];
@@ -376,14 +381,7 @@ export function managedOpenCodeConfig(
   const actionFor = (permission: string): "allow" | "ask" | "deny" => {
     if (permission === "question") return "allow";
     if (planning)
-      return [
-        "read",
-        "grep",
-        "glob",
-        "list",
-        "websearch",
-        "codesearch",
-      ].includes(permission)
+      return OPENCODE_PLAN_READ_ONLY_PERMISSIONS.includes(permission)
         ? "allow"
         : "deny";
     if (runtimeMode === "full-access") return "allow";
@@ -537,14 +535,7 @@ export function verifyManagedOpenCodePolicy(
             toolOutputGlob !== undefined &&
             rule.pattern === toolOutputGlob) ||
           (planning &&
-            ([
-              "read",
-              "grep",
-              "glob",
-              "list",
-              "websearch",
-              "codesearch",
-            ].includes(rule.permission) ||
+            (OPENCODE_PLAN_READ_ONLY_PERMISSIONS.includes(rule.permission) ||
               (allowExploreTask &&
                 rule.permission === "task" &&
                 rule.pattern === "explore"))) ||

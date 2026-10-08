@@ -30,6 +30,7 @@ import {
   buildOpenCodePermissionRules,
   managedOpenCodeConfig,
   verifyManagedOpenCodePolicy,
+  OPENCODE_PLAN_READ_ONLY_PERMISSIONS,
   nextOpenCodeMessageId,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
@@ -1235,8 +1236,7 @@ async function handleEvent(
         }) || permissionTitle(permission, patterns);
       if (live.planning) {
         const decision =
-          kind === "read" ||
-          kind === "search" ||
+          OPENCODE_PLAN_READ_ONLY_PERMISSIONS.includes(permission) ||
           (permission === "task" &&
             payloadSessionId === live.openCodeSessionId &&
             Array.isArray(properties.patterns) &&
