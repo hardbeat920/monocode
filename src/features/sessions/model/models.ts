@@ -380,6 +380,7 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     const comparableSlug = comparableNativeId(harness, slug);
     const hits = available.filter((model) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
+      if (harness === "muse" && !native) return false;
       const comparableNative = comparableNativeId(harness, native);
       return (
         comparableNative.startsWith(comparableSlug) ||
@@ -414,9 +415,13 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     const bundled = bundledById.get(id);
     if (bundled && bundled.harness === harness) return bundled;
 
-    // A saved concrete Claude version may be absent from both catalogs.
+    // A saved concrete model may be absent from both catalogs.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
+    if (harness === "muse" && /^muse:muse-spark-[a-z0-9.-]+$/.test(requested)) {
+      const nativeId = nativeIdForUnknownKey(requested);
+      return { id: requested, harness, name: nativeId, nativeId };
+    }
     if (harness === "claude" && /^claude:[a-z][a-z0-9-]*-\d/.test(requested)) {
       const nativeId = nativeIdForUnknownKey(requested);
       return { id: requested, harness, name: nativeId, nativeId };
