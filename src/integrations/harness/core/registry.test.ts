@@ -433,4 +433,12 @@ describe("harness registry", () => {
     expect(restoreTaskLists).toHaveBeenCalledTimes(1);
     expect(restoreTaskLists).toHaveBeenCalledWith("s1", [taskList]);
   });
+  it("registers native Muse sessions with catalog discovery", () => {
+    registerBuiltinHarnesses();
+    expect(isLiveHarness("muse")).toBe(true);
+    const adapter = listHarnesses().find((row) => row.id === "muse");
+    expect(adapter?.canSteer).toBe(false);
+    expect(adapter?.refreshCatalog).toBeTypeOf("function");
+    expect(adapter?.bindSession).toBeTypeOf("function");
+  });
 });

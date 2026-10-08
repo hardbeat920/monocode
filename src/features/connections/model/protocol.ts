@@ -14,6 +14,7 @@ export const REMOTE_PROVIDERS = [
   "omp",
   "fx",
   "hermes",
+  "muse",
   "antigravity",
 ] as const;
 export type RemoteProvider = (typeof REMOTE_PROVIDERS)[number];

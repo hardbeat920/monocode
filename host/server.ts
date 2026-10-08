@@ -50,6 +50,7 @@ import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness
 import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
 import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
 import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
+import { discoverMuseModels } from "../src/integrations/harness/providers/muse/museCatalog";
 import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
 import {
   resolveAntigravityBinary,
@@ -59,6 +60,7 @@ import {
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
+  resolveMuseBinary,
   resolveOmpBinary,
   resolveOpenCodeBinary,
   resolvePiBinary,
@@ -77,6 +79,7 @@ const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
   omp: () => resolveOmpBinary(),
   fx: () => resolveFxBinary(),
   hermes: () => resolveHermesBinary(),
+  muse: () => resolveMuseBinary(),
   antigravity: () => resolveAntigravityBinary(),
 };
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
@@ -92,6 +95,7 @@ const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel
   omp: discoverOmpModels,
   fx: discoverFxModels,
   hermes: discoverHermesModels,
+  muse: discoverMuseModels,
   antigravity: discoverAntigravityModels,
 };
 

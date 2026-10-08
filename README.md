@@ -12,7 +12,7 @@
   <img width="1680" height="1050" alt="Screenshot 2026-09-04 at 06 34 00" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
 </p>
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, and Hermes Agent. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Muse Code. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
 
 ## Install
 
@@ -28,6 +28,7 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 > - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 > - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
 > - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - macOS/Linux: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; Windows PowerShell: `iex (irm https://hermes-agent.nousresearch.com/install.ps1)`; then run `hermes model`
+> - [Muse Code](https://dev.meta.ai/docs/muse-code) - install the native CLI, then run `muse login`
 
 macOS (Apple Silicon): download [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg), open it, drag MonoCode to Applications.
 
@@ -42,6 +43,14 @@ Windows (x86_64): download the NSIS installer from [GitHub Releases](https://git
 Experimental remote sessions: run agents on an always-on Windows, Linux, or macOS machine and connect from the desktop. See [remote access setup and current limitations](docs/remote-access.md).
 
 This is very early and you should expect bugs.
+
+### Subscription connections
+
+Muse Code reuses the native CLI's authentication. Sign in with `muse login` for account access; an exported `META_API_KEY` takes precedence over that login. Its live model list supplies the available models and reasoning choices; if discovery is unavailable, the configured CLI model remains available. Each turn runs `muse exec --json`, with session resume and cancellation supported locally and through the remote host. The OS sandbox stays enabled. The headless CLI cannot answer interactive approvals: supervised mode disables writes, shell and web tools, and auto-accept-edits allows workspace edits while disabling shell and web tools. Auto mode uses Muse's `:auto-review` permission profile. Full access disables approval prompts while retaining the CLI sandbox. Plan turns use the supervised settings and return ordinary chat output. In-flight steering and side-question generation are unavailable. Images need a local file path.
+
+Command Code and Z.ai Coding Plan connections can use an existing configured Codex or OpenCode provider, including a compatible local gateway. Configure the underlying CLI first, then select its model in MonoCode. MonoCode keeps the configured provider endpoint and model identifiers; credentials remain with the CLI or gateway.
+
+Use [Z.ai's dedicated Coding Plan endpoint](https://zcode.z.ai/en/docs/configuration), `https://api.z.ai/api/coding/paas/v4`, for subscription access. [Command Code's Provider API](https://commandcode.ai/docs/provider) meters eligible coding-plan requests against plan credits; the Go plan does not include that API. Muse Code account access and Muse models offered by Command Code are separate connections.
 
 ### Agent access to MonoCode
 

@@ -12,6 +12,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveProvider } from "./process";
 
+it.runIf(process.platform !== "win32")(
+  "resolves the native Muse launcher without running it",
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), "monocode-muse-provider-"));
+    const candidate = join(directory, "muse");
+    const sentinel = join(directory, "executed");
+    writeFileSync(candidate, `#!/bin/sh\nprintf bad > '${sentinel}'\n`);
+    chmodSync(candidate, 0o755);
+    vi.stubEnv("PATH", directory);
+    try {
+      expect(await resolveProvider("muse")).toBe(candidate);
+      expect(existsSync(sentinel)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 it.each(["cursor", "pi", "fx"] as const)(
   "does not execute an unrelated ambiguous %s binary while resolving providers",
   async (provider) => {
