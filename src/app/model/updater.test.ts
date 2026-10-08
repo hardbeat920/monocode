@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   remember: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: mocks.getVersion }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: mocks.getVersion,
+  getBundleType: vi.fn().mockResolvedValue("appimage"),
+  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
   message: mocks.message,
