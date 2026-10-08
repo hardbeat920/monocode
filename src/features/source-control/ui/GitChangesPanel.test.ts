@@ -216,6 +216,43 @@ it("disables local PR generation when no text provider is eligible", async () =>
   expect(generatePrContent).not.toHaveBeenCalled();
 });
 
+it("disables commit-push-create-PR when no local text provider is eligible", async () => {
+  vi.mocked(pickTextHarness).mockReturnValue(null);
+  vi.mocked(gitDiffIndex).mockResolvedValue(
+    index({
+      files: [changedFile("change.ts", { staged: true, unstaged: false })],
+      remote: "origin",
+      upstream: "origin/feature/pull",
+    }),
+  );
+  await renderPanel();
+  const textarea = container.querySelector("textarea")!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(textarea, "Ship it");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Commit options"]')!
+      .click();
+  });
+  const items = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ];
+  const push = items.find(
+    (item) => item.textContent?.trim() === "Commit & Push",
+  )!;
+  const pushPr = items.find(
+    (item) => item.textContent?.trim() === "Commit, Push & Create PR",
+  )!;
+  expect(push.disabled).toBe(false);
+  expect(pushPr.disabled).toBe(true);
+});
+
 afterEach(() => {
   act(() => root.unmount());
   vi.clearAllTimers();

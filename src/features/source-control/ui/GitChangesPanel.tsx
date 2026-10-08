@@ -414,7 +414,11 @@ function ChangedFiles({
     ((index?.ahead ?? 0) > 0 || (index?.behind ?? 0) > 0);
   const canCommitPush =
     canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
-  const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
+  const canCommitPushPr =
+    canCommitPush &&
+    !hasOpenPr &&
+    !onDefault &&
+    (isRemoteProjectPath(cwd) || selectedTextHarness !== null);
   const canEditMessage = !busy;
 
   useEffect(() => {
