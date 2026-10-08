@@ -92,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -210,6 +211,55 @@ it("acknowledges a floating Build only after the owner accepts it", async () => 
     error: null,
   });
 });
+
+it.each(["success", "reject", "false"] as const)(
+  "keeps a slow floating Build pending until its %s outcome",
+  async (outcome) => {
+    vi.useFakeTimers();
+    requests = [
+      {
+        id: 12,
+        monoId: "first",
+        action: { kind: "buildPlan", blockId: "plan" },
+      },
+    ];
+    host.buildPlan = vi.fn(
+      () =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => {
+            if (outcome === "reject")
+              reject(new Error("Provider rejected Build"));
+            else resolve(outcome === "success");
+          }, 31_000);
+        }),
+    );
+
+    await act(async () => {
+      root.render(createElement(Harness, { sessions }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(host.buildPlan).toHaveBeenCalledTimes(1);
+    expect(native.invoke).toHaveBeenCalledWith("mono_chat_accept", { id: 12 });
+    expect(native.invoke).not.toHaveBeenCalledWith(
+      "mono_chat_reply",
+      expect.anything(),
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(31_000));
+
+    expect(host.buildPlan).toHaveBeenCalledTimes(1);
+    expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+      id: 12,
+      error:
+        outcome === "success"
+          ? null
+          : outcome === "reject"
+            ? "Provider rejected Build"
+            : expect.stringContaining("plan could not be built"),
+    });
+  },
+);
 
 it("shows or hides the menu bar icon to match the setting", async () => {
   const stored = new Map<string, string>();

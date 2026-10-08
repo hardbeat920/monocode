@@ -312,6 +312,30 @@ it("keeps the draft when the workspace rejects delivery", async () => {
   );
 });
 
+it.each(["Provider rejected Build", null])(
+  "updates the floating Build warning to its late outcome (%s)",
+  async (outcome) => {
+    await render();
+    native.invoke.mockImplementation(async (command) => {
+      if (command === "mono_chat_action")
+        throw new Error("Build is still pending; its outcome is unknown.");
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-build-plan]")!.click();
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "outcome is unknown",
+    );
+
+    act(() => receive({ payload: { ...snapshot(0), error: outcome } }));
+    if (outcome)
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        outcome,
+      );
+    else expect(container.querySelector('[role="alert"]')).toBeNull();
+  },
+);
+
 it("ignores a stale initial snapshot after a newer update arrives", async () => {
   let initial!: (view: FloatingMonoView) => void;
   native.invoke.mockImplementation(

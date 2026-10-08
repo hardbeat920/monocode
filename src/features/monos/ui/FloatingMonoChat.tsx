@@ -41,6 +41,7 @@ const EMPTY: FloatingMonoView = {
   session: null,
   error: null,
 };
+const BUILD_PENDING_ERROR = "Build is still pending;";
 const BUTTON =
   "grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content disabled:opacity-30";
 const SURFACE =
@@ -73,6 +74,9 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
         setArtifactId(null);
         setFocus((n) => n + 1);
       }
+      setError((current) =>
+        current?.startsWith(BUILD_PENDING_ERROR) ? next.error : current,
+      );
       setView(next);
       onShown();
     };
