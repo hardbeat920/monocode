@@ -264,6 +264,19 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain(">Draft</span>");
   });
 
+  it("offers draft editing only when the session can edit drafts", () => {
+    const blocks: Block[] = [
+      { id: "draft", role: "user", text: "Explore this", draft: true },
+    ];
+
+    expect(render(blocks)).not.toContain('aria-label="Edit draft"');
+    expect(
+      renderToStaticMarkup(
+        createElement(AgentTranscript, { blocks, onEditDraft: () => true }),
+      ),
+    ).toContain('aria-label="Edit draft"');
+  });
+
   it("keeps surrounding prose and previews its first URL", () => {
     const markup = render([
       {

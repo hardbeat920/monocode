@@ -762,6 +762,34 @@ export function removeSessionDraft(
   };
 }
 
+/** Rewrite a saved draft's text, keeping its attachments and request link. */
+export function editSessionDraft(
+  session: Session,
+  draftBlockId: string,
+  text: string,
+): Session | undefined {
+  const draft = session.blocks.find(
+    (block) =>
+      block.id === draftBlockId && block.role === "user" && block.draft,
+  );
+  if (!draft || (!text.trim() && !draft.attachments?.length)) return undefined;
+  const draftTitle = titleFromPrompt(
+    draft.text,
+    session.harness,
+    draft.attachments,
+  );
+  return {
+    ...session,
+    blocks: session.blocks.map((block) =>
+      block === draft ? { ...block, text } : block,
+    ),
+    title:
+      session.title === draftTitle
+        ? titleFromPrompt(text, session.harness, draft.attachments)
+        : session.title,
+  };
+}
+
 /** Title without the harness prefix stored for the tab strip. */
 export function sessionDisplayTitle(title: string, harness: HarnessId): string {
   const prefix = `${HARNESS_LABEL[harness]} · `;
