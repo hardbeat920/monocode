@@ -88,6 +88,12 @@ import {
   useRemoteMachines,
 } from "../../features/connections/model/connections";
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
+import {
+  openCloneRepo,
+  useGitHostAvailability,
+} from "../../features/git-hosts/model/gitHosts";
+import { GIT_HOST_UI } from "../../features/git-hosts/model/providers";
+import { InboxProviderMark } from "../../features/inbox/ui/InboxProviderMark";
 import { useProjectMenu } from "./useProjectMenu";
 import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
 
@@ -1149,10 +1155,12 @@ function projectCardAriaLabel(
   return parts.join(", ");
 }
 
-/** Adds a folder on this computer, or one on a connected machine. */
+/** Adds a folder on this computer, or one on a connected machine, or clones
+ * one from a Git host signed in on either. */
 function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const gitHosts = useGitHostAvailability();
   const item =
     "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-content/80 hover:bg-content/8 hover:text-content";
   return (
@@ -1164,7 +1172,10 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
         aria-label="Open project"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!open) gitHosts.refresh();
+          setOpen((value) => !value);
+        }}
         className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content"
       >
         <Plus className="size-3.5" strokeWidth={1.75} />
@@ -1173,7 +1184,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
         <Popover
           anchor={anchor}
           align="start"
-          width={230}
+          width={260}
           onDismiss={() => setOpen(false)}
           role="menu"
           aria-label="Open project"
@@ -1203,6 +1214,32 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
             <Internet className="size-3.5 shrink-0" strokeWidth={1.75} />
             Open folder on a machine…
           </button>
+          {GIT_HOST_UI.flatMap((host) =>
+            [
+              gitHosts.local.includes(host.id)
+                ? { target: "local" as const, label: `Clone from ${host.label}…` }
+                : null,
+              gitHosts.remote[host.id]?.length
+                ? { target: "remote" as const, label: `Clone from ${host.label} on a machine…` }
+                : null,
+            ]
+              .filter((entry) => entry !== null)
+              .map((entry) => (
+                <button
+                  key={`${host.id}:${entry.target}`}
+                  type="button"
+                  role="menuitem"
+                  className={item}
+                  onClick={() => {
+                    setOpen(false);
+                    openCloneRepo({ provider: host.id, target: entry.target });
+                  }}
+                >
+                  <InboxProviderMark provider={host.id} className="size-3.5 shrink-0" />
+                  {entry.label}
+                </button>
+              )),
+          )}
         </Popover>
       ) : null}
     </>

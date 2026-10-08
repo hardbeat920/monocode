@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- When the GitHub CLI is signed in, the **+** menu next to Projects offers **Clone from GitHub…**, and **Clone from GitHub on a machine…** for connected machines whose `gh` is signed in. Pick one of your repositories or paste `owner/name` or any GitHub URL, choose the folder to clone into, and a new session opens in the project. A folder that already tracks the repository is reused instead of cloned again; a same-named folder holding something else is left alone and the clone goes to `name-2`. The dialog shows which will happen before you confirm. Machines need an updated host for the remote option to appear.
+
 ## [0.9.0] - 2026-10-07
 
 ### Added

@@ -666,6 +666,11 @@ import {
 } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
+import { CloneRepoDialog } from "../features/git-hosts/ui/CloneRepoDialog";
+import {
+  OPEN_CLONE_REPO_EVENT,
+  type CloneRepoRequest,
+} from "../features/git-hosts/model/gitHosts";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "../features/inbox/model/inboxAsk";
@@ -11398,6 +11403,14 @@ function Workspace({
     window.addEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
     return () => window.removeEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
   }, []);
+  const [cloneRepoRequest, setCloneRepoRequest] =
+    useState<CloneRepoRequest | null>(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setCloneRepoRequest((event as CustomEvent<CloneRepoRequest>).detail);
+    window.addEventListener(OPEN_CLONE_REPO_EVENT, open);
+    return () => window.removeEventListener(OPEN_CLONE_REPO_EVENT, open);
+  }, []);
 
   useEffect(() => {
     const onOpenMcp = () => openSettings("mcp");
@@ -12945,6 +12958,18 @@ function Workspace({
               onCancel={() => setRemoteProjectDialogOpen(false)}
               onOpen={(key) => {
                 setRemoteProjectDialogOpen(false);
+                onSelectProject(key);
+              }}
+            />
+          ) : null}
+          {cloneRepoRequest ? (
+            <CloneRepoDialog
+              key={`${cloneRepoRequest.provider}:${cloneRepoRequest.target}`}
+              provider={cloneRepoRequest.provider}
+              target={cloneRepoRequest.target}
+              onCancel={() => setCloneRepoRequest(null)}
+              onOpen={(key) => {
+                setCloneRepoRequest(null);
                 onSelectProject(key);
               }}
             />
