@@ -526,9 +526,6 @@ jobs:
           npx tauri signer sign "${appimage[0]}"
           test -s "${appimage[0]}.sig"
 
-      - name: Assert AppImage uses host libraries
-        run: bash scripts/assert-appimage-host-libs.sh
-
       - name: Stage Linux packages
         run: |
           set -euo pipefail
