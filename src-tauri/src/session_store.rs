@@ -310,7 +310,11 @@ fn import_session(
     created_at: i64,
     updated_at: i64,
 ) -> rusqlite::Result<Option<SessionSummary>> {
-    let exists: Option<String> = conn
+    // One transaction: a row left with import-time timestamps would hide
+    // the session from the next listing without a way to import it again.
+    // The existence check runs inside it so the check and insert agree.
+    let tx = conn.unchecked_transaction()?;
+    let exists: Option<String> = tx
         .query_row(
             "SELECT id FROM sessions WHERE harness = ?1 AND provider_session_id = ?2 LIMIT 1",
             params![session.harness, provider_session_id],
@@ -320,9 +324,6 @@ fn import_session(
     if exists.is_some() {
         return Ok(None);
     }
-    // One transaction: a row left with import-time timestamps would hide
-    // the session from the next listing without a way to import it again.
-    let tx = conn.unchecked_transaction()?;
     let mut summary = upsert_session(&tx, session)?;
     tx.execute(
         "UPDATE sessions SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
