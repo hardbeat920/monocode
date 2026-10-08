@@ -825,15 +825,19 @@ async function fetchInboxItems(
   }
 
   let bitbucketItems: InboxItem[] = [];
-  if ((await bitbucketConnected()).connected) {
-    const bitbucket = await fetchRepositoryInboxItems(
-      "bitbucket",
-      unique,
-      query,
-      preferredPaths,
-    );
-    bitbucketItems = bitbucket.items;
-    if (bitbucket.error) errors.bitbucket = bitbucket.error;
+  try {
+    if ((await bitbucketConnected()).connected) {
+      const bitbucket = await fetchRepositoryInboxItems(
+        "bitbucket",
+        unique,
+        query,
+        preferredPaths,
+      );
+      bitbucketItems = bitbucket.items;
+      if (bitbucket.error) errors.bitbucket = bitbucket.error;
+    }
+  } catch (error) {
+    errors.bitbucket = inboxErrorMessage(error);
   }
 
   return {

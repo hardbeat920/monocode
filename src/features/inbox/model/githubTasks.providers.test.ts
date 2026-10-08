@@ -329,4 +329,21 @@ describe("bitbucket inbox fetching", () => {
     expect(result.items).toEqual([]);
     expect(result.errors.bitbucket).toContain("invalid or lack permission");
   });
+
+  it("isolates an unreadable Bitbucket config from other providers", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "git_github_repositories") return ["github/repo"];
+      if (command === "git_github_work_items")
+        return [workItem("github/repo", "pr")];
+      if (command === "bitbucket_status")
+        throw new Error("Could not read the Bitbucket settings");
+      if (command.endsWith("_status")) return { connected: false };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const result = await listInboxItems(projects, query);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.errors.bitbucket).toContain("Bitbucket settings");
+  });
 });

@@ -1246,7 +1246,7 @@ function InboxPage({
             Bitbucket
           </span>
         }
-        description="Pull requests and issues from Bitbucket Cloud repositories."
+        description="Pull requests from Bitbucket Cloud repositories."
       >
         <BitbucketSettings />
       </Group>
