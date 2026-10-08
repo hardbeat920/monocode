@@ -1640,7 +1640,7 @@ function BitbucketSettings() {
         setConnected(stored.connected);
         if (stored.email) setEmail(stored.email);
       } catch {
-        setConnected(false);
+        // Keep the last known state; the save error is already shown.
       }
     } finally {
       setBusy(false);
