@@ -71,6 +71,7 @@ import {
   supersedeMemoryEntry,
   topicName,
 } from "../../monos/model/monoMemory";
+import type { MonoGoal } from "../../monos/model/mono";
 
 export type AppSessionListing = {
   id: string;
@@ -134,7 +135,14 @@ export type AgentAppHost = {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
+    goal?: MonoGoal;
   } | undefined;
+  updateGoal?(
+    monoId: string,
+    goalId: string,
+    status: "done" | "blocked",
+    reason?: string,
+  ): MonoGoal | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
@@ -213,6 +221,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.update", ["id", "name", "instructions", "schedule", "enabled"]],
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
+  ["mono.goal.read", []],
+  ["mono.goal.update", ["goalId", "status", "reason"]],
   ["chat.card", [...CARD_FIELDS]],
 ]);
 
@@ -956,6 +966,23 @@ export async function handleAgentApp(
           })),
         })),
       };
+    case "mono.goal.read": {
+      if (!host.isMono(source.id))
+        throw new Error("Only a Mono can read its goal");
+      return host.monoOf?.(source.id)?.goal ?? null;
+    }
+    case "mono.goal.update": {
+      if (!host.isMono(source.id))
+        throw new Error("Only a Mono can update its goal");
+      const goalId = requiredString(input.goalId, "goalId", 128);
+      const status = input.status;
+      if (status !== "done" && status !== "blocked")
+        throw new Error('status must be "done" or "blocked"');
+      const reason = optionalString(input.reason, "reason", 2_000);
+      const goal = host.updateGoal?.(source.id, goalId, status, reason);
+      if (!goal) throw new Error("That goal is no longer active");
+      return goal;
+    }
     case "sessions.list": {
       const cwd = requireProject(source, input, host);
       return { cwd, sessions: await host.sessions(cwd) };

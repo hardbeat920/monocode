@@ -311,7 +311,8 @@ export function MonoComposer({
             ref={field}
             rows={1}
             aria-label={`Message ${name}`}
-            placeholder={`Message ${name}`}
+            aria-describedby="mono-goal-help"
+            placeholder={`Message ${name} · /goal <objective>`}
             disabled={!enabled || submitting}
             value={text}
             onFocus={onFocus}
@@ -346,6 +347,9 @@ export function MonoComposer({
           </button>
         </div>
       </div>
+      <p id="mono-goal-help" className="px-1 pt-1 text-[10px] text-content/40">
+        /goal &lt;objective&gt; starts a goal; /goal status, pause, resume or cancel manages it.
+      </p>
     </form>
   );
 }

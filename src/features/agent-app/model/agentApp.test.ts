@@ -124,6 +124,42 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("lets only the calling Mono read and finish its current goal", async () => {
+    const { source, host } = fixture();
+    const goal = {
+      id: "goal-1",
+      objective: "Fix the build",
+      status: "active" as const,
+      turns: 0,
+      stalled: 0,
+    };
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: "mono", projects: [source.cwd], goal });
+    host.updateGoal = vi.fn((
+      _monoId: string,
+      _goalId: string,
+      status: "done" | "blocked",
+      reason?: string,
+    ) => ({
+      ...goal,
+      status,
+      ...(reason ? { reason } : {}),
+    }));
+    await expect(handleAgentApp(source, "read", "mono.goal.read", {}, host)).resolves.toEqual(goal);
+    await expect(handleAgentApp(source, "done", "mono.goal.update", {
+      goalId: "goal-1",
+      status: "done",
+    }, host)).resolves.toMatchObject({ status: "done" });
+    expect(host.updateGoal).toHaveBeenCalledWith(source.id, "goal-1", "done", undefined);
+    await expect(handleAgentApp(source, "bad", "mono.goal.update", {
+      goalId: "goal-1",
+      status: "active",
+    }, host)).rejects.toThrow('status must be "done" or "blocked"');
+    host.isMono = () => false;
+    await expect(handleAgentApp(source, "no-access", "mono.goal.read", {}, host))
+      .rejects.toThrow("Only a Mono can read its goal");
+  });
+
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {

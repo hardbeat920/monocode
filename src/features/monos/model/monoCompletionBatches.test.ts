@@ -30,6 +30,24 @@ function result(
 }
 
 describe("Mono completion batches", () => {
+  it("keeps a watched delegation pending until its report is queued", async () => {
+    let deliver!: () => void;
+    const batches = new MonoSessionCompletionBatches(
+      () => new Promise<void>((resolve) => {
+        deliver = resolve;
+      }),
+    );
+    const finish = batches.watch(origin, "worker");
+    expect(batches.hasPending("mono")).toBe(true);
+    finish(result("worker"));
+    batches.closeInactive(() => false);
+    expect(batches.hasPending("mono")).toBe(true);
+    deliver();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(batches.hasPending("mono")).toBe(false);
+  });
+
   it("waits for the launching turn and all children, even when a fast child finishes before the others launch", () => {
     const ready = vi.fn();
     const batches = new MonoSessionCompletionBatches(ready);

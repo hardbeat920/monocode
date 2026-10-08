@@ -130,8 +130,11 @@ export function MonoRailSection({
           const projects = look.projects.length
             ? monoProjectsPhrase(look.projects)
             : "No projects yet";
-          const status =
-            state.status === "idle"
+          const status = state.goal
+            ? state.status === "idle"
+              ? state.activity
+              : `${state.activity ?? MONO_STATUS_LABEL[state.status]} · Goal ${state.goal.status}: ${state.goal.objective}`
+            : state.status === "idle"
               ? undefined
               : (state.activity ?? MONO_STATUS_LABEL[state.status]);
           return (

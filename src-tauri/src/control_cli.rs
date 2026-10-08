@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 34] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -114,9 +114,11 @@ const APP_ACTIONS: [&str; 32] = [
     "habits.update",
     "habits.run",
     "habits.remove",
+    "mono.goal.read",
+    "mono.goal.update",
     "chat.card",
 ];
-const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
+const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator or in a Mono chat.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
@@ -126,6 +128,10 @@ left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
+  mono.goal.read {}  Mono only. Read the goal currently set with /goal.
+  mono.goal.update {"goalId":"...","status":"done"|"blocked","reason":"..."}
+                  Mono only. Finish the matching active goal or mark it blocked.
+                  Use the exact goalId from mono.goal.read; stale goals are rejected.
   sessions.list  {}  Project sessions with IDs, busy status, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
@@ -632,6 +638,8 @@ mod tests {
             Ok(Parsed::Call(_, _, _))
         ));
         for action in [
+            "mono.goal.read",
+            "mono.goal.update",
             "sessions.read",
             "sessions.send",
             "sessions.draft",

@@ -50,6 +50,17 @@ export type Mono = {
    * it inherits. The folder moves under its id the first time it is read.
    */
   legacyProject?: string;
+  goal?: MonoGoal;
+};
+
+export type MonoGoal = {
+  id: string;
+  objective: string;
+  status: "active" | "paused" | "done" | "blocked" | "cancelled";
+  turns: number;
+  stalled: number;
+  lastReply?: string;
+  reason?: string;
 };
 
 const ROSTER_KEY = "monocode:mono-roster";
@@ -154,6 +165,14 @@ function parseMono(value: unknown): Mono | undefined {
   const name = text("name");
   const instructions = text("instructions");
   const legacyProject = text("legacyProject");
+  const goal = record(entry.goal);
+  const validGoal =
+    typeof goal.id === "string" &&
+    typeof goal.objective === "string" &&
+    !!goal.objective.trim() &&
+    ["active", "paused", "done", "blocked", "cancelled"].includes(
+      String(goal.status),
+    );
   return {
     id: entry.id,
     ...(sessionId ? { sessionId } : {}),
@@ -170,6 +189,27 @@ function parseMono(value: unknown): Mono | undefined {
       : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
+    ...(validGoal
+      ? {
+          goal: {
+            id: goal.id as string,
+            objective: goal.objective as string,
+            status: goal.status as MonoGoal["status"],
+            turns:
+              Number.isInteger(goal.turns) && (goal.turns as number) >= 0
+                ? (goal.turns as number)
+                : 0,
+            stalled:
+              Number.isInteger(goal.stalled) && (goal.stalled as number) >= 0
+                ? (goal.stalled as number)
+                : 0,
+            ...(typeof goal.lastReply === "string"
+              ? { lastReply: goal.lastReply }
+              : {}),
+            ...(typeof goal.reason === "string" ? { reason: goal.reason } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -304,6 +344,10 @@ export function saveMonoSessionId(monoId: string, sessionId: string): void {
   updateMono(monoId, (mono) => ({ ...mono, sessionId }));
 }
 
+export function saveMonoGoal(monoId: string, goal: MonoGoal): MonoGoal | undefined {
+  return updateMono(monoId, (mono) => ({ ...mono, goal }))?.goal;
+}
+
 export function saveMonoName(monoId: string, name: string): void {
   updateMono(monoId, (mono) => ({ ...mono, name }));
 }
@@ -412,6 +456,7 @@ export type MonoState = {
   status: MonoStatus;
   /** Short present-tense note while working or waiting. */
   activity?: string;
+  goal?: Pick<MonoGoal, "objective" | "status">;
 };
 
 export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
@@ -426,43 +471,55 @@ export function monoState(
     Session,
     "blocks" | "busy" | "pendingQuestion" | "worktreeRemoved" | "usageLimit"
   >,
+  goal?: MonoGoal,
 ): MonoState {
+  const withGoal = (state: MonoState): MonoState => ({
+    ...state,
+    ...(goal
+      ? {
+          goal: { objective: goal.objective, status: goal.status },
+        }
+      : {}),
+  });
   const { blocks, pendingQuestion: question } = session;
   if (!session.worktreeRemoved && question) {
-    return {
+    return withGoal({
       status: "needs-you",
       activity: question.title?.trim() || question.questions[0]?.prompt.trim(),
-    };
+    });
   }
   if (!session.worktreeRemoved && hasPendingApproval(blocks)) {
     const approval = latest(
       blocks,
       (block) => !!block.approval && !block.approval.decided,
     );
-    return {
+    return withGoal({
       status: "needs-you",
       activity: approval?.tool?.title
         ? `Approve ${plainLine(approval.tool.title)}`
         : "Waiting for approval",
-    };
+    });
   }
   if (!session.worktreeRemoved && session.usageLimit) {
-    return { status: "needs-you", activity: "Usage limit reached" };
+    return withGoal({ status: "needs-you", activity: "Usage limit reached" });
   }
-  if (!session.busy) return { status: "idle" };
+  if (!session.busy) return withGoal({ status: "idle" });
   const last = blocks[blocks.length - 1];
   if (last?.role === "assistant" && !last.tool && last.streaming) {
-    return { status: "working", activity: "Writing a reply" };
+    return withGoal({ status: "working", activity: "Writing a reply" });
   }
   // Only a step from the current turn says what it is doing now.
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i];
     if (block.role === "user") break;
     if (block.tool?.title) {
-      return { status: "working", activity: plainLine(block.tool.title) };
+      return withGoal({
+        status: "working",
+        activity: plainLine(block.tool.title),
+      });
     }
   }
-  return { status: "working", activity: "Thinking" };
+  return withGoal({ status: "working", activity: "Thinking" });
 }
 
 function latest(

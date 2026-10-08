@@ -209,6 +209,13 @@ export class MonoSessionCompletionBatches {
     }
   }
 
+  /** A goal must wait while this Mono still has watched delegated work. */
+  hasPending(monoId: string): boolean {
+    return [...this.batches.values(), ...this.deliveries].some(
+      (batch) => batch.origin.monoId === monoId && batch.results.size > 0,
+    );
+  }
+
   closeInactive(isActive: (origin: MonoCompletionOrigin) => boolean) {
     for (const [key, batch] of this.batches) {
       if (!batch.closed && !isActive(batch.origin)) batch.closed = true;

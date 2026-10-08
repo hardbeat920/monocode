@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Monos can keep one persistent goal with `/goal <objective>`, then inspect, pause, resume, or cancel it with `/goal status`, `/goal pause`, `/goal resume`, and `/goal cancel`. Active goals are included in each Mono turn and can be marked done or blocked through `app mono.goal.update`; automatic continuation stops on errors, user stops, pending input, usage limits, repeated replies, or after 24 turns.
+
 ## [0.9.0] - 2026-10-07
 
 ### Added
