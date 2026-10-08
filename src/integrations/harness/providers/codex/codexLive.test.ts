@@ -32,10 +32,27 @@ const saveGeneratedImage = vi.hoisted(() =>
   })),
 );
 const deleteGeneratedImages = vi.hoisted(() => vi.fn(async () => undefined));
+const spawnChild = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => undefined),
+);
+const restoreMonoCodexAgentState = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => undefined),
+);
+const prepareCodexMonoContext = vi.hoisted(() =>
+  vi.fn(async (_input: unknown) => ({
+    config: {
+      sqlite_home: "/private/mono",
+      instructions: "Account instructions",
+    },
+    hasThread: true,
+  })),
+);
+vi.mock("./codexStore", () => ({ prepareCodexMonoContext }));
 
 vi.mock("../../core/child", () => ({
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
-  spawnChild: async () => undefined,
+  spawnChild,
+  restoreMonoCodexAgentState,
   killChild: async () => undefined,
   unwatchChild: () => undefined,
   watchChild: (_id: string, line: (l: string) => void) => {
@@ -52,6 +69,7 @@ vi.mock("../../../../platform/tauri/fs", () => ({
 const {
   compactCodexContext,
   bindCodexSession,
+  hasLiveCodexSession,
   cancelCodexTurn,
   keepCodexQuestionOpen,
   respondCodexApproval,
@@ -120,6 +138,8 @@ async function startTurn(
     onAccepted?: () => void;
     controlsAgents?: boolean;
     text?: string;
+    ephemeral?: boolean;
+    codexStore?: "mono";
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -139,6 +159,8 @@ async function startTurn(
     providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
     controlsAgents: options.controlsAgents,
+    ephemeral: options.ephemeral,
+    codexStore: options.codexStore,
     intent: options.intent,
     text: options.text ?? "summarize the changelog",
     attachments: [],
@@ -181,6 +203,9 @@ describe("codex live turn sequence", () => {
     writeChild.mockClear();
     saveGeneratedImage.mockClear();
     deleteGeneratedImages.mockClear();
+    spawnChild.mockClear();
+    restoreMonoCodexAgentState.mockClear();
+    prepareCodexMonoContext.mockClear();
   });
 
   afterEach(async () => {
@@ -222,6 +247,200 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("keeps ephemeral helper threads out of saved Codex history", async () => {
+    const first = await startTurn("codex-live", { ephemeral: true });
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    expect(hasLiveCodexSession("codex-live", true)).toBe(true);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+
+    await stopCodexSession("codex-live");
+    expect(hasLiveCodexSession("codex-live", true)).toBe(false);
+    sent.length = 0;
+    const next = await startTurn("codex-live", { ephemeral: true });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
+  it("starts a fresh ephemeral helper instead of resuming a saved rollout", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      ephemeral: true,
+      expectResume: false,
+    });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("retains an ephemeral helper's in-memory context for consecutive turns", async () => {
+    const first = await startTurn("codex-live", { ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const next = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      ephemeral: true,
+      text: "Follow up on the previous answer",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "turn/start"),
+      "follow-up turn/start",
+    );
+    expect(parse().some((message) => message.method === "initialize")).toBe(
+      false,
+    );
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      false,
+    );
+    reply(
+      parse().find((message) => message.method === "turn/start")!.id as number,
+      {
+        turn: { id: "turn_2", status: "inProgress" },
+      },
+    );
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await next;
+  });
+
+  it("leaves regular Codex chats persistent", async () => {
+    const { turn } = await startTurn("codex-live");
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).not.toHaveProperty("ephemeral");
+    expect(hasLiveCodexSession("codex-live", false)).toBe(true);
+    expect(hasLiveCodexSession("codex-live", true)).toBe(false);
+    expect(prepareCodexMonoContext).not.toHaveBeenCalled();
+    expect(spawnChild.mock.calls[0][6]).toBeUndefined();
+    expect(restoreMonoCodexAgentState).not.toHaveBeenCalled();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("persists Monos privately and resumes the same native thread after parking", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono" });
+    expect(spawnChild.mock.calls[0][6]).toBe("mono");
+    const params = parse().find((m) => m.method === "thread/start")?.params;
+    expect(params).not.toHaveProperty("ephemeral");
+    expect(params).toMatchObject({
+      config: {
+        sqlite_home: "/private/mono",
+        instructions: "Account instructions",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    await stopCodexSession("codex-live");
+    sent.length = 0;
+    const next = await startTurn("codex-live", {
+      codexStore: "mono",
+      expectResume: true,
+    });
+    expect(
+      parse().find((m) => m.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thr_1",
+      config: { sqlite_home: "/private/mono" },
+    });
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: "thr_1" }),
+    );
+    expect(restoreMonoCodexAgentState).toHaveBeenCalledWith(undefined, "thr_1");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
+  it("resumes a saved Mono after restart without rebuilding its context", async () => {
+    const { turn } = await startTurn("codex-live", {
+      codexStore: "mono",
+      resume: true,
+      providerAccountId: "work",
+      resumeProviderAccountId: "work",
+    });
+    expect(
+      parse().find((m) => m.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thr_1",
+      config: { sqlite_home: "/private/mono" },
+    });
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+    expect(restoreMonoCodexAgentState).toHaveBeenCalledWith("work", "thr_1");
+    expect(prepareCodexMonoContext).toHaveBeenCalledWith(
+      expect.objectContaining({ providerAccountId: "work", threadId: "thr_1" }),
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("does not discard a retained private Mono when resume fails", async () => {
+    bindCodexSession("codex-live", "thr_1", "/repo");
+    const turn = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      codexStore: "mono",
+      text: "Continue",
+      onEvent: () => undefined,
+    });
+    const rejected = expect(turn).rejects.toThrow(
+      "saved Mono Codex context could not be resumed",
+    );
+    await waitFor(
+      () => parse().some((m) => m.method === "initialize"),
+      "initialize",
+    );
+    reply(parse().find((m) => m.method === "initialize")!.id as number, {});
+    await waitFor(
+      () => parse().some((m) => m.method === "thread/resume"),
+      "resume",
+    );
+    onLine!(
+      JSON.stringify({
+        id: parse().find((m) => m.method === "thread/resume")!.id,
+        error: { message: "thread not found" },
+      }),
+    );
+    await rejected;
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+  });
+
+  it("does not reopen a parked ephemeral helper just to rewind or compact it", async () => {
+    const input = {
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised" as const,
+      ephemeral: true,
+      onEvent: () => undefined,
+    };
+    await expect(rewindCodexLastTurn(input)).resolves.toEqual({
+      submitted: false,
+    });
+    await expect(compactCodexContext(input)).rejects.toThrow(
+      "Send a message before compacting this chat",
+    );
+    expect(sent).toEqual([]);
   });
 
   it("reopens a thread when app access changes its network policy", async () => {
