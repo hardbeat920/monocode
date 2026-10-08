@@ -9,7 +9,11 @@ import {
 } from "../model/checkpoint";
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
-import { basename, notifyGitChanged, subscribeGitChanged } from "../../../platform/tauri/fs";
+import {
+  basename,
+  notifyGitChanged,
+  subscribeGitChanged,
+} from "../../../platform/tauri/fs";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 
@@ -94,6 +98,7 @@ export function SessionReview({
 
   const disabled = acting != null;
   const canUndoAll = !undoLocked && files.every((file) => file.undoable);
+  const countsExact = files.every((file) => file.exact);
   const visibleFiles = expanded ? files : files.slice(0, 3);
   const hiddenFileCount = files.length - visibleFiles.length;
   const totals = files.reduce(
@@ -137,14 +142,23 @@ export function SessionReview({
             <div className="truncate text-[12px] font-medium text-content/80">
               Changed {files.length} {files.length === 1 ? "file" : "files"}
             </div>
-            <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
-              <span className="text-diff-add-fg">
-                +{formatInteger(totals.additions)}
-              </span>
-              <span className="text-diff-del-fg">
-                -{formatInteger(totals.deletions)}
-              </span>
-            </div>
+            {countsExact ? (
+              <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
+                <span className="text-diff-add-fg">
+                  +{formatInteger(totals.additions)}
+                </span>
+                <span className="text-diff-del-fg">
+                  -{formatInteger(totals.deletions)}
+                </span>
+              </div>
+            ) : (
+              <div
+                className="-mt-0.5 text-[11px] text-amber-300/80"
+                title="A file changed between this session's edits, so exact session line counts are unavailable"
+              >
+                Line counts unavailable
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <button

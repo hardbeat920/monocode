@@ -6,6 +6,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+mod checkpoint_diff;
 mod control;
 pub mod control_cli;
 mod cursor_store;

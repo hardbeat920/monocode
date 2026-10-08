@@ -113,6 +113,7 @@ export function captureSessionCheckpoint(
   sessionId: string,
   cwd: string,
   paths: string[],
+  diffs?: Record<string, string>,
 ): Promise<void> {
   if (paths.length === 0) return Promise.resolve();
   return enqueueCheckpoint(sessionId, () =>
@@ -120,6 +121,7 @@ export function captureSessionCheckpoint(
       sessionId,
       cwd,
       paths,
+      ...(diffs ? { diffs } : {}),
     }),
   );
 }

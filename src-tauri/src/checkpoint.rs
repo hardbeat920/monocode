@@ -139,6 +139,16 @@ impl CheckpointStore {
     }
 
     fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
+        self.capture_with_diffs(session_id, cwd, paths, &BTreeMap::new())
+    }
+
+    fn capture_with_diffs(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        paths: &[String],
+        diffs: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
         if paths.is_empty() {
             return Ok(());
         }
@@ -157,6 +167,12 @@ impl CheckpointStore {
             let Ok(relative) = relative_to_root(&root, path) else {
                 continue;
             };
+            let previous = manifest
+                .after
+                .get(&relative)
+                .map(|kind| read_after_snapshot(&dir, &relative, *kind));
+            let owned =
+                manifest.touched.contains(&relative) && manifest.prepared.contains(&relative);
             manifest.touched.insert(relative.clone());
             let tracked_in_head = in_head(&root, &relative);
             if tracked_in_head {
@@ -173,6 +189,32 @@ impl CheckpointStore {
                     .insert(relative.clone(), snapshot_file(&dir, &root, &relative)?);
             }
             let after = snapshot_after_file(&dir, &root, &relative)?;
+            if let Some(diff) = diffs.get(path) {
+                // Completion is after the write. Recover the actual preimage instead
+                // of trusting a tool-start snapshot that may have raced that write.
+                match (after == SnapshotKind::Contents)
+                    .then(|| reverse_snapshot_diff(&dir, &relative, diff))
+                    .flatten()
+                {
+                    Some(before) if !owned => {
+                        let blob = state_blob_path(&dir.join("files"), &relative)?;
+                        if let Some(parent) = blob.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        std::fs::write(&blob, before).map_err(|e| e.to_string())?;
+                        set_file_mode(&blob, file_mode(&root.join(&relative)))?;
+                        manifest
+                            .files
+                            .insert(relative.clone(), SnapshotKind::Contents);
+                    }
+                    Some(before) if matches!(&previous, Some(FileState::Contents(bytes)) if bytes == &before) =>
+                        {}
+                    _ => {
+                        manifest.diverged.insert(relative.clone());
+                    }
+                }
+                manifest.prepared.insert(relative.clone());
+            }
             manifest.after.insert(relative.clone(), after);
             if let Some(stats) = calculate_session_stats(&dir, &manifest, &relative) {
                 manifest.stats.insert(relative, stats);
@@ -611,14 +653,25 @@ pub async fn session_checkpoint_capture(
     session_id: String,
     cwd: String,
     paths: Vec<String>,
+    diffs: Option<BTreeMap<String, String>>,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
-    if paths.len() > MAX_SNAPSHOT_FILES {
+    if paths.len() > MAX_SNAPSHOT_FILES
+        || diffs.as_ref().is_some_and(|diffs| {
+            diffs.len() > MAX_SNAPSHOT_FILES
+                || diffs
+                    .values()
+                    .any(|diff| diff.len() as u64 > MAX_TEXT_FILE_BYTES)
+        })
+    {
         return Err("Too many paths".into());
     }
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.capture(&session_id, &cwd, &paths))
+        store.exclusive(|store| match diffs {
+            Some(diffs) => store.capture_with_diffs(&session_id, &cwd, &paths, &diffs),
+            None => store.capture(&session_id, &cwd, &paths),
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1042,6 +1095,15 @@ fn describe_change(
         exact,
         undoable,
     }
+}
+
+// Apply only to a private snapshot; never run a provider patch in the worktree.
+fn reverse_snapshot_diff(dir: &Path, relative: &str, diff: &str) -> Option<Vec<u8>> {
+    if !diff.starts_with("@@ ") || diff.len() as u64 > MAX_TEXT_FILE_BYTES {
+        return None;
+    }
+    let after = std::fs::read(state_blob_path(&dir.join("after"), relative).ok()?).ok()?;
+    crate::checkpoint_diff::reverse_diff(&after, diff)
 }
 
 fn calculate_session_stats(dir: &Path, manifest: &Manifest, relative: &str) -> Option<ChangeStats> {
@@ -1711,6 +1773,128 @@ mod tests {
             vec!["app.ts"]
         );
         assert!(store.status("reader", &cwd).unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn completed_diff_handles_late_events_without_hiding_foreign_edits() {
+        for foreign_edit in [false, true] {
+            let repo = tmp("late-file-events");
+            assert!(init_git_commit(&repo.0, &[("app.ts", "old\n")]));
+            let cwd = repo.0.to_string_lossy().into_owned();
+            let (_root, store) = store();
+            store.ensure("s1", &cwd).unwrap();
+            let paths = vec!["app.ts".to_string()];
+            // A start-event snapshot can even catch a file between truncate and write.
+            std::fs::write(repo.0.join("app.ts"), "").unwrap();
+            store.prepare("s1", &cwd, &paths).unwrap();
+            for (contents, diff) in [
+                ("new\n", "@@ -1 +1 @@\n-old\n+new\n"),
+                (
+                    if foreign_edit {
+                        "new\nsecond\nforeign\n"
+                    } else {
+                        "new\nsecond\n"
+                    },
+                    "@@ -1 +1,2 @@\n new\n+second\n",
+                ),
+            ] {
+                // Completion arrives after the provider has already written the file.
+                std::fs::write(repo.0.join("app.ts"), contents).unwrap();
+                let diffs = BTreeMap::from([("app.ts".into(), diff.into())]);
+                store
+                    .capture_with_diffs("s1", &cwd, &paths, &diffs)
+                    .unwrap();
+            }
+            let file = store.status("s1", &cwd).unwrap().files.remove(0);
+            assert_eq!(file.exact, !foreign_edit);
+            assert_eq!(file.undoable, !foreign_edit);
+            if foreign_edit {
+                assert!(store.undo("s1", &cwd, None).is_err());
+            } else {
+                assert_eq!((file.additions, file.deletions), (2, 1));
+                assert_eq!(
+                    store.file_diff("s1", &cwd, "app.ts").unwrap().original,
+                    "old\n"
+                );
+                store.undo("s1", &cwd, None).unwrap();
+                assert_eq!(
+                    std::fs::read_to_string(repo.0.join("app.ts")).unwrap(),
+                    "old\n"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn completed_diff_ignores_user_autocrlf() {
+        let config_dir = tmp("autocrlf-config");
+        let config = config_dir.0.join("gitconfig");
+        std::fs::write(&config, "[core]\n\tautocrlf = true\n").unwrap();
+        // Use a child process so other parallel tests do not inherit this config.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "checkpoint::tests::completed_diff_handles_late_events_without_hiding_foreign_edits",
+                "--nocapture",
+            ])
+            .env("GIT_CONFIG_GLOBAL", config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn mismatched_completed_diff_stays_mixed_and_never_writes_the_worktree() {
+        let repo = tmp("mismatched-completed-diff");
+        assert!(init_git_commit(&repo.0, &[("app.ts", "old\n")]));
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("s1", &cwd).unwrap();
+        std::fs::write(repo.0.join("app.ts"), "external\n").unwrap();
+        let diffs = BTreeMap::from([("app.ts".into(), "@@ -1 +1 @@\n-old\n+new\n".into())]);
+        store
+            .capture_with_diffs("s1", &cwd, &["app.ts".into()], &diffs)
+            .unwrap();
+        let file = store.status("s1", &cwd).unwrap().files.remove(0);
+        assert!(!file.exact);
+        assert!(!file.undoable);
+        assert!(store.undo("s1", &cwd, None).is_err());
+        assert_eq!(
+            std::fs::read_to_string(repo.0.join("app.ts")).unwrap(),
+            "external\n"
+        );
+    }
+
+    #[test]
+    fn shifted_completed_diff_disables_undo_without_changing_the_worktree() {
+        let repo = tmp("shifted-completed-diff");
+        assert!(init_git_commit(&repo.0, &[("app.ts", "old\nnew\n")]));
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure("s1", &cwd).unwrap();
+        // No prepare exists for diff-covered starts. The provider edited line
+        // one, then another edit replaced it. Git must not reverse the provider
+        // hunk against the unrelated matching text on line two.
+        let current = "external\nnew\n";
+        std::fs::write(repo.0.join("app.ts"), current).unwrap();
+        let diffs = BTreeMap::from([("app.ts".into(), "@@ -1 +1 @@\n-old\n+new\n".into())]);
+        store
+            .capture_with_diffs("s1", &cwd, &["app.ts".into()], &diffs)
+            .unwrap();
+        let file = store.status("s1", &cwd).unwrap().files.remove(0);
+        assert!(!file.exact);
+        assert!(!file.undoable);
+        assert!(store.undo("s1", &cwd, None).is_err());
+        assert_eq!(
+            std::fs::read_to_string(repo.0.join("app.ts")).unwrap(),
+            current
+        );
     }
 
     #[test]

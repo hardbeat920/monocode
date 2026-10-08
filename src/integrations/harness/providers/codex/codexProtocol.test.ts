@@ -592,6 +592,39 @@ describe("mapCodexNotification", () => {
       callId: "fc_1",
       kind: "edit",
       paths: ["src/App.tsx", "src/lib/checkpoint.ts"],
+      checkpointDiffs: {
+        "src/App.tsx": "@@ -1 +1 @@\n-old\n+new\n",
+        "src/lib/checkpoint.ts": "@@ -1 +1 @@\n-old\n+new\n",
+      },
+    });
+  });
+
+  it("preserves complete modification diffs on completion but skips additions and renames", () => {
+    const diff = "@@ -1 +1 @@\n-old\n+new\n";
+    const mapped = mapCodexNotification("item/completed", {
+      item: {
+        id: "edit",
+        type: "fileChange",
+        status: "completed",
+        changes: [
+          {
+            path: "modified.ts",
+            kind: { type: "update", movePath: null },
+            diff,
+          },
+          { path: "added.ts", kind: { type: "add" }, diff: "new\n" },
+          {
+            path: "renamed.ts",
+            kind: { type: "update", movePath: "new.ts" },
+            diff,
+          },
+        ],
+      },
+    });
+    expect(mapped.events[0]).toMatchObject({
+      type: "tool.updated",
+      status: "completed",
+      checkpointDiffs: { "modified.ts": diff },
     });
   });
 
