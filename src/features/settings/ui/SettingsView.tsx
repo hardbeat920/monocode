@@ -1600,17 +1600,20 @@ function BitbucketSettings() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once Connect or Disconnect starts so a slower initial status read
+  // cannot overwrite the result of that action.
+  const actedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     void bitbucketConnected()
       .then((status) => {
-        if (cancelled) return;
+        if (cancelled || actedRef.current) return;
         setConnected(status.connected);
         if (status.email) setEmail(status.email);
       })
       .catch((err: unknown) => {
-        if (!cancelled)
+        if (!cancelled && !actedRef.current)
           setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
@@ -1620,6 +1623,7 @@ function BitbucketSettings() {
 
   const onSave = async () => {
     if (!email.trim() || !token.trim() || busy) return;
+    actedRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -1638,6 +1642,7 @@ function BitbucketSettings() {
 
   const onDisconnect = async () => {
     if (busy) return;
+    actedRef.current = true;
     setBusy(true);
     setError(null);
     try {
