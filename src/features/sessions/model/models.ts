@@ -995,6 +995,26 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
       DEFAULT_MODEL_ID.fx
     );
   }
+  if (harness === "opencode") {
+    // v2 catalogs no longer contain the legacy `opencode:glm-5` id, and the
+    // list is alphabetical, so without a preference the default would land on
+    // an OpenAI image model. Prefer the current OpenCode Go GLM flagship.
+    const preferred = [
+      "opencode-go/glm-5.3",
+      "opencode-go/glm-5.2",
+      "opencode/glm-5",
+    ];
+    for (const nativeId of preferred) {
+      const hit = models.find((model) => model.nativeId === nativeId);
+      if (hit) return hit.id;
+    }
+    return (
+      models.find((model) => model.id === DEFAULT_MODEL_ID.opencode)?.id ??
+      models.find((model) => model.nativeId?.includes("glm"))?.id ??
+      models[0]?.id ??
+      DEFAULT_MODEL_ID.opencode
+    );
+  }
   return (
     models.find((model) => model.id === DEFAULT_MODEL_ID[harness])?.id ??
     models[0]?.id ??

@@ -83,21 +83,43 @@ export async function discoverOpenCodeModels(
     );
   }
 
-  const modelsOut = await execChild(
-    path,
-    ["models", "--verbose"],
-    cwd,
-    "opencode",
-  );
+  const modelsOut = await listModels(path, cwd);
   const parsed = parseModelsCliOutput(modelsOut);
   let agents: OpenCodeAgent[] = [];
   try {
-    const agentsOut = await execChild(path, ["agent", "list"], cwd, "opencode");
-    agents = parseAgentListCliOutput(agentsOut);
+    agents = await listAgents(path, cwd);
   } catch (error) {
     console.debug("[monocode] opencode agents", error);
   }
   return flattenOpenCodeModels(parsed, agents);
+}
+
+/**
+ * OpenCode v1 exposed model metadata behind `models --verbose`; v2 dropped the
+ * flag and prints bare `provider/model` slugs. Try the richer form first, then
+ * fall back so both CLIs populate the catalog.
+ */
+async function listModels(path: string, cwd: string): Promise<string> {
+  try {
+    const out = await execChild(path, ["models", "--verbose"], cwd, "opencode");
+    if (out.trim().length > 0) return out;
+  } catch (error) {
+    console.debug("[monocode] opencode models --verbose", error);
+  }
+  return execChild(path, ["models"], cwd, "opencode");
+}
+
+/** v2 replaced `agent list` with `debug agents` (JSON). */
+async function listAgents(path: string, cwd: string): Promise<OpenCodeAgent[]> {
+  try {
+    const out = await execChild(path, ["debug", "agents"], cwd, "opencode");
+    const parsed = parseAgentDebugOutput(out);
+    if (parsed.length > 0) return parsed;
+  } catch (error) {
+    console.debug("[monocode] opencode debug agents", error);
+  }
+  const out = await execChild(path, ["agent", "list"], cwd, "opencode");
+  return parseAgentListCliOutput(out);
 }
 
 export function parseModelsCliOutput(stdout: string): {
@@ -110,33 +132,35 @@ export function parseModelsCliOutput(stdout: string): {
   const jsonLines: string[] = [];
 
   const flushModel = () => {
-    if (currentSlug === null || jsonLines.length === 0) {
-      currentSlug = null;
+    if (currentSlug === null) {
       jsonLines.length = 0;
       return;
     }
     const jsonStr = jsonLines.join("\n").trim();
+    let model: OpenCodeModelJson = {};
     if (jsonStr.length > 0) {
       try {
-        const model = JSON.parse(jsonStr) as OpenCodeModelJson;
-        const separator = currentSlug.indexOf("/");
-        if (separator > 0) {
-          const providerID = currentSlug.slice(0, separator);
-          const modelID = currentSlug.slice(separator + 1);
-          let provider = providers.get(providerID);
-          if (!provider) {
-            provider = {
-              id: providerID,
-              name: openCodeProviderName(providerID),
-              models: {},
-            };
-            providers.set(providerID, provider);
-          }
-          provider.models[modelID] = model;
-        }
+        model = JSON.parse(jsonStr) as OpenCodeModelJson;
       } catch {
-        // Skip unparseable model JSON
+        // v2 prints bare slugs with no metadata; keep the model rather than
+        // dropping it when there is no JSON to parse.
+        model = {};
       }
+    }
+    const separator = currentSlug.indexOf("/");
+    if (separator > 0) {
+      const providerID = currentSlug.slice(0, separator);
+      const modelID = currentSlug.slice(separator + 1);
+      let provider = providers.get(providerID);
+      if (!provider) {
+        provider = {
+          id: providerID,
+          name: openCodeProviderName(providerID),
+          models: {},
+        };
+        providers.set(providerID, provider);
+      }
+      provider.models[modelID] = model;
     }
     currentSlug = null;
     jsonLines.length = 0;
@@ -155,6 +179,29 @@ export function parseModelsCliOutput(stdout: string): {
   }
   flushModel();
   return { providers, connected: [...providers.keys()] };
+}
+
+export function parseAgentDebugOutput(stdout: string): OpenCodeAgent[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const agents: OpenCodeAgent[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.id === "string" ? record.id.trim() : "";
+    if (!name) continue;
+    agents.push({
+      name,
+      mode: typeof record.mode === "string" ? record.mode : "primary",
+      hidden: record.hidden === true || KNOWN_HIDDEN_AGENTS.has(name),
+    });
+  }
+  return agents;
 }
 
 export function parseAgentListCliOutput(stdout: string): OpenCodeAgent[] {
