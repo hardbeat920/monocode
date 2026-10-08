@@ -71,8 +71,8 @@ const REPORT_KEPT_CHARS = 4_000;
 export const QUIET_MARKER = "NOTHING_TO_REPORT";
 /** A run that was due longer ago than this is skipped, not caught up. */
 export const MISSED_RUN_GRACE_MS = 2 * 60 * 60 * 1000;
-/** A run that has worked this long is stopped; time waiting on the user is not counted. */
-export const HABIT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+/** Allow one hour of work per run; time waiting on the user is not counted. */
+export const HABIT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 /** An approval the user has not answered in this long is turned down. */
 export const HABIT_APPROVAL_WAIT_MS = 12 * 60 * 60 * 1000;
 export const HABITS_MAX = 20;
