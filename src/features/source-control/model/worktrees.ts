@@ -39,14 +39,14 @@ export async function createWorktree(
   return tree;
 }
 
-export async function createOrchestrationWorktree(
-  cwd: string,
-  branch: string,
-) {
-  const tree = await invoke<Worktree>("git_orchestration_worktree_create", {
-    cwd,
-    branch,
-  });
+export async function createOrchestrationWorktree(cwd: string, branch: string) {
+  const tree = await invoke<Worktree & { created: boolean }>(
+    "git_orchestration_worktree_create",
+    {
+      cwd,
+      branch,
+    },
+  );
   notifyGitChanged();
   return tree;
 }

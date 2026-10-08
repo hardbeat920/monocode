@@ -3,9 +3,10 @@ use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle, Ra
 use std::sync::OnceLock;
 use windows_sys::Win32::System::{
     JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     },
     LibraryLoader::{
         SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -13,6 +14,34 @@ use windows_sys::Win32::System::{
 };
 
 static MANAGED_JOB: OnceLock<Result<OwnedHandle, i32>> = OnceLock::new();
+
+pub(crate) struct ProcessJob(OwnedHandle);
+
+impl ProcessJob {
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_empty(&self) -> io::Result<bool> {
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut _,
+                std::mem::size_of_val(&info) as u32,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(info.ActiveProcesses == 0)
+    }
+}
 
 /// Restrict DLL lookup before the first PTY is opened. MonoCode itself stays
 /// outside the job so relaunches and external applications do not inherit it.
@@ -94,6 +123,32 @@ pub(crate) fn spawn_managed(
         return Err(err);
     }
     Ok(child)
+}
+
+pub(crate) fn spawn_harness_process(
+    command: &mut std::process::Command,
+) -> io::Result<(std::process::Child, ProcessJob)> {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+    };
+    let job = ProcessJob(create_job()?);
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
+    let mut child = command.spawn()?;
+    let assigned =
+        unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), child.as_raw_handle()) };
+    if assigned == 0 {
+        let error = io::Error::last_os_error();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    if let Err(error) = resume_child(child.id()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok((child, job))
 }
 
 fn resume_child(pid: u32) -> io::Result<()> {

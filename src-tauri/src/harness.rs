@@ -6,9 +6,7 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
-#[cfg(not(windows))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -101,14 +99,100 @@ struct LiveChild {
     stdin: Mutex<ChildStdin>,
     pid: u32,
     account: Option<HarnessAccount>,
+    exit: Arc<ChildExit>,
+}
+
+type StopTargets = Vec<(String, Arc<LiveChild>)>;
+
+#[derive(Default)]
+struct ChildExit {
+    outcome: Mutex<Option<Result<(), String>>>,
+    stop: Mutex<()>,
+    confirmed: AtomicBool,
+    #[cfg(windows)]
+    job: Option<crate::windows::ProcessJob>,
+}
+
+impl ChildExit {
+    fn record(&self, outcome: std::io::Result<std::process::ExitStatus>) {
+        *self.outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+            outcome
+                .map(|_| ())
+                .map_err(|error| format!("Failed to wait for harness process: {error}")),
+        );
+    }
+
+    fn is_confirmed(&self) -> bool {
+        self.confirmed.load(Ordering::SeqCst)
+    }
+
+    fn confirm(&self) {
+        self.confirmed.store(true, Ordering::SeqCst);
+    }
+
+    fn outcome(&self) -> Option<Result<(), String>> {
+        self.outcome
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    #[cfg(windows)]
+    fn with_job(job: crate::windows::ProcessJob) -> Self {
+        Self {
+            job: Some(job),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(windows)]
+    fn terminate_tree(&self, pid: u32) -> Result<(), String> {
+        self.job
+            .as_ref()
+            .ok_or_else(|| format!("Process {pid} has no managed job"))?
+            .terminate()
+            .map_err(|error| format!("Could not stop process tree {pid}: {error}"))
+    }
+
+    #[cfg(windows)]
+    fn tree_is_empty(&self, pid: u32) -> Result<bool, String> {
+        self.job
+            .as_ref()
+            .ok_or_else(|| format!("Process {pid} has no managed job"))?
+            .is_empty()
+            .map_err(|error| format!("Could not inspect process tree {pid}: {error}"))
+    }
 }
 
 struct LiveSse {
     stop: Arc<AtomicBool>,
 }
 
+struct PendingSpawn {
+    cwd: PathBuf,
+    account: Option<HarnessAccount>,
+    finished: AtomicBool,
+}
+
+struct PendingSpawnGuard<'a> {
+    host: &'a HarnessHost,
+    session_id: String,
+    epoch: u64,
+    pending: Arc<PendingSpawn>,
+}
+
+impl Drop for PendingSpawnGuard<'_> {
+    fn drop(&mut self) {
+        self.pending.finished.store(true, Ordering::SeqCst);
+        self.host
+            .remove_pending_spawn(&self.session_id, self.epoch, &self.pending);
+    }
+}
+
 struct HarnessInner {
     children: HashMap<String, Arc<LiveChild>>,
+    stopping: HashMap<(String, usize), Arc<LiveChild>>,
+    pending: HashMap<(String, u64), Arc<PendingSpawn>>,
     epochs: HashMap<String, u64>,
 }
 
@@ -132,16 +216,24 @@ impl HarnessHost {
     }
 
     pub(crate) fn has_working_dir(&self, path: &Path) -> bool {
-        self.lock_inner()
+        let inner = self.lock_inner();
+        inner
             .children
             .values()
+            .chain(inner.stopping.values())
             .any(|child| crate::worktrees::contains_working_dir(path, &child.cwd))
+            || inner
+                .pending
+                .values()
+                .any(|spawn| crate::worktrees::contains_working_dir(path, &spawn.cwd))
     }
 
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HarnessInner {
                 children: HashMap::new(),
+                stopping: HashMap::new(),
+                pending: HashMap::new(),
                 epochs: HashMap::new(),
             }),
             sse: Mutex::new(HashMap::new()),
@@ -158,18 +250,46 @@ impl HarnessHost {
         self.lock_inner().children.get(session_id).cloned()
     }
 
-    /// Stamp this spawn and drop any child already registered under the id.
-    fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
+    fn begin_spawn(
+        &self,
+        session_id: &str,
+        cwd: PathBuf,
+        account: Option<HarnessAccount>,
+    ) -> (u64, u64, Option<Arc<LiveChild>>, Arc<PendingSpawn>) {
         let mut inner = self.lock_inner();
         let kill_all = self.kill_all_gen.load(Ordering::SeqCst);
         let epoch = inner.epochs.entry(session_id.to_string()).or_insert(0);
         *epoch += 1;
         let epoch = *epoch;
         let prev = inner.children.remove(session_id);
-        (epoch, kill_all, prev)
+        if let Some(child) = &prev {
+            inner
+                .stopping
+                .insert(stopping_key(session_id, child), Arc::clone(child));
+        }
+        let pending = Arc::new(PendingSpawn {
+            cwd,
+            account,
+            finished: AtomicBool::new(false),
+        });
+        inner
+            .pending
+            .insert((session_id.to_string(), epoch), Arc::clone(&pending));
+        (epoch, kill_all, prev, pending)
     }
 
-    #[cfg(all(test, unix))]
+    fn remove_pending_spawn(&self, session_id: &str, epoch: u64, pending: &Arc<PendingSpawn>) {
+        let mut inner = self.lock_inner();
+        let key = (session_id.to_string(), epoch);
+        if inner
+            .pending
+            .get(&key)
+            .is_some_and(|tracked| Arc::ptr_eq(tracked, pending))
+        {
+            inner.pending.remove(&key);
+        }
+    }
+
     fn spawn_stamp_current(&self, session_id: &str, epoch: u64, kill_all: u64) -> bool {
         let inner = self.lock_inner();
         self.kill_all_gen.load(Ordering::SeqCst) == kill_all
@@ -191,68 +311,315 @@ impl HarnessHost {
         if inner.epochs.get(&session_id) != Some(&epoch) {
             return Some(live);
         }
-        if let Some(prev) = inner.children.insert(session_id, live) {
-            terminate(prev.pid);
+        if inner.children.contains_key(&session_id) {
+            return Some(live);
         }
+        inner.children.insert(session_id, live);
         None
     }
 
-    fn kill_session(&self, session_id: &str) -> Option<Arc<LiveChild>> {
+    fn mark_session_stopping(&self, session_id: &str) -> (StopTargets, Vec<Arc<PendingSpawn>>) {
         let mut inner = self.lock_inner();
         *inner.epochs.entry(session_id.to_string()).or_insert(0) += 1;
-        inner.children.remove(session_id)
+        if let Some(child) = inner.children.remove(session_id) {
+            inner
+                .stopping
+                .insert(stopping_key(session_id, &child), child);
+        }
+        let children = inner
+            .stopping
+            .iter()
+            .filter(|((id, _), _)| id == session_id)
+            .map(|((id, _), child)| (id.clone(), Arc::clone(child)))
+            .collect();
+        let pending = inner
+            .pending
+            .iter()
+            .filter(|((id, _), _)| id == session_id)
+            .map(|(_, spawn)| Arc::clone(spawn))
+            .collect();
+        (children, pending)
     }
 
-    fn remove_if_pid(&self, session_id: &str, pid: u32) -> Option<Arc<LiveChild>> {
+    fn stopping_for_session(&self, session_id: &str) -> StopTargets {
+        self.lock_inner()
+            .stopping
+            .iter()
+            .filter(|((id, _), _)| id == session_id)
+            .map(|((id, _), child)| (id.clone(), Arc::clone(child)))
+            .collect()
+    }
+
+    fn remove_running_child(
+        &self,
+        session_id: &str,
+        child: &Arc<LiveChild>,
+    ) -> Option<Arc<LiveChild>> {
         let mut inner = self.lock_inner();
-        if inner.children.get(session_id).map(|live| live.pid) != Some(pid) {
+        if !inner
+            .children
+            .get(session_id)
+            .is_some_and(|live| Arc::ptr_eq(live, child))
+        {
             return None;
         }
         inner.children.remove(session_id)
     }
 
-    fn kill_account(&self, provider: &str, account_id: &str) {
-        let children: Vec<(String, Arc<LiveChild>)> = {
-            let mut inner = self.lock_inner();
-            let session_ids: Vec<String> = inner
-                .children
-                .iter()
-                .filter_map(|(session_id, live)| {
-                    let account = live.account.as_ref()?;
-                    (account.provider == provider && account.id == account_id)
-                        .then(|| session_id.clone())
-                })
-                .collect();
-            session_ids
-                .into_iter()
-                .filter_map(|session_id| {
-                    *inner.epochs.entry(session_id.clone()).or_insert(0) += 1;
-                    inner
-                        .children
-                        .remove(&session_id)
-                        .map(|child| (session_id, child))
-                })
-                .collect()
+    fn mark_account_stopping(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> (StopTargets, Vec<Arc<PendingSpawn>>) {
+        let mut inner = self.lock_inner();
+        let mut session_ids: Vec<String> = inner
+            .children
+            .iter()
+            .filter_map(|(session_id, live)| {
+                let account = live.account.as_ref()?;
+                (account.provider == provider && account.id == account_id)
+                    .then(|| session_id.clone())
+            })
+            .collect();
+        for ((session_id, _), pending) in &inner.pending {
+            let Some(account) = &pending.account else {
+                continue;
+            };
+            if account.provider == provider
+                && account.id == account_id
+                && !session_ids.contains(session_id)
+            {
+                session_ids.push(session_id.clone());
+            }
+        }
+        for session_id in &session_ids {
+            *inner.epochs.entry(session_id.clone()).or_insert(0) += 1;
+            if let Some(child) = inner.children.remove(session_id) {
+                inner
+                    .stopping
+                    .insert(stopping_key(session_id, &child), child);
+            }
+        }
+        let children = inner
+            .stopping
+            .iter()
+            .filter_map(|((session_id, _), child)| {
+                let account = child.account.as_ref()?;
+                (account.provider == provider && account.id == account_id)
+                    .then(|| (session_id.clone(), Arc::clone(child)))
+            })
+            .collect();
+        let pending = inner
+            .pending
+            .values()
+            .filter(|spawn| {
+                spawn
+                    .account
+                    .as_ref()
+                    .is_some_and(|account| account.provider == provider && account.id == account_id)
+            })
+            .cloned()
+            .collect();
+        (children, pending)
+    }
+
+    fn stopping_for_account(&self, provider: &str, account_id: &str) -> StopTargets {
+        self.lock_inner()
+            .stopping
+            .iter()
+            .filter_map(|((session_id, _), child)| {
+                let account = child.account.as_ref()?;
+                (account.provider == provider && account.id == account_id)
+                    .then(|| (session_id.clone(), Arc::clone(child)))
+            })
+            .collect()
+    }
+
+    fn mark_all_stopping(&self) -> (StopTargets, Vec<Arc<PendingSpawn>>) {
+        let mut inner = self.lock_inner();
+        self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
+        let running = std::mem::take(&mut inner.children);
+        for (session_id, child) in running {
+            inner
+                .stopping
+                .insert(stopping_key(&session_id, &child), child);
+        }
+        let children = inner
+            .stopping
+            .iter()
+            .map(|((session_id, _), child)| (session_id.clone(), Arc::clone(child)))
+            .collect();
+        let pending = inner.pending.values().cloned().collect();
+        (children, pending)
+    }
+
+    fn all_stopping(&self) -> StopTargets {
+        self.lock_inner()
+            .stopping
+            .iter()
+            .map(|((session_id, _), child)| (session_id.clone(), Arc::clone(child)))
+            .collect()
+    }
+
+    fn release_stopping(&self, session_id: &str, child: &Arc<LiveChild>) {
+        let mut inner = self.lock_inner();
+        let key = stopping_key(session_id, child);
+        if inner
+            .stopping
+            .get(&key)
+            .is_some_and(|tracked| Arc::ptr_eq(tracked, child))
+        {
+            inner.stopping.remove(&key);
+        }
+    }
+
+    fn track_stopping(&self, session_id: &str, child: Arc<LiveChild>) {
+        self.lock_inner()
+            .stopping
+            .insert(stopping_key(session_id, &child), child);
+    }
+
+    fn stop_targets(&self, mut targets: StopTargets) -> Result<(), String> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+        targets.sort_by(|(left_id, left), (right_id, right)| {
+            left_id
+                .cmp(right_id)
+                .then(left.pid.cmp(&right.pid))
+                .then((Arc::as_ptr(left) as usize).cmp(&(Arc::as_ptr(right) as usize)))
+        });
+        let _stop_guards: Vec<_> = targets
+            .iter()
+            .map(|(_, child)| child.exit.stop.lock().unwrap_or_else(|e| e.into_inner()))
+            .collect();
+        let children: Vec<Arc<LiveChild>> =
+            targets.iter().map(|(_, child)| Arc::clone(child)).collect();
+        let outcomes = stop_live_children(&children, KILL_ESCALATE, KILL_EXIT_WAIT);
+        let mut failures = Vec::new();
+        for ((session_id, child), outcome) in targets.iter().zip(outcomes) {
+            match outcome {
+                Ok(()) => {
+                    child.exit.confirm();
+                    self.release_stopping(session_id, child);
+                }
+                Err(error) => failures.push(format!(
+                    "session {session_id}, process {}: {error}",
+                    child.pid
+                )),
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Failed to stop harness process: {}",
+                failures.join("; ")
+            ))
+        }
+    }
+
+    fn stop_session(&self, session_id: &str) -> Result<(), String> {
+        let (children, pending) = self.mark_session_stopping(session_id);
+        let mut failures = Vec::new();
+        if let Err(error) = self.stop_targets(children) {
+            failures.push(error);
+        }
+        if !wait_pending_spawns(&pending, Instant::now() + PENDING_SPAWN_WAIT) {
+            failures.push(format!(
+                "Timed out waiting for a pending harness start for session {session_id}"
+            ));
+        }
+        if let Err(error) = self.stop_targets(self.stopping_for_session(session_id)) {
+            failures.push(error);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
+
+    fn child_exited(&self, session_id: &str, child: &Arc<LiveChild>) -> bool {
+        if child.exit.is_confirmed() {
+            return false;
+        }
+        if let Some(Err(error)) = child.exit.outcome() {
+            let retained = self.move_running_to_stopping(session_id, child);
+            if retained {
+                eprintln!("{error}");
+            }
+            return retained;
+        }
+        let tree_alive = match tracked_tree_alive(child) {
+            Ok(alive) => alive,
+            Err(error) => {
+                eprintln!("{error}");
+                true
+            }
         };
+        if tree_alive {
+            return self.move_running_to_stopping(session_id, child);
+        }
+        self.remove_running_child(session_id, child).is_some()
+    }
+
+    fn move_running_to_stopping(&self, session_id: &str, child: &Arc<LiveChild>) -> bool {
+        let mut inner = self.lock_inner();
+        if !inner
+            .children
+            .get(session_id)
+            .is_some_and(|tracked| Arc::ptr_eq(tracked, child))
+        {
+            return false;
+        }
+        let child = inner.children.remove(session_id).unwrap();
+        inner
+            .stopping
+            .insert(stopping_key(session_id, &child), child);
+        true
+    }
+
+    fn kill_account(&self, provider: &str, account_id: &str) -> Result<(), String> {
+        let (children, pending) = self.mark_account_stopping(provider, account_id);
         for (session_id, _) in &children {
             self.stop_sse(session_id);
         }
-        let pids: Vec<u32> = children.iter().map(|(_, child)| child.pid).collect();
-        drop(children);
-        terminate_all(&pids);
+        let mut failures = Vec::new();
+        if let Err(error) = self.stop_targets(children) {
+            failures.push(error);
+        }
+        if !wait_pending_spawns(&pending, Instant::now() + PENDING_SPAWN_WAIT) {
+            failures.push(format!(
+                "Timed out waiting for a pending {provider} account harness start"
+            ));
+        }
+        if let Err(error) = self.stop_targets(self.stopping_for_account(provider, account_id)) {
+            failures.push(error);
+        }
+        join_stop_failures(failures)
+    }
+
+    fn kill_all_result(&self) -> Result<(), String> {
+        let (children, pending) = self.mark_all_stopping();
+        self.stop_all_sse();
+        let mut failures = Vec::new();
+        if let Err(error) = self.stop_targets(children) {
+            failures.push(error);
+        }
+        if !wait_pending_spawns(&pending, Instant::now() + PENDING_SPAWN_WAIT) {
+            failures.push("Timed out waiting for pending harness starts".to_string());
+        }
+        if let Err(error) = self.stop_targets(self.all_stopping()) {
+            failures.push(error);
+        }
+        join_stop_failures(failures)
     }
 
     pub(crate) fn kill_all(&self) {
-        let kids: Vec<Arc<LiveChild>> = {
-            let mut inner = self.lock_inner();
-            self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
-            inner.children.drain().map(|(_, child)| child).collect()
-        };
-        self.stop_all_sse();
-        let pids: Vec<u32> = kids.iter().map(|live| live.pid).collect();
-        // Drop stdin before signaling so ACP CLIs that watch the pipe can exit.
-        drop(kids);
-        terminate_all(&pids);
+        if let Err(error) = self.kill_all_result() {
+            eprintln!("{error}");
+        }
     }
 
     fn insert_sse(&self, session_id: String, live: Arc<LiveSse>) -> Option<Arc<LiveSse>> {
@@ -287,6 +654,18 @@ impl HarnessHost {
 impl Drop for HarnessHost {
     fn drop(&mut self) {
         self.kill_all();
+    }
+}
+
+fn stopping_key(session_id: &str, child: &Arc<LiveChild>) -> (String, usize) {
+    (session_id.to_string(), Arc::as_ptr(child) as usize)
+}
+
+fn join_stop_failures(failures: Vec<String>) -> Result<(), String> {
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -844,9 +1223,21 @@ pub fn harness_spawn(
     }
 
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
-    if let Some(prev) = prev {
-        terminate(prev.pid);
+    let (epoch, kill_all, _prev, pending) =
+        host.begin_spawn(&session_id, workdir.clone(), account.clone());
+    let _pending = PendingSpawnGuard {
+        host: &host,
+        session_id: session_id.clone(),
+        epoch,
+        pending,
+    };
+    let previous = host.stopping_for_session(&session_id);
+    if !previous.is_empty() {
+        host.stop_sse(&session_id);
+        host.stop_targets(previous)?;
+    }
+    if !host.spawn_stamp_current(&session_id, epoch, kill_all) {
+        return Err(SPAWN_CANCELLED.to_string());
     }
 
     let mut cmd = Command::new(&command);
@@ -860,6 +1251,10 @@ pub fn harness_spawn(
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
+    #[cfg(windows)]
+    let (mut child, process_job) = crate::windows::spawn_harness_process(&mut cmd)
+        .map_err(|e| format!("Failed to start {command}: {e}"))?;
+    #[cfg(not(windows))]
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
@@ -877,21 +1272,33 @@ pub fn harness_spawn(
         .take()
         .ok_or_else(|| "Failed to open harness stderr".to_string())?;
 
+    #[cfg(windows)]
+    let exit = Arc::new(ChildExit::with_job(process_job));
+    #[cfg(not(windows))]
+    let exit = Arc::new(ChildExit::default());
     let live = Arc::new(LiveChild {
         cwd: workdir.clone(),
         stdin: Mutex::new(stdin),
         pid,
         account,
+        exit: Arc::clone(&exit),
     });
-    if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live) {
+    if let Some(rejected) =
+        host.install_spawn(session_id.clone(), epoch, kill_all, Arc::clone(&live))
+    {
         // A kill, or a newer spawn, won the race while this one was forking.
         // Returning `Ok` here would hand the caller a dead pid to store as the
         // session's live child, and this child's stdout would be parsed as the
         // stream that replaced it. Reap it without emitting anything.
-        terminate(rejected.pid);
+        drop(live);
+        host.track_stopping(&session_id, Arc::clone(&rejected));
+        let wait_exit = Arc::clone(&exit);
         thread::spawn(move || {
-            let _ = child.wait();
+            wait_exit.record(child.wait());
         });
+        if let Err(error) = host.stop_targets(vec![(session_id, rejected)]) {
+            return Err(format!("{SPAWN_CANCELLED}: {error}"));
+        }
         return Err(SPAWN_CANCELLED.to_string());
     }
 
@@ -928,10 +1335,13 @@ pub fn harness_spawn(
     let wait_app = app.clone();
     let wait_id = session_id;
     let wait_pid = pid;
+    let wait_live = live;
     thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
+        let outcome = child.wait();
+        let code = outcome.as_ref().ok().and_then(|status| status.code());
+        wait_live.exit.record(outcome);
         if let Some(host) = wait_app.try_state::<HarnessHost>() {
-            if host.remove_if_pid(&wait_id, wait_pid).is_some() {
+            if host.child_exited(&wait_id, &wait_live) {
                 host.stop_sse(&wait_id);
             }
         }
@@ -1002,7 +1412,7 @@ pub fn provider_account_remove(
     account_id: String,
 ) -> Result<(), String> {
     let dir = provider_account_path(&app, &provider, &account_id)?;
-    host.kill_account(&provider, &account_id);
+    host.kill_account(&provider, &account_id)?;
 
     #[cfg(target_os = "macos")]
     if provider == "claude" {
@@ -1094,18 +1504,14 @@ pub async fn harness_write(
 #[tauri::command(async)]
 pub fn harness_kill(host: State<'_, HarnessHost>, session_id: String) -> Result<(), String> {
     host.stop_sse(&session_id);
-    if let Some(live) = host.kill_session(&session_id) {
-        terminate(live.pid);
-    }
-    Ok(())
+    host.stop_session(&session_id)
 }
 
 /// Off the main thread: `kill_all` waits for the children to die before it
 /// returns, and a window close calls this while the app keeps running.
 #[tauri::command(async)]
 pub fn harness_kill_all(host: State<'_, HarnessHost>) -> Result<(), String> {
-    host.kill_all();
-    Ok(())
+    host.kill_all_result()
 }
 
 #[tauri::command]
@@ -1381,6 +1787,8 @@ pub(crate) fn exec_output(
 }
 
 const KILL_ESCALATE: Duration = Duration::from_secs(2);
+const KILL_EXIT_WAIT: Duration = Duration::from_secs(2);
+const PENDING_SPAWN_WAIT: Duration = Duration::from_secs(10);
 /// Quit and `Drop` cannot wait on a detached escalate thread — the process
 /// exits first and isolated harness groups stay behind as PID-1 orphans.
 #[cfg(not(windows))]
@@ -1464,6 +1872,156 @@ fn terminate(pid: u32) {
     terminate_after(pid, KILL_ESCALATE);
 }
 
+fn stop_live_children(
+    children: &[Arc<LiveChild>],
+    grace: Duration,
+    kill_wait: Duration,
+) -> Vec<Result<(), String>> {
+    let processes: Vec<(u32, &ChildExit)> = children
+        .iter()
+        .map(|child| (child.pid, child.exit.as_ref()))
+        .collect();
+    stop_processes(&processes, grace, kill_wait)
+}
+
+fn wait_pending_spawns(spawns: &[Arc<PendingSpawn>], until: Instant) -> bool {
+    while Instant::now() < until {
+        if spawns
+            .iter()
+            .all(|spawn| spawn.finished.load(Ordering::SeqCst))
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    spawns
+        .iter()
+        .all(|spawn| spawn.finished.load(Ordering::SeqCst))
+}
+
+fn stop_processes(
+    processes: &[(u32, &ChildExit)],
+    grace: Duration,
+    kill_wait: Duration,
+) -> Vec<Result<(), String>> {
+    let mut outcomes: Vec<Option<Result<(), String>>> =
+        (0..processes.len()).map(|_| None).collect();
+    let mut signal_errors: Vec<Option<String>> = (0..processes.len()).map(|_| None).collect();
+    refresh_stop_outcomes(processes, &mut outcomes);
+
+    #[cfg(windows)]
+    signal_pending(processes, &outcomes, &mut signal_errors, TreeSignal::Kill);
+    #[cfg(not(windows))]
+    signal_pending(processes, &outcomes, &mut signal_errors, TreeSignal::Term);
+
+    wait_for_stop_outcomes(processes, &mut outcomes, Instant::now() + grace);
+    signal_pending(processes, &outcomes, &mut signal_errors, TreeSignal::Kill);
+    wait_for_stop_outcomes(processes, &mut outcomes, Instant::now() + kill_wait);
+
+    for (index, outcome) in outcomes.iter_mut().enumerate() {
+        if outcome.is_none() {
+            let timeout = format!(
+                "Timed out waiting for process {} and its process tree to exit",
+                processes[index].0
+            );
+            *outcome = Some(Err(match signal_errors[index].take() {
+                Some(error) => format!("{error}; {timeout}"),
+                None => timeout,
+            }));
+        }
+    }
+    outcomes.into_iter().map(Option::unwrap).collect()
+}
+
+fn signal_pending(
+    processes: &[(u32, &ChildExit)],
+    outcomes: &[Option<Result<(), String>>],
+    signal_errors: &mut [Option<String>],
+    signal: TreeSignal,
+) {
+    for (index, (pid, _)) in processes.iter().enumerate() {
+        if outcomes[index].is_some() {
+            continue;
+        }
+        match signal_process(*pid, processes[index].1, signal) {
+            Ok(()) => signal_errors[index] = None,
+            Err(error) => signal_errors[index] = Some(error),
+        }
+    }
+}
+
+fn wait_for_stop_outcomes(
+    processes: &[(u32, &ChildExit)],
+    outcomes: &mut [Option<Result<(), String>>],
+    until: Instant,
+) {
+    loop {
+        refresh_stop_outcomes(processes, outcomes);
+        if outcomes.iter().all(Option::is_some) || Instant::now() >= until {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn refresh_stop_outcomes(
+    processes: &[(u32, &ChildExit)],
+    outcomes: &mut [Option<Result<(), String>>],
+) {
+    for (index, (pid, exit)) in processes.iter().enumerate() {
+        if outcomes[index].is_some() {
+            continue;
+        }
+        match process_stopped(*pid, exit) {
+            Ok(true) => outcomes[index] = Some(Ok(())),
+            Ok(false) => {}
+            Err(error) => outcomes[index] = Some(Err(error)),
+        }
+    }
+}
+
+fn process_stopped(pid: u32, exit: &ChildExit) -> Result<bool, String> {
+    if exit.is_confirmed() {
+        return Ok(true);
+    }
+    let Some(outcome) = exit.outcome() else {
+        return Ok(false);
+    };
+    outcome?;
+    #[cfg(not(windows))]
+    {
+        process_group_alive(pid).map(|alive| !alive)
+    }
+    #[cfg(windows)]
+    {
+        exit.tree_is_empty(pid)
+    }
+}
+
+fn signal_process(pid: u32, exit: &ChildExit, signal: TreeSignal) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = signal;
+        exit.terminate_tree(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exit;
+        signal_process_group(pid, signal)
+    }
+}
+
+fn tracked_tree_alive(child: &LiveChild) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        child.exit.tree_is_empty(child.pid).map(|empty| !empty)
+    }
+    #[cfg(not(windows))]
+    {
+        process_group_alive(child.pid)
+    }
+}
+
 fn terminate_after(pid: u32, escalate: Duration) {
     if pid == 0 || pid == 1 {
         return;
@@ -1471,17 +2029,16 @@ fn terminate_after(pid: u32, escalate: Duration) {
     #[cfg(windows)]
     {
         let _ = escalate;
-        signal_tree(pid, TreeSignal::Kill);
+        let _ = signal_tree(pid, TreeSignal::Kill);
     }
     #[cfg(not(windows))]
     {
-        signal_tree(pid, TreeSignal::Term);
-        thread::spawn(move || {
-            thread::sleep(escalate);
-            if tree_alive(pid) {
-                signal_tree(pid, TreeSignal::Kill);
-            }
-        });
+        let _ = signal_tree(pid, TreeSignal::Term);
+        if wait_until_dead(&[pid], Instant::now() + escalate) {
+            return;
+        }
+        let _ = signal_tree(pid, TreeSignal::Kill);
+        let _ = wait_until_dead(&[pid], Instant::now() + KILL_EXIT_WAIT);
     }
 }
 
@@ -1490,7 +2047,7 @@ pub(crate) fn terminate_all(pids: &[u32]) {
     let pids: Vec<u32> = pids.iter().copied().filter(|pid| *pid > 1).collect();
     #[cfg(windows)]
     for pid in pids {
-        signal_tree(pid, TreeSignal::Kill);
+        let _ = signal_tree(pid, TreeSignal::Kill);
     }
     #[cfg(not(windows))]
     {
@@ -1498,9 +2055,9 @@ pub(crate) fn terminate_all(pids: &[u32]) {
             return;
         }
         for pid in &pids {
-            signal_tree(*pid, TreeSignal::Term);
+            let _ = signal_tree(*pid, TreeSignal::Term);
         }
-        wait_until_dead(&pids, Instant::now() + KILL_ALL_GRACE);
+        let _ = wait_until_dead(&pids, Instant::now() + KILL_ALL_GRACE);
         let remaining: Vec<u32> = pids
             .iter()
             .copied()
@@ -1510,9 +2067,9 @@ pub(crate) fn terminate_all(pids: &[u32]) {
             return;
         }
         for pid in &remaining {
-            signal_tree(*pid, TreeSignal::Kill);
+            let _ = signal_tree(*pid, TreeSignal::Kill);
         }
-        wait_until_dead(&remaining, Instant::now() + KILL_ALL_KILL_WAIT);
+        let _ = wait_until_dead(&remaining, Instant::now() + KILL_ALL_KILL_WAIT);
     }
 }
 
@@ -1521,22 +2078,24 @@ pub(crate) fn terminate_all(pids: &[u32]) {
 /// race that thread for the exit status and free the pid while we still signal
 /// it.
 #[cfg(not(windows))]
-fn wait_until_dead(pids: &[u32], until: Instant) {
+fn wait_until_dead(pids: &[u32], until: Instant) -> bool {
     while Instant::now() < until {
         if pids.iter().all(|pid| !tree_alive(*pid)) {
-            return;
+            return true;
         }
         thread::sleep(Duration::from_millis(20));
     }
+    pids.iter().all(|pid| !tree_alive(*pid))
 }
 
+#[derive(Clone, Copy)]
 enum TreeSignal {
     #[cfg(not(windows))]
     Term,
     Kill,
 }
 
-fn signal_tree(pid: u32, signal: TreeSignal) {
+fn signal_tree(pid: u32, signal: TreeSignal) -> Result<(), String> {
     #[cfg(unix)]
     {
         let sig = match signal {
@@ -1544,14 +2103,16 @@ fn signal_tree(pid: u32, signal: TreeSignal) {
             TreeSignal::Kill => libc::SIGKILL,
         };
         let ipid = pid as i32;
-        unsafe {
-            // Every child is isolated with process_group(0), so its pid is the
-            // stable group id even after the leader exits. Signal the group
-            // first; looking it up through a dead leader loses descendants
-            // that ignored SIGTERM and prevents the SIGKILL escalation.
-            libc::kill(-ipid, sig);
-            libc::kill(ipid, sig);
+        let mut failure = None;
+        for target in [-ipid, ipid] {
+            if unsafe { libc::kill(target, sig) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    failure = Some(format!("Could not signal process tree {pid}: {error}"));
+                }
+            }
         }
+        failure.map_or(Ok(()), Err)
     }
     #[cfg(windows)]
     {
@@ -1561,13 +2122,75 @@ fn signal_tree(pid: u32, signal: TreeSignal) {
         cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let _ = cmd.status();
+        let status = cmd
+            .status()
+            .map_err(|error| format!("Could not stop process tree {pid}: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Could not stop process tree {pid}: taskkill exited with {status}"
+            ))
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = signal;
-        let _ = Command::new("kill").arg(pid.to_string()).status();
+        let status = Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .map_err(|error| format!("Could not stop process {pid}: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Could not stop process {pid}: kill exited with {status}"
+            ))
+        }
     }
+}
+
+#[cfg(not(windows))]
+fn process_group_alive(pid: u32) -> Result<bool, String> {
+    #[cfg(unix)]
+    {
+        if unsafe { libc::kill(-(pid as i32), 0) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(format!("Could not inspect process group {pid}: {error}")),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        Ok(false)
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: TreeSignal) -> Result<(), String> {
+    let sig = match signal {
+        TreeSignal::Term => libc::SIGTERM,
+        TreeSignal::Kill => libc::SIGKILL,
+    };
+    if unsafe { libc::kill(-(pid as i32), sig) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!("Could not signal process group {pid}: {error}"))
+    }
+}
+
+#[cfg(all(not(windows), not(unix)))]
+fn signal_process_group(pid: u32, signal: TreeSignal) -> Result<(), String> {
+    signal_tree(pid, signal)
 }
 
 #[cfg(not(windows))]
@@ -1575,7 +2198,7 @@ fn tree_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         let ipid = pid as i32;
-        unsafe { libc::kill(ipid, 0) == 0 || libc::kill(-ipid, 0) == 0 }
+        unix_target_alive(ipid) || unix_target_alive(-ipid)
     }
     #[cfg(not(unix))]
     {
@@ -1591,7 +2214,7 @@ fn process_alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        unix_target_alive(pid as i32)
     }
     #[cfg(not(unix))]
     {
@@ -2658,6 +3281,76 @@ mod windows_launcher_tests {
         std::fs::remove_file(bare).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }
+
+    #[test]
+    fn tracked_stop_kills_descendants_after_the_wrapper_exits() {
+        const WRAPPER: &str = "MONOCODE_TEST_EXITING_HARNESS_WRAPPER";
+        if std::env::var_os(WRAPPER).is_some() {
+            let mut descendant = Command::new("ping.exe");
+            crate::hide_window_console(&mut descendant);
+            descendant
+                .args(["-n", "30", "127.0.0.1"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            std::process::exit(0);
+        }
+        let cwd = std::env::temp_dir();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "harness::windows_launcher_tests::tracked_stop_kills_descendants_after_the_wrapper_exits",
+                "--nocapture",
+            ])
+            .env(WRAPPER, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut child, job) =
+            crate::windows::spawn_harness_process(&mut child).expect("spawn Windows test process");
+        let pid = child.id();
+        let stdin = child.stdin.take().expect("test child stdin");
+        let exit = Arc::new(ChildExit::with_job(job));
+        let live = Arc::new(LiveChild {
+            cwd: cwd.clone(),
+            stdin: Mutex::new(stdin),
+            pid,
+            account: None,
+            exit: Arc::clone(&exit),
+        });
+        let host = HarnessHost::new();
+        host.lock_inner()
+            .children
+            .insert("windows".into(), Arc::clone(&live));
+        let wait_exit = Arc::clone(&exit);
+        let waiter = thread::spawn(move || wait_exit.record(child.wait()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while exit.outcome().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(matches!(exit.outcome(), Some(Ok(()))));
+        assert!(!exit.tree_is_empty(pid).unwrap());
+
+        assert!(host.child_exited("windows", &live));
+        assert!(!exit.tree_is_empty(pid).unwrap());
+        assert!(host.has_working_dir(&cwd));
+        host.stop_session("windows").unwrap();
+
+        assert!(exit.tree_is_empty(pid).unwrap());
+        assert!(!host.has_working_dir(&cwd));
+        assert!(waiter.join().is_ok());
+    }
+}
+
+#[cfg(unix)]
+fn unix_target_alive(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 fn configured_binary_name_eq(path: &Path, expected: &str) -> bool {
@@ -2980,6 +3673,7 @@ mod tests {
     fn live_child() -> (Arc<LiveChild>, std::process::Child) {
         let mut child = Command::new("sleep")
             .arg("30")
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -2987,76 +3681,97 @@ mod tests {
             .expect("spawn test process");
         let pid = child.id();
         let stdin = child.stdin.take().expect("test child stdin");
+        let exit = Arc::new(ChildExit::default());
         (
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
                 account: None,
+                exit,
             }),
             child,
         )
     }
 
-    fn reap(mut child: std::process::Child) {
+    fn reap(mut child: std::process::Child, exit: &ChildExit) {
+        let _ = child.kill();
+        exit.record(child.wait());
+    }
+
+    fn reap_untracked(mut child: std::process::Child) {
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    fn begin_test_spawn(
+        host: &HarnessHost,
+        session_id: &str,
+    ) -> (u64, u64, Option<Arc<LiveChild>>) {
+        let (epoch, kill_all, previous, pending) =
+            host.begin_spawn(session_id, PathBuf::from("/test"), None);
+        pending.finished.store(true, Ordering::SeqCst);
+        host.remove_pending_spawn(session_id, epoch, &pending);
+        (epoch, kill_all, previous)
     }
 
     #[test]
     fn install_spawn_keeps_a_child_nothing_cancelled() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
         let (live, child) = live_child();
         let pid = live.pid;
+        let exit = Arc::clone(&live.exit);
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
             .is_none());
         assert_eq!(host.get("s1").map(|live| live.pid), Some(pid));
-        reap(child);
+        reap(child, &exit);
     }
 
     #[test]
     fn install_spawn_rejects_a_child_killed_mid_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
-        host.kill_session("s1");
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
+        let _ = host.mark_session_stopping("s1");
         let (live, child) = live_child();
+        let exit = Arc::clone(&live.exit);
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
             .is_some());
         assert!(host.get("s1").is_none());
-        reap(child);
+        reap(child, &exit);
     }
 
     #[test]
     fn install_spawn_rejects_a_child_after_kill_all() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
         host.kill_all();
         let (live, child) = live_child();
+        let exit = Arc::clone(&live.exit);
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
             .is_some());
         assert!(host.get("s1").is_none());
-        reap(child);
+        reap(child, &exit);
     }
 
     #[test]
     fn kill_during_spawn_invalidates_the_stamp() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, prev) = host.begin_spawn("s1");
+        let (epoch, kill_all, prev) = begin_test_spawn(&host, "s1");
         assert!(prev.is_none());
         assert!(host.spawn_stamp_current("s1", epoch, kill_all));
-        host.kill_session("s1");
+        let _ = host.mark_session_stopping("s1");
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
     }
 
     #[test]
     fn overlapping_spawn_invalidates_the_earlier_one() {
         let host = HarnessHost::new();
-        let first = host.begin_spawn("s1");
-        let second = host.begin_spawn("s1");
+        let first = begin_test_spawn(&host, "s1");
+        let second = begin_test_spawn(&host, "s1");
         assert!(!host.spawn_stamp_current("s1", first.0, first.1));
         assert!(host.spawn_stamp_current("s1", second.0, second.1));
     }
@@ -3064,21 +3779,42 @@ mod tests {
     #[test]
     fn kill_all_rejects_an_in_flight_spawn() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
         host.kill_all();
         assert!(!host.spawn_stamp_current("s1", epoch, kill_all));
     }
 
     #[test]
     fn terminate_reaps_the_process_group() {
-        let mut child = spawn_group("sleep 30 & sleep 30");
+        let child = spawn_group("sleep 30 & sleep 30");
         let pid = child.id();
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
         assert!(tree_alive(pid));
         terminate_after(pid, Duration::from_millis(100));
-        if !wait_dead(pid, &mut child) {
-            let _ = child.kill();
-            panic!("process group survived terminate");
+        assert!(!tree_alive(pid), "process group survived terminate");
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn terminate_returns_after_a_term_ignoring_group_is_gone() {
+        let child = spawn_group("trap '' TERM; while true; do sleep 1; done");
+        let pid = child.id();
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+
+        terminate_after(pid, Duration::from_millis(100));
+
+        let alive = tree_alive(pid);
+        if alive {
+            let _ = signal_tree(pid, TreeSignal::Kill);
         }
+        let _ = waiter.join();
+        assert!(!alive, "terminate returned before the process group exited");
     }
 
     #[test]
@@ -3088,6 +3824,7 @@ mod tests {
         // `sleep` never drains stdin: filling the pipe wedges the writer while
         // it holds the stdin mutex — the worst case recovery must survive.
         let (live, mut child) = live_child();
+        let exit = Arc::clone(&live.exit);
         host.lock_inner()
             .children
             .insert("wedged".to_string(), live.clone());
@@ -3097,44 +3834,53 @@ mod tests {
             let _ = stdin.write_all(&payload);
         });
         thread::sleep(Duration::from_millis(200));
+        let waiter = thread::spawn(move || exit.record(child.wait()));
         // Kill needs neither the stdin mutex nor the writer's thread.
-        let live = host
-            .kill_session("wedged")
-            .expect("wedged child registered");
-        terminate(live.pid);
+        let (children, _) = host.mark_session_stopping("wedged");
+        host.stop_targets(children).unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         while !writer.is_finished() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(50));
         }
         assert!(writer.is_finished(), "blocked write survived the kill");
         let _ = writer.join();
-        let _ = child.wait();
+        let _ = waiter.join();
     }
 
     #[test]
     fn terminate_escalates_to_sigkill() {
-        let mut child = spawn_group("trap '' TERM; while true; do sleep 1; done");
+        let child = spawn_group("trap '' TERM; while true; do sleep 1; done");
         let pid = child.id();
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
         assert!(tree_alive(pid));
         terminate_after(pid, Duration::from_millis(150));
-        if !wait_dead(pid, &mut child) {
-            let _ = child.kill();
-            panic!("SIGTERM-ignoring process survived SIGKILL escalate");
-        }
+        assert!(
+            !tree_alive(pid),
+            "SIGTERM-ignoring process survived SIGKILL escalate"
+        );
+        let _ = waiter.join();
     }
 
     #[test]
     fn terminate_escalates_after_group_leader_exits() {
-        let mut child = spawn_group(
+        let child = spawn_group(
             "trap 'exit 0' TERM; sh -c 'trap \"\" TERM; while true; do sleep 1; done' & wait",
         );
         let pid = child.id();
+        let waiter = thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
         assert!(tree_alive(pid));
         terminate_after(pid, Duration::from_millis(150));
-        if !wait_dead(pid, &mut child) {
-            let _ = child.kill();
-            panic!("process group survived after its leader exited");
-        }
+        assert!(
+            !tree_alive(pid),
+            "process group survived after its leader exited"
+        );
+        let _ = waiter.join();
     }
 
     fn live_group(script: &str) -> (Arc<LiveChild>, std::process::Child) {
@@ -3142,35 +3888,205 @@ mod tests {
             .args(["-c", script])
             .process_group(0)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn grouped child");
         let pid = child.id();
         let stdin = child.stdin.take().expect("grouped child stdin");
+        let exit = Arc::new(ChildExit::default());
         (
             Arc::new(LiveChild {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
                 account: None,
+                exit,
             }),
             child,
         )
     }
 
+    fn install_live_group(
+        host: &HarnessHost,
+        session_id: &str,
+        script: &str,
+        wait_ready: bool,
+    ) -> (u32, thread::JoinHandle<()>) {
+        let (epoch, kill_all, _) = begin_test_spawn(host, session_id);
+        let (live, mut child) = live_group(script);
+        if wait_ready {
+            let mut ready = String::new();
+            BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut ready)
+                .unwrap();
+            assert_eq!(ready, "ready\n");
+        }
+        let pid = live.pid;
+        let exit = Arc::clone(&live.exit);
+        assert!(host
+            .install_spawn(session_id.into(), epoch, kill_all, live)
+            .is_none());
+        let waiter = thread::spawn(move || exit.record(child.wait()));
+        (pid, waiter)
+    }
+
+    #[test]
+    fn session_stop_tracks_background_descendants_after_natural_exit() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "background");
+        let (live, mut child) = live_group("sleep 30 & echo $!; exit 0");
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant: u32 = line.trim().parse().unwrap();
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("background".into(), epoch, kill_all, Arc::clone(&live))
+            .is_none());
+        live.exit.record(child.wait());
+        let retained = host.child_exited("background", &live);
+        let owned = host.has_working_dir(Path::new("/test"));
+        let stop = host.stop_session("background");
+        assert!(
+            retained && owned,
+            "natural wrapper exit lost its live descendants"
+        );
+        assert!(stop.is_ok(), "{stop:?}");
+        assert!(!tree_alive(pid));
+        assert!(!process_alive(descendant));
+        assert!(!host.has_working_dir(Path::new("/test")));
+        assert!(host.stop_session("background").is_ok());
+    }
+
+    #[test]
+    fn session_stop_retains_the_working_dir_until_the_tree_exits() {
+        let host = Arc::new(HarnessHost::new());
+        let (pid, waiter) = install_live_group(
+            &host,
+            "s1",
+            "trap 'sleep 0.3; exit 0' TERM; printf 'ready\\n'; while true; do sleep 1; done",
+            true,
+        );
+        let stopping_host = Arc::clone(&host);
+        let stop = thread::spawn(move || stopping_host.stop_session("s1"));
+
+        thread::sleep(Duration::from_millis(50));
+        assert!(host.has_working_dir(Path::new("/test")));
+        assert!(tree_alive(pid));
+        assert!(stop.join().unwrap().is_ok());
+        assert!(!host.has_working_dir(Path::new("/test")));
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn concurrent_session_stops_wait_for_the_same_exit() {
+        let host = Arc::new(HarnessHost::new());
+        let (pid, waiter) = install_live_group(&host, "s1", "while true; do sleep 1; done", false);
+        let live = host.get("s1").unwrap();
+        let (first_targets, _) = host.mark_session_stopping("s1");
+        let (second_targets, _) = host.mark_session_stopping("s1");
+        let first_host = Arc::clone(&host);
+        let second_host = Arc::clone(&host);
+        let first = thread::spawn(move || first_host.stop_targets(first_targets));
+        let second = thread::spawn(move || second_host.stop_targets(second_targets));
+
+        assert!(first.join().unwrap().is_ok());
+        assert!(second.join().unwrap().is_ok());
+        assert!(!tree_alive(pid));
+        assert!(!host.has_working_dir(Path::new("/test")));
+        live.exit
+            .record(Err(std::io::Error::other("must not be re-queried")));
+        assert!(host
+            .stop_targets(vec![("s1".into(), Arc::clone(&live))])
+            .is_ok());
+        let _ = waiter.join();
+    }
+
+    #[test]
+    fn wait_error_retains_the_working_dir_without_resignaling() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
+        let (live, mut child) = live_group("while true; do sleep 1; done");
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("s1".into(), epoch, kill_all, Arc::clone(&live))
+            .is_none());
+        live.exit
+            .record(Err(std::io::Error::other("synthetic wait failure")));
+        assert!(host.child_exited("s1", &live));
+
+        let error = host.stop_session("s1").unwrap_err();
+
+        assert!(error.contains("synthetic wait failure"));
+        assert!(host.has_working_dir(Path::new("/test")));
+        assert!(tree_alive(pid));
+        let _ = signal_tree(pid, TreeSignal::Kill);
+        assert!(wait_dead(pid, &mut child));
+        host.release_stopping("s1", &live);
+    }
+
+    #[test]
+    fn session_stop_waits_for_a_pending_spawn() {
+        let host = Arc::new(HarnessHost::new());
+        let (epoch, _, _, pending) = host.begin_spawn("s1", PathBuf::from("/test"), None);
+        let stop_host = Arc::clone(&host);
+        let stop = thread::spawn(move || stop_host.stop_session("s1"));
+
+        thread::sleep(Duration::from_millis(50));
+        assert!(!stop.is_finished());
+        assert!(host.has_working_dir(Path::new("/test")));
+        pending.finished.store(true, Ordering::SeqCst);
+        host.remove_pending_spawn("s1", epoch, &pending);
+
+        assert!(stop.join().unwrap().is_ok());
+        assert!(!host.has_working_dir(Path::new("/test")));
+    }
+
+    #[test]
+    fn kill_all_waits_for_a_pending_spawn() {
+        let host = Arc::new(HarnessHost::new());
+        let (epoch, _, _, pending) = host.begin_spawn("s1", PathBuf::from("/test"), None);
+        let stop_host = Arc::clone(&host);
+        let stop = thread::spawn(move || stop_host.kill_all_result());
+
+        thread::sleep(Duration::from_millis(50));
+        assert!(!stop.is_finished());
+        pending.finished.store(true, Ordering::SeqCst);
+        host.remove_pending_spawn("s1", epoch, &pending);
+
+        assert!(stop.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn pending_spawn_timeout_retains_the_working_dir() {
+        let host = HarnessHost::new();
+        let (epoch, _, _, pending) = host.begin_spawn("s1", PathBuf::from("/test"), None);
+
+        assert!(!wait_pending_spawns(
+            &[Arc::clone(&pending)],
+            Instant::now() + Duration::from_millis(20)
+        ));
+        assert!(host.has_working_dir(Path::new("/test")));
+
+        pending.finished.store(true, Ordering::SeqCst);
+        host.remove_pending_spawn("s1", epoch, &pending);
+    }
+
     #[test]
     fn kill_all_reaps_term_ignoring_children_before_return() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("s1");
+        let (epoch, kill_all, _) = begin_test_spawn(&host, "s1");
         let (live, child) = live_group("trap '' TERM; while true; do sleep 1; done");
         let pid = live.pid;
+        let exit = Arc::clone(&live.exit);
         // `harness_spawn` always leaves a thread owning the `Child`. Without one
         // the SIGKILLed leader lingers as a zombie that `kill(pid, 0)` still
         // answers, so the test would not be exercising the real shutdown.
         let waiter = thread::spawn(move || {
             let mut child = child;
-            let _ = child.wait();
+            exit.record(child.wait());
         });
         assert!(host
             .install_spawn("s1".into(), epoch, kill_all, live)
@@ -3236,7 +4152,7 @@ mod tests {
             let _ = child.try_wait();
             panic!("reap_snapshots killed a child of this process");
         }
-        reap(child);
+        reap_untracked(child);
     }
 
     /// The marker is what lets the next launch tell a crashed run's leftovers
