@@ -60,14 +60,59 @@ export function goalTurnResult(goal: MonoGoal, reply: string): MonoGoal {
   };
 }
 
-export function completeMonoGoalTurn(
+export function recordMonoGoalTurn(
   goal: MonoGoal,
   reply: string,
-  waiting: boolean,
-  alreadyCounted = false,
-): { goal: MonoGoal; continue: boolean } {
-  const updated = alreadyCounted ? goal : goalTurnResult(goal, reply);
-  return { goal: updated, continue: !waiting && updated.status === "active" };
+  schedule: (callback: () => void, delay: number) => unknown,
+  continueGoal: () => void,
+): MonoGoal {
+  const updated = goalTurnResult(goal, reply);
+  if (updated.status === "active") schedule(continueGoal, 50);
+  return updated;
+}
+
+export function submitMonoGoal(
+  submit: () => boolean | Promise<boolean>,
+  onRejected: () => void,
+): boolean | Promise<boolean> {
+  let acceptance: boolean | Promise<boolean>;
+  try {
+    acceptance = submit();
+  } catch {
+    onRejected();
+    return false;
+  }
+  if (typeof acceptance === "boolean") {
+    if (!acceptance) onRejected();
+    return acceptance;
+  }
+  return acceptance.then(
+    (accepted) => {
+      if (!accepted) onRejected();
+      return accepted;
+    },
+    () => {
+      onRejected();
+      return false;
+    },
+  );
+}
+
+export function isActiveMonoGoal(
+  goal: MonoGoal | undefined,
+  goalId: string,
+): boolean {
+  return goal?.id === goalId && goal.status === "active";
+}
+
+export function failedMonoGoalSubmission(
+  goal: MonoGoal | undefined,
+  goalId: string,
+  status: "paused" | "cancelled",
+  reason: string,
+): MonoGoal | undefined {
+  if (goal?.id !== goalId || goal.status !== "active") return undefined;
+  return { ...goal, status, reason };
 }
 
 export function goalContext(goal: MonoGoal): string {

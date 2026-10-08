@@ -559,10 +559,13 @@ import {
 import {
   consumeMonoGoalCommand,
   canContinueMonoGoal,
-  completeMonoGoalTurn,
+  failedMonoGoalSubmission,
   goalContext,
   goalTurnPrompt,
+  isActiveMonoGoal,
   isCurrentGoalTurn,
+  recordMonoGoalTurn,
+  submitMonoGoal,
 } from "../features/monos/model/monoGoal";
 import {
   loadMonoFiles,
@@ -837,6 +840,8 @@ type SubmitOptions = ComposerTurnOptions & {
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
   monoSessionCompletion?: Block["monoSessionCompletion"];
+  /** Internal guard for a goal submission deferred by project synchronization. */
+  monoGoalId?: string;
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
   refreshTitle?: boolean;
@@ -1550,9 +1555,13 @@ function Workspace({
   });
   const turnGen = useRef(new Map<string, number>());
   const continueGoalRef = useRef<
-    (sessionId: string, turn: number, outcome: ControlOutcome) => void
+    (
+      sessionId: string,
+      turn: number,
+      goalId: string,
+      outcome: ControlOutcome,
+    ) => void
   >(() => {});
-  const goalContinuationTimers = useRef(new Set<string>());
   const countedGoalTurns = useRef(new Map<string, string>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
@@ -6629,6 +6638,12 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (options?.monoGoalId) {
+        if (
+          !isActiveMonoGoal(monoForSession(sessionId)?.goal, options.monoGoalId)
+        )
+          return false;
+      }
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -6690,20 +6705,22 @@ function Workspace({
             stalled: 0,
           } as const;
           saveMonoGoal(mono.id, startedGoal);
-          const accepted = submitSession(
-            sessionId,
-            goalCommand.objective,
-            [],
-            options,
-          );
-          if (!accepted)
-            saveMonoGoal(mono.id, {
-              ...startedGoal,
-              status: "cancelled",
-              reason:
+          return submitMonoGoal(
+            () =>
+              submitSession(sessionId, goalCommand.objective, [], {
+                ...options,
+                monoGoalId: startedGoal.id,
+              }),
+            () => {
+              const failed = failedMonoGoalSubmission(
+                monoForSession(sessionId)?.goal,
+                startedGoal.id,
+                "cancelled",
                 "The initial turn could not start. Submit /goal again when ready.",
-            });
-          return accepted;
+              );
+              if (failed) saveMonoGoal(mono.id, failed);
+            },
+          );
         }
         if (goalCommand.action === "pause" || goalCommand.action === "cancel") {
           if (!goal || goal.status !== "active") {
@@ -6751,20 +6768,22 @@ function Workspace({
             reason: undefined,
           };
           saveMonoGoal(mono.id, resumedGoal);
-          const accepted = submitSession(
-            sessionId,
-            goalTurnPrompt(resumedGoal),
-            [],
-            { managed: true },
-          );
-          if (!accepted)
-            saveMonoGoal(mono.id, {
-              ...goal,
-              status: "paused",
-              reason:
+          return submitMonoGoal(
+            () =>
+              submitSession(sessionId, goalTurnPrompt(resumedGoal), [], {
+                managed: true,
+                monoGoalId: resumedGoal.id,
+              }),
+            () => {
+              const failed = failedMonoGoalSubmission(
+                monoForSession(sessionId)?.goal,
+                resumedGoal.id,
+                "paused",
                 "The continuation could not start. Use /goal resume when ready.",
-            });
-          return accepted;
+              );
+              if (failed) saveMonoGoal(mono.id, failed);
+            },
+          );
         }
       }
       if (editedResends.isActive(sessionId)) return false;
@@ -6937,6 +6956,9 @@ function Workspace({
       }
       // The Mono has app access in every turn, without the command.
       const mono = isMonoSession(sessionId);
+      const activeGoal = mono ? monoForSession(sessionId)?.goal : undefined;
+      const monoGoalId =
+        activeGoal?.status === "active" ? activeGoal.id : undefined;
       const queuedMonoMessage =
         mono && options?.queuedMessageId
           ? current.queuedMessages?.find(
@@ -8162,8 +8184,9 @@ function Workspace({
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled" as const, text: controlText }
               : controlOutcome;
+          if (monoGoalId)
+            continueGoalRef.current(sessionId, gen, monoGoalId, outcome);
           options?.onSettled?.(outcome);
-          if (mono) continueGoalRef.current(sessionId, gen, outcome);
         });
       return true;
     },
@@ -8175,115 +8198,129 @@ function Workspace({
     ],
   );
   const continueMonoGoal = useCallback(
-    (sessionId: string, turn: number, outcome: ControlOutcome) => {
-      const key = `${sessionId}:${turn}`;
-      if (goalContinuationTimers.current.has(key)) return;
-      goalContinuationTimers.current.add(key);
-      window.setTimeout(() => {
-        goalContinuationTimers.current.delete(key);
-        const session = sessionsRef.current.find(
-          (entry) => entry.id === sessionId,
-        );
-        const mono = monoForSession(sessionId);
-        const goal = mono?.goal;
-        if (
-          !mono ||
-          !goal ||
-          !isCurrentGoalTurn(
-            goal,
-            goal.id,
-            turn,
-            turnGen.current.get(sessionId),
+    (
+      sessionId: string,
+      turn: number,
+      goalId: string,
+      outcome: ControlOutcome,
+    ) => {
+      const session = sessionsRef.current.find(
+        (entry) => entry.id === sessionId,
+      );
+      const mono = monoForSession(sessionId);
+      const goal = mono?.goal;
+      if (
+        !mono ||
+        !goal ||
+        !isCurrentGoalTurn(goal, goalId, turn, turnGen.current.get(sessionId))
+      )
+        return;
+      if (outcome.status !== "completed") {
+        saveMonoGoal(mono.id, {
+          ...goal,
+          status: "paused",
+          reason:
+            outcome.error ?? "The turn stopped before the goal was complete.",
+        });
+        return;
+      }
+      if (!session) return;
+      const turnKey = `${goalId}:${turn}`;
+      if (countedGoalTurns.current.get(sessionId) === turnKey) return;
+      countedGoalTurns.current.set(sessionId, turnKey);
+      // Count before the queue's 0 ms dispatch can invalidate this turn.
+      const updated = recordMonoGoalTurn(
+        goal,
+        lastAssistantTextInTurn(session),
+        (callback, delay) => window.setTimeout(callback, delay),
+        () => {
+          const currentSession = sessionsRef.current.find(
+            (entry) => entry.id === sessionId,
+          );
+          const currentMono = monoForSession(sessionId);
+          const currentGoal = currentMono?.goal;
+          if (
+            !currentMono ||
+            !currentGoal ||
+            !isCurrentGoalTurn(
+              currentGoal,
+              goalId,
+              turn,
+              turnGen.current.get(sessionId),
+            ) ||
+            !currentSession
           )
-        )
-          return;
-        if (outcome.status !== "completed") {
-          saveMonoGoal(mono.id, {
-            ...goal,
-            status: "paused",
-            reason:
-              outcome.error ?? "The turn stopped before the goal was complete.",
-          });
-          return;
-        }
-        if (!session) return;
-        let currentTurnStart = 0;
-        for (let index = session.blocks.length - 1; index >= 0; index--) {
-          if (session.blocks[index].role === "user") {
-            currentTurnStart = index;
-            break;
+            return;
+          let currentTurnStart = 0;
+          for (
+            let index = currentSession.blocks.length - 1;
+            index >= 0;
+            index--
+          ) {
+            if (currentSession.blocks[index].role === "user") {
+              currentTurnStart = index;
+              break;
+            }
           }
-        }
-        const workers = monoSpawnedSessions(
-          session.blocks.slice(Math.max(0, currentTurnStart)),
-        );
-        const waiting = Boolean(
-          session.busy ||
-          session.pendingQuestion ||
-          hasPendingApproval(session.blocks) ||
-          session.usageLimit ||
-          session.worktreeRemoved ||
-          session.pendingSwitch ||
-          session.queuedMessages?.length ||
-          session.queueStatus === "paused" ||
-          orchestrator.run(sessionId) ||
-          monoCompletionBatches.current?.hasPending(sessionId) ||
-          workers.some(
-            (worker) =>
-              sessionsRef.current.find((entry) => entry.id === worker.sessionId)
-                ?.busy,
-          ),
-        );
-        const turnKey = `${goal.id}:${turn}`;
-        const alreadyCounted =
-          countedGoalTurns.current.get(sessionId) === turnKey;
-        const result = completeMonoGoalTurn(
-          goal,
-          lastAssistantTextInTurn(session),
-          waiting,
-          alreadyCounted,
-        );
-        if (!alreadyCounted) {
-          countedGoalTurns.current.set(sessionId, turnKey);
-          saveMonoGoal(mono.id, result.goal);
-        }
-        if (result.goal.status === "blocked") {
-          enqueueHarnessEvent(sessionId, {
-            type: "status",
-            text: `Goal blocked: ${result.goal.reason}`,
-          });
-          flushHarnessEvents();
-          return;
-        }
-        if (!result.continue) return;
-        if (
-          !canContinueMonoGoal(
-            result.goal,
-            goal.id,
-            turn,
-            turnGen.current.get(sessionId),
-            outcome.status,
-            false,
+          const workers = monoSpawnedSessions(
+            currentSession.blocks.slice(Math.max(0, currentTurnStart)),
+          );
+          const waiting = Boolean(
+            currentSession.busy ||
+            currentSession.pendingQuestion ||
+            hasPendingApproval(currentSession.blocks) ||
+            currentSession.usageLimit ||
+            currentSession.worktreeRemoved ||
+            currentSession.pendingSwitch ||
+            currentSession.queuedMessages?.length ||
+            currentSession.queueStatus === "paused" ||
+            orchestrator.run(sessionId) ||
+            monoCompletionBatches.current?.hasPending(sessionId) ||
+            workers.some(
+              (worker) =>
+                sessionsRef.current.find(
+                  (entry) => entry.id === worker.sessionId,
+                )?.busy,
+            ),
+          );
+          if (waiting) return;
+          if (
+            !canContinueMonoGoal(
+              currentGoal,
+              goalId,
+              turn,
+              turnGen.current.get(sessionId),
+              "completed",
+              false,
+            )
           )
-        )
-          return;
-        const accepted = submitSession(
-          sessionId,
-          goalTurnPrompt(result.goal),
-          [],
-          {
-            managed: true,
-          },
-        );
-        if (!accepted) {
-          saveMonoGoal(mono.id, {
-            ...result.goal,
-            status: "paused",
-            reason:
-              "Automatic continuation could not start. Use /goal resume when ready.",
-          });
-        }
-      }, 50);
+            return;
+          return submitMonoGoal(
+            () =>
+              submitSession(sessionId, goalTurnPrompt(currentGoal), [], {
+                managed: true,
+                monoGoalId: goalId,
+              }),
+            () => {
+              const failed = failedMonoGoalSubmission(
+                monoForSession(sessionId)?.goal,
+                goalId,
+                "paused",
+                "Automatic continuation could not start. Use /goal resume when ready.",
+              );
+              if (failed) saveMonoGoal(mono.id, failed);
+            },
+          );
+        },
+      );
+      saveMonoGoal(mono.id, updated);
+      if (updated.status === "blocked") {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: `Goal blocked: ${updated.reason}`,
+        });
+        flushHarnessEvents();
+      }
     },
     [enqueueHarnessEvent, flushHarnessEvents, orchestrator, submitSession],
   );
