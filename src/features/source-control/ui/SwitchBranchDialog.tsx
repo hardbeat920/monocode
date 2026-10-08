@@ -57,6 +57,7 @@ export function SwitchBranchDialog({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, [message]);
 
   useEffect(() => {
@@ -140,7 +141,7 @@ export function SwitchBranchDialog({
             placeholder={`Message (${MOD}↩ to commit)`}
             disabled={Boolean(busy) || generating}
             aria-label="Commit message"
-            className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
+            className="max-h-40 w-full resize-none overflow-hidden rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
               if (

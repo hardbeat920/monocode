@@ -158,6 +158,7 @@ export function MonoProjectCommit({
     // natural size until it can be measured.
     if (el.scrollHeight === 0) return;
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, [message]);
 
   useEffect(() => () => generateAbortRef.current?.abort(), []);
@@ -434,7 +435,7 @@ export function MonoProjectCommit({
                 void commit(false);
               }
             }}
-            className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
+            className="max-h-40 w-full resize-none overflow-hidden rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
           />
           <button
             type="button"

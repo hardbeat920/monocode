@@ -260,6 +260,7 @@ export function InboxCommentForm({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, [draft]);
 
   const submit = async () => {
@@ -316,7 +317,7 @@ export function InboxCommentForm({
           }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
-          className="max-h-40 w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
+          className="max-h-40 w-full resize-none overflow-hidden bg-transparent px-3 py-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
         />
         <div className="flex items-center justify-end px-2 pb-2">
           <button
