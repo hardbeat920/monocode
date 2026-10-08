@@ -667,6 +667,7 @@ import {
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
 import { CloneRepoDialog } from "../features/git-hosts/ui/CloneRepoDialog";
+import { CloneRepoNotice } from "../features/git-hosts/ui/CloneRepoNotice";
 import {
   OPEN_CLONE_REPO_EVENT,
   type CloneRepoRequest,
@@ -11405,6 +11406,7 @@ function Workspace({
   }, []);
   const [cloneRepoRequest, setCloneRepoRequest] =
     useState<CloneRepoRequest | null>(null);
+  const [cloneRepoNotice, setCloneRepoNotice] = useState<string>();
   useEffect(() => {
     const open = (event: Event) =>
       setCloneRepoRequest((event as CustomEvent<CloneRepoRequest>).detail);
@@ -12968,10 +12970,17 @@ function Workspace({
               provider={cloneRepoRequest.provider}
               target={cloneRepoRequest.target}
               onCancel={() => setCloneRepoRequest(null)}
-              onOpen={(key) => {
+              onOpen={(key, reused) => {
                 setCloneRepoRequest(null);
                 onSelectProject(key);
+                if (reused) setCloneRepoNotice("Opened the existing checkout — nothing was cloned.");
               }}
+            />
+          ) : null}
+          {cloneRepoNotice ? (
+            <CloneRepoNotice
+              message={cloneRepoNotice}
+              onDismiss={() => setCloneRepoNotice(undefined)}
             />
           ) : null}
           {providerSignInRequest ? (

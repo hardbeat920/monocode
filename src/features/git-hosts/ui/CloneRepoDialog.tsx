@@ -14,15 +14,19 @@ import {
   localDefaultCloneParent,
   rememberCloneParent,
   rememberedCloneParent,
+  rememberedRepoScope,
+  rememberRepoScope,
   remoteCloneLocation,
   useGitHostAvailability,
   type CloneTarget,
+  type RepoScope,
 } from "../model/gitHosts";
 import { gitHostUi, parseRepoInput } from "../model/providers";
 import type { CheckoutPlan, GitHostId, GitHostRepo } from "../model/types";
 
 const errorText = (reason: unknown) => String(reason).replace(/^Error: /, "");
 const MAX_LISTED_REPOS = 60;
+const SEARCH_DEBOUNCE_MS = 400;
 
 /** Starts a project from a hosted repository: opens a folder that already
  * tracks it, or clones it, on this computer or a connected machine. */
@@ -35,8 +39,9 @@ export function CloneRepoDialog({
   provider: GitHostId;
   target: CloneTarget;
   onCancel: () => void;
-  /** Receives the project's rail key: its path, or a remote project key. */
-  onOpen: (key: string) => void;
+  /** Receives the project's rail key (its path, or a remote project key),
+   * and whether this opened a checkout already on disk instead of cloning. */
+  onOpen: (key: string, reused: boolean) => void;
 }) {
   const ui = gitHostUi(provider);
   const remote = target === "remote";
@@ -57,6 +62,10 @@ export function CloneRepoDialog({
 
   const [repos, setRepos] = useState<GitHostRepo[]>();
   const [reposError, setReposError] = useState("");
+  const [scope, setScope] = useState<RepoScope>(rememberedRepoScope);
+  const [searchResults, setSearchResults] = useState<GitHostRepo[]>();
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const [query, setQuery] = useState("");
   const [parent, setParent] = useState("");
   const [browsing, setBrowsing] = useState<HostDirectory>();
@@ -120,18 +129,56 @@ export function CloneRepoDialog({
 
   const slug = parseRepoInput(ui, query);
   const needle = query.trim().toLowerCase();
-  const matches = useMemo(
-    () =>
-      (needle && !slug
-        ? (repos ?? []).filter(
+  const everyone = scope === "everyone";
+  const mine = useMemo(() => (repos ?? []).filter((repo) => repo.mine), [repos]);
+  const matches = useMemo(() => {
+    if (everyone) return (searchResults ?? []).slice(0, MAX_LISTED_REPOS);
+    return (
+      needle
+        ? mine.filter(
             (repo) =>
               repo.slug.toLowerCase().includes(needle) ||
               repo.description?.toLowerCase().includes(needle),
           )
-        : (repos ?? [])
-      ).slice(0, MAX_LISTED_REPOS),
-    [repos, needle, slug],
-  );
+        : mine
+    ).slice(0, MAX_LISTED_REPOS);
+  }, [everyone, searchResults, mine, needle]);
+  const chooseScope = (value: RepoScope) => {
+    setScope(value);
+    rememberRepoScope(value);
+  };
+
+  // Everyone's repositories are not preloaded; a pause in typing searches
+  // GitHub live instead of listing everything up front.
+  useEffect(() => {
+    if (!everyone || !location) return;
+    if (!needle) {
+      setSearchResults(undefined);
+      setSearchError("");
+      setSearching(false);
+      return;
+    }
+    let current = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      location.search(provider, needle).then(
+        (value) => {
+          if (!current) return;
+          setSearchResults(value);
+          setSearching(false);
+        },
+        (reason) => {
+          if (!current) return;
+          setSearchError(errorText(reason));
+          setSearching(false);
+        },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [everyone, location, needle, provider]);
   // Enter with a partial name takes the first repository whose name matches;
   // a match only in a description is listed but never picked implicitly.
   const chosen =
@@ -185,7 +232,7 @@ export function CloneRepoDialog({
       // Cancelled: a local clone still lands on disk, but nothing opens.
       if (!alive.current || controller.signal.aborted) return;
       rememberCloneParent(locationKey, folder);
-      onOpen(key);
+      onOpen(key, plan?.reuse ?? false);
     } catch (reason) {
       if (alive.current && !controller.signal.aborted) setError(errorText(reason));
     } finally {
@@ -264,6 +311,22 @@ export function CloneRepoDialog({
               autoComplete="off"
               onChange={(event) => setQuery(event.target.value)}
             />
+            <div role="radiogroup" aria-label="Repository owner" className="flex shrink-0 gap-1 self-start rounded-md bg-content/5 p-0.5">
+              {(["mine", "everyone"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={scope === value}
+                  onClick={() => chooseScope(value)}
+                  className={`rounded px-2 py-1 text-[11px] capitalize ${
+                    scope === value ? "bg-content/15 text-content" : "text-content/55 hover:text-content/80"
+                  }`}
+                >
+                  {value === "mine" ? "Mine" : "Everyone"}
+                </button>
+              ))}
+            </div>
             <div
               aria-label="Repositories"
               role="listbox"
@@ -278,17 +341,44 @@ export function CloneRepoDialog({
                     onChoose={() => setQuery(repo.slug)}
                   />
                 ))}
-                {!repos && !reposError ? (
-                  <p className="px-2 py-1.5 text-[12px] text-content/45">Loading repositories…</p>
-                ) : null}
-                {reposError ? (
-                  <p className="px-2 py-1.5 text-[12px] text-red-400/90">{reposError}</p>
-                ) : null}
-                {repos && !matches.length ? (
-                  <p className="px-2 py-1.5 text-[12px] text-content/45">
-                    {slug ? `Will use ${slug}` : "No matching repositories. Type owner/name to use any repository."}
-                  </p>
-                ) : null}
+                {everyone ? (
+                  <>
+                    {!needle ? (
+                      <p className="px-2 py-1.5 text-[12px] text-content/45">
+                        Type to search all of {ui.label}.
+                      </p>
+                    ) : null}
+                    {needle && searching ? (
+                      <p className="px-2 py-1.5 text-[12px] text-content/45">Searching…</p>
+                    ) : null}
+                    {searchError ? (
+                      <p className="px-2 py-1.5 text-[12px] text-red-400/90">{searchError}</p>
+                    ) : null}
+                    {needle && !searching && !searchError && !matches.length ? (
+                      <p className="px-2 py-1.5 text-[12px] text-content/45">
+                        {slug ? `Will use ${slug}` : "No matching repositories."}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {!repos && !reposError ? (
+                      <p className="px-2 py-1.5 text-[12px] text-content/45">Loading repositories…</p>
+                    ) : null}
+                    {reposError ? (
+                      <p className="px-2 py-1.5 text-[12px] text-red-400/90">{reposError}</p>
+                    ) : null}
+                    {repos && !matches.length ? (
+                      <p className="px-2 py-1.5 text-[12px] text-content/45">
+                        {slug
+                          ? `Will use ${slug}`
+                          : repos.some((repo) => !repo.mine)
+                            ? "No matching repositories of yours. Switch to Everyone to include organizations and collaborators."
+                            : "No matching repositories. Type owner/name to use any repository."}
+                      </p>
+                    ) : null}
+                  </>
+                )}
               </div>
             </div>
 

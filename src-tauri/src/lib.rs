@@ -336,6 +336,7 @@ pub fn run() {
             fs::git_github_status,
             git_hosts::git_host_statuses,
             git_hosts::git_host_repos,
+            git_hosts::git_host_search_repos,
             git_hosts::git_host_checkout_plan,
             git_hosts::git_host_checkout,
             git_hosts::git_host_default_parent,

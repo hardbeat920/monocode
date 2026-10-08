@@ -30,6 +30,9 @@ export interface GitHostProvider {
   domain: string;
   status(): Promise<GitHostStatus>;
   repos(): Promise<GitHostRepo[]>;
+  /** Public repositories anywhere on the service matching `query`, most
+   * relevant first. Not limited to the signed-in account's own reach. */
+  search(query: string): Promise<GitHostRepo[]>;
   /** Clones `slug` into `dest`, which is missing or empty. */
   cloneInto(slug: string, dest: string): Promise<void>;
 }

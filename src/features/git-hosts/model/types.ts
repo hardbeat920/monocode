@@ -22,6 +22,9 @@ export type GitHostRepo = {
   description?: string;
   private: boolean;
   pushedAt?: string;
+  /** The signed-in account's own namespace owns this repository, as
+   * opposed to an organization or another collaborator's. */
+  mine: boolean;
 };
 
 /** Where a checkout ends up before anything is cloned. */

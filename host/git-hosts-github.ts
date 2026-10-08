@@ -9,6 +9,7 @@ const exec = promisify(execFile);
 /** Pages of 100 repositories listed, most recently pushed first. Anything
  * older can still be typed as `owner/name`. */
 const REPO_PAGES = 3;
+const SEARCH_RESULTS = 20;
 const CLONE_TIMEOUT_MS = 15 * 60_000;
 const HOST = "github.com";
 
@@ -44,6 +45,7 @@ export const github: GitHostProvider = {
   },
 
   async repos() {
+    const viewer = await viewerLogin();
     const repos: GitHostRepo[] = [];
     for (let page = 1; page <= REPO_PAGES; page++) {
       const { stdout } = await gh([
@@ -57,11 +59,40 @@ export const github: GitHostProvider = {
       ]).catch((error: unknown) => {
         throw ghError(error);
       });
-      const listed = parseGithubRepos(stdout);
+      const listed = parseGithubRepos(stdout, viewer);
       repos.push(...listed);
       if (listed.length < 100) break;
     }
     return repos;
+  },
+
+  async search(query) {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    const viewer = await viewerLogin();
+    // Forks are excluded from search by default; GitHub repositories
+    // started this way are common enough to be worth finding too.
+    const { stdout } = await gh([
+      "api",
+      "--hostname",
+      HOST,
+      "--method",
+      "GET",
+      "search/repositories",
+      "-f",
+      `q=${trimmed} fork:true`,
+      "-f",
+      `per_page=${SEARCH_RESULTS}`,
+      "-f",
+      "sort=stars",
+      "-f",
+      "order=desc",
+      "--jq",
+      ".items[] | {slug: .full_name, description, private, pushedAt: .pushed_at}",
+    ]).catch((error: unknown) => {
+      throw ghError(error);
+    });
+    return parseGithubRepos(stdout, viewer);
   },
 
   async cloneInto(slug, dest) {
@@ -74,7 +105,18 @@ export const github: GitHostProvider = {
   },
 };
 
-export function parseGithubRepos(lines: string): GitHostRepo[] {
+/** The signed-in account's own login, so each repository can be told apart
+ * from one owned by an organization or another collaborator. */
+async function viewerLogin(): Promise<string> {
+  const { stdout } = await gh(["api", "--hostname", HOST, "user", "--jq", ".login"]).catch(
+    (error: unknown) => {
+      throw ghError(error);
+    },
+  );
+  return stdout.trim();
+}
+
+export function parseGithubRepos(lines: string, viewer: string): GitHostRepo[] {
   return lines
     .split("\n")
     .filter((line) => line.trim())
@@ -91,6 +133,7 @@ export function parseGithubRepos(lines: string): GitHostRepo[] {
         description: repo.description?.trim() || undefined,
         private: repo.private,
         pushedAt: repo.pushedAt ?? undefined,
+        mine: repo.slug.split("/")[0]?.toLowerCase() === viewer.toLowerCase(),
       };
     });
 }

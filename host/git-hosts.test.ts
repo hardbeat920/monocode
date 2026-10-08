@@ -146,9 +146,10 @@ it("reports failed checkouts", async () => {
 it("parses GitHub repository listings", () => {
   expect(parseGithubRepos(
     '{"slug":"o/a","description":"","private":true,"pushedAt":"2026-01-01T00:00:00Z"}\n' +
-    '{"slug":"o/b","description":"B","private":false,"pushedAt":null}\n',
+    '{"slug":"other/b","description":"B","private":false,"pushedAt":null}\n',
+    "O",
   )).toEqual([
-    { provider: "github", slug: "o/a", description: undefined, private: true, pushedAt: "2026-01-01T00:00:00Z" },
-    { provider: "github", slug: "o/b", description: "B", private: false, pushedAt: undefined },
+    { provider: "github", slug: "o/a", description: undefined, private: true, pushedAt: "2026-01-01T00:00:00Z", mine: true },
+    { provider: "github", slug: "other/b", description: "B", private: false, pushedAt: undefined, mine: false },
   ]);
 });

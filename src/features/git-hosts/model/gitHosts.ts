@@ -25,6 +25,9 @@ export const openCloneRepo = (request: CloneRepoRequest) =>
 export type CloneLocation = {
   statuses(): Promise<GitHostStatus[]>;
   repos(provider: GitHostId): Promise<GitHostRepo[]>;
+  /** Public repositories anywhere on the service matching `query`, most
+   * relevant first. Not limited to the signed-in account's own reach. */
+  search(provider: GitHostId, query: string): Promise<GitHostRepo[]>;
   plan(provider: GitHostId, slug: string, parent: string): Promise<CheckoutPlan>;
   /** Opens an existing checkout or clones one, resolving to the project's
    * rail key. Aborting stops waiting; a clone already running finishes. */
@@ -36,6 +39,7 @@ const slashPlan = (plan: CheckoutPlan): CheckoutPlan => ({ ...plan, path: slash(
 export const localCloneLocation: CloneLocation = {
   statuses: () => invoke<GitHostStatus[]>("git_host_statuses"),
   repos: (provider) => invoke<GitHostRepo[]>("git_host_repos", { provider }),
+  search: (provider, query) => invoke<GitHostRepo[]>("git_host_search_repos", { provider, query }),
   plan: (provider, slug, parent) =>
     invoke<CheckoutPlan>("git_host_checkout_plan", { provider, slug, parent }).then(slashPlan),
   checkout: (provider, slug, parent) =>
@@ -70,6 +74,8 @@ export function remoteCloneLocation(machine: Pick<RemoteMachine, "id" | "environ
   return {
     statuses: () => remoteRequest<GitHostStatus[]>(machine.id, "gitHosts.status"),
     repos: (provider) => remoteRequest<GitHostRepo[]>(machine.id, "gitHosts.repos", { provider }),
+    search: (provider, query) =>
+      remoteRequest<GitHostRepo[]>(machine.id, "gitHosts.search", { provider, query }),
     plan: (provider, slug, parent) =>
       remoteRequest<CheckoutPlan>(machine.id, "gitHosts.checkoutPlan", { provider, slug, parent }),
     checkout: async (provider, slug, parent, signal) => {
@@ -123,6 +129,27 @@ export function rememberedCloneParent(location: string): string | undefined {
 export function rememberCloneParent(location: string, parent: string) {
   try {
     localStorage.setItem(parentKey(location), parent);
+  } catch {
+    // Only a default for next time.
+  }
+}
+
+export type RepoScope = "mine" | "everyone";
+const SCOPE_KEY = "monocode.clone-repo-scope.v1";
+
+/** Whether the repository list shows only what the signed-in account owns,
+ * or everything it can reach (its own, an organization's, or shared). */
+export function rememberedRepoScope(): RepoScope {
+  try {
+    return localStorage.getItem(SCOPE_KEY) === "everyone" ? "everyone" : "mine";
+  } catch {
+    return "mine";
+  }
+}
+
+export function rememberRepoScope(scope: RepoScope) {
+  try {
+    localStorage.setItem(SCOPE_KEY, scope);
   } catch {
     // Only a default for next time.
   }

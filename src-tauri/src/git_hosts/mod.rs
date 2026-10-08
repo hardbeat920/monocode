@@ -29,6 +29,9 @@ pub struct GitHostRepo {
     pub description: Option<String>,
     pub private: bool,
     pub pushed_at: Option<String>,
+    /// The signed-in account's own namespace owns this repository, as
+    /// opposed to an organization or another collaborator's.
+    pub mine: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -46,6 +49,9 @@ pub(crate) trait GitHost: Sync {
     fn status(&self) -> GitHostStatus;
     /// Repositories the signed-in account can reach, most recently pushed first.
     fn repos(&self) -> Result<Vec<GitHostRepo>, String>;
+    /// Public repositories anywhere on the service matching `query`, most
+    /// relevant first. Not limited to the signed-in account's own reach.
+    fn search(&self, query: &str) -> Result<Vec<GitHostRepo>, String>;
     /// Clones `slug` into `dest`, which is missing or empty.
     fn clone_into(&self, slug: &str, dest: &Path) -> Result<(), String>;
 }
@@ -71,6 +77,18 @@ pub async fn git_host_statuses() -> Result<Vec<GitHostStatus>, String> {
 #[tauri::command]
 pub async fn git_host_repos(provider: String) -> Result<Vec<GitHostRepo>, String> {
     tauri::async_runtime::spawn_blocking(move || self::provider(&provider)?.repos())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Public repositories matching `query`, searched live instead of listed up
+/// front since the signed-in account's own reach does not bound them.
+#[tauri::command]
+pub async fn git_host_search_repos(
+    provider: String,
+    query: String,
+) -> Result<Vec<GitHostRepo>, String> {
+    tauri::async_runtime::spawn_blocking(move || self::provider(&provider)?.search(&query))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -215,7 +233,9 @@ fn plan_checkout(domain: &str, slug: &str, parent: &Path) -> Result<CheckoutPlan
             reuse,
         });
     }
-    Err(format!("Too many folders named {base}; choose another location"))
+    Err(format!(
+        "Too many folders named {base}; choose another location"
+    ))
 }
 
 fn folder_state(path: &Path, domain: &str, slug: &str) -> FolderState {
@@ -333,7 +353,9 @@ fn parse_remote_url(url: &str) -> Option<(String, String)> {
 }
 
 fn without_user(authority: &str) -> &str {
-    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
 }
 
 fn remote_matches(url: &str, domain: &str, slug: &str) -> bool {
@@ -415,6 +437,9 @@ mod tests {
             }
         }
         fn repos(&self) -> Result<Vec<GitHostRepo>, String> {
+            Ok(Vec::new())
+        }
+        fn search(&self, _query: &str) -> Result<Vec<GitHostRepo>, String> {
             Ok(Vec::new())
         }
         fn clone_into(&self, _slug: &str, dest: &Path) -> Result<(), String> {

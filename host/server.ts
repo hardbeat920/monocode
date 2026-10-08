@@ -314,6 +314,9 @@ export function createHostServer(
           case "gitHosts.repos":
             result = await gitHostProvider(params.provider).repos();
             break;
+          case "gitHosts.search":
+            result = await gitHostProvider(params.provider).search(String(params.query ?? ""));
+            break;
           case "gitHosts.checkoutPlan":
             result = await planHostCheckout(
               gitHostProvider(params.provider),
