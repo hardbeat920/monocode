@@ -79,6 +79,7 @@ import { MOD } from "../../../platform/tauri/platform";
 import { applyProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { useAutoGrow } from "../../../shared/hooks/useAutoGrow";
 
 const GIT_POLL_MS = 2000;
 
@@ -277,7 +278,6 @@ export function GitChangesPanel({
         files={files}
         selected={selectedPath}
         selectedKind={selectedKind}
-        enabled={enabled}
         fill
         busy={busy}
         setBusy={setBusy}
@@ -334,7 +334,6 @@ function ChangedFiles({
   files,
   selected,
   selectedKind,
-  enabled,
   fill,
   busy,
   setBusy,
@@ -348,7 +347,6 @@ function ChangedFiles({
   files: GitChangedFile[];
   selected?: string;
   selectedKind?: GitFileDiffKind;
-  enabled: boolean;
   fill: boolean;
   busy: string | null;
   setBusy: (value: string | null) => void;
@@ -417,14 +415,7 @@ function ChangedFiles({
   }, [amendTarget, index?.branch, index?.head]);
   const canOpenMenu = !!index?.branch && !busy;
 
-  useEffect(() => {
-    if (!enabled) return;
-    const el = messageRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
-  }, [message, enabled]);
+  useAutoGrow(messageRef, message);
 
   useEffect(
     () => () => {
