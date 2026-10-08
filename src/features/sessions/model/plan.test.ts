@@ -9,6 +9,7 @@ import {
   isProviderFailureText,
   isReviewablePlan,
   monoTurnIntent,
+  monoSubmissionIntent,
   planTurnPrompt,
 } from "./plan";
 
@@ -22,6 +23,25 @@ describe("plan mode prompts", () => {
     expect(monoTurnIntent(false)).toBe("default");
     expect(canUseMonoTurnIntent(false, "build")).toBe(true);
     expect(canUseMonoDelegation(false)).toBe(true);
+  });
+
+  it("allows an approved Build through submission with build provider intent only", () => {
+    const approved = {
+      approvedPlanBuild: true,
+      hasApprovedPlan: true,
+    };
+    expect(monoSubmissionIntent(true, "build", approved)).toBe("build");
+    expect(monoSubmissionIntent(true, "build")).toBeNull();
+    expect(
+      monoSubmissionIntent(true, "build", { ...approved, managed: true }),
+    ).toBeNull();
+    expect(
+      monoSubmissionIntent(true, "build", { ...approved, appRequest: true }),
+    ).toBeNull();
+    expect(
+      monoSubmissionIntent(true, "build", { ...approved, queued: true }),
+    ).toBeNull();
+    expect(monoSubmissionIntent(true, "orchestrate", approved)).toBeNull();
   });
 
   it("keeps a running plan turn read-only after the saved switch changes", () => {

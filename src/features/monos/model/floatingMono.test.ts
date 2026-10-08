@@ -131,6 +131,22 @@ describe("floating Mono delivery", () => {
     );
   });
 
+  it("rejects floating Open when its plan is stale", async () => {
+    const runtime = host();
+    runtime.openPlan = vi.fn(() => false);
+    await expect(
+      deliverFloatingMonoRequest(
+        {
+          id: 1,
+          monoId: "mono",
+          action: { kind: "openPlan", blockId: "stale-plan" },
+        },
+        runtime,
+        async () => true,
+      ),
+    ).rejects.toThrow("plan is no longer available");
+  });
+
   it("does not deliver a request that expired while its Mono was loading", async () => {
     const runtime = host();
     await deliverFloatingMonoRequest(

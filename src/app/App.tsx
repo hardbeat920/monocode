@@ -367,10 +367,9 @@ import {
 import {
   buildPlanPrompt,
   canUseMonoDelegation,
-  canUseMonoTurnIntent,
   hasActivePlanTurn,
   isProviderFailureText,
-  monoTurnIntent,
+  monoSubmissionIntent,
   planTitle,
   planTurnKey,
   planTurnPrompt,
@@ -830,6 +829,7 @@ type SubmitOptions = ComposerTurnOptions & {
   queuedMessageId?: string;
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
+  approvedPlanBuild?: boolean;
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
@@ -6377,7 +6377,7 @@ function Workspace({
         (entry) => entry.id === sessionId,
       );
       const block = session?.blocks.find((entry) => entry.id === blockId);
-      if (!tab || !session || !block) return;
+      if (!tab || !session || block?.role !== "plan") return false;
       const file = {
         ...newPlanTab(
           session.id,
@@ -6393,6 +6393,7 @@ function Workspace({
         ),
       );
       setComposerFocused(false);
+      return true;
     },
     [activeTabId],
   );
@@ -6718,8 +6719,20 @@ function Workspace({
         (monoForSession(sessionId)?.planMode === true ||
           hasActivePlanTurn(current));
       const requestedIntent = options?.intent ?? "default";
-      const intent = monoTurnIntent(monoPlanMode, requestedIntent);
-      if (!canUseMonoTurnIntent(monoPlanMode, requestedIntent)) {
+      const approvedPlan = options?.planBlockId
+        ? current.blocks.find(
+            (block) =>
+              block.id === options.planBlockId && block.role === "plan",
+          )
+        : undefined;
+      const intent = monoSubmissionIntent(monoPlanMode, requestedIntent, {
+        approvedPlanBuild: options?.approvedPlanBuild,
+        hasApprovedPlan: !!approvedPlan?.text.trim(),
+        managed: options?.managed,
+        appRequest: !!options?.appRequestId,
+        queued: !!options?.queuedMessageId,
+      });
+      if (!intent) {
         enqueueHarnessEvent(sessionId, {
           type: "status",
           text: "Turn off Plan mode before starting implementation or delegated work.",
@@ -6743,12 +6756,6 @@ function Workspace({
           return false;
         }
       }
-      const approvedPlan = options?.planBlockId
-        ? current.blocks.find(
-            (block) =>
-              block.id === options.planBlockId && block.role === "plan",
-          )
-        : undefined;
       if (intent === "build" && !approvedPlan?.text.trim()) return false;
       if (options?.queuedMessageId) {
         const mode =
@@ -8637,14 +8644,24 @@ function Workspace({
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
       }
-      const accepted = onSubmit(sessionId, "Build approved plan", [], {
+      const accepted = submitSession(sessionId, "Build approved plan", [], {
         intent: "build",
         planBlockId: blockId,
         buildTarget: target,
+        approvedPlanBuild: true,
       });
-      if (mono) finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
+      if (mono) {
+        if (typeof accepted === "boolean")
+          finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
+        else
+          void accepted
+            .then((didAccept) =>
+              finishMonoPlanBuild(mono.id, mono.planMode === true, didAccept),
+            )
+            .catch(() => undefined);
+      }
     },
-    [onSubmit],
+    [submitSession],
   );
 
   useEffect(() => {

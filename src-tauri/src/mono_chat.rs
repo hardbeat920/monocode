@@ -201,6 +201,14 @@ fn menu_bar_hidden_marker(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join("menu-bar-icon-hidden"))
 }
 
+fn reply_reveals_workspace(success: bool, kind: Option<&str>) -> bool {
+    success
+        && matches!(
+            kind,
+            Some("reveal" | "openFile" | "openArtifact" | "openPlan")
+        )
+}
+
 /// Show or hide the menu bar icon, remembering the choice for next launch.
 #[tauri::command]
 pub fn mono_menu_bar_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
@@ -781,11 +789,10 @@ pub fn mono_chat_reply(
         if opening {
             inner.view(&request.mono_id).error = result.as_ref().err().cloned();
         }
-        let reveal = result.is_ok()
-            && matches!(
-                request.action.get("kind").and_then(Value::as_str),
-                Some("reveal" | "openFile" | "openArtifact")
-            );
+        let reveal = reply_reveals_workspace(
+            result.is_ok(),
+            request.action.get("kind").and_then(Value::as_str),
+        );
         inner.finish(id, window.label(), result);
         (request.mono_id, reveal)
     };
@@ -1004,5 +1011,14 @@ mod tests {
         );
         inner.pending.retain(|p| p.request.id != id);
         assert!(!inner.accept(id, "main"));
+    }
+
+    #[test]
+    fn opening_a_plan_reveals_the_workspace() {
+        assert!(reply_reveals_workspace(true, Some("openPlan")));
+        assert!(!reply_reveals_workspace(false, Some("openPlan")));
+        assert!(!reply_reveals_workspace(true, Some("planMode")));
+        assert!(!reply_reveals_workspace(true, Some("unknown")));
+        assert!(!reply_reveals_workspace(true, None));
     }
 }

@@ -24,6 +24,28 @@ export function canUseMonoTurnIntent(
   return !planMode || intent === "default" || intent === "plan";
 }
 
+export function monoSubmissionIntent(
+  planMode: boolean,
+  requested: TurnIntent,
+  options: {
+    approvedPlanBuild?: boolean;
+    hasApprovedPlan?: boolean;
+    managed?: boolean;
+    appRequest?: boolean;
+    queued?: boolean;
+  } = {},
+): TurnIntent | null {
+  const approvedBuild =
+    requested === "build" &&
+    options.approvedPlanBuild === true &&
+    options.hasApprovedPlan === true &&
+    !options.managed &&
+    !options.appRequest &&
+    !options.queued;
+  if (!canUseMonoTurnIntent(planMode, requested) && !approvedBuild) return null;
+  return monoTurnIntent(planMode, requested);
+}
+
 export function canUseMonoDelegation(planMode: boolean): boolean {
   return !planMode;
 }

@@ -163,6 +163,22 @@ it("stops publishing when Monos are disabled", async () => {
   ).toBe(false);
 });
 
+it("replies with an error when a floating Open plan is stale", async () => {
+  requests = [
+    {
+      id: 9,
+      monoId: "first",
+      action: { kind: "openPlan", blockId: "stale-plan" },
+    },
+  ];
+  host.openPlan = vi.fn(() => false);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 9,
+    error: "That plan is no longer available.",
+  });
+});
+
 it("shows or hides the menu bar icon to match the setting", async () => {
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
