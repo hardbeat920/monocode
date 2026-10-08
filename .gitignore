@@ -21,6 +21,8 @@ build/
 target/
 gen/schemas/
 coverage/
+playwright-report/
+test-results/
 .vite/
 .turbo/
 *.tsbuildinfo
