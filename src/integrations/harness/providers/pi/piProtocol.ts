@@ -133,9 +133,12 @@ export function parsePiVersion(output: string): string | null {
 }
 
 /**
- * Spawn args for a live session. Intentionally omits `--no-extensions` so the
- * user's global Pi packages (todos, subagents, custom tools) still load.
- * Project-local `.pi` resources follow Pi's saved trust.json; RPC never prompts.
+ * Spawn args for every Pi/omp process MonoCode starts. `--no-extensions` is
+ * never passed: extension factories own part of the model registry, so a
+ * child without them cannot resolve a plugin-provided model id and reports an
+ * empty catalog instead. Live sessions also keep the user's global Pi
+ * packages (todos, subagents, custom tools) working. Project-local `.pi`
+ * resources follow Pi's saved trust.json; RPC never prompts.
  */
 export function buildPiSpawnArgs(
   flavor: PiFlavor,
@@ -144,8 +147,6 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Catalog probes and throwaway text jobs — never for live chat. */
-    noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
     plan?: boolean;
@@ -153,7 +154,6 @@ export function buildPiSpawnArgs(
 ): string[] {
   const args = ["--mode", "rpc"];
   if (input.isolated || input.noSession) args.push("--no-session");
-  if (input.isolated || input.noExtensions) args.push("--no-extensions");
   if (input.isolated) {
     args.push(...flavor.isolateFlags);
   } else if (input.plan) {

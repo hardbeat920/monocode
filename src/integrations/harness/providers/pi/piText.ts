@@ -281,6 +281,8 @@ async function startLive(
     await spawnChild(
       childId,
       path,
+      // `isolated` strips tools, skills, and project context but never
+      // extensions: `model` is a catalog id that a plugin provider may own.
       buildPiSpawnArgs(flavor, {
         isolated: true,
         model,

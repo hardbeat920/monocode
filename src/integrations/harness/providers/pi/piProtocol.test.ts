@@ -53,18 +53,11 @@ describe("buildPiSpawnArgs", () => {
     ]);
   });
 
-  it("strips extensions for throwaway catalog probes", () => {
-    expect(
-      buildPiSpawnArgs(PI_FLAVOR, { noSession: true, noExtensions: true }),
-    ).toEqual(["--mode", "rpc", "--no-session", "--no-extensions"]);
-  });
-
   it("isolates throwaway text jobs from tools and project context", () => {
     expect(buildPiSpawnArgs(PI_FLAVOR, { isolated: true })).toEqual([
       "--mode",
       "rpc",
       "--no-session",
-      "--no-extensions",
       "--no-tools",
       "--no-skills",
       "--no-context-files",
@@ -97,7 +90,6 @@ describe("buildPiSpawnArgs", () => {
       "--mode",
       "rpc",
       "--no-session",
-      "--no-extensions",
       "--no-tools",
       "--no-skills",
       "--no-rules",
