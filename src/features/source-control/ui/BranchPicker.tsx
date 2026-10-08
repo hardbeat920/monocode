@@ -25,6 +25,7 @@ import { SwitchBranchDialog } from "./SwitchBranchDialog";
 
 type Props = {
   cwd: string;
+  project?: string;
   branch?: string;
   enabled?: boolean;
   worktree?: boolean;
@@ -51,6 +52,7 @@ const MENU_MAX_HEIGHT = 280;
 
 export function BranchPicker({
   cwd,
+  project = cwd,
   branch,
   enabled = true,
   worktree = false,
@@ -321,6 +323,7 @@ export function BranchPicker({
       {blocked ? (
         <SwitchBranchDialog
           cwd={cwd}
+          project={project}
           branch={blocked.name}
           creating={blocked.kind === "create"}
           busy={blockedBusy}

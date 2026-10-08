@@ -141,6 +141,7 @@ export {
 export {
   generateCommitMessage,
   generatePrContent,
+  NO_TEXT_HARNESS_MESSAGE,
   pickTextHarness,
   warmupText,
 } from "./core/textHarness";

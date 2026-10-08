@@ -204,9 +204,7 @@ async function startLive(
       },
       INIT_TIMEOUT_MS,
     );
-    await acp
-      .request("authenticate", { methodId: "cursor_login" }, REQUEST_TIMEOUT_MS)
-      .catch(() => undefined);
+    // Background text must not open a Cursor login page.
     await openSession(session, cwd, model, modelSettings);
     live = session;
     return session;

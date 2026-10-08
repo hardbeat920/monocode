@@ -70,7 +70,13 @@ it.each(providers)(
   async (id) => {
     const signal = new AbortController().signal;
     expect(
-      await generateCommitMessage("/repo", id, signal, ["chosen.txt"]),
+      await generateCommitMessage(
+        "/repo",
+        id,
+        signal,
+        undefined,
+        ["chosen.txt"],
+      ),
     ).toBe("Update selected files");
     expect(context).toHaveBeenCalledExactlyOnceWith("/repo", ["chosen.txt"]);
     expect(runPrompt).toHaveBeenCalledOnce();
@@ -91,7 +97,13 @@ it("does not read Git or call a model for an already cancelled generation", asyn
   const controller = new AbortController();
   controller.abort();
   await expect(
-    generateCommitMessage("/repo", "codex", controller.signal, ["chosen.txt"]),
+    generateCommitMessage(
+      "/repo",
+      "codex",
+      controller.signal,
+      undefined,
+      ["chosen.txt"],
+    ),
   ).rejects.toThrow();
   expect(context).not.toHaveBeenCalled();
   expect(runPrompt).not.toHaveBeenCalled();

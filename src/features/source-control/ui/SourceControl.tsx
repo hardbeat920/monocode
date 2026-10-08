@@ -1,9 +1,13 @@
 import type { HarnessId } from "../../sessions/model/session";
-import type { GitFileDiffKind, GitHistoryCommit } from "../../../platform/tauri/fs";
+import type {
+  GitFileDiffKind,
+  GitHistoryCommit,
+} from "../../../platform/tauri/fs";
 import { GitChangesPanel } from "./GitChangesPanel";
 
 type Props = {
   cwd: string;
+  project?: string;
   enabled: boolean;
   showGraph?: boolean;
   compactHeader?: boolean;
@@ -18,6 +22,7 @@ type Props = {
 
 export function SourceControl({
   cwd,
+  project,
   enabled,
   showGraph,
   compactHeader,
@@ -34,6 +39,7 @@ export function SourceControl({
       <GitChangesPanel
         key={cwd}
         cwd={cwd}
+        project={project}
         enabled={enabled}
         showGraph={showGraph}
         compactHeader={compactHeader}

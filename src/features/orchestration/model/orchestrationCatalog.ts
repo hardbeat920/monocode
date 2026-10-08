@@ -1,5 +1,9 @@
 import { HARNESSES } from "../../sessions/model/session";
-import { modelsFor } from "../../sessions/model/models";
+import { isProviderHidden } from "../../sessions/model/projectProviders";
+import {
+  isPickerProviderVisible,
+  modelsFor,
+} from "../../sessions/model/models";
 import {
   isHarnessAvailable,
   probeHarnessAvailability,
@@ -8,20 +12,24 @@ import { refreshHarnessCatalogs } from "../../../integrations/harness/core/regis
 import { validateOrchestrationSettings } from "./orchestrationPlan";
 
 /** Discover worker choices only when the user sends an orchestration request. */
-export async function discoverOrchestrationSettings() {
+export async function discoverOrchestrationSettings(project?: string) {
   await probeHarnessAvailability();
-  const installed = HARNESSES.filter(isHarnessAvailable);
+  // Worker sessions obey the same global and project visibility as the picker.
+  const installed = HARNESSES.filter(
+    (id) =>
+      isHarnessAvailable(id) &&
+      isPickerProviderVisible(id) &&
+      !isProviderHidden(project, id),
+  );
   await refreshHarnessCatalogs(installed);
   return validateOrchestrationSettings({
     maxWorkers: 2,
-    choices: installed
-      .filter(isHarnessAvailable)
-      .flatMap((harness) =>
-        modelsFor(harness).map(({ id, name }) => ({
-          harness,
-          model: id,
-          name,
-        })),
-      ),
+    choices: installed.filter(isHarnessAvailable).flatMap((harness) =>
+      modelsFor(harness).map(({ id, name }) => ({
+        harness,
+        model: id,
+        name,
+      })),
+    ),
   });
 }

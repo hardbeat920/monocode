@@ -2515,6 +2515,7 @@ function SidebarComponent({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <SourceControl
             cwd={gitRoot}
+            project={cwd}
             enabled={panesOpen}
             showGraph={!inset}
             compactHeader={inset}
