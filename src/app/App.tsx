@@ -10580,7 +10580,10 @@ function Workspace({
                 cwd,
                 remoteShells,
               ))
-                byId.set(listing.id, listing);
+                byId.set(listing.id, {
+                  ...listing,
+                  archived: byId.get(listing.id)?.archived ?? false,
+                });
               return [...byId.values()];
             },
             session: async (id) => {

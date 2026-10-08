@@ -38,7 +38,7 @@ export async function readRemoteShell(shell: Session): Promise<Session> {
 export async function remoteShellListings(
   cwd: string,
   shells: Session[],
-): Promise<AppSessionListing[]> {
+): Promise<Omit<AppSessionListing, "archived">[]> {
   const project = remoteProjectFor(cwd);
   let summaries: HostSessionSummary[] | undefined;
   if (project && shells.length)
