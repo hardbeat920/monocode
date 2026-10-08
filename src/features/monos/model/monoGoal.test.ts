@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { MonoGoal } from "./mono";
 import {
   canContinueMonoGoal,
+  completeMonoGoalTurn,
   consumeMonoGoalCommand,
   goalTurnResult,
   isCurrentGoalTurn,
@@ -28,11 +29,13 @@ it("parses only leading /goal commands and preserves objective text", () => {
     action: "start",
     objective: "Fix the build",
   });
-  expect(consumeMonoGoalCommand("/goal Fix the build\nand run checks")).toEqual({
-    matched: true,
-    action: "start",
-    objective: "Fix the build\nand run checks",
-  });
+  expect(consumeMonoGoalCommand("/goal Fix the build\nand run checks")).toEqual(
+    {
+      matched: true,
+      action: "start",
+      objective: "Fix the build\nand run checks",
+    },
+  );
   expect(consumeMonoGoalCommand(" /goal pause ")).toEqual({
     matched: true,
     action: "pause",
@@ -67,16 +70,76 @@ it("persists the visible goal across a Mono roster reload", async () => {
 });
 
 it("continues only the same active completed turn when no work is waiting", () => {
-  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "completed", false)).toBe(true);
-  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "failed", false)).toBe(false);
-  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "completed", true)).toBe(false);
-  expect(canContinueMonoGoal({ ...goal, status: "paused" }, "goal-1", 4, 4, "completed", false)).toBe(false);
+  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "completed", false)).toBe(
+    true,
+  );
+  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "failed", false)).toBe(
+    false,
+  );
+  expect(canContinueMonoGoal(goal, "goal-1", 4, 4, "completed", true)).toBe(
+    false,
+  );
+  expect(
+    canContinueMonoGoal(
+      { ...goal, status: "paused" },
+      "goal-1",
+      4,
+      4,
+      "completed",
+      false,
+    ),
+  ).toBe(false);
 });
 
 it("ignores stale completions and stops repeated or unbounded continuation", () => {
-  expect(isCurrentGoalTurn({ ...goal, id: "new-goal" }, "goal-1", 4, 4)).toBe(false);
+  expect(isCurrentGoalTurn({ ...goal, id: "new-goal" }, "goal-1", 4, 4)).toBe(
+    false,
+  );
   expect(isCurrentGoalTurn(goal, "goal-1", 4, 5)).toBe(false);
   const repeated = { ...goal, lastReply: "Still checking", stalled: 2 };
   expect(goalTurnResult(repeated, "Still checking")?.status).toBe("blocked");
-  expect(goalTurnResult({ ...goal, turns: MONO_GOAL_MAX_TURNS - 1 }, "progress")?.status).toBe("blocked");
+  expect(
+    goalTurnResult({ ...goal, turns: MONO_GOAL_MAX_TURNS - 1 }, "progress")
+      ?.status,
+  ).toBe("blocked");
+});
+
+it("counts delegated report turns while waiting and hits both goal limits", () => {
+  let reports = goal;
+  for (let turn = 0; turn < MONO_GOAL_MAX_TURNS; turn++) {
+    const result = completeMonoGoalTurn(reports, `Report ${turn}`, true);
+    reports = result.goal;
+    expect(result.continue).toBe(false);
+  }
+  expect(reports).toMatchObject({
+    status: "blocked",
+    turns: MONO_GOAL_MAX_TURNS,
+  });
+
+  let repeatedReports = goal;
+  for (let turn = 0; turn < 3; turn++) {
+    repeatedReports = completeMonoGoalTurn(
+      repeatedReports,
+      "Delegated work is still running",
+      true,
+    ).goal;
+  }
+  expect(repeatedReports).toMatchObject({
+    status: "blocked",
+    turns: 3,
+    stalled: 3,
+  });
+});
+
+it("does not count a duplicate completion twice, but can resume its continuation", () => {
+  const counted = completeMonoGoalTurn(goal, "Delegated report", true);
+  const duplicate = completeMonoGoalTurn(
+    counted.goal,
+    "Delegated report",
+    false,
+    true,
+  );
+
+  expect(duplicate.goal.turns).toBe(1);
+  expect(duplicate.continue).toBe(true);
 });

@@ -348,7 +348,8 @@ export function MonoComposer({
         </div>
       </div>
       <p id="mono-goal-help" className="px-1 pt-1 text-[10px] text-content/40">
-        /goal &lt;objective&gt; starts a goal; /goal status, pause, resume or cancel manages it.
+        /goal &lt;objective&gt; starts a goal; /goal status, pause, resume or
+        cancel manages it.
       </p>
     </form>
   );

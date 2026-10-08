@@ -33,9 +33,10 @@ describe("Mono completion batches", () => {
   it("keeps a watched delegation pending until its report is queued", async () => {
     let deliver!: () => void;
     const batches = new MonoSessionCompletionBatches(
-      () => new Promise<void>((resolve) => {
-        deliver = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          deliver = resolve;
+        }),
     );
     const finish = batches.watch(origin, "worker");
     expect(batches.hasPending("mono")).toBe(true);

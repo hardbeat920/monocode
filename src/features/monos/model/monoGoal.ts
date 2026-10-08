@@ -26,10 +26,7 @@ export function goalTurnPrompt(goal: MonoGoal): string {
   return `Continue working toward this goal. Review what has already been done, choose the next useful step, and keep going until it is complete or you are genuinely blocked. When finished or blocked, call app mono.goal.update with this goalId: ${goal.id}.`;
 }
 
-export function goalTurnResult(
-  goal: MonoGoal,
-  reply: string,
-): MonoGoal {
+export function goalTurnResult(goal: MonoGoal, reply: string): MonoGoal {
   const normalized = reply.trim().replace(/\s+/g, " ").slice(0, 4_000);
   const stalled = !normalized
     ? goal.stalled + 1
@@ -63,6 +60,16 @@ export function goalTurnResult(
   };
 }
 
+export function completeMonoGoalTurn(
+  goal: MonoGoal,
+  reply: string,
+  waiting: boolean,
+  alreadyCounted = false,
+): { goal: MonoGoal; continue: boolean } {
+  const updated = alreadyCounted ? goal : goalTurnResult(goal, reply);
+  return { goal: updated, continue: !waiting && updated.status === "active" };
+}
+
 export function goalContext(goal: MonoGoal): string {
   if (goal.status !== "active") return "";
   return `<mono_goal>\nThe user explicitly started this goal. Its exact objective is the following JSON string: ${JSON.stringify(goal.objective)}\nKeep working on it across turns. Do not claim it is complete unless it is; call app mono.goal.update with {"goalId":"${goal.id}","status":"done"} when finished, or status "blocked" with a short reason when you cannot proceed. The user can pause or cancel automatic continuation at any time.\n</mono_goal>`;
@@ -74,7 +81,9 @@ export function isCurrentGoalTurn(
   turn: number,
   currentTurn: number | undefined,
 ): boolean {
-  return goal?.id === goalId && goal.status === "active" && currentTurn === turn;
+  return (
+    goal?.id === goalId && goal.status === "active" && currentTurn === turn
+  );
 }
 
 export function canContinueMonoGoal(
@@ -85,6 +94,9 @@ export function canContinueMonoGoal(
   outcome: "completed" | "failed" | "cancelled",
   waiting: boolean,
 ): boolean {
-  return isCurrentGoalTurn(goal, goalId, turn, currentTurn) &&
-    outcome === "completed" && !waiting;
+  return (
+    isCurrentGoalTurn(goal, goalId, turn, currentTurn) &&
+    outcome === "completed" &&
+    !waiting
+  );
 }

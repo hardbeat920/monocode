@@ -344,7 +344,10 @@ export function saveMonoSessionId(monoId: string, sessionId: string): void {
   updateMono(monoId, (mono) => ({ ...mono, sessionId }));
 }
 
-export function saveMonoGoal(monoId: string, goal: MonoGoal): MonoGoal | undefined {
+export function saveMonoGoal(
+  monoId: string,
+  goal: MonoGoal,
+): MonoGoal | undefined {
   return updateMono(monoId, (mono) => ({ ...mono, goal }))?.goal;
 }
 
