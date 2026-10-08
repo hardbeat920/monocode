@@ -1,25 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { sniffImageMime } from "../../files/model/filePreview";
 
-/**
- * Prefixes rehype-harden will keep on issue/PR markdown. The fetcher still
- * re-checks the host; this list only has to match the URLs GitHub and Linear
- * put in the markdown source, not the CDN they redirect to.
- */
-export const INBOX_MEDIA_PREFIXES = [
-  "https://github.com/user-attachments/",
-  "https://www.github.com/user-attachments/",
-  "https://user-images.githubusercontent.com/",
-  "https://private-user-images.githubusercontent.com/",
-  "https://objects.githubusercontent.com/",
-  "https://media.githubusercontent.com/",
-  "https://camo.githubusercontent.com/",
-  "https://avatars.githubusercontent.com/",
-  "https://raw.githubusercontent.com/",
-  "https://gist.githubusercontent.com/",
-  "https://uploads.linear.app/",
-];
-
 export type InboxMediaKind = "image" | "video";
 export type InboxMediaType = { kind: InboxMediaKind; mime: string };
 
@@ -30,7 +11,10 @@ const mediaCache = new Map<string, Uint8Array>();
 const mediaRequests = new Map<string, Promise<Uint8Array>>();
 let mediaCacheBytes = 0;
 
-/** Remote image/video URLs GitHub and Linear actually put in issue bodies. */
+/**
+ * Remote image/video URLs GitHub and Linear actually put in issue bodies.
+ * Mirrors `is_allowed_media_target` in inbox_media.rs, which has the final say.
+ */
 export function isInboxMediaUrl(value: string): boolean {
   let url: URL;
   try {
@@ -55,11 +39,17 @@ export function isInboxMediaUrl(value: string): boolean {
   const path = url.pathname.toLowerCase();
   if (path.startsWith("/user-attachments/")) return true;
   const parts = path.split("/").filter(Boolean);
-  return (
-    parts.length >= 4 &&
-    parts[2] === "assets" &&
-    /^[0-9]+$/.test(parts[3] ?? "")
-  );
+  switch (parts[2]) {
+    case "assets":
+      return parts.length >= 4 && /^[0-9]+$/.test(parts[3] ?? "");
+    case "raw":
+    case "blob":
+      return parts.length >= 5;
+    case "releases":
+      return parts.length >= 6 && parts[3] === "download";
+    default:
+      return false;
+  }
 }
 
 export function sniffInboxMedia(bytes: Uint8Array): InboxMediaType | null {

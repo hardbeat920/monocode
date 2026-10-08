@@ -28,7 +28,7 @@ pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, Stri
 }
 
 fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
-    let mut current = parse_allowed_media_url(url)?;
+    let mut current = github_blob_as_raw(parse_allowed_media_url(url)?)?;
     let token = if github_auth_host(&current.host) {
         github_auth_token()
     } else {
@@ -220,9 +220,35 @@ fn is_github_attachment_path(path: &str) -> bool {
     if path.starts_with("/user-attachments/") {
         return true;
     }
-    // /owner/repo/assets/<user-id>/<uuid>
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-    parts.len() >= 4 && parts[2] == "assets" && parts[3].bytes().all(|byte| byte.is_ascii_digit())
+    match parts.get(2).copied() {
+        // /owner/repo/assets/<user-id>/<uuid>
+        Some("assets") => parts.len() >= 4 && parts[3].bytes().all(|byte| byte.is_ascii_digit()),
+        // Files committed to a repo or attached to a release, which PR bodies
+        // embed as screenshots. The body check still rejects an HTML page.
+        Some("raw") | Some("blob") => parts.len() >= 5,
+        Some("releases") => parts.len() >= 6 && parts[3] == "download",
+        _ => false,
+    }
+}
+
+/// `/owner/repo/blob/...` is the HTML file page; `/raw/` redirects to the bytes.
+fn github_blob_as_raw(url: MediaUrl) -> Result<MediaUrl, String> {
+    if !is_github_site(&url.host) {
+        return Ok(url);
+    }
+    let parts: Vec<&str> = url.path.splitn(5, '/').collect();
+    // ["", owner, repo, "blob", rest]
+    if parts.len() < 5 || !parts[3].eq_ignore_ascii_case("blob") {
+        return Ok(url);
+    }
+    let query = url.url.split_once('?').map(|(_, query)| query);
+    let path = format!("/{}/{}/raw/{}", parts[1], parts[2], parts[4]);
+    let raw = match query {
+        Some(query) => format!("https://{}{path}?{query}", url.host),
+        None => format!("https://{}{path}", url.host),
+    };
+    parse_allowed_media_url(&raw)
 }
 
 fn is_github_site(host: &str) -> bool {
@@ -305,12 +331,39 @@ mod tests {
             "https://github.com/acme/web/assets/12/aaaaaaaa-bbbb-cccc"
         )
         .is_ok());
+        assert!(parse_allowed_media_url(
+            "https://github.com/acme/web/releases/download/v1.0/shot.png"
+        )
+        .is_ok());
+        assert!(
+            parse_allowed_media_url("https://github.com/acme/web/raw/main/docs/shot.png").is_ok()
+        );
+    }
+
+    #[test]
+    fn github_blob_pages_fetch_the_raw_file() {
+        let url = github_blob_as_raw(
+            parse_allowed_media_url(
+                "https://github.com/acme/web/blob/feature/x/docs/shot.png?raw=true",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            url.url,
+            "https://github.com/acme/web/raw/feature/x/docs/shot.png?raw=true"
+        );
+        let other =
+            parse_allowed_media_url("https://raw.githubusercontent.com/a/b/blob/c.png").unwrap();
+        assert_eq!(github_blob_as_raw(other.clone()).unwrap(), other);
     }
 
     #[test]
     fn github_pages_other_hosts_and_traversal_are_rejected() {
         assert!(parse_allowed_media_url("https://github.com/acme/web/issues/1").is_err());
         assert!(parse_allowed_media_url("https://github.com/acme/web/assets").is_err());
+        assert!(parse_allowed_media_url("https://github.com/acme/web/releases/tag/v1").is_err());
+        assert!(parse_allowed_media_url("https://github.com/acme/web/raw/main").is_err());
         assert!(parse_allowed_media_url("https://github.com/user-attachments/../login").is_err());
         assert!(parse_allowed_media_url("http://github.com/user-attachments/assets/x").is_err());
         assert!(parse_allowed_media_url("https://evil.example/shot.png").is_err());

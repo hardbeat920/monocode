@@ -6,10 +6,12 @@ import { X } from "./icons";
 type Props = {
   src: string;
   alt: string;
+  /** Text shown under the image, such as its alt text or file name. */
+  caption?: string;
   onClose: () => void;
 };
 
-export function ImageLightbox({ src, alt, onClose }: Props) {
+export function ImageLightbox({ src, alt, caption, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -37,7 +39,7 @@ export function ImageLightbox({ src, alt, onClose }: Props) {
       role="dialog"
       aria-modal="true"
       aria-label={`Image preview: ${alt}`}
-      className="fixed inset-0 flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+      className="image-lightbox fixed inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 backdrop-blur-sm"
       style={{ zIndex: LAYER.dialog }}
       onMouseDown={(event) => {
         event.stopPropagation();
@@ -49,8 +51,13 @@ export function ImageLightbox({ src, alt, onClose }: Props) {
         src={src}
         alt={alt}
         draggable={false}
-        className="max-h-full max-w-full select-none object-contain shadow-2xl"
+        className="image-lightbox-image min-h-0 max-w-full select-none rounded-md object-contain shadow-2xl"
       />
+      {caption ? (
+        <p className="max-w-2xl shrink-0 truncate text-center text-[13px] text-white/70">
+          {caption}
+        </p>
+      ) : null}
       <button
         ref={closeRef}
         type="button"
