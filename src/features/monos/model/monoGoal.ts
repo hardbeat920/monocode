@@ -74,28 +74,51 @@ export function recordMonoGoalTurn(
 export function submitMonoGoal(
   submit: () => boolean | Promise<boolean>,
   onRejected: () => void,
+  ownsAttempt: () => boolean = () => true,
 ): boolean | Promise<boolean> {
+  const reject = () => {
+    if (ownsAttempt()) onRejected();
+  };
   let acceptance: boolean | Promise<boolean>;
   try {
     acceptance = submit();
   } catch {
-    onRejected();
+    reject();
     return false;
   }
   if (typeof acceptance === "boolean") {
-    if (!acceptance) onRejected();
+    if (!acceptance) reject();
     return acceptance;
   }
   return acceptance.then(
     (accepted) => {
-      if (!accepted) onRejected();
+      if (!accepted) reject();
       return accepted;
     },
     () => {
-      onRejected();
+      reject();
       return false;
     },
   );
+}
+
+export class MonoGoalSubmissionAttempts {
+  private latest = new Map<string, number>();
+  private nextId = 0;
+
+  begin(sessionId: string): number {
+    const attempt = ++this.nextId;
+    this.latest.set(sessionId, attempt);
+    return attempt;
+  }
+
+  invalidate(sessionId: string): void {
+    this.latest.delete(sessionId);
+  }
+
+  owns(sessionId: string, attempt: number): boolean {
+    return this.latest.get(sessionId) === attempt;
+  }
 }
 
 export function isActiveMonoGoal(

@@ -564,6 +564,7 @@ import {
   goalTurnPrompt,
   isActiveMonoGoal,
   isCurrentGoalTurn,
+  MonoGoalSubmissionAttempts,
   recordMonoGoalTurn,
   submitMonoGoal,
 } from "../features/monos/model/monoGoal";
@@ -842,6 +843,7 @@ type SubmitOptions = ComposerTurnOptions & {
   monoSessionCompletion?: Block["monoSessionCompletion"];
   /** Internal guard for a goal submission deferred by project synchronization. */
   monoGoalId?: string;
+  monoGoalAttempt?: number;
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
   refreshTitle?: boolean;
@@ -1562,6 +1564,7 @@ function Workspace({
       outcome: ControlOutcome,
     ) => void
   >(() => {});
+  const goalSubmissionAttempts = useRef(new MonoGoalSubmissionAttempts());
   const countedGoalTurns = useRef(new Map<string, string>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
@@ -6640,7 +6643,15 @@ function Workspace({
     ): SubmissionAcceptance => {
       if (options?.monoGoalId) {
         if (
-          !isActiveMonoGoal(monoForSession(sessionId)?.goal, options.monoGoalId)
+          !isActiveMonoGoal(
+            monoForSession(sessionId)?.goal,
+            options.monoGoalId,
+          ) ||
+          options.monoGoalAttempt === undefined ||
+          !goalSubmissionAttempts.current.owns(
+            sessionId,
+            options.monoGoalAttempt,
+          )
         )
           return false;
       }
@@ -6705,11 +6716,13 @@ function Workspace({
             stalled: 0,
           } as const;
           saveMonoGoal(mono.id, startedGoal);
+          const attempt = goalSubmissionAttempts.current.begin(sessionId);
           return submitMonoGoal(
             () =>
               submitSession(sessionId, goalCommand.objective, [], {
                 ...options,
                 monoGoalId: startedGoal.id,
+                monoGoalAttempt: attempt,
               }),
             () => {
               const failed = failedMonoGoalSubmission(
@@ -6720,6 +6733,7 @@ function Workspace({
               );
               if (failed) saveMonoGoal(mono.id, failed);
             },
+            () => goalSubmissionAttempts.current.owns(sessionId, attempt),
           );
         }
         if (goalCommand.action === "pause" || goalCommand.action === "cancel") {
@@ -6727,6 +6741,7 @@ function Workspace({
             report("There is no active goal to pause or cancel.");
             return false;
           }
+          goalSubmissionAttempts.current.invalidate(sessionId);
           saveMonoGoal(mono.id, {
             ...goal,
             status: goalCommand.action === "pause" ? "paused" : "cancelled",
@@ -6768,11 +6783,13 @@ function Workspace({
             reason: undefined,
           };
           saveMonoGoal(mono.id, resumedGoal);
+          const attempt = goalSubmissionAttempts.current.begin(sessionId);
           return submitMonoGoal(
             () =>
               submitSession(sessionId, goalTurnPrompt(resumedGoal), [], {
                 managed: true,
                 monoGoalId: resumedGoal.id,
+                monoGoalAttempt: attempt,
               }),
             () => {
               const failed = failedMonoGoalSubmission(
@@ -6783,6 +6800,7 @@ function Workspace({
               );
               if (failed) saveMonoGoal(mono.id, failed);
             },
+            () => goalSubmissionAttempts.current.owns(sessionId, attempt),
           );
         }
       }
@@ -8295,11 +8313,13 @@ function Workspace({
             )
           )
             return;
+          const attempt = goalSubmissionAttempts.current.begin(sessionId);
           return submitMonoGoal(
             () =>
               submitSession(sessionId, goalTurnPrompt(currentGoal), [], {
                 managed: true,
                 monoGoalId: goalId,
+                monoGoalAttempt: attempt,
               }),
             () => {
               const failed = failedMonoGoalSubmission(
@@ -8310,6 +8330,7 @@ function Workspace({
               );
               if (failed) saveMonoGoal(mono.id, failed);
             },
+            () => goalSubmissionAttempts.current.owns(sessionId, attempt),
           );
         },
       );

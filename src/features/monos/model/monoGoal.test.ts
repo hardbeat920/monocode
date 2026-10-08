@@ -10,6 +10,7 @@ import {
   isActiveMonoGoal,
   isCurrentGoalTurn,
   MONO_GOAL_MAX_TURNS,
+  MonoGoalSubmissionAttempts,
   recordMonoGoalTurn,
   submitMonoGoal,
 } from "./monoGoal";
@@ -27,6 +28,39 @@ const goal: MonoGoal = {
   turns: 0,
   stalled: 0,
 };
+
+function projectBoundAttempt(
+  state: { goal: MonoGoal; busy: boolean },
+  attempts: MonoGoalSubmissionAttempts,
+  attempt: number,
+  sync: Promise<{ path: string; identity: string; moved: false }>,
+  failureStatus: "paused" | "cancelled",
+) {
+  return submitMonoGoal(
+    () =>
+      submitAfterProjectSync({
+        cwd: "/repo",
+        sync,
+        applyLocationChange: vi.fn(),
+        submit: () => {
+          if (!attempts.owns("mono", attempt) || state.busy) return false;
+          state.busy = true;
+          return true;
+        },
+        onError: vi.fn(),
+      }),
+    () => {
+      state.goal =
+        failedMonoGoalSubmission(
+          state.goal,
+          goal.id,
+          failureStatus,
+          "The goal submission could not start.",
+        ) ?? state.goal;
+    },
+    () => attempts.owns("mono", attempt),
+  );
+}
 
 it("parses only leading /goal commands and preserves objective text", () => {
   expect(consumeMonoGoalCommand("/goal Fix the build")).toEqual({
@@ -278,4 +312,94 @@ it("does not submit a project-bound goal after it was cancelled during sync", as
 
   await expect(settled).resolves.toBe(false);
   expect(submit).not.toHaveBeenCalled();
+});
+
+it.each(["two resumes", "start followed by resume"] as const)(
+  "allows only the latest of %s sharing project sync to submit",
+  async (scenario) => {
+    const attempts = new MonoGoalSubmissionAttempts();
+    const state = { goal, busy: false };
+    let finishSync!: (location: {
+      path: string;
+      identity: string;
+      moved: false;
+    }) => void;
+    const sync = new Promise<{ path: string; identity: string; moved: false }>(
+      (resolve) => {
+        finishSync = resolve;
+      },
+    );
+    const firstAttempt = attempts.begin("mono");
+    const first = projectBoundAttempt(
+      state,
+      attempts,
+      firstAttempt,
+      sync,
+      scenario === "start followed by resume" ? "cancelled" : "paused",
+    );
+    const secondAttempt = attempts.begin("mono");
+    const second = projectBoundAttempt(
+      state,
+      attempts,
+      secondAttempt,
+      sync,
+      "paused",
+    );
+    finishSync({ path: "/repo", identity: "repo", moved: false });
+
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(true);
+    state.goal = recordMonoGoalTurn(
+      state.goal,
+      "The running goal completed a report",
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(state.goal).toMatchObject({ status: "active", turns: 1 });
+  },
+);
+
+it("lets pause and resume supersede an older pending project-bound attempt", async () => {
+  const attempts = new MonoGoalSubmissionAttempts();
+  const state = { goal, busy: false };
+  let finishSync!: (location: {
+    path: string;
+    identity: string;
+    moved: false;
+  }) => void;
+  const sync = new Promise<{ path: string; identity: string; moved: false }>(
+    (resolve) => {
+      finishSync = resolve;
+    },
+  );
+  const oldAttempt = attempts.begin("mono");
+  const oldSubmission = projectBoundAttempt(
+    state,
+    attempts,
+    oldAttempt,
+    sync,
+    "paused",
+  );
+  attempts.invalidate("mono");
+  state.goal = { ...state.goal, status: "paused" };
+  state.goal = { ...state.goal, status: "active" };
+  const resumedAttempt = attempts.begin("mono");
+  const resumedSubmission = projectBoundAttempt(
+    state,
+    attempts,
+    resumedAttempt,
+    sync,
+    "paused",
+  );
+  finishSync({ path: "/repo", identity: "repo", moved: false });
+
+  await expect(oldSubmission).resolves.toBe(false);
+  await expect(resumedSubmission).resolves.toBe(true);
+  state.goal = recordMonoGoalTurn(
+    state.goal,
+    "The resumed goal completed a report",
+    vi.fn(),
+    vi.fn(),
+  );
+  expect(state.goal).toMatchObject({ status: "active", turns: 1 });
 });
