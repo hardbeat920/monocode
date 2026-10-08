@@ -2253,6 +2253,8 @@ function UserMessageBlock({
   // The draft's text while it is being edited in place; null otherwise.
   const [draftEdit, setDraftEdit] = useState<string | null>(null);
   const editingDraft = draftEdit !== null;
+  const editDraftRef = useRef<HTMLButtonElement>(null);
+  const sendDraftRef = useRef<HTMLButtonElement>(null);
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
@@ -2366,9 +2368,15 @@ function UserMessageBlock({
   };
   const canSaveDraftEdit =
     draftEdit !== null && (!!draftEdit.trim() || !!block.attachments?.length);
+  // The editor unmounts on save or cancel; keep keyboard focus on the draft.
   const saveDraftEdit = () => {
     if (!canSaveDraftEdit || onEditDraft?.(block, draftEdit) === false) return;
-    setDraftEdit(null);
+    flushSync(() => setDraftEdit(null));
+    sendDraftRef.current?.focus();
+  };
+  const cancelDraftEdit = () => {
+    flushSync(() => setDraftEdit(null));
+    editDraftRef.current?.focus();
   };
 
   const deliveryControl =
@@ -2500,7 +2508,7 @@ function UserMessageBlock({
                     if (isImeComposition(event.nativeEvent)) return;
                     if (event.key === "Escape") {
                       event.preventDefault();
-                      setDraftEdit(null);
+                      cancelDraftEdit();
                     } else if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       saveDraftEdit();
@@ -2571,7 +2579,7 @@ function UserMessageBlock({
                         type="button"
                         title="Cancel draft edit"
                         aria-label="Cancel draft edit"
-                        onClick={() => setDraftEdit(null)}
+                        onClick={cancelDraftEdit}
                         className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
                       >
                         <X className="size-3.5" strokeWidth={1.75} />
@@ -2603,6 +2611,7 @@ function UserMessageBlock({
                       </button>
                       {onEditDraft ? (
                         <button
+                          ref={editDraftRef}
                           type="button"
                           title="Edit draft"
                           aria-label="Edit draft"
@@ -2614,6 +2623,7 @@ function UserMessageBlock({
                         </button>
                       ) : null}
                       <button
+                        ref={sendDraftRef}
                         type="button"
                         title="Send draft"
                         aria-label="Send draft"

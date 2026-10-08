@@ -762,7 +762,7 @@ export function removeSessionDraft(
   };
 }
 
-/** Rewrite a saved draft's text, keeping its attachments and request link. */
+/** Rewrite a saved draft's text, keeping its attachments. */
 export function editSessionDraft(
   session: Session,
   draftBlockId: string,
@@ -772,7 +772,13 @@ export function editSessionDraft(
     (block) =>
       block.id === draftBlockId && block.role === "user" && block.draft,
   );
-  if (!draft || (!text.trim() && !draft.attachments?.length)) return undefined;
+  // A CLI request retries by comparing its prompt with the saved draft text.
+  if (
+    !draft ||
+    draft.appRequestId ||
+    (!text.trim() && !draft.attachments?.length)
+  )
+    return undefined;
   const draftTitle = titleFromPrompt(
     draft.text,
     session.harness,
@@ -784,7 +790,7 @@ export function editSessionDraft(
       block === draft ? { ...block, text } : block,
     ),
     title:
-      session.title === draftTitle
+      session.blocks.length === 1 && session.title === draftTitle
         ? titleFromPrompt(text, session.harness, draft.attachments)
         : session.title,
   };

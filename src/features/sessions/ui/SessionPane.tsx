@@ -997,7 +997,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     onEditDraft={
-                      draftBlock && onEditDraft && !remote
+                      draftBlock &&
+                      onEditDraft &&
+                      !remote &&
+                      !draftBlock.appRequestId
                         ? (block, text) =>
                             onEditDraft(session.id, block.id, text)
                         : undefined

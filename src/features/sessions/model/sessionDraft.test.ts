@@ -69,7 +69,6 @@ describe("editSessionDraft", () => {
         text: "Maybe later",
         draft: true,
         attachments: [attachment],
-        appRequestId: "request",
       },
     ];
 
@@ -99,12 +98,38 @@ describe("editSessionDraft", () => {
     );
   });
 
-  it("rejects empty text, sent messages, and unknown blocks", () => {
+  it("keeps a title from an earlier turn that matches a follow-up draft", () => {
+    const session = newSession("codex", "/repo");
+    session.title = "codex · Fix this";
+    session.blocks = [
+      { id: "sent", role: "user", text: "Fix this" },
+      { id: "reply", role: "assistant", text: "Done" },
+      { id: "draft", role: "user", text: "Fix this", draft: true },
+    ];
+
+    expect(editSessionDraft(session, "draft", "Fix that")?.title).toBe(
+      "codex · Fix this",
+    );
+  });
+
+  it("rejects empty text, CLI request drafts, sent messages, and unknown blocks", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [
       { id: "sent", role: "user", text: "Keep this" },
       { id: "draft", role: "user", text: "Maybe later", draft: true },
     ];
+    const requested = newSession("codex", "/repo");
+    requested.blocks = [
+      {
+        id: "draft",
+        role: "user",
+        text: "Maybe later",
+        draft: true,
+        appRequestId: "request",
+      },
+    ];
+
+    expect(editSessionDraft(requested, "draft", "Changed")).toBeUndefined();
 
     expect(editSessionDraft(session, "draft", "  ")).toBeUndefined();
     expect(editSessionDraft(session, "sent", "Changed")).toBeUndefined();
