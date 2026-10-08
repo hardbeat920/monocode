@@ -128,22 +128,19 @@ it("explains when permissions take effect while the Mono is working", async () =
   );
 });
 
-it(
-  "shows and changes persistent Plan mode, disabling the switch while busy",
-  async () => {
-    await render("auto", false, true);
-    const toggle = container.querySelector<HTMLButtonElement>(
-      '[role="switch"][aria-label="Plan mode"]',
-    )!;
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    act(() => toggle.click());
-    expect(onPlanModeChange).toHaveBeenCalledWith(false);
+it("shows and changes persistent Plan mode, disabling the switch while busy", async () => {
+  await render("auto", false, true);
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Plan mode"]',
+  )!;
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  act(() => toggle.click());
+  expect(onPlanModeChange).toHaveBeenCalledWith(false);
 
-    await render("auto", true, true);
-    expect(
-      container.querySelector<HTMLButtonElement>(
-        '[role="switch"][aria-label="Plan mode"]',
-      )!.disabled,
-    ).toBe(true);
-  },
-);
+  await render("auto", true, true);
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+});

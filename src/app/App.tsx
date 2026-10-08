@@ -555,6 +555,7 @@ import {
   monosSnapshot,
   monoState,
   removeMono,
+  finishMonoPlanBuild,
   saveMonoPlanMode,
   subscribeMonos,
   type MonoState,
@@ -569,6 +570,7 @@ import {
   recordAgentContext,
   writeAgentFile,
 } from "../features/monos/model/monoFiles";
+import { canChangeMonoPlanMode } from "../features/monos/model/floatingMono";
 import { useMonoHabits } from "./hooks/useMonoHabits";
 import { useFloatingMono } from "./hooks/useFloatingMono";
 import {
@@ -8614,8 +8616,9 @@ function Workspace({
       );
       const mono = monoForSession(sessionId);
       if (session && remoteProjectFor(session.cwd)) {
-        if (mono?.planMode) saveMonoPlanMode(mono.id, false);
-        buildRemotePlan(sessionId, blockId, target);
+        const accepted = buildRemotePlan(sessionId, blockId, target);
+        if (mono && typeof accepted === "boolean")
+          finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
         return;
       }
       const block = session?.blocks.find((entry) => entry.id === blockId);
@@ -8631,15 +8634,15 @@ function Workspace({
       ) {
         return;
       }
-      if (mono?.planMode) saveMonoPlanMode(mono.id, false);
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
       }
-      onSubmit(sessionId, "Build approved plan", [], {
+      const accepted = onSubmit(sessionId, "Build approved plan", [], {
         intent: "build",
         planBlockId: blockId,
         buildTarget: target,
       });
+      if (mono) finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
     },
     [onSubmit],
   );
@@ -10472,16 +10475,13 @@ function Workspace({
           (session) => session.id === payload.sessionId,
         );
         const requestMono = requestSource
-          ? monoForSession(requestSource.id) ??
-            findMono(habitRunMono(requestSource.id) ?? "")
+          ? (monoForSession(requestSource.id) ??
+            findMono(habitRunMono(requestSource.id) ?? ""))
           : undefined;
         const planning =
           requestMono?.planMode === true ||
           (requestSource ? hasActivePlanTurn(requestSource) : false);
-        if (
-          payload.namespace === "control" &&
-          !canUseMonoDelegation(planning)
-        )
+        if (payload.namespace === "control" && !canUseMonoDelegation(planning))
           throw new Error(
             "Delegation is unavailable while Mono Plan mode is on",
           );
@@ -12214,8 +12214,18 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       }),
-    setPlanMode: (monoId, enabled) =>
-      saveMonoPlanMode(monoId, enabled),
+    setPlanMode: (monoId, enabled, sessionId) => {
+      const mono = findMono(monoId);
+      const current =
+        mono?.sessionId === sessionId
+          ? sessionsRef.current.find((entry) => entry.id === sessionId)
+          : undefined;
+      if (!canChangeMonoPlanMode(current)) return false;
+      saveMonoPlanMode(monoId, enabled);
+      return true;
+    },
+    openPlan: onOpenPlan,
+    buildPlan: onBuildPlan,
     submit: onSubmit,
     stop: onStop,
     approval: onApproval,
@@ -12324,8 +12334,7 @@ function Workspace({
         runtimeMode={monoViewSession.runtimeMode}
         planMode={!!monoViewMono.planMode}
         busy={
-          !!monoViewSession.busy ||
-          !!monoViewSession.backgroundTasks?.length
+          !!monoViewSession.busy || !!monoViewSession.backgroundTasks?.length
         }
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
@@ -12336,9 +12345,7 @@ function Workspace({
         onRuntimeModeChange={(mode) =>
           onRuntimeModeChange(monoViewSession.id, mode)
         }
-        onPlanModeChange={(mode) =>
-          saveMonoPlanMode(monoViewMono.id, mode)
-        }
+        onPlanModeChange={(mode) => saveMonoPlanMode(monoViewMono.id, mode)}
         onClose={() => setMonoDetailsOpen(false)}
         onReset={() => onResetMono(monoViewSession.id)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}

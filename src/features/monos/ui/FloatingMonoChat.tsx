@@ -19,7 +19,11 @@ import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
 } from "../model/monoMessaging";
-import { sessionWorkCwd, type Session } from "../../sessions/model/session";
+import {
+  sessionWorkCwd,
+  type PlanBuildTarget,
+  type Session,
+} from "../../sessions/model/session";
 import {
   FLOATING_MONO_CHANGED,
   floatingMonoAttachments,
@@ -334,7 +338,9 @@ function MonoRail({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSwitch(mono.id)}
               className={`grid size-8 place-items-center rounded-lg transition-opacity ${
-                selected ? "" : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
+                selected
+                  ? ""
+                  : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <PixelMascot
@@ -439,6 +445,14 @@ function FloatingConversation({
           }
           onOpenFile={(path) => void action({ kind: "openFile", path })}
           onOpenArtifact={onOpenArtifact}
+          onOpenPlan={(blockId) => void action({ kind: "openPlan", blockId })}
+          onBuildPlan={(blockId, target?: PlanBuildTarget) =>
+            void action({
+              kind: "buildPlan",
+              blockId,
+              ...(target ? { target } : {}),
+            })
+          }
           onOpenDiff={() => void action({ kind: "reveal" })}
           onShowWork={() => void action({ kind: "reveal" })}
           onShowSessions={() => void action({ kind: "reveal" })}
@@ -483,9 +497,7 @@ function FloatingConversation({
           name={mono.name}
           enabled={!session.worktreeRemoved}
           planMode={!!mono.planMode}
-          planModeDisabled={
-            !!session.busy || !!session.backgroundTasks?.length
-          }
+          planModeDisabled={!!session.busy || !!session.backgroundTasks?.length}
           onPlanModeChange={(enabled) => {
             void action({ kind: "planMode", enabled });
           }}

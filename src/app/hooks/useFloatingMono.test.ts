@@ -64,6 +64,8 @@ beforeEach(() => {
   host = {
     open: vi.fn(async (id) => sessions.find((s) => s.id === `chat-${id}`)),
     setPlanMode: vi.fn(),
+    openPlan: vi.fn(),
+    buildPlan: vi.fn(),
     submit: vi.fn(),
     stop: vi.fn(),
     approval: vi.fn(),

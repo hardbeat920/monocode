@@ -317,6 +317,14 @@ export function saveMonoPlanMode(monoId: string, planMode: boolean): void {
   updateMono(monoId, (mono) => ({ ...mono, planMode }));
 }
 
+export function finishMonoPlanBuild(
+  monoId: string,
+  wasInPlanMode: boolean,
+  accepted: boolean,
+): void {
+  if (accepted && wasInPlanMode) saveMonoPlanMode(monoId, false);
+}
+
 export function saveMonoMascot(monoId: string, mascot: string): void {
   updateMono(monoId, (mono) => ({ ...mono, mascot }));
 }

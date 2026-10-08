@@ -1,5 +1,9 @@
 import type { ApprovalDecision } from "../../../integrations/harness";
-import type { Attachment, Session } from "../../sessions/model/session";
+import type {
+  Attachment,
+  PlanBuildTarget,
+  Session,
+} from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
 import { listMonos, monoLook } from "./mono";
@@ -25,6 +29,8 @@ export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
   | { kind: "planMode"; enabled: boolean }
+  | { kind: "openPlan"; blockId: string }
+  | { kind: "buildPlan"; blockId: string; target?: PlanBuildTarget }
   | { kind: "stop" }
   | { kind: "create" }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
@@ -85,7 +91,13 @@ export function floatingMonoAttachments(
 
 export type FloatingMonoHost = {
   open(monoId: string): Promise<Session | undefined>;
-  setPlanMode(monoId: string, enabled: boolean): void;
+  setPlanMode(
+    monoId: string,
+    enabled: boolean,
+    sessionId: string,
+  ): boolean | void;
+  openPlan(sessionId: string, blockId: string): void;
+  buildPlan(sessionId: string, blockId: string, target?: PlanBuildTarget): void;
   submit(
     sessionId: string,
     text: string,
@@ -111,6 +123,15 @@ export type FloatingMonoHost = {
   create?(fromMonoId: string): Promise<void>;
 };
 
+export function canChangeMonoPlanMode(session: Session | undefined): boolean {
+  return (
+    !!session &&
+    !session.busy &&
+    !session.backgroundTasks?.length &&
+    !session.queuedMessages?.length
+  );
+}
+
 /** Preparation may await disk; recheck the receipt before mutating a session. */
 export async function deliverFloatingMonoRequest(
   request: FloatingMonoRequest,
@@ -131,7 +152,18 @@ export async function deliverFloatingMonoRequest(
         );
       break;
     case "planMode":
-      host.setPlanMode(request.monoId, action.enabled);
+      if (
+        host.setPlanMode(request.monoId, action.enabled, session.id) === false
+      )
+        throw new Error(
+          "Plan mode can only be changed while the Mono is idle.",
+        );
+      break;
+    case "openPlan":
+      host.openPlan(session.id, action.blockId);
+      break;
+    case "buildPlan":
+      host.buildPlan(session.id, action.blockId, action.target);
       break;
     case "stop":
       host.stop(session.id);

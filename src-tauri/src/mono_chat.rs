@@ -818,6 +818,9 @@ pub async fn mono_chat_action(
     if !matches!(
         kind,
         "submit"
+            | "planMode"
+            | "openPlan"
+            | "buildPlan"
             | "create"
             | "stop"
             | "approval"

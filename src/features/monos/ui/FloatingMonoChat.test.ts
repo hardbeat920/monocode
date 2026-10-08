@@ -26,9 +26,13 @@ vi.mock("../../sessions/ui/AgentTranscript", () => ({
   AgentTranscript: ({
     blocks,
     onOpenArtifact,
+    onOpenPlan,
+    onBuildPlan,
   }: {
     blocks: { text: string }[];
     onOpenArtifact: (id: string) => void;
+    onOpenPlan?: (id: string) => void;
+    onBuildPlan?: (id: string) => void;
   }) =>
     createElement(
       "div",
@@ -39,6 +43,18 @@ vi.mock("../../sessions/ui/AgentTranscript", () => ({
         { "data-open-doc": "", onClick: () => onOpenArtifact("doc-1") },
         "Open document",
       ),
+      onOpenPlan &&
+        createElement(
+          "button",
+          { "data-open-plan": "", onClick: () => onOpenPlan("plan-1") },
+          "Open plan",
+        ),
+      onBuildPlan &&
+        createElement(
+          "button",
+          { "data-build-plan": "", onClick: () => onBuildPlan("plan-1") },
+          "Build plan",
+        ),
     ),
 }));
 vi.mock("../hooks/useMonoTranscript", () => ({
@@ -174,6 +190,24 @@ it("switches Monos inside the same frame, loading only the conversation", async 
   ).toBe("Scout");
   act(() => receive({ payload: snapshot(1) }));
   expect(container.textContent).toContain("Scout's conversation");
+});
+
+it("routes the floating transcript plan controls through the owner", async () => {
+  await render();
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>("[data-open-plan]")!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "openPlan", blockId: "plan-1" },
+  });
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>("[data-build-plan]")!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "buildPlan", blockId: "plan-1" },
+  });
 });
 
 it("keeps one loading screen through initial lookup and roster updates until the conversation arrives", async () => {

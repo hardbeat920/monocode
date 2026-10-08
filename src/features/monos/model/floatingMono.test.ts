@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import {
+  canChangeMonoPlanMode,
   deliverFloatingMonoRequest,
   floatingMonoSession,
   type FloatingMonoHost,
@@ -11,6 +12,8 @@ function host(): FloatingMonoHost {
   return {
     open: vi.fn().mockResolvedValue(session),
     setPlanMode: vi.fn(),
+    openPlan: vi.fn(),
+    buildPlan: vi.fn(),
     submit: vi.fn().mockReturnValue(true),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -84,7 +87,48 @@ describe("floating Mono delivery", () => {
       runtime,
       async () => true,
     );
-    expect(runtime.setPlanMode).toHaveBeenCalledWith("mono", true);
+    expect(runtime.setPlanMode).toHaveBeenCalledWith("mono", true, session.id);
+  });
+
+  it("rejects a delayed Plan switch if its owner starts work while loading", async () => {
+    let resolveOpen!: (session: typeof session) => void;
+    let owner = session;
+    const runtime = host();
+    runtime.open = vi.fn(
+      () => new Promise((resolve) => (resolveOpen = resolve)),
+    );
+    runtime.setPlanMode = vi.fn((_monoId, _enabled, _sessionId) => {
+      if (!canChangeMonoPlanMode(owner)) return false;
+    });
+    const delivery = deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "planMode", enabled: true } },
+      runtime,
+      async () => true,
+    );
+    owner = { ...session, busy: true };
+    resolveOpen(session);
+    await expect(delivery).rejects.toThrow("while the Mono is idle");
+    expect(runtime.setPlanMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes floating plan actions to the main conversation", async () => {
+    const runtime = host();
+    await deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "openPlan", blockId: "plan" } },
+      runtime,
+      async () => true,
+    );
+    await deliverFloatingMonoRequest(
+      { id: 2, monoId: "mono", action: { kind: "buildPlan", blockId: "plan" } },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.openPlan).toHaveBeenCalledWith(session.id, "plan");
+    expect(runtime.buildPlan).toHaveBeenCalledWith(
+      session.id,
+      "plan",
+      undefined,
+    );
   });
 
   it("does not deliver a request that expired while its Mono was loading", async () => {

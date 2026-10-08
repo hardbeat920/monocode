@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   addMonoProject,
   createMono,
+  finishMonoPlanBuild,
   findMono,
   listMonos,
   monoLook,
@@ -55,6 +56,15 @@ it("persists Plan mode with the Mono across reloads", () => {
   expect(findMono(id)?.planMode).toBe(true);
   expect(findMono(id)?.sessionId).toBe("rotated-session");
   saveMonoPlanMode(id, false);
+  expect(findMono(id)?.planMode).toBe(false);
+});
+
+it("leaves Plan mode on when Build is rejected and exits after acceptance", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  finishMonoPlanBuild(id, true, false);
+  expect(findMono(id)?.planMode).toBe(true);
+  finishMonoPlanBuild(id, true, true);
   expect(findMono(id)?.planMode).toBe(false);
 });
 

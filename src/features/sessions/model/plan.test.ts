@@ -64,9 +64,9 @@ describe("plan mode prompts", () => {
   it("rejects provider blockers and ordinary commentary as fallback plans", () => {
     expect(isProviderFailureText("Upgrade your plan to continue")).toBe(true);
     expect(isReviewablePlan("Upgrade your plan to continue")).toBe(false);
-    expect(isReviewablePlan("I checked the repository and found the issue.")).toBe(
-      false,
-    );
+    expect(
+      isReviewablePlan("I checked the repository and found the issue."),
+    ).toBe(false);
   });
 
   it("accepts structured markdown fallback plans", () => {
