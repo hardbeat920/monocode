@@ -17,6 +17,8 @@ use crate::fs::{
 
 const MAX_SNAPSHOT_FILES: usize = 500;
 
+pub mod worker;
+
 #[derive(Clone)]
 pub struct CheckpointStore {
     root: PathBuf,
@@ -75,6 +77,8 @@ impl CheckpointStore {
             &dir,
             &Manifest {
                 cwd: root.to_string_lossy().into_owned(),
+                worker: None,
+                after_generation: None,
                 files,
                 touched: BTreeSet::new(),
                 tracked,
@@ -96,6 +100,9 @@ impl CheckpointStore {
             Some(manifest) if same_cwd(&manifest.cwd, cwd) => manifest,
             _ => return Ok(()),
         };
+        if manifest.worker.is_some() {
+            return Ok(());
+        }
 
         let mut dirty = false;
         for path in paths {
@@ -148,6 +155,9 @@ impl CheckpointStore {
             Some(manifest) if same_cwd(&manifest.cwd, cwd) => manifest,
             _ => return Ok(()),
         };
+        if manifest.worker.is_some() {
+            return Ok(());
+        }
 
         let mut dirty = false;
         for path in paths {
@@ -243,8 +253,8 @@ impl CheckpointStore {
                 .copied()
                 .ok_or_else(|| format!("Missing worker snapshot for {relative}"))?;
             let target = worktree_snapshot(&to_root, relative);
-            let before_state = stored_snapshot(&dir, relative, before, false);
-            let after_state = stored_snapshot(&dir, relative, after, true);
+            let before_state = stored_snapshot(&dir, &manifest, relative, before, false);
+            let after_state = stored_snapshot(&dir, &manifest, relative, after, true);
             if target == after_state {
                 already_applied += 1;
             } else if target != before_state {
@@ -257,7 +267,7 @@ impl CheckpointStore {
         for relative in &changed {
             let after = manifest.after.get(relative).copied().unwrap();
             let target = worktree_snapshot(&to_root, relative);
-            let after_state = stored_snapshot(&dir, relative, after, true);
+            let after_state = stored_snapshot(&dir, &manifest, relative, after, true);
             if target != after_state {
                 write_state(&to_root, relative, after_state.0, after_state.1)?;
             }
@@ -321,7 +331,7 @@ impl CheckpointStore {
             .copied()
             .ok_or_else(|| "Session result is unavailable".to_string())?;
         let original = read_snapshot(&dir, &relative, before);
-        let current = read_after_snapshot(&dir, &relative, after);
+        let current = read_after_snapshot(&dir, &manifest, &relative, after);
         let too_large =
             matches!(original, FileState::Skipped) || matches!(current, FileState::Skipped);
         let binary = state_is_binary(&original) || state_is_binary(&current);
@@ -386,6 +396,9 @@ impl CheckpointStore {
         let Some(mut manifest) = self.load_matching(session_id, cwd)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
+        if manifest.worker.is_some() {
+            return Err("Review this worker through its orchestration lead.".into());
+        }
         let root = project_root(cwd)?;
         let dir = self.session_dir(session_id);
         let foreign_touched = self.foreign_touched_paths(cwd, session_id);
@@ -426,6 +439,9 @@ impl CheckpointStore {
         let Some(mut manifest) = self.load_matching(session_id, cwd)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
+        if manifest.worker.is_some() {
+            return Err("Review this worker through its orchestration lead.".into());
+        }
         let root = project_root(cwd)?;
         let dir = self.session_dir(session_id);
         let Some(relative) = relative else {
@@ -478,6 +494,10 @@ impl CheckpointStore {
 #[serde(rename_all = "camelCase")]
 struct Manifest {
     cwd: String,
+    #[serde(default)]
+    worker: Option<worker::Baseline>,
+    #[serde(default)]
+    after_generation: Option<u64>,
     files: BTreeMap<String, SnapshotKind>,
     #[serde(default)]
     touched: BTreeSet<String>,
@@ -730,14 +750,20 @@ pub async fn session_checkpoint_keep(
     .map_err(|e| e.to_string())?
 }
 
-/// Reconstruct the worker-owned delta and reject anything that was not
-/// captured at a structured tool boundary. This is stricter than the review
-/// UI because cleanup must never discard an ambiguous edit.
+/// Integration and cleanup require matching before/after snapshots for every
+/// Git-visible change, including edits without structured tool events.
 fn verified_worker_delta(
     dir: &Path,
     root: &Path,
     manifest: &Manifest,
 ) -> Result<Vec<String>, String> {
+    if let Some(baseline) = &manifest.worker {
+        if git_head(root)? != baseline.head {
+            return Err(
+                "The worker branch moved after its baseline. The worktree was kept.".into(),
+            );
+        }
+    }
     if !manifest.diverged.is_empty() {
         return Err(format!(
             "Cannot safely integrate files that changed outside the worker: {}",
@@ -750,12 +776,16 @@ fn verified_worker_delta(
         ));
     }
 
-    let current_dirty: BTreeSet<String> = git_diff_files_for(root)
-        .files
-        .into_iter()
-        .map(|file| file.relative)
-        .collect();
-    if let Some(relative) = current_dirty
+    let current_paths: BTreeSet<String> = if manifest.worker.is_some() {
+        worker::checkout_paths(root)?
+    } else {
+        git_diff_files_for(root)
+            .files
+            .into_iter()
+            .map(|file| file.relative)
+            .collect()
+    };
+    if let Some(relative) = current_paths
         .iter()
         .find(|relative| !manifest.files.contains_key(*relative))
     {
@@ -766,6 +796,13 @@ fn verified_worker_delta(
 
     let mut changed = Vec::new();
     for (relative, before) in &manifest.files {
+        if *before == SnapshotKind::Skipped {
+            if let Some(baseline) = &manifest.worker {
+                if baseline.skipped.get(relative) == Some(&worker::fingerprint(root, relative)?) {
+                    continue;
+                }
+            }
+        }
         if path_contains_symlink(root, relative) {
             return Err(format!(
                 "Cannot safely integrate {relative}: the worker path contains a symbolic link. The worker worktree was kept."
@@ -776,7 +813,12 @@ fn verified_worker_delta(
                 "Cannot safely integrate {relative}: this file type or size cannot be checkpointed. The worker worktree was kept."
             ));
         }
-        let before_state = stored_snapshot(dir, relative, *before, false);
+        let before_state = stored_snapshot(dir, manifest, relative, *before, false);
+        if *before == SnapshotKind::Contents && before_state.0 == FileState::Missing {
+            return Err(format!(
+                "Missing baseline snapshot for {relative}. The worker worktree was kept."
+            ));
+        }
         if manifest.touched.contains(relative) {
             if !manifest.prepared.contains(relative) {
                 return Err(format!(
@@ -793,7 +835,12 @@ fn verified_worker_delta(
                     "Cannot safely integrate {relative}: this file type or size cannot be checkpointed. The worker worktree was kept."
                 ));
             }
-            let after_state = stored_snapshot(dir, relative, after, true);
+            let after_state = stored_snapshot(dir, manifest, relative, after, true);
+            if after == SnapshotKind::Contents && after_state.0 == FileState::Missing {
+                return Err(format!(
+                    "Missing worker snapshot for {relative}. The worker worktree was kept."
+                ));
+            }
             if worktree_snapshot(root, relative) != after_state {
                 return Err(format!(
                     "Cannot safely integrate {relative}: it changed after the worker checkpoint. The worker worktree was kept."
@@ -835,12 +882,13 @@ fn write_state(
 
 fn stored_snapshot(
     dir: &Path,
+    manifest: &Manifest,
     relative: &str,
     kind: SnapshotKind,
     after: bool,
 ) -> (FileState, Option<u32>) {
     let blob_root = if after {
-        dir.join("after")
+        after_root(dir, manifest)
     } else {
         dir.join("files")
     };
@@ -959,7 +1007,9 @@ fn diff_from_manifest_with(
 fn session_snapshot_differs(dir: &Path, manifest: &Manifest, relative: &str) -> Option<bool> {
     let before = manifest.files.get(relative).copied()?;
     let after = manifest.after.get(relative).copied()?;
-    Some(read_snapshot(dir, relative, before) != read_after_snapshot(dir, relative, after))
+    Some(
+        read_snapshot(dir, relative, before) != read_after_snapshot(dir, manifest, relative, after),
+    )
 }
 
 #[cfg(test)]
@@ -1051,7 +1101,7 @@ fn calculate_session_stats(dir: &Path, manifest: &Manifest, relative: &str) -> O
         return None;
     }
     let before_path = state_blob_path(&dir.join("files"), relative).ok()?;
-    let after_path = state_blob_path(&dir.join("after"), relative).ok()?;
+    let after_path = state_blob_path(&after_root(dir, manifest), relative).ok()?;
     let (additions, deletions) = diff_numstat(&before_path, &after_path)?;
     let status = match (before, after) {
         (SnapshotKind::Missing, SnapshotKind::Missing) => "modified",
@@ -1089,7 +1139,7 @@ fn after_matches_worktree(dir: &Path, root: &Path, manifest: &Manifest, relative
     let Some(kind) = manifest.after.get(relative).copied() else {
         return false;
     };
-    read_worktree(root, relative) == read_after_snapshot(dir, relative, kind)
+    read_worktree(root, relative) == read_after_snapshot(dir, manifest, relative, kind)
 }
 
 fn release_path(manifest: &mut Manifest, relative: &str) {
@@ -1238,8 +1288,20 @@ fn read_snapshot(dir: &Path, relative: &str, kind: SnapshotKind) -> FileState {
     read_snapshot_at(&dir.join("files"), relative, kind)
 }
 
-fn read_after_snapshot(dir: &Path, relative: &str, kind: SnapshotKind) -> FileState {
-    read_snapshot_at(&dir.join("after"), relative, kind)
+fn after_root(dir: &Path, manifest: &Manifest) -> PathBuf {
+    match manifest.after_generation {
+        Some(generation) => dir.join("captures").join(generation.to_string()),
+        None => dir.join("after"),
+    }
+}
+
+fn read_after_snapshot(
+    dir: &Path,
+    manifest: &Manifest,
+    relative: &str,
+    kind: SnapshotKind,
+) -> FileState {
+    read_snapshot_at(&after_root(dir, manifest), relative, kind)
 }
 
 fn read_snapshot_at(blob_root: &Path, relative: &str, kind: SnapshotKind) -> FileState {
@@ -2062,6 +2124,373 @@ mod tests {
             .apply("worker", &from, &to)
             .unwrap_err()
             .contains("not captured"));
+    }
+
+    #[test]
+    fn worker_failed_recapture_preserves_the_previous_result() {
+        let source = tmp("worker-failed-recapture");
+        let target = tmp("worker-failed-recapture-target");
+        assert!(init_git_commit(
+            &source.0,
+            &[("a.txt", "head\n"), ("z.txt", "head\n")]
+        ));
+        let from = source.0.to_string_lossy().into_owned();
+        let to = target.0.to_string_lossy().into_owned();
+        assert!(git(&source.0, &["clone", &from, &to]));
+        for relative in ["a.txt", "z.txt"] {
+            std::fs::copy(source.0.join(relative), target.0.join(relative)).unwrap();
+        }
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("a.txt"), "first\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let dir = store.session_dir("worker");
+        let saved = std::fs::read(dir.join("manifest.json")).unwrap();
+
+        std::fs::write(source.0.join("a.txt"), "second\n").unwrap();
+        std::fs::File::create(source.0.join("z.txt"))
+            .unwrap()
+            .set_len(MAX_TEXT_FILE_BYTES + 1)
+            .unwrap();
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap_err()
+            .contains("unsupported file z.txt"));
+        assert_eq!(std::fs::read(dir.join("manifest.json")).unwrap(), saved);
+        assert_eq!(
+            store.file_diff("worker", &from, "a.txt").unwrap().current,
+            "first\n"
+        );
+        assert!(store
+            .apply("worker", &from, &to)
+            .unwrap_err()
+            .contains("changed after"));
+        assert_eq!(std::fs::read(target.0.join("a.txt")).unwrap(), b"head\n");
+
+        std::fs::write(source.0.join("a.txt"), "first\n").unwrap();
+        std::fs::write(source.0.join("z.txt"), "head\n").unwrap();
+        assert_eq!(store.apply("worker", &from, &to).unwrap().files, ["a.txt"]);
+        assert_eq!(std::fs::read(target.0.join("a.txt")).unwrap(), b"first\n");
+
+        std::fs::write(source.0.join("a.txt"), "head\n").unwrap();
+        std::fs::write(source.0.join("z.txt"), "third\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let manifest = read_manifest(&dir).unwrap().unwrap();
+        assert_eq!(manifest.tracked, BTreeSet::from(["z.txt".into()]));
+        assert_eq!(
+            relatives(&store.status("worker", &from).unwrap()),
+            ["z.txt"]
+        );
+        assert_eq!(
+            store.file_diff("worker", &from, "z.txt").unwrap().current,
+            "third\n"
+        );
+    }
+
+    #[test]
+    fn worker_recapture_publication_failure_leaves_published_blobs_intact() {
+        let source = tmp("worker-recapture-write-error");
+        assert!(init_git_commit(
+            &source.0,
+            &[("a.txt", "head\n"), ("z.txt", "head\n")]
+        ));
+        let from = source.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("a.txt"), "first\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let dir = store.session_dir("worker");
+        let saved = read_manifest(&dir).unwrap().unwrap();
+        let mut next = saved.clone();
+        next.after_generation = Some(saved.after_generation.unwrap() + 1);
+        let blocked = dir.join("manifest.json.tmp");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(source.0.join("a.txt"), "second\n").unwrap();
+        std::fs::write(source.0.join("z.txt"), "second\n").unwrap();
+        std::fs::write(source.0.join("cache"), "unpublished\n").unwrap();
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .is_err());
+        assert_eq!(read_manifest(&dir).unwrap().unwrap(), saved);
+        assert_eq!(
+            std::fs::read(after_root(&dir, &saved).join("a.txt")).unwrap(),
+            b"first\n"
+        );
+        assert_eq!(
+            std::fs::read(after_root(&dir, &next).join("a.txt")).unwrap(),
+            b"second\n"
+        );
+        std::fs::remove_dir(blocked).unwrap();
+        std::fs::remove_file(source.0.join("cache")).unwrap();
+        std::fs::create_dir(source.0.join("cache")).unwrap();
+        std::fs::write(source.0.join("cache/child.txt"), "replacement\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        assert_eq!(
+            store.file_diff("worker", &from, "a.txt").unwrap().current,
+            "second\n"
+        );
+        assert_eq!(
+            store.file_diff("worker", &from, "z.txt").unwrap().current,
+            "second\n"
+        );
+        assert_eq!(
+            store
+                .file_diff("worker", &from, "cache/child.txt")
+                .unwrap()
+                .current,
+            "replacement\n"
+        );
+    }
+
+    #[test]
+    fn worker_missing_after_blob_cannot_be_applied_as_a_deletion() {
+        let source = tmp("worker-missing-after");
+        let target = tmp("worker-missing-after-target");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let from = source.0.to_string_lossy().into_owned();
+        let to = target.0.to_string_lossy().into_owned();
+        assert!(git(&source.0, &["clone", &from, &to]));
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("a.txt"), "worker\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let dir = store.session_dir("worker");
+        let manifest = read_manifest(&dir).unwrap().unwrap();
+        std::fs::remove_file(after_root(&dir, &manifest).join("a.txt")).unwrap();
+        std::fs::remove_file(source.0.join("a.txt")).unwrap();
+        assert!(store
+            .apply("worker", &from, &to)
+            .unwrap_err()
+            .contains("Missing worker snapshot"));
+        assert!(target.0.join("a.txt").exists());
+    }
+
+    #[test]
+    fn worker_capture_checks_scope_and_preserves_seed_on_restart() {
+        let source = tmp("worker-scope");
+        assert!(init_git_commit(
+            &source.0,
+            &[("allowed.txt", "head\n"), ("outside.txt", "head\n")]
+        ));
+        let from = source.0.to_string_lossy().into_owned();
+        let (storage, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("outside.txt"), "unreported shell edit\n").unwrap();
+        let original = std::fs::read(store.session_dir("worker").join("manifest.json")).unwrap();
+        assert!(store
+            .capture_worker("worker", &from, &["allowed.txt".into()])
+            .unwrap_err()
+            .contains("outside its assignment"));
+        assert_eq!(
+            std::fs::read(store.session_dir("worker").join("manifest.json")).unwrap(),
+            original
+        );
+        assert!(!store.cleanup_safe("worker", &from).unwrap());
+        let restarted = CheckpointStore::new(storage.0.clone());
+        restarted.ensure_worker("worker", &from).unwrap();
+        restarted
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let diff = restarted.file_diff("worker", &from, "outside.txt").unwrap();
+        assert_eq!(diff.original, "head\n");
+        assert_eq!(diff.current, "unreported shell edit\n");
+        assert!(restarted.keep("worker", &from, None).is_err());
+        assert!(restarted.undo("worker", &from, None).is_err());
+    }
+
+    #[test]
+    fn worker_capture_refuses_missing_legacy_and_corrupt_baselines() {
+        let source = tmp("worker-missing");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let from = source.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        assert!(store
+            .capture_worker("missing", &from, &[".".into()])
+            .is_err());
+        store.ensure("legacy", &from).unwrap();
+        assert!(store.ensure_worker("legacy", &from).is_err());
+        assert!(store
+            .capture_worker("legacy", &from, &[".".into()])
+            .is_err());
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::remove_file(store.session_dir("worker").join("files/a.txt")).unwrap();
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap_err()
+            .contains("Missing baseline"));
+        assert!(!store.cleanup_safe("worker", &from).unwrap());
+    }
+
+    #[test]
+    fn worker_capture_keeps_staged_deletions_and_large_unchanged_files() {
+        let source = tmp("worker-staged");
+        assert!(init_git_commit(
+            &source.0,
+            &[("a.txt", "head\n"), ("deleted.txt", "delete me\n")]
+        ));
+        let from = source.0.to_string_lossy().into_owned();
+        assert!(git(&source.0, &["rm", "deleted.txt"]));
+        let large = vec![b'a'; MAX_TEXT_FILE_BYTES as usize + 1];
+        std::fs::write(source.0.join("large.bin"), &large).unwrap();
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        assert!(store.cleanup_safe("worker", &from).unwrap());
+        std::fs::write(source.0.join("a.txt"), "worker\n").unwrap();
+        store
+            .capture_worker("worker", &from, &["a.txt".into()])
+            .unwrap();
+        assert_eq!(
+            relatives(&store.status("worker", &from).unwrap()),
+            ["a.txt"]
+        );
+        std::fs::write(source.0.join("large.bin"), vec![b'b'; large.len()]).unwrap();
+        assert!(!store.cleanup_safe("worker", &from).unwrap());
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap_err()
+            .contains("Unsupported file large.bin changed"));
+    }
+
+    #[test]
+    fn worker_baseline_does_not_truncate_at_the_changed_file_limit() {
+        let source = tmp("worker-many-seed-files");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let from = source.0.to_string_lossy().into_owned();
+        for index in 0..=MAX_SNAPSHOT_FILES {
+            std::fs::write(source.0.join(format!("seed-{index}.txt")), "seed\n").unwrap();
+        }
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        assert!(store.cleanup_safe("worker", &from).unwrap());
+        std::fs::write(source.0.join("seed-500.txt"), "worker\n").unwrap();
+        store
+            .capture_worker("worker", &from, &["seed-500.txt".into()])
+            .unwrap();
+        let diff = store.file_diff("worker", &from, "seed-500.txt").unwrap();
+        assert_eq!(diff.original, "seed\n");
+        assert_eq!(diff.current, "worker\n");
+        for index in 0..=MAX_SNAPSHOT_FILES {
+            std::fs::write(source.0.join(format!("seed-{index}.txt")), "worker\n").unwrap();
+        }
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap_err()
+            .contains("Too many changed files"));
+    }
+
+    #[test]
+    fn worker_shell_edits_keep_the_seeded_baseline() {
+        let source = tmp("worker-shell");
+        let target = tmp("worker-shell-target");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let from = source.0.to_string_lossy().into_owned();
+        let to = target.0.to_string_lossy().into_owned();
+        assert!(git(&source.0, &["clone", &from, &to]));
+        for root in [&source.0, &target.0] {
+            std::fs::write(root.join("a.txt"), "seed\r\n").unwrap();
+            std::fs::write(root.join("seed.txt"), "untracked seed\n").unwrap();
+        }
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("a.txt"), "shell result\n").unwrap();
+        std::fs::remove_file(source.0.join("seed.txt")).unwrap();
+        std::fs::write(source.0.join("new.txt"), "new file\n").unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let applied = store.apply("worker", &from, &to).unwrap();
+        assert_eq!(applied.files, ["a.txt", "new.txt", "seed.txt"]);
+        assert_eq!(
+            std::fs::read(target.0.join("a.txt")).unwrap(),
+            b"shell result\n"
+        );
+        assert!(!target.0.join("seed.txt").exists());
+        assert_eq!(
+            store.apply("worker", &from, &to).unwrap().already_applied,
+            3
+        );
+        std::fs::write(source.0.join("new.txt"), "late external edit\n").unwrap();
+        assert!(store
+            .apply("worker", &from, &to)
+            .unwrap_err()
+            .contains("changed after"));
+        assert_eq!(
+            std::fs::read(target.0.join("new.txt")).unwrap(),
+            b"new file\n"
+        );
+    }
+
+    #[test]
+    fn worker_late_prepare_cannot_replace_the_original_baseline() {
+        let source = tmp("worker-late-prepare");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let from = source.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::write(source.0.join("a.txt"), "already edited\n").unwrap();
+        store.prepare("worker", &from, &["a.txt".into()]).unwrap();
+        store.capture("worker", &from, &["a.txt".into()]).unwrap();
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        let diff = store.file_diff("worker", &from, "a.txt").unwrap();
+        assert_eq!(diff.original, "head\n");
+        assert_eq!(diff.current, "already edited\n");
+    }
+
+    #[test]
+    fn worker_preserves_unchanged_gitlinks_and_rejects_changes_inside_them() {
+        let source = tmp("worker-gitlink");
+        assert!(init_git_commit(&source.0, &[("a.txt", "head\n")]));
+        let module = source.0.join("module");
+        std::fs::create_dir(&module).unwrap();
+        assert!(init_git_commit(&module, &[("inside.txt", "nested\n")]));
+        assert!(git(&source.0, &["add", "module"]));
+        let from = source.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        assert!(store.cleanup_safe("worker", &from).unwrap());
+        store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap();
+        std::fs::write(module.join("inside.txt"), "unsupported edit\n").unwrap();
+        assert!(store
+            .capture_worker("worker", &from, &[".".into()])
+            .unwrap_err()
+            .contains("Unsupported file module changed"));
+        assert!(!store.cleanup_safe("worker", &from).unwrap());
+    }
+
+    #[test]
+    fn worker_capture_excludes_git_ignored_generated_outputs() {
+        let source = tmp("worker-ignored");
+        assert!(init_git_commit(
+            &source.0,
+            &[("a.txt", "head\n"), (".gitignore", "generated/\n")]
+        ));
+        let from = source.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        store.ensure_worker("worker", &from).unwrap();
+        std::fs::create_dir(source.0.join("generated")).unwrap();
+        std::fs::write(source.0.join("generated/build.log"), "output\n").unwrap();
+        std::fs::write(source.0.join("a.txt"), "worker\n").unwrap();
+        store
+            .capture_worker("worker", &from, &["a.txt".into()])
+            .unwrap();
+        assert_eq!(
+            relatives(&store.status("worker", &from).unwrap()),
+            ["a.txt"]
+        );
     }
 
     #[test]
