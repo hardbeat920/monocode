@@ -636,10 +636,13 @@ export function CodeMirrorEditor({
   canAutosaveRef.current = canAutosave;
   onStageGitRef.current = onStageGit;
   onDocChangeRef.current = onDocChange;
-  workspaceRef.current = workspace;
-  commentPathRef.current = commentPath;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+    commentPathRef.current = commentPath;
+  }, [workspace, commentPath]);
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -847,7 +850,9 @@ export function CodeMirrorEditor({
             pendingNavigationRef.current = null;
           }
           if (update.selectionSet) {
-            setSelectionTarget(editorSelectionTarget(update.view, commentPath));
+            setSelectionTarget(
+              editorSelectionTarget(update.view, commentPathRef.current),
+            );
           } else if (update.docChanged) {
             setSelectionTarget(null);
           }
