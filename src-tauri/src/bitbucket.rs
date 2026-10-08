@@ -12,8 +12,13 @@ use tauri::{AppHandle, Manager};
 const API_BASE: &str = "https://api.bitbucket.org/2.0";
 const BITBUCKET_HOST: &str = "bitbucket.org";
 const DEFAULT_LIMIT: u32 = 40;
-/// Bitbucket rejects a larger `pagelen` on the pull request list.
+/// Largest `pagelen` Bitbucket accepts on the pull request list; larger
+/// result limits are fetched across pages.
 const MAX_PR_PAGE: u32 = 50;
+/// Cap on rows gathered across pages for statuses, steps and pipeline lookups.
+const MAX_LISTED_ROWS: usize = 500;
+/// Bounds pagination even when pages are empty and `next` loops back.
+const MAX_PAGES: usize = 50;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const USER_AGENT: &str = "MonoCode";
@@ -357,7 +362,8 @@ fn bitbucket_list_work_items_for(
 ) -> Result<Vec<BitbucketWorkItem>, String> {
     validate_kind(kind)?;
     let all = state.trim().eq_ignore_ascii_case("all");
-    let limit = limit.clamp(1, MAX_PR_PAGE);
+    let limit = limit.max(1);
+    let page_size = limit.min(MAX_PR_PAGE);
     let account_id = config.account_id.as_str();
     if assigned_to_me && account_id.is_empty() {
         return Err("Reconnect Bitbucket in Settings".into());
@@ -369,16 +375,20 @@ fn bitbucket_list_work_items_for(
         "&state=OPEN"
     };
     let mut path =
-        format!("/repositories/{repo_path}/pullrequests?sort=-updated_on&pagelen={limit}{states}");
+        format!("/repositories/{repo_path}/pullrequests?sort=-updated_on&pagelen={page_size}{states}");
     if assigned_to_me {
         let query = format!(
             "(reviewers.account_id=\"{account_id}\" OR author.account_id=\"{account_id}\")"
         );
         path.push_str(&format!("&q={}", encode_component(&query)));
     }
-    let response = bitbucket_get(config, &path)
+    let (rows, _) = bitbucket_get_values(config, &path, limit as usize)
         .map_err(|error| format!("Bitbucket pull requests for {repo}: {error}"))?;
-    parse_pr_list(&response.value, repo, assigned_to_me.then_some(account_id))
+    parse_pr_list(
+        &json!({ "values": rows }),
+        repo,
+        assigned_to_me.then_some(account_id),
+    )
 }
 
 fn bitbucket_work_item_details_for(
@@ -463,11 +473,24 @@ fn bitbucket_pr_checks_for(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let statuses = bitbucket_get(
+    if head_oid.is_empty() {
+        return Err("Bitbucket did not return the pull request head commit".into());
+    }
+    // Read the statuses of the captured commit rather than the PR, so a push
+    // between the two requests cannot pair newer results with this head.
+    let (rows, truncated) = bitbucket_get_values(
         config,
-        &format!("{base}/statuses?pagelen=100&sort=-updated_on"),
+        &format!(
+            "/repositories/{}/commit/{}/statuses?pagelen=100&sort=-updated_on",
+            repo_path(repo),
+            encode_component(&head_oid)
+        ),
+        MAX_LISTED_ROWS,
     )?;
-    parse_pr_checks(&statuses.value, head_oid)
+    if truncated {
+        return Err("Bitbucket returned too many build statuses to summarize".into());
+    }
+    parse_pr_checks(&json!({ "values": rows }), head_oid)
 }
 
 const PIPELINES_SCOPE: &str = "read:pipeline:bitbucket";
@@ -503,8 +526,13 @@ fn bitbucket_build_details_for(
         notice: Some(text),
     };
     let uuid = match find_pipeline_uuid(config, repo, number) {
-        Ok(Some(uuid)) => uuid,
-        Ok(None) => return Ok(notice("Bitbucket has no steps for this build.".into())),
+        Ok((Some(uuid), _)) => uuid,
+        Ok((None, true)) => {
+            return Ok(notice(
+                "Couldn't find this build among the most recent pipelines.".into(),
+            ))
+        }
+        Ok((None, false)) => return Ok(notice("Bitbucket has no steps for this build.".into())),
         Err(error) if is_scope_error(&error) => {
             return Ok(notice(missing_pipelines_scope_notice()))
         }
@@ -515,8 +543,14 @@ fn bitbucket_build_details_for(
         repo_path(repo),
         encode_component(&uuid)
     );
-    match bitbucket_get(config, &path) {
-        Ok(response) => parse_build_steps(&response.value),
+    match bitbucket_get_values(config, &path, MAX_LISTED_ROWS) {
+        Ok((rows, truncated)) => {
+            let mut details = parse_build_steps(&json!({ "values": rows }))?;
+            if truncated {
+                details.notice = Some("Showing the first steps of a very large build.".into());
+            }
+            Ok(details)
+        }
         Err(error) if is_scope_error(&error) => Ok(notice(missing_pipelines_scope_notice())),
         Err(error) => Err(error),
     }
@@ -524,28 +558,31 @@ fn bitbucket_build_details_for(
 
 /// Bitbucket identifies pipelines by UUID, but status URLs only carry the
 /// build number. Try the number directly, then look through recent pipelines.
+/// The flag reports that the search was cut short before finding a match.
 fn find_pipeline_uuid(
     config: &BitbucketConfig,
     repo: &str,
     number: i64,
-) -> Result<Option<String>, String> {
+) -> Result<(Option<String>, bool), String> {
     let base = format!("/repositories/{}/pipelines", repo_path(repo));
     match bitbucket_get(config, &format!("{base}/{number}")) {
         Ok(response) => {
             if let Some(uuid) = pipeline_uuid_for(&response.value, number) {
-                return Ok(Some(uuid));
+                return Ok((Some(uuid), false));
             }
         }
         Err(error) if is_scope_error(&error) => return Err(error),
         // Not addressable by number here; fall through to the list.
         Err(_) => {}
     }
-    let list = bitbucket_get(config, &format!("{base}/?sort=-created_on&pagelen=100"))?;
-    Ok(list
-        .value
-        .get("values")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.iter().find_map(|row| pipeline_uuid_for(row, number))))
+    let (rows, truncated) = bitbucket_get_values(
+        config,
+        &format!("{base}/?sort=-created_on&pagelen=100"),
+        MAX_LISTED_ROWS,
+    )?;
+    let uuid = rows.iter().find_map(|row| pipeline_uuid_for(row, number));
+    let truncated = uuid.is_none() && truncated;
+    Ok((uuid, truncated))
 }
 
 fn pipeline_uuid_for(row: &Value, number: i64) -> Option<String> {
@@ -562,8 +599,11 @@ fn parse_build_steps(value: &Value) -> Result<BitbucketBuildDetails, String> {
         .ok_or_else(|| "Bitbucket did not return build steps".to_string())?;
     let steps = rows
         .iter()
-        .filter_map(|row| {
-            let name = string_field(row, "name").filter(|name| !name.is_empty())?;
+        .enumerate()
+        .map(|(index, row)| {
+            let name = string_field(row, "name")
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("Step {}", index + 1));
             let phase = row
                 .pointer("/state/name")
                 .and_then(Value::as_str)
@@ -580,12 +620,12 @@ fn parse_build_steps(value: &Value) -> Result<BitbucketBuildDetails, String> {
                 ("PENDING" | "IN_PROGRESS" | "PAUSED", _) => "pending",
                 _ => "unknown",
             };
-            Some(BitbucketBuildStep {
+            BitbucketBuildStep {
                 name,
                 state: state.into(),
                 started_at: string_field(row, "started_on"),
                 completed_at: string_field(row, "completed_on"),
-            })
+            }
         })
         .collect();
     Ok(BitbucketBuildDetails {
@@ -1019,6 +1059,50 @@ fn bitbucket_get(config: &BitbucketConfig, path: &str) -> Result<BitbucketRespon
     read_response(get_following_redirects(config, path, "application/json"))
 }
 
+/// Collects `values` across pages by following `next`, stopping at `max_items`.
+/// The flag reports that more rows existed than were returned.
+fn bitbucket_get_values(
+    config: &BitbucketConfig,
+    path: &str,
+    max_items: usize,
+) -> Result<(Vec<Value>, bool), String> {
+    let mut path = path.to_string();
+    let mut values: Vec<Value> = Vec::new();
+    for _ in 0..MAX_PAGES {
+        let response = bitbucket_get(config, &path)?;
+        let rows = response
+            .value
+            .get("values")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "Bitbucket returned an unexpected response".to_string())?;
+        values.extend(rows.iter().cloned());
+        let next = response
+            .value
+            .get("next")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|next| !next.is_empty());
+        // The final page can overflow the limit too, so check before `next`.
+        let over = values.len() > max_items;
+        if over {
+            values.truncate(max_items);
+        }
+        let Some(next) = next else {
+            return Ok((values, over));
+        };
+        if values.len() >= max_items {
+            return Ok((values, true));
+        }
+        // Only follow pagination links on the configured API, so credentials
+        // never leave it.
+        match next.strip_prefix(config.api_base()) {
+            Some(rest) => path = rest.to_string(),
+            None => return Err("Bitbucket returned an unexpected pagination link".into()),
+        }
+    }
+    Err("Bitbucket returned too many pages".into())
+}
+
 /// `scheme://host[:port]` of a URL.
 fn origin(url: &str) -> &str {
     let after_scheme = url.find("://").map(|at| at + 3).unwrap_or(0);
@@ -1091,6 +1175,12 @@ fn bitbucket_get_text(config: &BitbucketConfig, path: &str) -> Result<(String, b
         Ok(response) => response,
         Err(error) => return read_response(Err(error)).map(|_| (String::new(), false)),
     };
+    // A blocked or exhausted redirect hands back the 3xx itself.
+    if !(200..300).contains(&response.status()) {
+        let status = response.status();
+        let body = response.into_string().unwrap_or_default();
+        return Err(bitbucket_http_error(status, &body));
+    }
     let mut bytes = Vec::new();
     response
         .into_reader()
@@ -1515,9 +1605,12 @@ mod tests {
             account_id: "acct-1".into(),
             api_base: format!("http://{}", listener.local_addr().unwrap()),
         };
+        let base = config.api_base.clone();
         let handle = std::thread::spawn(move || {
             let mut requests = Vec::new();
             for (status, headers, body) in responses {
+                // Lets a canned `next` link point back at this server.
+                let body = body.replace("{BASE}", &base);
                 let deadline = std::time::Instant::now() + Duration::from_secs(3);
                 let mut stream = loop {
                     match listener.accept() {
@@ -1741,7 +1834,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_checks_read_the_head_commit_then_the_statuses() {
+    fn pr_checks_read_the_statuses_of_the_captured_head_commit() {
         let (config, server) = serve(vec![
             ok(json!({ "source": { "commit": { "hash": "deadbeef" } } })),
             ok(json!({ "values": [
@@ -1754,13 +1847,110 @@ mod tests {
         let requests = server.join().unwrap();
         assert!(requests[0].starts_with("GET /repositories/acme/app/pullrequests/7 "));
         assert!(
-            requests[1].starts_with("GET /repositories/acme/app/pullrequests/7/statuses?"),
+            requests[1].starts_with("GET /repositories/acme/app/commit/deadbeef/statuses?"),
             "{}",
             requests[1]
         );
         assert!(requests[1].contains("pagelen=100"));
         assert_eq!(checks.head_oid, "deadbeef");
         assert_eq!(checks.checks[0].state, "fail");
+    }
+
+    #[test]
+    fn list_follows_pagination_up_to_the_requested_limit() {
+        let page = |ids: &[i64], next: bool| {
+            let values: Vec<Value> = ids
+                .iter()
+                .map(|id| {
+                    json!({ "id": id, "title": "t", "state": "OPEN",
+                            "author": { "display_name": "A" } })
+                })
+                .collect();
+            let mut body = json!({ "values": values });
+            if next {
+                body["next"] = json!("{BASE}/repositories/acme/app/pullrequests?page=2");
+            }
+            ok(body)
+        };
+        let (config, server) = serve(vec![page(&[1, 2], true), page(&[3, 4], true)]);
+
+        let items =
+            bitbucket_list_work_items_for(&config, "acme/app", "pr", false, "all", 3).unwrap();
+
+        assert_eq!(items.len(), 3);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].contains("pagelen=3"), "{}", requests[0]);
+        assert!(requests[1].starts_with("GET /repositories/acme/app/pullrequests?page=2"));
+    }
+
+    #[test]
+    fn the_final_page_cannot_exceed_the_limit() {
+        let rows = |n: usize| json!({ "values": vec![json!({}); n] });
+        let (config, server) = serve(vec![ok(rows(4))]);
+        let (values, truncated) = bitbucket_get_values(&config, "/x", 3).unwrap();
+        server.join().unwrap();
+        assert_eq!((values.len(), truncated), (3, true));
+
+        let (config, server) = serve(vec![ok(rows(3))]);
+        let (values, truncated) = bitbucket_get_values(&config, "/x", 3).unwrap();
+        server.join().unwrap();
+        assert_eq!((values.len(), truncated), (3, false));
+    }
+
+    #[test]
+    fn empty_pages_that_link_to_themselves_stop() {
+        let looping = || ok(json!({ "values": [], "next": "{BASE}/x" }));
+        let (config, server) = serve((0..MAX_PAGES).map(|_| looping()).collect());
+
+        let error = bitbucket_get_values(&config, "/x", 100).unwrap_err();
+
+        server.join().unwrap();
+        assert_eq!(error, "Bitbucket returned too many pages");
+    }
+
+    #[test]
+    fn pagination_links_to_another_origin_are_not_followed() {
+        let (config, server) = serve(vec![ok(json!({
+            "values": [{}],
+            "next": "http://other.invalid/page2"
+        }))]);
+
+        let error = bitbucket_get_values(&config, "/x", 100).unwrap_err();
+
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(error, "Bitbucket returned an unexpected pagination link");
+    }
+
+    #[test]
+    fn pr_checks_gather_every_status_page_for_the_captured_commit() {
+        let (config, server) = serve(vec![
+            ok(json!({ "source": { "commit": { "hash": "deadbeef" } } })),
+            ok(json!({
+                "values": [{ "key": "a", "name": "A", "state": "SUCCESSFUL" }],
+                "next": "{BASE}/repositories/acme/app/commit/deadbeef/statuses?page=2"
+            })),
+            ok(json!({ "values": [{ "key": "b", "name": "B", "state": "FAILED" }] })),
+        ]);
+
+        let checks = bitbucket_pr_checks_for(&config, "acme/app", 7).unwrap();
+
+        assert_eq!(server.join().unwrap().len(), 3);
+        assert_eq!(checks.checks.len(), 2);
+    }
+
+    #[test]
+    fn diff_text_rejects_a_redirect_it_cannot_follow() {
+        let (config, server) = serve(vec![(
+            302,
+            vec![("Location", "http://other.invalid/steal".to_string())],
+            String::new(),
+        )]);
+
+        let error = bitbucket_get_text(&config, "/x/diff").unwrap_err();
+
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert_eq!(error, "Bitbucket request failed (302)");
     }
 
     #[test]
@@ -1781,7 +1971,8 @@ mod tests {
             { "name": "Smoke", "state": { "name": "IN_PROGRESS" } },
             { "name": "Queue", "state": { "name": "PENDING" } },
             { "name": "Mystery", "state": { "name": "SOMETHING" } },
-            { "name": "", "state": { "name": "COMPLETED" } }
+            { "name": "", "state": { "name": "COMPLETED", "result": { "name": "SUCCESSFUL" } } },
+            { "state": { "name": "COMPLETED", "result": { "name": "FAILED" } } }
         ]});
 
         let details = parse_build_steps(&value).unwrap();
@@ -1802,6 +1993,8 @@ mod tests {
                 ("Smoke", "pending"),
                 ("Queue", "pending"),
                 ("Mystery", "unknown"),
+                ("Step 9", "pass"),
+                ("Step 10", "fail"),
             ]
         );
         assert_eq!(
