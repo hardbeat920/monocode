@@ -1037,7 +1037,7 @@ export function GitSyncActions({
   canSync,
   canPublish,
   canCreatePr,
-  textUnavailable,
+  textUnavailable = false,
   canViewPr,
   onSync,
   onCreatePr,
@@ -1052,7 +1052,7 @@ export function GitSyncActions({
   canSync: boolean;
   canPublish: boolean;
   canCreatePr: boolean;
-  textUnavailable: boolean;
+  textUnavailable?: boolean;
   canViewPr: boolean;
   onSync: () => void;
   onCreatePr: () => void;
