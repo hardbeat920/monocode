@@ -1288,10 +1288,11 @@ export function Composer({
     value: string,
     onAccepted?: () => void,
     onRejected?: () => void,
+    skipDraftSave = false,
   ) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value, onAccepted, onRejected).finally(() => {
+    void completeSubmit(value, onAccepted, onRejected, skipDraftSave).finally(() => {
       submitLockRef.current = false;
     });
   };
@@ -1319,12 +1320,13 @@ export function Composer({
       setDraft(originalDraft);
       onDraftChange?.(originalDraft);
       syncHasValue(originalDraft, attachmentsRef.current);
-    });
+    }, true);
   };
   const completeSubmit = async (
     submittedValue: string,
     onAccepted?: () => void,
     onRejected?: () => void,
+    skipDraftSave = false,
   ) => {
     let pending = pasteFlightRef.current;
     const generation = pasteGenerationRef.current;
@@ -1352,7 +1354,7 @@ export function Composer({
     const draftCommand = canSaveDraft
       ? consumeDraftCommand(value)
       : { text: value, matched: false };
-    if ((draftSelected || draftCommand.matched) && onSaveDraft) {
+    if (!skipDraftSave && (draftSelected || draftCommand.matched) && onSaveDraft) {
       const files = attachmentsRef.current;
       const text = draftCommand.text;
       if (!text.trim() && files.length === 0) return;

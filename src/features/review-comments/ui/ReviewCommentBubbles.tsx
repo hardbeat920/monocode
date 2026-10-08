@@ -10,7 +10,7 @@ import {
   type ReviewComment,
 } from "../model/reviewComments";
 
-type Bubble = { comment: ReviewComment; top: number };
+type Bubble = { comment: ReviewComment; top: number; right: number };
 
 export function ReviewCommentBubbles({
   path,
@@ -38,12 +38,12 @@ export function ReviewCommentBubbles({
     if (!host || !view) return;
     const place = () => {
       const hostRect = host.getBoundingClientRect();
-      setBubbles(
-        comments
+      const positioned = comments
           .filter(
             (comment) =>
               comment.workspace === workspace && comment.path === path,
           )
+          .sort((left, right) => left.startLine - right.startLine)
           .flatMap((comment) => {
             const line = Math.min(
               Math.max(1, comment.startLine),
@@ -51,7 +51,14 @@ export function ReviewCommentBubbles({
             );
             const coords = view.coordsAtPos(view.state.doc.line(line).from);
             return coords ? [{ comment, top: coords.top - hostRect.top }] : [];
-          }),
+          });
+      const counts = new Map<number, number>();
+      setBubbles(
+        positioned.map((bubble) => {
+          const index = counts.get(bubble.top) ?? 0;
+          counts.set(bubble.top, index + 1);
+          return { ...bubble, right: 8 + index * 30 };
+        }),
       );
     };
     place();
@@ -65,7 +72,7 @@ export function ReviewCommentBubbles({
 
   return (
     <>
-      {bubbles.map(({ comment, top }) => (
+      {bubbles.map(({ comment, top, right }) => (
         <button
           key={comment.id}
           type="button"
@@ -75,8 +82,8 @@ export function ReviewCommentBubbles({
             setEditing(comment);
             event.currentTarget.blur();
           }}
-          style={{ top }}
-          className="absolute right-2 z-10 grid size-6 -translate-y-0.5 place-items-center rounded-full border border-accent/30 bg-background-base text-accent shadow-sm hover:bg-accent hover:text-background-base"
+          style={{ top, right }}
+          className="absolute z-10 grid size-6 -translate-y-0.5 place-items-center rounded-full border border-accent/30 bg-background-base text-accent shadow-sm hover:bg-accent hover:text-background-base"
         >
           <MessageSquare className="size-3.5" />
         </button>

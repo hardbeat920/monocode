@@ -600,6 +600,8 @@ export function CodeMirrorEditor({
   const onStageGitRef = useRef(onStageGit);
   const canStage = onStageGit !== undefined;
   const onDocChangeRef = useRef(onDocChange);
+  const workspaceRef = useRef(workspace);
+  const commentPathRef = useRef(commentPath);
   const valueRef = useRef(value);
   const navigationTokenRef = useRef<number | undefined>(undefined);
   const pendingNavigationRef = useRef<EditorNavigationRequest | null>(null);
@@ -634,6 +636,8 @@ export function CodeMirrorEditor({
   canAutosaveRef.current = canAutosave;
   onStageGitRef.current = onStageGit;
   onDocChangeRef.current = onDocChange;
+  workspaceRef.current = workspace;
+  commentPathRef.current = commentPath;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
 
@@ -850,17 +854,24 @@ export function CodeMirrorEditor({
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
-            markReviewCommentsStale(workspace, commentPath);
+            markReviewCommentsStale(
+              workspaceRef.current,
+              commentPathRef.current,
+            );
             setDocumentRevision((current) => current + 1);
             return;
           }
-          remapReviewCommentLines(workspace, commentPath, (line) => {
+          remapReviewCommentLines(
+            workspaceRef.current,
+            commentPathRef.current,
+            (line) => {
             const previous = update.startState.doc.line(
               Math.min(line, update.startState.doc.lines),
             );
             const position = update.changes.mapPos(previous.from, 1);
             return update.state.doc.lineAt(position).number;
-          });
+            },
+          );
           setDocumentRevision((current) => current + 1);
           markDirty();
           scheduleAutosave();

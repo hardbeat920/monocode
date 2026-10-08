@@ -93,6 +93,7 @@ export function markReviewCommentsStale(workspace: string, path: string) {
     if (
       comment.workspace !== workspace ||
       comment.path !== path ||
+      comment.startLine === 0 ||
       comment.deleted
     )
       return comment;
