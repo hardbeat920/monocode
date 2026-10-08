@@ -258,7 +258,7 @@ it("cancels the SSE request and releases its reader after a frame error", async 
 });
 import { REMOTE_PROVIDERS } from "../src/features/connections/model/protocol";
 
-it("resolves every provider and runs only allowed catalog commands", async () => {
+it("resolves every provider and runs only allowed provider commands", async () => {
   const directory = mkdtempSync(join(tmpdir(), "monocode-catalog-test-"));
   const file = join(directory, "provider.cjs");
   writeFileSync(file, "console.log(JSON.stringify(process.argv.slice(2)))");
@@ -283,6 +283,19 @@ it("resolves every provider and runs only allowed catalog commands", async () =>
       cwd: directory,
     });
     expect(JSON.parse(output)).toEqual(["models", "--json"]);
+    const cleanupArgs = [
+      "--no-auto-update",
+      "sessions",
+      "delete",
+      "550e8400-e29b-41d4-a716-446655440000",
+    ];
+    const cleanupOutput = await backend.invoke<string>("harness_exec", {
+      command: file,
+      args: cleanupArgs,
+      binaryProvider: "grok",
+      cwd: directory,
+    });
+    expect(JSON.parse(cleanupOutput)).toEqual(cleanupArgs);
     await expect(
       backend.invoke("harness_exec", {
         command: file,
@@ -290,6 +303,38 @@ it("resolves every provider and runs only allowed catalog commands", async () =>
         binaryProvider: "fx",
       }),
     ).rejects.toThrow("Unsupported headless catalog command");
+    for (const args of [
+      ["service", "status"],
+      ["service", "start"],
+      ["service", "get", "password"],
+    ]) {
+      const serviceOutput = await backend.invoke<string>("harness_exec", {
+        command: file,
+        args,
+        binaryProvider: "opencode",
+        cwd: directory,
+      });
+      expect(JSON.parse(serviceOutput)).toEqual(args);
+    }
+    for (const [provider, args] of [
+      ["fx", ["service", "start"]],
+      ["opencode", ["service", "stop"]],
+      ["opencode", ["service get", "password"]],
+      ["opencode", ["service", "get", "password", "--json"]],
+      ["opencode", ["models --json"]],
+      ["cursor", cleanupArgs],
+      ["grok", ["--no-auto-update", "sessions", "delete", "--all"]],
+      ["grok", ["--no-auto-update", "sessions", "delete", "../sessions"]],
+      ["grok", [...cleanupArgs, "--all"]],
+    ] as const) {
+      await expect(
+        backend.invoke("harness_exec", {
+          command: file,
+          args,
+          binaryProvider: provider,
+        }),
+      ).rejects.toThrow("Unsupported headless catalog command");
+    }
     writeFileSync(join(directory, "note.txt"), "host-owned transcript");
     expect(
       await backend.invoke("harness_read_text_file", {

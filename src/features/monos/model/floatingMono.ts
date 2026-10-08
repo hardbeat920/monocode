@@ -24,11 +24,13 @@ export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
   | { kind: "stop" }
+  | { kind: "create" }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
   | { kind: "question"; requestId: number; reply: UserQuestionReply }
   | { kind: "questionInteraction"; requestId: number }
   | { kind: "reveal" }
   | { kind: "openFile"; path: string }
+  | { kind: "openArtifact"; id: string }
   | { kind: "resume" };
 export type FloatingMonoRequest = {
   id: number;
@@ -99,7 +101,10 @@ export type FloatingMonoHost = {
   questionInteraction(sessionId: string, requestId: number): void;
   reveal(monoId: string): Promise<void>;
   openFile(path: string): void | Promise<void>;
+  openArtifact?(monoId: string, id: string): void | Promise<void>;
   resume(sessionId: string): void;
+  /** Add a Mono and show it in place of the chat that asked. */
+  create?(fromMonoId: string): Promise<void>;
 };
 
 /** Preparation may await disk; recheck the receipt before mutating a session. */
@@ -139,8 +144,16 @@ export async function deliverFloatingMonoRequest(
     case "openFile":
       await host.openFile(action.path);
       break;
+    case "openArtifact":
+      if (!host.openArtifact) throw new Error("Artifacts are unavailable.");
+      await host.openArtifact(request.monoId, action.id);
+      break;
     case "resume":
       host.resume(session.id);
+      break;
+    case "create":
+      if (!host.create) throw new Error("New Monos are unavailable here.");
+      await host.create(request.monoId);
       break;
     default:
       throw new Error("Unknown chat action.");
