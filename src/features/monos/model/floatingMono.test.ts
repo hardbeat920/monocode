@@ -13,7 +13,7 @@ function host(): FloatingMonoHost {
     open: vi.fn().mockResolvedValue(session),
     setPlanMode: vi.fn(),
     openPlan: vi.fn(),
-    buildPlan: vi.fn(),
+    buildPlan: vi.fn().mockReturnValue(true),
     submit: vi.fn().mockReturnValue(true),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -130,6 +130,46 @@ describe("floating Mono delivery", () => {
       undefined,
     );
   });
+
+  it("returns accepted Build outcomes from the floating owner", async () => {
+    const runtime = host();
+    runtime.buildPlan = vi.fn().mockResolvedValue(true);
+    await expect(
+      deliverFloatingMonoRequest(
+        {
+          id: 1,
+          monoId: "mono",
+          action: { kind: "buildPlan", blockId: "plan" },
+        },
+        runtime,
+        async () => true,
+      ),
+    ).resolves.toBe(session);
+    expect(runtime.buildPlan).toHaveBeenCalledWith(
+      session.id,
+      "plan",
+      undefined,
+    );
+  });
+
+  it.each([false, Promise.resolve(false)])(
+    "reports a stale or busy floating Build rejection (%s)",
+    async (result) => {
+      const runtime = host();
+      runtime.buildPlan = vi.fn().mockReturnValue(result);
+      await expect(
+        deliverFloatingMonoRequest(
+          {
+            id: 1,
+            monoId: "mono",
+            action: { kind: "buildPlan", blockId: "plan" },
+          },
+          runtime,
+          async () => true,
+        ),
+      ).rejects.toThrow("could not be built");
+    },
+  );
 
   it("rejects floating Open when its plan is stale", async () => {
     const runtime = host();

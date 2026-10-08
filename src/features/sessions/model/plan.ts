@@ -30,6 +30,7 @@ export function monoSubmissionIntent(
   options: {
     approvedPlanBuild?: boolean;
     hasApprovedPlan?: boolean;
+    canStartBuild?: boolean;
     managed?: boolean;
     appRequest?: boolean;
     queued?: boolean;
@@ -39,9 +40,16 @@ export function monoSubmissionIntent(
     requested === "build" &&
     options.approvedPlanBuild === true &&
     options.hasApprovedPlan === true &&
+    options.canStartBuild === true &&
     !options.managed &&
     !options.appRequest &&
     !options.queued;
+  if (
+    requested === "build" &&
+    options.approvedPlanBuild === true &&
+    !approvedBuild
+  )
+    return null;
   if (!canUseMonoTurnIntent(planMode, requested) && !approvedBuild) return null;
   return monoTurnIntent(planMode, requested);
 }

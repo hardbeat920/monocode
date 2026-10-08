@@ -17,6 +17,7 @@ import {
 } from "./mono";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
+import { monoSubmissionIntent } from "../../sessions/model/plan";
 
 beforeEach(() => {
   const stored = new Map<string, string>();
@@ -66,6 +67,23 @@ it("leaves Plan mode on when Build is rejected and exits after acceptance", () =
   expect(findMono(id)?.planMode).toBe(true);
   finishMonoPlanBuild(id, true, true);
   expect(findMono(id)?.planMode).toBe(false);
+});
+
+it("keeps Plan mode when queued work rejects an explicit Build", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const intent = monoSubmissionIntent(true, "build", {
+    approvedPlanBuild: true,
+    hasApprovedPlan: true,
+    canStartBuild: false,
+  });
+  expect(intent).toBeNull();
+  finishMonoPlanBuild(id, true, intent === "build");
+  expect(findMono(id)?.planMode).toBe(true);
+
+  // submitSession returns false for a disconnected-provider Build attempt.
+  finishMonoPlanBuild(id, true, false);
+  expect(findMono(id)?.planMode).toBe(true);
 });
 
 it("keeps the rail's order and forgets a removed Mono", () => {

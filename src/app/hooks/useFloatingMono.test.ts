@@ -65,7 +65,7 @@ beforeEach(() => {
     open: vi.fn(async (id) => sessions.find((s) => s.id === `chat-${id}`)),
     setPlanMode: vi.fn(),
     openPlan: vi.fn(),
-    buildPlan: vi.fn(),
+    buildPlan: vi.fn().mockReturnValue(true),
     submit: vi.fn(),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -176,6 +176,38 @@ it("replies with an error when a floating Open plan is stale", async () => {
   expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
     id: 9,
     error: "That plan is no longer available.",
+  });
+});
+
+it("returns a floating Build rejection to the native request", async () => {
+  requests = [
+    {
+      id: 10,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  host.buildPlan = vi.fn().mockResolvedValue(false);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 10,
+    error: expect.stringContaining("plan could not be built"),
+  });
+});
+
+it("acknowledges a floating Build only after the owner accepts it", async () => {
+  requests = [
+    {
+      id: 11,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  host.buildPlan = vi.fn().mockResolvedValue(true);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 11,
+    error: null,
   });
 });
 

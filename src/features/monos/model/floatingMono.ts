@@ -97,7 +97,11 @@ export type FloatingMonoHost = {
     sessionId: string,
   ): boolean | void;
   openPlan(sessionId: string, blockId: string): boolean | void;
-  buildPlan(sessionId: string, blockId: string, target?: PlanBuildTarget): void;
+  buildPlan(
+    sessionId: string,
+    blockId: string,
+    target?: PlanBuildTarget,
+  ): boolean | Promise<boolean>;
   submit(
     sessionId: string,
     text: string,
@@ -164,7 +168,10 @@ export async function deliverFloatingMonoRequest(
         throw new Error("That plan is no longer available.");
       break;
     case "buildPlan":
-      host.buildPlan(session.id, action.blockId, action.target);
+      if (!(await host.buildPlan(session.id, action.blockId, action.target)))
+        throw new Error(
+          "The plan could not be built. Check the main Mono for details.",
+        );
       break;
     case "stop":
       host.stop(session.id);

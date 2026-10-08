@@ -6725,9 +6725,14 @@ function Workspace({
               block.id === options.planBlockId && block.role === "plan",
           )
         : undefined;
+      const canStartBuild =
+        !current.busy &&
+        !current.backgroundTasks?.length &&
+        !current.queuedMessages?.length;
       const intent = monoSubmissionIntent(monoPlanMode, requestedIntent, {
         approvedPlanBuild: options?.approvedPlanBuild,
         hasApprovedPlan: !!approvedPlan?.text.trim(),
+        canStartBuild,
         managed: options?.managed,
         appRequest: !!options?.appRequestId,
         queued: !!options?.queuedMessageId,
@@ -6735,7 +6740,10 @@ function Workspace({
       if (!intent) {
         enqueueHarnessEvent(sessionId, {
           type: "status",
-          text: "Turn off Plan mode before starting implementation or delegated work.",
+          text:
+            options?.approvedPlanBuild && !canStartBuild
+              ? "Wait for current, background, or queued work to finish before building this plan."
+              : "Turn off Plan mode before starting implementation or delegated work.",
         });
         flushHarnessEvents();
         return false;
@@ -6886,7 +6894,7 @@ function Workspace({
         sessionsRef.current = next;
         setSessions(next);
         dismissNoticesForContinuedSession(sessionId);
-        return true;
+        return options?.approvedPlanBuild ? false : true;
       }
 
       if (mono && current.busy && options?.queuedMessageId) {
@@ -7272,7 +7280,7 @@ function Workspace({
             if (editedResend) {
               next = editedResend.replace(next);
             }
-            if (approvedPlan && intent === "build") {
+            if (live && approvedPlan && intent === "build") {
               next = {
                 ...next,
                 blocks: next.blocks.map((block) =>
@@ -7433,7 +7441,7 @@ function Workspace({
           text: "",
           error: "Harness is not connected",
         });
-        return true;
+        return options?.approvedPlanBuild ? false : true;
       }
       if (editedResend && canRewindHarnessLastTurn(current.harness)) {
         editedResends.start(sessionId);
@@ -8626,12 +8634,11 @@ function Workspace({
         const accepted = buildRemotePlan(sessionId, blockId, target);
         if (mono && typeof accepted === "boolean")
           finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
-        return;
+        return accepted === true;
       }
       const block = session?.blocks.find((entry) => entry.id === blockId);
       if (
         !session ||
-        session.busy ||
         block?.role !== "plan" ||
         !!block.orchestration ||
         !block.text.trim() ||
@@ -8639,7 +8646,7 @@ function Workspace({
         block.plan?.status === "building" ||
         block.plan?.status === "built"
       ) {
-        return;
+        return false;
       }
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
@@ -8650,16 +8657,13 @@ function Workspace({
         buildTarget: target,
         approvedPlanBuild: true,
       });
-      if (mono) {
-        if (typeof accepted === "boolean")
-          finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
-        else
-          void accepted
-            .then((didAccept) =>
-              finishMonoPlanBuild(mono.id, mono.planMode === true, didAccept),
-            )
-            .catch(() => undefined);
-      }
+      const finish = (didAccept: boolean) => {
+        if (mono)
+          finishMonoPlanBuild(mono.id, mono.planMode === true, didAccept);
+        return didAccept;
+      };
+      if (typeof accepted === "boolean") return finish(accepted);
+      return accepted.then(finish, () => false);
     },
     [submitSession],
   );

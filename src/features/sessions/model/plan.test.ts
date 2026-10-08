@@ -29,6 +29,7 @@ describe("plan mode prompts", () => {
     const approved = {
       approvedPlanBuild: true,
       hasApprovedPlan: true,
+      canStartBuild: true,
     };
     expect(monoSubmissionIntent(true, "build", approved)).toBe("build");
     expect(monoSubmissionIntent(true, "build")).toBeNull();
@@ -42,6 +43,12 @@ describe("plan mode prompts", () => {
       monoSubmissionIntent(true, "build", { ...approved, queued: true }),
     ).toBeNull();
     expect(monoSubmissionIntent(true, "orchestrate", approved)).toBeNull();
+    expect(
+      monoSubmissionIntent(true, "build", {
+        ...approved,
+        canStartBuild: false,
+      }),
+    ).toBeNull();
   });
 
   it("keeps a running plan turn read-only after the saved switch changes", () => {
