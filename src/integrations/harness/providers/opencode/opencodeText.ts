@@ -194,25 +194,29 @@ async function startLive(
   const generation = assertSupportedOpenCodeVersion(version);
 
   const service =
-    generation === "v2" ? await resolveOpenCodeV2Service(path, cwd) : undefined;
+    generation === "v2"
+      ? await resolveOpenCodeV2Service(path, cwd)
+      : undefined;
   serverUrl = service?.url ?? "";
+  if (generation === "v1") {
+    watchChild(
+      TEXT_CHILD_ID,
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+      () => {
+        if (live) live = null;
+      },
+      (line) => {
+        const parsed = parseServerUrlFromOutput(line);
+        if (parsed) serverUrl = parsed;
+      },
+    );
+  }
+
   try {
     if (generation === "v1") {
-      watchChild(
-        TEXT_CHILD_ID,
-        (line) => {
-          const parsed = parseServerUrlFromOutput(line);
-          if (parsed) serverUrl = parsed;
-        },
-        () => {
-          if (live) live = null;
-        },
-        (line) => {
-          const parsed = parseServerUrlFromOutput(line);
-          if (parsed) serverUrl = parsed;
-        },
-      );
-
       const port = await freeHarnessPort();
       await spawnChild(
         TEXT_CHILD_ID,
@@ -223,12 +227,16 @@ async function startLive(
         "opencode",
       );
     }
-
     const url =
       generation === "v2"
         ? serverUrl
         : await waitForUrl(() => serverUrl, SERVER_TIMEOUT_MS);
-    const client = new OpenCodeClient(url, cwd, generation, service?.password);
+    const client = new OpenCodeClient(
+      url,
+      cwd,
+      generation,
+      service?.password,
+    );
     const created = await client.createSession({
       permission: [{ permission: "*", pattern: "*", action: "deny" }],
     });

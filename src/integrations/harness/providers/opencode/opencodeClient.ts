@@ -776,8 +776,7 @@ function normalizeV2Message(value: unknown): OpenCodeMessage {
     ? rec.content.map((part, index) => {
         const item = asRecord(part) ?? {};
         const partType = stringField(item, "type");
-        const id =
-          stringField(item, "id") ?? `${stringField(rec, "id")}:${index}`;
+        const id = stringField(item, "id") ?? `${stringField(rec, "id")}:${index}`;
         const state = asRecord(item.state);
         return {
           ...item,
@@ -791,8 +790,7 @@ function normalizeV2Message(value: unknown): OpenCodeMessage {
                   ? {
                       state: {
                         ...state,
-                        output:
-                          state.output ?? openCodeV2ContentText(state.content),
+                        output: state.output ?? openCodeV2ContentText(state.content),
                       },
                     }
                   : {}),

@@ -96,7 +96,7 @@ it("preserves an empty enabled-model list for its project", async () => {
   expect(modelsFor("opencode")).toHaveLength(1);
 });
 
-it("rejects unsupported OpenCode majors before running legacy inventory commands", async () => {
+it("rejects unsupported OpenCode majors before running inventory commands", async () => {
   exec.mockImplementationOnce(async () => "3.0.0");
   await refreshProjectOpenCodeCatalog("/unsupported");
   expect(projectOpenCodeModels("/unsupported")).toBeUndefined();

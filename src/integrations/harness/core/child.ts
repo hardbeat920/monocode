@@ -346,8 +346,8 @@ export async function spawnChild(
     account,
     binaryProvider,
     binaryPath,
-    ...(codexStore ? { codexStore } : {}),
     env,
+    ...(codexStore ? { codexStore } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);

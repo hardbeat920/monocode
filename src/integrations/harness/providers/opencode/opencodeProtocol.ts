@@ -194,19 +194,12 @@ export function rememberBounded<K, V>(
   dropOldest(map, limit);
 }
 
-export function rememberBoundedSet<K>(
-  set: Set<K>,
-  key: K,
-  limit: number,
-): void {
+export function rememberBoundedSet<K>(set: Set<K>, key: K, limit: number): void {
   set.add(key);
   dropOldest(set, limit);
 }
 
-function dropOldest<K>(
-  collection: Map<K, unknown> | Set<K>,
-  limit: number,
-): void {
+function dropOldest<K>(collection: Map<K, unknown> | Set<K>, limit: number): void {
   if (collection.size <= limit) return;
   const oldest = collection.keys().next();
   if (!oldest.done) collection.delete(oldest.value);

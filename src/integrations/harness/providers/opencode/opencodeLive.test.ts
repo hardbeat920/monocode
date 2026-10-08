@@ -14,7 +14,12 @@ let onStdout: ((line: string) => void) | undefined;
 let onChildExit: ((code: number | null) => void) | undefined;
 let onSseEvent: ((event: Record<string, unknown>) => void) | undefined;
 let onSseEnd: ((error?: string) => void) | undefined;
-let sessionMessages: unknown[] = [];
+let sessionMessages: Array<{
+  info?: Record<string, unknown>;
+  parts?: unknown[];
+}> = [];
+let promptMessageID: string | undefined;
+let fakeSessionStatus = "idle";
 let openCodeVersion = "opencode 1.14.19";
 /** v2 inbox ids handed out, in order, by the prompt and compact routes. */
 let admittedIds: Record<string, string[]> = {};
@@ -24,15 +29,13 @@ let v2SessionDirectory = "/repo";
 let v2ForkDirectory: string | undefined;
 let v2MoveApplies = true;
 let v2ForkFailure: { status: number; body: string } | undefined;
-let promptMessageID: string | undefined;
-let fakeSessionStatus = "idle";
 const execChild = vi.fn(async (_path: string, args: string[]) =>
-  args[0] === "service"
-    ? args[1] === "get"
-      ? "secret"
-      : "http://127.0.0.1:4096"
-    : args[0] === "--version"
-      ? openCodeVersion
+  args[0] === "--version"
+    ? openCodeVersion
+    : args[0] === "service"
+      ? args[1] === "get"
+        ? "secret"
+        : "http://127.0.0.1:4096"
       : args[0] === "debug" && args[1] === "paths"
         ? "data       /isolated/data/opencode"
         : ["build", "plan", "general", "explore"]
@@ -64,35 +67,24 @@ const defaultHarnessHttp = async (input: {
   if (input.method === "GET" && url.pathname === "/api/session/session_1") {
     return v2Session("session_1", v2SessionDirectory);
   }
-  if (
-    input.method === "POST" &&
-    url.pathname === "/api/session/session_1/fork"
-  ) {
+  if (input.method === "POST" && url.pathname === "/api/session/session_1/fork") {
     if (v2ForkFailure) return v2ForkFailure;
     v2ForkDirectory = v2SessionDirectory;
     return v2Session("session_fork", v2ForkDirectory);
   }
-  if (
-    input.method === "POST" &&
-    url.pathname === "/api/session/session_fork/move"
-  ) {
+  if (input.method === "POST" && url.pathname === "/api/session/session_fork/move") {
     if (v2MoveApplies) {
-      v2ForkDirectory = (
-        JSON.parse(input.body ?? "{}") as { directory: string }
-      ).directory;
+      v2ForkDirectory = (JSON.parse(input.body ?? "{}") as { directory: string })
+        .directory;
     }
     return { status: 204, body: "" };
   }
   if (input.method === "GET" && url.pathname === "/api/session/session_fork") {
     return v2Session("session_fork", v2ForkDirectory ?? "");
   }
-  if (
-    input.method === "GET" &&
-    /^\/api\/session\/[^/]+\/message$/.test(url.pathname)
-  ) {
+  if (input.method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(url.pathname)) {
     return { status: 200, body: JSON.stringify({ data: [] }) };
   }
-
   if (url.pathname === "/agent" || url.pathname === "/config") {
     const env = spawnChild.mock.calls[
       spawnChild.mock.calls.length - 1
@@ -152,10 +144,12 @@ const defaultHarnessHttp = async (input: {
   if (
     input.method === "POST" &&
     /^\/api\/session\/[^/]+\/(?:prompt|compact)$/.test(url.pathname)
-  )
+  ) {
     onAdmit?.(url.pathname, admitted);
-  if (admitted)
+  }
+  if (admitted) {
     return { status: 200, body: JSON.stringify({ data: { id: admitted } }) };
+  }
   return { status: 204, body: "" };
 };
 const harnessHttp = vi.fn(defaultHarnessHttp);
@@ -209,6 +203,16 @@ const waitFor = async (predicate: () => boolean, label: string) => {
   }
   throw new Error(`timed out waiting for ${label}`);
 };
+
+/** Joins the latest `message.part` snapshot of each assistant part. */
+function snapshotText(events: HarnessEvent[], reasoning = false): string {
+  const byPart = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "message.part" && Boolean(event.reasoning) === reasoning)
+      byPart.set(event.partId, event.text);
+  }
+  return [...byPart.values()].join("");
+}
 
 function turn(
   events: HarnessEvent[],
@@ -329,10 +333,7 @@ it("ends a 1.x turn on session.status, not the deprecated session.idle", async (
   const { done } = await startTurn(events);
   let finished = false;
   void done.then(() => (finished = true));
-  onSseEvent?.({
-    type: "session.idle",
-    properties: { sessionID: "session_1" },
-  });
+  onSseEvent?.({ type: "session.idle", properties: { sessionID: "session_1" } });
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(finished).toBe(false);
   idle();
@@ -390,30 +391,11 @@ it("renders a v2 turn streamed as session step, text, reasoning, and tool events
     onSseEvent?.({ id: `evt_${type}`, type, data: { sessionID, ...data } });
 
   send("session.execution.started", {});
-  send("session.step.started", {
-    agent: "build",
-    model,
-    assistantMessageID: "msg_a",
-  });
-  send("session.reasoning.started", {
-    assistantMessageID: "msg_a",
-    ordinal: 0,
-  });
-  send("session.reasoning.delta", {
-    assistantMessageID: "msg_a",
-    ordinal: 0,
-    delta: "Plan it.",
-  });
-  send("session.tool.input.started", {
-    assistantMessageID: "msg_a",
-    id: "call_1",
-    name: "shell",
-  });
-  send("session.reasoning.ended", {
-    assistantMessageID: "msg_a",
-    ordinal: 0,
-    text: "Plan it.",
-  });
+  send("session.step.started", { agent: "build", model, assistantMessageID: "msg_a" });
+  send("session.reasoning.started", { assistantMessageID: "msg_a", ordinal: 0 });
+  send("session.reasoning.delta", { assistantMessageID: "msg_a", ordinal: 0, delta: "Plan it." });
+  send("session.tool.input.started", { assistantMessageID: "msg_a", id: "call_1", name: "shell" });
+  send("session.reasoning.ended", { assistantMessageID: "msg_a", ordinal: 0, text: "Plan it." });
   send("session.tool.called", {
     assistantMessageID: "msg_a",
     id: "call_1",
@@ -428,56 +410,21 @@ it("renders a v2 turn streamed as session step, text, reasoning, and tool events
   send("session.step.ended", {
     assistantMessageID: "msg_a",
     finish: "tool-calls",
-    tokens: {
-      input: 100,
-      output: 5,
-      reasoning: 2,
-      cache: { read: 50, write: 0 },
-    },
+    tokens: { input: 100, output: 5, reasoning: 2, cache: { read: 50, write: 0 } },
   });
-  send("session.step.started", {
-    agent: "build",
-    model,
-    assistantMessageID: "msg_b",
-  });
+  send("session.step.started", { agent: "build", model, assistantMessageID: "msg_b" });
   send("session.text.started", { assistantMessageID: "msg_b", ordinal: 0 });
-  send("session.text.delta", {
-    assistantMessageID: "msg_b",
-    ordinal: 0,
-    delta: "DO",
-  });
-  send("session.text.delta", {
-    assistantMessageID: "msg_b",
-    ordinal: 0,
-    delta: "NE",
-  });
-  send("session.text.ended", {
-    assistantMessageID: "msg_b",
-    ordinal: 0,
-    text: "DONE",
-  });
+  send("session.text.delta", { assistantMessageID: "msg_b", ordinal: 0, delta: "DO" });
+  send("session.text.delta", { assistantMessageID: "msg_b", ordinal: 0, delta: "NE" });
+  send("session.text.ended", { assistantMessageID: "msg_b", ordinal: 0, text: "DONE" });
   send("session.step.ended", { assistantMessageID: "msg_b", finish: "stop" });
   send("session.execution.succeeded", {});
   await done;
 
-  const text = applyHarnessEventLog(events)
-    .blocks.filter((block) => block.role === "assistant")
-    .map((block) => block.text)
-    .join("");
-  expect(text).toBe("DONE");
+  expect(snapshotText(events)).toBe("DONE");
+  expect(snapshotText(events, true)).toBe("Plan it.");
   expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "message.part",
-      reasoning: true,
-      text: "Plan it.",
-    }),
-  );
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "tool.started",
-      callId: "call_1",
-      kind: "shell",
-    }),
+    expect.objectContaining({ type: "tool.started", callId: "call_1", kind: "shell" }),
   );
   expect(events).toContainEqual(
     expect.objectContaining({
@@ -505,16 +452,10 @@ it("surfaces a failed v2 execution as a session error", async () => {
   );
   onSseEvent?.({
     type: "session.execution.failed",
-    data: {
-      sessionID: "session_1",
-      error: { type: "provider", message: "Rate limited" },
-    },
+    data: { sessionID: "session_1", error: { type: "provider", message: "Rate limited" } },
   });
   await done.catch(() => undefined);
-  expect(events).toContainEqual({
-    type: "session.error",
-    message: "Rate limited",
-  });
+  expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
 });
 
 describe("OpenCode 2.x resumed session folders", () => {
@@ -526,18 +467,12 @@ describe("OpenCode 2.x resumed session folders", () => {
     bindOpenCodeSession("opencode-live", "session_1", "/repo");
     const done = turn(events);
     await waitFor(
-      () =>
-        paths().some((path) => path.endsWith("/prompt")) ||
-        events.some((e) => e.type === "session.error"),
+      () => paths().some((path) => path.endsWith("/prompt")) || events.some((e) => e.type === "session.error"),
       "prompt",
     );
     onSseEvent?.({
       type: "session.execution.succeeded",
-      data: {
-        sessionID: paths().some((p) => p.includes("session_fork/prompt"))
-          ? "session_fork"
-          : "session_1",
-      },
+      data: { sessionID: paths().some((p) => p.includes("session_fork/prompt")) ? "session_fork" : "session_1" },
     });
     return done;
   };
@@ -558,12 +493,9 @@ describe("OpenCode 2.x resumed session folders", () => {
     const events: HarnessEvent[] = [];
     await resumeTurn(events);
     const move = harnessHttp.mock.calls.find(
-      ([input]) =>
-        new URL(input.url).pathname === "/api/session/session_fork/move",
+      ([input]) => new URL(input.url).pathname === "/api/session/session_fork/move",
     );
-    expect(JSON.parse(move?.[0].body ?? "{}")).toMatchObject({
-      directory: "/repo",
-    });
+    expect(JSON.parse(move?.[0].body ?? "{}")).toMatchObject({ directory: "/repo" });
     expect(paths()).toContain("POST /api/session/session_fork/prompt");
     expect(paths()).not.toContain("POST /api/session/session_1/move");
     expect(paths()).not.toContain("POST /api/session/session_1/prompt");
@@ -595,8 +527,7 @@ describe("OpenCode 2.x resumed session folders", () => {
     await resumeTurn();
     const create = harnessHttp.mock.calls.find(
       ([input]) =>
-        input.method === "POST" &&
-        new URL(input.url).pathname === "/api/session",
+        input.method === "POST" && new URL(input.url).pathname === "/api/session",
     );
     expect(JSON.parse(create?.[0].body ?? "{}")).toMatchObject({
       location: { directory: "/repo" },
@@ -608,15 +539,10 @@ describe("OpenCode 2.x completion correlation", () => {
   const PROMPT = "/api/session/session_1/prompt";
   const COMPACT = "/api/session/session_1/compact";
   const v2 = (type: string, data: Record<string, unknown> = {}) =>
-    onSseEvent?.({
-      id: `evt_${type}`,
-      type,
-      data: { sessionID: "session_1", ...data },
-    });
+    onSseEvent?.({ id: `evt_${type}`, type, data: { sessionID: "session_1", ...data } });
   const calls = (path: string) =>
-    harnessHttp.mock.calls.filter(
-      ([input]) => new URL(input.url).pathname === path,
-    ).length;
+    harnessHttp.mock.calls.filter(([input]) => new URL(input.url).pathname === path)
+      .length;
   const settled = (promise: Promise<unknown>) => {
     let done = false;
     promise.then(
@@ -626,11 +552,7 @@ describe("OpenCode 2.x completion correlation", () => {
     return () => done;
   };
   const drain = () => new Promise((resolve) => setTimeout(resolve, 20));
-  const replyText = (events: HarnessEvent[]) =>
-    applyHarnessEventLog(events)
-      .blocks.filter((block) => block.role === "assistant")
-      .map((block) => block.text)
-      .join("");
+  const replyText = (events: HarnessEvent[]) => snapshotText(events);
   const compact = (events: HarnessEvent[]) =>
     compactOpenCodeContext({
       sessionId: "opencode-live",
@@ -658,8 +580,7 @@ describe("OpenCode 2.x completion correlation", () => {
     // The interrupt response returns before its event; the event lands while
     // the next prompt is being admitted.
     onAdmit = (_path, id) => {
-      if (id === "msg_second")
-        v2("session.execution.interrupted", { reason: "user" });
+      if (id === "msg_second") v2("session.execution.interrupted", { reason: "user" });
     };
     const events: HarnessEvent[] = [];
     const second = turn(events);
@@ -673,10 +594,7 @@ describe("OpenCode 2.x completion correlation", () => {
 
     v2("session.execution.started");
     v2("session.inbox.delivered", { inboxID: "msg_second" });
-    v2("session.text.delta", {
-      assistantMessageID: "msg_reply",
-      delta: "SECOND_DONE",
-    });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "SECOND_DONE" });
     v2("session.execution.succeeded");
     await second;
     expect(replyText(events)).toBe("SECOND_DONE");
@@ -688,10 +606,7 @@ describe("OpenCode 2.x completion correlation", () => {
     onAdmit = (_path, id) => {
       v2("session.execution.started");
       v2("session.inbox.delivered", { inboxID: id });
-      v2("session.text.delta", {
-        assistantMessageID: "msg_reply",
-        delta: "FAST",
-      });
+      v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "FAST" });
       v2("session.execution.succeeded");
     };
     const events: HarnessEvent[] = [];
@@ -760,10 +675,7 @@ describe("OpenCode 2.x completion correlation", () => {
     const done = turn(events);
     await waitFor(settled(done), "first early outcome");
     await done;
-    expect(events).toContainEqual({
-      type: "session.error",
-      message: "Rate limited",
-    });
+    expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
     expect(events).not.toContainEqual({ type: "message.completed" });
   });
 
@@ -781,10 +693,7 @@ describe("OpenCode 2.x completion correlation", () => {
     expect(finished()).toBe(false);
     expect(events).not.toContainEqual({ type: "message.completed" });
 
-    v2("session.text.delta", {
-      assistantMessageID: "msg_reply",
-      delta: "CURRENT",
-    });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "CURRENT" });
     v2("session.execution.succeeded");
     await done;
     expect(replyText(events)).toBe("CURRENT");
@@ -799,10 +708,7 @@ describe("OpenCode 2.x completion correlation", () => {
     v2("session.inbox.delivered", { inboxID: "msg_fail" });
     v2("session.execution.failed", { error: { message: "Rate limited" } });
     await done;
-    expect(events).toContainEqual({
-      type: "session.error",
-      message: "Rate limited",
-    });
+    expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
   });
 
   it("ends the active turn on a v2 session error and shows the message", async () => {
@@ -813,10 +719,7 @@ describe("OpenCode 2.x completion correlation", () => {
     await drain();
     v2("session.error", { error: { message: "Provider exploded" } });
     await done;
-    expect(events).toContainEqual({
-      type: "session.error",
-      message: "Provider exploded",
-    });
+    expect(events).toContainEqual({ type: "session.error", message: "Provider exploded" });
   });
 
   it("shows a stale failed run between turns without finishing the next turn", async () => {
@@ -831,10 +734,7 @@ describe("OpenCode 2.x completion correlation", () => {
     await first;
 
     v2("session.execution.failed", { error: { message: "Late failure" } });
-    expect(firstEvents).toContainEqual({
-      type: "session.error",
-      message: "Late failure",
-    });
+    expect(firstEvents).toContainEqual({ type: "session.error", message: "Late failure" });
 
     const events: HarnessEvent[] = [];
     const second = turn(events);
@@ -845,16 +745,11 @@ describe("OpenCode 2.x completion correlation", () => {
 
     v2("session.execution.started");
     v2("session.inbox.delivered", { inboxID: "msg_second" });
-    v2("session.text.delta", {
-      assistantMessageID: "msg_reply",
-      delta: "SECOND_DONE",
-    });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "SECOND_DONE" });
     v2("session.execution.succeeded");
     await second;
     expect(replyText(events)).toBe("SECOND_DONE");
-    expect(events).not.toContainEqual(
-      expect.objectContaining({ type: "session.error" }),
-    );
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "session.error" }));
   });
 
   it("keeps uncorrelated completion when the server never reports delivery", async () => {
@@ -875,10 +770,7 @@ describe("OpenCode 2.x completion correlation", () => {
     await drain();
     v2("session.execution.started");
     v2("session.inbox.delivered", { inboxID: "msg_compact" });
-    v2("session.compaction.started", {
-      reason: "manual",
-      inputID: "msg_compact",
-    });
+    v2("session.compaction.started", { reason: "manual", inputID: "msg_compact" });
 
     const events: HarnessEvent[] = [];
     const next = turn(events);
@@ -892,13 +784,21 @@ describe("OpenCode 2.x completion correlation", () => {
     await drain();
     // The compaction's execution goes on to run the queued prompt.
     v2("session.inbox.delivered", { inboxID: "msg_after" });
-    v2("session.text.delta", {
-      assistantMessageID: "msg_reply",
-      delta: "AFTER",
-    });
+    v2("session.text.delta", { assistantMessageID: "msg_reply", delta: "AFTER" });
     v2("session.execution.succeeded");
     await next;
     expect(replyText(events)).toBe("AFTER");
+  });
+
+  it("fails compaction when a session error arrives before it ends", async () => {
+    admittedIds[COMPACT] = ["msg_compact"];
+    const compaction = compact([]);
+    await waitFor(() => calls(COMPACT) === 1, "compact");
+    await drain();
+    v2("session.execution.started");
+    v2("session.inbox.delivered", { inboxID: "msg_compact" });
+    v2("session.error", { error: { message: "Summary model refused" } });
+    await expect(compaction).rejects.toThrow("Summary model refused");
   });
 
   it("waits for compaction to end when admission returns no inbox id", async () => {
@@ -957,10 +857,7 @@ describe("OpenCode 2.x completion correlation", () => {
     await waitFor(() => calls(COMPACT) === 1, "compact");
     await drain();
     v2("session.inbox.delivered", { inboxID: "msg_compact" });
-    v2("session.compaction.started", {
-      reason: "manual",
-      inputID: "msg_compact",
-    });
+    v2("session.compaction.started", { reason: "manual", inputID: "msg_compact" });
     v2("session.execution.interrupted", { reason: "shutdown" });
     await expect(compaction).rejects.toThrow("interrupted");
   });
@@ -3047,9 +2944,3 @@ describe("OpenCode review regressions", () => {
     await done;
   });
 });
-
-function applyHarnessEventLog(events: HarnessEvent[]) {
-  let session = newSession("opencode", "/repo");
-  for (const event of events) session = applyHarnessEvent(session, event);
-  return session;
-}

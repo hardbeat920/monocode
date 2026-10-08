@@ -157,8 +157,6 @@ type Live = {
 };
 
 type Resume = {
-  // Keep delivery correlation across cancellation and transport replacement.
-  inbox?: OpenCodeV2InboxTracker;
   sessionId: string;
   cwd: string;
 };
@@ -171,6 +169,13 @@ const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 const openingThreads = new Map<string, number>();
 const lifecycleByThread = new Map<string, Promise<void>>();
+/**
+ * v2 inbox trackers by OpenCode session id. Cancel drops the Live, but the
+ * shared service keeps running, so a stopped run's late terminal event can
+ * reach the next Live. Reusing the tracker keeps that event attributed to
+ * the stopped run.
+ */
+const v2InboxBySession = new Map<string, OpenCodeV2InboxTracker>();
 
 let resolveOpenCodeBinaryImpl: () => Promise<{ path: string }> =
   resolveOpenCodeBinary;
@@ -345,9 +350,11 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
-  const messageID = nextOpenCodeMessageId();
+  // v2 assigns its own message ids, so only v1 prompts are correlated here.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
   const prompt = live.prompt;
-  prompt?.messageIDs.add(messageID);
+  if (messageID) prompt?.messageIDs.add(messageID);
   if (prompt?.pendingError) prompt.pendingError.progressAt = Date.now();
   try {
     await live.client.promptAsync({
@@ -360,7 +367,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
       delivery: "steer",
     });
   } catch (error) {
-    prompt?.messageIDs.delete(messageID);
+    if (messageID) prompt?.messageIDs.delete(messageID);
     throw error;
   }
 }
@@ -473,6 +480,8 @@ async function stopLive(sessionId: string): Promise<void> {
 }
 
 export async function forgetOpenCodeSession(sessionId: string): Promise<void> {
+  const resume = resumeByThread.get(sessionId);
+  if (resume) v2InboxBySession.delete(resume.sessionId);
   resumeByThread.delete(sessionId);
   await stopOpenCodeSession(sessionId);
 }
@@ -528,6 +537,7 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
 
   const { path } = await resolveOpenCodeBinaryImpl();
   const generation = await assertOpenCodeVersion(path, input.cwd);
+  const restricted = planning || input.runtimeMode !== "full-access";
   let toolOutputGlob: string | undefined;
   let policy: Record<string, unknown> | undefined;
   if (generation === "v1") {
@@ -537,18 +547,29 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
       input.cwd,
       "opencode",
     );
-    toolOutputGlob =
-      planning || input.runtimeMode !== "full-access"
-        ? parseOpenCodeToolOutputGlob(
-            await execChild(path, ["debug", "paths"], input.cwd, "opencode"),
-          )
-        : undefined;
+    toolOutputGlob = restricted
+      ? parseOpenCodeToolOutputGlob(
+          await execChild(path, ["debug", "paths"], input.cwd, "opencode"),
+        )
+      : undefined;
     policy = managedOpenCodeConfig(
       agents,
       input.runtimeMode,
       planning,
       toolOutputGlob,
     );
+  } else if (restricted) {
+    // The v2 service is shared, so MonoCode cannot start it with a managed
+    // config. Its sessions still get the tool-output read rule when the CLI
+    // reports a data directory; without one the rules only deny more.
+    toolOutputGlob = await execChild(
+      path,
+      ["debug", "paths"],
+      input.cwd,
+      "opencode",
+    )
+      .then(parseOpenCodeToolOutputGlob)
+      .catch(() => undefined);
   }
 
   const liveRef: { current: Live | null } = { current: null };
@@ -615,10 +636,7 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
       generation,
       service?.password,
     );
-    if (
-      generation === "v1" &&
-      (planning || input.runtimeMode !== "full-access")
-    ) {
+    if (generation === "v1" && restricted) {
       const agents = await client.getAgents();
       const config = await client.getConfig();
       verifyManagedOpenCodePolicy(
@@ -673,15 +691,14 @@ async function startLive(input: HarnessSessionInput): Promise<Live> {
       turnFailed: null,
       activeTurn: false,
       inbox:
-        generation === "v2" && resume?.sessionId === openCodeSession.id
-          ? (resume.inbox ?? new OpenCodeV2InboxTracker())
+        generation === "v2"
+          ? v2InboxTracker(openCodeSession.id)
           : new OpenCodeV2InboxTracker(),
       awaitedInbox: null,
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
     resumeByThread.set(input.sessionId, {
-      ...(generation === "v2" ? { inbox: live.inbox } : {}),
       sessionId: openCodeSession.id,
       cwd: input.cwd,
     });
@@ -807,20 +824,24 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
-  const messageID = nextOpenCodeMessageId();
-  live.prompt = {
-    messageIDs: new Set([messageID]),
-    assistantIDs: new Set(),
-    accepted: false,
-    observed: false,
-    idleSeen: false,
-    checking: null,
-  };
+  // v1 turns settle from the durable messages that answer this message id.
+  // v2 assigns its own ids and settles through the awaited inbox item.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
+  live.prompt = messageID
+    ? {
+        messageIDs: new Set([messageID]),
+        assistantIDs: new Set(),
+        accepted: false,
+        observed: false,
+        idleSeen: false,
+        checking: null,
+      }
+    : null;
   live.activeTurn = true;
   live.activeAgent = openCodeAgentForTurn(input);
   live.turnMetricsByMessageId.clear();
-  const v2 = live.client.generation === "v2";
-  live.awaitedInbox = v2 ? { kind: "turn" } : null;
+  live.awaitedInbox = live.client.generation === "v2" ? { kind: "turn" } : null;
 
   try {
     const inboxID = await live.client.promptAsync({
@@ -832,14 +853,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       parts,
     });
     input.onAccepted?.();
-    if (v2) {
-      admitAwaitedInbox(live, inboxID);
-    } else {
-      if (live.prompt) live.prompt.accepted = true;
-      if (live.prompt?.pendingError)
-        scheduleBufferedErrorCheck(live, live.prompt, 0);
-      if (live.prompt?.idleSeen) await reconcileIdlePrompt(live);
-    }
+    if (live.client.generation === "v2") admitAwaitedInbox(live, inboxID);
+    if (live.prompt) live.prompt.accepted = true;
+    if (live.prompt?.pendingError)
+      scheduleBufferedErrorCheck(live, live.prompt, 0);
+    if (live.prompt?.idleSeen) await reconcileIdlePrompt(live);
     await turnPromise;
   } catch (error) {
     if (live.cancelled) return;
@@ -862,34 +880,42 @@ async function runCompaction(
   live: Live,
   model: { providerID: string; modelID: string },
 ): Promise<void> {
-  if (live.client.generation !== "v2") {
-    const before = new Set(
-      (await live.client.getMessages(live.openCodeSessionId)).map((message) =>
-        stringField(asRecord(message.info), "id"),
-      ),
-    );
-    if (!canRunQueuedOperation(live)) return;
-    live.compacting = true;
-    live.compactionError = undefined;
-    try {
-      await live.client.summarizeSession(live.openCodeSessionId, model);
-      const messages = await live.client.getMessages(live.openCodeSessionId);
-      const failed = messages.find((message) => {
-        const info = asRecord(message.info);
-        return !before.has(stringField(info, "id")) && info?.error;
-      });
-      if (failed || live.compactionError)
-        throw new Error(
-          failed
-            ? sessionErrorMessage(failed.info?.error)
-            : live.compactionError,
-        );
-    } finally {
-      live.compacting = false;
-      live.compactionError = undefined;
-    }
+  if (live.client.generation === "v2") {
+    await runV2Compaction(live, model);
     return;
   }
+  const before = new Set(
+    (await live.client.getMessages(live.openCodeSessionId)).map((message) =>
+      stringField(asRecord(message.info), "id"),
+    ),
+  );
+  if (!canRunQueuedOperation(live)) return;
+  live.compacting = true;
+  live.compactionError = undefined;
+  try {
+    // Unlike prompt_async, summarize responds only after the compaction pass.
+    // Keep this outside the normal turn latch: its eventual session.status=idle
+    // must not become a pending completion for the next user turn.
+    await live.client.summarizeSession(live.openCodeSessionId, model);
+    const messages = await live.client.getMessages(live.openCodeSessionId);
+    const failed = messages.find((message) => {
+      const info = asRecord(message.info);
+      return !before.has(stringField(info, "id")) && info?.error;
+    });
+    if (failed || live.compactionError)
+      throw new Error(
+        failed ? sessionErrorMessage(failed.info?.error) : live.compactionError,
+      );
+  } finally {
+    live.compacting = false;
+    live.compactionError = undefined;
+  }
+}
+
+async function runV2Compaction(
+  live: Live,
+  model: { providerID: string; modelID: string },
+): Promise<void> {
   // v2 only queues the compaction. Hold the turn chain until it actually
   // ends so the next prompt is not sent into a context being rewritten.
   const finished = new Promise<void>((resolve, reject) => {
@@ -899,6 +925,7 @@ async function runCompaction(
   // Rejections can land before the admission request returns.
   finished.catch(() => undefined);
   live.awaitedInbox = { kind: "compaction" };
+  live.compacting = true;
   const timer = setTimeout(
     () => live.turnFailed?.(new Error("OpenCode compaction timed out")),
     COMPACTION_TIMEOUT_MS,
@@ -912,6 +939,7 @@ async function runCompaction(
     await finished;
   } finally {
     clearTimeout(timer);
+    live.compacting = false;
     live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
@@ -1287,17 +1315,24 @@ async function handleEvent(
     }
     case "session.error": {
       const message = sessionErrorMessage(properties.error);
-      if (live.client.generation === "v2") {
-        live.onEvent({ type: "session.error", message });
-        // A stale failure must not complete the next v2 turn.
-        if (live.turnDone) {
-          finishActiveTurn(live);
-        }
-        break;
-      }
       const errorName = stringField(asRecord(properties.error), "name");
       if (live.compacting) {
         live.compactionError = message;
+        // A v2 compaction is still waiting on its latch, not on a response,
+        // so fail it here instead of letting it settle as a success.
+        if (live.client.generation === "v2") {
+          const failed = live.turnFailed;
+          live.awaitedInbox = null;
+          live.turnDone = null;
+          live.turnFailed = null;
+          failed?.(new Error(message));
+        }
+        break;
+      }
+      if (live.client.generation === "v2") {
+        live.onEvent({ type: "session.error", message });
+        // A stale v2 failure with nothing waiting must not end the next turn.
+        if (live.turnDone) finishActiveTurn(live);
         break;
       }
       if (!live.activeTurn || !live.prompt) break;
@@ -2006,8 +2041,10 @@ function roleForPart(
   if (part.messageID) {
     const known = live.messageRoleById.get(part.messageID);
     if (known) return known;
-    // v2 text events identify an assistant even when step.started was missed.
-    if (live.client.generation === "v1") return undefined;
+    // v1 also streams user parts, so wait for the message role. The v2
+    // translator builds parts only from assistant step events, so a part
+    // whose step start was missed still belongs to an assistant.
+    if (live.client.generation !== "v2") return undefined;
   }
   return part.type === "tool" ||
     part.type === "text" ||
@@ -2127,7 +2164,17 @@ function waitForServerUrl(
 }
 
 /** Exported for tests. */
+function v2InboxTracker(openCodeSessionId: string): OpenCodeV2InboxTracker {
+  let tracker = v2InboxBySession.get(openCodeSessionId);
+  if (!tracker) {
+    tracker = new OpenCodeV2InboxTracker();
+    v2InboxBySession.set(openCodeSessionId, tracker);
+  }
+  return tracker;
+}
+
 export function __openCodeTestReset(): void {
+  v2InboxBySession.clear();
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();

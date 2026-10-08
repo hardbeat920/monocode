@@ -30,13 +30,14 @@ const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
   ["status", "--json"],
   ["agent", "list"],
 ];
-// OpenCode 2.x runs as a background service; other providers' CLIs may give
-// these subcommands unrelated meanings, so they stay OpenCode-only.
+// OpenCode 2.x runs as a background service, and `debug paths` reports the
+// owned data directory. Other providers' CLIs may give these subcommands
+// unrelated meanings, so they stay OpenCode-only.
 const OPENCODE_EXEC_ARGS: readonly (readonly string[])[] = [
-  ["debug", "paths"],
   ["service", "status"],
   ["service", "start"],
   ["service", "get", "password"],
+  ["debug", "paths"],
 ];
 
 function execArgsAllowed(provider: RemoteProvider, args: string[]): boolean {

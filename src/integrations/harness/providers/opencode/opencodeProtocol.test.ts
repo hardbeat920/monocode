@@ -9,7 +9,6 @@ import {
 } from "./opencodeCatalog";
 import {
   assertSupportedOpenCodeVersion,
-  openCodeApiGeneration,
   buildOpenCodePermissionRules,
   compareSemver,
   sameDirectory,
@@ -23,6 +22,7 @@ import {
   inferDefaultVariant,
   isOpenCodeDefaultTitle,
   isOpenCodeNotFound,
+  openCodeApiGeneration,
   managedOpenCodeConfig,
   verifyManagedOpenCodePolicy,
   nextOpenCodeMessageId,
@@ -848,14 +848,14 @@ describe("managed OpenCode permissions", () => {
   });
 
   it.each([
-    ["1.14.18", false],
-    ["1.14.19", true],
-    ["1.15.0", true],
-    ["2.0.14", false],
-    ["2.0.20", true],
-    ["3.0.0", false],
-  ])("checks the supported API version %s", (version, supported) => {
-    expect(openCodeApiGeneration(version as string) !== null).toBe(supported);
+    ["1.14.18", null],
+    ["1.14.19", "v1"],
+    ["1.15.0", "v1"],
+    ["2.0.14", null],
+    ["2.0.20", "v2"],
+    ["3.0.0", null],
+  ])("maps OpenCode version %s to its API generation", (version, generation) => {
+    expect(openCodeApiGeneration(version as string)).toBe(generation);
   });
 
   it("accepts final text corrections and shortening", () => {

@@ -846,8 +846,8 @@ pub fn harness_spawn(
     account: Option<HarnessAccount>,
     binary_provider: Option<String>,
     binary_path: Option<String>,
-    codex_store: Option<String>,
     env: Option<HashMap<String, String>>,
+    codex_store: Option<String>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -1778,13 +1778,14 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["agent", "list"],
 ];
 
-// OpenCode 2.x runs as a background service; other providers' CLIs may give
-// these subcommands unrelated meanings, so they stay OpenCode-only.
+// OpenCode 2.x runs as a background service, and `debug paths` reports the
+// owned data directory. Other providers' CLIs may give these subcommands
+// unrelated meanings, so they stay OpenCode-only.
 const OPENCODE_EXEC_ALLOWED_ARGS: &[&[&str]] = &[
-    &["debug", "paths"],
     &["service", "status"],
     &["service", "start"],
     &["service", "get", "password"],
+    &["debug", "paths"],
 ];
 
 fn exec_args_allowed(binary_provider: Option<&str>, args: &[String]) -> bool {
@@ -4324,10 +4325,10 @@ mod exec_allowlist_tests {
     #[test]
     fn allows_service_args_only_for_opencode() {
         for service in [
-            &["debug", "paths"][..],
             &["service", "status"][..],
             &["service", "start"][..],
             &["service", "get", "password"][..],
+            &["debug", "paths"][..],
         ] {
             assert!(exec_args_allowed(Some("opencode"), &args(service)));
             assert!(!exec_args_allowed(None, &args(service)));
@@ -4355,6 +4356,19 @@ mod exec_allowlist_tests {
         let mut extra = cleanup;
         extra.push("--all".to_string());
         assert!(!exec_args_allowed(Some("grok"), &extra));
+    }
+
+    #[test]
+    fn limits_debug_paths_to_opencode() {
+        let error = tauri::async_runtime::block_on(harness_exec(
+            "unused".into(),
+            args(&["debug", "paths"]),
+            None,
+            Some("codex".into()),
+            None,
+        ))
+        .unwrap_err();
+        assert_eq!(error, "harness_exec: unsupported arguments");
     }
 
     #[test]
