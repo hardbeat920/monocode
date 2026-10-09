@@ -173,6 +173,11 @@ export type SessionPaneProps = {
     attachments: Attachment[],
   ) => boolean | void;
   onRemoveDraft: (sessionId: string, draftBlockId: string) => boolean | void;
+  onEditDraft?: (
+    sessionId: string,
+    draftBlockId: string,
+    text: string,
+  ) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
   onPlaceSessionInFolder: (
@@ -314,6 +319,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onRuntimeModeChange,
   onSaveDraft,
   onRemoveDraft,
+  onEditDraft,
   onSubmit,
   onStop,
   onCompactContext,
@@ -991,6 +997,15 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onRemoveDraft={
                       draftBlock
                         ? (block) => onRemoveDraft(session.id, block.id)
+                        : undefined
+                    }
+                    onEditDraft={
+                      draftBlock &&
+                      onEditDraft &&
+                      !remote &&
+                      !draftBlock.appRequestId
+                        ? (block, text) =>
+                            onEditDraft(session.id, block.id, text)
                         : undefined
                     }
                     onSaveSelectionNote={

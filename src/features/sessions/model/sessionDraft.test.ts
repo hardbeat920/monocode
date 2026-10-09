@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newSession, removeSessionDraft } from "./session";
+import { editSessionDraft, newSession, removeSessionDraft } from "./session";
 
 describe("removeSessionDraft", () => {
   it("removes a follow-up draft without changing earlier conversation history", () => {
@@ -48,5 +48,91 @@ describe("removeSessionDraft", () => {
 
     expect(removeSessionDraft(session, "sent")).toBeUndefined();
     expect(removeSessionDraft(session, "missing")).toBeUndefined();
+  });
+});
+
+describe("editSessionDraft", () => {
+  it("rewrites the draft text and keeps its identity and attachments", () => {
+    const session = newSession("codex", "/repo");
+    const attachment = {
+      id: "a",
+      name: "notes.md",
+      mimeType: "text/markdown",
+      kind: "file" as const,
+      size: 4,
+    };
+    session.blocks = [
+      { id: "sent", role: "user", text: "Start here" },
+      {
+        id: "draft",
+        role: "user",
+        text: "Maybe later",
+        draft: true,
+        attachments: [attachment],
+      },
+    ];
+
+    const updated = editSessionDraft(session, "draft", "Do it now");
+
+    expect(updated?.blocks[0]).toBe(session.blocks[0]);
+    expect(updated?.blocks[1]).toEqual({
+      ...session.blocks[1],
+      text: "Do it now",
+    });
+  });
+
+  it("retitles a session named after the draft but keeps a custom title", () => {
+    const session = newSession("codex", "/repo");
+    session.title = "codex · Maybe later";
+    session.blocks = [
+      { id: "draft", role: "user", text: "Maybe later", draft: true },
+    ];
+
+    expect(editSessionDraft(session, "draft", "Do it now")?.title).toBe(
+      "codex · Do it now",
+    );
+
+    session.title = "codex · Keep this name";
+    expect(editSessionDraft(session, "draft", "Do it now")?.title).toBe(
+      "codex · Keep this name",
+    );
+  });
+
+  it("keeps a title from an earlier turn that matches a follow-up draft", () => {
+    const session = newSession("codex", "/repo");
+    session.title = "codex · Fix this";
+    session.blocks = [
+      { id: "sent", role: "user", text: "Fix this" },
+      { id: "reply", role: "assistant", text: "Done" },
+      { id: "draft", role: "user", text: "Fix this", draft: true },
+    ];
+
+    expect(editSessionDraft(session, "draft", "Fix that")?.title).toBe(
+      "codex · Fix this",
+    );
+  });
+
+  it("rejects empty text, CLI request drafts, sent messages, and unknown blocks", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "sent", role: "user", text: "Keep this" },
+      { id: "draft", role: "user", text: "Maybe later", draft: true },
+    ];
+    const requested = newSession("codex", "/repo");
+    requested.blocks = [
+      {
+        id: "draft",
+        role: "user",
+        text: "Maybe later",
+        draft: true,
+        appRequestId: "request",
+      },
+    ];
+
+    expect(editSessionDraft(requested, "draft", "Changed")).toBeUndefined();
+
+    expect(editSessionDraft(session, "draft", "  ")).toBeUndefined();
+    expect(editSessionDraft(session, "sent", "Changed")).toBeUndefined();
+    expect(editSessionDraft(session, "missing", "Changed")).toBeUndefined();
   });
 });

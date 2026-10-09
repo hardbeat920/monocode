@@ -439,6 +439,7 @@ import {
   newSession,
   retargetSessionToProject,
   removeSessionDraft,
+  editSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
   sessionWorkCwd,
@@ -6665,6 +6666,30 @@ function Workspace({
     [invalidateLoadedSession],
   );
 
+  const onEditDraft = useCallback(
+    (sessionId: string, draftBlockId: string, text: string) => {
+      const current = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      // Host sessions have no edit command; their drafts stay read-only.
+      if (
+        !current ||
+        remoteProjectFor(current.cwd) ||
+        !editSessionDraft(current, draftBlockId, text)
+      )
+        return false;
+      setSessions((sessions) =>
+        sessions.map((session) =>
+          session.id === sessionId
+            ? (editSessionDraft(session, draftBlockId, text) ?? session)
+            : session,
+        ),
+      );
+      return true;
+    },
+    [],
+  );
+
   const submitSession = useCallback(
     (
       sessionId: string,
@@ -12248,6 +12273,7 @@ function Workspace({
     onRuntimeModeChange,
     onSaveDraft,
     onRemoveDraft,
+    onEditDraft,
     onSubmit,
     onStop,
     onCompactContext,

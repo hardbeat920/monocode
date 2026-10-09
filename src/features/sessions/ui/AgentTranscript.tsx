@@ -68,6 +68,7 @@ import {
   stubFilePreview,
 } from "../../../integrations/harness/core/preview";
 import { copyMessage } from "../../../platform/tauri/clipboard";
+import { isImeComposition } from "../../../shared/lib/keyboard";
 import type { Attachment } from "../model/session";
 import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
@@ -222,6 +223,7 @@ type Props = {
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  onEditDraft?: (block: Block, text: string) => boolean | void;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
   onOpenArtifact?: (id: string) => void;
@@ -285,6 +287,7 @@ function AgentTranscriptComponent({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onEditDraft,
   onSaveSelectionNote,
   onOpenFile,
   onOpenArtifact,
@@ -1213,6 +1216,7 @@ function AgentTranscriptComponent({
                 onSaveNote={onSaveNote}
                 onSendDraft={onSendDraft}
                 onRemoveDraft={onRemoveDraft}
+                onEditDraft={onEditDraft}
                 onOpenFile={onOpenFile}
                 onOpenDiff={onOpenDiff}
                 onOpenPlan={onOpenPlan}
@@ -2037,6 +2041,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onEditDraft,
   onOpenFile,
   onOpenDiff,
   onOpenPlan,
@@ -2066,6 +2071,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  onEditDraft?: (block: Block, text: string) => boolean | void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
@@ -2094,6 +2100,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onSaveNote={onSaveNote}
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
+        onEditDraft={onEditDraft}
       />
     );
   }
@@ -2225,6 +2232,7 @@ function UserMessageBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onEditDraft,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -2240,10 +2248,16 @@ function UserMessageBlock({
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
+  onEditDraft?: (block: Block, text: string) => boolean | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
+  // The draft's text while it is being edited in place; null otherwise.
+  const [draftEdit, setDraftEdit] = useState<string | null>(null);
+  const editingDraft = draftEdit !== null;
+  const editDraftRef = useRef<HTMLButtonElement>(null);
+  const sendDraftRef = useRef<HTMLButtonElement>(null);
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
@@ -2350,10 +2364,22 @@ function UserMessageBlock({
       observer.disconnect();
       turn?.removeEventListener("contentvisibilityautostatechange", onVisible);
     };
-  }, [text, roundsSingleLine, expanded, visible]);
+  }, [text, roundsSingleLine, expanded, visible, editingDraft]);
 
   const toggle = () => {
     if (overflows) setExpanded((value) => !value);
+  };
+  const canSaveDraftEdit =
+    draftEdit !== null && (!!draftEdit.trim() || !!block.attachments?.length);
+  // The editor unmounts on save or cancel; keep keyboard focus on the draft.
+  const saveDraftEdit = () => {
+    if (!canSaveDraftEdit || onEditDraft?.(block, draftEdit) === false) return;
+    flushSync(() => setDraftEdit(null));
+    sendDraftRef.current?.focus();
+  };
+  const cancelDraftEdit = () => {
+    flushSync(() => setDraftEdit(null));
+    editDraftRef.current?.focus();
   };
 
   const deliveryControl =
@@ -2474,7 +2500,26 @@ function UserMessageBlock({
                   <SecondOpinionCard card={card} />
                 </div>
               ) : null}
-              {messageLink ? (
+              {draftEdit !== null ? (
+                <textarea
+                  autoFocus
+                  aria-label="Draft text"
+                  value={draftEdit}
+                  rows={Math.min(10, Math.max(2, draftEdit.split("\n").length))}
+                  onChange={(event) => setDraftEdit(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (isImeComposition(event.nativeEvent)) return;
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelDraftEdit();
+                    } else if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      saveDraftEdit();
+                    }
+                  }}
+                  className="block w-[36rem] max-w-full resize-none rounded-md border border-content/15 bg-content/5 px-2 py-1 font-sans text-sm text-content outline-none focus:border-content/30"
+                />
+              ) : messageLink ? (
                 <div
                   ref={(element) => {
                     textRef.current = element;
@@ -2497,7 +2542,7 @@ function UserMessageBlock({
                   {displayText}
                 </pre>
               ) : null}
-              {overflows ? (
+              {overflows && !editingDraft ? (
                 <button
                   type="button"
                   aria-expanded={expanded}
@@ -2531,28 +2576,68 @@ function UserMessageBlock({
                     <CircleDashed className="size-3.5" strokeWidth={1.75} />
                     Draft
                   </span>
-                  <span className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      title="Remove draft"
-                      aria-label="Remove draft"
-                      onClick={() => onRemoveDraft?.(block)}
-                      className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
-                    >
-                      <Trash2 className="size-3.5" strokeWidth={1.75} />
-                      Remove
-                    </button>
-                    <button
-                      type="button"
-                      title="Send draft"
-                      aria-label="Send draft"
-                      onClick={() => onSendDraft?.(block)}
-                      className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
-                    >
-                      Send
-                      <ArrowUp className="size-3.5" strokeWidth={2.25} />
-                    </button>
-                  </span>
+                  {draftEdit !== null ? (
+                    <span className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Cancel draft edit"
+                        aria-label="Cancel draft edit"
+                        onClick={cancelDraftEdit}
+                        className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
+                      >
+                        <X className="size-3.5" strokeWidth={1.75} />
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        title="Save draft"
+                        aria-label="Save draft"
+                        disabled={!canSaveDraftEdit}
+                        onClick={saveDraftEdit}
+                        className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97] disabled:opacity-40"
+                      >
+                        Save
+                        <Check className="size-3.5" strokeWidth={2.25} />
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Remove draft"
+                        aria-label="Remove draft"
+                        onClick={() => onRemoveDraft?.(block)}
+                        className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
+                      >
+                        <Trash2 className="size-3.5" strokeWidth={1.75} />
+                        Remove
+                      </button>
+                      {onEditDraft ? (
+                        <button
+                          ref={editDraftRef}
+                          type="button"
+                          title="Edit draft"
+                          aria-label="Edit draft"
+                          onClick={() => setDraftEdit(block.text)}
+                          className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
+                        >
+                          <Pencil className="size-3.5" strokeWidth={1.75} />
+                          Edit
+                        </button>
+                      ) : null}
+                      <button
+                        ref={sendDraftRef}
+                        type="button"
+                        title="Send draft"
+                        aria-label="Send draft"
+                        onClick={() => onSendDraft?.(block)}
+                        className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
+                      >
+                        Send
+                        <ArrowUp className="size-3.5" strokeWidth={2.25} />
+                      </button>
+                    </span>
+                  )}
                 </div>
               ) : null}
               {monocode ? (
