@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Markdown table columns keep a readable minimum width and top-aligned content; narrow panes scroll horizontally instead of squeezing file names into stacked text.
+- Nested menu flyouts (model picker, project ⋮ → Move to group / Open in editor / Mute, and other ExplorerMenu submenus) stay open while the pointer moves diagonally toward them, instead of switching to rows it crosses on the way.
 
 ## [0.10.0] - 2026-10-08
 

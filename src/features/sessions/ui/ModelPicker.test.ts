@@ -36,10 +36,12 @@ vi.mock("../../../shared/ui/Popover", () => ({
     side?: string;
     "aria-label"?: string;
     "data-model-picker"?: boolean;
+    ref?: React.Ref<HTMLDivElement>;
   }) =>
     createElement(
       "div",
       {
+        ref: props.ref,
         role,
         className,
         tabIndex,
@@ -222,6 +224,64 @@ describe("model picker", () => {
 
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("opens the clicked row's submenu even when hover was held by the safe triangle", () => {
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "grok",
+          model: "grok:grok-4.6",
+          values: { effort: "high" },
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
+        .click(),
+    );
+    const row = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.startsWith(label),
+      )!;
+
+    hover(row("Effort"));
+    const effortMenu = container.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Effort"]',
+    )!;
+    vi.spyOn(effortMenu, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 280, y: 0, width: 200, height: 300 }),
+    );
+    // Leaving Effort toward its submenu arms the grace triangle, so crossing
+    // Model on the way does not take over.
+    act(() => {
+      row("Effort").dispatchEvent(
+        new MouseEvent("mouseout", {
+          bubbles: true,
+          clientX: 200,
+          clientY: 60,
+        }),
+      );
+      row("Model").dispatchEvent(
+        new MouseEvent("mouseover", {
+          bubbles: true,
+          clientX: 220,
+          clientY: 50,
+        }),
+      );
+    });
+    expect(row("Model").getAttribute("aria-expanded")).toBe("false");
+    expect(row("Effort").getAttribute("aria-expanded")).toBe("true");
+
+    act(() => row("Model").click());
+    expect(row("Model").getAttribute("aria-expanded")).toBe("true");
+    expect(row("Effort").hasAttribute("aria-expanded")).toBe(false);
+    expect(
+      container.querySelector('[role="dialog"][aria-label="Models"]'),
+    ).not.toBeNull();
   });
 
   it("lists Claude Opus 5.5 after Opus 5 in the built-in Claude catalog", () => {
@@ -763,9 +823,7 @@ describe("model picker", () => {
       );
       const effortRow = [
         ...container.querySelectorAll<HTMLButtonElement>("button"),
-      ].find((button) =>
-        button.textContent?.startsWith(settingLabel),
-      )!;
+      ].find((button) => button.textContent?.startsWith(settingLabel))!;
       hover(effortRow);
 
       expect(

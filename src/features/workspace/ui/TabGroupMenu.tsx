@@ -15,12 +15,14 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { normalizeHex } from "../../../shared/lib/colorUtils";
 import { projectKey } from "../../../shared/lib/paths";
 import { clearProjectLogo, pickAndSetProjectLogo } from "../../projects/model/projectLogos";
 import { PROJECT_MASCOTS, projectMascot } from "../../projects/model/projectMascots";
+import { graceArea, inGrace, type Grace } from "../../../shared/lib/safeTriangle";
 import { TAB_GROUP_COLORS } from "../model/tabGroups";
 import { ColorPickerPopover, ColorSwatchRow } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
@@ -153,12 +155,15 @@ export function TabGroupMenu({
     anchor: HTMLButtonElement;
   } | null>(null);
   const submenuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const grace = useRef<Grace | null>(null);
+  const hoveredRow = useRef<string | null>(null);
   const cancelSubmenuClose = () => {
     if (submenuCloseTimer.current != null) clearTimeout(submenuCloseTimer.current);
     submenuCloseTimer.current = null;
   };
   const closeSubmenu = () => {
     cancelSubmenuClose();
+    grace.current = null;
     submenu?.anchor.focus();
     setSubmenu(null);
   };
@@ -167,6 +172,30 @@ export function TabGroupMenu({
     if (submenu) submenuCloseTimer.current = setTimeout(closeSubmenu, 180);
   };
   useEffect(() => cancelSubmenuClose, [submenu]);
+  const hoverRow = (
+    id: string,
+    event: ReactMouseEvent<HTMLButtonElement>,
+    next: { item: TabGroupMenuExtraItem; anchor: HTMLButtonElement } | null,
+  ) => {
+    if (hoveredRow.current === id) return;
+    const point = { x: event.clientX, y: event.clientY };
+    if (grace.current && inGrace(point, grace.current)) return;
+    grace.current = null;
+    hoveredRow.current = id;
+    cancelSubmenuClose();
+    setSubmenu(next);
+  };
+  const leaveRow = (event: ReactMouseEvent) => {
+    const point = { x: event.clientX, y: event.clientY };
+    // Leaving a row crossed on the way keeps the original, wider triangle.
+    if (grace.current && inGrace(point, grace.current)) return;
+    hoveredRow.current = null;
+    const el = document.querySelector<HTMLElement>(
+      `[data-menu-owner="${CSS.escape(menuId)}"][data-explorer-menu]`,
+    );
+    const rect = el?.getBoundingClientRect();
+    grace.current = rect ? graceArea(point, rect) : null;
+  };
   const pickExtra = (id: string) => {
     if (onExtraPick?.(id) !== false) onClose();
   };
@@ -220,7 +249,8 @@ export function TabGroupMenu({
           <>
             <MenuRow
               item={leadingAction}
-              onHover={() => setSubmenu(null)}
+              onHover={(event) => hoverRow(leadingAction.id, event, null)}
+              onLeave={leaveRow}
               onPick={() => pickExtra(leadingAction.id)}
             />
             <div role="separator" className="my-1 h-px bg-content/10" />
@@ -336,7 +366,8 @@ export function TabGroupMenu({
               <MenuRow
                 key={item.id}
                 item={item}
-                onHover={() => setSubmenu(null)}
+                onHover={(event) => hoverRow(item.id, event, null)}
+                onLeave={leaveRow}
                 onPick={() => onPick(item.id as TabGroupMenuAction)}
               />
             ))}
@@ -347,7 +378,8 @@ export function TabGroupMenu({
               <MenuRow
                 key={item.id}
                 item={item}
-                onHover={() => setSubmenu(null)}
+                onHover={(event) => hoverRow(item.id, event, null)}
+                onLeave={leaveRow}
                 onPick={() => onPick(item.id as TabGroupMenuAction)}
               />
             ))}
@@ -358,7 +390,8 @@ export function TabGroupMenu({
               <MenuRow
                 key={item.id}
                 item={item}
-                onHover={() => setSubmenu(null)}
+                onHover={(event) => hoverRow(item.id, event, null)}
+                onLeave={leaveRow}
                 onPick={() => onPick(item.id as TabGroupMenuAction)}
               />
             ))}
@@ -376,12 +409,24 @@ export function TabGroupMenu({
                 <MenuRow
                   item={item}
                   expanded={submenu?.item.id === item.id}
-                  onHover={(anchor) =>
-                    setSubmenu(item.submenu && !item.disabled ? { item, anchor } : null)
+                  onHover={(event) =>
+                    hoverRow(
+                      item.id,
+                      event,
+                      item.submenu && !item.disabled
+                        ? { item, anchor: event.currentTarget }
+                        : null,
+                    )
                   }
+                  onLeave={leaveRow}
                   onPick={(anchor) => {
-                    if (item.submenu) setSubmenu({ item, anchor });
-                    else pickExtra(item.id);
+                    if (!item.submenu) {
+                      pickExtra(item.id);
+                      return;
+                    }
+                    grace.current = null;
+                    hoveredRow.current = item.id;
+                    setSubmenu({ item, anchor });
                   }}
                 />
               </Fragment>
@@ -399,7 +444,10 @@ export function TabGroupMenu({
           onPick={pickExtra}
           onBack={closeSubmenu}
           onClose={closeSubmenu}
-          onMouseEnter={cancelSubmenuClose}
+          onMouseEnter={() => {
+            grace.current = null;
+            cancelSubmenuClose();
+          }}
           onMouseLeave={scheduleSubmenuClose}
         />
       ) : null}
@@ -441,11 +489,13 @@ function MenuRow({
   item,
   onPick,
   onHover,
+  onLeave,
   expanded,
 }: {
   item: MenuItem & Pick<TabGroupMenuExtraItem, "disabled" | "submenu" | "description">;
   onPick: (anchor: HTMLButtonElement) => void;
-  onHover?: (anchor: HTMLButtonElement) => void;
+  onHover?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onLeave?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   expanded?: boolean;
 }) {
   const Icon = item.icon;
@@ -459,7 +509,9 @@ function MenuRow({
       aria-label={item.description ? item.label : undefined}
       aria-description={item.description}
       onMouseDown={(e) => e.preventDefault()}
-      onMouseEnter={(e) => onHover?.(e.currentTarget)}
+      onMouseEnter={(e) => onHover?.(e)}
+      onMouseMove={(e) => onHover?.(e)}
+      onMouseLeave={(e) => onLeave?.(e)}
       onClick={(e) => onPick(e.currentTarget)}
       onKeyDown={(e) => {
         if (item.submenu && e.key === "ArrowRight") {

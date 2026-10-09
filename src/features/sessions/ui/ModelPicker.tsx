@@ -16,6 +16,7 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -49,6 +50,11 @@ import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { LAYER } from "../../../shared/lib/layers";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
+import {
+  graceArea,
+  inGrace,
+  type Grace,
+} from "../../../shared/lib/safeTriangle";
 import { MOD } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
 import "./ModelPicker.css";
@@ -317,6 +323,9 @@ export function ModelPicker({
   const recentOpenRef = useRef(recentMenu != null);
   const currentRef = useRef<AgentModel | null>(null);
   const lastHotkey = useRef(0);
+  const submenuEl = useRef<HTMLDivElement>(null);
+  const grace = useRef<Grace | null>(null);
+  const hoveredRow = useRef<number | null>(null);
   onCloseRef.current = onClose;
   openRef.current = open;
   recentOpenRef.current = recentMenu != null;
@@ -448,6 +457,8 @@ export function ModelPicker({
       ),
     );
     setActive(0);
+    hoveredRow.current = null;
+    grace.current = null;
     // Beside-picker mode leaves only the Model row; open its list directly
     // instead of making it one more hover step.
     setSubmenu(hideSettings ? { kind: "models" } : null);
@@ -603,6 +614,41 @@ export function ModelPicker({
       return;
     }
     setSubmenu(null);
+  };
+
+  // Rows switch on mousemove (not just enter) so a row crossed inside the
+  // safe triangle still takes over once the pointer leaves the triangle.
+  const hoverEntry = (
+    index: number,
+    entry: MenuEntry,
+    event: ReactMouseEvent,
+  ) => {
+    if (hoveredRow.current === index) return;
+    const point = { x: event.clientX, y: event.clientY };
+    if (grace.current && inGrace(point, grace.current)) return;
+    activateEntry(index, entry);
+  };
+
+  // A click always wins over the safe triangle: the row under the pointer
+  // becomes active even if hover was suppressed while aiming at a submenu.
+  const activateEntry = (index: number, entry: MenuEntry) => {
+    grace.current = null;
+    hoveredRow.current = index;
+    setActive(index);
+    showEntrySubmenu(entry);
+  };
+
+  const leaveEntry = (event: ReactMouseEvent) => {
+    const point = { x: event.clientX, y: event.clientY };
+    // Leaving a row crossed on the way keeps the original, wider triangle.
+    if (grace.current && inGrace(point, grace.current)) return;
+    hoveredRow.current = null;
+    const rect = submenuEl.current?.getBoundingClientRect();
+    grace.current = rect ? graceArea(point, rect) : null;
+  };
+
+  const enterSubmenu = () => {
+    grace.current = null;
   };
 
   const moveEntry = (direction: 1 | -1) => {
@@ -788,11 +834,10 @@ export function ModelPicker({
                     aria-haspopup="menu"
                     aria-expanded={highlighted && showSubmenu}
                     onMouseDown={(event) => event.preventDefault()}
-                    onMouseEnter={() => {
-                      setActive(index);
-                      showEntrySubmenu(entry);
-                    }}
-                    onClick={() => showEntrySubmenu(entry)}
+                    onMouseEnter={(event) => hoverEntry(index, entry, event)}
+                    onMouseMove={(event) => hoverEntry(index, entry, event)}
+                    onMouseLeave={leaveEntry}
+                    onClick={() => activateEntry(index, entry)}
                     className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] ${
                       highlighted
                         ? "bg-selection text-content"
@@ -832,15 +877,14 @@ export function ModelPicker({
                   }
                   title={setting.description}
                   onMouseDown={(event) => event.preventDefault()}
-                  onMouseEnter={() => {
-                    setActive(index);
-                    showEntrySubmenu(entry);
-                  }}
+                  onMouseEnter={(event) => hoverEntry(index, entry, event)}
+                  onMouseMove={(event) => hoverEntry(index, entry, event)}
+                  onMouseLeave={leaveEntry}
                   onClick={() => {
                     if (isToggle) {
                       setSetting(setting, value === "true" ? "false" : "true");
                     } else {
-                      showEntrySubmenu(entry);
+                      activateEntry(index, entry);
                     }
                   }}
                   className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] ${
@@ -893,7 +937,11 @@ export function ModelPicker({
               layer={LAYER.submenu}
               role="menu"
               aria-label={settingLabel(submenu.setting)}
-              onMouseEnter={() => setSubmenu(submenu)}
+              ref={submenuEl}
+              onMouseEnter={() => {
+                enterSubmenu();
+                setSubmenu(submenu);
+              }}
               data-model-picker
               className="p-1 font-sans"
             >
@@ -938,6 +986,8 @@ export function ModelPicker({
             <ModelFlyout
               anchor={activeRow}
               autoFocusSearch
+              popoverRef={submenuEl}
+              onMouseEnter={enterSubmenu}
               harnesses={pickerHarnesses}
               tab={visibleTab}
               models={visibleModels}
@@ -1398,6 +1448,8 @@ function ModelFlyout({
   onActive,
   onPick,
   onToggleFavorite,
+  popoverRef,
+  onMouseEnter,
 }: {
   anchor: HTMLButtonElement | { current: HTMLButtonElement | null };
   side?: "right" | "top" | "bottom";
@@ -1416,6 +1468,8 @@ function ModelFlyout({
   onActive: (index: number) => void;
   onPick: (model: AgentModel) => void;
   onToggleFavorite: (id: string) => void;
+  popoverRef?: React.Ref<HTMLDivElement>;
+  onMouseEnter?: () => void;
 }) {
   const source = useModelSource();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -1474,6 +1528,8 @@ function ModelFlyout({
       layer={LAYER.submenu}
       role="dialog"
       aria-label="Models"
+      ref={popoverRef}
+      onMouseEnter={onMouseEnter}
       onDismiss={onDismiss}
       onKeyDown={(event) => {
         // Keyboard nav once focus leaves the search field (which stops its
