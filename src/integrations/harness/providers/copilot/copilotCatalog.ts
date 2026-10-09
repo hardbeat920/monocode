@@ -23,6 +23,7 @@ import {
 const PROBE_ID = "monocode-copilot-probe";
 const DISCOVERY_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 20_000;
+const COMMANDS_WAIT_MS = 500;
 
 let inflight: Promise<void> | null = null;
 
@@ -60,10 +61,18 @@ async function probeCopilot(
   const cwd = workingDirectory ?? (await homeDir());
   const probeId = `${PROBE_ID}-${crypto.randomUUID()}`;
   let commands: NativeCommand[] = [];
+  let resolveCommands!: () => void;
+  const commandsReceived = new Promise<void>((resolve) => {
+    resolveCommands = resolve;
+  });
   const acp = new JsonRpcClient(probeId, {
     onNotification: (method, params) => {
       if (method === "session/update") {
-        commands = commandsFromCopilotUpdate(params) ?? commands;
+        const update = commandsFromCopilotUpdate(params);
+        if (update !== undefined) {
+          commands = update;
+          resolveCommands();
+        }
       }
     },
     onRequest: (id, method) => {
@@ -80,6 +89,7 @@ async function probeCopilot(
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    resolveCommands();
     acp.close();
     unwatchChild(probeId);
     await killChild(probeId).catch(() => undefined);
@@ -113,6 +123,15 @@ async function probeCopilot(
           { cwd, mcpServers: [] },
           REQUEST_TIMEOUT_MS,
         );
+        // Command metadata can follow session/new's response. Allow a brief
+        // grace period, including for CLIs that never advertise commands.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, COMMANDS_WAIT_MS);
+          void commandsReceived.then(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
         return { models: modelsFromCopilotSession(created), commands };
       },
       () => {

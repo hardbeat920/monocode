@@ -11,6 +11,8 @@ const io = vi.hoisted(() => ({
   authError: false,
   holdSetup: false,
   delayInitialize: 0,
+  commandTiming: "before" as "before" | "after" | "none",
+  emptyCommands: false,
 }));
 vi.mock("../../../../platform/tauri/fs", () => ({
   homeDir: async () => "/home/test",
@@ -42,19 +44,22 @@ vi.mock("../../core/child", () => ({
         );
         return;
       }
-      io.lines.get(id)?.(
-        JSON.stringify({
-          method: "session/update",
-          params: {
-            update: {
-              sessionUpdate: "available_commands_update",
-              availableCommands: [
-                { name: "context", description: "Show context" },
-              ],
+      const notifyCommands = () =>
+        io.lines.get(id)?.(
+          JSON.stringify({
+            method: "session/update",
+            params: {
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: io.emptyCommands
+                  ? []
+                  : [{ name: "context", description: "Show context" }],
+              },
             },
-          },
-        }),
-      );
+          }),
+        );
+      if (io.commandTiming === "before") notifyCommands();
+      else if (io.commandTiming === "after") setTimeout(notifyCommands, 100);
       io.lines.get(id)?.(
         JSON.stringify({
           id: request.id,
@@ -80,6 +85,8 @@ beforeEach(() => {
   io.authError = false;
   io.holdSetup = false;
   io.delayInitialize = 0;
+  io.commandTiming = "before";
+  io.emptyCommands = false;
   io.lines.clear();
   vi.clearAllMocks();
   resetHarnessModelOverlays();
@@ -143,4 +150,49 @@ it("surfaces actionable login help when discovery is unauthenticated", async () 
   await expect(discoverCopilotModels("/repo")).rejects.toThrow("copilot login");
   expect(io.kill).toHaveBeenCalledOnce();
   expect(io.lines.size).toBe(0);
+});
+
+it("waits for command metadata arriving after the session response", async () => {
+  vi.useFakeTimers();
+  io.commandTiming = "after";
+  let settled = false;
+  const pending = discoverCopilotCommands("/repo").then((commands) => {
+    settled = true;
+    return commands;
+  });
+  await vi.advanceTimersByTimeAsync(99);
+  expect(settled).toBe(false);
+  expect(io.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(pending).resolves.toEqual([
+    expect.objectContaining({ name: "context", source: "copilot" }),
+  ]);
+  expect(io.kill).toHaveBeenCalledOnce();
+  expect(io.lines.size).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("returns models within a bounded wait when command metadata is absent", async () => {
+  vi.useFakeTimers();
+  io.commandTiming = "none";
+  const pending = discoverCopilotModels("/repo");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(io.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await expect(pending).resolves.toEqual([
+    expect.objectContaining({ id: "copilot:auto" }),
+  ]);
+  expect(io.kill).toHaveBeenCalledOnce();
+  expect(io.lines.size).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("accepts an explicitly empty command update without waiting", async () => {
+  vi.useFakeTimers();
+  io.emptyCommands = true;
+  const pending = discoverCopilotCommands("/repo");
+  await vi.advanceTimersByTimeAsync(0);
+  await expect(pending).resolves.toEqual([]);
+  expect(io.kill).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
 });
