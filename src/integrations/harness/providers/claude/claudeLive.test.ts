@@ -908,6 +908,146 @@ describe("claude model switching", () => {
   });
 });
 
+describe("claude conversation binding", () => {
+  it("does not bind a new conversation until Claude saves the first prompt", async () => {
+    const first = await startTurn("s1");
+    expect(
+      first.events.some((event) => event.type === "session.providerBound"),
+    ).toBe(false);
+    await cancelClaudeTurn("s1");
+    await first.turn;
+    onExit!(1);
+
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "try again",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+    await waitFor(() => spawned.length === 2, "replacement Claude process");
+    expect(spawned[1]).not.toContain("--resume");
+    expect(spawned[1]).toContain("--session-id");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(
+      () => parse().filter((m) => m.type === "user").length === 2,
+      "retried prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("binds the conversation once Claude streams the reply", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "stream_event",
+      session_id: "sess_1",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "hi" },
+      },
+    });
+    expect(
+      events.filter((event) => event.type === "session.providerBound"),
+    ).toEqual([{ type: "session.providerBound", providerSessionId: "sess_1" }]);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("starts a new conversation when the saved one does not exist", async () => {
+    bindClaudeSession("s1", "gone", "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "keep going",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(() => spawned.length === 1, "resumed Claude process");
+    expect(spawned[0]).toEqual(expect.arrayContaining(["--resume", "gone"]));
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "gone",
+      errors: ["No conversation found with session ID: gone"],
+    });
+    onExit!(1);
+
+    await waitFor(() => spawned.length === 2, "replacement Claude process");
+    expect(spawned[1]).not.toContain("--resume");
+    expect(spawned[1]).toContain("--session-id");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
+    emit({ type: "result", subtype: "success", session_id: "sess_2" });
+    await turn;
+
+    expect(events.map((event) => event.type)).not.toContain("session.error");
+    expect(events.map((event) => event.type)).not.toContain("session.ended");
+    expect(
+      events.filter((event) => event.type === "session.providerBound"),
+    ).toEqual([{ type: "session.providerBound", providerSessionId: "sess_2" }]);
+  });
+});
+
+describe("claude missing conversation during a turn", () => {
+  it("fails the turn and starts a new conversation next time", async () => {
+    bindClaudeSession("s1", "gone", "/repo");
+    const { events, turn } = await startTurn("s1");
+    expect(spawned[0]).toEqual(expect.arrayContaining(["--resume", "gone"]));
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "gone",
+      errors: ["No conversation found with session ID: gone"],
+    });
+    await turn;
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "No conversation found with session ID: gone",
+    });
+    onExit!(1);
+
+    const next = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "again",
+      attachments: [],
+      onEvent: () => undefined,
+    });
+    await waitFor(() => spawned.length === 2, "replacement Claude process");
+    expect(spawned[1]).not.toContain("--resume");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(
+      () => parse().filter((m) => m.type === "user").length === 2,
+      "retried prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_2" });
+    await next;
+  });
+});
+
 describe("claude legacy account resume", () => {
   it("resumes a legacy thread when the missing account resolves to default", async () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
@@ -975,11 +1115,11 @@ describe("claude subagents", () => {
         type: "control_response",
         response: { response: { behavior: decision } },
       });
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
       expect(
         events.filter((event) => event.type === "session.providerBound").at(-1),
       ).toMatchObject({ providerSessionId: "sess_1" });
-      emit({ type: "result", subtype: "success", session_id: "sess_1" });
-      await turn;
     },
   );
 

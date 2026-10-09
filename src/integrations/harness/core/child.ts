@@ -81,7 +81,7 @@ function listen<T>(
   return backend ? backend.listen(event, handler) : tauriListen(event, handler);
 }
 
-type LinePayload = { sessionId: string; line: string };
+type LinePayload = { sessionId: string; line: string; pid?: number };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
 type SsePayload = { sessionId: string; data: string };
 type SseEndPayload = { sessionId: string; error?: string | null };
@@ -104,6 +104,17 @@ const sseBuffer = new Map<string, string[]>();
 const ownedChildren = new Set<string>();
 const ownedSse = new Set<string>();
 const livePid = new Map<string, number>();
+/**
+ * Children that were replaced, killed, or exited, by session id. A respawn
+ * reuses the session id, so their late output must not reach the new child's
+ * handlers.
+ */
+const retiredPids = new Map<string, number[]>();
+/**
+ * A child that exited on its own. The exit can arrive before its last output
+ * lines, so it is only retired once the session spawns or kills a child.
+ */
+const exitedPid = new Map<string, number>();
 const pendingExit = new Map<
   string,
   Array<{ code: number | null; pid: number }>
@@ -117,6 +128,30 @@ export function isCurrentChildExit(
   if (expectedPid == null || expectedPid <= 0) return false;
   if (exitedPid == null || exitedPid <= 0) return false;
   return exitedPid === expectedPid;
+}
+
+function retireChild(sessionId: string): void {
+  const pids = [livePid.get(sessionId), exitedPid.get(sessionId)].filter(
+    (pid): pid is number => pid != null,
+  );
+  livePid.delete(sessionId);
+  exitedPid.delete(sessionId);
+  if (pids.length === 0) return;
+  const retired = retiredPids.get(sessionId) ?? [];
+  retired.push(...pids);
+  if (retired.length > 8) retired.splice(0, retired.length - 8);
+  retiredPids.set(sessionId, retired);
+}
+
+function noteChildExited(sessionId: string, pid: number): void {
+  livePid.delete(sessionId);
+  exitedPid.set(sessionId, pid);
+}
+
+/** True when the line came from a child this session no longer runs. */
+function fromRetiredChild(payload: LinePayload): boolean {
+  if (payload.pid == null) return false;
+  return retiredPids.get(payload.sessionId)?.includes(payload.pid) ?? false;
 }
 
 const MAX_BUFFERED = 1000;
@@ -156,6 +191,7 @@ function ensureBridge() {
   const installation = Promise.all([
     register(
       listen<LinePayload>("harness-stdout", (event) => {
+        if (fromRetiredChild(event.payload)) return;
         const { sessionId, line } = event.payload;
         const handler = lineHandlers.get(sessionId);
         if (handler) {
@@ -169,6 +205,7 @@ function ensureBridge() {
     ),
     register(
       listen<LinePayload>("harness-stderr", (event) => {
+        if (fromRetiredChild(event.payload)) return;
         const { sessionId, line } = event.payload;
         stderrHandlers.get(sessionId)?.(line);
       }),
@@ -180,7 +217,7 @@ function ensureBridge() {
         if (!handler || pid == null || pid <= 0) return;
         const currentPid = livePid.get(sessionId);
         if (isCurrentChildExit(currentPid, pid)) {
-          livePid.delete(sessionId);
+          noteChildExited(sessionId, pid);
           handler(code);
           return;
         }
@@ -235,6 +272,8 @@ function teardownBridge() {
   ownedChildren.clear();
   ownedSse.clear();
   livePid.clear();
+  retiredPids.clear();
+  exitedPid.clear();
   pendingExit.clear();
   void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
@@ -331,29 +370,73 @@ export async function spawnChild(
   binaryProvider?: ConfigurableBinaryProvider,
   codexStore?: "mono",
 ): Promise<void> {
-  livePid.delete(sessionId);
+  const previousLive = livePid.get(sessionId);
+  const previousExited = exitedPid.get(sessionId);
+  retireChild(sessionId);
   pendingExit.delete(sessionId);
   ownedChildren.add(sessionId);
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
-  const pid = await invoke<number>("harness_spawn", {
-    sessionId,
-    command,
-    args,
-    cwd,
-    account,
-    binaryProvider,
-    binaryPath,
-    ...(codexStore ? { codexStore } : {}),
-  });
+  let pid: number;
+  try {
+    pid = await invoke<number>("harness_spawn", {
+      sessionId,
+      command,
+      args,
+      cwd,
+      account,
+      binaryProvider,
+      binaryPath,
+      ...(codexStore ? { codexStore } : {}),
+    });
+  } catch (error) {
+    // A rejected spawn can leave the previous child running, so keep its
+    // output flowing.
+    const restored = [previousLive, previousExited];
+    const retired = retiredPids.get(sessionId);
+    if (retired) {
+      retiredPids.set(
+        sessionId,
+        retired.filter((old) => !restored.includes(old)),
+      );
+    }
+    if (previousLive != null && !livePid.has(sessionId)) {
+      // The previous child may have exited while the spawn was pending. Its
+      // exit was queued because it was no longer live, so deliver it now.
+      const exits = pendingExit.get(sessionId) ?? [];
+      const previousExit = exits.find((event) => event.pid === previousLive);
+      if (previousExit) {
+        pendingExit.set(
+          sessionId,
+          exits.filter((event) => event.pid !== previousLive),
+        );
+        noteChildExited(sessionId, previousLive);
+        exitHandlers.get(sessionId)?.(previousExit.code);
+      } else {
+        livePid.set(sessionId, previousLive);
+      }
+    }
+    if (previousExited != null && !exitedPid.has(sessionId)) {
+      exitedPid.set(sessionId, previousExited);
+    }
+    throw error;
+  }
   if (typeof pid !== "number" || pid <= 0) return;
+  // The OS can hand a retired child's pid to the new one.
+  const retired = retiredPids.get(sessionId);
+  if (retired?.includes(pid)) {
+    retiredPids.set(
+      sessionId,
+      retired.filter((old) => old !== pid),
+    );
+  }
   livePid.set(sessionId, pid);
   const exits = pendingExit.get(sessionId);
   pendingExit.delete(sessionId);
   const exited = exits?.find((event) => event.pid === pid);
   if (!exited) return;
-  livePid.delete(sessionId);
+  noteChildExited(sessionId, pid);
   exitHandlers.get(sessionId)?.(exited.code);
 }
 
@@ -362,7 +445,7 @@ export function writeChild(sessionId: string, line: string): Promise<void> {
 }
 
 export function killChild(sessionId: string): Promise<void> {
-  livePid.delete(sessionId);
+  retireChild(sessionId);
   pendingExit.delete(sessionId);
   unwatchChild(sessionId);
   return invoke("harness_kill", { sessionId });
@@ -379,6 +462,8 @@ export function killAllChildren(): Promise<void> {
   ownedChildren.clear();
   ownedSse.clear();
   livePid.clear();
+  retiredPids.clear();
+  exitedPid.clear();
   pendingExit.clear();
   return invoke("harness_kill_all");
 }

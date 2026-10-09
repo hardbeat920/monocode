@@ -37,6 +37,9 @@ pub struct HarnessAccount {
 struct HarnessLine {
     session_id: String,
     line: String,
+    /// The child that wrote the line, so a replacement under the same session
+    /// id can ignore output from the process it replaced.
+    pid: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -919,6 +922,7 @@ pub fn harness_spawn(
 
     let stdout_app = app.clone();
     let stdout_id = session_id.clone();
+    let stdout_pid = pid;
     let wait_store = codex_store.clone();
     let stdout_store = codex_store;
     thread::spawn(move || {
@@ -937,6 +941,7 @@ pub fn harness_spawn(
                 HarnessLine {
                     session_id: stdout_id.clone(),
                     line,
+                    pid: stdout_pid,
                 },
             );
         }
@@ -944,6 +949,7 @@ pub fn harness_spawn(
 
     let stderr_app = app.clone();
     let stderr_id = session_id.clone();
+    let stderr_pid = pid;
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
             let Ok(line) = line else { break };
@@ -952,6 +958,7 @@ pub fn harness_spawn(
                 HarnessLine {
                     session_id: stderr_id.clone(),
                     line,
+                    pid: stderr_pid,
                 },
             );
         }

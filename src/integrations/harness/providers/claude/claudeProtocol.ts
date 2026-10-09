@@ -477,6 +477,24 @@ export function statusTextFromSystem(
   return compact ? "Compacted context" : undefined;
 }
 
+/**
+ * The result Claude prints and exits with when `--resume` names a session it
+ * has no transcript for.
+ */
+export function isMissingConversationResult(
+  rec: Record<string, unknown>,
+): boolean {
+  if (stringField(rec, "type") !== "result" || rec.is_error !== true) {
+    return false;
+  }
+  const errors = Array.isArray(rec.errors) ? rec.errors : [];
+  return errors.some(
+    (item) =>
+      typeof item === "string" &&
+      item.startsWith("No conversation found with session ID"),
+  );
+}
+
 export function turnStatusFromResult(rec: Record<string, unknown>): {
   status: "completed" | "failed" | "interrupted" | "cancelled";
   error?: string;
