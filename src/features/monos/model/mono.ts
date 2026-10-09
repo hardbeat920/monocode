@@ -45,6 +45,8 @@ export type Mono = {
   showStartedSessionsInSidebar?: boolean;
   /** Keep turns in the Mono's conversation in read-only plan mode. */
   planMode?: boolean;
+  /** User Plan mode choices since the last saved roster. */
+  planModeRevision?: number;
   /** Files the sessions it starts into a sidebar folder named after it. */
   useSidebarFolders?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
@@ -174,6 +176,11 @@ function parseMono(value: unknown): Mono | undefined {
       : {}),
     ...(typeof entry.planMode === "boolean"
       ? { planMode: entry.planMode }
+      : {}),
+    ...(typeof entry.planModeRevision === "number" &&
+    Number.isSafeInteger(entry.planModeRevision) &&
+    entry.planModeRevision >= 0
+      ? { planModeRevision: entry.planModeRevision }
       : {}),
     ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
     ...(instructions ? { instructions } : {}),
@@ -317,15 +324,32 @@ export function saveMonoName(monoId: string, name: string): void {
 }
 
 export function saveMonoPlanMode(monoId: string, planMode: boolean): void {
-  updateMono(monoId, (mono) => ({ ...mono, planMode }));
+  updateMono(monoId, (mono) =>
+    (mono.planMode === true) === planMode
+      ? mono
+      : {
+          ...mono,
+          planMode,
+          planModeRevision: (mono.planModeRevision ?? 0) + 1,
+        },
+  );
 }
 
 export function finishMonoPlanBuild(
   monoId: string,
-  wasInPlanMode: boolean,
+  planModeRevision: number,
   accepted: boolean,
 ): void {
-  if (accepted && wasInPlanMode) saveMonoPlanMode(monoId, false);
+  if (!accepted) return;
+  updateMono(monoId, (mono) =>
+    mono.planMode === true && (mono.planModeRevision ?? 0) === planModeRevision
+      ? {
+          ...mono,
+          planMode: false,
+          planModeRevision: planModeRevision + 1,
+        }
+      : mono,
+  );
 }
 
 export function saveMonoMascot(monoId: string, mascot: string): void {

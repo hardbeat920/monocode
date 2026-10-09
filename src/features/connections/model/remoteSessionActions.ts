@@ -9,7 +9,7 @@ import type {
 } from "../../../integrations/harness";
 
 type RemoteActions = {
-  buildPlan: (blockId: string, target?: PlanBuildTarget) => boolean | void;
+  buildPlan: (blockId: string, target?: PlanBuildTarget) => boolean;
   submit: (
     text: string,
     attachments: Attachment[],
@@ -38,7 +38,7 @@ export function buildRemotePlan(
   shellId: string,
   blockId: string,
   target?: PlanBuildTarget,
-) {
+): boolean | undefined {
   return actions.get(shellId)?.buildPlan(blockId, target);
 }
 

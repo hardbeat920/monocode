@@ -30,6 +30,7 @@ import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
+import { openMonoPlan } from "./model/openMonoPlan";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -193,7 +194,6 @@ import {
   neighborLeafId,
   newEditorWorkspaceTab,
   newFileTab,
-  newPlanTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -371,7 +371,6 @@ import {
   hasActivePlanTurn,
   isProviderFailureText,
   monoSubmissionIntent,
-  planTitle,
   planTurnKey,
   planTurnPrompt,
 } from "../features/sessions/model/plan";
@@ -6433,30 +6432,19 @@ function Workspace({
 
   const onOpenPlan = useCallback(
     (sessionId: string, blockId: string) => {
-      const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      const block = session?.blocks.find((entry) => entry.id === blockId);
-      if (!tab || !session || block?.role !== "plan") return false;
-      const file = {
-        ...newPlanTab(
-          session.id,
-          block.id,
-          planTitle(block.text),
-          sessionWorkCwd(session),
-        ),
-        ...(session.worktreeCwd ? { projectCwd: session.cwd } : {}),
-      };
-      setTabs((prev) =>
-        prev.map((entry) =>
-          entry.id === tab.id ? openEditorTab(entry, file) : entry,
-        ),
-      );
-      setComposerFocused(false);
-      return true;
+      return openMonoPlan({
+        tab: tabsRef.current.find((entry) => entry.id === activeTabId),
+        session,
+        blockId,
+        closeMonoView,
+        setTabs,
+        setComposerFocused,
+      });
     },
-    [activeTabId],
+    [activeTabId, closeMonoView],
   );
 
   const onPinFile = useCallback((fileId: string) => {
@@ -8696,10 +8684,11 @@ function Workspace({
         (entry) => entry.id === sessionId,
       );
       const mono = monoForSession(sessionId);
+      const planModeRevision = mono?.planModeRevision ?? 0;
       if (session && remoteProjectFor(session.cwd)) {
         const accepted = buildRemotePlan(sessionId, blockId, target);
-        if (mono && typeof accepted === "boolean")
-          finishMonoPlanBuild(mono.id, mono.planMode === true, accepted);
+        if (mono && accepted !== undefined)
+          finishMonoPlanBuild(mono.id, planModeRevision, accepted);
         return accepted === true;
       }
       const block = session?.blocks.find((entry) => entry.id === blockId);
@@ -8725,8 +8714,7 @@ function Workspace({
         abortSignal: signal,
       });
       const finish = (didAccept: boolean) => {
-        if (mono)
-          finishMonoPlanBuild(mono.id, mono.planMode === true, didAccept);
+        if (mono) finishMonoPlanBuild(mono.id, planModeRevision, didAccept);
         return didAccept;
       };
       if (typeof accepted === "boolean") return finish(accepted);
