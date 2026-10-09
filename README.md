@@ -114,6 +114,8 @@ That emits a `.rpm` under `target/release/bundle/rpm/`, installable with `sudo d
 
 The AppImage uses the host WebKitGTK 4.1 stack and native Wayland, like the `.deb` and `.rpm`. Install WebKit with `sudo dnf install webkit2gtk4.1` if the launcher asks for it. Set `GDK_BACKEND=x11` to keep the previous X11-forced behavior (for example NVIDIA plus Wayland). Older AppImages that bundled Ubuntu-built libraries aborted with `Could not create default EGL display: EGL_BAD_PARAMETER`; current builds do not.
 
+The AppImage disables WebKitGTK's DMA-BUF renderer automatically on launch to avoid the same startup abort on Mesa/Wayland systems. If it still fails to start, use the native `.deb` or `.rpm` package instead.
+
 ### Windows packages
 
 ```bash
