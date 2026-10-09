@@ -667,6 +667,7 @@ import { findRemoteSessionTab } from "../features/connections/model/remoteSessio
 import {
   remotePath,
   remoteProjectFor,
+  remoteSessionGitCwd,
 } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
@@ -1912,8 +1913,14 @@ function Workspace({
             (gitCwd && gitCwd !== sidebarCwd ? gitCwd : remoteFilesProject.cwd),
         )
     : gitCwd;
-  const gitCwdRef = useRef(filesCwd);
-  gitCwdRef.current = filesCwd;
+  // Git follows the session's own work path (a linked worktree included),
+  // never the terminal-following files cwd: a remote session working in a
+  // separate worktree diffed the main checkout and showed "No file changes".
+  const gitRootCwd = remoteFilesProject
+    ? remoteSessionGitCwd(remoteFilesProject, gitCwd, sidebarCwd)
+    : gitCwd;
+  const gitCwdRef = useRef(gitRootCwd);
+  gitCwdRef.current = gitRootCwd;
   const projectBranches = useProjectBranches(
     sidebarCwd,
     Boolean(sidebarCwd) && sidebarCwd !== "~",
