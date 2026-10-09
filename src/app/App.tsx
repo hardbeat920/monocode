@@ -1904,12 +1904,17 @@ function Workspace({
       ? active.branch || gitCwdBranches?.current || undefined
       : undefined;
   const remoteFilesProject = remoteProjectFor(sidebarCwd);
+  // The host checkout the remote tab is aimed at — the attached session's
+  // work path or a worktree picked before the first message.
+  const remoteTabCheckout = remoteFilesProject
+    ? remoteTabCwd(sidebarCwd, active?.id)
+    : undefined;
   const filesCwd = remoteFilesProject
     ? isRemoteProjectPath(gitCwd)
       ? gitCwd
       : remotePath(
           remoteFilesProject.environmentId,
-          remoteTabCwd(sidebarCwd, active?.id) ??
+          remoteTabCheckout ??
             (gitCwd && gitCwd !== sidebarCwd ? gitCwd : remoteFilesProject.cwd),
         )
     : gitCwd;
@@ -1917,7 +1922,12 @@ function Workspace({
   // never the terminal-following files cwd: a remote session working in a
   // separate worktree diffed the main checkout and showed "No file changes".
   const gitRootCwd = remoteFilesProject
-    ? remoteSessionGitCwd(remoteFilesProject, gitCwd, sidebarCwd)
+    ? remoteSessionGitCwd(
+        remoteFilesProject,
+        gitCwd,
+        sidebarCwd,
+        remoteTabCheckout,
+      )
     : gitCwd;
   const gitCwdRef = useRef(gitRootCwd);
   gitCwdRef.current = gitRootCwd;
