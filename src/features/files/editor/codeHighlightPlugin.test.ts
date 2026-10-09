@@ -34,6 +34,127 @@ function text(result: HighlightResult): string {
 }
 
 describe("bounded code highlight plugin", () => {
+  it("matches plaintext fallback highlighting with blank lines and CRLF", async () => {
+    const plugin = createBoundedCodePlugin();
+    const result = await highlight(plugin, "a\r\n\r\nb", "not-a-language");
+    const highlighter = await shiki.createHighlighter({
+      themes: plugin.getThemes(),
+      langs: [],
+      engine: createJavaScriptRegexEngine({ forgiving: true }),
+    });
+    try {
+      expect(result.tokens).toEqual(
+        highlighter.codeToTokens("a\r\n\r\nb", {
+          lang: "text",
+          themes: { light: "github-light", dark: "github-dark" },
+        }).tokens,
+      );
+    } finally {
+      highlighter.dispose();
+    }
+  });
+
+  it("keeps interleaved sources correct when the checkpoint or themes change", async () => {
+    const plugin = createBoundedCodePlugin();
+    const highlighter = await shiki.createHighlighter({
+      themes: ["github-light", "github-dark", "nord", "min-light"],
+      langs: ["typescript"],
+      engine: createJavaScriptRegexEngine({ forgiving: true }),
+    });
+    try {
+      for (const code of [
+        "/* first\ncomment",
+        "const second = `hello\nworld",
+        "/* first\ncomment */\nconst first = 1;",
+        "const second = `hello\nworld`;\nconst done = true;",
+      ]) {
+        for (const pair of [
+          ["github-light", "github-dark"],
+          ["min-light", "nord"],
+        ] as const) {
+          const result = await new Promise<HighlightResult>((resolve) => {
+            const cached = plugin.highlight(
+              { code, language: "typescript", themes: [...pair] },
+              resolve,
+            );
+            if (cached) resolve(cached);
+          });
+          expect(result.tokens).toEqual(
+            highlighter.codeToTokens(code, {
+              lang: "typescript",
+              themes: { light: pair[0], dark: pair[1] },
+            }).tokens,
+          );
+        }
+      }
+    } finally {
+      highlighter.dispose();
+    }
+  });
+
+  it.each([
+    ["typescript", "/* multiline\r\ncomment */\r\nconst done = true;\r\n"],
+    [
+      "typescript",
+      "/* multiline\ncomment */\nconst message = `hello\nworld`;\nconst done = true;",
+    ],
+    [
+      "markdown",
+      "# Prompt\n\n**bold** and [link](url)\n```typescript\nconst x = 1;\n```\n\nEnd.",
+    ],
+    ["python", 'text = """first\nsecond\nthird"""\nprint(text)'],
+  ])(
+    "matches full %s highlighting as multiline syntax streams",
+    async (language, source) => {
+      const plugin = createBoundedCodePlugin();
+      const highlighter = await shiki.createHighlighter({
+        themes: plugin.getThemes(),
+        langs: [language as BundledLanguage],
+        engine: createJavaScriptRegexEngine({ forgiving: true }),
+      });
+      try {
+        for (let end = 1; end <= source.length; end += 3) {
+          const code = source.slice(0, end);
+          const expected = highlighter.codeToTokens(code, {
+            lang: language as BundledLanguage,
+            themes: { light: "github-light", dark: "github-dark" },
+          });
+          expect((await highlight(plugin, code, language)).tokens).toEqual(
+            expected.tokens,
+          );
+        }
+        // Replacing or shortening the source must discard the old checkpoint.
+        for (const code of [
+          source.replace("\n", " changed\n"),
+          source.slice(0, 5),
+          source,
+        ]) {
+          expect((await highlight(plugin, code, language)).tokens).toEqual(
+            highlighter.codeToTokens(code, {
+              lang: language as BundledLanguage,
+              themes: { light: "github-light", dark: "github-dark" },
+            }).tokens,
+          );
+        }
+      } finally {
+        highlighter.dispose();
+      }
+    },
+    20_000,
+  );
+
+  it("reuses completed line tokens while rehighlighting the unfinished line", async () => {
+    const plugin = createBoundedCodePlugin();
+    const first = await highlight(plugin, "const first = 1;\nconst second");
+    const next = await highlight(
+      plugin,
+      "const first = 1;\nconst second = 2;\nconst third",
+    );
+    expect(next.tokens[0]).toBe(first.tokens[0]);
+    expect(next.tokens[1]).not.toBe(first.tokens[1]);
+    expect(text(next)).toBe("const first = 1;\nconst second = 2;\nconst third");
+  });
+
   it("shares one highlight run across concurrent requests and notifies every callback", async () => {
     const plugin = createBoundedCodePlugin();
     const source = "const shared = 1;";

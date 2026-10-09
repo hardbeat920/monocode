@@ -371,6 +371,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       "effort thinking reasoning fast service tier model picker composer",
   },
   {
+    id: "composer-autocorrect",
+    section: "chat",
+    label: "Autocorrect",
+    keywords: "spelling spell check autocorrect typo macos composer",
+  },
+  {
     id: "composer-mascot",
     section: "chat",
     label: "Composer mascot",

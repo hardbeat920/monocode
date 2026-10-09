@@ -422,7 +422,7 @@ export function MonoProjectCommit({
             rows={1}
             value={message}
             placeholder={`Message (${MOD}↩ to commit)`}
-            disabled={(!!busy && busy !== "generate") || selected.length === 0}
+            disabled={!!busy && busy !== "generate"}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
               if (
