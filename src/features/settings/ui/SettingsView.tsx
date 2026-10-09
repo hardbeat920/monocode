@@ -318,6 +318,12 @@ import {
   loadFollowUpBehavior,
   loadFormatOnSave,
   loadGridArcadeEnabled,
+  KEEP_AWAKE_HOLD_AFTER,
+  KEEP_AWAKE_HOLD_AFTER_DEFAULT,
+  isKeepAwakeHoldAfter,
+  loadKeepAwakeEnabled,
+  loadKeepAwakeHoldAfter,
+  loadKeepAwakeScreen,
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
@@ -338,6 +344,9 @@ import {
   saveFollowUpBehavior,
   saveFormatOnSave,
   saveGridArcadeEnabled,
+  saveKeepAwakeEnabled,
+  saveKeepAwakeHoldAfter,
+  saveKeepAwakeScreen,
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
@@ -347,6 +356,9 @@ import {
   validateKeybindingShortcut,
   saveQuickComposerEnabled,
   saveQuickComposerShortcut,
+  subscribeKeepAwakeEnabled,
+  subscribeKeepAwakeHoldAfter,
+  subscribeKeepAwakeScreen,
   subscribeKeybindings,
   type KeybindingOverride,
   saveTabAnimationsEnabled,
@@ -766,6 +778,21 @@ function GeneralPage({
     loadTabAnimationsEnabled,
   );
   const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
+  const keepAwake = useSyncExternalStore(
+    subscribeKeepAwakeEnabled,
+    loadKeepAwakeEnabled,
+    () => false,
+  );
+  const keepAwakeHoldAfter = useSyncExternalStore(
+    subscribeKeepAwakeHoldAfter,
+    loadKeepAwakeHoldAfter,
+    () => KEEP_AWAKE_HOLD_AFTER_DEFAULT,
+  );
+  const keepAwakeScreen = useSyncExternalStore(
+    subscribeKeepAwakeScreen,
+    loadKeepAwakeScreen,
+    () => false,
+  );
   const [quickComposerEnabled, setQuickComposerEnabled] = useState(
     loadQuickComposerEnabled,
   );
@@ -831,6 +858,18 @@ function GeneralPage({
   const onCloseToTray = (next: boolean) => {
     saveCloseToTray(next);
     setCloseToTray(next);
+  };
+
+  const onKeepAwake = (next: boolean) => {
+    saveKeepAwakeEnabled(next);
+  };
+
+  const onKeepAwakeHoldAfter = (next: string) => {
+    if (isKeepAwakeHoldAfter(next)) saveKeepAwakeHoldAfter(next);
+  };
+
+  const onKeepAwakeScreen = (next: boolean) => {
+    saveKeepAwakeScreen(next);
   };
 
   return (
@@ -950,6 +989,49 @@ function GeneralPage({
             />
           </Row>
         )}
+      </Group>
+
+      <Group
+        title="Sleep"
+        description="Keep this computer awake while an agent is working."
+      >
+        <Row
+          id="keep-awake"
+          label="Prevent sleep while agents work"
+          description={
+            IS_WIN
+              ? "Prevent idle sleep during agent work, and optionally after the last agent finishes. Closing the lid or choosing Sleep still works. On battery-powered Modern Standby PCs, Windows may stop the request five minutes after the sleep timeout."
+              : IS_MAC
+                ? "Prevent idle sleep during agent work, and optionally after the last agent finishes. Closing the lid or choosing Sleep still works."
+                : "Prevent idle sleep during agent work, and optionally after the last agent finishes. Automatic screen locking remains available. On GNOME, choosing Sleep may be blocked while this is active."
+          }
+        >
+          <Select
+            label="Stay awake after an agent ends"
+            value={keepAwakeHoldAfter}
+            options={[...KEEP_AWAKE_HOLD_AFTER]}
+            onChange={onKeepAwakeHoldAfter}
+          />
+          <Toggle
+            label="Prevent sleep while agents work"
+            on={keepAwake}
+            onChange={onKeepAwake}
+          />
+        </Row>
+        <Row
+          id="keep-awake-screen"
+          label="Keep the screen on"
+          description={IS_WIN || IS_MAC
+            ? "Keep the display awake while the sleep setting is active. Closing the lid or choosing Sleep still works."
+            : "Keep the display awake while the sleep setting is active. Automatic screen locking may be prevented."}
+        >
+          <Toggle
+            label="Keep the screen on"
+            on={keepAwakeScreen}
+            onChange={onKeepAwakeScreen}
+            disabled={!keepAwake}
+          />
+        </Row>
       </Group>
 
       <Group title="About">
