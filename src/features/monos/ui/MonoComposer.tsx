@@ -16,6 +16,7 @@ import {
 } from "../../sessions/model/draftCache";
 import { useFileDrop } from "../../sessions/hooks/useFileDrop";
 import { resizeComposer } from "../../sessions/model/composerResize";
+import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 import {
   consumeQuoteRequest,
   type QuoteRequest,
@@ -64,6 +65,7 @@ export function MonoComposer({
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const autocorrect = useComposerAutocorrect();
   const textRef = useRef(text);
   const attachmentsRef = useRef(attachments);
   const consumedQuote = useRef<number | null>(null);
@@ -312,6 +314,8 @@ export function MonoComposer({
             rows={1}
             aria-label={`Message ${name}`}
             placeholder={`Message ${name}`}
+            spellCheck={autocorrect}
+            autoCorrect={autocorrect ? "on" : "off"}
             disabled={!enabled || submitting}
             value={text}
             onFocus={onFocus}

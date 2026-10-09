@@ -155,6 +155,7 @@ export type DiscoveredSkill = {
     | "grok"
     | "hermes"
     | "antigravity"
+    | "devin"
     | "monocode";
 };
 
@@ -312,12 +313,23 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
+export type GitFileLocation = { root: string; relative: string };
+
+/** Each path's repository root and repo-relative path, or null outside git. */
+export function gitLocateFiles(
+  paths: string[],
+): Promise<(GitFileLocation | null)[]> {
+  return invoke<(GitFileLocation | null)[]>("git_locate_files", { paths });
+}
+
+/** Commit the index, or only `paths` (staging them first) when given. */
 export function gitCommit(
   cwd: string,
   message: string,
   amend = false,
+  paths?: string[],
 ): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message, amend });
+  return invoke<void>("git_commit", { cwd, message, amend, paths });
 }
 
 export function gitHeadMessage(cwd: string): Promise<string> {
