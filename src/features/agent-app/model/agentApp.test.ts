@@ -245,6 +245,44 @@ describe("agent app commands", () => {
     );
   });
 
+  it("files a Mono's sessions into a folder named after it", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      folder: { name: "Captain Jack", color: "#5b8def" },
+    });
+    for (const request of ["first", "second"])
+      await handleAgentApp(source, request, "sessions.start", {
+        prompt: "Review the project",
+        notifyOnComplete: false,
+      }, host);
+    expect(loadSessionFolders(source.cwd)).toEqual([
+      expect.objectContaining({
+        name: "Captain Jack",
+        customColor: "#5b8def",
+        sessionIds: ["app-lead-first", "app-lead-second"],
+      }),
+    ]);
+  });
+
+  it("leaves a hidden Mono session out of its folder", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: [source.cwd],
+      showStartedSessionsInSidebar: false,
+      folder: { name: "Captain Jack", color: "#5b8def" },
+    });
+    await handleAgentApp(source, "hidden", "sessions.start", {
+      prompt: "Review the project",
+      notifyOnComplete: false,
+    }, host);
+    expect(loadSessionFolders(source.cwd)).toEqual([]);
+  });
+
   describe.each([
     ["sessions.stop", "stopped"],
     ["sessions.archive", "archived"],
