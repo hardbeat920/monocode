@@ -2503,7 +2503,7 @@ fn resolve_devin() -> Option<PathBuf> {
     first_binary(candidates)
 }
 
-fn resolve_antigravity() -> Option<PathBuf> {
+pub(crate) fn resolve_antigravity() -> Option<PathBuf> {
     // The .par wrapper is a POSIX self-extracting archive — Antigravity ships
     // no Windows ACP binary, so report the provider unavailable there instead
     // of probing paths that can never be executable.
@@ -2770,7 +2770,7 @@ fn is_cursor_agent(path: &Path) -> bool {
 ///
 /// Reads the cached PATH rather than spawning a shell per lookup: six
 /// resolvers each asking `command -v` meant six shell startups per probe.
-fn which_via_login_shell(name: &str) -> Option<PathBuf> {
+pub(crate) fn which_via_login_shell(name: &str) -> Option<PathBuf> {
     which_in_path(&gui_search_path(), name)
 }
 

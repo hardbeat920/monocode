@@ -177,6 +177,70 @@ describe("UsageProviderChip", () => {
     );
   });
 
+  it("shows Antigravity model pools with the active model's pool first", async () => {
+    const limits: ProviderRateLimits = {
+      provider: "antigravity",
+      session: null,
+      weekly: null,
+      monthly: null,
+      resetCredits: null,
+      pools: [
+        {
+          id: "claude-opus-5-5-high",
+          label: "Claude & GPT-OSS",
+          shortLabel: "Claude",
+          modelIds: ["claude-opus-5-5-high"],
+          modelNames: ["Claude Opus 5.5 (High)"],
+          window: { usedPercent: 100, windowMinutes: 0, resetsAt: now + 86_400_000 },
+        },
+        {
+          id: "gemini-3-flash",
+          label: "Gemini",
+          shortLabel: "Gemini",
+          modelIds: ["gemini-3-flash"],
+          modelNames: ["Gemini 3 Flash"],
+          window: { usedPercent: 8, windowMinutes: 0, resetsAt: now + 41 * 60_000 },
+        },
+        {
+          id: "tab",
+          label: "Tab",
+          shortLabel: "Tab",
+          modelIds: ["tab"],
+          modelNames: ["Tab"],
+          window: { usedPercent: 3, windowMinutes: 0, resetsAt: null },
+        },
+      ],
+      updatedAt: now,
+      error: null,
+      status: "ok",
+    };
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits,
+          now,
+          activeModel: { id: "gemini-3-flash" },
+        }),
+      ),
+    );
+
+    const trigger = button("Antigravity usage details");
+    expect(trigger.textContent).toBe("Gemini 8% 41m·Claude 100% 1d");
+    // The chip keeps two pools; the tooltip and popover list every one.
+    expect(trigger.title).toBe(
+      "Gemini: 8% used · Resets in 41m · Claude & GPT-OSS: 100% used · Resets in 1d · Tab: 3% used",
+    );
+    // The mini bar follows the active pool, not the exhausted one.
+    expect(trigger.querySelector(".w-8 > span")?.getAttribute("style")).toBe(
+      "width: 8%;",
+    );
+    await act(async () => trigger.click());
+    const titles = [...document.querySelectorAll('[role="dialog"] h3')].map(
+      (heading) => heading.textContent,
+    );
+    expect(titles).toEqual(["Gemini", "Claude & GPT-OSS", "Tab"]);
+  });
+
   it("fills bars with used capacity by default", async () => {
     act(() =>
       root.render(
