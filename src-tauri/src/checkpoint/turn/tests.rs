@@ -142,6 +142,41 @@ fn overlapping_turns_keep_exact_diffs_but_cannot_restore_shared_work() {
 }
 
 #[test]
+fn nested_turns_share_work_but_sibling_path_prefixes_do_not() {
+    let f = Fixture::new();
+    f.write("nested/a.txt", "child baseline\n");
+    f.write("nested-other/a.txt", "sibling baseline\n");
+    let child = f.repo.join("nested");
+    let sibling = f.repo.join("nested-other");
+    let child_cwd = child.to_str().unwrap();
+    let sibling_cwd = sibling.to_str().unwrap();
+
+    f.store.begin_turn("child", child_cwd, "first").unwrap();
+    f.store.begin_turn("sibling", sibling_cwd, "first").unwrap();
+    f.write("nested/a.txt", "independent child change\n");
+    f.store.finish_turn("child", child_cwd, "first").unwrap();
+    let status = f.store.status("child", child_cwd).unwrap();
+    assert_eq!(status.files.len(), 1);
+    assert!(status.files[0].undoable);
+    f.store
+        .finish_turn("sibling", sibling_cwd, "first")
+        .unwrap();
+
+    f.store.begin_turn("parent", f.cwd(), "second").unwrap();
+    f.store.begin_turn("child", child_cwd, "second").unwrap();
+    f.write("nested/a.txt", "shared parent and child change\n");
+    f.store.finish_turn("parent", f.cwd(), "second").unwrap();
+    f.store.finish_turn("child", child_cwd, "second").unwrap();
+    for (id, cwd) in [("parent", f.cwd()), ("child", child_cwd)] {
+        let status = f.store.status(id, cwd).unwrap();
+        assert_eq!(status.files.len(), 1);
+        assert!(status.files[0].exact);
+        assert!(!status.files[0].undoable);
+        assert!(f.store.undo(id, cwd, None).is_err());
+    }
+}
+
+#[test]
 fn undo_restores_only_recorded_files_and_keep_retains_history() {
     let f = Fixture::new();
     f.write("user.txt", "user baseline\n");

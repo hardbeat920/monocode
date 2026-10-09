@@ -165,6 +165,7 @@ impl CheckpointStore {
         root: &Path,
         except: &str,
     ) -> Result<Vec<(PathBuf, TurnReview)>, String> {
+        let root = review_comparison_path(root);
         let mut active = Vec::new();
         if !self.root.exists() {
             return Ok(active);
@@ -175,8 +176,9 @@ impl CheckpointStore {
                 continue;
             }
             if let Some(review) = read_review(&entry.path())? {
-                let other = Path::new(&review.cwd);
-                if review.active.is_some() && (root.starts_with(other) || other.starts_with(root)) {
+                let other = review_comparison_path(Path::new(&review.cwd));
+                if review.active.is_some() && (root.starts_with(&other) || other.starts_with(&root))
+                {
                     active.push((entry.path(), review));
                 }
             }
@@ -367,6 +369,16 @@ impl CheckpointStore {
             }
         }
         Ok(())
+    }
+}
+
+fn review_comparison_path(path: &Path) -> PathBuf {
+    // path_to_js replaces Windows separators, including in canonical verbatim
+    // paths. Restore native separators before comparing path components.
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().replace('/', "\\"))
+    } else {
+        path.to_path_buf()
     }
 }
 

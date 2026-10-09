@@ -192,6 +192,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "mono agent rail hide",
   },
   {
+    id: "rail-monos-pinned",
+    section: "monos",
+    label: "Pin monos to the icon rail",
+    keywords: "mono rail compact collapsed icons top divider project picker",
+  },
+  {
     id: "mono-list",
     section: "monos",
     label: "Your monos",
