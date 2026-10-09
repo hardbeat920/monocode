@@ -395,6 +395,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pacman snake arcade grid fun",
   },
   {
+    id: "agent-proxy",
+    section: "providers",
+    label: "Agent proxy",
+    keywords: "network http https proxy agents cli connection",
+  },
+  {
     id: "agent-clis",
     section: "providers",
     label: "Agent CLIs",

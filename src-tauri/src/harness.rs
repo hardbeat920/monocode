@@ -832,6 +832,7 @@ pub fn harness_spawn(
     binary_provider: Option<String>,
     binary_path: Option<String>,
     codex_store: Option<String>,
+    proxy_url: Option<String>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -844,6 +845,12 @@ pub fn harness_spawn(
         return Err("harness_spawn: not a resolved harness CLI".to_string());
     }
 
+    // Validate (and normalize) before `begin_spawn` terminates the previous
+    // session: a bad address must not kill a working child.
+    let proxy = proxy_url
+        .as_deref()
+        .map(validate_agent_proxy_url)
+        .transpose()?;
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
@@ -857,6 +864,7 @@ pub fn harness_spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
+    apply_agent_proxy(&mut cmd, proxy.as_deref());
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
     let codex_store = match codex_store.as_deref() {
         None => None,
@@ -1359,6 +1367,7 @@ pub async fn harness_exec(
     cwd: Option<String>,
     binary_provider: Option<String>,
     binary_path: Option<String>,
+    proxy_url: Option<String>,
 ) -> Result<String, String> {
     if !exec_args_allowed(binary_provider.as_deref(), &args) {
         return Err("harness_exec: unsupported arguments".into());
@@ -1368,14 +1377,23 @@ pub async fn harness_exec(
         {
             return Err("harness_exec: not a resolved harness CLI".to_string());
         }
-        exec_capture(&command, &args, cwd.as_deref())
+        let proxy = proxy_url
+            .as_deref()
+            .map(validate_agent_proxy_url)
+            .transpose()?;
+        exec_capture(&command, &args, cwd.as_deref(), proxy.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn exec_capture(command: &str, args: &[String], cwd: Option<&str>) -> Result<String, String> {
-    let output = exec_output(command, args, cwd, EXEC_TIMEOUT)?;
+fn exec_capture(
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<String, String> {
+    let output = exec_output_with_proxy(command, args, cwd, EXEC_TIMEOUT, proxy)?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if output.status.success() || !stdout.trim().is_empty() {
         return Ok(stdout);
@@ -1392,12 +1410,23 @@ pub(crate) fn exec_output(
     cwd: Option<&str>,
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
+    exec_output_with_proxy(command, args, cwd, timeout, None)
+}
+
+fn exec_output_with_proxy(
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    timeout: Duration,
+    proxy: Option<&str>,
+) -> Result<std::process::Output, String> {
     let mut cmd = Command::new(command);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, command);
+    apply_agent_proxy(&mut cmd, proxy);
     if let Some(dir) = cwd {
         let workdir = expand_home(dir);
         if workdir.is_dir() {
@@ -2076,7 +2105,12 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
     if provider == "antigravity" {
         return Ok(());
     }
-    let version = exec_capture(&path.to_string_lossy(), &["--version".to_string()], None)?;
+    let version = exec_capture(
+        &path.to_string_lossy(),
+        &["--version".to_string()],
+        None,
+        None,
+    )?;
     let lower = version.to_ascii_lowercase();
     let has_version = is_supported_harness_version(&version);
     let provider_marker = match provider {
@@ -2858,6 +2892,72 @@ fn prepare_child(cmd: &mut Command, command: &str) {
     isolate_child(cmd);
 }
 
+/// Accepts only credential-less HTTP(S) origins for the harness children.
+/// Userinfo would persist in the saved setting and reappear in the child
+/// environment; a path, query, or fragment is not a proxy address. Returns
+/// the normalized origin.
+fn validate_agent_proxy_url(raw: &str) -> Result<String, String> {
+    if raw.len() > 256 {
+        return Err("harness: proxy URL is too long".into());
+    }
+    let url = url::Url::parse(raw).map_err(|e| format!("harness: invalid proxy URL: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("harness: proxy URL must use http or https".into());
+    }
+    if url.host().is_none() {
+        return Err("harness: proxy URL has no host".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("harness: proxy URL must not contain credentials".into());
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return Err("harness: proxy URL must be a bare origin".into());
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+/// Points the child's proxy variables, lower- and upper-case, at a validated
+/// proxy. The parent's NO_PROXY/no_proxy entries are preserved and loopback
+/// stays direct; `None` leaves the inherited environment alone.
+fn apply_agent_proxy(cmd: &mut Command, proxy: Option<&str>) {
+    let Some(proxy) = proxy else {
+        return;
+    };
+    for name in [
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+    ] {
+        cmd.env(name, proxy);
+    }
+    let inherited_upper = std::env::var("NO_PROXY").unwrap_or_default();
+    let inherited_lower = std::env::var("no_proxy").unwrap_or_default();
+    let mut bypass: Vec<&str> = Vec::new();
+    for entry in inherited_upper
+        .split(',')
+        .chain(inherited_lower.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        if !bypass.iter().any(|seen| seen.eq_ignore_ascii_case(entry)) {
+            bypass.push(entry);
+        }
+    }
+    for host in ["localhost", "127.0.0.1", "::1"] {
+        if !bypass.iter().any(|entry| entry.eq_ignore_ascii_case(host)) {
+            bypass.push(host);
+        }
+    }
+    if !bypass.is_empty() {
+        let value = bypass.join(",");
+        cmd.env("no_proxy", &value);
+        cmd.env("NO_PROXY", &value);
+    }
+}
+
 /// fx keeps its Gateway credential in the macOS Keychain and reads it by
 /// shelling out to `osascript`. From a bundled app that read can block on a
 /// SecurityAgent prompt nobody ever sees, and fx then rejects `initialize`
@@ -3043,6 +3143,72 @@ mod tests {
     fn reap(mut child: std::process::Child) {
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    #[test]
+    fn agent_proxy_env_reaches_child_and_rejects_credentials() {
+        // A chosen proxy lands in the child under every spelling the harness
+        // CLIs read, and loopback stays direct.
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            "printenv http_proxy; printenv https_proxy; printenv all_proxy; printenv HTTP_PROXY; printenv HTTPS_PROXY; printenv ALL_PROXY; printenv no_proxy; printenv NO_PROXY",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+        apply_agent_proxy(&mut cmd, Some("http://127.0.0.1:7897"));
+        let out = cmd.output().expect("spawn proxied child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut lines = stdout.lines();
+        for _ in 0..6 {
+            assert_eq!(lines.next(), Some("http://127.0.0.1:7897"));
+        }
+        let no_proxy = lines.next().expect("child no_proxy line");
+        let no_proxy_upper = lines.next().expect("child NO_PROXY line");
+        assert_eq!(no_proxy, no_proxy_upper);
+        for host in ["localhost", "127.0.0.1", "::1"] {
+            assert!(
+                no_proxy.split(',').any(|entry| entry.trim() == host),
+                "loopback host {host} missing from {no_proxy}"
+            );
+        }
+        for key in ["NO_PROXY", "no_proxy"] {
+            if let Ok(inherited) = std::env::var(key) {
+                for entry in inherited.split(',').map(str::trim) {
+                    if entry.is_empty() {
+                        continue;
+                    }
+                    let retained = no_proxy
+                        .split(',')
+                        .any(|kept| kept.eq_ignore_ascii_case(entry));
+                    assert!(retained, "existing {key} entry was lost");
+                }
+            }
+        }
+        // `None` leaves the inherited environment untouched.
+        let mut plain = Command::new("sh");
+        plain
+            .args(["-c", "printenv http_proxy"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        apply_agent_proxy(&mut plain, None);
+        let plain_out = plain.output().expect("spawn unproxied child");
+        assert_eq!(
+            String::from_utf8_lossy(&plain_out.stdout).trim_end_matches('\n'),
+            std::env::var("http_proxy").unwrap_or_default(),
+            "None proxy rewrote the inherited http_proxy"
+        );
+        // Credential-carrying and non-HTTP(S) addresses never reach the env.
+        assert!(validate_agent_proxy_url("http://user:pass@127.0.0.1:7897").is_err());
+        assert!(validate_agent_proxy_url("http://user@127.0.0.1:7897").is_err());
+        assert!(validate_agent_proxy_url("ftp://127.0.0.1:7897").is_err());
+        assert!(validate_agent_proxy_url("http://127.0.0.1:7897/proxy").is_err());
+        assert_eq!(
+            validate_agent_proxy_url("http://127.0.0.1:7897/").as_deref(),
+            Ok("http://127.0.0.1:7897")
+        );
     }
 
     #[test]

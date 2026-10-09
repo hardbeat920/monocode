@@ -164,6 +164,11 @@ import {
   type ConfigurableBinaryProvider,
 } from "../../providers/model/providerBinaryPaths";
 import {
+  loadAgentProxyUrl,
+  parseAgentProxyUrl,
+  saveAgentProxyUrl,
+} from "../../providers/model/agentProxy";
+import {
   compareSemver,
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
@@ -3155,6 +3160,23 @@ function ProvidersPage({
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
   );
+  const [proxyUrl, setProxyUrl] = useState(loadAgentProxyUrl);
+  const [proxyDraft, setProxyDraft] = useState(() => loadAgentProxyUrl() ?? "");
+  const [proxyError, setProxyError] = useState<string | null>(null);
+  const onProxySave = (value: string | null) => {
+    const address = value ? parseAgentProxyUrl(value) : null;
+    if (value && !address) {
+      setProxyError("Enter a bare HTTP(S) proxy URL without credentials.");
+      return;
+    }
+    if (!saveAgentProxyUrl(address)) {
+      setProxyError("Could not save the proxy address.");
+      return;
+    }
+    setProxyUrl(address);
+    setProxyDraft(address ?? "");
+    setProxyError(null);
+  };
 
   const scopeOptions = useMemo(() => {
     const options: { value: string; label: string; icon?: ReactNode }[] = [
@@ -3251,6 +3273,62 @@ function ProvidersPage({
       <ProviderAccountsSettings />
 
       <UsageDisplaySettings />
+
+      <Group
+        id="agent-proxy"
+        title="Agent proxy"
+        description="Only new local AI CLI processes use this proxy. Restart running sessions to apply a change; remote machines keep their own network settings."
+      >
+        <Row
+          label="HTTP(S) proxy"
+          description="Leave blank to inherit MonoCode's environment. Localhost connections bypass the custom proxy."
+        >
+          <div className="min-w-0">
+            <form
+              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onProxySave(proxyDraft);
+              }}
+            >
+              <label className="flex h-7 w-52 max-w-full items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+                <input
+                  type="text"
+                  inputMode="url"
+                  value={proxyDraft}
+                  onChange={(event) => {
+                    setProxyDraft(event.target.value);
+                    setProxyError(null);
+                  }}
+                  placeholder="http://127.0.0.1:7897"
+                  aria-label="Agent proxy URL"
+                  autoComplete="url"
+                  spellCheck={false}
+                  maxLength={256}
+                  className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+                />
+              </label>
+              <SecondaryButton
+                type="submit"
+                disabled={proxyDraft === (proxyUrl ?? "")}
+              >
+                Save
+              </SecondaryButton>
+              <SecondaryButton
+                onClick={() => onProxySave(null)}
+                disabled={!proxyUrl && !proxyDraft}
+              >
+                Use inherited
+              </SecondaryButton>
+            </form>
+            {proxyError ? (
+              <p role="alert" className="mt-2 text-[12px] text-red-400/90">
+                {proxyError}
+              </p>
+            ) : null}
+          </div>
+        </Row>
+      </Group>
 
       <Group
         id="agent-clis"
