@@ -7,15 +7,35 @@ import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
 
 type Props = {
   attachment: Attachment;
+  onOpen?: () => void;
   onRemove?: () => void;
   /** A sent image shown large on its own, like a photo in a messaging app. */
   photo?: boolean;
 };
 
-export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
+export function AttachmentChip({
+  attachment,
+  onOpen,
+  onRemove,
+  photo = false,
+}: Props) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const preview = attachmentPreviewSrc(attachment);
   const image = attachment.kind === "image" && preview;
+  const fileContent = (
+    <>
+      <span className="grid size-5 shrink-0 place-items-center">
+        <FileTypeIcon
+          name={attachment.name}
+          isDir={isAttachmentFolder(attachment)}
+          size={16}
+        />
+      </span>
+      <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-none text-content/80">
+        {attachment.name}
+      </span>
+    </>
+  );
 
   return (
     <>
@@ -47,19 +67,20 @@ export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
               }
             />
           </button>
+        ) : onOpen ? (
+          <button
+            type="button"
+            aria-label={`Open ${attachment.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+            className="flex min-w-0 items-center gap-1.5 rounded-sm text-left hover:bg-content/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            {fileContent}
+          </button>
         ) : (
-          <>
-            <span className="grid size-5 shrink-0 place-items-center">
-              <FileTypeIcon
-                name={attachment.name}
-                isDir={isAttachmentFolder(attachment)}
-                size={16}
-              />
-            </span>
-            <span className="min-w-0 max-w-[140px] truncate text-[11px] leading-none text-content/80">
-              {attachment.name}
-            </span>
-          </>
+          fileContent
         )}
         {onRemove ? (
           <button

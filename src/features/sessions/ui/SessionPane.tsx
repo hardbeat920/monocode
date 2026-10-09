@@ -79,6 +79,7 @@ import { useMonoTranscript } from "../../monos/hooks/useMonoTranscript";
 import { MONO_PAGE_TURNS } from "../data/sessionStore";
 import { useComposerDockMotion } from "./useComposerDockMotion";
 import { MOD } from "../../../platform/tauri/platform";
+import type { OpenFileFn } from "../../search/model/search";
 import {
   acknowledgeQuoteRequest,
   ADD_TO_CHAT_EVENT,
@@ -211,7 +212,7 @@ export type SessionPaneProps = {
     reply: UserQuestionReply,
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onOpenDiff: (
     path?: string,
     session?: { sessionId: string; cwd: string },

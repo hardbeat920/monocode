@@ -55,6 +55,7 @@ import {
   type MentionToken,
 } from "../../files/model/fileMentions";
 import type { ProjectFile } from "../../../platform/tauri/fs";
+import type { OpenFileFn } from "../../search/model/search";
 import {
   composeInboxMessage,
   type InboxComposerCard,
@@ -199,6 +200,8 @@ import {
 import type { LastTurnRecall } from "../model/editLastTurn";
 import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 
+const LARGE_PASTE_CHARACTER_THRESHOLD = 2_000;
+
 type Props = {
   enabled?: boolean;
   focused: boolean;
@@ -287,7 +290,7 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: OpenFileFn;
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
   onEditingLastTurnChange?: (editing: boolean) => void;
@@ -1647,13 +1650,17 @@ export function Composer({
       );
       return;
     }
-    const files = filesFromClipboard(e.clipboardData);
+    let files = filesFromClipboard(e.clipboardData);
+    const text =
+      files.length === 0 ? e.clipboardData.getData("text/plain") : "";
+    if (attachmentsSupported && text.length > LARGE_PASTE_CHARACTER_THRESHOLD) {
+      files = [new File([text], "pasted-text.txt", { type: "text/plain" })];
+    }
     if (files.length === 0) {
       // A webview reports a paste as text only, so a screenshot or a file
       // copied in a file manager arrives with nothing to attach; both live on
       // the native clipboard.
       if (!attachmentsSupported) return;
-      const text = e.clipboardData.getData("text/plain");
       // Prose and whitespace alike are the webview's to insert.
       if (text && !isFileReferenceText(text)) return;
       // A file URI becomes a chip, so it is kept out of the draft; with no text
@@ -2010,6 +2017,14 @@ export function Composer({
                 <AttachmentChip
                   key={file.id}
                   attachment={file}
+                  onOpen={
+                    !remote &&
+                    file.mimeType === "text/plain" &&
+                    file.path &&
+                    onOpenFile
+                      ? () => onOpenFile(file.path!, undefined, { exact: true })
+                      : undefined
+                  }
                   onRemove={() => removeAttachment(file.id)}
                 />
               ))}

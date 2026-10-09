@@ -106,9 +106,9 @@ describe("AttachmentChip image preview", () => {
       '[aria-label="Open generated-image full screen"]',
     )!;
     act(() => trigger.click());
-    expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(
-      "blob:generated-image",
-    );
+    expect(
+      document.querySelector('[role="dialog"] img')?.getAttribute("src"),
+    ).toBe("blob:generated-image");
   });
 
   it("removes an image without opening the preview", () => {
@@ -124,4 +124,43 @@ describe("AttachmentChip image preview", () => {
     expect(onRemove).toHaveBeenCalledOnce();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
+});
+
+it("opens a file attachment without swallowing its remove action", () => {
+  const file: Attachment = {
+    id: "text-1",
+    name: "pasted-text.txt",
+    mimeType: "text/plain",
+    kind: "file",
+    size: 12,
+    path: "/tmp/pasted-text.txt",
+  };
+  const onOpen = vi.fn();
+  const onRemove = vi.fn();
+  act(() =>
+    root.render(
+      createElement(AttachmentChip, {
+        attachment: file,
+        onOpen,
+        onRemove,
+      }),
+    ),
+  );
+
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Open pasted-text.txt"]')!
+      .click(),
+  );
+  expect(onOpen).toHaveBeenCalledOnce();
+
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Remove pasted-text.txt"]',
+      )!
+      .click(),
+  );
+  expect(onRemove).toHaveBeenCalledOnce();
+  expect(onOpen).toHaveBeenCalledOnce();
 });
