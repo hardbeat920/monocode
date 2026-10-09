@@ -116,6 +116,7 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).toContain("--permission-prompt-tool");
     expect(args).toContain("stdio");
     expect(args).toContain("--include-partial-messages");
+    expect(args).toContain("--replay-user-messages");
     expect(args).toContain("--setting-sources=user,project,local");
     expect(args).toEqual(
       expect.arrayContaining([
@@ -151,6 +152,7 @@ describe("buildClaudeSpawnArgs", () => {
     const settings = args[args.indexOf("--settings") + 1];
     expect(JSON.parse(settings)).toMatchObject({ disableAllHooks: true });
     expect(args).not.toContain("--permission-prompt-tool");
+    expect(args).not.toContain("--replay-user-messages");
   });
 
   it("locks isolated read-only prompts to plan mode", () => {
@@ -174,6 +176,13 @@ describe("buildClaudeSpawnArgs", () => {
 });
 
 describe("buildClaudeUserMessage", () => {
+  it("preserves the client UUID for user acknowledgment", () => {
+    expect(
+      buildClaudeUserMessage({ text: "request", uuid: "request-uuid" }),
+    ).toMatchObject({ type: "user", uuid: "request-uuid" });
+    expect(buildClaudeUserMessage({ text: "request" })).not.toHaveProperty("uuid");
+  });
+
   it("embeds vision images as base64 source blocks", () => {
     const message = buildClaudeUserMessage({
       text: "look",

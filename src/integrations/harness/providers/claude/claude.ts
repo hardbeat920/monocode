@@ -126,6 +126,15 @@ type BackgroundTask = {
   toolUseId?: string;
 };
 
+type TurnSubmission = {
+  uuid: string;
+  written: boolean;
+  acknowledged: boolean;
+  accepted: boolean;
+  onAccepted?: () => void;
+  pendingEvents: HarnessEvent[];
+};
+
 type Live = {
   cwd: string;
   claudeSessionId: string;
@@ -134,6 +143,9 @@ type Live = {
   planning: boolean;
   settingsKey: string;
   onEvent: (event: HarnessEvent) => void;
+  eventTarget: (event: HarnessEvent) => void;
+  hasSubmittedInput: boolean;
+  submission?: TurnSubmission;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
   visibleQuestionId: number | null;
@@ -169,6 +181,9 @@ type Live = {
   turnEndPending: boolean;
   activeTurn: boolean;
   initDone: (() => void) | null;
+  initReady: boolean;
+  initError?: Error;
+  resumeIdentity?: { expected: string; confirmed: boolean };
   initialized: boolean;
   emittedAssistant: string;
   emittedReasoning: string;
@@ -225,7 +240,7 @@ export async function sendClaudeTurn(input: SendTurnInput): Promise<void> {
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
-  live.onEvent = input.onEvent;
+  live.eventTarget = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -252,7 +267,7 @@ export async function compactClaudeContext(
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
-  live.onEvent = input.onEvent;
+  live.eventTarget = input.onEvent;
   live.runtimeMode = input.runtimeMode;
   live.turns = live.turns
     .catch(() => undefined)
@@ -364,6 +379,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
       pending.resolve({ kind: "skipped" });
     live.questions.clear();
     live.activeTurn = false;
+    live.submission = undefined;
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
@@ -431,7 +447,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     existing.settingsKey === settingsKey &&
     existing.planning === planning
   ) {
-    existing.onEvent = input.onEvent;
+    existing.eventTarget = input.onEvent;
     existing.runtimeMode = input.runtimeMode;
     return existing;
   }
@@ -481,7 +497,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     runtimeMode: input.runtimeMode,
     planning,
     settingsKey,
-    onEvent: input.onEvent,
+    onEvent: (event) => forwardTurnEvent(live, event),
+    eventTarget: input.onEvent,
+    hasSubmittedInput: false,
     approvals: new Map(),
     questions: new Map(),
     visibleQuestionId: null,
@@ -506,6 +524,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     turnEndPending: false,
     activeTurn: false,
     initDone: null,
+    initReady: false,
+    ...(canResume && resume
+      ? { resumeIdentity: { expected: resume.sessionId, confirmed: false } }
+      : {}),
     initialized: false,
     emittedAssistant: "",
     emittedReasoning: "",
@@ -560,6 +582,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       buildControlRequest(nextControlId(live), { subtype: "initialize" }),
     );
     await waitForInit(live, INIT_TIMEOUT_MS);
+    if (live.initError) throw live.initError;
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: live.claudeSessionId,
@@ -573,11 +596,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+  if (live.initError) throw live.initError;
+  if (live.resumeIdentity && !live.initialized) {
+    throw new Error(
+      "Claude has not confirmed the resumed provider conversation. Retry after initialization finishes.",
+    );
+  }
   const effort = input.modelSettings?.effort;
+  const uuid = crypto.randomUUID();
   const message = buildClaudeUserMessage({
     text: input.text,
     attachments: input.attachments,
     effort,
+    uuid,
   });
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
@@ -599,12 +630,29 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
+  void turnPromise.catch(() => undefined);
   live.activeTurn = true;
   settlePendingTurn(live);
 
+  const submission: TurnSubmission = {
+    uuid,
+    written: false,
+    acknowledged: false,
+    accepted: false,
+    onAccepted: input.onAccepted,
+    pendingEvents: [],
+  };
+  live.submission = submission;
   try {
     await writeJson(input.sessionId, message);
-    input.onAccepted?.();
+    if (live.initError) throw live.initError;
+    if (live.submission !== submission || live.cancelled || live.muteUpdates)
+      return;
+    submission.written = true;
+    live.hasSubmittedInput = true;
+    acceptSubmittedInput(live, submission);
+    for (const event of submission.pendingEvents.splice(0))
+      forwardTurnEvent(live, event);
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -615,9 +663,48 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    if (live.submission === submission) live.submission = undefined;
     live.turnDone = null;
     live.turnFailed = null;
   }
+}
+
+function forwardTurnEvent(live: Live, event: HarnessEvent): void {
+  if (
+    event.type.startsWith("session.") ||
+    event.type === "status" ||
+    event.type === "context" ||
+    event.type === "usage.limited"
+  ) {
+    live.eventTarget(event);
+    return;
+  }
+  const submission = live.submission;
+  if (!submission) {
+    if (live.hasSubmittedInput && !live.muteUpdates) live.eventTarget(event);
+    return;
+  }
+  if (!submission.written) {
+    submission.pendingEvents.push(event);
+    return;
+  }
+  live.eventTarget(event);
+}
+
+function acceptSubmittedInput(live: Live, submission: TurnSubmission): void {
+  if (
+    live.submission !== submission ||
+    !submission.written ||
+    !submission.acknowledged ||
+    submission.accepted ||
+    live.manualCompaction ||
+    live.cancelled ||
+    live.muteUpdates
+  ) {
+    return;
+  }
+  submission.accepted = true;
+  submission.onAccepted?.();
 }
 
 function handleLine(sessionId: string, live: Live, line: string): void {
@@ -662,9 +749,25 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
-  if (live.muteUpdates) return;
+  if (live.muteUpdates || live.initError) return;
 
   const sessionIdFromLine = sessionIdFromMessage(rec);
+  if (sessionIdFromLine && live.resumeIdentity) {
+    if (sessionIdFromLine !== live.resumeIdentity.expected) {
+      live.initError = new Error(
+        "Claude resumed a different provider conversation. Retry with a fresh conversation and shared history.",
+      );
+      live.turnFailed?.(live.initError);
+      live.initDone?.();
+      live.initDone = null;
+      void stopClaudeSession(sessionId);
+      return;
+    }
+    if (!live.resumeIdentity.confirmed) {
+      live.resumeIdentity.confirmed = true;
+      if (live.initReady) markInitialized(live);
+    }
+  }
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
     // A different conversation starts with its own task ids.
@@ -905,6 +1008,16 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
     noteSubagentResults(live, rec);
     return;
   }
+  const submission = live.submission;
+  if (
+    submission &&
+    rec.isReplay === true &&
+    rec.parent_tool_use_id === null &&
+    stringField(rec, "uuid") === submission.uuid
+  ) {
+    submission.acknowledged = true;
+    acceptSubmittedInput(live, submission);
+  }
   for (const result of toolResultsFromUserMessage(rec)) {
     const tool = live.toolsById.get(result.toolUseId);
     if (!tool) continue;
@@ -1009,7 +1122,11 @@ async function handleControlRequest(
   const toolName = control.toolName ?? "tool";
   const input = control.input ?? {};
 
-  if (live.cancelled || live.muteUpdates) {
+  if (
+    live.cancelled ||
+    live.muteUpdates ||
+    (!live.submission && !live.hasSubmittedInput)
+  ) {
     await writeJson(
       sessionId,
       buildControlResponse(
@@ -1722,23 +1839,39 @@ function settlePendingTurn(live: Live): void {
 }
 
 function markInitialized(live: Live): void {
-  if (live.initialized) return;
+  if (live.initialized || live.initError) return;
+  live.initReady = true;
+  if (live.resumeIdentity && !live.resumeIdentity.confirmed) return;
   live.initialized = true;
   live.initDone?.();
   live.initDone = null;
 }
 
 function waitForInit(live: Live, timeoutMs: number): Promise<void> {
+  if (live.initError) return Promise.reject(live.initError);
   if (live.initialized) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      const error =
+        live.initError ??
+        (live.resumeIdentity && !live.initialized
+          ? new Error(
+              "Claude did not confirm the resumed provider conversation before initialization finished. Retry with a fresh conversation and shared history.",
+            )
+          : undefined);
+      if (error) {
+        live.initError = error;
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
     const timer = setTimeout(() => {
       live.initDone = null;
-      resolve();
+      finish();
     }, timeoutMs);
-    live.initDone = () => {
-      clearTimeout(timer);
-      resolve();
-    };
+    live.initDone = finish;
   });
 }
 

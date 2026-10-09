@@ -25,6 +25,7 @@ import {
 } from "../../features/projects/model/projectTerminal";
 import { sessionWorkCwd, type Session } from "../../features/sessions/model/session";
 import { sessionChildHarnesses } from "../../features/sessions/model/handoff";
+import { requiresFreshProviderBinding } from "../../features/sessions/model/providerContext";
 import {
   getSession,
   listInFlightSessions,
@@ -330,17 +331,23 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
 
 export function bindResumedSessions(sessions: Session[]): void {
   for (const session of sessions) {
+    if (session.worktreeRemoved) continue;
+    const cwd = sessionWorkCwd(session);
+    const source = session.pendingSwitch;
+    if (source?.fromProviderSessionId && source.from !== session.harness && isLiveHarness(source.from)) {
+      bindHarnessSession(source.from, session.id, source.fromProviderSessionId, cwd, source.fromProviderAccountId, session.blocks);
+    }
     if (
-      session.worktreeRemoved ||
       !session.providerSessionId ||
-      !isLiveHarness(session.harness)
+      !isLiveHarness(session.harness) ||
+      requiresFreshProviderBinding(session, session.harness, cwd, session.providerAccountId)
     )
       continue;
     bindHarnessSession(
       session.harness,
       session.id,
       session.providerSessionId,
-      sessionWorkCwd(session),
+      cwd,
       session.providerAccountId,
       session.blocks,
     );

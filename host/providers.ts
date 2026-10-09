@@ -32,12 +32,15 @@ import {
   OMP_FLAVOR,
 } from "../src/integrations/harness/providers/pi/piFlavor";
 import { respondQuestion as respondPiQuestion } from "../src/integrations/harness/providers/pi/piFamily";
+import type { ContextTransferCapabilities } from "../src/features/sessions/model/contextTransfer";
 
 export interface HostProvider {
+  contextTransferCapabilities?: ContextTransferCapabilities;
   send(input: SendTurnInput): Promise<void>;
   compact?(input: CompactContextInput): Promise<void>;
   cancel(id: string): Promise<void>;
   stop(id: string): Promise<void>;
+  forget?(id: string): Promise<void>;
   bind(id: string, providerId: string, cwd: string): void;
   approve(id: string, request: number, decision: ApprovalDecision): void;
   answer(id: string, request: number, reply: UserQuestionReply): void;
@@ -51,10 +54,12 @@ export interface HostProvider {
 
 export const hostProviders: Record<RemoteProvider, HostProvider> = {
   codex: {
+    contextTransferCapabilities: { nativeMessages: true, resumedAppend: true },
     send: codex.sendCodexTurn,
     compact: codex.compactCodexContext,
     cancel: codex.cancelCodexTurn,
-    stop: codex.forgetCodexSession,
+    stop: codex.stopCodexSession,
+    forget: codex.forgetCodexSession,
     bind: codex.bindCodexSession,
     approve: codex.respondCodexApproval,
     answer: codex.respondCodexQuestion,
@@ -62,10 +67,12 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     generateBranchName: generateCodexBranchName,
   },
   claude: {
+    contextTransferCapabilities: { nativeMessages: false, resumedAppend: true, explicitAcceptance: true },
     send: claude.sendClaudeTurn,
     compact: claude.compactClaudeContext,
     cancel: claude.cancelClaudeTurn,
-    stop: claude.forgetClaudeSession,
+    stop: claude.stopClaudeSession,
+    forget: claude.forgetClaudeSession,
     bind: claude.bindClaudeSession,
     approve: claude.respondClaudeApproval,
     answer: claude.respondClaudeQuestion,
@@ -75,7 +82,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
   cursor: {
     send: cursor.sendCursorTurn,
     cancel: cursor.cancelCursorTurn,
-    stop: cursor.forgetCursorSession,
+    stop: cursor.stopCursorSession,
+    forget: cursor.forgetCursorSession,
     bind: cursor.bindCursorSession,
     approve: cursor.respondCursorApproval,
     answer: cursor.respondCursorQuestion,
@@ -85,7 +93,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     send: grok.sendGrokTurn,
     compact: grok.compactGrokContext,
     cancel: grok.cancelGrokTurn,
-    stop: grok.forgetGrokSession,
+    stop: grok.stopGrokSession,
+    forget: grok.forgetGrokSession,
     bind: grok.bindGrokSession,
     approve: grok.respondGrokApproval,
     answer: grok.respondGrokQuestion,
@@ -95,7 +104,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     send: opencode.sendOpenCodeTurn,
     compact: opencode.compactOpenCodeContext,
     cancel: opencode.cancelOpenCodeTurn,
-    stop: opencode.forgetOpenCodeSession,
+    stop: opencode.stopOpenCodeSession,
+    forget: opencode.forgetOpenCodeSession,
     bind: opencode.bindOpenCodeSession,
     approve: opencode.respondOpenCodeApproval,
     answer: opencode.respondOpenCodeQuestion,
@@ -105,7 +115,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     send: pi.sendPiTurn,
     compact: pi.compactPiContext,
     cancel: pi.cancelPiTurn,
-    stop: pi.forgetPiSession,
+    stop: pi.stopPiSession,
+    forget: pi.forgetPiSession,
     bind: pi.bindPiSession,
     approve: pi.respondPiApproval,
     answer: (id, request, reply) =>
@@ -116,7 +127,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     send: omp.sendOmpTurn,
     compact: omp.compactOmpContext,
     cancel: omp.cancelOmpTurn,
-    stop: omp.forgetOmpSession,
+    stop: omp.stopOmpSession,
+    forget: omp.forgetOmpSession,
     bind: omp.bindOmpSession,
     approve: omp.respondOmpApproval,
     answer: (id, request, reply) =>
@@ -126,7 +138,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
   fx: {
     send: fx.sendFxTurn,
     cancel: fx.cancelFxTurn,
-    stop: fx.forgetFxSession,
+    stop: fx.stopFxSession,
+    forget: fx.forgetFxSession,
     bind: fx.bindFxSession,
     approve: fx.respondFxApproval,
     answer: unsupportedQuestion,
@@ -134,7 +147,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
   hermes: {
     send: hermes.sendHermesTurn,
     cancel: hermes.cancelHermesTurn,
-    stop: hermes.forgetHermesSession,
+    stop: hermes.stopHermesSession,
+    forget: hermes.forgetHermesSession,
     bind: hermes.bindHermesSession,
     approve: hermes.respondHermesApproval,
     answer: unsupportedQuestion,
@@ -142,7 +156,8 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
   antigravity: {
     send: antigravity.sendAntigravityTurn,
     cancel: antigravity.cancelAntigravityTurn,
-    stop: antigravity.forgetAntigravitySession,
+    stop: antigravity.stopAntigravitySession,
+    forget: antigravity.forgetAntigravitySession,
     bind: antigravity.bindAntigravitySession,
     approve: antigravity.respondAntigravityApproval,
     answer: unsupportedQuestion,

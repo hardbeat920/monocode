@@ -35,6 +35,16 @@ describe("JsonRpcClient", () => {
     });
   });
 
+  it("preserves a remote method-not-found code for safe capability fallback", async () => {
+    let client!: JsonRpcClient;
+    transport.onWrite = async (_sessionId, line) => {
+      const outbound = JSON.parse(line) as { id: number };
+      client.pushLine(JSON.stringify({ id: outbound.id, error: { code: -32601, message: "Unknown method", data: { method: "thread/inject_items" } } }));
+    };
+    client = new JsonRpcClient("unsupported", {});
+    await expect(client.request("thread/inject_items")).rejects.toMatchObject({ name: "JsonRpcRemoteError", code: -32601, data: { method: "thread/inject_items" } });
+  });
+
   it("rejects and removes a request when writing fails", async () => {
     transport.onWrite = async () => {
       throw new Error("pipe closed");

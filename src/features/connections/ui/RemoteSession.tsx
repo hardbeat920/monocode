@@ -45,6 +45,8 @@ import {
   sameModelSettings,
 } from "../model/remoteModels";
 import {
+  hostSupportsProviderSwitch,
+  hostSupportsProviderInspection,
   isRemoteProvider,
   REMOTE_PROVIDERS,
   requireHostDescriptor,
@@ -216,6 +218,7 @@ function ConnectedRemoteSession({
         setUnseenSend(undefined);
         setChanges(undefined);
         applied.current = undefined;
+        rejectedConfiguration.current = undefined;
         setError("");
         setRemovingDraft(undefined);
         preparingRef.current = false;
@@ -323,6 +326,7 @@ function ConnectedRemoteSession({
     !hasHostBlock(pending.commandId);
   const busy =
     !!hostSession?.busy || unseenActive || (startingActive && !starting?.draft) || pendingSendActive;
+  const needsInspection = hostSession?.providerContext?.delivery?.needsInspection === true;
   // An accepted turn stays on screen until a sync shows the host's copy, so
   // the transcript never drops it for a moment in between.
   useEffect(() => {
@@ -497,6 +501,7 @@ function ConnectedRemoteSession({
     settings: hostSession.modelSettings ?? {},
     mode: hostSession.runtimeMode,
   };
+  const canSwitchProvider = hostSupportsProviderSwitch(descriptor) && !needsInspection;
   const configuration = saved ? (changes ?? saved) : draft;
   const updateConfiguration = (
     update: (current: Configuration) => Configuration,
@@ -539,6 +544,10 @@ function ConnectedRemoteSession({
     followup?: HostCommand,
   ): Promise<CommandReceipt | undefined> => {
     if (sendingRef.current) return undefined;
+    if (needsInspection && (command.type === "send" || command.type === "compact" || command.type === "switchProvider")) {
+      setError("Inspect the interrupted provider request before continuing.");
+      return undefined;
+    }
     const version = bindingVersion.current;
     sendingRef.current = true;
     setSending(true);
@@ -677,12 +686,13 @@ function ConnectedRemoteSession({
   // Model, effort and permission changes apply directly, as locally. A
   // running turn keeps its settings; the change is sent once it finishes.
   const applying = useRef(false);
+  const rejectedConfiguration = useRef<{ value: Configuration; revision: number } | undefined>(undefined);
   // The last change the host accepted, until a sync reflects it.
   const applied = useRef<Configuration>(undefined);
   useEffect(() => {
     if (!changes || !saved || !hostSession) return;
     const same = (a: Configuration, b: Configuration) =>
-      a.model === b.model &&
+      a.harness === b.harness && a.model === b.model &&
       a.mode === b.mode &&
       sameModelSettings(a.settings, b.settings);
     if (same(changes, saved)) {
@@ -691,11 +701,18 @@ function ConnectedRemoteSession({
       return;
     }
     if (applied.current && same(changes, applied.current)) return;
-    if (busy || !online || pending || applying.current) return;
+    if (rejectedConfiguration.current &&
+      rejectedConfiguration.current.revision === snapshot?.revision &&
+      same(changes, rejectedConfiguration.current.value)) return;
+    if (busy || needsInspection || !online || pending || applying.current) return;
+    if (changes.harness !== saved.harness && !canSwitchProvider) return;
     applying.current = true;
     const sent = changes;
+    const revision = snapshot!.revision;
     void run({
-      type: "configure",
+      ...(changes.harness !== saved.harness
+        ? { type: "switchProvider" as const, harness: changes.harness, expectedRevision: revision }
+        : { type: "configure" as const }),
       commandId: crypto.randomUUID(),
       sessionId: hostSession.id,
       model: changes.model,
@@ -704,6 +721,7 @@ function ConnectedRemoteSession({
     })
       .then((receipt) => {
         if (receipt) applied.current = sent;
+        else rejectedConfiguration.current = { value: sent, revision };
       })
       .finally(() => {
         applying.current = false;
@@ -853,6 +871,7 @@ function ConnectedRemoteSession({
       preparingRef.current ||
       pending ||
       busy ||
+      needsInspection ||
       (!text.trim() && !attachments.length)
     )
       return false;
@@ -939,7 +958,7 @@ function ConnectedRemoteSession({
           .find((m) => m.id === id),
       available: (harness) =>
         providers.includes(harness as RemoteProvider) &&
-        (!hostSession || hostSession.harness === harness),
+        (!hostSession || canSwitchProvider || hostSession.harness === harness),
       probed: () => !!descriptor,
       // The host re-probes when a provider CLI changes or its catalog ages,
       // so each picker opening asks again.
@@ -949,6 +968,7 @@ function ConnectedRemoteSession({
     catalog,
     catalogError,
     descriptor,
+    canSwitchProvider,
     providers,
     machine.environmentId,
     hostSession?.harness,
@@ -1031,7 +1051,23 @@ function ConnectedRemoteSession({
       if (next) await run(next);
     }
   };
-  const notice = pending && !sending
+  const confirmInspection = () => {
+    if (!hostSession || !snapshot || hostSession.busy || sending || !online ||
+      !hostSupportsProviderInspection(descriptor)) return;
+    void run({
+      type: "confirmProviderInspection", commandId: crypto.randomUUID(),
+      sessionId: hostSession.id, expectedRevision: snapshot.revision,
+    });
+  };
+  const notice: { text: string; detail?: string; action?: { label: string; run: () => void } } | undefined = needsInspection && pending?.type !== "confirmProviderInspection"
+    ? {
+        text: "The provider request may already have run. Inspect its work before continuing.",
+        detail: hostSupportsProviderInspection(descriptor) ? error : "Update this host to confirm inspection.",
+        ...(hostSupportsProviderInspection(descriptor) ? {
+          action: { label: "Confirm inspection", run: confirmInspection },
+        } : {}),
+      }
+    : pending && !sending
     ? { text: "Waiting for the host to confirm your request.", detail: error,
         action: { label: "Retry", run: () => void retryPending() } }
     : starting?.failed
@@ -1147,7 +1183,7 @@ function ConnectedRemoteSession({
     });
   };
   const compact = () => {
-    if (!hostSession || busy || pending || changes || !online) return false;
+    if (!hostSession || busy || needsInspection || pending || changes || !online) return false;
     void run(message(hostSession.id, "/compact"));
     return true;
   };
@@ -1185,7 +1221,7 @@ function ConnectedRemoteSession({
     },
     remoteSessionLoading: !!sessionId && !hostSession && !session.blocks.length,
     remoteSessionStarted: !!sessionId,
-    allowedModelHarnesses: hostSession
+    allowedModelHarnesses: hostSession && !canSwitchProvider
       ? [hostSession.harness]
       : providers.length
         ? providers
@@ -1198,6 +1234,7 @@ function ConnectedRemoteSession({
     onCompactContext: compact,
     onModelChange: (_, harness, model) => {
       if (!isRemoteProvider(harness)) return;
+      if (hostSession && harness !== hostSession.harness && !canSwitchProvider) return;
       updateConfiguration((current) => ({
         ...current,
         harness,

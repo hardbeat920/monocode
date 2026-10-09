@@ -33,7 +33,19 @@ import {
   toCodexApprovalDecision,
   type CodexApprovalKind,
 } from "./codexProtocol";
-import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
+import {
+  JsonRpcClient,
+  JsonRpcRemoteError,
+  type JsonRpcId,
+} from "../../core/jsonRpc";
+import {
+  ContextTransferError,
+  reportInlineContextDelivery,
+} from "../../../../features/sessions/model/contextTransfer";
+import {
+  nativePortableContextItems,
+  renderPortableContext,
+} from "../../../../features/sessions/model/portableContext";
 import {
   deleteGeneratedImages,
   saveGeneratedImage,
@@ -94,6 +106,8 @@ type Live = {
   codexStore?: "mono";
   runtimeMode: RuntimeMode;
   planning: boolean;
+  resumed: boolean;
+  binaryPath: string;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
@@ -145,6 +159,7 @@ type Resume = {
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+const unsupportedHistoryBinaries = new Set<string>();
 
 let resolveCodexBinaryImpl: () => Promise<{ path: string }> =
   resolveCodexBinary;
@@ -175,7 +190,9 @@ export async function sendCodexTurn(input: SendTurnInput): Promise<void> {
       live.cancelled = false;
       live.muteUpdates = false;
       try {
-        await runTurn(live, input);
+        const prepared = await prepareCodexContext(live, input);
+        if (live.cancelled) return;
+        await runTurn(live, prepared);
       } catch (error) {
         if (live.cancelled) return;
         throw error;
@@ -762,6 +779,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       codexStore,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
+      resumed: didResume,
+      binaryPath: path,
       onEvent: input.onEvent,
       approvals: new Map(),
       questions: new Map(),
@@ -805,6 +824,61 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     rpc.close(error instanceof Error ? error : new Error(String(error)));
     await stopCodexSession(input.sessionId);
     throw error;
+  }
+}
+
+async function prepareCodexContext(live: Live, input: SendTurnInput): Promise<SendTurnInput> {
+  const transfer = input.contextTransfer;
+  if (!transfer) return input;
+  const context = !live.resumed && transfer.fallbackContext
+    ? transfer.fallbackContext
+    : transfer.context;
+  const inlineInput = (): SendTurnInput => ({
+    ...input,
+    text: renderPortableContext(context, input.text),
+    onAccepted: () => {
+      reportInlineContextDelivery(input, {
+        mode: "inline",
+        providerSessionId: live.threadId,
+        includedIds: context.items.map((item) => item.id),
+        omittedIds: context.omitted.map((item) => item.id),
+        throughBlockId: context.throughBlockId,
+      });
+      input.onAccepted?.();
+    },
+  });
+  if (unsupportedHistoryBinaries.has(live.binaryPath)) return inlineInput();
+  // Native item notifications must not duplicate transcript rows or prove
+  // acceptance of a current request that has not started yet.
+  const previousMute = live.muteUpdates;
+  live.muteUpdates = true;
+  let imported = false;
+  try {
+    await live.rpc.request("thread/inject_items", {
+      threadId: live.threadId,
+      items: nativePortableContextItems(context),
+    });
+    imported = true;
+    if (live.cancelled) return input;
+    await transfer.onDelivered?.({
+      mode: "native",
+      providerSessionId: live.threadId,
+      includedIds: context.items.map((item) => item.id),
+      omittedIds: context.omitted.map((item) => item.id),
+      throughBlockId: context.throughBlockId,
+    });
+    return input;
+  } catch (error) {
+    if (!imported && error instanceof JsonRpcRemoteError && error.code === -32601) {
+      unsupportedHistoryBinaries.add(live.binaryPath);
+      return inlineInput();
+    }
+    // A transport or mutation error may mean some items arrived. Retrying on
+    // this identity could repeat history, so require a fresh native thread.
+    await forgetCodexSession(input.sessionId);
+    throw new ContextTransferError("Codex history delivery is uncertain. Retry with a fresh provider conversation.", error);
+  } finally {
+    live.muteUpdates = previousMute || live.cancelled;
   }
 }
 
@@ -1602,6 +1676,7 @@ export function __codexTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();
+  unsupportedHistoryBinaries.clear();
 }
 
 export function __codexTestResumeMap(): Map<string, Resume> {

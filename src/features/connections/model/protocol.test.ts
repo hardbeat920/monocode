@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { applySessionSync, type HostSession } from "./protocol";
+import {
+  applySessionSync,
+  hostSupportsProviderSwitch,
+  hostSupportsProviderInspection,
+  SESSION_PROVIDER_INSPECTION_CAPABILITY,
+  SESSION_PROVIDER_SWITCH_CAPABILITY,
+  type HostDescriptor,
+  type HostSession,
+} from "./protocol";
 
 const known: HostSession = {
   projectId: "project",
@@ -65,4 +73,24 @@ it("rejects deltas that do not apply, so the caller loads a snapshot", () => {
   expect(() =>
     applySessionSync(undefined, { kind: "unchanged", revision: 4 }),
   ).toThrow();
+});
+
+it("enables provider switching only when the host advertises it", () => {
+  const host: HostDescriptor = {
+    protocolVersion: 1,
+    environmentId: "host",
+    name: "Host",
+    providers: ["codex", "claude"],
+    capabilities: [],
+  };
+  expect(hostSupportsProviderSwitch()).toBe(false);
+  expect(hostSupportsProviderSwitch(host)).toBe(false);
+  expect(hostSupportsProviderInspection(host)).toBe(false);
+  expect(hostSupportsProviderSwitch({
+    ...host,
+    capabilities: [SESSION_PROVIDER_SWITCH_CAPABILITY],
+  })).toBe(true);
+  expect(hostSupportsProviderInspection({ ...host, capabilities: [SESSION_PROVIDER_SWITCH_CAPABILITY] })).toBe(false);
+  expect(hostSupportsProviderInspection({ ...host, capabilities: [SESSION_PROVIDER_INSPECTION_CAPABILITY] })).toBe(true);
+  expect(hostSupportsProviderInspection({ ...host, protocolVersion: 2, capabilities: [SESSION_PROVIDER_INSPECTION_CAPABILITY] })).toBe(false);
 });

@@ -7,6 +7,7 @@ mod azure_devops;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
+mod context_assets;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -474,11 +475,14 @@ pub fn run() {
             session_store::session_search,
             session_store::cancel_session_search,
             session_store::session_get,
+            session_store::session_context_snapshot,
+            context_assets::session_context_assets,
             mono_transcript::mono_session_get,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,
             session_store::session_delete,
+            session_store::session_discard_draft,
             session_store::session_set_archived,
             session_store::session_set_pinned,
             session_store::session_set_linked_work_item,

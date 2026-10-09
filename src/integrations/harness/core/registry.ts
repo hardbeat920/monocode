@@ -6,6 +6,8 @@ import type {
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
+import type { ContextTransferCapabilities } from "../../../features/sessions/model/contextTransfer";
+import { prepareContextTransferInput } from "../../../features/sessions/model/contextTransfer";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
 import type { UserQuestionReply } from "../../../features/sessions/model/userQuestion";
@@ -55,6 +57,7 @@ export type HarnessAdapter = {
   live: boolean;
   /** False when the harness cannot accept a follow-up while a turn is running. Default: same as live. */
   canSteer?: boolean;
+  contextTransferCapabilities?: ContextTransferCapabilities;
   commands?: NativeCommandProvider;
   sendTurn(input: SendTurnInput): Promise<void>;
   /** Trigger provider-owned compaction outside MonoCode's normal user-turn path. */
@@ -229,11 +232,15 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       });
     activeTurnSessions.add(input.sessionId);
     try {
+      const prepared = prepareContextTransferInput(
+        input,
+        adapter.contextTransferCapabilities,
+      );
       await adapter.sendTurn({
-        ...input,
+        ...prepared,
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
-          input.onAccepted?.();
+          prepared.onAccepted?.();
         },
       });
     } finally {
@@ -248,6 +255,10 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
 export function canCompactHarnessContext(id: HarnessId): boolean {
   const adapter = adapters.get(id);
   return adapter?.live === true && adapter.compactContext != null;
+}
+
+export function canResumeHarnessWithContext(id: HarnessId): boolean {
+  return adapters.get(id)?.contextTransferCapabilities?.resumedAppend === true;
 }
 
 export function compactHarnessContext(

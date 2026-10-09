@@ -1,6 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
+import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import type {
   CommandReceipt,
   HostProject,
@@ -33,6 +35,7 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), snapshot TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, signature TEXT NOT NULL, receipt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, revision));
+      CREATE TABLE IF NOT EXISTS context_history_cleanup (session_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, pending INTEGER NOT NULL CHECK (pending IN (0, 1)));
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE);`);
     const columns = this.db.prepare("PRAGMA table_info(sessions)").all();
     if (!columns.some((column) => column.name === "summary"))
@@ -45,6 +48,14 @@ export class HostStore {
         .prepare("SELECT value FROM metadata WHERE key='environmentId'")
         .get()!.value,
     );
+    for (const id of this.pendingContextCleanup()) {
+      try {
+        rmSync(this.contextDirectory(id), { recursive: true, force: true });
+        this.completeContextCleanup(id);
+      } catch (error) {
+        console.error("Context history cleanup failed after session deletion", id, error);
+      }
+    }
   }
 
   transaction<T>(fn: () => T): T {
@@ -168,6 +179,7 @@ export class HostStore {
 
   /** Returns the saved value, stamped with per-block change revisions. */
   save(input: HostSession, event: unknown): HostSession {
+    this.assertContextWritable(input.session.id);
     const previous = this.find(input.session.id);
     const value = {
       ...input,
@@ -226,13 +238,52 @@ export class HostStore {
 
   deleteSession(id: string): void {
     this.transaction(() => {
+      if (this.deletedSessionProject(id) !== undefined) return;
       const current = this.session(id);
       if (current.status === "running")
         throw new Error("Stop this session before deleting it");
+      // Retain the deleted ID after cleanup to reject delayed writes.
+      this.db.prepare("INSERT INTO context_history_cleanup (session_id, project_id, pending) VALUES (?, ?, 1)")
+        .run(id, current.projectId);
       this.db.prepare("DELETE FROM events WHERE session_id=?").run(id);
       this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
       this.cache.delete(id);
     });
+  }
+
+  deletedSessionProject(id: string): string | undefined {
+    const row = this.db.prepare("SELECT project_id FROM context_history_cleanup WHERE session_id=?").get(id);
+    return row ? String(row.project_id) : undefined;
+  }
+
+  assertContextWritable(id: string): void {
+    if (this.deletedSessionProject(id) !== undefined)
+      throw new Error("Session was deleted on this machine");
+  }
+
+  private contextDirectory(id: string): string {
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid session ID for context cleanup");
+    return join(dirname(this.attachmentDir), "context-history", id);
+  }
+
+  private pendingContextCleanup(): string[] {
+    return this.db.prepare("SELECT session_id FROM context_history_cleanup WHERE pending=1")
+      .all().map((row) => String(row.session_id));
+  }
+
+  private completeContextCleanup(id: string): void {
+    this.db.prepare("UPDATE context_history_cleanup SET pending=0 WHERE session_id=?").run(id);
+  }
+
+  async retryContextCleanup(): Promise<void> {
+    for (const id of this.pendingContextCleanup()) {
+      try {
+        await rm(this.contextDirectory(id), { recursive: true, force: true });
+        this.completeContextCleanup(id);
+      } catch (error) {
+        console.error("Context history cleanup failed after session deletion", id, error);
+      }
+    }
   }
 
   receipt(id: string, signature: string): CommandReceipt | undefined {

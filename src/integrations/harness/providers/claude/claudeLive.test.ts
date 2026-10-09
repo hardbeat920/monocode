@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import { buildPortableContext } from "../../../../features/sessions/model/portableContext";
+import { prepareContextTransferInput } from "../../../../features/sessions/model/contextTransfer";
 import {
   foldableWork,
   foldedBlocks,
@@ -45,8 +47,12 @@ const {
   stopClaudeSession,
   __claudeTestReset,
 } = await import("./claude");
+const { claudeAdapter } = await import("./claudeAdapter");
 import type { HarnessEvent } from "../../core/types";
-import type { RuntimeMode, TurnIntent } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TurnIntent,
+} from "../../../../features/sessions/model/session";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -54,6 +60,17 @@ function parse() {
 
 function emit(rec: Record<string, unknown>) {
   onLine!(JSON.stringify(rec));
+}
+
+function replayUser(uuid: unknown, sessionId = "sess_1") {
+  emit({
+    type: "user",
+    uuid,
+    isReplay: true,
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "text", text: "echoed input" }] },
+  });
 }
 
 const waitFor = async (pred: () => boolean, label: string) => {
@@ -72,6 +89,8 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     providerAccountId?: string;
+    providerSessionId?: string;
+    onAccepted?: () => void;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -85,6 +104,7 @@ async function startTurn(
     providerAccountId: options.providerAccountId,
     text: "explore the codebase",
     attachments: [],
+    onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
   });
 
@@ -96,12 +116,20 @@ async function startTurn(
       }),
     "initialize",
   );
-  emit({ type: "system", subtype: "init", session_id: "sess_1" });
+  emit({
+    type: "system",
+    subtype: "init",
+    session_id: options.providerSessionId ?? "sess_1",
+  });
   emit({
     type: "control_response",
     response: { subtype: "success", request_id: "monocode_1" },
   });
   await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
+  replayUser(
+    parse().find((message) => message.type === "user")?.uuid,
+    options.providerSessionId ?? "sess_1",
+  );
   return { events, turn };
 }
 
@@ -245,7 +273,8 @@ function emitBashFinished(taskId = "b1") {
     task_id: taskId,
     tool_use_id: "toolu_bash",
     status: "completed",
-    summary: 'Background command "sleep 30 && echo done" completed (exit code 0)',
+    summary:
+      'Background command "sleep 30 && echo done" completed (exit code 0)',
   });
 }
 
@@ -706,7 +735,9 @@ describe("claude task tools", () => {
       {
         key: "claude-tasks",
         providerSessionId: "sess_2",
-        items: [{ id: "1", text: "Other conversation", status: "pending" as const }],
+        items: [
+          { id: "1", text: "Other conversation", status: "pending" as const },
+        ],
       },
     ];
 
@@ -749,7 +780,9 @@ describe("claude task tools", () => {
     );
 
     const events: HarnessEvent[] = [];
-    const { turn } = await restartedTurn(events, { providerSessionId: "sess_2" });
+    const { turn } = await restartedTurn(events, {
+      providerSessionId: "sess_2",
+    });
     expect(spawned.at(-1)).toEqual(
       expect.arrayContaining(["--resume", "sess_2"]),
     );
@@ -808,7 +841,9 @@ describe("claude task tools", () => {
     await first.turn;
 
     const events: HarnessEvent[] = [];
-    const { turn: second } = await restartedTurn(events, { providerAccountId: "home" });
+    const { turn: second } = await restartedTurn(events, {
+      providerAccountId: "home",
+    });
     expect(spawned.at(-1)).not.toContain("--resume");
     emitTaskTool(
       "toolu_u1",
@@ -908,11 +943,510 @@ describe("claude model switching", () => {
   });
 });
 
+describe("claude current request acceptance", () => {
+  async function initializingTransfer() {
+    bindClaudeSession("s1", "expected-native", "/repo");
+    const events: HarnessEvent[] = [];
+    const accepted = vi.fn();
+    const delivered = vi.fn();
+    const history = {
+      ...newSession("codex", "/repo"),
+      blocks: [
+        {
+          id: "earlier",
+          role: "user" as const,
+          text: "Retain the earlier request.",
+        },
+      ],
+    };
+    const turn = sendClaudeTurn(
+      prepareContextTransferInput(
+        {
+          sessionId: "s1",
+          cwd: "/repo",
+          model: "claude:sonnet-5",
+          runtimeMode: "supervised",
+          text: "Current request",
+          onAccepted: accepted,
+          contextTransfer: {
+            context: buildPortableContext(history),
+            onDelivered: delivered,
+          },
+          onEvent: (event) => events.push(event),
+        },
+        claudeAdapter.contextTransferCapabilities,
+      ),
+    );
+    void turn.catch(() => undefined);
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.request as Record<string, unknown>)?.subtype ===
+            "initialize",
+        ),
+      "initialize",
+    );
+    return { events, accepted, delivered, turn };
+  }
+
+  function confirmIdentity() {
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+  }
+
+  function response(text = "Current response") {
+    emit({
+      type: "stream_event",
+      session_id: "expected-native",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text },
+      },
+    });
+  }
+
+  it("does not accept or append a startup control plan before user submission", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    emit({
+      type: "control_request",
+      request_id: "startup-plan",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "ExitPlanMode",
+        input: { plan: "# Startup plan" },
+      },
+    });
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            "startup-plan",
+        ),
+      "startup plan reply",
+    );
+    expect(parse().some((message) => message.type === "user")).toBe(false);
+    expect(events.some((event) => event.type === "plan")).toBe(false);
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it("ignores startup text and tools and does not accept a result-only refusal", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    emit({
+      type: "assistant",
+      session_id: "expected-native",
+      message: {
+        content: [
+          { type: "text", text: "Startup response" },
+          {
+            type: "tool_use",
+            id: "startup-tool",
+            name: "Read",
+            input: { file_path: "/repo/old.ts" },
+          },
+        ],
+      },
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message.delta" || event.type === "tool.started",
+      ),
+    ).toBe(false);
+    confirmIdentity();
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Usage limit reached"],
+      session_id: "expected-native",
+    });
+    await turn;
+    expect(events.some((event) => event.type === "session.error")).toBe(true);
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it("defers a matching replay until the pending user write succeeds and accepts once", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    let finishWrite: (() => void) | undefined;
+    writeChild.mockImplementationOnce((_id, line) => {
+      sent.push(line);
+      replayUser(JSON.parse(line).uuid, "expected-native");
+      response();
+      return new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+    });
+    confirmIdentity();
+    await waitFor(() => finishWrite != null, "pending user write");
+    expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    finishWrite!();
+    await waitFor(
+      () => accepted.mock.calls.length === 1,
+      "accepted current request",
+    );
+    response("Follow-up response");
+    replayUser(
+      parse().find((message) => message.type === "user")?.uuid,
+      "expected-native",
+    );
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await turn;
+    response("Background response after the completed input");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message.delta" && event.text === "Current response",
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message.delta" &&
+          event.text === "Background response after the completed input",
+      ),
+    ).toBe(true);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores unrelated and child echoes until the matching parent replay", async () => {
+    const { accepted, delivered, turn } = await initializingTransfer();
+    confirmIdentity();
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    const uuid = parse().find((message) => message.type === "user")?.uuid;
+    for (const fields of [
+      { uuid: crypto.randomUUID(), isReplay: true, parent_tool_use_id: null },
+      { uuid, isReplay: true, parent_tool_use_id: "child-tool" },
+      { uuid, isReplay: false, parent_tool_use_id: null },
+      { uuid, isReplay: true },
+    ]) {
+      emit({
+        type: "user",
+        session_id: "expected-native",
+        message: { role: "user", content: [] },
+        ...fields,
+      });
+    }
+    response("Output without a current acknowledgment");
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    replayUser(uuid, "expected-native");
+    replayUser(uuid, "expected-native");
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await turn;
+  });
+
+  it("does not reuse a previous request acknowledgment for the next turn", async () => {
+    const first = await startTurn("s1");
+    const oldUuid = parse().find((message) => message.type === "user")?.uuid;
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    const accepted = vi.fn();
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "Next request",
+      onAccepted: accepted,
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().filter((message) => message.type === "user").length === 2,
+      "next user prompt",
+    );
+    const uuid = parse()
+      .filter((message) => message.type === "user")
+      .at(-1)?.uuid;
+    expect(uuid).not.toBe(oldUuid);
+    replayUser(oldUuid);
+    expect(accepted).not.toHaveBeenCalled();
+    replayUser(uuid);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("does not accept unrelated output buffered during the current write", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    let finishWrite: (() => void) | undefined;
+    writeChild.mockImplementationOnce((_id, line) => {
+      sent.push(line);
+      response("Unrelated startup output");
+      return new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+    });
+    confirmIdentity();
+    await waitFor(() => finishWrite != null, "pending user write");
+    finishWrite!();
+    await waitFor(
+      () => events.some((event) => event.type === "message.delta"),
+      "buffered output delivery",
+    );
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Current request failed"],
+      session_id: "expected-native",
+    });
+    await turn;
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it("discards buffered response evidence when the user write fails", async () => {
+    const { events, accepted, delivered, turn } = await initializingTransfer();
+    let failWrite: ((error: Error) => void) | undefined;
+    writeChild.mockImplementationOnce((_id, line) => {
+      sent.push(line);
+      replayUser(JSON.parse(line).uuid, "expected-native");
+      response();
+      return new Promise<void>((_resolve, reject) => {
+        failWrite = reject;
+      });
+    });
+    confirmIdentity();
+    await waitFor(() => failWrite != null, "pending user write");
+    failWrite!(new Error("Broken pipe"));
+    await expect(turn).rejects.toThrow("Broken pipe");
+    expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(accepted).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+});
+
 describe("claude legacy account resume", () => {
+  async function initializingTurn(providerSessionId?: string) {
+    if (providerSessionId) bindClaudeSession("s1", providerSessionId, "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:sonnet-5",
+      runtimeMode: "supervised",
+      text: "Current request",
+      onEvent: (event) => events.push(event),
+    });
+    void turn.catch(() => undefined);
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.request as Record<string, unknown>)?.subtype ===
+            "initialize",
+        ),
+      "initialize",
+    );
+    return { events, turn };
+  }
+
+  it("waits for a validated native identity after the resume initialize response", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(parse().some((message) => message.type === "user")).toBe(false);
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "different-native",
+    });
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+
+    sent.length = 0;
+    const retry = await startTurn("s1", {
+      providerSessionId: "expected-native",
+    });
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "expected-native"]),
+    );
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await retry.turn;
+  });
+
+  it("accepts a matching commands record before system init on resume", async () => {
+    const { turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "expected-native" });
+    await turn;
+  });
+
+  it("rejects a later mismatched parent identity before releasing the resumed request", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(parse().some((message) => message.type === "user")).toBe(false);
+  });
+
+  it("fails an active resumed turn if a later parent record changes its identity", async () => {
+    const { events, turn } = await initializingTurn("expected-native");
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: "expected-native",
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({
+      type: "stream_event",
+      session_id: "expected-native",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Accepted response" },
+      },
+    });
+    emit({
+      type: "stream_event",
+      session_id: "child-native",
+      parent_tool_use_id: "child-tool",
+      event: { type: "message_start" },
+    });
+    emit({
+      type: "system",
+      subtype: "hook_started",
+      session_id: "hook-native",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.providerBound" &&
+          event.providerSessionId === "different-native",
+      ),
+    ).toBe(false);
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.error" &&
+          event.message.includes("different provider conversation"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects unconfirmed resume after the initialization timeout without sending input", async () => {
+    vi.useFakeTimers();
+    try {
+      bindClaudeSession("s1", "expected-native", "/repo");
+      const turn = sendClaudeTurn({
+        sessionId: "s1",
+        cwd: "/repo",
+        model: "claude:sonnet-5",
+        runtimeMode: "supervised",
+        text: "Current request",
+        onEvent: () => {},
+      });
+      const rejected = expect(turn).rejects.toThrow("did not confirm");
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        type: "control_response",
+        response: { subtype: "success", request_id: "monocode_1" },
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await rejected;
+      expect(parse().some((message) => message.type === "user")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows fresh initialization without a provider identity record", async () => {
+    const { turn } = await initializingTurn();
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "user prompt",
+    );
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
   it("resumes a legacy thread when the missing account resolves to default", async () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
     const { turn } = await startTurn("s1", {
       providerAccountId: "default",
+      providerSessionId: "legacy-session",
     });
     expect(spawned[0]).toEqual(
       expect.arrayContaining(["--resume", "legacy-session"]),
@@ -920,6 +1454,35 @@ describe("claude legacy account resume", () => {
     expect(spawned[0]).not.toContain("--session-id");
     emit({ type: "result", subtype: "success", session_id: "legacy-session" });
     await turn;
+  });
+
+  it("rejects a mismatched resumed identity before sending a current request", async () => {
+    bindClaudeSession("s1", "expected-native", "/repo");
+    const turn = sendClaudeTurn({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:sonnet-5",
+      runtimeMode: "supervised",
+      text: "Current request",
+      onEvent: () => {},
+    });
+    void turn.catch(() => undefined);
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.request as Record<string, unknown>)?.subtype ===
+            "initialize",
+        ),
+      "initialize",
+    );
+    emit({ type: "system", subtype: "init", session_id: "different-native" });
+    emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: "monocode_1" },
+    });
+    await expect(turn).rejects.toThrow("different provider conversation");
+    expect(parse().some((message) => message.type === "user")).toBe(false);
   });
 
   it("does not resume a legacy default thread under a named account", async () => {
@@ -1779,9 +2342,9 @@ describe("claude background tasks", () => {
     });
     const items = groupTurnItems(session.blocks.slice(1));
     const group = items.at(-1);
-    expect(group?.type === "activity" && workSummaryLine(group.blocks, true)).toBe(
-      "Running in background",
-    );
+    expect(
+      group?.type === "activity" && workSummaryLine(group.blocks, true),
+    ).toBe("Running in background");
   });
 
   it("lets the turn go if a finished task never wakes Claude", async () => {
@@ -1802,6 +2365,103 @@ describe("claude background tasks", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("allows late background tools and questions without accepting another request", async () => {
+    const accepted = vi.fn();
+    const { events, turn } = await startTurn("s1", {
+      runtimeMode: "full-access",
+      onAccepted: accepted,
+    });
+    emitBackgroundBash();
+    expect(accepted).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    try {
+      emitBashFinished();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await turn;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    emit({
+      type: "control_request",
+      request_id: "late_read",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Read",
+        input: { file_path: "/repo/result.txt" },
+      },
+    });
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            "late_read",
+        ),
+      "late background tool response",
+    );
+    expect(
+      parse().find(
+        (message) =>
+          (message.response as Record<string, unknown>)?.request_id ===
+          "late_read",
+      ),
+    ).toMatchObject({
+      type: "control_response",
+      response: { response: { behavior: "allow" } },
+    });
+
+    emit({
+      type: "control_request",
+      request_id: "late_question",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        input: {
+          questions: [
+            {
+              question: "Use the background result?",
+              options: [{ label: "Proceed" }],
+            },
+          ],
+        },
+      },
+    });
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const question = session.pendingQuestion!;
+    expect(question.questions[0].prompt).toBe("Use the background result?");
+    respondClaudeQuestion("s1", question.requestId, {
+      kind: "answered",
+      answers: {
+        [question.questions[0].id]: [question.questions[0].options[0].id],
+      },
+    });
+    await waitFor(
+      () =>
+        parse().some(
+          (message) =>
+            (message.response as Record<string, unknown>)?.request_id ===
+            "late_question",
+        ),
+      "late background question response",
+    );
+    expect(
+      parse().find(
+        (message) =>
+          (message.response as Record<string, unknown>)?.request_id ===
+          "late_question",
+      ),
+    ).toMatchObject({
+      type: "control_response",
+      response: { response: { behavior: "allow" } },
+    });
+    expect(accepted).toHaveBeenCalledTimes(1);
   });
 
   it("stops background commands when the turn is stopped", async () => {
@@ -1934,7 +2594,8 @@ describe("claude plan permissions", () => {
 
 describe("claude manual compaction", () => {
   it("runs the built-in command and requires a compact boundary", async () => {
-    const { turn } = await startTurn("s1");
+    const accepted = vi.fn();
+    const { turn } = await startTurn("s1", { onAccepted: accepted });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await turn;
     sent.length = 0;
@@ -1954,6 +2615,7 @@ describe("claude manual compaction", () => {
     expect(parse().find((message) => message.type === "user")).toMatchObject({
       message: { content: [{ type: "text", text: "/compact" }] },
     });
+    replayUser(parse().find((message) => message.type === "user")?.uuid);
 
     emit({
       type: "assistant",
@@ -1973,5 +2635,6 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(accepted).toHaveBeenCalledTimes(1);
   });
 });
