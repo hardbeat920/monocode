@@ -794,6 +794,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Cognition's Devin CLI (`devin`).
+#[tauri::command(async)]
+pub fn harness_resolve_devin() -> Result<CursorBinary, String> {
+    resolve_devin()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Devin CLI not found. Install it with `curl -fsSL https://cli.devin.ai/install.sh | bash` (Windows: `irm https://static.devin.ai/cli/setup.ps1 | iex`) and run `devin auth login`, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -832,6 +845,7 @@ pub fn harness_spawn(
     binary_provider: Option<String>,
     binary_path: Option<String>,
     codex_store: Option<String>,
+    devin_ask_edits: Option<bool>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -844,6 +858,15 @@ pub fn harness_spawn(
         return Err("harness_spawn: not a resolved harness CLI".to_string());
     }
 
+    // `--config` is a global option, so it precedes the `acp` subcommand.
+    let devin_config = match devin_ask_edits {
+        None | Some(false) => Vec::new(),
+        Some(true) if binary_provider.as_deref() == Some("devin") && args == ["acp"] => {
+            crate::devin_config::supervised_args(&app)?
+        }
+        Some(true) => return Err("Edit approvals are only supported for `devin acp`".into()),
+    };
+
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
@@ -851,7 +874,8 @@ pub fn harness_spawn(
     }
 
     let mut cmd = Command::new(&command);
-    cmd.args(&args)
+    cmd.args(&devin_config)
+        .args(&args)
         .current_dir(&workdir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1324,6 +1348,8 @@ fn exec_args_allowed(binary_provider: Option<&str>, args: &[String]) -> bool {
     let matches = |a: &&[&str]| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y);
     EXEC_ALLOWED_ARGS.iter().any(matches)
         || (binary_provider == Some("opencode") && OPENCODE_EXEC_ALLOWED_ARGS.iter().any(matches))
+        // Devin reads its login location from `auth status`.
+        || (binary_provider == Some("devin") && matches(&&["auth", "status"][..]))
         || (binary_provider == Some("grok")
             && args.len() == 4
             && args[0] == "--no-auto-update"
@@ -1726,6 +1752,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "devin"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -1966,6 +1993,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
         "antigravity" => resolve_antigravity(),
+        "devin" => resolve_devin(),
         _ => None,
     }
 }
@@ -2011,6 +2039,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "fx" => &["fx"],
         "hermes" => &["hermes"],
         "antigravity" => &["agy_acp_server.par"],
+        "devin" => &["devin"],
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
@@ -2083,6 +2112,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
+        "devin" => lower.contains("devin"),
         _ => true,
     };
     if has_version && provider_marker {
@@ -2146,10 +2176,16 @@ fn validate_configured_harness_binary_identity(
     }
 }
 
+/// Prefers whatever `codex` the user's own shell resolves, like
+/// `resolve_claude`. Trying `~/.local/bin/codex` first picks the ChatGPT app's
+/// wrapper, pinned to an older bundled CLI, over a newer Homebrew or npm install.
 fn resolve_codex() -> Option<PathBuf> {
     let home = dirs_home().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
 
+    if let Some(from_shell) = which_via_login_shell("codex") {
+        candidates.push(from_shell);
+    }
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/codex"));
         candidates.push(home.join(".bun/bin/codex"));
@@ -2161,9 +2197,6 @@ fn resolve_codex() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/local/bin/codex"));
     candidates.push(PathBuf::from("/usr/bin/codex"));
     candidates.push(PathBuf::from("/snap/bin/codex"));
-    if let Some(from_shell) = which_via_login_shell("codex") {
-        candidates.push(from_shell);
-    }
 
     // Last resort: the Codex app bundles its own CLI, but never puts it on
     // PATH. It is pinned to the app release (often a prerelease), so a real
@@ -2369,6 +2402,30 @@ fn resolve_hermes() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/bin/hermes"));
     candidates.push(PathBuf::from("/snap/bin/hermes"));
     if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
+}
+
+fn resolve_devin() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official installer target on macOS and Linux.
+        candidates.push(home.join(".local/bin/devin"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // The Windows installer keeps its launcher beside versioned builds.
+        candidates.push(local_app_data.join("devin/cli/bin/devin"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/devin"));
+    candidates.push(PathBuf::from("/usr/local/bin/devin"));
+    candidates.push(PathBuf::from("/usr/bin/devin"));
+    if let Some(from_shell) = which_via_login_shell("devin") {
         candidates.push(from_shell);
     }
 
@@ -4010,6 +4067,7 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv("/Users/n/.local/bin/devin acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(
