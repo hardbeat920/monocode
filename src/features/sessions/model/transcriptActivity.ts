@@ -1145,7 +1145,7 @@ function yieldedAt(items: TurnItem[]): number {
   const index = items.findIndex((item, at) => {
     const before = items[at - 1];
     return (
-      item.type === "activity" &&
+      (item.type === "activity" || item.type === "subagents") &&
       before?.type === "block" &&
       isProseBlock(before.block) &&
       (!!before.block.yielded ||

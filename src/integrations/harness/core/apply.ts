@@ -22,6 +22,7 @@ import { isReviewablePlan } from "../../../features/sessions/model/plan";
 import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
+import { isNoticeBlock } from "../../../features/sessions/model/transcriptActivity";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -238,6 +239,8 @@ function markYieldedAnswer(session: Session): Session {
   for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
     const block = session.blocks[index];
     if (block.tool?.background) continue;
+    if (block.role === "system" && !block.interjection && !isNoticeBlock(block))
+      continue;
     if (block.role !== "assistant" || !block.text.trim() || block.yielded)
       return session;
     const blocks = session.blocks.slice();

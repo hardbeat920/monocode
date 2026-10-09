@@ -1362,6 +1362,21 @@ describe("the settled work trail", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "keeps yielded prose before a subagent (settled: %s)",
+    (settled) => {
+      const items = groupTurnItems([
+        shell("before"),
+        { ...note("answer", "Here is the answer."), yielded: true },
+        { ...agent("ag"), tool: { kind: "agent", status: "failed" } },
+        shell("after"),
+        note("done", "The task finished."),
+      ], { settled });
+      expect(foldedBlocks(items, foldableWork(items)!).map((block) => block.id))
+        .toEqual(["before"]);
+    },
+  );
+
   it("lets the settled fold reach across an interjection that stops it live", () => {
     const turn = [
       { id: "u", role: "user", text: "go" },

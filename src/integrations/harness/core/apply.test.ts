@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   newSession,
+  type Block,
   type Session,
 } from "../../../features/sessions/model/session";
 import { planTurnKey } from "../../../features/sessions/model/plan";
+import { INTERRUPT_MESSAGE } from "../../../features/sessions/model/inFlight";
 import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
 import {
   acknowledgeMonoMessage,
@@ -133,6 +135,28 @@ describe("background work", () => {
     expect(
       saved.blocks.filter((block) => block.yielded).map((block) => block.text),
     ).toEqual(["Still compiling.", "Here is the order."]);
+  });
+
+  it.each<[Partial<Block>, boolean]>([
+    [{}, true],
+    [{ statusKey: "progress" }, true],
+    [{ role: "user" }, false],
+    [{ notice: "error" }, false],
+    [{ text: INTERRUPT_MESSAGE }, false],
+    [{ interjection: { customType: "note" } }, false],
+  ])("only skips ordinary status blocks after an answer: %j", (barrier, marked) => {
+    let session = applyHarnessEvent(newSession("claude", "/tmp"), {
+      type: "message.delta",
+      text: "The answer.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, { type: "status", text: "Waiting." });
+    Object.assign(session.blocks[session.blocks.length - 1], barrier);
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["cargo test"],
+    });
+    expect(!!session.blocks[0].yielded).toBe(marked);
   });
 });
 
