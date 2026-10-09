@@ -1529,19 +1529,20 @@ export class Orchestrator {
             dispatches: [...(run.dispatches ?? []), dispatch],
           });
           this.writeChecks.set(dispatchId, new Set());
-          try {
+          const requireAssignedModel = () => {
             if (
-              !this.host
-                .choices(run.cwd)
-                .some(
-                  (choice) =>
-                    choice.harness === task.harness &&
-                    choice.models.some((model) => model.id === task.model),
-                )
+              !this.host!.choices(run.cwd).some(
+                (choice) =>
+                  choice.harness === task.harness &&
+                  choice.models.some((model) => model.id === task.model),
+              )
             )
               throw new Error(
                 "The assigned harness/model is no longer available. Review this task before retrying.",
               );
+          };
+          try {
+            requireAssignedModel();
             const activeRun = this.run(run.leadId)!;
             const activeTask = activeRun.tasks.find(
               (entry) => entry.id === task.id,
@@ -1595,6 +1596,8 @@ export class Orchestrator {
               task.files,
               prepared.scratchDir,
             );
+            // Preparation may finish after the provider is hidden.
+            requireAssignedModel();
             this.host.submit(task.sessionId, prompt, (outcome) => {
               void this.settle(run.leadId, task.id, outcome, dispatchId).catch(
                 console.error,

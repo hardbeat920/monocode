@@ -448,6 +448,48 @@ describe("local orchestration", () => {
     );
     expect(choices).toHaveBeenCalledWith("/repo");
   });
+  it("does not submit a worker hidden during preparation", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    let visible = true;
+    f.host.choices = (project) =>
+      visible && project === "/repo"
+        ? [
+            {
+              harness: "codex",
+              models: [{ id: "codex:test", name: "Test" }],
+            },
+          ]
+        : [];
+    const createWorker = f.host.createWorker;
+    let finishPreparation!: () => void;
+    f.host.createWorker = vi.fn(async (run, task) => {
+      await new Promise<void>((resolve) => {
+        finishPreparation = resolve;
+      });
+      return createWorker(run, task);
+    });
+
+    await f.manager.startApproved("lead", "card", proposal());
+    await vi.waitFor(() => expect(f.host.createWorker).toHaveBeenCalledOnce());
+    const first = f.tasks().find((task) => task.title === "Types")!;
+    visible = false;
+    finishPreparation();
+
+    await vi.waitFor(() =>
+      expect(f.tasks().find((task) => task.id === first.id)?.status).toBe(
+        "failed",
+      ),
+    );
+    expect(
+      vi
+        .mocked(f.host.submit)
+        .mock.calls.some(([id]) => id === first.sessionId),
+    ).toBe(false);
+    expect(f.tasks().find((task) => task.id === first.id)?.error).toContain(
+      "no longer available",
+    );
+  });
   it("treats directory scopes as overlapping only at path boundaries", () => {
     expect(scopesOverlap(["/repo/src"], ["/repo/src/file.ts"])).toBe(true);
     expect(scopesOverlap(["/repo/src"], ["/repo/src2/file.ts"])).toBe(false);
