@@ -14,6 +14,7 @@ You need Node.js 20+, a current stable Rust toolchain, and at least one provider
 - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
 - [OpenCode](https://opencode.ai) - `opencode auth login`
 - [Antigravity](https://antigravity.google/docs/cli-install) (macOS/Linux) - `curl -fsSL https://antigravity.google/cli/install.sh | bash`, then run `agy` once to sign in
+- [Antigravity](https://antigravity.google/docs/cli-install) (Windows) - install `agy`, sign in once, then extract the [official ACP server](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json) for your architecture to `%LOCALAPPDATA%\agy-acp`
 - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`

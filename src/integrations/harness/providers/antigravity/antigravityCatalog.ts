@@ -14,7 +14,7 @@ import {
 } from "./antigravityProtocol";
 
 const PROBE_ID = "monocode-antigravity-probe";
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 let inflight: Promise<void> | null = null;
 
 export function refreshAntigravityCatalog(): Promise<void> {

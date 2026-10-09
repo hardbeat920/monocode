@@ -50,7 +50,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     install:
       "Install from hermes-agent.nousresearch.com, then run hermes model",
   },
-  antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
+  antigravity: { name: "Antigravity ACP server" },
 };
 
 let inflight: Promise<void> | null = null;

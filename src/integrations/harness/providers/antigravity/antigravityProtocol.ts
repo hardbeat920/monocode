@@ -37,7 +37,7 @@ export function antigravityPromptBlocks(
   return promptBlocks(text, attachments);
 }
 
-/** The raw .par locates sibling resources relative to its process directory. */
+/** The ACP server locates sibling resources relative to its process directory. */
 export function antigravitySpawnCwd(binary: string, fallback: string): string {
   const separator = Math.max(binary.lastIndexOf("/"), binary.lastIndexOf("\\"));
   return separator >= 0 ? binary.slice(0, separator + 1) : fallback;
