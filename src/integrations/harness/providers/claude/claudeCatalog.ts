@@ -102,48 +102,70 @@ const THINKING: ModelSetting = {
   ],
 };
 
-function contextWindow(defaultValue: "200k" | "1m"): ModelSetting {
-  return {
-    id: "context",
-    label: "Context",
-    kind: "select",
-    value: defaultValue,
-    options: [
-      { value: "200k", label: "200k" },
-      { value: "1m", label: "1M" },
-    ],
-  };
-}
+const CONTEXT_WINDOW: ModelSetting = {
+  id: "context",
+  label: "Context",
+  kind: "select",
+  value: "1m",
+  options: [
+    { value: "200k", label: "200k" },
+    { value: "1m", label: "1M" },
+  ],
+};
 
-/** Fallback catalog when `list_models` is unavailable. */
+/**
+ * Models Claude Code runs with a 1M context window from the bare model id:
+ * `native_1m` in its model catalog in 2.1.280 and 2.1.285. A `[1m]` suffix
+ * changes nothing for them and no model id holds them to 200k, so they offer
+ * no Context choice. Other models run at 200k and offer 1M only when Claude
+ * Code lists their `[1m]` variant.
+ */
+const NATIVE_1M_MODELS = new Set([
+  "claude-fable-5",
+  "claude-fable-5-1",
+  "claude-mythos-5",
+  "claude-mythos-5-1",
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-sonnet-5",
+  "claude-sonnet-5-5",
+]);
+
+/**
+ * Fallback catalog when `list_models` is unavailable. It offers no Context
+ * choice: without a listed `[1m]` variant there is no sign the account can
+ * use 1M.
+ */
 export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
   {
     id: "claude:fable-5",
     harness: "claude",
     name: "Claude Fable 5",
     nativeId: "claude-fable-5",
-    settings: [EFFORT_WITH_XHIGH, contextWindow("1m")],
+    settings: [EFFORT_WITH_XHIGH],
   },
   {
     id: "claude:opus-5",
     harness: "claude",
     name: "Claude Opus 5",
     nativeId: "claude-opus-5",
-    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE],
   },
   {
     id: "claude:opus-5-5",
     harness: "claude",
     name: "Claude Opus 5.5",
     nativeId: "claude-opus-5-5",
-    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE],
   },
   {
     id: "claude:sonnet-5",
     harness: "claude",
     name: "Claude Sonnet 5",
     nativeId: "claude-sonnet-5",
-    settings: [EFFORT_WITH_XHIGH, contextWindow("200k")],
+    settings: [EFFORT_WITH_XHIGH],
   },
   {
     id: "claude:opus-4.8",
@@ -164,14 +186,14 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     harness: "claude",
     name: "Claude Opus 4.6",
     nativeId: "claude-opus-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE, contextWindow("1m")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK, FAST_MODE],
   },
   {
     id: "claude:sonnet-4.6",
     harness: "claude",
     name: "Claude Sonnet 4.6",
     nativeId: "claude-sonnet-4-6",
-    settings: [EFFORT_LOW_TO_ULTRATHINK, contextWindow("200k")],
+    settings: [EFFORT_LOW_TO_ULTRATHINK],
   },
   {
     id: "claude:opus-4.5",
@@ -378,9 +400,12 @@ function modelFromListRow(raw: unknown): AgentModel | null {
   const displayName = stringField(rec, "displayName") ?? "";
   const description = stringField(rec, "description") ?? "";
   const name = pickerName(displayName, description, nativeId, fromResolved.id);
+  const native1m = NATIVE_1M_MODELS.has(
+    (fromResolved.id || nativeId).replace(/-\d{8}$/, ""),
+  );
   const settings = settingsFromListRow(
     rec,
-    fromValue.context1m || fromResolved.context1m,
+    !native1m && (fromValue.context1m || fromResolved.context1m),
   );
 
   return {
@@ -404,7 +429,7 @@ function settingsFromListRow(
     settings.push(THINKING);
   }
   if (rec.supportsFastMode === true) settings.push(FAST_MODE);
-  if (context1m) settings.push(contextWindow("1m"));
+  if (context1m) settings.push(CONTEXT_WINDOW);
   return settings;
 }
 

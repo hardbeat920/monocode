@@ -11,6 +11,7 @@ import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
+import { modelsFromClaudeListModels } from "../../../integrations/harness/providers/claude/claudeCatalog";
 import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
 import "../model/remoteCommands";
 import type {
@@ -615,6 +616,44 @@ it("drops settings from the tab that the host's model does not offer", async () 
     reasoningEffort: "high",
   });
 });
+
+it.each([
+  // Opus 4.6 reaches 1M only through a variant Claude Code lists.
+  ["claude:opus-4-6", "claude-opus-4-6", undefined],
+  ["claude:opus-4-6", "claude-opus-4-6[1m]", "1m"],
+  // Opus 5.5 runs at 1M from its bare id, so there is nothing to choose.
+  ["claude:opus-5-5", "claude-opus-5-5[1m]", undefined],
+])(
+  "sends a saved 1M context for %s listed as %s only when the host offers it",
+  async (model, listed, context) => {
+    providers = ["claude"];
+    catalog = {
+      models: {
+        claude: modelsFromClaudeListModels([
+          {
+            value: listed,
+            resolvedModel: listed.replace("[1m]", ""),
+            displayName: "Opus",
+            supportsEffort: true,
+          },
+        ]),
+      },
+      errors: {},
+    };
+    await render({
+      ...shell(),
+      harness: "claude",
+      model,
+      modelSettings: { effort: "high", context: "1m" },
+    });
+    await send("Use the long context");
+    expect(commands[0]).toMatchObject({ type: "create", model });
+    expect(commands[0]).toHaveProperty(
+      "modelSettings",
+      context ? { effort: "high", context } : { effort: "high" },
+    );
+  },
+);
 
 it("sends a remote plan turn from the plus menu", async () => {
   await render();

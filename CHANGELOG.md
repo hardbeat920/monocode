@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude model picker no longer offers a Context choice that does not change the window. Claude Code runs Fable 5 and 5.1, Opus 4.7 through 5.5, and Sonnet 5 and 5.5 at 1M from the bare model id, so choosing 200k still ran them at 1M. Those models now show no Context choice. Other models, such as Opus 4.6, offer 1M only when Claude Code lists their `[1m]` variant.
+
 ## [0.10.0] - 2026-10-08
 
 ### Added
