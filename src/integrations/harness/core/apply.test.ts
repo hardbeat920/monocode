@@ -83,6 +83,57 @@ describe("background work", () => {
     session = stopStreaming(session);
     expect(session.backgroundTasks).toBeUndefined();
   });
+
+  it("marks each answer the agent yields while the task runs", () => {
+    const answer = (session: Session, text: string) =>
+      applyHarnessEvent(
+        applyHarnessEvent(session, { type: "message.delta", text }),
+        { type: "message.completed" },
+      );
+    const yielded = (session: Session) =>
+      session.blocks
+        .filter((block) => block.yielded)
+        .map((block) => block.text);
+
+    let session = appendUser(newSession("claude", "/tmp"), "build it");
+    session = answer(session, "Still compiling.");
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "background:task",
+      title: "cargo test",
+      kind: "execute",
+      status: "in_progress",
+      background: true,
+    });
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["cargo test"],
+    });
+    // The row for the task sits under the answer; the answer still gets it.
+    expect(yielded(session)).toEqual(["Still compiling."]);
+
+    // The user writes in while the turn waits, and the reply yields again
+    // with no new row under it.
+    session = appendSteerUser(session, "what next?");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: [],
+    });
+    session = answer(session, "Here is the order.");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["cargo test"],
+    });
+    expect(yielded(session)).toEqual([
+      "Still compiling.",
+      "Here is the order.",
+    ]);
+
+    const saved = sanitizeSessionForPersist(session);
+    expect(
+      saved.blocks.filter((block) => block.yielded).map((block) => block.text),
+    ).toEqual(["Still compiling.", "Here is the order."]);
+  });
 });
 
 describe("turn duration", () => {

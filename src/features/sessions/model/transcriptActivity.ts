@@ -1136,18 +1136,20 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
 }
 
 /**
- * Where the fold has to stop: the first group of background rows, which sits
- * right under the message the agent yielded with. The whole turn when there
- * is none.
+ * Where the fold has to stop: the first work after the message the agent
+ * yielded with, either the background rows right under it or, once the user
+ * wrote in while the turn waited, whatever the finished task woke it up to do.
+ * The whole turn when there is none.
  */
 function yieldedAt(items: TurnItem[]): number {
   const index = items.findIndex((item, at) => {
     const before = items[at - 1];
     return (
       item.type === "activity" &&
-      item.blocks.some((block) => !!block.tool?.background) &&
       before?.type === "block" &&
-      isProseBlock(before.block)
+      isProseBlock(before.block) &&
+      (!!before.block.yielded ||
+        item.blocks.some((block) => !!block.tool?.background))
     );
   });
   return index < 0 ? items.length : index;

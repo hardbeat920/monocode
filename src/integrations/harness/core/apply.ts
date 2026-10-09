@@ -149,7 +149,7 @@ export function applyHarnessEvent(
         const { backgroundTasks: _cleared, ...rest } = session;
         return rest;
       }
-      return { ...session, backgroundTasks: event.tasks };
+      return markYieldedAnswer({ ...session, backgroundTasks: event.tasks });
     case "plan":
       return upsertPlan(session, event);
     case "session.error":
@@ -226,6 +226,25 @@ export function applyHarnessEvent(
     default:
       return session;
   }
+}
+
+/**
+ * The agent yielded while background work still runs, so the message it left
+ * off with is its answer. Rows for that work may already sit under it. Marked
+ * here because a later yield on the same task gets no new row to show it, as
+ * when the user writes in while the turn waits.
+ */
+function markYieldedAnswer(session: Session): Session {
+  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
+    const block = session.blocks[index];
+    if (block.tool?.background) continue;
+    if (block.role !== "assistant" || !block.text.trim() || block.yielded)
+      return session;
+    const blocks = session.blocks.slice();
+    blocks[index] = { ...block, yielded: true };
+    return { ...session, blocks };
+  }
+  return session;
 }
 
 function mergeTurnMetrics(
