@@ -443,6 +443,7 @@ function ChangedFiles({
         generateAbortRef.current = null;
         generateReleaseRef.current?.();
         generateReleaseRef.current = null;
+        setGenerating(false);
       }
     },
     [cwd],

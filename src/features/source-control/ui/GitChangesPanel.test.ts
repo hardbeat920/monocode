@@ -193,6 +193,57 @@ describe("GitChangesPanel commit message generation", () => {
     await act(async () => resolveFirst("Old message"));
     expect(container.querySelector("textarea")?.value).toBe("New message");
   });
+
+  it("drops the Cancel state when the repository changes mid-generation", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          {
+            path: "/repo/change.ts",
+            relative: "change.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 0,
+            staged: true,
+            unstaged: false,
+          },
+        ],
+      }),
+    );
+    let resolveFirst!: (message: string) => void;
+    vi.mocked(generateCommitMessage).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    await renderPanel();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Generate commit message"]',
+        )!
+        .click();
+    });
+    const signal = vi.mocked(generateCommitMessage).mock.calls[0]?.[2];
+
+    await renderPanel("/other-repo");
+    expect(signal?.aborted).toBe(true);
+    expect(
+      container.querySelector(
+        '[aria-label="Cancel commit message generation"]',
+      ),
+    ).toBeNull();
+
+    await act(async () => resolveFirst("Old message"));
+    expect(
+      container.querySelector(
+        '[aria-label="Cancel commit message generation"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe("");
+  });
 });
 
 afterEach(() => {
