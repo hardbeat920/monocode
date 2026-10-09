@@ -1,9 +1,10 @@
 import type { Block } from "./session";
 import {
+  groupMonoChatTurns,
   groupMonoTurnItems,
-  groupMonoTurns,
   groupTurnItems,
   groupTurns,
+  monoTurnRuns,
   type TurnItem,
 } from "./transcriptActivity";
 
@@ -24,7 +25,7 @@ export class TranscriptTurnCache {
       return this.turns;
     const previous = new Map(this.turns.map((turn) => [turn[0].id, turn]));
     const grouped = inlineWork
-      ? groupMonoTurns(blocks, managed)
+      ? groupMonoChatTurns(blocks, managed)
       : groupTurns(blocks, managed);
     const next = grouped.map((turn) => {
       const before = previous.get(turn[0].id);
@@ -68,12 +69,20 @@ export class TranscriptTurnCache {
     const key = JSON.stringify([settled, managed, inlineWork, undelivered]);
     const previous = variants?.get(key);
     if (previous) return previous;
-    const blocks = turn.filter(
-      (block) => !block.orchestration && (managed || !block.internal),
-    );
+    const visible = (blocks: Block[]) =>
+      blocks.filter(
+        (block) => !block.orchestration && (managed || !block.internal),
+      );
+    // Each run in a merged Mono turn folds on its own: an earlier answer is
+    // not narration for the work that the next run went on to do.
     const items = inlineWork
-      ? groupMonoTurnItems(blocks, { live: !settled, undeliveredMessageIds })
-      : groupTurnItems(blocks, { settled });
+      ? monoTurnRuns(turn).flatMap((run, index, runs) =>
+          groupMonoTurnItems(visible(run), {
+            live: !settled && index === runs.length - 1,
+            undeliveredMessageIds,
+          }),
+        )
+      : groupTurnItems(visible(turn), { settled });
     if (!variants) {
       variants = new Map();
       this.items.set(turn, variants);

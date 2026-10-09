@@ -15,7 +15,8 @@ export type DevinModeId = "accept-edits" | "smart" | "plan" | "bypass";
 
 /**
  * Devin's ACP server has no "ask before every edit" mode: its most careful
- * coding mode still accepts edits and prompts for commands. Plan intent uses
+ * coding mode still accepts edits and prompts for commands. Supervised adds a
+ * permission rule instead (see `devinAsksBeforeEdits`). Plan intent uses
  * Devin's native plan mode; client-side gating still denies writes.
  */
 export function devinModeId(
@@ -26,6 +27,58 @@ export function devinModeId(
   if (runtimeMode === "full-access") return "bypass";
   if (runtimeMode === "auto") return "smart";
   return "accept-edits";
+}
+
+/**
+ * Supervised children start with an `ask` rule for every write, so workspace
+ * edits reach MonoCode's approval prompt instead of being accepted silently.
+ * The rule is process-wide: changing it restarts the child.
+ */
+export function devinAsksBeforeEdits(runtimeMode: RuntimeMode): boolean {
+  return runtimeMode === "supervised";
+}
+
+export const DEVIN_ASK_EDITS_RULE = "Write(**)";
+
+/**
+ * The user's Devin config with the edit rule added; `--config` replaces the
+ * user config, so their own settings must come along. Throws for anything it
+ * cannot extend: Supervised must not start without the rule. Mirrors
+ * `devin_config.rs` for the headless host.
+ */
+export function devinAskEditsConfig(user: string | null): string {
+  const help = "Supervised mode needs it to make Devin ask before edits.";
+  let config: unknown = {};
+  if (user?.trim()) {
+    try {
+      config = JSON.parse(user);
+    } catch (error) {
+      throw new Error(`Devin's config.json is not valid JSON (${errorDetail(error)}). ${help}`);
+    }
+  }
+  const root = asRecord(config);
+  if (!root || Array.isArray(config)) {
+    throw new Error(`Devin's config.json is not a JSON object. ${help}`);
+  }
+  const permissions = root.permissions ?? {};
+  if (!asRecord(permissions) || Array.isArray(permissions)) {
+    throw new Error(`Devin's config.json \`permissions\` is not an object. ${help}`);
+  }
+  const ask = (permissions as Record<string, unknown>).ask ?? [];
+  if (!Array.isArray(ask)) {
+    throw new Error(`Devin's config.json \`permissions.ask\` is not a list. ${help}`);
+  }
+  return JSON.stringify(
+    {
+      ...root,
+      permissions: {
+        ...(permissions as Record<string, unknown>),
+        ask: ask.includes(DEVIN_ASK_EDITS_RULE) ? ask : [...ask, DEVIN_ASK_EDITS_RULE],
+      },
+    },
+    null,
+    2,
+  );
 }
 
 /**
@@ -47,6 +100,7 @@ export function devinCredentialsCandidates(home: string): string[] {
   const base = home.replace(/[\\/]+$/, "");
   return [
     `${base}/AppData/Roaming/devin/credentials.toml`,
+    `${base}/.local/share/devin/credentials.toml`,
     `${base}/.config/devin/credentials.toml`,
   ];
 }
@@ -113,6 +167,29 @@ export function devinTurnError(error: unknown): Error {
     return new Error("Devin stopped responding before the turn finished.");
   }
   return new Error(detail);
+}
+
+/**
+ * `session/load` failed because Devin no longer has the conversation, the one
+ * case where replacing it with a new session loses nothing.
+ */
+export function devinSessionMissing(error: unknown): boolean {
+  return /session.*not found|not found.*session|no such session|unknown session/i.test(
+    errorDetail(error),
+  );
+}
+
+/** A restore that failed for any other reason; the binding is kept for a retry. */
+export function devinRestoreError(error: unknown): Error {
+  const detail = errorDetail(error);
+  const auth = withAuthHelp(detail);
+  if (auth) return new Error(auth);
+  if (/timed out/i.test(detail)) {
+    return new Error(
+      "Devin timed out restoring the previous conversation. Send again to retry.",
+    );
+  }
+  return new Error(`Devin could not restore the previous conversation. ${detail}`);
 }
 
 function errorDetail(error: unknown): string {

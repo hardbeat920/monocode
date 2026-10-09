@@ -156,7 +156,7 @@ describe("transcript turn cache", () => {
   it("retains hidden completion prompts for identity while respecting managed visibility", () => {
     const cache = new TranscriptTurnCache();
     const blocks: Block[] = [
-      { id: "u", role: "user", text: "Inspect this" },
+      { id: "u", role: "user", text: "Inspect this", startedAt: 0 },
       { id: "a", role: "assistant", text: "Checking" },
       {
         id: "completion",
@@ -164,6 +164,8 @@ describe("transcript turn cache", () => {
         text: "Private completion prompt",
         internal: true,
         appRequestId: "mono-completion-result",
+        // A day later, so the reply opens a turn of its own.
+        startedAt: 24 * 60 * 60 * 1000,
       },
       { id: "reply", role: "assistant", text: "Done" },
     ];
@@ -177,5 +179,41 @@ describe("transcript turn cache", () => {
     });
     expect(managed[0]).toEqual({ type: "block", block: blocks[2] });
     expect(cache.turnItems(turns[1], true, { inlineWork: true })).toBe(visible);
+  });
+  it("keeps each merged Mono run's answer when a later run did more work", () => {
+    const cache = new TranscriptTurnCache();
+    const shell = (id: string): Block => ({
+      id,
+      role: "tool",
+      text: "bash ls",
+      tool: { kind: "shell", title: "bash ls", status: "completed" },
+    });
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: 0 },
+      { id: "welcome", role: "assistant", text: "You're welcome!" },
+      {
+        id: "completion",
+        role: "user",
+        text: "Private completion prompt",
+        internal: true,
+        appRequestId: "mono-completion-review",
+        startedAt: 60_000,
+      },
+      shell("check"),
+      { id: "cancelled", role: "assistant", text: "The review was cancelled." },
+    ];
+    const turns = cache.group(blocks, false, true);
+    expect(turns).toHaveLength(1);
+    for (const settled of [true, false]) {
+      const prose = cache
+        .turnItems(turns[0], settled, { inlineWork: true })
+        .flatMap((item) =>
+          item.type === "block" && item.block.role === "assistant"
+            ? [item.block.id]
+            : [],
+        );
+      expect(prose).toContain("welcome");
+      if (settled) expect(prose).toEqual(["welcome", "cancelled"]);
+    }
   });
 });

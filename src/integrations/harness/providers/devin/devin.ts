@@ -30,6 +30,7 @@ import {
 import { readDevinApiKey } from "./devinAuth";
 import {
   DEVIN_AUTH_HELP,
+  devinAsksBeforeEdits,
   devinAuthenticateParams,
   devinAuthMethodId,
   devinCommandsFromUpdate,
@@ -40,6 +41,8 @@ import {
   devinModeId,
   devinPermissionCommand,
   devinPromptBlocks,
+  devinRestoreError,
+  devinSessionMissing,
   devinSessionTitle,
   devinStartupError,
   devinToolInfo,
@@ -55,6 +58,10 @@ type Live = {
   rpc: JsonRpcClient;
   acpSessionId: string;
   cwd: string;
+  /** Spawned with the Supervised edit-approval rule. */
+  asksBeforeEdits: boolean;
+  /** A saved model Devin no longer lists, reported once. */
+  staleModel?: string;
   configOptions: SessionConfigOption[];
   /** Effort/speed variants behind each grouped picker model. */
   modelFamilies: DevinModelFamily[];
@@ -73,6 +80,15 @@ type Live = {
 
 type Resume = { acpSessionId: string; cwd: string };
 
+/** A child that is still starting; stop and cancel must reach it before it is live. */
+type Startup = {
+  rpc: JsonRpcClient | null;
+  /** Stopped or deleted: tear the child down and never bind it. */
+  stopped: boolean;
+  /** The turn was cancelled: keep the child, skip the prompt. */
+  cancelled: boolean;
+};
+
 const INIT_TIMEOUT_MS = 20_000;
 const AUTH_TIMEOUT_MS = 5 * 60_000;
 const SESSION_TIMEOUT_MS = 45_000;
@@ -89,9 +105,7 @@ export const DEVIN_CLIENT_CAPABILITIES = {
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
-const cancelledThreads = new Set<string>();
-// Threads whose child is still starting; only these record a no-live cancel.
-const startingThreads = new Set<string>();
+const startups = new Map<string, Startup>();
 const commandsByThread = new Map<string, NativeCommand[]>();
 const commandListeners = new Set<(threadId: string, commands: NativeCommand[]) => void>();
 const titleWaiters = new Map<string, Set<(title: string) => void>>();
@@ -119,17 +133,8 @@ async function runTurn(
   input: HarnessSessionInput,
   body: (live: Live) => Promise<void>,
 ): Promise<void> {
-  let live: Live;
-  startingThreads.add(input.sessionId);
-  try {
-    live = await ensureLive(input);
-  } catch (error) {
-    cancelledThreads.delete(input.sessionId);
-    throw error;
-  } finally {
-    startingThreads.delete(input.sessionId);
-  }
-  if (cancelledThreads.delete(input.sessionId)) return;
+  const live = await ensureLive(input);
+  if (!live) return;
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
@@ -173,7 +178,8 @@ export async function cancelDevinTurn(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (!live) {
     // An idle thread has nothing to cancel; a stale marker would drop the next prompt.
-    if (startingThreads.has(sessionId)) cancelledThreads.add(sessionId);
+    const startup = startups.get(sessionId);
+    if (startup) startup.cancelled = true;
     return;
   }
   live.cancelled = true;
@@ -186,7 +192,13 @@ export async function cancelDevinTurn(sessionId: string): Promise<void> {
 }
 
 export async function stopDevinSession(sessionId: string): Promise<void> {
-  cancelledThreads.delete(sessionId);
+  const startup = startups.get(sessionId);
+  if (startup) {
+    startups.delete(sessionId);
+    startup.stopped = true;
+    // Fails the in-flight initialize/authenticate/session request at once.
+    startup.rpc?.close(new Error("Devin session stopped"));
+  }
   const live = liveByThread.get(sessionId);
   liveByThread.delete(sessionId);
   if (live) {
@@ -262,14 +274,25 @@ export async function startDevinAcp(
   childId: string,
   cwd: string,
   rpc: JsonRpcClient,
-  options: { allowBrowser?: boolean } = {},
+  options: { allowBrowser?: boolean; askBeforeEdits?: boolean } = {},
 ): Promise<void> {
   const { path } = await resolveDevinBinary();
   const apiKey = await readDevinApiKey(path);
   if (!apiKey && options.allowBrowser === false) {
     throw new Error(`Devin is not logged in. ${DEVIN_AUTH_HELP}`);
   }
-  await spawnChild(childId, path, ["acp"], cwd, undefined, "devin");
+  // Stopped while the binary and login were being resolved: spawn nothing.
+  if (rpc.isClosed) throw new Error("Devin session stopped");
+  await spawnChild(
+    childId,
+    path,
+    ["acp"],
+    cwd,
+    undefined,
+    "devin",
+    undefined,
+    options.askBeforeEdits,
+  );
   let init: unknown;
   try {
     init = await rpc.request(
@@ -295,19 +318,44 @@ export async function startDevinAcp(
   }
 }
 
-async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+/**
+ * The thread's live child, started when needed. Null when the session was
+ * stopped, deleted or cancelled before the child finished starting.
+ */
+async function ensureLive(input: HarnessSessionInput): Promise<Live | null> {
   const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
+  const sameCwd = existing?.cwd === input.cwd;
+  if (
+    existing &&
+    sameCwd &&
+    existing.asksBeforeEdits === devinAsksBeforeEdits(input.runtimeMode)
+  ) {
     existing.onEvent = input.onEvent;
     existing.runtimeMode = input.runtimeMode;
     existing.planning = input.intent === "plan";
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    // Toggling Supervised restarts the child; session/load resumes the same
+    // conversation. Another directory is another conversation.
+    if (!sameCwd) resumeByThread.delete(input.sessionId);
     await stopDevinSession(input.sessionId);
   }
 
+  const startup: Startup = { rpc: null, stopped: false, cancelled: false };
+  startups.set(input.sessionId, startup);
+  try {
+    const live = await startLive(input, startup);
+    return startup.cancelled ? null : live;
+  } catch (error) {
+    if (startup.stopped) return null;
+    throw error;
+  } finally {
+    if (startups.get(input.sessionId) === startup) startups.delete(input.sessionId);
+  }
+}
+
+async function startLive(input: HarnessSessionInput, startup: Startup): Promise<Live> {
   const resume = resumeByThread.get(input.sessionId);
   const canLoad = resume != null && resume.cwd === input.cwd;
   if (resume && !canLoad) resumeByThread.delete(input.sessionId);
@@ -330,6 +378,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         .catch(() => undefined);
     },
   }, { includeJsonrpc: true, label: "devin" });
+  startup.rpc = rpc;
 
   const emit = (event: HarnessEvent) => {
     (liveRef.current?.onEvent ?? input.onEvent)(event);
@@ -354,7 +403,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   );
 
   try {
-    await startDevinAcp(input.sessionId, input.cwd, rpc);
+    const asksBeforeEdits = devinAsksBeforeEdits(input.runtimeMode);
+    await startDevinAcp(input.sessionId, input.cwd, rpc, {
+      askBeforeEdits: asksBeforeEdits,
+    });
 
     let setup: unknown;
     let acpSessionId: string | undefined;
@@ -371,7 +423,12 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
         didLoad = true;
-      } catch {
+      } catch (error) {
+        // Only a conversation Devin no longer has may be replaced. A timeout
+        // or other failure keeps the binding so the next turn retries it.
+        if (startup.stopped || !devinSessionMissing(error)) {
+          throw devinRestoreError(error);
+        }
         setup = undefined;
       } finally {
         muteGate.current = false;
@@ -397,6 +454,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       }
     }
     if (!acpSessionId) throw new Error("Devin did not return a session id");
+    // Stopped or deleted while starting: a late bind would resurrect it.
+    if (startup.stopped) throw new Error("Devin session stopped");
 
     const live: Live = {
       threadId: input.sessionId,
@@ -404,6 +463,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       rpc,
       acpSessionId,
       cwd: input.cwd,
+      asksBeforeEdits,
       configOptions: readConfigOptions(asRecord(setup)?.configOptions),
       modelFamilies: devinModelFamilies(devinModelChoices(setup)),
       modeId: "",
@@ -425,8 +485,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return live;
   } catch (error) {
     rpc.close(error instanceof Error ? error : new Error(String(error)));
-    unwatchChild(input.sessionId);
-    await killChild(input.sessionId).catch(() => undefined);
+    // Children are keyed by thread: once stopped, a newer start may own the id.
+    const superseded =
+      startup.stopped &&
+      (startups.has(input.sessionId) || liveByThread.has(input.sessionId));
+    if (!superseded) {
+      unwatchChild(input.sessionId);
+      await killChild(input.sessionId).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -440,7 +506,22 @@ async function applyModelSelection(
     nativeModelId(input.model).trim(),
     input.modelSettings,
   );
-  if (modelId && modelId !== "default") await setConfigOption(live, "model", modelId);
+  const offered = live.modelFamilies.some((family) =>
+    family.variants.some((variant) => variant.value === modelId),
+  );
+  if (modelId && modelId !== "default") {
+    // Devin rejects ids it no longer lists (CLI updates rename models), which
+    // would fail every turn of a session saved before the update.
+    if (offered || live.modelFamilies.length === 0) {
+      await setConfigOption(live, "model", modelId);
+    } else if (live.staleModel !== modelId) {
+      live.staleModel = modelId;
+      live.onEvent({
+        type: "status",
+        text: `Devin no longer offers the model "${modelId}"; using its current model. Pick another model to change it.`,
+      });
+    }
+  }
   for (const [settingId, value] of Object.entries(input.modelSettings ?? {})) {
     // Effort and speed already picked the model variant above.
     if (settingId === "effort" || settingId === "fast") continue;

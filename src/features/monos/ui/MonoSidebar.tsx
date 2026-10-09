@@ -5,6 +5,7 @@ import { PanelRightToggle } from "../../../shared/ui/icons";
 
 const MIN_WIDTH = 340;
 let rememberedWidth = MIN_WIDTH;
+let rememberedArtifactWidth = 560;
 
 /** The shared frame for a Mono's details and turn sidebars. */
 export function MonoSidebar({
@@ -16,20 +17,26 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity" | "sessions";
+  kind: "details" | "activity" | "sessions" | "artifact" | "changes";
   label: string;
   color: string;
   windowControls?: ReactNode;
   children: ReactNode;
 }) {
+  // Readers (documents, diffs) need room; the turn sidebars stay narrow.
+  const reader = kind === "artifact" || kind === "changes";
   const resize = useDragResize({
-    min: MIN_WIDTH,
-    max: () => Math.min(440, Math.round(window.innerWidth * 0.4)),
-    defaultWidth: MIN_WIDTH,
-    initial: rememberedWidth,
+    min: reader ? 360 : MIN_WIDTH,
+    max: () =>
+      reader
+        ? Math.min(840, Math.round(window.innerWidth * 0.58))
+        : Math.min(440, Math.round(window.innerWidth * 0.4)),
+    defaultWidth: reader ? 560 : MIN_WIDTH,
+    initial: reader ? rememberedArtifactWidth : rememberedWidth,
     direction: "left",
     onCommit: (width) => {
-      rememberedWidth = width;
+      if (reader) rememberedArtifactWidth = width;
+      else rememberedWidth = width;
     },
   });
   return (
@@ -41,6 +48,8 @@ export function MonoSidebar({
       data-mono-details={kind === "details" ? "" : undefined}
       data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
+      data-mono-artifact={kind === "artifact" ? "" : undefined}
+      data-mono-changes={kind === "changes" ? "" : undefined}
       data-open={open}
       style={
         {
@@ -70,10 +79,15 @@ export function MonoSidebar({
 
 export function MonoSidebarHeader({
   title,
+  heading,
   onClose,
+  actions,
 }: {
   title: string;
+  /** Richer content in place of the plain title text. */
+  heading?: ReactNode;
   onClose: () => void;
+  actions?: ReactNode;
 }) {
   return (
     <header
@@ -82,9 +96,10 @@ export function MonoSidebarHeader({
       data-tauri-drag-region="deep"
     >
       <h3 className="flex min-w-0 flex-1 items-center pl-4 text-[13px] font-medium text-content">
-        {title}
+        {heading ?? title}
       </h3>
       <div className="flex shrink-0 items-center gap-0.5 px-3">
+        {actions}
         <IconButton
           label={`Hide ${title.toLowerCase()}`}
           active

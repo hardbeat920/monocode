@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 const textFiles = new Map<string, string>();
+const children = { spawned: 0, killed: 0, askEdits: [] as boolean[] };
 
 vi.mock("../../core/child", () => ({
   resolveDevinBinary: async () => ({ path: "/fake/devin" }),
-  spawnChild: async () => undefined,
-  killChild: async () => undefined,
+  spawnChild: async (...args: unknown[]) => {
+    children.spawned += 1;
+    children.askEdits.push(args[7] === true);
+  },
+  killChild: async () => {
+    children.killed += 1;
+  },
   unwatchChild: () => undefined,
   watchChild: (_id: string, line: (value: string) => void) => {
     onLine = line;
@@ -16,7 +22,7 @@ vi.mock("../../core/child", () => ({
     sent.push(line);
   },
   execChild: async () =>
-    "Logged in.\n  Credentials path: /home/me/.config/devin/credentials.toml\n",
+    "Logged in.\n  Credentials path: /home/me/.local/share/devin/credentials.toml\n",
   readHarnessTextFile: async (path: string) => {
     const content = textFiles.get(path);
     if (content == null) throw new Error(`missing ${path}`);
@@ -34,6 +40,7 @@ const {
   forgetDevinSession,
   respondDevinApproval,
   sendDevinTurn,
+  stopDevinSession,
   waitForDevinSessionTitle,
 } = await import("./devin");
 const { resetDevinAuthCache } = await import("./devinAuth");
@@ -103,11 +110,61 @@ describe("Devin live ACP sequence", () => {
     textFiles.clear();
     resetDevinAuthCache();
     await forgetDevinSession("devin-thread");
+    children.spawned = 0;
+    children.killed = 0;
+    children.askEdits.length = 0;
+  });
+
+  it("makes a Supervised child ask before edits and restarts it to leave", async () => {
+    const supervised = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "supervised",
+      text: "edit a file",
+      onEvent: () => undefined,
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await supervised;
+    expect(children.askEdits).toEqual([true]);
+
+    // Same mode: the child is reused.
+    sent.length = 0;
+    const again = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "supervised",
+      text: "again",
+      onEvent: () => undefined,
+    });
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await again;
+    expect(children.spawned).toBe(1);
+
+    // Leaving Supervised drops the rule and resumes the same conversation.
+    sent.length = 0;
+    const auto = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "go",
+      onEvent: () => undefined,
+    });
+    await startSession(true);
+    expect(request("session/load")!.params.sessionId).toBe("devin-1");
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await auto;
+    expect(children.askEdits).toEqual([true, false]);
   });
 
   it("reuses the CLI login, picks model and mode, and prompts", async () => {
     textFiles.set(
-      "/home/me/.config/devin/credentials.toml",
+      "/home/me/.local/share/devin/credentials.toml",
       'windsurf_api_key = "devin-key"\n',
     );
     const events: HarnessEvent[] = [];
@@ -149,6 +206,26 @@ describe("Devin live ACP sequence", () => {
     });
     expect(events).toContainEqual({ type: "message.delta", text: "hi there" });
     expect(events.some((event) => event.type === "session.error")).toBe(false);
+  });
+
+  it("keeps Devin's model when a saved one is no longer offered", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:swe-1-7-lightning",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: (event) => events.push(event),
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+    expect(request("session/set_config_option")).toBeUndefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "status", text: expect.stringContaining("swe-1-7-lightning") }),
+    );
   });
 
   it("answers string-id permission requests with the user's decision", async () => {
@@ -362,6 +439,161 @@ describe("Devin live ACP sequence", () => {
     expect(events.some((event) => event.type === "status")).toBe(true);
     reply(request("session/prompt")!.id, { stopReason: "end_turn" });
     await turn;
+  });
+
+  it("stops a child that is still starting without binding it", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(() => !!request("initialize"), "initialize");
+    await stopDevinSession("devin-thread");
+    // The pending initialize is failed at once instead of waiting it out.
+    await turn;
+    expect(children.killed).toBeGreaterThan(0);
+    expect(request("authenticate")).toBeUndefined();
+    expect(request("session/new")).toBeUndefined();
+    expect(events.some((event) => event.type === "session.providerBound")).toBe(false);
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+  });
+
+  it("spawns nothing when stopped before the child exists", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => undefined,
+    });
+    await stopDevinSession("devin-thread");
+    await turn;
+    expect(children.spawned).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not resurrect a session deleted mid-startup", async () => {
+    bindDevinSession("devin-thread", "devin-1", "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: (event) => events.push(event),
+    });
+    await answer("initialize", { protocolVersion: 1, authMethods: [{ id: "devin-browser" }] });
+    await answer("authenticate", {});
+    await waitFor(() => !!request("session/load"), "session/load");
+    await forgetDevinSession("devin-thread");
+    reply(request("session/load")!.id, { configOptions: CONFIG });
+    await turn;
+    expect(events.some((event) => event.type === "session.providerBound")).toBe(false);
+
+    // The deleted binding stays gone: the next turn starts fresh.
+    sent.length = 0;
+    const next = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "again",
+      onEvent: () => undefined,
+    });
+    await startSession();
+    expect(request("session/load")).toBeUndefined();
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await next;
+  });
+
+  it("keeps the binding when session/load fails for another reason", async () => {
+    bindDevinSession("devin-thread", "devin-1", "/repo");
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "continue",
+      onEvent: (event) => events.push(event),
+    });
+    await answer("initialize", { protocolVersion: 1, authMethods: [{ id: "devin-browser" }] });
+    await answer("authenticate", {});
+    await waitFor(() => !!request("session/load"), "session/load");
+    onLine!(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: request("session/load")!.id,
+        error: { code: -32603, message: "Internal error: database is locked" },
+      }),
+    );
+    await expect(turn).rejects.toThrow(/could not restore.*database is locked/);
+    expect(request("session/new")).toBeUndefined();
+    expect(events.some((event) => event.type === "session.providerBound")).toBe(false);
+
+    // The next turn retries the same conversation.
+    sent.length = 0;
+    const retry = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "continue",
+      onEvent: () => undefined,
+    });
+    await startSession(true);
+    expect(request("session/load")!.params.sessionId).toBe("devin-1");
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await retry;
+  });
+
+  it("keeps the binding when session/load times out", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bindDevinSession("devin-thread", "devin-1", "/repo");
+      const events: HarnessEvent[] = [];
+      const turn = sendDevinTurn({
+        sessionId: "devin-thread",
+        cwd: "/repo",
+        model: "devin:glm-5-2",
+        runtimeMode: "auto",
+        text: "continue",
+        onEvent: (event) => events.push(event),
+      });
+      const failed = expect(turn).rejects.toThrow(/timed out restoring/);
+      await answer("initialize", { protocolVersion: 1, authMethods: [{ id: "devin-browser" }] });
+      await answer("authenticate", {});
+      await waitFor(() => !!request("session/load"), "session/load");
+      await vi.advanceTimersByTimeAsync(60_000);
+      await failed;
+      expect(request("session/new")).toBeUndefined();
+      expect(events.some((event) => event.type === "session.providerBound")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    sent.length = 0;
+    const retry = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      runtimeMode: "auto",
+      text: "continue",
+      onEvent: () => undefined,
+    });
+    await startSession(true);
+    expect(request("session/load")!.params.sessionId).toBe("devin-1");
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await retry;
   });
 
   it("cancels a permission request that arrives between turns", async () => {

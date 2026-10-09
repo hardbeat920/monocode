@@ -158,21 +158,29 @@ export function buildTurnStartParams(input: {
           input.controlsAgents,
         )
       : runtimeConfig;
+  // settings.model is a required string. Null is rejected
+  // ("invalid type: null, expected a string") and omitting it is
+  // "missing field `model`". Skip the override until a model is known
+  // so Codex keeps the one it chose when the thread started.
+  const model = input.model?.trim() ?? "";
+  const collaborationMode = model
+    ? {
+        mode: input.intent === "plan" ? "plan" : "default",
+        settings: {
+          model,
+          reasoning_effort: input.effort ?? null,
+          developer_instructions: null,
+        },
+      }
+    : undefined;
   return {
     threadId: input.threadId,
     input: codexInput(input.prompt, input.attachments),
     approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: config.sandboxPolicy,
-    collaborationMode: {
-      mode: input.intent === "plan" ? "plan" : "default",
-      settings: {
-        model: input.model ?? null,
-        reasoning_effort: input.effort ?? null,
-        developer_instructions: null,
-      },
-    },
-    ...(input.model ? { model: input.model } : {}),
+    ...(collaborationMode ? { collaborationMode } : {}),
+    ...(model ? { model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.serviceTier && input.serviceTier !== "default"
       ? { serviceTier: input.serviceTier }

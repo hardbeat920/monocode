@@ -9,6 +9,7 @@ import {
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
+  groupMonoChatTurns,
   groupMonoTurnItems,
   groupMonoTurns,
   groupTurnItems,
@@ -16,6 +17,7 @@ import {
   hasRunningSubagent,
   initialThinkingIndex,
   lastActivityIndex,
+  monoTurnRuns,
   nestedScrollAbsorbsWheel,
   proseSummary,
   resolveToolCallDisplay,
@@ -108,6 +110,76 @@ function irc(id: string, text = "new message in #general"): Block {
     interjection: { customType: "irc:incoming" },
   };
 }
+
+describe("groupMonoChatTurns", () => {
+  const minute = 60 * 1000;
+  const at = new Date(2026, 9, 7, 11, 0).getTime();
+  const completion = (id: string, startedAt: number): Block => ({
+    id,
+    role: "user",
+    text: "{}",
+    internal: true,
+    appRequestId: `mono-completion-${id}`,
+    sentAt: startedAt,
+    startedAt,
+    durationMs: 25_000,
+  });
+
+  it("continues the message above with a reply the Mono sends on its own", () => {
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: at },
+      note("welcome", "You're welcome!"),
+      completion("review", at + 3 * minute),
+      note("cancelled", "The review was cancelled."),
+      completion("tests", at + 5 * minute),
+      note("tests-done", "Tests passed."),
+    ];
+    const turns = groupMonoChatTurns(blocks);
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["thanks", "welcome", "review", "cancelled", "tests", "tests-done"],
+    ]);
+    expect(
+      monoTurnRuns(turns[0]).map((run) => run.map((block) => block.id)),
+    ).toEqual([
+      ["thanks", "welcome"],
+      ["review", "cancelled"],
+      ["tests", "tests-done"],
+    ]);
+  });
+
+  it("starts a new message where the transcript marks a new stretch", () => {
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: at },
+      note("welcome", "You're welcome!"),
+      completion("review", at + 90 * minute),
+      note("cancelled", "The review was cancelled."),
+    ];
+    expect(groupMonoChatTurns(blocks)).toHaveLength(2);
+  });
+
+  it("keeps the user's own messages and habit reports as their own turns", () => {
+    const blocks: Block[] = [
+      { id: "first", role: "user", text: "First", startedAt: at },
+      note("first-answer", "Done."),
+      { id: "second", role: "user", text: "Second", startedAt: at + minute },
+      note("second-answer", "Done."),
+      {
+        id: "habit",
+        role: "assistant",
+        text: "Morning report",
+        monoHabit: { id: "h", name: "Morning", at: at + 2 * minute },
+      },
+      completion("review", at + 3 * minute),
+      note("cancelled", "The review was cancelled."),
+    ];
+    expect(groupMonoChatTurns(blocks).map((turn) => turn[0].id)).toEqual([
+      "first",
+      "second",
+      "habit",
+      "review",
+    ]);
+  });
+});
 
 describe("groupMonoTurnItems", () => {
   it("keeps a queued message promoted to a new turn separate and hides its process", () => {

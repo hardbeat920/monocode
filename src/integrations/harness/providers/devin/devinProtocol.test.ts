@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEVIN_ASK_EDITS_RULE,
   DEVIN_AUTH_HELP,
   devinApiKeyFromCredentials,
+  devinAskEditsConfig,
+  devinAsksBeforeEdits,
   devinAuthenticateParams,
   devinAuthMethodId,
   devinCommandsFromUpdate,
@@ -12,6 +15,8 @@ import {
   devinModelFamilies,
   devinModelValue,
   devinPermissionCommand,
+  devinRestoreError,
+  devinSessionMissing,
   devinSessionTitle,
   devinStartupError,
   devinTurnError,
@@ -56,8 +61,47 @@ describe("devin auth helpers", () => {
     ).toBe("devin-key");
     expect(devinCredentialsCandidates("C:\\Users\\me\\")).toEqual([
       "C:\\Users\\me/AppData/Roaming/devin/credentials.toml",
+      "C:\\Users\\me/.local/share/devin/credentials.toml",
       "C:\\Users\\me/.config/devin/credentials.toml",
     ]);
+    // Current CLIs log in to the XDG data directory on macOS and Linux.
+    expect(devinCredentialsCandidates("/home/me")).toContain(
+      "/home/me/.local/share/devin/credentials.toml",
+    );
+  });
+
+  it("adds the Supervised edit rule without dropping the user's config", () => {
+    expect(devinAsksBeforeEdits("supervised")).toBe(true);
+    expect(devinAsksBeforeEdits("auto-accept-edits")).toBe(false);
+    const merged = JSON.parse(
+      devinAskEditsConfig(
+        '{"theme_mode":"dark","permissions":{"allow":["Exec(python3)"],"ask":["exec"]}}',
+      ),
+    );
+    expect(merged.theme_mode).toBe("dark");
+    expect(merged.permissions).toEqual({
+      allow: ["Exec(python3)"],
+      ask: ["exec", DEVIN_ASK_EDITS_RULE],
+    });
+    expect(JSON.parse(devinAskEditsConfig(null)).permissions.ask).toEqual([
+      DEVIN_ASK_EDITS_RULE,
+    ]);
+    expect(
+      JSON.parse(devinAskEditsConfig(JSON.stringify(merged))).permissions.ask,
+    ).toEqual(["exec", DEVIN_ASK_EDITS_RULE]);
+    // Fails closed rather than starting Supervised without the rule.
+    expect(() => devinAskEditsConfig("{ // comment\n}")).toThrow(/not valid JSON/);
+    expect(() => devinAskEditsConfig("[]")).toThrow(/not a JSON object/);
+    expect(() => devinAskEditsConfig('{"permissions":{"ask":"x"}}')).toThrow(/not a list/);
+  });
+
+  it("only treats a vanished conversation as safe to replace", () => {
+    expect(devinSessionMissing(new Error("Session not found"))).toBe(true);
+    expect(devinSessionMissing(new Error("Method not found"))).toBe(false);
+    expect(devinSessionMissing(new Error("devin request timed out"))).toBe(false);
+    expect(devinRestoreError(new Error("session/load timed out")).message).toMatch(
+      /timed out restoring/,
+    );
   });
 
   it("extracts the stored API key without other fields", () => {

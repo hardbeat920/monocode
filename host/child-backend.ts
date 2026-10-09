@@ -5,11 +5,14 @@ import {
 } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { ChildBackend } from "../src/integrations/harness/core/child";
+import { devinAskEditsConfig } from "../src/integrations/harness/providers/devin/devinProtocol";
 import {
   isRemoteProvider,
   type RemoteProvider,
@@ -17,16 +20,71 @@ import {
 import { providerLaunch, resolveProvider } from "./process";
 
 const exec = promisify(execFile);
-const ALLOWED_EXEC_ARGS = new Set([
-  "--version",
-  "--list-models",
-  "models --verbose",
-  "models --json",
-  "models",
-  "status --json",
-  "agent list",
-  "auth status",
-]);
+const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["--version"],
+  ["--list-models"],
+  ["models", "--verbose"],
+  ["models", "--json"],
+  ["models"],
+  ["status", "--json"],
+  ["agent", "list"],
+];
+// OpenCode 2.x runs as a background service; other providers' CLIs may give
+// these subcommands unrelated meanings, so they stay OpenCode-only.
+const OPENCODE_EXEC_ARGS: readonly (readonly string[])[] = [
+  ["service", "status"],
+  ["service", "start"],
+  ["service", "get", "password"],
+];
+// Devin reads its login location from `auth status`.
+const DEVIN_EXEC_ARGS: readonly (readonly string[])[] = [["auth", "status"]];
+
+function execArgsAllowed(provider: RemoteProvider, args: string[]): boolean {
+  const matches = (allowed: readonly string[]) =>
+    allowed.length === args.length &&
+    allowed.every((arg, index) => arg === args[index]);
+  return (
+    ALLOWED_EXEC_ARGS.some(matches) ||
+    (provider === "opencode" && OPENCODE_EXEC_ARGS.some(matches)) ||
+    (provider === "devin" && DEVIN_EXEC_ARGS.some(matches)) ||
+    (provider === "grok" &&
+      args.length === 4 &&
+      args[0] === "--no-auto-update" &&
+      args[1] === "sessions" &&
+      args[2] === "delete" &&
+      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(args[3]))
+  );
+}
+
+/** The user config file Devin itself reads. */
+function devinUserConfigPath(): string {
+  if (process.platform === "win32")
+    return join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "devin", "config.json");
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "devin", "config.json");
+}
+
+/**
+ * Supervised `devin acp` runs with a copy of the user's config plus an ask
+ * rule for every write (see devin_config.rs). Named by content so a running
+ * child's file is never rewritten.
+ */
+async function devinAskEditsArgs(): Promise<string[]> {
+  let user: string | null = null;
+  try {
+    user = await readFile(devinUserConfigPath(), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const config = devinAskEditsConfig(user);
+  const dir = join(homedir(), ".monocode-host", "devin");
+  const hash = createHash("sha256").update(config).digest("hex").slice(0, 16);
+  const file = join(dir, `supervised-${hash}.json`);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await writeFile(file, config, { mode: 0o600, flag: "wx" }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  });
+  return ["--config", file];
+}
 
 function loopbackUrl(value: unknown): string {
   const url = new URL(String(value));
@@ -98,7 +156,7 @@ export class HostChildBackend implements ChildBackend {
           args.command !== commandPath ||
           !Array.isArray(args.args) ||
           !args.args.every((arg) => typeof arg === "string") ||
-          !ALLOWED_EXEC_ARGS.has(args.args.join(" "))
+          !execArgsAllowed(provider, args.args as string[])
         )
           throw new Error("Unsupported headless catalog command");
         const launch = await providerLaunch(commandPath, args.args as string[]);
@@ -272,10 +330,18 @@ export class HostChildBackend implements ChildBackend {
       throw new Error(
         "Named provider accounts are not supported by this host yet",
       );
-    const launch = await providerLaunch(
-      String(args.command),
-      args.args as string[],
-    );
+    let commandArgs = args.args as string[];
+    if (args.devinAskEdits) {
+      if (
+        args.binaryProvider !== "devin" ||
+        commandArgs.length !== 1 ||
+        commandArgs[0] !== "acp"
+      )
+        throw new Error("Edit approvals are only supported for `devin acp`");
+      // `--config` is a global option, so it precedes the subcommand.
+      commandArgs = [...(await devinAskEditsArgs()), ...commandArgs];
+    }
+    const launch = await providerLaunch(String(args.command), commandArgs);
     if (this.closing) throw new Error("Host is stopping");
     const child = spawn(
       process.execPath,

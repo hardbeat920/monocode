@@ -104,7 +104,7 @@ it("gives a standalone habit report its mascot, name, posting time and response 
 });
 
 it.each(["current", "older"])(
-  "shows a delivered completion report as a separate Mono reply in %s saved chats",
+  "continues the Mono's reply with a delivered completion report in %s saved chats",
   async (version) => {
     let session = appendUser(newSession("codex", "/tmp"), "Review the API");
     session = applyHarnessEvent(session, {
@@ -145,23 +145,24 @@ it.each(["current", "older"])(
     }
     render(sanitizeSessionForPersist(session).blocks);
     const turns = container.querySelectorAll("[data-transcript-turn]");
-    expect(turns).toHaveLength(2);
+    expect(turns).toHaveLength(1);
     expect(turns[0].textContent).toContain("I have started the review.");
-    expect(turns[0].textContent).not.toContain("The API fix");
-    expect(turns[1].textContent).toContain("The API fix passed all tests.");
-    expect(turns[1].textContent).toContain("Captain Awesome");
+    expect(turns[0].textContent).toContain("The API fix passed all tests.");
+    expect(
+      turns[0].querySelectorAll("[data-mono-work]"),
+    ).toHaveLength(1);
     expect(container.textContent).not.toContain(notification.text);
     expect(session.queuedMessages).toBeUndefined();
     expect(
       container.querySelectorAll('[aria-label="Copy response"]'),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     await act(async () => {
-      turns[1]
+      turns[0]
         .querySelector<HTMLButtonElement>('[aria-label="Copy response"]')!
         .click();
     });
     expect(copyMessage).toHaveBeenCalledWith(
-      "The API fix passed all tests.",
+      expect.stringContaining("The API fix passed all tests."),
       undefined,
     );
   },
@@ -209,9 +210,8 @@ it.each(["current", "older"])(
       expect(previousTurn.querySelector('[aria-label="Copy response"]')).toBe(
         actions,
       );
-      expect(previousTurn.textContent).toContain(
-        "Captain Awesome worked for 20s",
-      );
+      expect(previousTurn.textContent).toContain("Captain Awesome");
+      expect(previousTurn.textContent).not.toContain("worked for");
     };
     const notification = monoSessionCompletionMessage({
       requestId: "review",

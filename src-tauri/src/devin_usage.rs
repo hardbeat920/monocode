@@ -150,19 +150,46 @@ struct Credentials {
     api_server: String,
 }
 
-/// Where `devin auth login` keeps credentials.toml on each platform.
 fn credentials_candidates() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    #[cfg(windows)]
-    if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
-        paths.push(app_data.join("devin").join("credentials.toml"));
+    let env = |key: &str| {
+        std::env::var_os(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    candidate_paths(
+        cfg!(windows),
+        env("APPDATA"),
+        env("XDG_DATA_HOME"),
+        env("XDG_CONFIG_HOME"),
+        dirs_home().map(PathBuf::from),
+    )
+}
+
+/// Where `devin auth login` keeps credentials.toml: `%APPDATA%\devin` on
+/// Windows, the XDG data directory (`~/.local/share/devin`) elsewhere. The
+/// config directory is read last for logins made by older CLIs.
+fn candidate_paths(
+    windows: bool,
+    app_data: Option<PathBuf>,
+    xdg_data: Option<PathBuf>,
+    xdg_config: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let file = |dir: PathBuf| dir.join("devin").join("credentials.toml");
+    let mut dirs = Vec::new();
+    if windows {
+        dirs.extend(app_data);
+    } else {
+        dirs.extend(xdg_data);
+        dirs.extend(home.as_ref().map(|home| home.join(".local").join("share")));
+        dirs.extend(xdg_config);
     }
-    #[cfg(not(windows))]
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
-        paths.push(PathBuf::from(xdg).join("devin").join("credentials.toml"));
-    }
-    if let Some(home) = dirs_home().map(PathBuf::from) {
-        paths.push(home.join(".config").join("devin").join("credentials.toml"));
+    dirs.extend(home.map(|home| home.join(".config")));
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for path in dirs.into_iter().map(file) {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
     }
     paths
 }
@@ -344,6 +371,35 @@ mod tests {
         .unwrap();
         assert_eq!(plain.api_server, DEFAULT_API_SERVER);
         assert!(parse_credentials("api_server_url = \"https://x\"\n").is_none());
+    }
+
+    #[test]
+    fn unix_credentials_live_in_the_xdg_data_directory() {
+        let home = PathBuf::from("/home/me");
+        let file = |dir: &str| PathBuf::from(dir).join("devin").join("credentials.toml");
+        assert_eq!(
+            candidate_paths(false, None, None, None, Some(home.clone())),
+            vec![file("/home/me/.local/share"), file("/home/me/.config")]
+        );
+        assert_eq!(
+            candidate_paths(
+                false,
+                None,
+                Some("/data".into()),
+                Some("/cfg".into()),
+                Some(home.clone())
+            ),
+            vec![
+                file("/data"),
+                file("/home/me/.local/share"),
+                file("/cfg"),
+                file("/home/me/.config"),
+            ]
+        );
+        assert_eq!(
+            candidate_paths(true, Some("/appdata".into()), None, None, Some(home)),
+            vec![file("/appdata"), file("/home/me/.config")]
+        );
     }
 
     #[test]
