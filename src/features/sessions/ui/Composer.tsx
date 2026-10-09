@@ -143,6 +143,7 @@ import {
 import { resolveTabGroupLogo } from "../../workspace/model/tabGroups";
 import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "../../../shared/ui/Popover";
+import { useT } from "../../../shared/hooks/useI18n";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import { consumePlanCommand, PLAN_COMMAND } from "../model/plan";
 import {
@@ -407,6 +408,7 @@ export function Composer({
   onEditingLastTurnChange,
   children,
 }: Props) {
+  const t = useT();
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
@@ -1920,7 +1922,7 @@ export function Composer({
         >
           {fileDrag ? (
             <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
-              Drop files to attach
+              {t("Drop files to attach")}
             </div>
           ) : null}
           {hideTopBar ? null : (
@@ -2061,17 +2063,15 @@ export function Composer({
               defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
-                  ? "Select a branch or worktree to continue…"
+                  ? t("Select a branch or worktree to continue…")
                   : inboxCard
-                    ? "Add a note, or send to start…"
+                    ? t("Add a note, or send to start…")
                     : noteCard
-                      ? "Add a message, or send…"
+                      ? t("Add a message, or send…")
                       : handoffCard
-                        ? "Add context, or send to continue…"
+                        ? t("Add context, or send to continue…")
                         : (placeholder ??
-                          (shell
-                            ? "Ask, build, / for commands, @ for references... "
-                            : "Ask, build, / for commands, @ for references... "))
+                          t("Ask, build, / for commands, @ for references... "))
               }
               aria-label={inputAriaLabel}
               disabled={disabled}
@@ -2135,7 +2135,7 @@ export function Composer({
                   className="p-1.5"
                 >
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-content/40">
-                    Add to message
+                    {t("Add to message")}
                   </p>
                   <button
                     type="button"
@@ -2149,13 +2149,15 @@ export function Composer({
                   >
                     <FilePlus className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
-                      <span className="block text-[13px]">Upload file</span>
+                      <span className="block text-[13px]">{t("Upload file")}</span>
                       <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
                         {attachmentsSupported
-                          ? "Attach files or images"
+                          ? t("Attach files or images")
                           : remote && !remoteFeatures?.attachments
                             ? "Update this machine’s host to attach files"
-                            : `${HARNESS_TITLE[harness]} does not support attachments`}
+                            : t("{name} does not support attachments", {
+                                name: HARNESS_TITLE[harness],
+                              })}
                       </span>
                     </span>
                   </button>
@@ -2177,9 +2179,11 @@ export function Composer({
                     >
                       <AiIdea className="mt-0.5 size-4 shrink-0 text-yellow-300/80" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px]">Plan mode</span>
+                        <span className="block text-[13px]">
+                          {t("Plan mode")}
+                        </span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Review a plan before building
+                          {t("Review a plan before building")}
                         </span>
                       </span>
                       {planActive ? (
@@ -2238,13 +2242,13 @@ export function Composer({
                       <Share className="mt-0.5 size-4 shrink-0 text-fuchsia-300/65" />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5">
-                          <span className="text-[13px]">Orchestrator</span>
+                          <span className="text-[13px]">{t("Orchestrator")}</span>
                           <span className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[9px] font-medium leading-none tracking-wide text-fuchsia-200/55 mb-px">
                             v1
                           </span>
                         </span>
                         <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-content/45">
-                          Plan and coordinate agent work
+                          {t("Plan and coordinate agent work")}
                         </span>
                       </span>
                       {orchestrationActive && (
@@ -2395,7 +2399,7 @@ export function Composer({
                 disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}
-                label={draftActive ? "Save draft" : "Send"}
+                label={draftActive ? t("Save draft") : t("Send")}
                 onSend={() => submit(ref.current?.value ?? "")}
                 onStop={() => onStop?.()}
               />
@@ -2541,6 +2545,7 @@ export function ComposerAction({
   onSend: () => void;
   onStop: () => void;
 }) {
+  const t = useT();
   if (disabled) {
     return (
       <button
@@ -2568,8 +2573,8 @@ export function ComposerAction({
     ) : (
       <button
         type="button"
-        title="Stop"
-        aria-label="Stop"
+        title={t("Stop")}
+        aria-label={t("Stop")}
         onClick={onStop}
         className="grid size-6.5 place-items-center rounded-md bg-white text-black hover:bg-white/90"
       >
