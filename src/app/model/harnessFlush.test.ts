@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { newSession } from "../../features/sessions/model/session";
+import { applyHarnessEvents } from "../../integrations/harness/core/apply";
 import type { HarnessEvent } from "../../integrations/harness/core/types";
 import {
   cancelScheduledFlush,
@@ -195,4 +197,28 @@ describe("harness event queue", () => {
     queue.flush();
     expect([...apply.mock.calls[0][0].keys()]).toEqual(["front", "back"]);
   });
+});
+
+it("applies a wake queued during a checkpoint before finalization resumes", async () => {
+  let session = newSession("pi", "/repo");
+  const queue = new HarnessEventQueue(
+    () => false,
+    (batches) => {
+      session = applyHarnessEvents(session, batches.get(session.id) ?? []);
+    },
+  );
+  let finish!: () => void;
+  const checkpoint = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const flushed = queue.flushAfter(checkpoint);
+  queue.enqueue(session.id, { type: "turn.activity", active: true });
+  queue.enqueue(session.id, { type: "message.delta", text: "New run" });
+  expect(session.providerActive).toBeUndefined();
+  finish();
+  await flushed;
+  expect(session.providerActive).toBe(true);
+  expect(session.busy).toBe(true);
+  expect(session.blocks.at(-1)?.text).toBe("New run");
+  expect(vi.getTimerCount()).toBe(0);
 });

@@ -6,7 +6,9 @@ import {
 import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 import { join } from "node:path";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, mkdir, writeFile, rename, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { ChildBackend } from "../src/integrations/harness/core/child";
@@ -188,6 +190,21 @@ export class HostChildBackend implements ChildBackend {
         if (bytes.includes(0))
           throw new Error("Binary file is not readable as text");
         return new TextDecoder("utf-8", { fatal: true }).decode(bytes) as T;
+      }
+      case "harness_prepare_pi_bridge": {
+        const source = args.source;
+        if (typeof source !== "string" || !source || Buffer.byteLength(source) > 65536)
+          throw new Error("Invalid Pi bridge source");
+        const dir = join(homedir(), ".cache", "monocode", "pi-bridge");
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        const path = join(dir, createHash("sha256").update(source).digest("hex") + ".mjs");
+        try { if (await readFile(path, "utf8") === source) return path as T; } catch {}
+        const temporary = join(dir, randomUUID() + ".tmp");
+        try {
+          await writeFile(temporary, source, { mode: 0o600, flag: "wx" });
+          await rename(temporary, path);
+        } finally { await rm(temporary, { force: true }); }
+        return path as T;
       }
       case "harness_spawn":
         return (await this.start(id, args)) as T;

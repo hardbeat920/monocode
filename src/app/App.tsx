@@ -157,6 +157,7 @@ import {
 import { resolveZoomKeybinding } from "../features/settings/model/zoomKeybinding";
 import { resolveAppShortcut } from "../features/settings/model/appShortcuts";
 import { runUpdateFlow } from "./model/updater";
+import { finalizeSubmittedTurn } from "./model/finalizeSubmittedTurn";
 import {
   displayAttachments,
   prepareAttachments,
@@ -283,7 +284,6 @@ import {
   probeHarnessAvailability,
   refreshHarnessCatalogs,
   registerBuiltinHarnesses,
-  promoteLastAssistantToPlan,
   respondHarnessApproval,
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
@@ -453,7 +453,6 @@ import {
   type PlanBuildTarget,
   type QueuedMessage,
   type RuntimeMode,
-  type PlanStatus,
   type SecondOpinionMeta,
   type Session,
   type UsageLimit,
@@ -845,35 +844,6 @@ type Submit = (
   attachments?: Attachment[],
   options?: SubmitOptions,
 ) => SubmissionAcceptance;
-
-function withPlanStatus(
-  session: Session,
-  blockId: string,
-  status: PlanStatus,
-): Session {
-  return {
-    ...session,
-    blocks: session.blocks.map((block) =>
-      block.id === blockId && block.role === "plan"
-        ? {
-            ...block,
-            plan: { ...(block.plan ?? { status: "ready" }), status },
-          }
-        : block,
-    ),
-  };
-}
-
-function lastAssistantTextInTurn(session: Session): string {
-  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
-    const block = session.blocks[index];
-    if (session.queuedMessages?.some((message) => message.blockId === block.id))
-      continue;
-    if (block.role === "user") return "";
-    if (block.role === "assistant" && block.text.trim()) return block.text;
-  }
-  return "";
-}
 
 function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   if (a.size !== b.size) return false;
@@ -7608,7 +7578,11 @@ function Workspace({
         const planEventKey = planTurnKey(gen);
         let nativePlanSeen = false;
         let providerFailureSeen = false;
+        let submittedTurn: Session | undefined;
+        let submittedTurnEnded = false;
         const routePlanEvent = (event: HarnessEvent): HarnessEvent | null => {
+          // Autonomous wakes are ordinary turns, even after a planning submit.
+          if (submittedTurnEnded) return event;
           if (event.type === "session.error") providerFailureSeen = true;
           if (proposalDraft) {
             if (event.type === "message.delta") {
@@ -7640,11 +7614,19 @@ function Workspace({
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
-          if (options?.onSettled && event.type === "message.delta")
+          if (
+            !submittedTurnEnded &&
+            options?.onSettled &&
+            event.type === "message.delta"
+          )
             controlText = (controlText + event.text).slice(-20_000);
-          if (options?.onSettled && event.type === "message.completed")
+          if (
+            !submittedTurnEnded &&
+            options?.onSettled &&
+            event.type === "message.completed"
+          )
             controlText += "\n";
-          if (event.type === "session.error")
+          if (!submittedTurnEnded && event.type === "session.error")
             controlOutcome.error = event.message;
           if (
             wrap &&
@@ -7658,6 +7640,18 @@ function Workspace({
             trackSessionEdits(sessionId, workCwd, event);
           const routed = routePlanEvent(event);
           if (routed) enqueueHarnessEvent(sessionId, routed);
+          if (
+            !submittedTurnEnded &&
+            event.type === "turn.activity" &&
+            !event.active
+          ) {
+            // Capture the completed run before another agent_start can append output.
+            flushHarnessEvents();
+            submittedTurn = sessionsRef.current.find(
+              (session) => session.id === sessionId,
+            );
+            submittedTurnEnded = true;
+          }
         };
         const routeTurnEvent = (event: HarnessEvent) => {
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -7780,8 +7774,10 @@ function Workspace({
               return;
             }
           }
-          const sendTurn = (text: string, turnAttachments = prepared) =>
-            sendHarnessTurn({
+          const sendTurn = (text: string, turnAttachments = prepared) => {
+            submittedTurn = undefined;
+            submittedTurnEnded = false;
+            return sendHarnessTurn({
               harness: current.harness,
               sessionId,
               cwd: workCwd,
@@ -7803,6 +7799,7 @@ function Workspace({
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
+          };
           let sendText = orchestrator.prompt(
             sessionId,
             inboxAskPrompt(
@@ -7957,6 +7954,10 @@ function Workspace({
         } finally {
           if (turnGen.current.get(sessionId) !== gen) return;
           flushHarnessEvents();
+          const submitted =
+            submittedTurn ??
+            sessionsRef.current.find((session) => session.id === sessionId);
+          submittedTurnEnded = true;
           controlOutcome = {
             status:
               providerFailureSeen ||
@@ -7975,40 +7976,26 @@ function Workspace({
               () => undefined,
             );
           }
-          await flushSessionCheckpoint(sessionId);
+          await harnessEvents.flushAfter(flushSessionCheckpoint(sessionId));
+          if (turnGen.current.get(sessionId) !== gen) return;
           setSessions((prev) =>
             prev.map((s) => {
               if (s.id !== sessionId) return s;
-              const stopped = stopStreaming(s);
-              const providerFailed =
-                providerFailureSeen ||
-                isProviderFailureText(lastAssistantTextInTurn(stopped));
-              const finalized =
-                proposalDraft && proposalId
-                  ? withOrchestrationProposal(
-                      stopped,
-                      proposalId,
-                      completedProposal && !providerFailed && buildSucceeded
-                        ? completedProposal
-                        : completeOrchestrationProposal(
-                            proposalDraft,
-                            nativeProposalText || proposalText,
-                            providerFailed || !buildSucceeded
-                              ? (controlOutcome.error ??
-                                  "The lead could not finish planning.")
-                              : undefined,
-                          ),
-                    )
-                  : intent === "plan" && !nativePlanSeen && !providerFailed
-                    ? promoteLastAssistantToPlan(stopped, planEventKey)
-                    : stopped;
-              return approvedPlan && intent === "build"
-                ? withPlanStatus(
-                    finalized,
-                    approvedPlan.id,
-                    buildSucceeded && !providerFailed ? "built" : "ready",
-                  )
-                : finalized;
+              return submitted
+                ? finalizeSubmittedTurn(s, submitted, {
+                    intent,
+                    planEventKey,
+                    nativePlanSeen,
+                    providerFailureSeen,
+                    buildSucceeded,
+                    approvedPlanId: approvedPlan?.id,
+                    proposalId,
+                    proposalDraft,
+                    completedProposal,
+                    proposalText: nativeProposalText || proposalText,
+                    error: controlOutcome.error,
+                  })
+                : s;
             }),
           );
           // Next tick: the flush above has rendered by then, so the banner
@@ -8019,7 +8006,7 @@ function Workspace({
             );
             const visible = sessionId === activeSessionIdRef.current;
             // A habit's hidden run speaks through its Mono's chat instead.
-            if (finished && !isHabitRun(sessionId))
+            if (finished && !finished.busy && !isHabitRun(sessionId))
               void announceSessionFinished(finished, visible);
           }, 0);
           notifyReviewChanged(sessionId);
@@ -8079,6 +8066,7 @@ function Workspace({
       dismissNoticesForContinuedSession,
       enqueueHarnessEvent,
       flushHarnessEvents,
+      harnessEvents,
     ],
   );
   submitAfterProjectSyncRef.current = submitSession;

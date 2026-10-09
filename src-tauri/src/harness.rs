@@ -4037,3 +4037,31 @@ mod reap_logic_tests {
         ));
     }
 }
+
+/// Cache the bundled Pi extension atomically on the host that will execute it.
+#[tauri::command]
+pub fn harness_prepare_pi_bridge(app: AppHandle, source: String) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    if source.is_empty() || source.len() > 65536 {
+        return Err("Invalid Pi bridge source".into());
+    }
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("pi-bridge");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{:x}.mjs", Sha256::digest(source.as_bytes())));
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(source.as_str()) {
+        let temporary = dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&temporary, &source).map_err(|e| e.to_string())?;
+        let result = std::fs::rename(&temporary, &path);
+        let _ = std::fs::remove_file(&temporary);
+        if let Err(error) = result {
+            if std::fs::read_to_string(&path).ok().as_deref() != Some(source.as_str()) {
+                return Err(error.to_string());
+            }
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}

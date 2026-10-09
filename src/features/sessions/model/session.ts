@@ -449,6 +449,8 @@ export type Session = {
   monoTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /** Provider reports a live run independently of sendTurn(). In-memory only. */
+  providerActive?: boolean;
   /** The provider has accepted this turn and can take live follow-ups. */
   turnReady?: boolean;
   /**

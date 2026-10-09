@@ -278,3 +278,26 @@ setInterval(() => {}, 1000);
     });
   }
 }, 10_000);
+
+
+it("materializes a content-addressed Pi bridge on the execution host and repairs corrupt cache", async () => {
+  const backend = new HostChildBackend();
+  const source = `export default function() {} // ${Date.now()}-${Math.random()}`;
+  let path: string | undefined;
+  try {
+    const paths = await Promise.all([1, 2].map(() => backend.invoke<string>("harness_prepare_pi_bridge", { source })));
+    path = paths[0];
+    expect(paths[1]).toBe(path);
+    expect(readFileSync(path, "utf8")).toBe(source);
+    expect(path).toMatch(/[a-f0-9]{64}\.mjs$/);
+    writeFileSync(path, "corrupted");
+    expect(await backend.invoke("harness_prepare_pi_bridge", { source })).toBe(path);
+    expect(readFileSync(path, "utf8")).toBe(source);
+    for (const source of [undefined, "", 3, "x".repeat(65537)]) {
+      await expect(backend.invoke("harness_prepare_pi_bridge", { source })).rejects.toThrow("Invalid Pi bridge source");
+    }
+  } finally {
+    if (path) rmSync(path, { force: true });
+    await backend.close();
+  }
+});

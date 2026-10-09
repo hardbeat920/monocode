@@ -52,6 +52,12 @@ export class HarnessEventQueue {
   /** Lifecycle boundaries still need every session's latest output. */
   flush = () => this.flushMatching(() => true);
 
+  /** Apply activity received during an asynchronous lifecycle checkpoint. */
+  async flushAfter(checkpoint: Promise<void>): Promise<void> {
+    await checkpoint;
+    this.flush();
+  }
+
   /** Tab activation catches up its visible panes without flushing hidden work. */
   flushForeground = () => this.flushMatching((id) => this.visible(id));
 

@@ -27,6 +27,11 @@ export function hasHeadlessChildBackend(): boolean {
   return backend !== undefined;
 }
 
+/** Materialize the bundled extension on the machine that will run Pi. */
+export function preparePiBackgroundBridge(source: string): Promise<string> {
+  return invoke<string>("harness_prepare_pi_bridge", { source });
+}
+
 /** Provider-owned transcript files are read on the machine running the child. */
 export function readHarnessTextFile(path: string): Promise<string> {
   return invoke<string>(backend ? "harness_read_text_file" : "read_text_file", {

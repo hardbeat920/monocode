@@ -624,6 +624,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const composer = (
     <Composer
       key={session.id}
+      placeholder={session.busy && session.backgroundTasks?.length
+        ? "Background work is running. Add a message…"
+        : undefined}
       disabled={workspaceSwitchingSessionId === session.id}
       remoteSession={remoteSession}
       remoteFeatures={remoteFeatures}

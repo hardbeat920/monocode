@@ -17,6 +17,8 @@ export type HarnessEvent =
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "turn.started"; providerTurnId: string }
   | { type: "turn.ready" }
+  /** Provider-owned activity, including runs started without a submitted prompt. */
+  | { type: "turn.activity"; active: boolean }
   | {
       type: "session.configChanged";
       model?: string;

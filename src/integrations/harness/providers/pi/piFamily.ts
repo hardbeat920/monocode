@@ -12,6 +12,7 @@ import { discoverOmpCommands, ompCommandsFromRpcData } from "./piSkills";
 import { OMP_FLAVOR } from "./piFlavor";
 import {
   killChild,
+  preparePiBackgroundBridge,
   spawnChild,
   unwatchChild,
   watchChild,
@@ -19,6 +20,7 @@ import {
 } from "../../core/child";
 import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
+import { PI_BACKGROUND_BRIDGE, PI_BACKGROUND_STATUS_KEY } from "./piBackgroundBridge";
 import { piSubagentEvents } from "./piSubagents";
 import {
   agentEndWillRetry,
@@ -115,6 +117,8 @@ type Live = {
   turnFailed: ((error: Error) => void) | null;
   turnEndPending: boolean;
   activeTurn: boolean;
+  piSettled: boolean;
+  backgroundTasks: string[];
   emittedAssistant: string;
   emittedReasoning: string;
   /** Reason the turn failed, held until we know it is not being retried. */
@@ -319,6 +323,7 @@ export async function rewindLastTurn(
   return { submitted: false };
 }
 
+/** Prompt a yielded Pi agent immediately; use steering while it is still running. */
 export async function steerTurn(
   flavor: PiFlavor,
   input: SteerTurnInput,
@@ -327,7 +332,9 @@ export async function steerTurn(
   if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
   const message = input.text.trim();
   const buildCommand =
-    flavor.id === "omp" && message.startsWith("/")
+    flavor.id === "pi" && live.piSettled
+      ? buildPiPrompt
+      : flavor.id === "omp" && message.startsWith("/")
       ? (input: Parameters<typeof buildPiPrompt>[0]) =>
           buildPiPrompt({ ...input, streaming: true })
       : buildPiSteer;
@@ -363,6 +370,7 @@ export function respondQuestion(
     ?.resolve(reply);
 }
 
+/** Abort the current run and release its Pi activity state. */
 export async function cancelTurn(
   flavor: PiFlavor,
   sessionId: string,
@@ -385,6 +393,7 @@ export async function cancelTurn(
   finishActiveTurn(live, [
     { type: "message.completed" },
     { type: "reasoning.completed" },
+    ...(flavor.id === "pi" ? [{ type: "turn.activity" as const, active: false }] : []),
   ]);
 }
 
@@ -474,6 +483,7 @@ async function ensureLive(
   }
 }
 
+/** Start the RPC host, loading the background liveness bridge for Pi only. */
 async function startLive(
   flavor: PiFlavor,
   input: HarnessSessionInput,
@@ -482,6 +492,9 @@ async function startLive(
   const state = stateFor(flavor);
   const { liveByThread } = state;
   const { path } = await state.resolveBinary();
+  const backgroundBridge = flavor.id === "pi"
+    ? await preparePiBackgroundBridge(PI_BACKGROUND_BRIDGE)
+    : undefined;
   const native = nativeModelId(input.model);
   const modelRef = parsePiModelRef(native);
   const liveRef: { current: Live | null } = { current: null };
@@ -523,6 +536,8 @@ async function startLive(
     turnFailed: null,
     turnEndPending: false,
     activeTurn: false,
+    piSettled: true,
+    backgroundTasks: [],
     emittedAssistant: "",
     emittedReasoning: "",
     turnError: null,
@@ -537,6 +552,9 @@ async function startLive(
       liveByThread.delete(input.sessionId);
       const current = liveRef.current;
       if (!current?.muteUpdates) {
+        if (flavor.id === "pi") {
+          current?.onEvent({ type: "turn.activity", active: false });
+        }
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
       if (current) {
@@ -559,11 +577,14 @@ async function startLive(
   await spawnChild(
     input.sessionId,
     path,
-    buildPiSpawnArgs(flavor, {
-      resume,
-      model: modelRef ? native : undefined,
-      plan: input.intent === "plan",
-    }),
+    [
+      ...buildPiSpawnArgs(flavor, {
+        resume,
+        model: modelRef ? native : undefined,
+        plan: input.intent === "plan",
+      }),
+      ...(backgroundBridge ? ["--extension", backgroundBridge] : []),
+    ],
     input.cwd,
     undefined,
     flavor.id,
@@ -592,6 +613,7 @@ async function startLive(
   }
 }
 
+/** Own one submit promise; leave cleanup to a newer run if it has taken over. */
 async function runTurn(
   flavor: PiFlavor,
   live: Live,
@@ -615,6 +637,7 @@ async function runTurn(
     live.turnFailed = reject;
   });
   live.activeTurn = true;
+  live.piSettled = false;
   settlePendingTurn(live);
 
   try {
@@ -651,11 +674,14 @@ async function runTurn(
     });
     throw error;
   } finally {
-    live.activeTurn = false;
-    live.promptId = null;
     live.rpc.cancelRequest(promptId);
-    live.turnDone = null;
-    live.turnFailed = null;
+    // A new extension-triggered run can already own the live session.
+    if (live.promptId === promptId) {
+      live.activeTurn = false;
+      live.promptId = null;
+      live.turnDone = null;
+      live.turnFailed = null;
+    }
   }
 }
 
@@ -717,6 +743,7 @@ function interjectionFromCustomMessage(
   };
 }
 
+/** Translate RPC frames, including autonomous starts and keyed liveness statuses. */
 function handleFrame(
   flavor: PiFlavor,
   sessionId: string,
@@ -742,6 +769,26 @@ function handleFrame(
   ) {
     for (const question of live.questions.values()) {
       if (question.id === rec.id) question.resolve({ kind: "skipped" });
+    }
+    return;
+  }
+  if (flavor.id === "pi" && rec.type === "extension_ui_request" &&
+      rec.method === "setStatus" && rec.statusKey === PI_BACKGROUND_STATUS_KEY) {
+    if (live.cancelled || live.muteUpdates) return;
+    const data = typeof rec.statusText === "string" ? tryParseJsonRecord(rec.statusText) : null;
+    if (data?.version !== 1 || !Array.isArray(data.tasks) ||
+        !data.tasks.every((task) => typeof task === "string")) return;
+    live.backgroundTasks = data.tasks;
+    live.onEvent({ type: "background.updated", tasks: live.backgroundTasks });
+    if (live.backgroundTasks.length) {
+      live.settleToken += 1;
+      live.settling = false;
+      if (!live.activeTurn) {
+        live.activeTurn = true;
+        live.onEvent({ type: "turn.activity", active: true });
+      }
+    } else if (live.piSettled) {
+      void settleTurn(live, flavor);
     }
     return;
   }
@@ -851,6 +898,22 @@ function handleFrame(
       return;
     }
     if (type === "agent_end" && rec.isTerminal === false) return;
+  }
+  if (flavor.id === "pi" && type === "agent_start") {
+    // Extensions can start a run after the submitted prompt has settled.
+    // Also invalidate a stats request still settling the previous run.
+    live.settleToken += 1;
+    live.settling = false;
+    live.piSettled = false;
+    live.onEvent({ type: "background.updated", tasks: [] });
+    if (!live.activeTurn) {
+      live.promptId = null;
+      live.activeTurn = true;
+      live.turnError = null;
+      live.toolsByIndex.clear();
+      live.toolsById.clear();
+    }
+    live.onEvent({ type: "turn.activity", active: true });
   }
   if (type === "compaction_start") live.compacting = true;
   if (type === "compaction_end") live.compacting = false;
@@ -974,16 +1037,25 @@ function handleFrame(
   }
 
   if (isAgentSettled(rec)) {
+    if (flavor.id === "pi") live.piSettled = true;
+    if (flavor.id === "pi" && live.backgroundTasks.length) {
+      live.onEvent({ type: "background.updated", tasks: live.backgroundTasks });
+    }
     flushTurnError(flavor, live);
-    void settleTurn(live);
+    void settleTurn(live, flavor);
     return;
   }
   const willRetry = agentEndWillRetry(rec);
   // The retry carries the real answer, so the attempt it replaces stays quiet.
   if (willRetry === true) live.turnError = null;
-  if (willRetry === false && !live.compacting && !live.retrying) {
+  // Pi's agent_end is a low-level boundary; queued work can still follow.
+  // Its terminal event is agent_settled. OMP retains its agent_end contract.
+  if (
+    flavor.id === "omp" && willRetry === false &&
+    !live.compacting && !live.retrying
+  ) {
     flushTurnError(flavor, live);
-    void settleTurn(live);
+    void settleTurn(live, flavor);
   }
 }
 
@@ -997,8 +1069,10 @@ function flushTurnError(flavor: PiFlavor, live: Live): void {
   });
 }
 
-async function settleTurn(live: Live): Promise<void> {
+/** Wait for Pi and background observers, ignoring stats from superseded runs. */
+async function settleTurn(live: Live, flavor: PiFlavor): Promise<void> {
   if (live.settling || live.cancelled || live.muteUpdates) return;
+  if (flavor.id === "pi" && (!live.piSettled || live.backgroundTasks.length)) return;
   if (!live.activeTurn && !live.turnDone) return;
   live.settling = true;
   const token = live.settleToken;
@@ -1018,6 +1092,7 @@ async function settleTurn(live: Live): Promise<void> {
     finishActiveTurn(live, [
       { type: "message.completed" },
       { type: "reasoning.completed" },
+      ...(flavor.id === "pi" ? [{ type: "turn.activity" as const, active: false }] : []),
     ]);
   }
   if (live.settleToken === token) live.settling = false;
@@ -1290,6 +1365,7 @@ function emitTaskListIfNeeded(live: Live, tool: InFlightTool): void {
   if (items) live.onEvent({ type: "tasks.updated", items });
 }
 
+/** Finish the current submit without carrying autonomous completion into the next prompt. */
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   if (!live.activeTurn && !live.turnDone) return;
   live.turnEndPending = false;
@@ -1303,7 +1379,9 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
     done();
     return;
   }
-  if (!failed) live.turnEndPending = true;
+  // An autonomous run has no submit promise. Its end must not settle the
+  // next user prompt before that prompt's own events arrive.
+  if (!failed && live.promptId) live.turnEndPending = true;
 }
 
 function settlePendingTurn(live: Live): void {

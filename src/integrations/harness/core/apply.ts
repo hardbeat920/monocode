@@ -187,6 +187,10 @@ export function applyHarnessEvent(
       blocks[index] = { ...block, providerTurnId: event.providerTurnId };
       return { ...session, blocks };
     }
+    case "turn.activity":
+      return event.active
+        ? { ...session, providerActive: true, busy: true, turnReady: true }
+        : stopStreaming(session);
     case "turn.ready":
       return session.busy ? { ...session, turnReady: true } : session;
     case "session.configChanged":
@@ -524,7 +528,7 @@ export function appendSteerUser(
 }
 
 export function stopStreaming(session: Session, endedAt = Date.now()): Session {
-  const { backgroundTasks: _cleared, ...settled } =
+  const { backgroundTasks: _cleared, providerActive: _active, ...settled } =
     settlePendingApprovals(session);
   return {
     ...settled,

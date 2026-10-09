@@ -1582,3 +1582,24 @@ describe("subagent steps", () => {
     expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
   });
 });
+
+
+describe("provider-owned turn activity", () => {
+  it("makes an autonomous run busy and steerable, then closes its streams", () => {
+    let session = newSession("pi", "/repo");
+    session = applyHarnessEvent(session, { type: "turn.activity", active: true });
+    expect(session).toMatchObject({ busy: true, turnReady: true, providerActive: true });
+    expect(sanitizeSessionForPersist(session)).not.toHaveProperty("providerActive");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Reviewing the result" });
+    session = applyHarnessEvent(session, { type: "turn.activity", active: false });
+    expect(session.busy).toBe(false);
+    expect(session.turnReady).toBe(false);
+    expect(session.providerActive).toBeUndefined();
+    expect(session.blocks.at(-1)?.streaming).toBe(false);
+  });
+
+  it("clears provider activity on explicit stop", () => {
+    const session = applyHarnessEvent(newSession("pi", "/repo"), { type: "turn.activity", active: true });
+    expect(stopStreaming(session).providerActive).toBeUndefined();
+  });
+});

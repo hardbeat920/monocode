@@ -3808,3 +3808,45 @@ html.theme-light .btw-burst {
     var(--color-background-base)
   );
 }
+
+/* Background work lives in the transcript's existing quiet, monochrome rail. */
+.background-activity {
+  margin: 6px 16px 12px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-content) 2%, transparent);
+  font-family: var(--font-sans);
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+  transition: background-color 340ms var(--motion-ease-out);
+  animation: background-activity-appear 280ms var(--motion-ease-out) both;
+}
+.background-activity-heading { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px; }
+.background-activity-mark { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; }
+.background-activity-mark svg { width: 20px; height: 20px; }
+.background-activity-orbit { transform-origin: 10px 10px; animation: background-activity-orbit 2.4s linear infinite; animation-play-state: paused; transition: opacity 340ms ease; }
+.background-activity[data-live="true"] .background-activity-orbit { animation-play-state: running; }
+.background-activity[data-phase="ended"] .background-activity-orbit,
+.background-activity[data-phase="stopped"] .background-activity-orbit { opacity: 0; }
+.background-activity-time { flex-shrink: 0; min-width: 4ch; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--color-content) 65%, transparent); }
+.background-activity-toggle { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; cursor: pointer; transition: background-color var(--motion-feedback-duration) ease; }
+.background-activity-toggle:hover { background: var(--color-selection-subtle); }
+.background-activity-toggle svg { transition: transform 340ms var(--motion-ease-out); }
+.background-activity-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.background-activity button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.background-activity-disclosure { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 340ms var(--motion-ease-out), opacity 220ms ease; }
+.background-activity-disclosure[data-open="true"] { grid-template-rows: 1fr; opacity: 1; }
+.background-activity-clip { min-height: 0; overflow: hidden; }
+.background-activity-body { padding: 0 12px 12px 42px; }
+.background-activity-tasks { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; font-size: 12px; }
+.background-activity-tasks li { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
+.background-activity-tasks li > span { width: 4px; height: 4px; flex-shrink: 0; border-radius: 50%; background: currentColor; opacity: .45; align-self: center; }
+.background-activity-footer { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; line-height: 1.5; color: color-mix(in srgb, var(--color-content) 65%, transparent); }
+.background-activity-footer p { margin: 0; }
+.background-activity-footer button { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; border-radius: 3px; transition: color var(--motion-feedback-duration) ease; }
+.background-activity-footer button:hover { color: var(--color-content); }
+@keyframes background-activity-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .background-activity, .background-activity *, .background-activity-orbit { animation: none !important; transition: none !important; }
+}
+.background-activity .mono-work-ticker-row > span { color: color-mix(in srgb, var(--color-content) 75%, transparent); }
+@keyframes background-activity-appear { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }

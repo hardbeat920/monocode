@@ -100,6 +100,7 @@ import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../../settings/model/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { MonoWorkTicker } from "./MonoWorkTicker";
+import { BackgroundActivity } from "./BackgroundActivity";
 import { monoWorkStatus } from "../model/monoWorkStatus";
 import { isEmojiOnlyMessage } from "../model/emojiMessage";
 import { attachmentPreviewSrc } from "../model/attachments";
@@ -1389,6 +1390,16 @@ function AgentTranscriptComponent({
                   return [foldLineRow, row];
                 })
                 .concat(foldLineAt >= items.length ? [foldLineRow] : [])}
+              {isLastTurn ? (
+                <BackgroundActivity
+                  key={turnId}
+                  tasks={backgroundTasks}
+                  busy={!settled}
+                  visible={visible}
+                  interrupted={settled && (turn[turn.length - 1]?.notice === "interrupt" || turn[turn.length - 1]?.notice === "error")}
+                  onShowWork={onShowWork ? () => onShowWork(turnId, turn) : undefined}
+                />
+              ) : null}
               {settled &&
                 proposals
                   .filter((block) => block.orchestration?.status !== "planning")

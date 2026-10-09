@@ -17,6 +17,7 @@ const transport = vi.hoisted(() => ({
 }));
 
 vi.mock("../../core/child", () => ({
+  preparePiBackgroundBridge: async () => "/fake/bridge.mjs",
   resolveOmpBinary: async () => ({ path: "/fake/omp" }),
   resolvePiBinary: async () => ({ path: "/fake/pi" }),
   acquireHarnessBridge: async () => () => undefined,
@@ -206,6 +207,7 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
         expect(row?.tool?.detail).toBe("Found auth");
       } finally {
         frame(sessionId, { type: "agent_end" });
+        if (flavor === "pi") frame(sessionId, { type: "agent_settled" });
         await turn;
       }
     },
@@ -266,6 +268,7 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
         );
       } finally {
         frame(sessionId, { type: "agent_end" });
+        if (flavor === "pi") frame(sessionId, { type: "agent_settled" });
         await turn;
       }
     },
@@ -320,6 +323,7 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
         );
       } finally {
         frame(sessionId, { type: "agent_end" });
+        if (flavor === "pi") frame(sessionId, { type: "agent_settled" });
         await turn;
       }
     },
@@ -706,6 +710,7 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
     });
     expect(events.some((event) => event.type === "interjection")).toBe(false);
     frame("pi-test", { type: "agent_end" });
+    frame("pi-test", { type: "agent_settled" });
     await turn;
   });
 });
