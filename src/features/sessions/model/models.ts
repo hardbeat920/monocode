@@ -1,5 +1,10 @@
 import type { HarnessId } from "./session";
-import { HARNESSES } from "./session";
+import {
+  DEFAULT_RUNTIME_MODE,
+  HARNESSES,
+  RUNTIME_MODES,
+  type RuntimeMode,
+} from "./session";
 import { loadProjectProviderSettings } from "./projectProviders";
 import {
   hasProbedHarnessAvailability,
@@ -33,6 +38,8 @@ export type AgentModel = {
   settings?: ModelSetting[];
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
+  /** Whether Auto approval works with this model; unset means not reported. */
+  supportsAuto?: boolean;
 };
 
 export const MODELS: AgentModel[] = [
@@ -330,6 +337,42 @@ export function findModel(id: string): AgentModel | undefined {
     indexById = index;
   }
   return indexById.get(id);
+}
+
+/**
+ * Whether Auto approval is available for a model. Only Claude and Codex have
+ * it, and Claude reports it per model; a model that doesn't say is assumed to
+ * support it so a stale or fallback catalog doesn't hide the option.
+ */
+export function modelSupportsAuto(harness: HarnessId, modelId: string) {
+  if (harness !== "claude" && harness !== "codex") return false;
+  return lookupModel(modelId)?.supportsAuto !== false;
+}
+
+/** Access modes offered for a model. */
+export function runtimeModesFor(
+  harness: HarnessId,
+  modelId: string,
+): RuntimeMode[] {
+  return RUNTIME_MODES.filter(
+    (mode) => mode !== "auto" || modelSupportsAuto(harness, modelId),
+  );
+}
+
+/**
+ * The mode to use for a model. When `mode` isn't offered, step down to the
+ * closest offered mode before it (Auto → Auto-accept edits → Supervised).
+ */
+export function coerceRuntimeMode(
+  harness: HarnessId,
+  modelId: string,
+  mode: RuntimeMode,
+): RuntimeMode {
+  const offered = runtimeModesFor(harness, modelId);
+  for (let i = RUNTIME_MODES.indexOf(mode); i >= 0; i--) {
+    if (offered.includes(RUNTIME_MODES[i])) return RUNTIME_MODES[i];
+  }
+  return DEFAULT_RUNTIME_MODE;
 }
 
 /** The bundled list never changes, so index it once for `lookupModel`. */

@@ -209,6 +209,8 @@ export function MonoDetails({
             />
             <Property label="Permissions">
               <AccessPicker
+                harness={harness}
+                model={model}
                 value={runtimeMode}
                 onChange={onRuntimeModeChange}
                 busy={busy}

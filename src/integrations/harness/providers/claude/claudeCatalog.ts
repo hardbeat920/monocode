@@ -389,6 +389,9 @@ function modelFromListRow(raw: unknown): AgentModel | null {
     name,
     nativeId,
     ...(settings.length > 0 ? { settings } : {}),
+    ...(typeof rec.supportsAutoMode === "boolean"
+      ? { supportsAuto: rec.supportsAutoMode }
+      : {}),
   };
 }
 
