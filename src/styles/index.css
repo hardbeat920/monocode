@@ -635,9 +635,11 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   }
 }
 
+/* History is paged by turn. Lay out each loaded page at its real height:
+   estimated offscreen heights change the scroll range during a gesture and
+   require scrollTop corrections as the reader moves back through history. */
 .transcript-turn {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 240px;
+  content-visibility: visible;
 }
 
 ::highlight(monocode-transcript-search-match) {
@@ -690,13 +692,6 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   mask-image: var(--mono-transcript-mask);
 }
 
-/* Mono history is already paged in groups of ten. Lay out those turns at
-   their real heights so opening and scrolling never correct placeholders. */
-.mono-transcript-fades .transcript-turn {
-  content-visibility: visible;
-  contain-intrinsic-block-size: none;
-}
-
 .agent-transcript
   [data-transcript-search-current="true"]
   .user-message-bubble
@@ -704,15 +699,6 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
-}
-
-/*
- * The live turn is still growing. Size containment would flash the 240px
- * intrinsic fallback when the first step arrives, which bounces Working
- * down and then back up.
- */
-.transcript-turn-live {
-  content-visibility: visible;
 }
 
 /* Touch layouts keep actions in flow. Desktop places them in the existing
@@ -1362,6 +1348,13 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
  */
 .transcript-turn-anchor {
   min-height: var(--transcript-viewport, 0px);
+}
+
+/* A finished run can still be revealing its reply. Artifacts and actions wait
+   for the final word's fade, using the reply's actual animation state. */
+.transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
 }
 
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
@@ -2015,6 +2008,24 @@ header[data-tauri-drag-region] button {
   font-size: 10px;
 }
 
+.markdown-code-numbered-line::before {
+  content: counter(line);
+  counter-increment: line;
+  display: inline-block;
+  text-align: right;
+  user-select: none;
+}
+
+.markdown-code-token {
+  color: var(--sdm-c, inherit);
+  background-color: var(--sdm-tbg, transparent);
+}
+
+html:not(.theme-light) .markdown-code-token {
+  color: var(--shiki-dark, var(--sdm-c, inherit));
+  background-color: var(--shiki-dark-bg, var(--sdm-tbg, transparent));
+}
+
 .agent-markdown [data-streamdown="table-wrapper"] > div {
   border: 0;
   border-radius: 0;
@@ -2030,6 +2041,9 @@ header[data-tauri-drag-region] button {
 .agent-markdown [data-streamdown="table-cell"] {
   padding: 8px 10px;
   font-size: 12px;
+  /* Keep columns readable; narrow panes use the table's existing scroller. */
+  min-width: 10rem;
+  vertical-align: top;
 }
 
 .agent-markdown [data-streamdown="horizontal-rule"] {
@@ -2788,6 +2802,11 @@ html.theme-light .mono-pill {
   overflow: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+  scrollbar-width: none;
+}
+
+.zen-phase-body > .zen-phase-live::-webkit-scrollbar {
+  display: none;
 }
 
 /*

@@ -23,6 +23,7 @@ type Props = {
     path?: string,
     session?: { sessionId: string; cwd: string },
   ) => void;
+  onCommit?: (session: { sessionId: string; cwd: string }) => void;
 };
 
 export function SessionReview({
@@ -32,6 +33,7 @@ export function SessionReview({
   busy = false,
   undoLocked = false,
   onOpenDiff,
+  onCommit,
 }: Props) {
   const [files, setFiles] = useState<CheckpointFile[]>([]);
   const [expanded, setExpanded] = useState(false);
@@ -171,6 +173,16 @@ export function SessionReview({
             >
               Keep
             </button>
+            {onCommit ? (
+              <button
+                type="button"
+                title="Commit these changes"
+                onClick={() => onCommit({ sessionId, cwd })}
+                className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content"
+              >
+                Commit
+              </button>
+            ) : null}
             <button
               type="button"
               title="Review changes"

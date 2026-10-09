@@ -47,6 +47,8 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
+import { artifactCards } from "../../artifacts/artifacts";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
@@ -161,6 +163,7 @@ import {
 } from "../model/transcriptHighlights";
 
 const NEAR_BOTTOM_PX = 16;
+const WHEEL_HOLD_MS = 150;
 /*
  * Tool calls often land in a burst. Each arrival waits for the one before it
  * to finish its whole entrance — rail, branch, row — before starting its own.
@@ -225,6 +228,7 @@ type Props = {
   onRemoveDraft?: (block: Block) => boolean | void;
   onSaveSelectionNote?: (text: string) => void | Promise<void>;
   onOpenFile?: (path: string) => void;
+  onOpenArtifact?: (id: string) => void;
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
@@ -287,6 +291,7 @@ function AgentTranscriptComponent({
   onRemoveDraft,
   onSaveSelectionNote,
   onOpenFile,
+  onOpenArtifact,
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
@@ -336,6 +341,7 @@ function AgentTranscriptComponent({
   const showJumpRef = useRef(false);
   const distanceFromBottom = useRef(0);
   const lastScrollTop = useRef(0);
+  const wheelHold = useRef(0);
   const prependHeight = useRef<number | null>(null);
   const prependAnchor = useRef<{ element: HTMLElement; top: number } | null>(
     null,
@@ -465,7 +471,10 @@ function AgentTranscriptComponent({
       // The browser can apply a manual scroll before dispatching its event.
       // Reconcile that offset before a streaming commit or observer pins it.
       syncPinned(el);
-      if (stickToBottom.current) pinTranscript(el);
+      // A gesture whose direction is not known yet may already be scrolling
+      // off the main thread. Pinning now would snap it back to the end.
+      if (stickToBottom.current && performance.now() >= wheelHold.current)
+        pinTranscript(el);
     },
     [pinTranscript, syncPinned],
   );
@@ -513,11 +522,21 @@ function AgentTranscriptComponent({
       if (scrollerEl.isConnected && scrollerEl.clientHeight > 0)
         syncPinned(scrollerEl);
     };
+    let release: ReturnType<typeof setTimeout> | undefined;
     const onWheel = (e: WheelEvent) => {
       if (innerScrollerTakes(scrollerEl, e)) return;
       if (e.deltaY < 0) {
         stickToBottom.current = false;
         setShowJump(true);
+      } else if (e.deltaY === 0) {
+        // A trackpad gesture can open with an event that carries no
+        // direction, and the rest of it may reach us after the scroll has
+        // moved. Hold the pin until its upward events can release it.
+        wheelHold.current = performance.now() + WHEEL_HOLD_MS;
+        clearTimeout(release);
+        release = setTimeout(() => {
+          if (scrollerEl.isConnected) followTranscript(scrollerEl);
+        }, WHEEL_HOLD_MS);
       }
     };
     const onPointerDown = (event: PointerEvent) => {
@@ -531,11 +550,19 @@ function AgentTranscriptComponent({
       passive: true,
     });
     return () => {
+      clearTimeout(release);
       scrollerEl.removeEventListener("scroll", onScroll);
       scrollerEl.removeEventListener("wheel", onWheel);
       scrollerEl.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [bottomAligned, scrollerEl, setShowJump, syncPinned, visible]);
+  }, [
+    bottomAligned,
+    scrollerEl,
+    followTranscript,
+    setShowJump,
+    syncPinned,
+    visible,
+  ]);
 
   useLayoutEffect(() => {
     stickToBottom.current = true;
@@ -581,7 +608,11 @@ function AgentTranscriptComponent({
       stickToBottom.current = true;
       setShowJump(false);
       pinTranscript(el);
-    } else if (restore && !stickToBottom.current) {
+    } else if (restore && stickToBottom.current) {
+      // Reattaching reset the offset to the top. Pin before any follow reads
+      // that reset as the reader scrolling up and lets go of the end.
+      pinTranscript(el);
+    } else if (restore) {
       el.scrollTop = Math.max(
         0,
         el.scrollHeight - el.clientHeight - distanceFromBottom.current,
@@ -644,10 +675,12 @@ function AgentTranscriptComponent({
     if (previousHeight == null) {
       // The opening window grows above the screen. Settle the offset in this
       // commit: a scroll event queued by an earlier pin would otherwise read
-      // the taller transcript first and unpin it partway up.
+      // the taller transcript first and unpin it partway up. The insert can
+      // also nudge the offset itself, so do not read that as the reader
+      // scrolling; a wheel or touch has already released the pin.
       if (stickToBottom.current) {
         syncTranscriptViewport(el);
-        followTranscript(el);
+        pinTranscript(el);
       } else {
         el.scrollTop =
           el.scrollHeight - el.clientHeight - distanceFromBottom.current;
@@ -666,7 +699,7 @@ function AgentTranscriptComponent({
       : el.scrollHeight - previousHeight;
     el.scrollTop += shift;
     rememberScroll(el);
-  }, [visibleTurnCount, followTranscript, rememberScroll]);
+  }, [visibleTurnCount, pinTranscript, rememberScroll]);
 
   // Short turns can leave the first paint with empty space above them, and
   // the rest of the window arriving later would then push everything down.
@@ -982,6 +1015,7 @@ function AgentTranscriptComponent({
             firstVisibleTurn + turnIndex === activeTurnIndex
           );
           const proposals = turn.filter((block) => block.orchestration);
+          const artifacts = artifactCards(turn);
           // Proposals are turn results, like the changes card. Keep them out
           // of the live work and append them after all of the lead's output.
           const items = turnCache.turnItems(turn, settled, {
@@ -1067,6 +1101,9 @@ function AgentTranscriptComponent({
                 background={backgroundTasks}
                 modelName={turnModelName}
               />
+            ) : agentMascot && agentName ? (
+              // A Mono signs its settled turns with just its mascot and name.
+              <span className="font-medium text-content/80">{agentName}</span>
             ) : durationMs != null ? (
               formatWorkingDuration(durationMs, turnModelName, true)
             ) : inlineWork && turnModelName ? (
@@ -1272,6 +1309,10 @@ function AgentTranscriptComponent({
                   live={live}
                   waitingForAnswers={!!pendingQuestion}
                   backgroundTasks={backgroundTasks}
+                  onShowWork={
+                    onShowWork ? () => onShowWork(turnId, turn) : undefined
+                  }
+                  workExpanded={activeWorkTurnId === turnId}
                   searchCurrent={
                     turn.some((block) => block.id === searchCurrent) &&
                     !items.some(
@@ -1403,6 +1444,20 @@ function AgentTranscriptComponent({
                       <OrchestrationPreview block={block} busy={!!busy} />
                     </div>
                   ))}
+              {settled && artifacts.length > 0 ? (
+                <div
+                  data-artifact-results
+                  className="flex flex-col gap-2 px-4 pt-1 pb-3"
+                >
+                  {artifacts.map((card) => (
+                    <ArtifactCard
+                      key={card.id}
+                      card={card}
+                      onOpen={onOpenArtifact}
+                    />
+                  ))}
+                </div>
+              ) : null}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
               {isLastTurn && latestTurnAccessory && !parked
                 ? latestTurnAccessory
@@ -2778,6 +2833,19 @@ function WorkFoldLine({
       {title}
     </span>
   );
+  // A settled Mono turn signs off in a pill, like the day separators.
+  const content =
+    agentMascot && !live ? (
+      <MonoSignaturePill>
+        {icon}
+        {label}
+      </MonoSignaturePill>
+    ) : (
+      <>
+        {icon}
+        {label}
+      </>
+    );
   const row = `flex w-full min-w-0 items-center gap-1.5 px-4 py-1 text-left${
     open ? " zen-fold-drop" : ""
   }`;
@@ -2789,8 +2857,7 @@ function WorkFoldLine({
         role={live ? "status" : undefined}
         aria-live={live ? "polite" : undefined}
       >
-        {icon}
-        {label}
+        {content}
       </div>
     );
   }
@@ -2803,9 +2870,16 @@ function WorkFoldLine({
       onClick={onToggle}
       className={`group ${row}`}
     >
-      {icon}
-      {label}
+      {content}
     </button>
+  );
+}
+
+function MonoSignaturePill({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 rounded-full bg-content/[0.07] py-0.5 pr-3 pl-2">
+      {children}
+    </span>
   );
 }
 
@@ -2873,11 +2947,10 @@ function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
 }
 
 /**
- * Hold the reader's place while turns above the viewport change height. An
- * off-screen turn keeps its content-visibility placeholder until it is first
- * laid out, and the scroller opts out of native scroll anchoring, so scrolling
- * up through a freshly opened chat would otherwise shove the view down by
- * each turn's correction.
+ * Hold the reader's place while turns above the viewport change height. The
+ * scroller opts out of native scroll anchoring, so late markdown, image or
+ * disclosure sizing above the viewport needs an explicit correction. Loaded
+ * turns use their real heights; scrolling alone must not cause corrections.
  */
 function useTurnScrollAnchor(
   el: HTMLDivElement | null,
@@ -3024,6 +3097,8 @@ function MonoTurnHeader({
   live,
   waitingForAnswers,
   backgroundTasks,
+  onShowWork,
+  workExpanded,
   searchCurrent,
 }: {
   blocks: Block[];
@@ -3035,6 +3110,8 @@ function MonoTurnHeader({
   live: boolean;
   waitingForAnswers: boolean;
   backgroundTasks?: string[];
+  onShowWork?: () => void;
+  workExpanded?: boolean;
   searchCurrent: boolean;
 }) {
   const activity = useMemo(
@@ -3054,6 +3131,21 @@ function MonoTurnHeader({
           : `Waiting for ${backgroundTasks.length} background tasks…`,
     };
   }
+  const mark = agentMascot ? (
+    <PixelMascot
+      name={agentMascot.mascot}
+      color={agentMascot.color}
+      still
+      className="size-3.5 shrink-0"
+    />
+  ) : harness ? (
+    <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+  ) : (
+    <ActivityPhaseIcon kind={status.kind} />
+  );
+  const ticker = (
+    <MonoWorkTicker status={{ ...status, active: live }} showIcon={false} />
+  );
   return (
     <div
       data-mono-work
@@ -3061,37 +3153,64 @@ function MonoTurnHeader({
       data-transcript-search-current={searchCurrent || undefined}
       className="flex min-w-0 items-center gap-1.5 px-4 py-1 font-sans text-sm text-content/50"
     >
-      {agentMascot ? (
-        <PixelMascot
-          name={agentMascot.mascot}
-          color={agentMascot.color}
-          still
-          className="size-3.5 shrink-0"
-        />
-      ) : harness ? (
-        <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-      ) : (
-        <ActivityPhaseIcon kind={status.kind} />
-      )}
       {active ? (
         <>
-          {name ? (
+          {agentMascot ? (
+            // The pill holds the Mono's signature from the first token on;
+            // the ticker runs beside it.
             <>
-              <span className="max-w-[45%] truncate">{name}</span>
+              <span className="max-w-[45%] shrink-0">
+                <MonoSignaturePill>
+                  {mark}
+                  {name ? (
+                    <span className="min-w-0 truncate font-medium text-content/80">
+                      {name}
+                    </span>
+                  ) : null}
+                </MonoSignaturePill>
+              </span>
               <span aria-hidden className="shrink-0 text-content/25">
                 ·
               </span>
             </>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <MonoWorkTicker
-              status={{ ...status, active: live }}
-              showIcon={false}
-            />
-          </div>
+          ) : (
+            <>
+              {mark}
+              {name ? (
+                <>
+                  <span className="max-w-[45%] truncate">{name}</span>
+                  <span aria-hidden className="shrink-0 text-content/25">
+                    ·
+                  </span>
+                </>
+              ) : null}
+            </>
+          )}
+          {onShowWork ? (
+            <button
+              type="button"
+              title={workExpanded ? "Hide activity" : "Show activity"}
+              aria-label={workExpanded ? "Hide activity" : "Show activity"}
+              aria-expanded={!!workExpanded}
+              onClick={onShowWork}
+              className="min-w-0 flex-1 cursor-pointer text-left outline-none transition-opacity duration-150 hover:opacity-70 focus-visible:opacity-70"
+            >
+              {ticker}
+            </button>
+          ) : (
+            <div className="min-w-0 flex-1">{ticker}</div>
+          )}
         </>
+      ) : agentMascot ? (
+        <MonoSignaturePill>
+          {mark}
+          <span className="min-w-0 truncate">{title}</span>
+        </MonoSignaturePill>
       ) : (
-        <span className="min-w-0 truncate">{title}</span>
+        <>
+          {mark}
+          <span className="min-w-0 truncate">{title}</span>
+        </>
       )}
     </div>
   );
@@ -4033,7 +4152,8 @@ function ActivityThinkingRow({
             bare ? pulse : ""
           }`}
         >
-          {text}
+          {/* Open, the body starts with the paragraph the summary came from. */}
+          {open ? "Thinking" : text}
         </span>
       </button>
       {open ? (
