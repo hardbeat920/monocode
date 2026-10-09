@@ -1,15 +1,32 @@
-import { ALT, IS_MAC, IS_WIN, MOD, SHIFT } from "../../../platform/tauri/platform";
+import {
+  ALT,
+  IS_MAC,
+  IS_WIN,
+  MOD,
+  SHIFT,
+} from "../../../platform/tauri/platform";
+import {
+  canonicalShortcut,
+  isGlobalShortcut,
+  QUICK_COMPOSER_DEFAULT_SHORTCUT,
+  quickComposerShortcutLabel,
+  shortcutFromKeyEvent,
+  shortcutTokens,
+} from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
 
 const SECTION_KEY = "monocode.settingsSection";
 
 export type SettingsSectionId =
   | "general"
+  | "connections"
   | "appearance"
   | "keybindings"
   | "chat"
   | "providers"
+  | "mcp"
   | "skills"
+  | "monos"
   | "inbox"
   | "worktrees"
   | "archive";
@@ -42,6 +59,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: "version update sounds notifications notes rail",
   },
   {
+    id: "connections",
+    group: "app",
+    label: "Connections",
+    description: "Connect your machines and run agents remotely through SSH.",
+    keywords: "ssh remote host machine server environment always on",
+  },
+  {
     id: "appearance",
     group: "app",
     label: "Appearance",
@@ -63,8 +87,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Chat",
     description:
-      "How transcripts read, what the composer does with a follow-up, and how diffs open.",
-    keywords: "transcript composer prompt message diff review layout",
+      "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open.",
+    keywords:
+      "transcript composer prompt message diff review layout format save editor",
   },
   {
     id: "providers",
@@ -76,6 +101,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       "account sign in login model harness claude codex gemini cli default hooks",
   },
   {
+    id: "mcp",
+    group: "agents",
+    label: "MCP",
+    description:
+      "Find MCP servers across providers and manage their connections.",
+    keywords:
+      "tools servers connections oauth authenticate login claude codex cursor opencode",
+  },
+  {
     id: "skills",
     group: "agents",
     label: "Skills",
@@ -84,12 +118,21 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     keywords: "skill instructions prompt",
   },
   {
+    id: "monos",
+    group: "agents",
+    label: "Monos",
+    description:
+      "The resident agent beside your tabs, and which projects have one.",
+    keywords: "mono resident agent mascot claim project title bar",
+  },
+  {
     id: "inbox",
     group: "workspace",
     label: "Inbox",
     description:
       "Manage Inbox services and notification preferences for each project.",
-    keywords: "github gitlab linear jira atlassian azure devops connect token integration",
+    keywords:
+      "github gitlab linear jira atlassian azure devops connect token integration",
   },
   {
     id: "archive",
@@ -131,6 +174,37 @@ export type SettingsEntry = {
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   {
+    id: "remote-machines",
+    section: "connections",
+    label: "Your machines",
+    keywords: "ssh remote connect host server environment",
+  },
+  {
+    id: "mcp-servers",
+    section: "mcp",
+    label: "MCP servers",
+    keywords: "claude tools connections oauth authenticate login add remove",
+  },
+  {
+    id: "monos-enabled",
+    section: "monos",
+    label: "Show monos",
+    keywords: "mono agent rail hide",
+  },
+  {
+    id: "rail-monos-pinned",
+    section: "monos",
+    label: "Pin monos to the icon rail",
+    keywords: "mono rail compact collapsed icons top divider project picker",
+  },
+  {
+    id: "mono-list",
+    section: "monos",
+    label: "Your monos",
+    keywords:
+      "mono reset soul name projects sessions sidebar visibility hidden show",
+  },
+  {
     id: "project-worktrees",
     section: "worktrees",
     label: "Project worktrees",
@@ -160,6 +234,16 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     label: "Notes",
     keywords: "notebook markdown rail scratchpad",
   },
+  ...(IS_MAC
+    ? [
+        {
+          id: "quick-composer",
+          section: "general" as const,
+          label: "Quick composer",
+          keywords: "spotlight global shortcut hotkey floating prompt anywhere",
+        },
+      ]
+    : []),
   {
     id: "working-agents",
     section: "general",
@@ -199,6 +283,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "appearance",
     label: "Accent color",
     keywords: "highlight bubble send button tint",
+  },
+  {
+    id: "diff-colors",
+    section: "appearance",
+    label: "Diff colors",
+    keywords:
+      "colorblind color blind accessibility added removed red green blue orange high contrast changes",
   },
   {
     id: "hue",
@@ -286,10 +377,22 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       "effort thinking reasoning fast service tier model picker composer",
   },
   {
+    id: "composer-autocorrect",
+    section: "chat",
+    label: "Autocorrect",
+    keywords: "spelling spell check autocorrect typo macos composer",
+  },
+  {
     id: "composer-mascot",
     section: "chat",
     label: "Composer mascot",
     keywords: "runner animation coin fun",
+  },
+  {
+    id: "format-on-save",
+    section: "chat",
+    label: "Format on save",
+    keywords: "prettier quotes editor save format",
   },
   {
     id: "diff-view",
@@ -304,10 +407,30 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pacman snake arcade grid fun",
   },
   {
+    id: "agent-clis",
+    section: "providers",
+    label: "Agent CLIs",
+    keywords:
+      "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
+  },
+  {
     id: "provider-accounts",
     section: "providers",
     label: "Provider accounts",
-    keywords: "account sign in login rename remove delete credentials profile",
+    keywords:
+      "account sign in login rename remove delete credentials profile usage limit quota exhausted",
+  },
+  {
+    id: "show-remaining-usage",
+    section: "providers",
+    label: "Show remaining usage",
+    keywords: "usage limit meter bar left used quota percent",
+  },
+  {
+    id: "mask-emails",
+    section: "providers",
+    label: "Mask account emails",
+    keywords: "email privacy blur hide screenshot account",
   },
   {
     id: "claude-hooks",
@@ -539,7 +662,7 @@ export function saveTabAnimationsEnabled(value: boolean) {
 export type CollapsedProjectRailMode = "compact" | "hidden";
 
 export const COLLAPSED_PROJECT_RAIL_MODE_DEFAULT: CollapsedProjectRailMode =
-  "hidden";
+  "compact";
 
 export const COLLAPSED_PROJECT_RAIL_MODE_CHANGE_EVENT =
   "monocode:collapsed-project-rail-mode-change";
@@ -669,6 +792,91 @@ export function subscribeNotesEnabled(onStoreChange: () => void) {
     window.removeEventListener(NOTES_ENABLED_CHANGE_EVENT, onStoreChange);
 }
 
+const MONOS_ENABLED_KEY = "monocode.monosEnabled";
+
+export const MONOS_ENABLED_DEFAULT = true;
+
+/** Fired on `window` when monos are shown or hidden. */
+export const MONOS_ENABLED_CHANGE_EVENT = "monocode:monos-enabled-change";
+
+/** Whether monos show in the title bar at all, across every project. */
+export function loadMonosEnabled(): boolean {
+  return readFlag(MONOS_ENABLED_KEY) ?? MONOS_ENABLED_DEFAULT;
+}
+
+export function saveMonosEnabled(value: boolean) {
+  writeFlag(MONOS_ENABLED_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(MONOS_ENABLED_CHANGE_EVENT, { detail: value }),
+  );
+}
+
+export function subscribeMonosEnabled(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const MONO_MENU_BAR_KEY = "monocode.monoMenuBarIcon";
+
+/** Fired on `window` when the menu bar icon is shown or hidden. */
+export const MONO_MENU_BAR_CHANGE_EVENT = "monocode:mono-menu-bar-change";
+
+export function loadMonoMenuBarIcon(): boolean {
+  return readFlag(MONO_MENU_BAR_KEY) ?? true;
+}
+
+export function saveMonoMenuBarIcon(value: boolean) {
+  writeFlag(MONO_MENU_BAR_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(MONO_MENU_BAR_CHANGE_EVENT));
+}
+
+export function subscribeMonoMenuBarIcon(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MONO_MENU_BAR_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(MONO_MENU_BAR_CHANGE_EVENT, onStoreChange);
+}
+
+const QUICK_COMPOSER_ENABLED_KEY = "monocode.quickComposerEnabled";
+const QUICK_COMPOSER_SHORTCUT_KEY = "monocode.quickComposerShortcut";
+
+export const QUICK_COMPOSER_ENABLED_DEFAULT = true;
+
+export function loadQuickComposerEnabled(): boolean {
+  return readFlag(QUICK_COMPOSER_ENABLED_KEY) ?? QUICK_COMPOSER_ENABLED_DEFAULT;
+}
+
+export function saveQuickComposerEnabled(value: boolean) {
+  writeFlag(QUICK_COMPOSER_ENABLED_KEY, value);
+}
+
+export function loadQuickComposerShortcut(): string {
+  try {
+    const value = localStorage.getItem(QUICK_COMPOSER_SHORTCUT_KEY);
+    return value && isGlobalShortcut(value)
+      ? value
+      : QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  } catch {
+    return QUICK_COMPOSER_DEFAULT_SHORTCUT;
+  }
+}
+
+export function saveQuickComposerShortcut(value: string) {
+  if (!isGlobalShortcut(value)) return;
+  // Same conflict rules as every other row, so the separately stored Quick
+  // Composer chord cannot claim a combination another command already owns.
+  const shortcut = validateKeybindingShortcut(QUICK_COMPOSER_COMMAND, value);
+  try {
+    localStorage.setItem(QUICK_COMPOSER_SHORTCUT_KEY, shortcut);
+  } catch {
+    // private mode / quota
+  }
+}
+
 const LIVE_AGENTS_ENABLED_KEY = "monocode.liveAgentsEnabled";
 
 export const LIVE_AGENTS_ENABLED_DEFAULT = true;
@@ -783,6 +991,49 @@ export function subscribeDiffViewer(onStoreChange: () => void) {
     window.removeEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
 }
 
+const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
+
+export const FORMAT_ON_SAVE_DEFAULT = true;
+
+export function loadFormatOnSave(): boolean {
+  return readFlag(FORMAT_ON_SAVE_KEY) ?? FORMAT_ON_SAVE_DEFAULT;
+}
+
+export function saveFormatOnSave(value: boolean) {
+  writeFlag(FORMAT_ON_SAVE_KEY, value);
+}
+
+const AUTOSAVE_KEY = "monocode.autosave";
+const AUTOSAVE_CHANGE_EVENT = "monocode:autosave-change";
+
+export const AUTOSAVE_DEFAULT = false;
+
+export function loadAutosave(): boolean {
+  return readFlag(AUTOSAVE_KEY) ?? AUTOSAVE_DEFAULT;
+}
+
+export function saveAutosave(value: boolean): boolean {
+  writeFlag(AUTOSAVE_KEY, value);
+  const saved = loadAutosave();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTOSAVE_CHANGE_EVENT));
+  }
+  return saved;
+}
+
+export function subscribeAutosave(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === AUTOSAVE_KEY) onStoreChange();
+  };
+  window.addEventListener(AUTOSAVE_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(AUTOSAVE_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
 const CLAUDE_HOOKS_KEY = "monocode.claudeHooks";
 
 export const CLAUDE_HOOKS_DEFAULT = true;
@@ -809,12 +1060,22 @@ export type KeybindingRow = {
  * focused surface handlers such as the draft composer workspace toggle.
  */
 export const KEYBINDINGS: KeybindingRow[] = [
+  { command: "App: Settings", keys: `${MOD},`, when: "Always" },
   { command: "App: Search", keys: `${MOD}K`, when: "Always" },
   { command: "App: Go to File", keys: `${MOD}P`, when: "Always" },
   { command: "App: Command Palette", keys: `${MOD}${SHIFT}P`, when: "Always" },
   { command: "App: Find in Files", keys: `${MOD}${SHIFT}F`, when: "Always" },
   { command: "App: Open Project", keys: `${MOD}O`, when: "Always" },
   { command: "App: New Window", keys: `${MOD}${SHIFT}N`, when: "Always" },
+  ...(IS_MAC
+    ? [
+        {
+          command: "App: Quick Composer",
+          keys: `${MOD}${SHIFT}Space`,
+          when: "Anywhere",
+        },
+      ]
+    : []),
   { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
   {
     command: "App: Toggle Session Sidebar",
@@ -822,6 +1083,7 @@ export const KEYBINDINGS: KeybindingRow[] = [
     when: "Always",
   },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  { command: "App: Toggle Mono", keys: `${MOD}I`, when: "Project with a mono" },
   {
     command: "Composer: Toggle Workspace",
     keys: `${MOD}${SHIFT}G`,
@@ -898,6 +1160,285 @@ export const KEYBINDINGS: KeybindingRow[] = [
   { command: "Editor: Find", keys: `${MOD}F`, when: "editorFocus" },
   { command: "Editor: Replace", keys: `${MOD}${ALT}F`, when: "editorFocus" },
 ];
+
+const KEYBINDING_OVERRIDES_KEY = "monocode.keybindingOverrides";
+const KEYBINDINGS_CHANGE_EVENT = "monocode:keybindings-change";
+
+export type KeybindingOverride = {
+  disabled?: boolean;
+  shortcut?: string;
+};
+
+export type KeybindingOverrides = Record<string, KeybindingOverride>;
+
+const VALID_COMMANDS = new Set(KEYBINDINGS.map((row) => row.command));
+
+const KEY_CODES: Record<string, string> = {
+  " ": "Space",
+  Enter: "Enter",
+  Space: "Space",
+  Tab: "Tab",
+  "`": "Backquote",
+  "[": "BracketLeft",
+  "]": "BracketRight",
+  ",": "Comma",
+  ".": "Period",
+  "+": "Equal",
+  "-": "Minus",
+  "\\": "Backslash",
+  "↑": "ArrowUp",
+  "↓": "ArrowDown",
+  "←": "ArrowLeft",
+  "→": "ArrowRight",
+};
+
+const DISPLAY_MODIFIERS: [string, string][] = IS_MAC
+  ? [
+      ["⌘", "Command"],
+      ["⌃", "Control"],
+      ["⌥", "Option"],
+      ["⇧", "Shift"],
+    ]
+  : [
+      ["Ctrl+", "Control"],
+      ["Alt+", "Option"],
+      ["Shift+", "Shift"],
+    ];
+
+const QUICK_COMPOSER_COMMAND = "App: Quick Composer";
+const ACTIVATE_RANGE_COMMAND = "Tab: Activate 1–8";
+
+/**
+ * Every chord a command owns by default, in stored form. Grouped rows expand
+ * to one chord per key so a rebind can never shadow a working shortcut.
+ */
+function defaultShortcutsFor(command: string): string[] {
+  const row = KEYBINDINGS.find((entry) => entry.command === command);
+  if (!row) return [];
+  let rest = row.keys;
+  const modifiers: string[] = [];
+  for (const [display, modifier] of DISPLAY_MODIFIERS) {
+    if (rest.startsWith(display)) {
+      modifiers.push(modifier);
+      rest = rest.slice(display.length);
+    }
+  }
+  const chords = (code: string) => {
+    const value = canonicalShortcut(
+      modifiers.length ? [...modifiers, code].join("+") : code,
+    );
+    return value ? [value] : [];
+  };
+  if (row.keys.includes("…")) {
+    return [1, 2, 3, 4, 5, 6, 7, 8].flatMap((digit) => chords(`Digit${digit}`));
+  }
+  if (/^[A-Za-z]$/.test(rest)) return chords(`Key${rest.toUpperCase()}`);
+  if (/^[0-9]$/.test(rest)) return chords(`Digit${rest}`);
+  if (KEY_CODES[rest]) return chords(KEY_CODES[rest]);
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(rest)) return chords(rest);
+  return [];
+}
+
+/** Chord to owning command, covering defaults, live overrides and Quick Composer. */
+function shortcutOwners(): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const row of KEYBINDINGS) {
+    // The Quick Composer chord is stored separately from the table.
+    const chords =
+      row.command === QUICK_COMPOSER_COMMAND
+        ? [loadQuickComposerShortcut()]
+        : defaultShortcutsFor(row.command);
+    for (const chord of chords) owners.set(chord, row.command);
+  }
+  for (const [command, override] of Object.entries(loadKeybindingOverrides())) {
+    if (override.shortcut) owners.set(override.shortcut, command);
+  }
+  return owners;
+}
+
+function validateShortcut(command: string, shortcut: string): string {
+  const canonical = canonicalShortcut(shortcut);
+  if (!canonical) throw new Error("That combination is not a valid shortcut");
+  if (command === ACTIVATE_RANGE_COMMAND && !/Digit[1-8]$/.test(canonical)) {
+    throw new Error("Tab: Activate 1–8 needs a number key from 1 to 8");
+  }
+  return canonical;
+}
+
+/** Shared by both save paths so no chord can be claimed twice. */
+export function validateKeybindingShortcut(
+  command: string,
+  shortcut: string,
+): string {
+  const canonical = validateShortcut(command, shortcut);
+  const owner = shortcutOwners().get(canonical);
+  if (owner && owner !== command) {
+    throw new Error(`Already used by ${owner}`);
+  }
+  return canonical;
+}
+
+let cacheStorage: Storage | null = null;
+let cacheRaw: string | null = null;
+let cacheValue: KeybindingOverrides = {};
+
+function parseKeybindingOverrides(raw: string | null): KeybindingOverrides {
+  const value = JSON.parse(raw ?? "{}");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const next: KeybindingOverrides = {};
+  for (const [command, entry] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (!VALID_COMMANDS.has(command) || !entry || typeof entry !== "object")
+      continue;
+    const override = entry as { disabled?: unknown; shortcut?: unknown };
+    const disabled = override.disabled === true;
+    const shortcut =
+      typeof override.shortcut === "string"
+        ? (canonicalShortcut(override.shortcut) ?? undefined)
+        : undefined;
+    if (shortcut) next[command] = { shortcut };
+    else if (disabled) next[command] = { disabled: true };
+  }
+  return next;
+}
+
+/** Cached per raw value: this runs several times on every keydown. Returns a fresh object. */
+export function loadKeybindingOverrides(): KeybindingOverrides {
+  try {
+    const storage = localStorage;
+    const raw = storage.getItem(KEYBINDING_OVERRIDES_KEY);
+    if (cacheStorage === storage && cacheRaw === raw) return { ...cacheValue };
+    const next = parseKeybindingOverrides(raw);
+    cacheStorage = storage;
+    cacheRaw = raw;
+    cacheValue = next;
+    return { ...next };
+  } catch {
+    return {};
+  }
+}
+
+export function saveKeybindingOverride(
+  command: string,
+  override: KeybindingOverride,
+): KeybindingOverrides {
+  const next = loadKeybindingOverrides();
+  if (override.disabled) next[command] = { disabled: true };
+  else if (override.shortcut) {
+    const shortcut = validateKeybindingShortcut(command, override.shortcut);
+    next[command] = { shortcut };
+  } else delete next[command];
+  try {
+    if (Object.keys(next).length) {
+      localStorage.setItem(KEYBINDING_OVERRIDES_KEY, JSON.stringify(next));
+    } else {
+      localStorage.removeItem(KEYBINDING_OVERRIDES_KEY);
+    }
+  } catch {
+    throw new Error("Could not save shortcuts");
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(KEYBINDINGS_CHANGE_EVENT));
+  }
+  return next;
+}
+
+export type ShortcutEvent = Pick<KeyboardEvent, "code"> &
+  Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
+export function shortcutMatches(
+  shortcut: string,
+  event: ShortcutEvent,
+): boolean {
+  // Copy the fields: real keyboard events expose modifiers as prototype
+  // accessors, so spreading the event would silently drop all of them.
+  return (
+    shortcutFromKeyEvent({
+      code: event.code,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+    }) === shortcut
+  );
+}
+
+export function matchCustomKeybinding(event: ShortcutEvent): string | null {
+  for (const [command, override] of Object.entries(loadKeybindingOverrides())) {
+    if (override.shortcut && shortcutMatches(override.shortcut, event)) {
+      return command;
+    }
+  }
+  return null;
+}
+
+export function keybindingPressed(
+  command: string,
+  event: ShortcutEvent,
+  defaultMatch: boolean,
+): boolean {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return false;
+  if (override?.shortcut) return shortcutMatches(override.shortcut, event);
+  return defaultMatch;
+}
+
+export function keybindingShortcutLabel(
+  command: string,
+  fallback: string,
+): string | null {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return null;
+  return override?.shortcut
+    ? quickComposerShortcutLabel(override.shortcut)
+    : fallback;
+}
+
+export function keybindingShortcutTokens(
+  command: string,
+  fallback: string,
+): string | null {
+  const override = loadKeybindingOverrides()[command];
+  if (override?.disabled) return null;
+  return override?.shortcut ? shortcutTokens(override.shortcut) : fallback;
+}
+
+export function subscribeKeybindings(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === KEYBINDING_OVERRIDES_KEY) onStoreChange();
+  };
+  window.addEventListener(KEYBINDINGS_CHANGE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(KEYBINDINGS_CHANGE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+export function currentKeybindings(): KeybindingRow[] {
+  const overrides = loadKeybindingOverrides();
+  return KEYBINDINGS.map((row) => {
+    if (row.command === "App: Quick Composer") {
+      return {
+        ...row,
+        keys: loadQuickComposerEnabled()
+          ? quickComposerShortcutLabel(loadQuickComposerShortcut())
+          : "Disabled",
+      };
+    }
+    const override = overrides[row.command];
+    return {
+      ...row,
+      keys: override?.disabled
+        ? "Disabled"
+        : override?.shortcut
+          ? quickComposerShortcutLabel(override.shortcut)
+          : row.keys,
+    };
+  });
+}
 
 export function filterKeybindings(
   rows: KeybindingRow[],

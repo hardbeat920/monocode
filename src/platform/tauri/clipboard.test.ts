@@ -143,6 +143,43 @@ it("keeps the existing clipboard when a message has no copyable content", async 
   expect(await navigator.clipboard.readText()).toBe("Previous clipboard");
 });
 
+it("copies a folder path, including when the message is only that folder", async () => {
+  const folder = {
+    id: "dir",
+    name: "reports",
+    mimeType: "inode/directory",
+    kind: "file" as const,
+    size: 0,
+    path: "/home/dev/reports",
+  };
+  await copyMessage("", [folder]);
+  expect(await navigator.clipboard.readText()).toBe("/home/dev/reports");
+
+  await copyMessage("See the reports", [folder]);
+  expect(await navigator.clipboard.readText()).toBe(
+    "See the reports\n/home/dev/reports",
+  );
+
+  let written: ClipboardItem[] = [];
+  vi.spyOn(navigator.clipboard, "write").mockImplementation(async (items) => {
+    written = items;
+  });
+  await copyMessage("See the reports", [
+    folder,
+    {
+      id: "1",
+      name: "shot.png",
+      mimeType: "image/png",
+      kind: "image",
+      size: 3,
+      data: "YWJj",
+    },
+  ]);
+  expect(await (await written[0].getType("text/plain")).text()).toBe(
+    "See the reports\n/home/dev/reports",
+  );
+});
+
 it("copies available disk attachments including empty files", async () => {
   vi.mocked(invoke).mockImplementation(async (_command, args) =>
     (args as { path: string }).path === "/empty.txt" ? "" : "cGRm",

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newSession } from "../../../features/sessions/model/session";
+import {
+  newSession,
+  type Session,
+} from "../../../features/sessions/model/session";
+import { planTurnKey } from "../../../features/sessions/model/plan";
+import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
+import {
+  acknowledgeMonoMessage,
+  enqueueMonoMessage,
+} from "../../../features/monos/model/monoMessaging";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
@@ -18,6 +27,38 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("follow-up readiness", () => {
+  it("preserves and pauses the backlog when the original turn fails to connect", () => {
+    const queuedMessages = [
+      { id: "waiting", text: "Follow up", attachments: [] },
+    ];
+    const session = applyHarnessEvent(
+      {
+        ...appendUser(newSession("codex", "/tmp"), "First"),
+        queuedMessages,
+        queueStatus: "active",
+      },
+      { type: "session.error", message: "Connection failed" },
+    );
+    expect(session.busy).toBe(false);
+    expect(session.queueStatus).toBe("paused");
+    expect(session.queuedMessages).toBe(queuedMessages);
+  });
+  it("becomes ready only after acceptance and resets when stopped or restarted", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "First");
+    expect(session.turnReady).toBe(false);
+    session = applyHarnessEvent(session, { type: "turn.ready" });
+    expect(session.turnReady).toBe(true);
+    session = stopStreaming(session);
+    expect(session.turnReady).toBe(false);
+    expect(applyHarnessEvent(session, { type: "turn.ready" }).turnReady).toBe(
+      false,
+    );
+    session = appendUser(session, "Next");
+    expect(session.turnReady).toBe(false);
+  });
 });
 
 describe("background work", () => {
@@ -190,6 +231,32 @@ describe("streamed markdown", () => {
     expect(session.blocks[0]?.text).toBe(chunks.join(""));
   });
 
+  it("stores generated images as standalone blocks without assistant text", () => {
+    const session = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "image.generated",
+      itemId: "image_1",
+      path: "/app-data/generated-images/image.png",
+      name: "generated-image",
+      mimeType: "image/png",
+      size: 8,
+      alt: "A clean product photo",
+    });
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ]);
+  });
+
   it("does not double an assistant block when a completed snapshot repeats it", () => {
     let session = newSession("claude", "/tmp");
     session = applyHarnessEvent(session, {
@@ -206,102 +273,280 @@ describe("streamed markdown", () => {
 
   it("continues open prose through status rows, then completes it", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "contributor（",
+    });
     const id = session.blocks[0].id;
-    session = applyHarnessEvent(session, { type: "status", text: "Advisor reviewed this turn" });
-    session = applyHarnessEvent(session, { type: "message.delta", text: "邮箱归属链已验证）" });
-    expect(session.blocks.map(block => block.text)).toEqual([
-      "contributor（邮箱归属链已验证）", "Advisor reviewed this turn",
+    session = applyHarnessEvent(session, {
+      type: "status",
+      text: "Advisor reviewed this turn",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "邮箱归属链已验证）",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "contributor（邮箱归属链已验证）",
+      "Advisor reviewed this turn",
     ]);
     expect(session.blocks[0]).toMatchObject({ id, streaming: true });
     session = applyHarnessEvent(session, { type: "message.completed" });
-    session = applyHarnessEvent(session, { type: "message.delta", text: "Next message." });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Next message.",
+    });
     expect(session.blocks[0].streaming).toBe(false);
-    expect(session.blocks[2]).toMatchObject({ role: "assistant", text: "Next message." });
+    expect(session.blocks[2]).toMatchObject({
+      role: "assistant",
+      text: "Next message.",
+    });
   });
 
-  it.each([false, true])("seals open prose at an interjection, with preceding status: %s", status => {
-    let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "message.delta", text: "contributor（" });
-    const id = session.blocks[0].id;
-    if (status) session = applyHarnessEvent(session, { type: "status", text: "Reviewed" });
-    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
-    expect(session.blocks[0]).toMatchObject({ id, streaming: false });
-    session = applyHarnessEvent(session, { type: "message.delta", text: "邮箱归属链已验证）" });
-    expect(session.blocks.map(block => block.text)).toEqual([
-      "contributor（", ...(status ? ["Reviewed"] : []), "Review", "邮箱归属链已验证）",
+  it("keeps adjacent completed assistant messages in separate blocks", () => {
+    let session = newSession("codex", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "- update the notes and commit",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Connect returned an empty file for one image.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "assistant",
+        text: "- update the notes and commit",
+        streaming: false,
+      },
+      {
+        role: "assistant",
+        text: "Connect returned an empty file for one image.",
+        streaming: false,
+      },
     ]);
-    expect(session.blocks.at(-1)).toMatchObject({ role: "assistant", streaming: true });
-    expect(session.blocks.at(-1)!.id).not.toBe(id);
+    expect(session.blocks[0].id).not.toBe(session.blocks[1].id);
   });
+
+  it.each([false, true])(
+    "seals open prose at an interjection, with preceding status: %s",
+    (status) => {
+      let session = newSession("omp", "/tmp");
+      session = applyHarnessEvent(session, {
+        type: "message.delta",
+        text: "contributor（",
+      });
+      const id = session.blocks[0].id;
+      if (status)
+        session = applyHarnessEvent(session, {
+          type: "status",
+          text: "Reviewed",
+        });
+      session = applyHarnessEvent(session, {
+        type: "interjection",
+        text: "Review",
+        customType: "advisor",
+      });
+      expect(session.blocks[0]).toMatchObject({ id, streaming: false });
+      session = applyHarnessEvent(session, {
+        type: "message.delta",
+        text: "邮箱归属链已验证）",
+      });
+      expect(session.blocks.map((block) => block.text)).toEqual([
+        "contributor（",
+        ...(status ? ["Reviewed"] : []),
+        "Review",
+        "邮箱归属链已验证）",
+      ]);
+      expect(session.blocks.at(-1)).toMatchObject({
+        role: "assistant",
+        streaming: true,
+      });
+      expect(session.blocks.at(-1)!.id).not.toBe(id);
+    },
+  );
 
   it("does not resume a sealed assistant through status after an interjection", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "message.delta", text: "First." });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "First.",
+    });
     const id = session.blocks[0].id;
-    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
-    session = applyHarnessEvent(session, { type: "status", text: "Advisor reviewed this turn" });
-    session = applyHarnessEvent(session, { type: "message.delta", text: "Second." });
-    expect(session.blocks.map(block => block.text)).toEqual([
-      "First.", "Review", "Advisor reviewed this turn", "Second.",
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Review",
+      customType: "advisor",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      text: "Advisor reviewed this turn",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Second.",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "First.",
+      "Review",
+      "Advisor reviewed this turn",
+      "Second.",
     ]);
-    expect(session.blocks[0]).toMatchObject({ id, streaming: false, text: "First." });
+    expect(session.blocks[0]).toMatchObject({
+      id,
+      streaming: false,
+      text: "First.",
+    });
     expect(session.blocks.at(-1)!.id).not.toBe(id);
   });
 
   it("keeps stacked interjections as hard boundaries", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "message.delta", text: "First." });
-    session = applyHarnessEvent(session, { type: "interjection", text: "One", customType: "advisor" });
-    session = applyHarnessEvent(session, { type: "interjection", text: "Two", customType: "advisor" });
-    session = applyHarnessEvent(session, { type: "message.delta", text: "Second." });
-    expect(session.blocks.map(block => [block.role, block.text])).toEqual([
-      ["assistant", "First."], ["system", "One"], ["system", "Two"], ["assistant", "Second."],
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "First.",
+    });
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "One",
+      customType: "advisor",
+    });
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Two",
+      customType: "advisor",
+    });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Second.",
+    });
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      ["assistant", "First."],
+      ["system", "One"],
+      ["system", "Two"],
+      ["assistant", "Second."],
     ]);
   });
 
   it("seals open reasoning at an interjection", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "Think" });
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: "Think",
+    });
     const id = session.blocks[0].id;
-    session = applyHarnessEvent(session, { type: "interjection", text: "Review", customType: "advisor" });
-    session = applyHarnessEvent(session, { type: "reasoning.delta", text: " more" });
-    expect(session.blocks[0]).toMatchObject({ id, text: "Think", streaming: false });
-    expect(session.blocks.at(-1)).toMatchObject({ role: "reasoning", text: " more", streaming: true });
+    session = applyHarnessEvent(session, {
+      type: "interjection",
+      text: "Review",
+      customType: "advisor",
+    });
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: " more",
+    });
+    expect(session.blocks[0]).toMatchObject({
+      id,
+      text: "Think",
+      streaming: false,
+    });
+    expect(session.blocks.at(-1)).toMatchObject({
+      role: "reasoning",
+      text: " more",
+      streaming: true,
+    });
     expect(session.blocks.at(-1)!.id).not.toBe(id);
   });
 
   it("continues open prose through many status rows", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "message.delta", text: "Hel" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Hel",
+    });
     const id = session.blocks[0].id;
     for (const text of ["A", "B", "C", "D", "E"]) {
       session = applyHarnessEvent(session, { type: "status", text });
     }
     session = applyHarnessEvent(session, { type: "message.delta", text: "lo" });
-    expect(session.blocks[0]).toMatchObject({ id, text: "Hello", streaming: true });
-    expect(session.blocks.filter(block => block.role === "system")).toHaveLength(5);
+    expect(session.blocks[0]).toMatchObject({
+      id,
+      text: "Hello",
+      streaming: true,
+    });
+    expect(
+      session.blocks.filter((block) => block.role === "system"),
+    ).toHaveLength(5);
   });
 
   it("continues reasoning across status but seals it when a tool starts", () => {
     let session = newSession("omp", "/tmp");
-    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "Think" });
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: "Think",
+    });
     session = applyHarnessEvent(session, { type: "status", text: "Reviewing" });
-    session = applyHarnessEvent(session, { type: "reasoning.delta", text: " more" });
-    expect(session.blocks[0]).toMatchObject({ text: "Think more", streaming: true });
-    session = applyHarnessEvent(session, { type: "tool.started", callId: "call", title: "Read" });
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: " more",
+    });
+    expect(session.blocks[0]).toMatchObject({
+      text: "Think more",
+      streaming: true,
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "call",
+      title: "Read",
+    });
     expect(session.blocks[0].streaming).toBe(false);
     session = applyHarnessEvent(session, { type: "status", text: "Waiting" });
-    session = applyHarnessEvent(session, { type: "tool.updated", callId: "call", status: "completed" });
-    expect(session.blocks.filter(block => block.role === "tool")).toMatchObject([
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call",
+      status: "completed",
+    });
+    expect(
+      session.blocks.filter((block) => block.role === "tool"),
+    ).toMatchObject([
       { streaming: false, tool: { callId: "call", status: "completed" } },
     ]);
-    session = applyHarnessEvent(session, { type: "reasoning.delta", text: "New thought" });
-    expect(session.blocks.at(-1)).toMatchObject({ role: "reasoning", text: "New thought" });
+    session = applyHarnessEvent(session, {
+      type: "reasoning.delta",
+      text: "New thought",
+    });
+    expect(session.blocks.at(-1)).toMatchObject({
+      role: "reasoning",
+      text: "New thought",
+    });
   });
 });
 
 describe("appendSteerUser", () => {
+  it("times a mid-turn message and keeps timing the turn from its start", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1000);
+      let session = appendUser(newSession("claude", "/tmp"), "check it");
+      vi.setSystemTime(3000);
+      session = appendSteerUser(session, "please");
+      expect(session.blocks.at(-1)).toMatchObject({ sentAt: 3000 });
+      expect(session.blocks.at(-1)?.startedAt).toBeUndefined();
+      session = stopStreaming(session, 5000);
+      expect(session.blocks[0]).toMatchObject({
+        startedAt: 1000,
+        durationMs: 4000,
+      });
+      expect(session.blocks.at(-1)?.durationMs).toBeUndefined();
+      const saved = sanitizeSessionForPersist(session);
+      expect(saved.blocks.at(-1)).toMatchObject({ sentAt: 3000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("appends a user message without sealing an in-flight assistant block", () => {
     let session = appendUser(newSession("cursor", "/tmp"), "build it");
     session = applyHarnessEvent(session, {
@@ -338,6 +583,20 @@ describe("appendSteerUser", () => {
   });
 });
 
+describe("usage limits", () => {
+  it("records when a limited turn can resume", () => {
+    const limited = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "usage.limited",
+      resetsAt: 5_000,
+    });
+    expect(limited.usageLimit).toEqual({ resetsAt: 5_000 });
+    expect(
+      applyHarnessEvent(newSession("codex", "/tmp"), { type: "usage.limited" })
+        .usageLimit,
+    ).toEqual({});
+  });
+});
+
 describe("status blocks", () => {
   it("keeps one row when the same status repeats", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");
@@ -370,6 +629,159 @@ describe("status blocks", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");
     session = applyHarnessEvent(session, { type: "status", text: "  " });
     expect(session.blocks.some((block) => block.role === "system")).toBe(false);
+  });
+
+  it("updates a keyed status in place for the rest of the turn", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "⠋ caveman level: ULTRA",
+    });
+    const id = session.blocks[1]?.id;
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Working.",
+    });
+    for (const frame of ["⠙", "⠹", "⠸"]) {
+      session = applyHarnessEvent(session, {
+        type: "status",
+        key: "caveman",
+        text: `${frame} caveman level: ULTRA`,
+      });
+    }
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      ["user", "go"],
+      ["system", "⠸ caveman level: ULTRA"],
+      ["assistant", "Working."],
+    ]);
+    expect(session.blocks[1]).toMatchObject({ id, statusKey: "caveman" });
+    expect(session.blocks[2]?.streaming).toBe(true);
+  });
+
+  it("removes a keyed status when its text is cleared", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "caveman level: ULTRA",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: " ",
+    });
+    expect(session.blocks.map((block) => block.role)).toEqual(["user"]);
+  });
+
+  it("keeps the same keyed status across pending and accepted Mono follow-ups", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "Working",
+    });
+    const id = session.blocks[1].id;
+    session = enqueueMonoMessage(session, {
+      id: "follow-up",
+      text: "Check the fallback too",
+      attachments: [],
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "Still working",
+    });
+    expect(session.blocks.filter((block) => block.statusKey === "caveman"))
+      .toEqual([expect.objectContaining({ id, text: "Still working" })]);
+
+    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
+      mode: "follow-up",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "Checking the fallback",
+    });
+    expect(session.blocks.filter((block) => block.statusKey === "caveman"))
+      .toEqual([expect.objectContaining({ id, text: "Checking the fallback" })]);
+
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "",
+    });
+    expect(session.blocks.some((block) => block.statusKey === "caveman"))
+      .toBe(false);
+  });
+
+  it("starts a new keyed status after a queued Mono message starts a new turn", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "First turn",
+    });
+    session = enqueueMonoMessage(stopStreaming(session), {
+      id: "next-turn",
+      text: "again",
+      attachments: [],
+    });
+    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
+      mode: "new-turn",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "Next turn",
+    });
+    expect(session.blocks.filter((block) => block.statusKey === "caveman")
+      .map((block) => block.text)).toEqual(["First turn", "Next turn"]);
+  });
+
+  it("keeps one row per status key", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "caveman level: ULTRA",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "ponytail",
+      text: "ponytail: FULL",
+    });
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "caveman level: LITE",
+    });
+    expect(
+      session.blocks
+        .filter((block) => block.role === "system")
+        .map((block) => block.text),
+    ).toEqual(["caveman level: LITE", "ponytail: FULL"]);
+  });
+
+  it("starts a new keyed status row in the next turn", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "caveman level: ULTRA",
+    });
+    session = appendUser(session, "again");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "caveman",
+      text: "caveman level: LITE",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "caveman level: ULTRA",
+      "again",
+      "caveman level: LITE",
+    ]);
   });
 });
 
@@ -515,6 +927,48 @@ describe("task list updates", () => {
     ).toEqual([
       { id: "2", text: "Implement", status: "completed" },
       { id: "3", text: "Verify", status: "in_progress" },
+    ]);
+  });
+
+  it("keeps a keyed task list from another provider conversation", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "first");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_1",
+      authoritative: true,
+      items: [{ id: "1", text: "Old task", status: "completed" }],
+    });
+    session = appendUser(session, "second");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "pending" }],
+    });
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "completed" }],
+    });
+
+    const lists = session.blocks
+      .filter((block) => block.role === "tasks")
+      .map((block) => block.taskList);
+    expect(lists).toEqual([
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_1",
+        items: [{ id: "1", text: "Old task", status: "completed" }],
+      },
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "New task", status: "completed" }],
+      },
     ]);
   });
 
@@ -684,6 +1138,65 @@ describe("task list updates", () => {
   });
 });
 
+describe("plan keys", () => {
+  it("reaches this turn's plan block past a mid-turn follow-up", () => {
+    const key = planTurnKey(1);
+    let session = appendUser(newSession("claude", "/repo"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach",
+      streaming: true,
+    });
+    session = appendSteerUser(session, "also cover the tests");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach\n\nCover the tests too.",
+    });
+
+    const plans = session.blocks.filter((block) => block.role === "plan");
+    expect(plans).toHaveLength(1);
+    expect(plans[0].text).toBe("# Approach\n\nCover the tests too.");
+  });
+
+  it("does not adopt a saved plan block when the turn counter starts over", () => {
+    // First run of the app: this is the session's first turn, so gen is 1.
+    let session = appendUser(
+      newSession("claude", "/repo"),
+      "plan the refactor",
+    );
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# Old plan",
+    });
+
+    // The key is saved with the transcript, so it survives the restart.
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks.find((block) => block.role === "plan")?.plan?.key).toBe(
+      session.blocks.find((block) => block.role === "plan")?.plan?.key,
+    );
+
+    // Second run: the counter is back to 1 and the user plans again.
+    let reopened: Session = { ...session, blocks: saved.blocks };
+    reopened = appendUser(reopened, "plan the follow-up");
+    reopened = applyHarnessEvent(reopened, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# New plan",
+    });
+
+    const plans = reopened.blocks.filter((block) => block.role === "plan");
+    expect(plans.map((block) => block.text)).toEqual([
+      "# Old plan",
+      "# New plan",
+    ]);
+    // The new plan belongs to the turn that produced it, not to the old one.
+    expect(reopened.blocks.at(-1)?.text).toBe("# New plan");
+  });
+});
+
 describe("applyHarnessEvent context", () => {
   it("tracks the newest level instead of summing turns", () => {
     let session = newSession("claude", "/repo");
@@ -805,6 +1318,32 @@ describe("tool enrichment", () => {
       (block) => block.tool?.callId === "call_1",
     );
     expect(tool?.text).toBe("ls");
+  });
+
+  it("keeps a long shell command instead of the earlier Shell placeholder", () => {
+    const command = `npm run check:web 2>&1 | grep -E "${"test output".repeat(28)}"`;
+    expect(command.length).toBeGreaterThan(240);
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "call_1",
+      title: "Shell",
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      title: command,
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      status: "completed",
+    });
+    expect(session.blocks[0].text).toBe(command);
+    expect(session.blocks[0].tool?.status).toBe("completed");
   });
 });
 
@@ -987,6 +1526,38 @@ describe("subagent steps", () => {
         text: "Read src/App.tsx",
       }),
     ).toBe(session);
+  });
+
+  it("caps a failed step's error output like the parent's own", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "boom ".repeat(4_000),
+    });
+
+    const detail = session.blocks[0].agentRun?.steps[0].detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(8_002);
+    expect(detail.endsWith("…")).toBe(true);
+  });
+
+  it("drops a blank error output rather than carrying it around", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "   ",
+    });
+
+    expect(session.blocks[0].agentRun?.steps[0]).not.toHaveProperty("detail");
   });
 
   it("keeps the parent tool block's own identity", () => {

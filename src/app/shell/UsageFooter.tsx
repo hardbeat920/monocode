@@ -1,38 +1,35 @@
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
-import {
-  consumeCodexRateLimitResetCredit,
-  fetchClaudeRateLimits,
-  fetchCodexRateLimits,
-  fetchOpencodeGoRateLimits,
-} from "../../features/providers/model/rateLimitsFetch";
+import { consumeCodexRateLimitResetCredit } from "../../features/providers/model/rateLimitsFetch";
 import {
   errorRateLimits,
-  fetchingRateLimits,
-  idleRateLimits,
-  RATE_LIMIT_POLL_MS,
-  shouldFetchProvider,
   unavailableRateLimits,
-  type ProviderRateLimits,
   type RateLimitProvider,
 } from "../../features/providers/model/rateLimits";
-import { HARNESS_LABEL, HARNESS_TITLE, type HarnessId } from "../../features/sessions/model/session";
-import { loginHarness, supportsHarnessLogin } from "../../integrations/harness/core/auth";
+import {
+  getCachedRateLimits,
+  loadRateLimits,
+  setCachedRateLimits,
+  useCachedRateLimits,
+} from "../../features/providers/model/rateLimitsCache";
+import {
+  HARNESS_LABEL,
+  HARNESS_TITLE,
+  type HarnessId,
+} from "../../features/sessions/model/session";
+import {
+  loginHarness,
+  supportsHarnessLogin,
+} from "../../integrations/harness/core/auth";
 import {
   runningTerminalChipLabel,
   type RunningTerminal,
 } from "../../features/terminal/model/terminalTab";
 import { MOD } from "../../platform/tauri/platform";
 import { UsageProviderChip } from "./UsageProviderChip";
+import { PiUsage } from "./PiUsage";
 import {
   ProviderSignInPanel,
   type ProviderSignInState,
@@ -53,6 +50,7 @@ const CLOCK_MS = 30_000;
 export type UsageFooterSession = {
   id?: string;
   harness: HarnessId;
+  model?: string;
   authRequired?: boolean;
   providerAccountId?: string;
 };
@@ -88,25 +86,11 @@ export function UsageFooter({
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
-  const [claude, setClaude] = useState<ProviderRateLimits>(() =>
-    idleRateLimits("claude"),
-  );
-  const [codex, setCodex] = useState<ProviderRateLimits>(() =>
-    idleRateLimits("codex"),
-  );
-  const [opencode, setOpencode] = useState<ProviderRateLimits>(() =>
-    idleRateLimits("opencode"),
-  );
+  const wantDevin = providers.includes("devin");
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [, setAccountsVersion] = useState(0);
   const inflight = useRef<Promise<void> | null>(null);
-  const claudeRef = useRef(claude);
-  const codexRef = useRef(codex);
-  const opencodeRef = useRef(opencode);
-  claudeRef.current = claude;
-  codexRef.current = codex;
-  opencodeRef.current = opencode;
   const claudeAccountId =
     session?.harness === "claude" && session.providerAccountId
       ? session.providerAccountId
@@ -122,10 +106,22 @@ export function UsageFooter({
     claudeAccountId,
   );
   const codexAccountAvailable = providerAccountExists("codex", codexAccountId);
-  const claudeAccountRef = useRef(claudeAccountId);
-  const codexAccountRef = useRef(codexAccountId);
-  claudeAccountRef.current = claudeAccountId;
-  codexAccountRef.current = codexAccountId;
+  const cachedClaude = useCachedRateLimits("claude", claudeAccountId);
+  const cachedCodex = useCachedRateLimits("codex", codexAccountId);
+  const opencode = useCachedRateLimits("opencode");
+  const devin = useCachedRateLimits("devin");
+  const claude = claudeAccountAvailable
+    ? cachedClaude
+    : unavailableRateLimits(
+        "claude",
+        "This conversation uses a removed account",
+      );
+  const codex = codexAccountAvailable
+    ? cachedCodex
+    : unavailableRateLimits(
+        "codex",
+        "This conversation uses a removed account",
+      );
 
   useEffect(
     () =>
@@ -133,108 +129,54 @@ export function UsageFooter({
     [],
   );
 
-  const refresh = useCallback(
-    (force = false) => {
-      if (inflight.current) return inflight.current;
-      const visible = document.visibilityState === "visible";
-      const fetchClaude =
-        wantClaude &&
-        claudeAccountAvailable &&
-        shouldFetchProvider(claudeRef.current, { force, visible });
-      const fetchCodex =
-        wantCodex &&
-        codexAccountAvailable &&
-        shouldFetchProvider(codexRef.current, { force, visible });
-      const fetchOpencode =
-        wantOpencode &&
-        shouldFetchProvider(opencodeRef.current, { force, visible });
-      if (!fetchClaude && !fetchCodex && !fetchOpencode) return;
-      if (force) setRefreshing(true);
-      const jobs: Promise<void>[] = [];
-      if (fetchClaude) {
-        const accountId = claudeAccountId;
-        setClaude((current) => fetchingRateLimits("claude", current));
-        jobs.push(
-          fetchClaudeRateLimits(accountId).then((value) => {
-            if (accountId === claudeAccountRef.current) setClaude(value);
-          }),
-        );
-      }
-      if (fetchCodex) {
-        const accountId = codexAccountId;
-        setCodex((current) => fetchingRateLimits("codex", current));
-        jobs.push(
-          fetchCodexRateLimits(accountId).then((value) => {
-            if (accountId === codexAccountRef.current) setCodex(value);
-          }),
-        );
-      }
-      if (fetchOpencode) {
-        setOpencode((current) => fetchingRateLimits("opencode", current));
-        jobs.push(
-          fetchOpencodeGoRateLimits().then((value) => {
-            setOpencode(value);
-          }),
-        );
-      }
-      const run = Promise.allSettled(jobs)
-        .then(() => undefined)
-        .finally(() => {
-          inflight.current = null;
-          setRefreshing(false);
-        });
-      inflight.current = run;
-      return run;
-    },
-    [
-      claudeAccountAvailable,
-      claudeAccountId,
-      codexAccountAvailable,
-      codexAccountId,
-      wantClaude,
-      wantCodex,
-      wantOpencode,
-    ],
-  );
-
+  // New accounts load once. Returning from Settings or focusing the window
+  // reads the shared snapshot without starting another provider request.
   useEffect(() => {
-    const next = claudeAccountAvailable
-      ? idleRateLimits("claude")
-      : unavailableRateLimits(
-          "claude",
-          "This conversation uses a removed account",
-        );
-    claudeRef.current = next;
-    setClaude(next);
-    const pending = inflight.current;
-    if (pending) void pending.finally(() => refresh(true));
-  }, [claudeAccountAvailable, claudeAccountId, refresh]);
+    if (wantClaude && claudeAccountAvailable)
+      void loadRateLimits("claude", claudeAccountId);
+    if (wantCodex && codexAccountAvailable)
+      void loadRateLimits("codex", codexAccountId);
+    if (wantOpencode) void loadRateLimits("opencode");
+    if (wantDevin) void loadRateLimits("devin");
+  }, [
+    claudeAccountAvailable,
+    claudeAccountId,
+    codexAccountAvailable,
+    codexAccountId,
+    wantClaude,
+    wantCodex,
+    wantOpencode,
+    wantDevin,
+  ]);
 
-  useEffect(() => {
-    const next = codexAccountAvailable
-      ? idleRateLimits("codex")
-      : unavailableRateLimits(
-          "codex",
-          "This conversation uses a removed account",
-        );
-    codexRef.current = next;
-    setCodex(next);
-    const pending = inflight.current;
-    if (pending) void pending.finally(() => refresh(true));
-  }, [codexAccountAvailable, codexAccountId, refresh]);
-
-  useEffect(() => {
-    void refresh();
-    const poll = window.setInterval(() => void refresh(), RATE_LIMIT_POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(poll);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [refresh]);
+  const refresh = useCallback(() => {
+    if (inflight.current) return inflight.current;
+    setRefreshing(true);
+    const jobs: Promise<unknown>[] = [];
+    if (wantClaude && claudeAccountAvailable)
+      jobs.push(loadRateLimits("claude", claudeAccountId, true));
+    if (wantCodex && codexAccountAvailable)
+      jobs.push(loadRateLimits("codex", codexAccountId, true));
+    if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
+    if (wantDevin) jobs.push(loadRateLimits("devin", "default", true));
+    const run = Promise.allSettled(jobs)
+      .then(() => undefined)
+      .finally(() => {
+        inflight.current = null;
+        setRefreshing(false);
+      });
+    inflight.current = run;
+    return run;
+  }, [
+    claudeAccountAvailable,
+    claudeAccountId,
+    codexAccountAvailable,
+    codexAccountId,
+    wantClaude,
+    wantCodex,
+    wantOpencode,
+    wantDevin,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
@@ -245,7 +187,6 @@ export function UsageFooter({
     async (creditId?: string) => {
       while (inflight.current) await inflight.current;
       setRefreshing(true);
-      setCodex((current) => fetchingRateLimits("codex", current));
       let outcome: Awaited<ReturnType<typeof consumeCodexRateLimitResetCredit>>;
       const operation = (async () => {
         try {
@@ -253,13 +194,21 @@ export function UsageFooter({
             creditId,
             codexAccountId,
           );
-          setCodex(await fetchCodexRateLimits(codexAccountId));
+          await loadRateLimits("codex", codexAccountId, true);
         } catch (error) {
           const message =
             error instanceof Error
               ? error.message
               : "Could not use Codex reset";
-          setCodex((current) => errorRateLimits("codex", message, current));
+          setCachedRateLimits(
+            "codex",
+            codexAccountId,
+            errorRateLimits(
+              "codex",
+              message,
+              getCachedRateLimits("codex", codexAccountId),
+            ),
+          );
           throw error;
         }
       })();
@@ -275,22 +224,15 @@ export function UsageFooter({
   );
 
   const reconnectProvider = useCallback(
-    async (
-      provider: RateLimitProvider,
-      accountId: string,
-      fetchLimits: () => Promise<ProviderRateLimits>,
-      setLimits: Dispatch<SetStateAction<ProviderRateLimits>>,
-    ) => {
+    async (provider: RateLimitProvider, accountId: string) => {
       while (inflight.current) await inflight.current;
       setRefreshing(true);
-      setLimits((current) => fetchingRateLimits(provider, current));
       const operation = (async () => {
         try {
           await (accountId === "default"
             ? loginHarness(provider)
             : loginHarness(provider, accountId));
-          const value = await fetchLimits();
-          setLimits(value);
+          const value = await loadRateLimits(provider, accountId, true);
           if (value.status !== "ok") {
             throw new Error(
               value.error ||
@@ -302,7 +244,15 @@ export function UsageFooter({
             error instanceof Error
               ? error.message
               : "Could not complete sign-in";
-          setLimits((current) => errorRateLimits(provider, message, current));
+          setCachedRateLimits(
+            provider,
+            accountId,
+            errorRateLimits(
+              provider,
+              message,
+              getCachedRateLimits(provider, accountId),
+            ),
+          );
           throw error;
         }
       })();
@@ -317,25 +267,18 @@ export function UsageFooter({
   );
 
   const reconnectClaude = useCallback(
-    () =>
-      reconnectProvider(
-        "claude",
-        claudeAccountId,
-        () => fetchClaudeRateLimits(claudeAccountId),
-        setClaude,
-      ),
+    () => reconnectProvider("claude", claudeAccountId),
     [claudeAccountId, reconnectProvider],
   );
 
   const reconnectCodex = useCallback(
-    () =>
-      reconnectProvider(
-        "codex",
-        codexAccountId,
-        () => fetchCodexRateLimits(codexAccountId),
-        setCodex,
-      ),
+    () => reconnectProvider("codex", codexAccountId),
     [codexAccountId, reconnectProvider],
+  );
+
+  const reconnectDevin = useCallback(
+    () => reconnectProvider("devin", "default"),
+    [reconnectProvider],
   );
 
   const selectAccount = useCallback(
@@ -358,7 +301,7 @@ export function UsageFooter({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip;
+  const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -367,7 +310,7 @@ export function UsageFooter({
   const onTerminalClick = projectTerminalActive
     ? (onShowTerminal ?? onNewTerminal)
     : (onNewTerminal ?? onShowTerminal);
-  const ariaLabel = showUsage
+  const ariaLabel = showUsage || session?.harness === "pi"
     ? "Provider usage"
     : showTerminals || showTerminalButton
       ? "Terminals"
@@ -380,7 +323,9 @@ export function UsageFooter({
       aria-label={ariaLabel}
       className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
-      {showUsage ? (
+      {session?.harness === "pi" ? (
+        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
+      ) : showUsage ? (
         <>
           {wantClaude ? (
             <UsageProviderChip
@@ -417,13 +362,22 @@ export function UsageFooter({
           {showOpencodeChip ? (
             <UsageProviderChip limits={opencode} now={now} project={project} />
           ) : null}
+          {wantDevin ? (
+            // Devin has one login per machine, so there is no account picker.
+            <UsageProviderChip
+              limits={devin}
+              now={now}
+              project={project}
+              onReconnect={reconnectDevin}
+            />
+          ) : null}
           <button
             type="button"
             className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
             aria-label="Refresh usage"
             title="Refresh usage"
             disabled={refreshing}
-            onClick={() => void refresh(true)}
+            onClick={() => void refresh()}
           >
             <RefreshCw
               className={`size-2.5 ${refreshing ? "animate-spin" : ""}`}

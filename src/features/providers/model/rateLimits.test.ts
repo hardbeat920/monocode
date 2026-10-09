@@ -1,23 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
   clampUsedPercent,
+  exhaustedWindowResetAt,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
   formatResetDuration,
   formatUsagePercent,
   formatWindowLabel,
   idleRateLimits,
-  isRateLimitSnapshotStale,
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  formatExtraUsageBalance,
+  parseDevinUsage,
   parseOpencodeGoUsage,
   parseResetTimestamp,
-  RATE_LIMIT_MIN_REFETCH_MS,
   rateLimitWindowTooltip,
-  shouldFetchProvider,
-  shouldFetchRateLimits,
 } from "./rateLimits";
+
+describe("parseDevinUsage", () => {
+  it("turns remaining daily and weekly quota into used windows", () => {
+    const limits = parseDevinUsage({
+      plan: "Pro",
+      dailyRemainingPercent: 0,
+      dailyResetsAt: 1_791_273_600,
+      weeklyRemainingPercent: 42,
+      weeklyResetsAt: 1_791_705_600,
+      extraUsageBalanceMicros: -1_673_099,
+    });
+    expect(formatExtraUsageBalance(limits.extraUsageBalance!)).toBe("$-1.67");
+    expect(limits).toMatchObject({
+      provider: "devin",
+      status: "ok",
+      session: { usedPercent: 100, windowMinutes: 1_440, resetsAt: 1_791_273_600_000 },
+      weekly: { usedPercent: 58, windowMinutes: 10_080, resetsAt: 1_791_705_600_000 },
+      monthly: null,
+    });
+  });
+
+  it("leaves out windows the plan hides", () => {
+    const limits = parseDevinUsage({ weeklyRemainingPercent: 80, weeklyResetsAt: null });
+    expect(limits.session).toBeNull();
+    expect(limits.weekly).toEqual({ usedPercent: 20, windowMinutes: 10_080, resetsAt: null });
+    expect(limits.extraUsageBalance).toBeNull();
+  });
+});
 
 describe("formatWindowLabel", () => {
   it("uses the compact 5h / wk labels", () => {
@@ -90,6 +117,27 @@ describe("formatUsagePercent", () => {
     expect(formatUsagePercent(58.4)).toBe("58%");
     expect(formatUsagePercent(58.6)).toBe("59%");
     expect(clampUsedPercent(140)).toBe(100);
+  });
+});
+
+describe("exhaustedWindowResetAt", () => {
+  it("returns the latest reset among spent windows", () => {
+    const limits = {
+      ...idleRateLimits("codex"),
+      session: { usedPercent: 100, windowMinutes: 300, resetsAt: 2_000 },
+      weekly: { usedPercent: 100, windowMinutes: 10_080, resetsAt: 9_000 },
+    };
+    expect(exhaustedWindowResetAt(limits)).toBe(9_000);
+  });
+
+  it("ignores windows with room left", () => {
+    const limits = {
+      ...idleRateLimits("claude"),
+      session: { usedPercent: 100, windowMinutes: 300, resetsAt: 2_000 },
+      weekly: { usedPercent: 40, windowMinutes: 10_080, resetsAt: 9_000 },
+    };
+    expect(exhaustedWindowResetAt(limits)).toBe(2_000);
+    expect(exhaustedWindowResetAt(idleRateLimits("claude"))).toBeNull();
   });
 });
 
@@ -222,6 +270,26 @@ describe("parseCodexRateLimits", () => {
     expect(limits.resetCredits).toEqual({ availableCount: 3, credits: null });
   });
 
+  it("maps a free plan's lone 30-day primary window to monthly", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: {
+        primary: {
+          usedPercent: 4,
+          windowDurationMins: 43_200,
+          resetsAt: 1_792_550_273,
+        },
+        secondary: null,
+      },
+    });
+    expect(limits.session).toBeNull();
+    expect(limits.weekly).toBeNull();
+    expect(limits.monthly).toEqual({
+      usedPercent: 4,
+      windowMinutes: 43_200,
+      resetsAt: 1_792_550_273_000,
+    });
+  });
+
   it("falls back to primary=session when durations are unknown", () => {
     const limits = parseCodexRateLimits({
       primary: { usedPercent: 10, resetsAt: 100 },
@@ -242,7 +310,11 @@ describe("parseOpencodeGoUsage", () => {
           resetsAt: "2026-09-16T16:27:38.287Z",
         },
         weekly: { status: "ok", percent: 30, resetsAt: "2026-09-23T00:00:00Z" },
-        monthly: { status: "ok", percent: 12, resetsAt: "2026-10-16T00:00:00Z" },
+        monthly: {
+          status: "ok",
+          percent: 12,
+          resetsAt: "2026-10-16T00:00:00Z",
+        },
       },
     });
     expect(limits.provider).toBe("opencode");
@@ -285,120 +357,37 @@ describe("rateLimitWindowTooltip", () => {
       ),
     ).toBe("42% used · Resets in 2h 33m");
   });
-});
 
-describe("shouldFetchRateLimits", () => {
-  const now = Date.parse("2026-08-27T08:00:00Z");
-  const fresh = {
-    ...idleRateLimits("claude"),
-    status: "ok" as const,
-    updatedAt: now - 60_000,
-  };
-  const stale = {
-    ...fresh,
-    provider: "codex" as const,
-    updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-  };
-
-  it("always fetches when forced", () => {
+  it("shows remaining percent with a reset countdown", () => {
+    const now = Date.parse("2026-08-27T08:00:00Z");
     expect(
-      shouldFetchRateLimits({
-        force: true,
-        visible: false,
-        claude: fresh,
-        codex: fresh,
+      rateLimitWindowTooltip(
+        {
+          usedPercent: 42.4,
+          windowMinutes: 300,
+          resetsAt: now + 2 * 3_600_000,
+        },
         now,
-      }),
-    ).toBe(true);
+        true,
+      ),
+    ).toBe("58% remaining · Resets in 2h");
   });
 
-  it("skips when the window is hidden", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: false,
-        claude: stale,
-        codex: stale,
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("skips a visible window when both snapshots are fresh", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: fresh,
-        codex: { ...fresh, provider: "codex" },
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("fetches on focus once either snapshot is 5 minutes old", () => {
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: fresh,
-        codex: stale,
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("treats the first idle load as stale", () => {
-    expect(isRateLimitSnapshotStale(idleRateLimits("claude"), now)).toBe(true);
-  });
-
-  it("does not keep polling a provider that is not connected", () => {
-    const disconnected = {
-      ...idleRateLimits("codex"),
-      status: "unavailable" as const,
-      updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-      error: "Codex CLI not found",
-    };
-    expect(isRateLimitSnapshotStale(disconnected, now)).toBe(false);
-    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
-      false,
-    );
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: disconnected,
-        codex: disconnected,
-        now,
-      }),
-    ).toBe(false);
-  });
-
-  it("still polls the connected provider when the other is not", () => {
-    const disconnected = {
-      ...idleRateLimits("claude"),
-      status: "unavailable" as const,
-      updatedAt: now - RATE_LIMIT_MIN_REFETCH_MS,
-      error: "Claude not signed in",
-    };
-    expect(shouldFetchProvider(disconnected, { visible: true, now })).toBe(
-      false,
-    );
-    expect(
-      shouldFetchRateLimits({
-        visible: true,
-        claude: disconnected,
-        codex: stale,
-        now,
-      }),
-    ).toBe(true);
-  });
-
-  it("retries a disconnected provider only when forced", () => {
-    const disconnected = {
-      ...idleRateLimits("codex"),
-      status: "unavailable" as const,
-      updatedAt: now,
-      error: "Codex not signed in",
-    };
-    expect(
-      shouldFetchProvider(disconnected, { force: true, visible: true, now }),
-    ).toBe(true);
-  });
+  it.each([
+    [0, "100%"],
+    [100, "0%"],
+    [-10, "100%"],
+    [110, "0%"],
+  ])(
+    "clamps %s used before showing remaining usage",
+    (usedPercent, remaining) => {
+      expect(
+        rateLimitWindowTooltip(
+          { usedPercent, windowMinutes: 10_080, resetsAt: null },
+          0,
+          true,
+        ),
+      ).toBe(`${remaining} remaining · wk window`);
+    },
+  );
 });

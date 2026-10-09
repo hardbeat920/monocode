@@ -34,8 +34,10 @@ export function warmupText(cwd: string, preferred?: HarnessId): Promise<void> {
 export function generateCommitMessage(
   cwd: string,
   preferred?: HarnessId,
+  signal?: AbortSignal,
+  paths?: readonly string[],
 ): Promise<string> {
-  return generateHarnessCommitMessage(pickTextHarness(preferred), cwd);
+  return generateHarnessCommitMessage(pickTextHarness(preferred), cwd, signal, paths);
 }
 
 export function generatePrContent(

@@ -16,6 +16,8 @@ export type Note = {
   tags: string[];
   sourceSessionId?: string;
   sourceCwd?: string;
+  /** Slug generated for a note created without a title; replaced once from its first real title. */
+  slugPending: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -28,6 +30,8 @@ export type NoteUpsert = {
   sourceSessionId?: string;
   /** Omit on update to keep the saved project directory. */
   sourceCwd?: string;
+  /** Replace a pending slug from the title. Set once the title is done being typed; ignored unless the slug is pending. */
+  finalizeSlug?: boolean;
 };
 
 /** Note chip shown in the composer and on the user turn in the thread. */
@@ -53,6 +57,7 @@ export function noteCardMeta(card: NoteComposerCard): NoteCardMeta {
 }
 
 export const ADD_NOTE_TO_CHAT_EVENT = "monocode:add-note-to-chat";
+export const NOTES_CHANGED_EVENT = "monocode:notes-changed";
 
 const MAX_TITLE = 200;
 export const MAX_NOTE_TAGS = 20;
@@ -351,6 +356,7 @@ export function composeNoteMessage(
       title: card.title,
       body: card.body,
       tags: [],
+      slugPending: false,
       createdAt: 0,
       updatedAt: 0,
     },

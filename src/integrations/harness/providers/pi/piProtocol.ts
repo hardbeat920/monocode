@@ -1,5 +1,8 @@
 import type { Attachment, ToolPreview, TurnMetrics } from "../../../../features/sessions/model/session";
-import { attachmentPathText } from "../../../../features/sessions/model/attachments";
+import {
+  attachmentPathText,
+  promptText,
+} from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
@@ -60,6 +63,7 @@ export type PiExtensionUiRequest =
       method:
         "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
       title?: string;
+      statusKey?: string;
     };
 
 export type PiRpcResponse = {
@@ -183,7 +187,8 @@ export function piNativeId(provider: string, modelId: string): string {
 
 function piPromptContent(text: string, attachments: Attachment[] = []) {
   const images: PiImage[] = [];
-  const parts = text ? [text] : [];
+  const body = promptText(text, attachments);
+  const parts = body ? [body] : [];
   for (const attachment of attachments) {
     const mimeType = attachment.mimeType.trim().toLowerCase();
     if (
@@ -296,6 +301,8 @@ export function parseExtensionUiRequest(
     method === "setTitle" ||
     method === "set_editor_text"
   ) {
+    const statusKey =
+      method === "setStatus" ? stringField(rec, "statusKey") : undefined;
     return {
       id,
       method,
@@ -304,6 +311,7 @@ export function parseExtensionUiRequest(
         stringField(rec, "statusText") ??
         stringField(rec, "title") ??
         stringField(rec, "text"),
+      ...(statusKey ? { statusKey } : {}),
     };
   }
   return null;
@@ -709,6 +717,28 @@ export function summarizeToolRequest(
   }
 }
 
+/**
+ * Copilot's /models endpoint also returns internal agents and dated legacy
+ * snapshots that never appear in its own model picker. omp drops the
+ * picker/policy flags, so hide those ids by name.
+ */
+const COPILOT_HIDDEN_MODELS = [
+  /^(exec-agent|copilot-search)-/,
+  /^trajectory-compaction$/,
+  /^gpt-3\.5-turbo/,
+  /^gpt-4(-0613|-o-preview)?$/,
+  /^gpt-4o-mini/,
+  /^gpt-4o-\d{4}-/,
+  /^gpt-4\.1-\d{4}-/,
+];
+
+export function isHiddenCopilotModel(provider: string, modelId: string) {
+  return (
+    provider === "github-copilot" &&
+    COPILOT_HIDDEN_MODELS.some((pattern) => pattern.test(modelId))
+  );
+}
+
 export function modelsFromRpcData(
   flavor: PiFlavor,
   data: unknown,
@@ -727,6 +757,7 @@ export function modelsFromRpcData(
     const modelId = stringField(model, "id");
     const provider = stringField(model, "provider");
     if (!modelId || !provider) continue;
+    if (isHiddenCopilotModel(provider, modelId)) continue;
     const nativeId = piNativeId(provider, modelId);
     if (seen.has(nativeId)) continue;
     seen.add(nativeId);

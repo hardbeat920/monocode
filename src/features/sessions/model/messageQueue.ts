@@ -31,10 +31,13 @@ export function dequeueQueuedMessage(
 
 /**
  * True when the idle session can send its queued head as a new turn.
- * Busy / paused / resuming / preparing-handoff / editing-the-head all wait.
+ * Busy / paused / resuming / usage-limited / preparing-handoff /
+ * editing-the-head all wait.
  */
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
+  if (session.worktreePreparing || session.worktreeRemoved) return false;
+  if (session.usageLimit) return false;
   if (session.queueStatus === "paused" || session.queueStatus === "resuming") {
     return false;
   }
@@ -43,6 +46,30 @@ export function canDispatchQueuedHead(session: Session): boolean {
   if (isEditingQueuedHead(session)) return false;
   if (isPreparingHandoff(session)) return false;
   return true;
+}
+
+/** Monos deliver one waiting follow-up at a time after the provider is ready. */
+export function canSteerQueuedHead(session: Session): boolean {
+  const head = queuedHead(session);
+  return (
+    !!head &&
+    !head.monoSessionCompletion &&
+    !!session.busy &&
+    !!session.turnReady &&
+    !session.worktreePreparing &&
+    !session.worktreeRemoved &&
+    !session.pendingSwitch &&
+    !session.usageLimit &&
+    !(
+      session.pendingQuestion && session.pendingQuestion.autoResolveAt == null
+    ) &&
+    session.queueStatus !== "paused" &&
+    session.queueStatus !== "resuming" &&
+    !isEditingQueuedHead(session) &&
+    !isPreparingHandoff(session) &&
+    head.intent !== "plan" &&
+    head.intent !== "orchestrate"
+  );
 }
 
 /** Resolve a queued row for auto-dispatch (head, idle) or an explicit Steer. */
@@ -55,7 +82,7 @@ export function queuedMessageForSubmit(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
-  if (mode === "steer") return message;
+  if (mode === "steer") return message.monoSessionCompletion ? undefined : message;
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;

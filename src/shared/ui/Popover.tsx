@@ -1,5 +1,7 @@
+import { NativePopupHost } from "./NativePopupHost";
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -47,6 +49,8 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   layer?: number;
   /** Drops the glass frame and keeps only placement and the content animation. */
   bare?: boolean;
+  /** Corner radius of the glass frame. Defaults to `rounded-xl`. */
+  rounded?: string;
   style?: CSSProperties;
   autoFocus?: boolean;
   /** Wiring this in hands Popover the outside-click and Escape handling. */
@@ -57,8 +61,7 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   ref?: Ref<HTMLDivElement>;
 };
 
-const FRAME =
-  "isolate overflow-hidden rounded-xl border border-content/10 shadow-xl";
+const FRAME = "isolate overflow-hidden border border-content/10 shadow-xl";
 
 /** Which corner the open animation grows from, so it reads as anchored. */
 function origin(side: PopoverSide, align: PopoverAlign): string {
@@ -127,7 +130,90 @@ function samePosition(a: PopoverPosition | null, b: PopoverPosition): boolean {
  * no local stacking context can paint over it, placed against its anchor with
  * viewport flipping, and animated in from the anchored edge.
  */
-export function Popover({
+export function Popover(props: Props) {
+  const host = useContext(NativePopupHost);
+  return host ? (
+    <NativePopover {...props} host={host} />
+  ) : (
+    <WebPopover {...props} />
+  );
+}
+
+function NativePopover({
+  host,
+  children,
+  className,
+  maxHeight,
+  onDismiss,
+  ignore,
+  ref,
+  style,
+  autoFocus,
+  dismissOnEscape = true,
+  ...props
+}: Props & { host: HTMLElement }) {
+  const surface = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (autoFocus) surface.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
+  useEffect(() => {
+    if (!onDismiss) return;
+    const key = (event: KeyboardEvent) => {
+      if (!dismissOnEscape || event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss("escape");
+    };
+    const outside = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        surface.current?.contains(target) ||
+        (ignore && target.closest(ignore))
+      )
+        return;
+      onDismiss("outside");
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", outside);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", outside);
+    };
+  }, [onDismiss, dismissOnEscape, ignore]);
+  // These position the ordinary web popover; the OS positions this surface.
+  const {
+    anchor: _anchor,
+    side: _side,
+    align: _align,
+    gap: _gap,
+    padding: _padding,
+    width: _width,
+    minHeight: _minHeight,
+    constrainHeight: _constrainHeight,
+    layer: _layer,
+    bare: _bare,
+    rounded: _rounded,
+    ...rest
+  } = props;
+  return createPortal(
+    <div
+      {...rest}
+      ref={(el) => {
+        surface.current = el;
+        if (typeof ref === "function") ref(el);
+        else if (ref) ref.current = el;
+      }}
+      style={{ maxHeight: maxHeight ?? 400, ...style }}
+      className={`relative w-full outline-none ${className ?? ""}`}
+    >
+      {children}
+    </div>,
+    host,
+  );
+}
+
+function WebPopover({
   anchor,
   side = "bottom",
   align = "start",
@@ -139,6 +225,7 @@ export function Popover({
   constrainHeight = true,
   layer = LAYER.popover,
   bare = false,
+  rounded = "rounded-xl",
   className,
   style,
   autoFocus = false,
@@ -258,7 +345,7 @@ export function Popover({
       ref={frame}
       data-popover-side={position?.side ?? side}
       style={{ ...placed, zIndex: layer }}
-      className={bare ? undefined : FRAME}
+      className={bare ? undefined : `${FRAME} ${rounded}`}
     >
       {bare ? null : <GlassBackdrop />}
       <div

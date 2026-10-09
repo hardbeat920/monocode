@@ -1,6 +1,11 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
-import type { RuntimeMode } from "../../../../features/sessions/model/session";
+import type {
+  RuntimeMode,
+  TaskListItem,
+  TaskListMeta,
+} from "../../../../features/sessions/model/session";
 import { loadClaudeHooks } from "../../../../features/settings/model/settings";
 import {
   killChild,
@@ -33,6 +38,8 @@ import {
   isSubagentMessage,
   isTerminalAgentTaskStatus,
   isTodoTool,
+  applyClaudeTaskTool,
+  isUsageLimitResult,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
   parseControlCancelId,
@@ -59,6 +66,7 @@ import {
   toolTitle,
   tryParseJsonRecord,
   turnStatusFromResult,
+  usageLimitFromRateLimitEvent,
   type ClaudeAgentTaskNotification,
   type ClaudeCliSettings,
   type ClaudeControlRequest,
@@ -148,7 +156,11 @@ type Live = {
   backgroundKey: string;
   /** Finished-subagent notes held until Claude picks the thread back up. */
   taskNotes: string[];
+  /** TaskCreate/TaskUpdate items, keyed by Claude's task id. */
+  claudeTasks: Map<string, TaskListItem>;
   turnResultSeen: boolean;
+  /** Latest `rate_limit_event` refused requests; reported when the turn ends. */
+  usageLimit: { resetsAt?: number } | null;
   cancelled: boolean;
   muteUpdates: boolean;
   turns: Promise<void>;
@@ -160,6 +172,7 @@ type Live = {
   initialized: boolean;
   emittedAssistant: string;
   emittedReasoning: string;
+  pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
 };
@@ -179,6 +192,17 @@ const RESUME_GRACE_MS = 15_000;
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+/**
+ * Claude task lists outlive a Live: a restart that resumes the conversation
+ * keeps its task ids, so later TaskUpdate calls must find earlier tasks. Task
+ * ids belong to one Claude conversation, so each map records which one.
+ */
+const tasksByThread = new Map<
+  string,
+  { providerSessionId: string; tasks: Map<string, TaskListItem> }
+>();
+/** Task-list block key for TaskCreate/TaskUpdate items. */
+const CLAUDE_TASKS_KEY = "claude-tasks";
 const cancelledThreads = new Set<string>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
@@ -259,7 +283,7 @@ export async function compactClaudeContext(
 
 export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new Error("No active turn to steer");
+  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
 
   const message = buildClaudeUserMessage({
     text: input.text,
@@ -352,6 +376,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
 
 export async function forgetClaudeSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
+  tasksByThread.delete(sessionId);
   await stopClaudeSession(sessionId);
 }
 
@@ -364,6 +389,36 @@ export function bindClaudeSession(
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
   resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
+  // Task ids from another conversation mean nothing in this one.
+  if (tasksByThread.get(threadId)?.providerSessionId !== sessionId) {
+    tasksByThread.delete(threadId);
+  }
+}
+
+/**
+ * Seed the task map from a restored session's persisted panel. After an app
+ * restart only the transcript survives, and a resumed conversation still
+ * refers to its earlier task ids.
+ */
+export function restoreClaudeTaskLists(
+  threadId: string,
+  lists: TaskListMeta[],
+): void {
+  if (!threadId || tasksByThread.has(threadId)) return;
+  // Only a list produced by the conversation bound to this thread applies.
+  const providerSessionId = resumeByThread.get(threadId)?.sessionId;
+  if (!providerSessionId) return;
+  let items: TaskListItem[] = [];
+  for (const entry of lists) {
+    if (entry.key !== CLAUDE_TASKS_KEY) continue;
+    if (entry.providerSessionId !== providerSessionId) continue;
+    items = entry.items.filter((item) => item.id);
+  }
+  if (items.length === 0) return;
+  tasksByThread.set(threadId, {
+    providerSessionId,
+    tasks: new Map(items.map((item) => [item.id!, { ...item }])),
+  });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
@@ -400,11 +455,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   ) {
     resumeByThread.delete(input.sessionId);
   }
-
   const { path } = await resolveClaudeBinaryImpl();
   const liveRef: { current: Live | null } = { current: null };
   const claudeSessionId =
     canResume && resume ? resume.sessionId : crypto.randomUUID();
+  const retained = tasksByThread.get(input.sessionId);
+  const claudeTasks =
+    retained?.providerSessionId === claudeSessionId
+      ? retained.tasks
+      : new Map<string, TaskListItem>();
+  tasksByThread.set(input.sessionId, {
+    providerSessionId: claudeSessionId,
+    tasks: claudeTasks,
+  });
   const launch = launchOptions(
     input,
     canResume ? resume?.sessionId : undefined,
@@ -432,7 +495,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     awaitingResume: null,
     backgroundKey: "",
     taskNotes: [],
+    claudeTasks,
     turnResultSeen: false,
+    usageLimit: null,
     cancelled: false,
     muteUpdates: false,
     turns: Promise.resolve(),
@@ -444,6 +509,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     initialized: false,
     emittedAssistant: "",
     emittedReasoning: "",
+    pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
   };
@@ -478,6 +544,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     buildClaudeSpawnArgs(launch),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
+    "claude",
   );
 
   liveByThread.set(input.sessionId, live);
@@ -517,6 +584,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   live.emittedAssistant = "";
   live.emittedReasoning = "";
+  live.pendingAssistantBoundary = false;
   live.toolsByIndex.clear();
   live.toolsById.clear();
   live.agentTasks.clear();
@@ -536,6 +604,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   try {
     await writeJson(input.sessionId, message);
+    input.onAccepted?.();
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -598,6 +667,12 @@ function handleLine(sessionId: string, live: Live, line: string): void {
   const sessionIdFromLine = sessionIdFromMessage(rec);
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
+    // A different conversation starts with its own task ids.
+    live.claudeTasks = new Map();
+    tasksByThread.set(sessionId, {
+      providerSessionId: sessionIdFromLine,
+      tasks: live.claudeTasks,
+    });
     resumeByThread.set(sessionId, {
       sessionId: sessionIdFromLine,
       cwd: live.cwd,
@@ -650,6 +725,10 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     handleResult(live, rec);
     return;
   }
+  if (type === "rate_limit_event") {
+    live.usageLimit = usageLimitFromRateLimitEvent(rec);
+    return;
+  }
   if (type === "system") {
     const text = statusTextFromSystem(rec);
     if (text) {
@@ -667,6 +746,7 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
   if (delta) {
     if (subagent) return;
     if (delta.kind === "assistant") {
+      closePendingAssistantMessage(live);
       live.emittedAssistant = joinStreamText(live.emittedAssistant, delta.text);
       live.onEvent({ type: "message.delta", text: delta.text });
     } else {
@@ -746,6 +826,7 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   if (used !== undefined) live.onEvent({ type: "context", used });
 
   const snapshot = assistantTextBlocks(rec).join("");
+  if (snapshot) closePendingAssistantMessage(live);
   const extra = snapshotRemainder(live.emittedAssistant, snapshot);
   if (extra) {
     live.emittedAssistant = joinStreamText(live.emittedAssistant, extra);
@@ -805,6 +886,18 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
     }
     emitTaskListIfNeeded(live, tool.name, tool.input);
   }
+
+  // Each assistant record is one Claude message. Wait until the next message
+  // begins to close its UI block, so a backgrounded turn stays visibly live.
+  live.pendingAssistantBoundary = !!(snapshot || live.emittedAssistant);
+  live.emittedAssistant = "";
+  live.emittedReasoning = "";
+}
+
+function closePendingAssistantMessage(live: Live): void {
+  if (!live.pendingAssistantBoundary) return;
+  live.pendingAssistantBoundary = false;
+  live.onEvent({ type: "message.completed" });
 }
 
 function handleUser(live: Live, rec: Record<string, unknown>): void {
@@ -827,6 +920,19 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
       detail: result.text || undefined,
       preview: previewFromTool(tool.name, tool.input, result.text),
     });
+    if (
+      !result.isError &&
+      applyClaudeTaskTool(live.claudeTasks, tool.name, tool.input, result.text)
+    ) {
+      live.onEvent({
+        type: "tasks.updated",
+        key: CLAUDE_TASKS_KEY,
+        // The map is the source of truth, so a TaskUpdate subject is a rename.
+        authoritative: true,
+        providerSessionId: live.claudeSessionId,
+        items: [...live.claudeTasks.values()],
+      });
+    }
     // What a subagent hands back is the last thing it said, so it closes out
     // that agent's own trail rather than sitting on the parent row as detail.
     if (isAgentToolName(tool.name) && result.text.trim() && !result.isError) {
@@ -838,7 +944,27 @@ function handleUser(live: Live, rec: Record<string, unknown>): void {
         text: result.text,
       });
     }
+    if (isAgentToolName(tool.name)) settleInlineAgentTask(live, tool.id);
   }
+}
+
+/**
+ * A subagent that was never backgrounded reports back on the parent's own tool
+ * result, and Claude sends no task record for one that ended inline. Without
+ * this its task would keep the turn open for good: the reply reads as finished
+ * while the composer and the plan's Build button stay disabled until a restart.
+ */
+function settleInlineAgentTask(live: Live, toolUseId: string): void {
+  let settled = false;
+  for (const [taskId, task] of [...live.agentTasks]) {
+    if (task.toolUseId !== toolUseId || task.backgrounded) continue;
+    live.agentTasks.delete(taskId);
+    live.backgroundTasks.delete(taskId);
+    settled = true;
+  }
+  if (!settled) return;
+  maybeFinishTurn(live);
+  syncBackgroundWait(live);
 }
 
 function handleResult(live: Live, rec: Record<string, unknown>): void {
@@ -856,6 +982,14 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   if (result.status === "failed" && result.error && !live.cancelled) {
     live.onEvent({ type: "session.error", message: result.error });
   }
+  // A refused window can still fall back to another model, so only a turn
+  // that ended in error was stopped by it.
+  const turnErrored = rec.is_error === true || result.status === "failed";
+  const usageLimit = live.usageLimit ?? (isUsageLimitResult(rec) ? {} : null);
+  live.usageLimit = null;
+  if (usageLimit && turnErrored && !live.cancelled) {
+    live.onEvent({ type: "usage.limited", ...usageLimit });
+  }
   live.turnResultSeen = true;
   maybeFinishTurn(live);
   showBackgroundRows(live);
@@ -868,10 +1002,7 @@ async function handleControlRequest(
   control: ClaudeControlRequest,
 ): Promise<void> {
   if (control.subtype !== "can_use_tool" && control.subtype !== "permission") {
-    await writeJson(
-      sessionId,
-      buildControlResponse(control.requestId, {}),
-    );
+    await writeJson(sessionId, buildControlResponse(control.requestId, {}));
     return;
   }
 
@@ -1171,12 +1302,16 @@ function handleAgentLifecycle(
   }
   for (const row of liveTasks) {
     if (live.agentTasks.has(row.taskId)) continue;
+    // The list carries no tool_use_id and often lands before task_started, so
+    // find the Agent call that spawned it rather than opening a second row.
+    const toolUseId = unclaimedAgentCall(live, row.description);
     live.agentTasks.set(row.taskId, {
       taskId: row.taskId,
+      toolUseId,
       description: row.description,
       backgrounded: true,
     });
-    upsertAgentTool(live, undefined, row.description, "in_progress");
+    upsertAgentTool(live, toolUseId, row.description, "in_progress");
   }
   maybeFinishTurn(live);
   syncBackgroundWait(live);
@@ -1273,10 +1408,7 @@ function noteSubagentTool(
  * never joins the parent transcript — that would read as the main agent
  * talking — but it is the most legible thing in the panel for its own row.
  */
-function noteSubagentNarration(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentNarration(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   const model = stringField(asRecord(rec.message), "model");
@@ -1311,10 +1443,7 @@ function noteSubagentNarration(
 }
 
 /** Settles the subagent's own tool rows once their results come back. */
-function noteSubagentResults(
-  live: Live,
-  rec: Record<string, unknown>,
-): void {
+function noteSubagentResults(live: Live, rec: Record<string, unknown>): void {
   const parent = subagentParent(live, rec);
   if (!parent) return;
   for (const result of toolResultsFromUserMessage(rec)) {
@@ -1325,6 +1454,7 @@ function noteSubagentResults(
       kind: "tool",
       text: "",
       status: result.isError ? "failed" : "completed",
+      ...(result.isError && result.text ? { detail: result.text } : {}),
     });
   }
 }
@@ -1334,6 +1464,22 @@ function isBackgroundedAgentTool(live: Live, toolUseId: string): boolean {
     if (task.toolUseId === toolUseId && task.backgrounded) return true;
   }
   return false;
+}
+
+/** The latest Agent call with this description that no task has claimed yet. */
+function unclaimedAgentCall(
+  live: Live,
+  description: string,
+): string | undefined {
+  const claimed = new Set(
+    [...live.agentTasks.values()].map((task) => task.toolUseId),
+  );
+  let match: string | undefined;
+  for (const tool of live.toolsById.values()) {
+    if (!isAgentToolName(tool.name) || claimed.has(tool.id)) continue;
+    if (stringField(tool.input, "description") === description) match = tool.id;
+  }
+  return match;
 }
 
 function upsertAgentTool(
@@ -1437,6 +1583,7 @@ function noteClaudeTurnStarted(live: Live): void {
   // compared against what the earlier turn streamed.
   live.emittedAssistant = "";
   live.emittedReasoning = "";
+  live.pendingAssistantBoundary = false;
   // Close the message Claude left off with, so the reply starts its own and
   // the fold puts the earlier one away, the same as prose between tool calls.
   // A background command's row already sits between the two; a subagent's
@@ -1457,7 +1604,8 @@ function noteClaudeTurnStarted(live: Live): void {
 function showBackgroundRows(live: Live): void {
   if (!live.activeTurn || live.cancelled) return;
   for (const [taskId, task] of live.backgroundTasks) {
-    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId)) continue;
+    if (live.backgroundRows.has(taskId) || live.agentTasks.has(taskId))
+      continue;
     const source = task.toolUseId
       ? live.toolsById.get(task.toolUseId)
       : undefined;
@@ -1471,7 +1619,9 @@ function showBackgroundRows(live: Live): void {
       kind: source ? toolKindFromName(source.name) : "execute",
       status: "in_progress",
       background: true,
-      ...(source ? { preview: previewFromTool(source.name, source.input) } : {}),
+      ...(source
+        ? { preview: previewFromTool(source.name, source.input) }
+        : {}),
     });
   }
 }
@@ -1661,5 +1811,6 @@ function launchOptions(
 export function __claudeTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
+  tasksByThread.clear();
   cancelledThreads.clear();
 }

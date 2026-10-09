@@ -9,7 +9,11 @@ import {
 } from "../model/checkpoint";
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
-import { basename, notifyGitChanged, subscribeGitChanged } from "../../../platform/tauri/fs";
+import {
+  basename,
+  notifyGitChanged,
+  subscribeGitChanged,
+} from "../../../platform/tauri/fs";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 
@@ -23,6 +27,7 @@ type Props = {
     path?: string,
     session?: { sessionId: string; cwd: string },
   ) => void;
+  onCommit?: (session: { sessionId: string; cwd: string }) => void;
 };
 
 export function SessionReview({
@@ -32,25 +37,40 @@ export function SessionReview({
   busy = false,
   undoLocked = false,
   onOpenDiff,
+  onCommit,
 }: Props) {
   const [files, setFiles] = useState<CheckpointFile[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [acting, setActing] = useState<"keep" | "undo" | null>(null);
   const filesRef = useRef(files);
+  const loadGeneration = useRef(0);
   filesRef.current = files;
 
   const load = useCallback(() => {
+    const generation = ++loadGeneration.current;
     if (!cwd || cwd === "~") {
       setFiles([]);
+      setError(null);
       return;
     }
     void sessionCheckpointStatus(sessionId, cwd)
-      .then((status) => setFiles(status.files))
-      .catch(() => setFiles([]));
+      .then((status) => {
+        if (generation !== loadGeneration.current) return;
+        setFiles(status.files);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (generation !== loadGeneration.current) return;
+        setFiles([]);
+        setError(caught instanceof Error ? caught.message : String(caught));
+      });
   }, [sessionId, cwd]);
 
   useEffect(() => {
     if (!enabled || busy) return;
+    setFiles([]);
+    setError(null);
     load();
     let timer: number | null = null;
     const schedule = () => {
@@ -63,15 +83,12 @@ export function SessionReview({
     const unsubReview = subscribeReviewChanged((id) => {
       if (!id || id === sessionId) schedule();
     });
-    const unsubGit = subscribeGitChanged(() => {
-      if (filesRef.current.length > 0) schedule();
-    });
-    const onResume = () => {
-      if (filesRef.current.length > 0) schedule();
-    };
+    const unsubGit = subscribeGitChanged(schedule);
+    const onResume = schedule;
     window.addEventListener("focus", onResume);
     document.addEventListener("visibilitychange", onResume);
     return () => {
+      loadGeneration.current++;
       if (timer != null) window.clearTimeout(timer);
       window.removeEventListener("focus", onResume);
       document.removeEventListener("visibilitychange", onResume);
@@ -85,12 +102,32 @@ export function SessionReview({
   }, [files.length]);
 
   useEffect(() => {
-    if (busy) setFiles([]);
+    if (busy) {
+      loadGeneration.current++;
+      setFiles([]);
+      setError(null);
+    }
   }, [busy]);
 
   // The card represents the result of a turn. Keep it out of the live turn,
   // then refresh and reveal it once the turn has settled.
-  if (busy || files.length === 0) return null;
+  if (busy) return null;
+  if (error) {
+    return (
+      <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
+        <div
+          role="status"
+          className="rounded-xl border border-content/12 bg-content/3 px-3 py-2.5"
+        >
+          <p className="text-[12px] font-medium text-content/80">
+            Couldn’t record changes
+          </p>
+          <p className="mt-1 text-[11px] text-content/50">{error}</p>
+        </div>
+      </div>
+    );
+  }
+  if (files.length === 0) return null;
 
   const disabled = acting != null;
   const canUndoAll = !undoLocked && files.every((file) => file.undoable);
@@ -135,13 +172,15 @@ export function SessionReview({
           </span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] font-medium text-content/80">
-              Changed {files.length} {files.length === 1 ? "file" : "files"}
+              <span title="Workspace changes recorded during the latest turn">
+                Changed {files.length} {files.length === 1 ? "file" : "files"}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
-              <span className="text-emerald-400">
+              <span className="text-diff-add-fg">
                 +{formatInteger(totals.additions)}
               </span>
-              <span className="text-red-400">
+              <span className="text-diff-del-fg">
                 -{formatInteger(totals.deletions)}
               </span>
             </div>
@@ -151,10 +190,10 @@ export function SessionReview({
               type="button"
               title={
                 canUndoAll
-                  ? "Undo all session changes"
+                  ? "Undo the recorded changes"
                   : undoLocked
                     ? "Undo is unavailable while another session is running in this project"
-                    : "Undo is unavailable because a file changed outside this session"
+                    : "Undo is unavailable because the workspace was shared, the branch moved, or a recorded file changed afterward"
               }
               disabled={disabled || !canUndoAll}
               onClick={() => run("undo")}
@@ -164,13 +203,23 @@ export function SessionReview({
             </button>
             <button
               type="button"
-              title="Keep all session changes and dismiss this card"
+              title="Keep the recorded changes and dismiss this card"
               disabled={disabled}
               onClick={() => run("keep")}
               className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
               Keep
             </button>
+            {onCommit ? (
+              <button
+                type="button"
+                title="Commit these changes"
+                onClick={() => onCommit({ sessionId, cwd })}
+                className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content"
+              >
+                Commit
+              </button>
+            ) : null}
             <button
               type="button"
               title="Review changes"
@@ -255,15 +304,18 @@ function FileRow({
 function DiffCounts({ file }: { file: CheckpointFile }) {
   if (!file.exact) {
     return (
-      <span className="shrink-0 text-[11px] font-medium text-amber-300/80">
-        Mixed changes
+      <span
+        title="This older checkpoint has no exact before/after diff"
+        className="shrink-0 text-[11px] font-medium text-content/45"
+      >
+        Diff unavailable
       </span>
     );
   }
   return (
     <span className="flex shrink-0 gap-2 font-sans text-[11px] font-semibold tabular-nums">
-      <span className="text-emerald-400">+{formatInteger(file.additions)}</span>
-      <span className="text-red-400">-{formatInteger(file.deletions)}</span>
+      <span className="text-diff-add-fg">+{formatInteger(file.additions)}</span>
+      <span className="text-diff-del-fg">-{formatInteger(file.deletions)}</span>
     </span>
   );
 }

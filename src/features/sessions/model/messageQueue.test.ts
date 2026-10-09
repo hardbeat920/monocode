@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appendPreparingHandoff } from "./handoff";
 import {
   canDispatchQueuedHead,
+  canSteerQueuedHead,
   dequeueQueuedMessage,
   isEditingQueuedHead,
   queuedHead,
@@ -32,12 +33,12 @@ describe("queuedHead", () => {
 describe("isEditingQueuedHead", () => {
   it("is true only when the head row is the one being edited", () => {
     expect(isEditingQueuedHead(chat())).toBe(false);
-    expect(
-      isEditingQueuedHead(chat({ editingQueuedMessageId: "a" })),
-    ).toBe(true);
-    expect(
-      isEditingQueuedHead(chat({ editingQueuedMessageId: "b" })),
-    ).toBe(false);
+    expect(isEditingQueuedHead(chat({ editingQueuedMessageId: "a" }))).toBe(
+      true,
+    );
+    expect(isEditingQueuedHead(chat({ editingQueuedMessageId: "b" }))).toBe(
+      false,
+    );
   });
 });
 
@@ -54,13 +55,19 @@ describe("canDispatchQueuedHead", () => {
     );
   });
 
-  it("holds only when the head item is being edited", () => {
+  it("holds while the last turn is stopped at a usage limit", () => {
     expect(
-      canDispatchQueuedHead(chat({ editingQueuedMessageId: "a" })),
+      canDispatchQueuedHead(chat({ usageLimit: { resetsAt: 1_000 } })),
     ).toBe(false);
-    expect(
-      canDispatchQueuedHead(chat({ editingQueuedMessageId: "b" })),
-    ).toBe(true);
+  });
+
+  it("holds only when the head item is being edited", () => {
+    expect(canDispatchQueuedHead(chat({ editingQueuedMessageId: "a" }))).toBe(
+      false,
+    );
+    expect(canDispatchQueuedHead(chat({ editingQueuedMessageId: "b" }))).toBe(
+      true,
+    );
   });
 
   it("does not dispatch during a preparing handoff", () => {
@@ -73,10 +80,60 @@ describe("canDispatchQueuedHead", () => {
   });
 
   it("does not dispatch an empty queue", () => {
+    expect(canDispatchQueuedHead(chat({ queuedMessages: undefined }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("canSteerQueuedHead", () => {
+  it("still takes follow-ups while an optional asynchronous question is open", () => {
     expect(
-      canDispatchQueuedHead(chat({ queuedMessages: undefined })),
+      canSteerQueuedHead(
+        chat({
+          busy: true,
+          turnReady: true,
+          pendingQuestion: { requestId: 1, questions: [], autoResolveAt: 1000 },
+        }),
+      ),
+    ).toBe(true);
+  });
+  it("holds during startup and allows delivery once the busy turn is ready", () => {
+    expect(canSteerQueuedHead(chat({ busy: true }))).toBe(false);
+    expect(canSteerQueuedHead(chat({ busy: true, turnReady: true }))).toBe(
+      true,
+    );
+    expect(canSteerQueuedHead(chat({ turnReady: true }))).toBe(false);
+  });
+
+  it.each([
+    { queueStatus: "paused" as const },
+    { queueStatus: "resuming" as const },
+    { editingQueuedMessageId: "a" },
+    { worktreePreparing: true },
+    { worktreeRemoved: true },
+    { usageLimit: { resetsAt: 1000 } },
+    { pendingQuestion: { requestId: 1, questions: [] } },
+  ])("holds an unavailable session: %j", (patch) => {
+    expect(
+      canSteerQueuedHead(chat({ busy: true, turnReady: true, ...patch })),
     ).toBe(false);
   });
+
+  it.each(["plan", "orchestrate"] as const)(
+    "waits for an idle turn for %s",
+    (intent) => {
+      expect(
+        canSteerQueuedHead(
+          chat({
+            busy: true,
+            turnReady: true,
+            queuedMessages: [{ ...queued("a"), intent }],
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("dequeueQueuedMessage", () => {
@@ -109,9 +166,9 @@ describe("queuedMessageForSubmit", () => {
   });
 
   it("lets Steer target any remaining row, including while busy or paused", () => {
-    expect(
-      queuedMessageForSubmit(chat({ busy: true }), "b", "steer")?.id,
-    ).toBe("b");
+    expect(queuedMessageForSubmit(chat({ busy: true }), "b", "steer")?.id).toBe(
+      "b",
+    );
     expect(
       queuedMessageForSubmit(chat({ queueStatus: "paused" }), "a", "steer")?.id,
     ).toBe("a");

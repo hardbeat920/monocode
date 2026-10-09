@@ -81,6 +81,12 @@ function pressPaste(el: HTMLElement) {
   });
 }
 
+function press(el: HTMLElement, init: KeyboardEventInit) {
+  return act(async () => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+  });
+}
+
 function nativeDrop(paths: string[]) {
   return act(async () => {
     dragDrop.handler!({
@@ -139,6 +145,13 @@ describe("FileTree render isolation", () => {
     expect(
       container.querySelector('[role="tree"]')?.getAttribute("aria-label"),
     ).toBe("mc/update-readme-tests files");
+  });
+
+  it("keeps room for descenders in truncated file names", async () => {
+    await act(async () => render());
+    expect(row("first.ts").lastElementChild?.className).toContain(
+      "leading-label",
+    );
   });
 
   it.each([false, true])(
@@ -250,6 +263,16 @@ describe("FileTree accepts files from outside the tree", () => {
     ]);
   });
 
+  it("pastes on a non-Latin layout", async () => {
+    clipboardFiles.push("/Users/me/Desktop/a.txt");
+    saveSelected(cwd, `${cwd}/docs`);
+    await act(async () => render());
+    await press(row("docs"), { key: "м", code: "KeyV", metaKey: true });
+    expect(copied).toEqual([
+      { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
+    ]);
+  });
+
   it("does nothing on paste when the clipboard holds no files", async () => {
     saveSelected(cwd, `${cwd}/docs`);
     await act(async () => render());
@@ -295,6 +318,50 @@ describe("FileTree accepts files from outside the tree", () => {
     document.elementFromPoint = () => document.body;
     await nativeDrop(["/Users/me/Desktop/a.txt"]);
     expect(copied).toEqual([]);
+  });
+});
+
+describe("FileTree copies paths", () => {
+  beforeEach(async () => {
+    saveSelected(cwd, `${cwd}/first.ts`);
+    await navigator.clipboard.writeText("before");
+    await act(async () => render());
+  });
+
+  it("copies the selected path on Mod+Shift+C", async () => {
+    await press(row("first.ts"), { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("copies the project root path from the root row", async () => {
+    const rootRow = container.querySelector<HTMLButtonElement>(
+      "[data-explorer-root]",
+    );
+    if (!rootRow) throw new Error("Root row not rendered");
+    await act(async () => rootRow.click());
+    await press(rootRow, { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(cwd);
+  });
+
+  it("copies the selected path on a non-Latin layout", async () => {
+    await press(row("first.ts"), {
+      key: "С",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("matches the typed Latin letter, not the physical key", async () => {
+    // Dvorak types "j" on the physical C key.
+    await press(row("first.ts"), {
+      key: "J",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe("before");
   });
 });
 
@@ -407,5 +474,76 @@ describe("FileTree starts Explorer file drags", () => {
     expect(events).toEqual([]);
 
     window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+  });
+});
+
+describe("FileTree keyboard navigation", () => {
+  const selected = () =>
+    container.querySelector<HTMLButtonElement>('[role="treeitem"].bg-selection')
+      ?.title;
+
+  beforeEach(async () => {
+    directories.set(cwd, [folder("src"), file("first.ts"), file("second.ts")]);
+    directories.set(`${cwd}/src`, [
+      { name: "a.ts", path: `${cwd}/src/a.ts`, isDir: false, ignored: false },
+    ]);
+    await refreshDir(cwd);
+    saveSelected(cwd, `${cwd}/src`);
+    await act(async () => render());
+  });
+
+  it("moves the selection with the arrow keys and Home/End", async () => {
+    await press(row("src"), { key: "ArrowDown" });
+    expect(selected()).toBe(`${cwd}/first.ts`);
+    await press(row("first.ts"), { key: "End" });
+    expect(selected()).toBe(`${cwd}/second.ts`);
+    await press(row("second.ts"), { key: "ArrowUp" });
+    expect(selected()).toBe(`${cwd}/first.ts`);
+    await press(row("first.ts"), { key: "Home" });
+    expect(
+      container
+        .querySelector("[data-explorer-root]")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(selected()).toBeUndefined();
+  });
+
+  it("expands with Right, enters the folder, and walks back out with Left", async () => {
+    await press(row("src"), { key: "ArrowRight" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("true");
+    expect(row("src/a.ts")).not.toBeNull();
+    await press(row("src"), { key: "ArrowRight" });
+    expect(selected()).toBe(`${cwd}/src/a.ts`);
+    await press(row("src/a.ts"), { key: "ArrowLeft" });
+    expect(selected()).toBe(`${cwd}/src`);
+    await press(row("src"), { key: "ArrowLeft" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("opens files with Enter and toggles folders", async () => {
+    await press(row("src"), { key: "Enter" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("true");
+    await press(row("src"), { key: "End" });
+    await press(row("second.ts"), { key: "Enter" });
+    expect(props.onOpenFile).toHaveBeenCalledWith(
+      `${cwd}/second.ts`,
+      undefined,
+      { exact: true },
+    );
+  });
+
+  it("jumps to a row by typing its name", async () => {
+    await press(row("src"), { key: "s" });
+    expect(selected()).toBe(`${cwd}/second.ts`);
+    await press(row("second.ts"), { key: "s" });
+    expect(selected()).toBe(`${cwd}/src`);
+    await press(row("src"), { key: "f" });
+    expect(selected()).toBe(`${cwd}/src`);
+  });
+
+  it("narrows the match as more of the name is typed", async () => {
+    await press(row("src"), { key: "s" });
+    await press(row("second.ts"), { key: "r" });
+    expect(selected()).toBe(`${cwd}/src`);
   });
 });

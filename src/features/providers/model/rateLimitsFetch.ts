@@ -4,11 +4,15 @@ import {
   errorRateLimits,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseDevinUsage,
   parseOpencodeGoUsage,
   unavailableRateLimits,
+  type DevinUsage,
   type ProviderRateLimits,
 } from "./rateLimits";
+import type { ProviderAccountIdentity } from "./providerAccountIdentity";
 import {
+  inspectHarnessBinary,
   killChild,
   resolveCodexBinary,
   spawnChild,
@@ -69,6 +73,60 @@ export async function fetchOpencodeGoRateLimits(): Promise<ProviderRateLimits> {
     "opencode",
     result.error?.trim() || "OpenCode Go usage unavailable",
   );
+}
+
+type DevinUsageFetch = {
+  status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
+  usage?: DevinUsage | null;
+  error?: string | null;
+};
+
+let devinIdentity: ProviderAccountIdentity | null = null;
+
+/** Identity from the latest Devin usage read; Devin caches none on disk. */
+export function cachedDevinIdentity(): ProviderAccountIdentity | null {
+  return devinIdentity;
+}
+
+/**
+ * Devin's API server reports the plan's daily and weekly quota. The request
+ * names the installed CLI's version, read from the binary rather than pinned.
+ */
+export async function fetchDevinRateLimits(): Promise<ProviderRateLimits> {
+  let cliVersion: string | undefined;
+  try {
+    const inspected = await inspectHarnessBinary("devin");
+    cliVersion = /\d+(?:\.\d+)+/.exec(inspected.version ?? "")?.[0];
+  } catch {
+    return unavailableRateLimits("devin", "Devin CLI not found");
+  }
+  if (!cliVersion) return errorRateLimits("devin", "Devin CLI version unknown");
+  let result: DevinUsageFetch;
+  try {
+    result = await invoke<DevinUsageFetch>("fetch_devin_usage", { cliVersion });
+  } catch (error) {
+    return errorRateLimits(
+      "devin",
+      error instanceof Error ? error.message : "Devin usage unavailable",
+    );
+  }
+  if (result.status === "ok" && result.usage) {
+    devinIdentity = {
+      name: result.usage.name ?? null,
+      email: result.usage.email ?? null,
+      plan: result.usage.plan ?? null,
+    };
+    return parseDevinUsage(result.usage);
+  }
+  if (result.status === "unavailable") {
+    devinIdentity = null;
+    return unavailableRateLimits("devin", result.error?.trim() || "Devin not signed in");
+  }
+  // A rejected key means that account is no longer signed in; a network
+  // failure keeps the identity beside the last usage snapshot.
+  if (result.httpStatus === 401 || result.httpStatus === 403) devinIdentity = null;
+  return errorRateLimits("devin", result.error?.trim() || "Devin usage unavailable");
 }
 
 export type CodexRateLimitResetOutcome =
@@ -134,7 +192,9 @@ export async function fetchCodexRateLimits(
       accountId,
     );
     const parsed = parseCodexRateLimits(result);
-    if (parsed.session || parsed.weekly || parsed.resetCredits) return parsed;
+    if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
+      return parsed;
+    }
     const rec = asRecord(result);
     if (rec && !parsed.session && !parsed.weekly) {
       return unavailableRateLimits("codex", "No Codex usage data");
@@ -184,7 +244,26 @@ export async function consumeCodexRateLimitResetCredit(
   throw new Error("Codex returned an unknown reset result");
 }
 
-async function requestCodexAccount<T>(
+// Every probe reuses USAGE_CHILD_ID and kills whatever holds it first, so
+// probes for different accounts (footer, Settings, account picker) must not
+// overlap or they terminate each other.
+let codexUsageQueue: Promise<unknown> = Promise.resolve();
+
+function requestCodexAccount<T>(
+  path: string,
+  cwd: string,
+  method: string,
+  params: unknown,
+  accountId: string,
+): Promise<T> {
+  const run = codexUsageQueue.then(() =>
+    runCodexAccountRequest<T>(path, cwd, method, params, accountId),
+  );
+  codexUsageQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function runCodexAccountRequest<T>(
   path: string,
   cwd: string,
   method: string,
@@ -216,10 +295,17 @@ async function requestCodexAccount<T>(
   );
 
   try {
-    await spawnChild(USAGE_CHILD_ID, path, ["app-server"], cwd, {
-      provider: "codex",
-      id: accountId,
-    });
+    await spawnChild(
+      USAGE_CHILD_ID,
+      path,
+      ["app-server"],
+      cwd,
+      {
+        provider: "codex",
+        id: accountId,
+      },
+      "codex",
+    );
     return await withTimeout(
       DISCOVERY_TIMEOUT_MS,
       async () => {

@@ -63,6 +63,7 @@ import {
   newAutomationDraft,
   nextAutomationRunAt,
   nextRunPreview,
+  peekAutomations,
   saveAutomation,
   setAutomationEnabled,
   subscribeAutomations,
@@ -89,7 +90,7 @@ import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
 import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
-import { defaultSessionChoice, modelsFor, resolveModel } from "../../sessions/model/models";
+import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
@@ -181,13 +182,15 @@ function AutomationsContent({
   onLaunch,
   onOpenSession,
 }: Pick<Props, "cwd" | "recents" | "onLaunch" | "onOpenSession">) {
-  const [automations, setAutomations] = useState<Automation[]>([]);
+  const [automations, setAutomations] = useState<Automation[]>(
+    () => peekAutomations() ?? [],
+  );
   const [runs, setRuns] = useState<AutomationRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(
     rememberedAutomationId,
   );
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => peekAutomations() === null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AutomationDraft | null>(null);
   const [pickerOpen, setPickerOpen] = useState(true);
@@ -258,14 +261,18 @@ function AutomationsContent({
   const selected = automations.find((entry) => entry.id === selectedId) ?? null;
 
   const defaultDraftTarget = () => {
-    const preferred = defaultSessionChoice();
-    const harness = selected?.harness ?? preferred.harness;
-    const model =
-      (selected?.harness === harness ? selected.model : undefined) ??
-      modelsFor(harness)[0]?.id ??
-      preferred.model;
     const project =
       cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
+    const preferred = defaultSessionChoice(project);
+    const harness = firstEnabledHarness(
+      project,
+      selected?.harness ?? preferred.harness,
+    );
+    const model =
+      (selected?.harness === harness ? selected.model : undefined) ??
+      (preferred.harness === harness ? preferred.model : undefined) ??
+      modelsFor(harness)[0]?.id ??
+      preferredModelId(harness);
     return { project, harness, model };
   };
 
@@ -497,19 +504,20 @@ function AutomationCard({
   const model = resolveModel(automation.harness, automation.model);
   return (
     <div
-      className={`group rounded-md border px-2.5 py-2 ${
+      className={`group relative rounded-md border ${
         active
           ? "border-transparent bg-selection"
           : "border-transparent hover:bg-content/5"
       }`}
     >
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          aria-current={active ? "true" : undefined}
-          onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] text-content/45"
-        >
+      <button
+        type="button"
+        aria-current={active ? "true" : undefined}
+        aria-label={`Open ${automation.name}`}
+        onClick={onSelect}
+        className="block w-full rounded-md px-2.5 py-2 text-left"
+      >
+        <span className="flex min-w-0 items-center gap-1.5 pr-8 text-[10px] text-content/45">
           <TriggerMark
             kind={
               automationTriggers(automation)[0]?.kind ?? automation.triggerKind
@@ -517,20 +525,8 @@ function AutomationCard({
             className="size-3"
           />
           <span className="min-w-0 truncate">{triggerLabel(automation)}</span>
-        </button>
-        <ToggleSwitch
-          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
-          on={automation.enabled}
-          onChange={onToggle}
-          compact
-        />
-      </div>
-      <button
-        type="button"
-        onClick={onSelect}
-        className="mt-1 w-full text-left"
-      >
-        <span className="block truncate text-[13px] font-semibold text-content">
+        </span>
+        <span className="mt-1 block truncate text-[13px] font-semibold text-content">
           {automation.name}
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
@@ -567,6 +563,14 @@ function AutomationCard({
           </span>
         </span>
       </button>
+      <span className="absolute right-2.5 top-2 flex">
+        <ToggleSwitch
+          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
+          on={automation.enabled}
+          onChange={onToggle}
+          compact
+        />
+      </span>
     </div>
   );
 }
@@ -1325,6 +1329,7 @@ function AutomationEditor({
                         harness={draft.harness}
                         model={draft.model}
                         values={draft.modelSettings}
+                        project={draft.cwd}
                         hideSettings={controlsBeside}
                         onChange={(harness, model) =>
                           onChange({ ...draft, harness, model })

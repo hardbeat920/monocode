@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetHarnessModelOverlays, setHarnessModels } from "../../../features/sessions/model/models";
+import {
+  resetHarnessModelOverlays,
+  setHarnessModels,
+} from "../../../features/sessions/model/models";
 import type { HarnessId } from "../../../features/sessions/model/session";
 import {
   HARNESS_IDLE_PARK_MS,
+  bindHarnessSession,
   canCompactHarnessContext,
+  canRunHarnessTextPrompt,
+  runHarnessTextPrompt,
   canRewindHarnessLastTurn,
   compactHarnessContext,
   isLiveHarness,
@@ -57,34 +63,69 @@ describe("harness registry", () => {
     ).toEqual(["claude", "codex", "cursor"]);
   });
 
-  it("advertises and dispatches compaction only when an adapter supports it", async () => {
-    const compactContext = vi.fn(async () => undefined);
-    registerHarness(stub("codex", { compactContext }));
-    registerHarness(stub("claude"));
-
-    expect(canCompactHarnessContext("codex")).toBe(true);
-    expect(canCompactHarnessContext("claude")).toBe(false);
-
-    await compactHarnessContext({
+  it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {
+    let accepted!: () => void;
+    let finish!: () => void;
+    registerHarness(
+      stub("codex", {
+        async sendTurn(input) {
+          accepted = () => input.onAccepted?.();
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      }),
+    );
+    const onEvent = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = sendHarnessTurn({
       harness: "codex",
-      sessionId: "compact-1",
+      sessionId: "readiness",
       cwd: "/tmp",
       model: "codex:gpt-5.4",
       runtimeMode: "supervised",
-      onEvent: () => undefined,
+      text: "Hello",
+      onEvent,
+      onAccepted,
     });
+    await vi.waitFor(() => expect(accepted).toBeDefined());
+    expect(onEvent).not.toHaveBeenCalled();
+    accepted();
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ type: "turn.ready" });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    finish();
+    await sending;
+  });
 
-    expect(compactContext).toHaveBeenCalledOnce();
-    await expect(
-      compactHarnessContext({
-        harness: "claude",
-        sessionId: "compact-2",
-        cwd: "/tmp",
-        model: "claude:sonnet",
-        runtimeMode: "supervised",
-        onEvent: () => undefined,
-      }),
-    ).rejects.toThrow("does not support manual compaction");
+  it("advertises isolated text prompt support by harness", () => {
+    registerBuiltinHarnesses();
+    const ids: HarnessId[] = [
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+      "omp",
+      "fx",
+      "hermes",
+      "antigravity",
+    ];
+
+    expect(
+      Object.fromEntries(ids.map((id) => [id, canRunHarnessTextPrompt(id)])),
+    ).toEqual({
+      claude: true,
+      codex: true,
+      cursor: true,
+      grok: true,
+      opencode: true,
+      pi: true,
+      omp: true,
+      fx: false,
+      hermes: false,
+      antigravity: false,
+    });
   });
 
   it("exposes the native compaction support matrix", () => {
@@ -114,6 +155,79 @@ describe("harness registry", () => {
       fx: false,
       antigravity: false,
     });
+  });
+  it("advertises and dispatches compaction only when an adapter supports it", async () => {
+    const compactContext = vi.fn(async () => undefined);
+    registerHarness(stub("codex", { compactContext }));
+    registerHarness(stub("claude"));
+
+    expect(canCompactHarnessContext("codex")).toBe(true);
+    expect(canCompactHarnessContext("claude")).toBe(false);
+
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-1",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: () => undefined,
+    });
+
+    expect(compactContext).toHaveBeenCalledOnce();
+    await expect(
+      compactHarnessContext({
+        harness: "claude",
+        sessionId: "compact-2",
+        cwd: "/tmp",
+        model: "claude:sonnet",
+        runtimeMode: "supervised",
+        onEvent: () => undefined,
+      }),
+    ).rejects.toThrow("does not support manual compaction");
+  });
+  it("cancels an isolated text prompt through the adapter lifecycle", async () => {
+    const runTextPrompt = vi.fn(() => new Promise<string>(() => undefined));
+    const stopTextPrompt = vi.fn(async () => undefined);
+    registerHarness(stub("claude", { runTextPrompt, stopTextPrompt }));
+    const controller = new AbortController();
+    const request = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "read-only question",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(request).rejects.toThrow("By-the-way request cancelled");
+    expect(runTextPrompt).toHaveBeenCalledOnce();
+    expect(stopTextPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does not stop the shared text backend while another prompt is active", async () => {
+    const runTextPrompt = vi.fn(() => new Promise<string>(() => undefined));
+    const stopTextPrompt = vi.fn(async () => undefined);
+    registerHarness(stub("claude", { runTextPrompt, stopTextPrompt }));
+    const first = new AbortController();
+    const second = new AbortController();
+    const firstRequest = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "first",
+      signal: first.signal,
+    });
+    const secondRequest = runHarnessTextPrompt({
+      harness: "claude",
+      cwd: "/tmp",
+      prompt: "second",
+      signal: second.signal,
+    });
+    first.abort();
+    await expect(firstRequest).rejects.toThrow("By-the-way request cancelled");
+    expect(stopTextPrompt).not.toHaveBeenCalled();
+    second.abort();
+    await expect(secondRequest).rejects.toThrow("By-the-way request cancelled");
+    expect(stopTextPrompt).not.toHaveBeenCalled();
   });
 
   it("exposes the edit-last-turn support matrix", () => {
@@ -146,7 +260,9 @@ describe("harness registry", () => {
   it("registers Antigravity as a live fx-tier harness", () => {
     registerBuiltinHarnesses();
     expect(isLiveHarness("antigravity")).toBe(true);
-    const adapter = listHarnesses().find((adapter) => adapter.id === "antigravity")!;
+    const adapter = listHarnesses().find(
+      (adapter) => adapter.id === "antigravity",
+    )!;
     expect(adapter.canSteer).toBe(false);
     expect(adapter.bindSession).toBeTypeOf("function");
     expect(adapter.refreshCatalog).toBeTypeOf("function");
@@ -183,6 +299,25 @@ describe("harness registry", () => {
     await refreshHarnessCatalogs(["pi"]);
 
     expect(pi).toHaveBeenCalledOnce();
+  });
+
+  it("forces a catalog probe past the live-list skip on request", async () => {
+    const pi = vi.fn(async () => {
+      setHarnessModels("pi", [
+        {
+          id: "pi:opus",
+          harness: "pi",
+          name: "Opus",
+          nativeId: "anthropic/opus",
+        },
+      ]);
+    });
+    registerHarness(stub("pi", { refreshCatalog: pi }));
+
+    await refreshHarnessCatalogs(["pi"]);
+    await refreshHarnessCatalogs(["pi"], { force: true });
+
+    expect(pi).toHaveBeenCalledTimes(2);
   });
 
   it("skips catalog refresh when no harness is in use", async () => {
@@ -271,5 +406,31 @@ describe("harness registry", () => {
       "start:s1",
       "end:s1",
     ]);
+  });
+
+  it("binds a restored session and forwards its task panels", () => {
+    const bindSession = vi.fn();
+    const restoreTaskLists = vi.fn();
+    registerHarness(stub("claude", { bindSession, restoreTaskLists }));
+    const taskList = {
+      key: "claude-tasks",
+      items: [{ id: "1", text: "Write tests", status: "pending" as const }],
+    };
+
+    bindHarnessSession("claude", "s1", "sess_1", "/repo", "work", [
+      { id: "b1", role: "user", text: "go" },
+      { id: "b2", role: "tasks", text: "Write tests", taskList },
+    ]);
+    bindHarnessSession("claude", "s2", "sess_2", "/repo");
+
+    expect(bindSession).toHaveBeenCalledWith("s1", "sess_1", "/repo", "work");
+    expect(bindSession).toHaveBeenCalledWith(
+      "s2",
+      "sess_2",
+      "/repo",
+      undefined,
+    );
+    expect(restoreTaskLists).toHaveBeenCalledTimes(1);
+    expect(restoreTaskLists).toHaveBeenCalledWith("s1", [taskList]);
   });
 });

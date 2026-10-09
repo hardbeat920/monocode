@@ -8,10 +8,15 @@ import {
   isWeakToolTitle,
 } from "../../../integrations/harness/core/preview";
 import { leafName } from "../../files/model/fileName";
-import { displayPath } from "../../../shared/lib/paths";
+import {
+  displayPath,
+  pathKey,
+  resolveWorkspacePath,
+} from "../../../shared/lib/paths";
 import { INTERRUPT_MESSAGE } from "./inFlight";
-import type { Block } from "./session";
+import type { Block, ToolPreview } from "./session";
 import { allModels } from "./models";
+import { monoCodeWorkSummary } from "./monocodeToolCall";
 
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
@@ -25,19 +30,23 @@ export function needsApproval(block: Block): boolean {
   return !!block.approval && !block.approval.decided;
 }
 
+/** Statuses a provider uses for a call that did not work. */
+export function isFailedStatus(status?: string): boolean {
+  const value = status?.toLowerCase() ?? "";
+  return (
+    value === "failed" ||
+    value === "error" ||
+    value === "cancelled" ||
+    value === "canceled"
+  );
+}
+
 export function toolCallState(block: Block): ToolCallState {
   const status = block.tool?.status?.toLowerCase() ?? "";
   const decided = block.approval?.decided;
 
   if (decided === "deny") return "rejected";
-  if (
-    status === "failed" ||
-    status === "error" ||
-    status === "cancelled" ||
-    status === "canceled"
-  ) {
-    return "rejected";
-  }
+  if (isFailedStatus(status)) return "rejected";
   if (needsApproval(block)) return "pending";
   if (status === "completed" || status === "success") return "accepted";
   if (
@@ -201,21 +210,146 @@ export function editVerb(label: string): string {
   return "Edit";
 }
 
+export type ToolCallDisplay = {
+  action?: string;
+  target?: string;
+  fileName: string;
+  filePath?: string;
+  isFile: boolean;
+  /**
+   * False when a write preview's own path resolves to a different file than
+   * `filePath` - the label showed one file, but the preview would diff
+   * another. A row like this must fall back to the plain file control rather
+   * than a diff for the wrong file.
+   */
+  previewMatchesFile: boolean;
+};
+
 /**
- * User turns, with handoff dividers sitting on their own row. `managed` is for
+ * Parses a tool call row's label into the action/target shown on screen, and
+ * resolves the file path a click should open. The opened path is always
+ * derived from `target` (what the user reads), never from `preview.path` on
+ * its own - those two can disagree (e.g. two files sharing a SKILL.md name,
+ * one under the project and one under a provider's own skills folder), and
+ * opening a path the label never showed is confusing at best.
+ */
+export function resolveToolCallDisplay(
+  label: string,
+  preview: ToolPreview | undefined,
+  cwd: string | undefined,
+): ToolCallDisplay {
+  const parts = label.match(/^(Read|Find|Skill|List|Edit|Write)\s+(.+)$/);
+  const labelVerb = parts?.[1];
+  const labelTarget = parts?.[2];
+  // A write preview carries the path itself, so edits get the same verb + file
+  // chip as reads rather than falling through to a raw label.
+  const writeTarget =
+    preview?.kind === "write"
+      ? preview.path
+        ? displayPath(preview.path, cwd)
+        : preview.fileName
+      : undefined;
+  const isFileVerb = (verb: string | undefined) =>
+    verb === "Read" || verb === "List" || verb === "Edit" || verb === "Write";
+  // A file-verb's captured target is only trustworthy as a path when it
+  // looks like one. Harnesses sometimes phrase these in plain English (e.g.
+  // "Edit dependency versions"), and treating that phrase itself as a
+  // filename both fails to resolve and shoulders out a real path the write
+  // preview already has.
+  const trustedLabelTarget =
+    labelTarget &&
+    (!isFileVerb(labelVerb) || !!resolveWorkspacePath(labelTarget, cwd))
+      ? labelTarget
+      : undefined;
+  const action =
+    labelVerb ??
+    (writeTarget ? editVerb(label) : undefined) ??
+    (/^read$/i.test(label.trim()) && (preview?.path || preview?.fileName)
+      ? "Read"
+      : /^find$/i.test(label.trim()) && preview?.query
+        ? "Find"
+        : /^list$/i.test(label.trim()) && (preview?.path || preview?.fileName)
+          ? "List"
+          : /^skill$/i.test(label.trim())
+            ? "Skill"
+            : undefined);
+  const target =
+    trustedLabelTarget ??
+    writeTarget ??
+    (action === "Read" ||
+    action === "List" ||
+    action === "Edit" ||
+    action === "Write"
+      ? preview?.path
+        ? displayPath(preview.path, cwd)
+        : preview?.fileName
+      : action === "Find"
+        ? preview?.query
+        : undefined);
+  if (!action || !target) {
+    return { fileName: "file", isFile: false, previewMatchesFile: true };
+  }
+  const isFile = action !== "Find" && action !== "Skill";
+  const fileName =
+    preview?.fileName ||
+    target
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .filter(Boolean)
+      .pop() ||
+    "file";
+  // Resolve from `target`, not `preview.path`, so the file that opens always
+  // matches the path the row displays.
+  const filePath = resolveWorkspacePath(target, cwd);
+  // A write preview's own path can still disagree with `target` (e.g. two
+  // files sharing a SKILL.md name). When it does, the preview would render a
+  // diff for a file other than the one the row opens, so callers must not
+  // show it as this row's diff.
+  const hasWritePreviewPath = preview?.kind === "write" && !!preview.path;
+  const previewPath = hasWritePreviewPath
+    ? resolveWorkspacePath(displayPath(preview.path as string, cwd), cwd)
+    : undefined;
+  // A write preview with a path that failed to resolve, or a target that
+  // failed to resolve, is not a confirmed match - it is unknown, and an
+  // unknown match must not render as if it were one. Only "no write preview
+  // path at all" defaults to true, since there is then nothing to disagree.
+  const previewMatchesFile = !hasWritePreviewPath
+    ? true
+    : !!previewPath && !!filePath && pathKey(previewPath) === pathKey(filePath);
+  return { action, target, fileName, filePath, isFile, previewMatchesFile };
+}
+
+/**
+ * User turns, with handoffs and habit updates sitting on their own row. `managed` is for
  * a worker's own transcript, where the app-written turns are the orchestrator
  * talking to it — the whole prompt side of that conversation, and the only
  * thing its replies are answering.
  */
 export function groupTurns(blocks: Block[], managed = false): Block[][] {
+  return groupTranscriptTurns(blocks, managed, false);
+}
+
+function groupTranscriptTurns(
+  blocks: Block[],
+  managed: boolean,
+  retainCompletionPrompts: boolean,
+): Block[][] {
   const turns: Block[][] = [];
   let current: Block[] = [];
   for (const block of blocks) {
     // A turn the app wrote to keep an orchestration moving is not a user
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
-    if (block.internal && !managed) continue;
-    if (block.role === "handoff") {
+    if (block.internal && !managed) {
+      if (isMonoCompletionPrompt(block)) {
+        if (current.length > 0) turns.push(current);
+        // Mono replies need a stable turn before their first output arrives.
+        // Keep the hidden prompt as its identity and timing, not visible text.
+        current = retainCompletionPrompts ? [block] : [];
+      }
+      continue;
+    }
+    if (block.role === "handoff" || block.monoHabit) {
       if (current.length > 0) turns.push(current);
       turns.push([block]);
       current = [];
@@ -229,6 +363,101 @@ export function groupTurns(blocks: Block[], managed = false): Block[][] {
   }
   if (current.length > 0) turns.push(current);
   return turns;
+}
+
+/** The hidden turn the app writes when a session a Mono launched finishes. */
+export function isMonoCompletionPrompt(block: Block): boolean {
+  // Older completion deliveries lost their marker but kept the receipt ID.
+  return (
+    !!block.internal &&
+    (!!block.monoSessionCompletion ||
+      (block.role === "user" &&
+        !!block.appRequestId?.startsWith("mono-completion-")))
+  );
+}
+
+/** A message this long after the one before gets its own day and time. */
+const STRETCH_GAP = 60 * 60 * 1000;
+
+/** Whether a turn starts a new stretch: the first, a new day or after a break. */
+export function opensNewStretch(at: number, previousAt?: number): boolean {
+  if (previousAt == null) return true;
+  return (
+    at - previousAt > STRETCH_GAP ||
+    new Date(at).toDateString() !== new Date(previousAt).toDateString()
+  );
+}
+
+/** When the latest run in a Mono turn started, for measuring the gap after it. */
+export function monoTurnLatestStart(turn: Block[]): number | undefined {
+  let latest = turn[0].monoHabit?.at ?? turn[0].startedAt;
+  for (const block of turn) {
+    if (
+      block.role === "user" &&
+      block.startedAt != null &&
+      (latest == null || block.startedAt > latest)
+    )
+      latest = block.startedAt;
+  }
+  return latest;
+}
+
+/**
+ * The Mono chat's turns. A reply the Mono sends on its own, after a session it
+ * launched finishes, continues the message above it: one header, one answer,
+ * one set of actions. Only a new stretch, which gets its own day and time,
+ * starts a fresh message.
+ */
+export function groupMonoChatTurns(
+  blocks: Block[],
+  managed = false,
+): Block[][] {
+  const groups: Block[][] = [];
+  for (const turn of groupMonoTurns(blocks, managed)) {
+    const previous = groups[groups.length - 1];
+    const at = turn[0].startedAt;
+    if (
+      previous &&
+      !previous[0].monoHabit &&
+      previous[0].role !== "handoff" &&
+      isMonoCompletionPrompt(turn[0]) &&
+      (at == null || !opensNewStretch(at, monoTurnLatestStart(previous)))
+    ) {
+      previous.push(...turn);
+    } else groups.push(turn);
+  }
+  return groups;
+}
+
+/** The runs a merged Mono turn holds, each opened by its own prompt. */
+export function monoTurnRuns(turn: Block[]): Block[][] {
+  const runs: Block[][] = [];
+  turn.forEach((block, index) => {
+    if (
+      index === 0 ||
+      (isMonoCompletionPrompt(block) && block.startedAt != null)
+    )
+      runs.push([block]);
+    else runs[runs.length - 1].push(block);
+  });
+  return runs;
+}
+
+/** Follow-ups belong to one conversation burst even when work lands between them. */
+export function groupMonoTurns(blocks: Block[], managed = false): Block[][] {
+  const groups: Block[][] = [];
+  for (const turn of groupTranscriptTurns(blocks, managed, true)) {
+    const previous = groups[groups.length - 1];
+    if (
+      previous?.[0].role === "user" &&
+      turn[0].role === "user" &&
+      turn[0].sentAt != null &&
+      turn[0].startedAt == null
+    ) {
+      previous.push(...turn);
+    } else groups.push([...turn]);
+  }
+  return groups;
 }
 
 /**
@@ -285,6 +514,87 @@ export function groupTurnItems(
   });
   flush();
   return items;
+}
+
+/**
+ * A Mono keeps its process, including the opening message, in the activity
+ * trail. Live prose stays there until the user joins the running turn; replies
+ * after a delivered follow-up stay visible even when more work arrives.
+ * Settling reveals the trailing reply for uninterrupted turns.
+ * Cards, notices and interjections keep their
+ * own rows, and work resumed after a yielded reply does not absorb that reply.
+ */
+export function groupMonoTurnItems(
+  blocks: Block[],
+  options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
+): TurnItem[] {
+  // Read the original order before moving user bubbles above the work. Once
+  // the user joins in, hiding subsequent replies makes a delivered message
+  // look ignored. Queued or failed messages have not reached the agent yet.
+  const followUpReplies = new Set<string>();
+  let interactive = false;
+  for (const block of blocks) {
+    if (
+      block.role === "user" &&
+      block.sentAt != null &&
+      block.startedAt == null &&
+      !block.internal &&
+      !block.draft &&
+      !options?.undeliveredMessageIds?.has(block.id)
+    )
+      interactive = true;
+    if (interactive && isProseBlock(block)) followUpReplies.add(block.id);
+  }
+  // Keep the user's messages together above the work, without mutating history.
+  const items = groupTurnItems([
+    ...blocks.filter((block) => block.role === "user"),
+    ...blocks.filter((block) => block.role !== "user"),
+  ]);
+  const start = items.findIndex(
+    (item) => item.type !== "block" || item.block.role !== "user",
+  );
+  if (start < 0) return items;
+  let end = -1;
+  const boundary = yieldedAt(items);
+  for (let index = start; index < items.length; index += 1) {
+    const item = items[index];
+    // Status pings after an answer are not new work that should absorb it.
+    if (
+      item.type !== "block"
+        ? item.blocks.some(
+            (block) => isToolBlock(block) || isThinkingBlock(block),
+          )
+        : isToolBlock(item.block) || (options?.live && isProseBlock(item.block))
+    )
+      end = index;
+  }
+  if (end < start) return items;
+
+  const grouped: TurnItem[] = [];
+  let work: Block[] = [];
+  const flush = () => {
+    if (work.length) grouped.push({ type: "activity", blocks: work });
+    work = [];
+  };
+  items.forEach((item, index) => {
+    if (
+      index >= start &&
+      index <= end &&
+      !(item.type === "block" && followUpReplies.has(item.block.id)) &&
+      // A reply already delivered before background work resumed stays put.
+      !(boundary < items.length && index === boundary - 1) &&
+      (item.type !== "block" ||
+        isProseBlock(item.block) ||
+        isToolBlock(item.block))
+    ) {
+      work.push(...(item.type === "block" ? [item.block] : item.blocks));
+    } else {
+      flush();
+      grouped.push(item);
+    }
+  });
+  flush();
+  return grouped;
 }
 
 /**
@@ -733,6 +1043,8 @@ function currentWorkKind(steps: Block[]): ActivityWorkKind | undefined {
  * "N notes" clause; a group holding nothing but notes is just that clause.
  */
 export function workSummaryLine(steps: Block[], live = false): string {
+  const appSummary = monoCodeWorkSummary(steps, live);
+  if (appSummary) return appSummary;
   const tally = tallySteps(steps);
   const notes =
     tally.notes === 1
@@ -796,11 +1108,15 @@ export type WorkFold = { start: number; end: number };
  * the fold: an answer the harness already showed never folds behind an
  * interjection that arrived after it. A settled turn groups them into the
  * trail itself, where the fold simply spans them.
+ *
+ * The message the agent yielded with, while work it left in the background
+ * was still running, is its answer to the prompt. Whatever a finished task
+ * wakes it up to say afterwards comes below that answer, not in its place.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
   let answered = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  for (let index = yieldedAt(items) - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
       if (answered && isFoldableItem(item)) {
@@ -817,6 +1133,24 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let start = end;
   while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
   return { start, end };
+}
+
+/**
+ * Where the fold has to stop: the first group of background rows, which sits
+ * right under the message the agent yielded with. The whole turn when there
+ * is none.
+ */
+function yieldedAt(items: TurnItem[]): number {
+  const index = items.findIndex((item, at) => {
+    const before = items[at - 1];
+    return (
+      item.type === "activity" &&
+      item.blocks.some((block) => !!block.tool?.background) &&
+      before?.type === "block" &&
+      isProseBlock(before.block)
+    );
+  });
+  return index < 0 ? items.length : index;
 }
 
 function isFoldableItem(item: TurnItem): boolean {
@@ -840,17 +1174,15 @@ export function firstFoldableIndex(items: TurnItem[]): number {
 
 /** Every block inside a fold, work and commentary alike. */
 export function foldedBlocks(items: TurnItem[], fold: WorkFold): Block[] {
-  return items
-    .slice(fold.start, fold.end + 1)
-    .flatMap((item) =>
-      item.type === "block"
-        ? [item.block]
-        : // Delegated runs keep their own rows, so they are not part of what
-          // the fold summarises.
-          item.type === "subagents"
-          ? []
-          : item.blocks,
-    );
+  return items.slice(fold.start, fold.end + 1).flatMap((item) =>
+    item.type === "block"
+      ? [item.block]
+      : // Delegated runs keep their own rows, so they are not part of what
+        // the fold summarises.
+        item.type === "subagents"
+        ? []
+        : item.blocks,
+  );
 }
 
 /** True when a nested scroller should consume this wheel, not the parent. */

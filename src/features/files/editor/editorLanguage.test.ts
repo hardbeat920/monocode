@@ -50,6 +50,7 @@ describe("languageForPath", () => {
     "Controller.m",
     "messages.proto",
     "Dockerfile",
+    "settings.jsonc",
   ])("loads highlighting for additional mainstream file %s", async (path) => {
     await expect(languageForPath(path)).resolves.not.toBeNull();
   });

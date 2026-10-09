@@ -9,13 +9,18 @@ import {
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
+  groupMonoChatTurns,
+  groupMonoTurnItems,
+  groupMonoTurns,
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
   initialThinkingIndex,
   lastActivityIndex,
+  monoTurnRuns,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  resolveToolCallDisplay,
   isSubagentBlock,
   subagentBrief,
   subagentFailureSummary,
@@ -105,6 +110,308 @@ function irc(id: string, text = "new message in #general"): Block {
     interjection: { customType: "irc:incoming" },
   };
 }
+
+describe("groupMonoChatTurns", () => {
+  const minute = 60 * 1000;
+  const at = new Date(2026, 9, 7, 11, 0).getTime();
+  const completion = (id: string, startedAt: number): Block => ({
+    id,
+    role: "user",
+    text: "{}",
+    internal: true,
+    appRequestId: `mono-completion-${id}`,
+    sentAt: startedAt,
+    startedAt,
+    durationMs: 25_000,
+  });
+
+  it("continues the message above with a reply the Mono sends on its own", () => {
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: at },
+      note("welcome", "You're welcome!"),
+      completion("review", at + 3 * minute),
+      note("cancelled", "The review was cancelled."),
+      completion("tests", at + 5 * minute),
+      note("tests-done", "Tests passed."),
+    ];
+    const turns = groupMonoChatTurns(blocks);
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["thanks", "welcome", "review", "cancelled", "tests", "tests-done"],
+    ]);
+    expect(
+      monoTurnRuns(turns[0]).map((run) => run.map((block) => block.id)),
+    ).toEqual([
+      ["thanks", "welcome"],
+      ["review", "cancelled"],
+      ["tests", "tests-done"],
+    ]);
+  });
+
+  it("starts a new message where the transcript marks a new stretch", () => {
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: at },
+      note("welcome", "You're welcome!"),
+      completion("review", at + 90 * minute),
+      note("cancelled", "The review was cancelled."),
+    ];
+    expect(groupMonoChatTurns(blocks)).toHaveLength(2);
+  });
+
+  it("keeps the user's own messages and habit reports as their own turns", () => {
+    const blocks: Block[] = [
+      { id: "first", role: "user", text: "First", startedAt: at },
+      note("first-answer", "Done."),
+      { id: "second", role: "user", text: "Second", startedAt: at + minute },
+      note("second-answer", "Done."),
+      {
+        id: "habit",
+        role: "assistant",
+        text: "Morning report",
+        monoHabit: { id: "h", name: "Morning", at: at + 2 * minute },
+      },
+      completion("review", at + 3 * minute),
+      note("cancelled", "The review was cancelled."),
+    ];
+    expect(groupMonoChatTurns(blocks).map((turn) => turn[0].id)).toEqual([
+      "first",
+      "second",
+      "habit",
+      "review",
+    ]);
+  });
+});
+
+describe("groupMonoTurnItems", () => {
+  it("keeps a queued message promoted to a new turn separate and hides its process", () => {
+    const blocks: Block[] = [
+      { id: "first", role: "user", text: "First request", startedAt: 1 },
+      note("first-answer", "Done."),
+      {
+        id: "queued",
+        role: "user",
+        text: "Next request",
+        sentAt: 10,
+        startedAt: 20,
+      },
+      note("intro", "Checking the next request."),
+      shell("next-work", "in_progress"),
+    ];
+    const turns = groupMonoTurns(blocks);
+    expect(turns).toHaveLength(2);
+    expect(groupMonoTurnItems(turns[1], { live: true })).toMatchObject([
+      { type: "block", block: { id: "queued" } },
+      {
+        type: "activity",
+        blocks: [{ id: "intro" }, { id: "next-work" }],
+      },
+    ]);
+  });
+
+  it("keeps replies after mid-turn follow-ups visible while tools continue", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Review the PR" },
+      note("intro", "I will inspect the files."),
+      shell("first"),
+      { id: "status", role: "user", text: "What are you doing?", sentAt: 10 },
+      note("status-reply", "I am checking browser security."),
+      shell("second", "in_progress"),
+      { id: "stop", role: "user", text: "You can stop", sentAt: 20 },
+      note("stop-reply", "Stopping the background review now."),
+      shell("cancel", "in_progress"),
+    ];
+    for (const live of [true, false]) {
+      const items = groupMonoTurnItems(blocks, { live });
+      expect(
+        items.flatMap((item) =>
+          item.type === "block" && item.block.role === "assistant"
+            ? [item.block.text]
+            : [],
+        ),
+      ).toEqual([
+        "I am checking browser security.",
+        "Stopping the background review now.",
+      ]);
+    }
+  });
+
+  it("keeps live narration compact until the turn settles", () => {
+    const blocks = [
+      note("intro", "Checking."),
+      shell("first"),
+      note("reply", "The result."),
+    ];
+    expect(groupMonoTurnItems(blocks, { live: true })).toMatchObject([
+      {
+        type: "activity",
+        blocks: [{ id: "intro" }, { id: "first" }, { id: "reply" }],
+      },
+    ]);
+    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+      type: "block",
+      block: { id: "reply" },
+    });
+  });
+
+  it("keeps the opening in the chronological work group and reveals only the trailing reply", () => {
+    const items = groupMonoTurnItems([
+      { id: "user", role: "user", text: "Inspect" },
+      note("intro", "I will inspect the files."),
+      shell("first"),
+      note("progress", "Now checking the result."),
+      shell("second"),
+      note("answer", "Everything passed."),
+      note("answer-more", "Here are the details."),
+    ]);
+    expect(items).toMatchObject([
+      { type: "block", block: { id: "user" } },
+      {
+        type: "activity",
+        blocks: [
+          { id: "intro" },
+          { id: "first" },
+          { id: "progress" },
+          { id: "second" },
+        ],
+      },
+      { type: "block", block: { id: "answer" } },
+      { type: "block", block: { id: "answer-more" } },
+    ]);
+  });
+
+  it("groups a tool-first turn without promoting its first progress note to an opening", () => {
+    expect(
+      groupMonoTurnItems([
+        shell("first"),
+        note("progress", "Trying another approach."),
+        shell("second"),
+        note("answer", "Done."),
+      ]),
+    ).toMatchObject([
+      {
+        type: "activity",
+        blocks: [{ id: "first" }, { id: "progress" }, { id: "second" }],
+      },
+      { type: "block", block: { id: "answer" } },
+    ]);
+  });
+
+  it("absorbs the latest narration when more tools arrive", () => {
+    const blocks = [
+      note("intro", "Checking."),
+      shell("first"),
+      note("progress", "Checking more."),
+    ];
+    expect(groupMonoTurnItems(blocks).at(-1)).toMatchObject({
+      type: "block",
+      block: { id: "progress" },
+    });
+    expect(
+      groupMonoTurnItems([...blocks, shell("second", "in_progress")]).at(-1),
+    ).toMatchObject({
+      type: "activity",
+      blocks: [
+        { id: "intro" },
+        { id: "first" },
+        { id: "progress" },
+        { id: "second" },
+      ],
+    });
+  });
+
+  it("keeps notices, cards and interjections outside the work", () => {
+    const notice: Block = {
+      id: "error",
+      role: "system",
+      notice: "error",
+      text: "A command failed.",
+    };
+    const card: Block = { id: "plan", role: "plan", text: "The plan" };
+    const incoming = irc("incoming");
+    const items = groupMonoTurnItems([
+      shell("first"),
+      notice,
+      card,
+      incoming,
+      shell("second"),
+      note("answer", "Done."),
+    ]);
+    expect(items).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "error" } },
+      { type: "block", block: { id: "plan" } },
+      { type: "block", block: { id: "incoming" } },
+      { type: "activity", blocks: [{ id: "second" }] },
+      { type: "block", block: { id: "answer" } },
+    ]);
+  });
+
+  it("preserves a yielded reply when background work resumes", () => {
+    const background: Block = {
+      ...shell("background"),
+      tool: { kind: "shell", status: "completed", background: true },
+    };
+    expect(
+      groupMonoTurnItems([
+        shell("first"),
+        note("yielded", "The task is still running."),
+        background,
+        note("update", "It finished."),
+      ]),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "yielded" } },
+      { type: "activity", blocks: [{ id: "background" }] },
+      { type: "block", block: { id: "update" } },
+    ]);
+  });
+
+  it("keeps direct replies and empty turns intact", () => {
+    expect(groupMonoTurnItems([])).toEqual([]);
+    expect(groupMonoTurnItems([note("answer", "Hello.")])).toMatchObject([
+      { type: "block", block: { id: "answer" } },
+    ]);
+    expect(
+      groupMonoTurnItems([note("answer", "Hello.")], { live: true }),
+    ).toMatchObject([{ type: "activity", blocks: [{ id: "answer" }] }]);
+  });
+
+  it("keeps a final answer visible when a status ping arrives after it", () => {
+    expect(
+      groupMonoTurnItems([
+        note("intro", "Checking."),
+        shell("first"),
+        note("answer", "Everything passed."),
+        status("reviewed"),
+      ]),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "intro" }, { id: "first" }] },
+      { type: "block", block: { id: "answer" } },
+      { type: "activity", blocks: [{ id: "reviewed" }] },
+    ]);
+  });
+
+  it("hides new streamed narration after a previously delivered background reply", () => {
+    const background: Block = {
+      ...shell("background"),
+      tool: { kind: "shell", status: "completed", background: true },
+    };
+    expect(
+      groupMonoTurnItems(
+        [
+          shell("first"),
+          note("yielded", "The task is still running."),
+          background,
+          note("update", "It finished."),
+        ],
+        { live: true },
+      ),
+    ).toMatchObject([
+      { type: "activity", blocks: [{ id: "first" }] },
+      { type: "block", block: { id: "yielded" } },
+      { type: "activity", blocks: [{ id: "background" }, { id: "update" }] },
+    ]);
+  });
+});
 
 describe("groupTurnItems", () => {
   it("keeps consecutive shell calls in one activity stack", () => {
@@ -348,6 +655,25 @@ describe("turnCopyText", () => {
 });
 
 describe("groupTurns", () => {
+  it("keeps habit reports and relayed approvals outside conversation turns", () => {
+    const monoHabit = { id: "habit", name: "Morning check", at: 1_000 };
+    const turns = groupTurns([
+      { id: "user", role: "user", text: "Review" },
+      { id: "answer", role: "assistant", text: "Reviewed." },
+      { id: "report", role: "assistant", text: "CI failed.", monoHabit },
+      { id: "approval", role: "approval", text: "Allow command", monoHabit },
+      { id: "next-report", role: "assistant", text: "CI passed.", monoHabit },
+      { id: "next-user", role: "user", text: "Thanks" },
+    ]);
+    expect(turns.map((turn) => turn.map((block) => block.id))).toEqual([
+      ["user", "answer"],
+      ["report"],
+      ["approval"],
+      ["next-report"],
+      ["next-user"],
+    ]);
+  });
+
   it("folds an orchestration turn the app wrote into the turn above", () => {
     const turns = groupTurns([
       { id: "u1", role: "user", text: "Review the changes" },
@@ -842,11 +1168,7 @@ describe("the settled work trail", () => {
     const items = groupTurnItems(turn, { settled: true });
     expect(items).toHaveLength(1);
     if (items[0]?.type !== "activity") throw new Error("expected activity");
-    expect(items[0].blocks.map((block) => block.id)).toEqual([
-      "a",
-      "ag",
-      "b",
-    ]);
+    expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "ag", "b"]);
     expect(workSummaryLine(items[0].blocks)).toBe(
       "Ran 2 commands · Ran a subagent",
     );
@@ -945,6 +1267,70 @@ describe("the settled work trail", () => {
     expect(phases[0].kind).toBe("note");
     expect(activityPhaseTitle(phases[0])).toBe("2 notes");
     expect(workKind(trailing.blocks)).toBe("note");
+  });
+
+  it("keeps the answer Claude yielded with above what a background task wakes it to say", () => {
+    const background: Block = {
+      ...shell("bg"),
+      tool: {
+        kind: "shell",
+        title: "bash ls",
+        status: "completed",
+        background: true,
+      },
+    };
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "go" },
+        shell("t1"),
+        { id: "note", role: "assistant", text: "Updating the state file." },
+        shell("t2"),
+        { id: "answer", role: "assistant", text: "Two new findings." },
+        background,
+        {
+          id: "late",
+          role: "assistant",
+          text: "Stray command, nothing to do.",
+        },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "t1",
+      "note",
+      "t2",
+    ]);
+    expect(items.slice(fold.end + 1).map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+    ]);
+  });
+
+  it("keeps a yielded answer visible when status precedes the background tool", () => {
+    const items = groupTurnItems(
+      [
+        shell("before"),
+        { id: "answer", role: "assistant", text: "The initial answer." },
+        status("after-yield"),
+        {
+          ...shell("background"),
+          tool: { kind: "shell", background: true, status: "completed" },
+        },
+        { id: "late", role: "assistant", text: "The follow-up." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "before",
+    ]);
+    expect(items.slice(fold.end + 1).map((item) => item.type)).toEqual([
+      "block",
+      "activity",
+      "block",
+    ]);
   });
 
   it("lets the settled fold reach across an interjection that stops it live", () => {
@@ -1261,6 +1647,161 @@ describe("editVerb", () => {
   it("falls back to Edit for unknown phrasing", () => {
     expect(editVerb("Patching src/App.tsx")).toBe("Edit");
     expect(editVerb("")).toBe("Edit");
+  });
+});
+
+describe("resolveToolCallDisplay", () => {
+  it("opens the exact path shown in the label, even when preview.path disagrees", () => {
+    // Two skills named SKILL.md: one under the provider's own skills folder
+    // (what the label names, from issue #322) and one under the project's
+    // .claude/skills that a preview field points at instead.
+    const label = "Read /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "read" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+    expect(result.filePath).toBe(result.target);
+    expect(result.filePath).not.toBe(preview.path);
+  });
+
+  it("still resolves from preview.path when the label carries no literal path", () => {
+    const preview = {
+      kind: "read" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(
+      "Read",
+      preview,
+      "/Users/dev/project",
+    );
+    expect(result.target).toBe("src/App.tsx");
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+  });
+
+  it("falls back to the raw label when there is no recognisable action", () => {
+    const result = resolveToolCallDisplay(
+      "Thinking",
+      undefined,
+      "/Users/dev/project",
+    );
+    expect(result.action).toBeUndefined();
+    expect(result.target).toBeUndefined();
+  });
+
+  it("flags a write preview whose own path disagrees with the label's file", () => {
+    // Same two-SKILL.md situation as above, but for a write: the row must
+    // still open the label's file, and must not show it a diff meant for the
+    // other one.
+    const label = "Edit /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.filePath).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("keeps the write preview when its path agrees with the label's file", () => {
+    const label = "Edit src/App.tsx";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("keeps the write preview when the label carries no literal path of its own", () => {
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(
+      "Write",
+      preview,
+      "/Users/dev/project",
+    );
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("falls back to the write preview's path when the label's target is plain English, not a filename", () => {
+    // A harness can phrase an edit's label as a description ("dependency
+    // versions") rather than a path. That description does not look like a
+    // file, so the row must still open and diff the preview's real file
+    // instead of failing to resolve anything.
+    const label = "Edit dependency versions";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/package.json",
+      fileName: "package.json",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("package.json");
+    expect(result.filePath).toBe("/Users/dev/project/package.json");
+    expect(result.previewMatchesFile).toBe(true);
+  });
+
+  it("still trusts a label's own path over the write preview when it looks like a file", () => {
+    const label = "Edit /Users/dev/.codex/skills/zuse/SKILL.md";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/.claude/skills/custom-skill/SKILL.md",
+      fileName: "SKILL.md",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("/Users/dev/.codex/skills/zuse/SKILL.md");
+  });
+
+  it("does not treat an unresolved write-preview path as a confirmed match", () => {
+    // The preview's own path is relative and cwd is unknown here, so it
+    // cannot be resolved at all - that is not the same as it agreeing with
+    // the label's file, and must not be shown as though it were.
+    const label = "Edit /Users/dev/project/src/App.tsx";
+    const preview = {
+      kind: "write" as const,
+      path: "src/App.tsx",
+      fileName: "App.tsx",
+    };
+    const result = resolveToolCallDisplay(label, preview, undefined);
+    expect(result.filePath).toBe("/Users/dev/project/src/App.tsx");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("trusts a label target with a line:column suffix over a disagreeing write preview", () => {
+    // "main.ts:12" does not end in ".ts" once the location suffix is
+    // counted, so a plain extension check on the label text alone rejects
+    // it. resolveWorkspacePath already strips that suffix, so the trust
+    // check must go through it instead of looksLikeFilePath directly.
+    const label = "Edit src/main.ts:12";
+    const preview = {
+      kind: "write" as const,
+      path: "/Users/dev/project/other.ts",
+      fileName: "other.ts",
+    };
+    const result = resolveToolCallDisplay(label, preview, "/Users/dev/project");
+    expect(result.target).toBe("src/main.ts:12");
+    expect(result.filePath).toBe("/Users/dev/project/src/main.ts");
+    expect(result.previewMatchesFile).toBe(false);
+  });
+
+  it("trusts a Windows-style label target ending in an extensionless filename", () => {
+    // Backslash separators mean looksLikeFilePath's own "/" check never
+    // fires, and "Dockerfile" alone has no dot extension - resolving through
+    // resolveWorkspacePath (which normalises slashes first) is what makes
+    // this recognisable as a real path instead of plain English.
+    const label = "Read C:\\repo\\docker\\Dockerfile";
+    const result = resolveToolCallDisplay(label, undefined, "C:/repo");
+    expect(result.target).toBe("C:\\repo\\docker\\Dockerfile");
+    expect(result.filePath).toBe("C:/repo/docker/Dockerfile");
   });
 });
 

@@ -106,13 +106,14 @@ describe("code view outline", () => {
     await act(async () =>
       root.render(createElement(Fragment, null, ...nodes)),
     );
-    await act(async () =>
-      vi.waitFor(() =>
-        expect(container.querySelectorAll(".cm-editor").length).toBe(
-          entries.length,
-        ),
-      ),
-    );
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      expect(container.querySelectorAll(".cm-editor").length).toBe(
+        entries.length,
+      );
+    });
     return Array.from(
       container.querySelectorAll<HTMLElement>(".cm-editor"),
     ).map((el) => EditorView.findFromDOM(el)!);

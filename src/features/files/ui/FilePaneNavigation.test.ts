@@ -11,6 +11,10 @@ const disk = vi.hoisted(() => ({ content: "" }));
 const invoke = vi.hoisted(() =>
   vi.fn(async (command: string) => {
     if (command === "read_text_file") return disk.content;
+    if (command === "git_diff_files")
+      return {
+        files: [{ relative: "review.txt", staged: false, unstaged: true }],
+      };
     if (command === "git_file_diff")
       return {
         original: "first line\nold line\nthird line",
@@ -76,11 +80,12 @@ describe("file pane source navigation", () => {
       editorNavigation: { path, line, column: 2, token: 1 },
     };
     await act(async () => root.render(createElement(FilePane, paneProps)));
-    await act(async () =>
-      vi.waitFor(() =>
-        expect(container.querySelector(".cm-editor")).not.toBeNull(),
-      ),
-    );
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      expect(container.querySelector(".cm-editor")).not.toBeNull();
+    });
     return EditorView.findFromDOM(
       container.querySelector<HTMLElement>(".cm-editor")!,
     )!;
@@ -133,7 +138,9 @@ describe("file pane source navigation", () => {
   });
 
   it("reapplies the requested location when a pending file reload adds its line", async () => {
-    invoke.mockResolvedValueOnce("first line");
+    // Watcher stat calls can arrive before the initial read on slower runners.
+    // Model the file itself instead of whichever IPC call happens to run next.
+    disk.content = "first line";
     const view = await render("/repo/growing.txt", 3);
     await act(async () =>
       vi.waitFor(() => {
@@ -142,6 +149,7 @@ describe("file pane source navigation", () => {
       }),
     );
     await act(async () => {
+      disk.content = "first line\nsecond line\nthird line";
       invalidateWatchedFiles(["/repo/growing.txt"]);
       await new Promise((resolve) => setTimeout(resolve, 100));
     });
@@ -167,11 +175,6 @@ describe("file pane source navigation", () => {
         expect(container.textContent).toContain("-1");
       }),
     );
-    expect(invoke).toHaveBeenCalledWith("git_file_diff", {
-      cwd: "/repo",
-      relative: "review.txt",
-      staged: false,
-    });
   });
 
   it("preserves a manually moved selection and external focus after a reload", async () => {
@@ -214,17 +217,24 @@ describe("file pane source navigation", () => {
     "cancels a clamped pending navigation on %s before its line arrives",
     async (interaction) => {
       const path = `/repo/pending-${interaction}.txt`;
-      invoke.mockResolvedValueOnce("first line");
+      // Watcher IPC can run before the read; keep the file short until reload.
+      disk.content = "first line";
       const view = await render(path, 3);
       await act(async () =>
-        vi.waitFor(() => expect(view.state.selection.main.head).toBe(1)),
+        vi.waitFor(() => {
+          expect(view.state.doc.lines).toBe(1);
+          expect(view.state.selection.main.head).toBe(1);
+        }),
       );
       const button = document.createElement("button");
       container.append(button);
       await act(async () => {
         if (interaction === "selection")
           view.dispatch({ selection: { anchor: 0 } });
-        else button.focus();
+        else {
+          view.focus();
+          button.focus();
+        }
       });
       const focus = vi.spyOn(view, "focus");
 

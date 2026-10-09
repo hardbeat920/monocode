@@ -1,14 +1,34 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isMonoSession } from "../../monos/model/mono";
+import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
+import {
+  isWeakToolTitle,
+  titleFromToolInput,
+} from "../../../integrations/harness/core/preview";
+import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
-import { normalizeProjectPath } from "../../projects/model/recents";
-import { ompActiveAssistantTexts, ompSessionInterjections } from "../../../platform/tauri/fs";
-import { backfillOmpInterjections, ompStatusSplitTexts } from "../model/ompInterjections";
+import {
+  isRemoteProjectPath,
+  normalizeProjectPath,
+} from "../../projects/model/recents";
+import {
+  claudeShellCommands,
+  ompActiveAssistantTexts,
+  ompSessionInterjections,
+} from "../../../platform/tauri/fs";
+import {
+  backfillOmpInterjections,
+  ompStatusSplitTexts,
+} from "../model/ompInterjections";
 import type {
   AgentRunMeta,
   AgentStep,
   Block,
+  BtwMessage,
+  BtwThread,
+  GeneratedImageMeta,
   HarnessId,
   HandoffMeta,
   HandoffStatus,
@@ -19,15 +39,20 @@ import type {
   Session,
   TaskListMeta,
   PlanBlockMeta,
+  QueuedMessage,
+  MessageQueueStatus,
   TurnModel,
   TurnMetrics,
 } from "../model/session";
+
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
 export type SessionSummary = {
+  sidebarHidden?: boolean;
   orchestrationLeadId?: string;
   orchestration?: OrchestrationSummary;
   id: string;
@@ -53,6 +78,8 @@ export type SessionSummary = {
 };
 
 type SessionRecord = {
+  sidebarHidden?: boolean;
+  monoTranscript?: Session["monoTranscript"];
   orchestrationLeadId?: string;
   id: string;
   cwd: string;
@@ -64,6 +91,8 @@ type SessionRecord = {
   providerSessionId?: string | null;
   providerAccountId?: string | null;
   blocks: Block[];
+  queuedMessages?: QueuedMessage[];
+  queueStatus?: MessageQueueStatus;
   contextUsed?: number | null;
   contextWindow?: number | null;
   branch?: string | null;
@@ -76,6 +105,7 @@ type SessionRecord = {
 };
 
 type SessionUpsertPayload = {
+  sidebarHidden?: boolean;
   id: string;
   cwd: string;
   harness: string;
@@ -86,6 +116,8 @@ type SessionUpsertPayload = {
   providerSessionId?: string;
   providerAccountId?: string;
   blocks: Block[];
+  queuedMessages?: QueuedMessage[];
+  queueStatus?: MessageQueueStatus;
   contextUsed?: number;
   contextWindow?: number;
   branch?: string;
@@ -98,9 +130,13 @@ type SessionUpsertPayload = {
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
+    !session.ephemeral &&
     !session.inboxAsk &&
+    !isRemoteProjectPath(session.cwd) &&
     session.cwd !== "~" &&
-    session.blocks.some((block) => block.role === "user")
+    (session.blocks.some((block) => block.role === "user") ||
+      (isMonoSession(session.id) &&
+        (session.blocks.length > 0 || !!session.monoTranscript)))
   );
 }
 
@@ -111,8 +147,12 @@ export function isPersistableId(value: string): boolean {
 
 function persistableMeta(
   session: Session,
+  includeQueue = true,
 ): Omit<SessionUpsertPayload, "blocks"> {
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
+  const queuedMessages = includeQueue
+    ? sanitizeQueuedMessages(session.queuedMessages)
+    : [];
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
@@ -121,6 +161,13 @@ function persistableMeta(
     modelSettings: session.modelSettings,
     runtimeMode: session.runtimeMode,
     title: session.title,
+    ...(session.sidebarHidden === true ? { sidebarHidden: true } : {}),
+    ...(queuedMessages.length
+      ? {
+          queuedMessages,
+          queueStatus: session.queueStatus ?? "active",
+        }
+      : {}),
     ...(session.providerSessionId && isPersistableId(session.providerSessionId)
       ? { providerSessionId: session.providerSessionId }
       : {}),
@@ -139,6 +186,118 @@ function persistableMeta(
       ? { automationId: session.automationId }
       : {}),
   };
+}
+
+function sanitizeMonoSessionCompletion(
+  value: unknown,
+): Block["monoSessionCompletion"] {
+  if (!value || typeof value !== "object") return undefined;
+  const completion = value as NonNullable<Block["monoSessionCompletion"]>;
+  if (
+    typeof completion.sessionId !== "string" ||
+    !isPersistableId(completion.sessionId) ||
+    typeof completion.title !== "string" ||
+    !["completed", "failed", "cancelled"].includes(completion.status)
+  )
+    return undefined;
+  return {
+    sessionId: completion.sessionId,
+    title: completion.title,
+    status: completion.status,
+    ...(typeof completion.sessionCount === "number" &&
+    Number.isInteger(completion.sessionCount) &&
+    completion.sessionCount > 1
+      ? { sessionCount: completion.sessionCount }
+      : {}),
+  };
+}
+
+/** Pending images need their bytes until delivery; object URLs never survive reloads. */
+function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const message = entry as QueuedMessage;
+    if (
+      typeof message.id !== "string" ||
+      !isPersistableId(message.id) ||
+      seen.has(message.id) ||
+      typeof message.text !== "string"
+    )
+      return [];
+    seen.add(message.id);
+    const attachments = Array.isArray(message.attachments)
+      ? message.attachments.flatMap((file) => {
+          if (
+            !file ||
+            typeof file.id !== "string" ||
+            typeof file.name !== "string" ||
+            typeof file.mimeType !== "string" ||
+            !["image", "audio", "file"].includes(file.kind) ||
+            typeof file.size !== "number" ||
+            !Number.isFinite(file.size) ||
+            file.size < 0
+          )
+            return [];
+          return [
+            {
+              ...persistableAttachment(file),
+              ...(!file.path &&
+              file.kind === "image" &&
+              typeof file.data === "string"
+                ? { data: file.data }
+                : {}),
+            },
+          ];
+        })
+      : [];
+    const noteMeta = sanitizeNoteCard(message.noteCard);
+    const completion = sanitizeMonoSessionCompletion(
+      message.monoSessionCompletion,
+    );
+    const noteCard =
+      noteMeta && typeof message.noteCard?.body === "string"
+        ? { ...noteMeta, body: message.noteCard.body }
+        : undefined;
+    const handoff = message.handoffCard;
+    const handoffCard =
+      handoff &&
+      typeof handoff.brief === "string" &&
+      HARNESSES.includes(handoff.from) &&
+      HARNESSES.includes(handoff.to)
+        ? handoff
+        : undefined;
+    if (
+      !message.text.trim() &&
+      !attachments.length &&
+      !noteCard &&
+      !handoffCard
+    )
+      return [];
+    return [
+      {
+        id: message.id,
+        ...(typeof message.blockId === "string" &&
+        isPersistableId(message.blockId)
+          ? { blockId: message.blockId }
+          : {}),
+        text: message.text,
+        attachments,
+        ...(noteCard ? { noteCard } : {}),
+        ...(handoffCard ? { handoffCard } : {}),
+        ...(completion ? { monoSessionCompletion: completion } : {}),
+        ...(["default", "plan", "build", "orchestrate"].includes(
+          message.intent ?? "",
+        )
+          ? { intent: message.intent }
+          : {}),
+        ...(typeof message.error === "string" && message.error
+          ? { error: message.error }
+          : {}),
+      },
+    ];
+  });
 }
 
 export function sanitizeLinkedWorkItem(
@@ -193,6 +352,7 @@ export function sanitizeSessionForPersist(
  * write concurrently.
  */
 const sessionWriteQueues = new Map<string, Promise<unknown>>();
+const sessionWriteLeadById = new Map<string, string>();
 const deletedSessionIds = new Set<string>();
 
 function enqueueSessionWrite<T>(
@@ -209,6 +369,7 @@ function enqueueSessionWrite<T>(
   void tail.then(() => {
     if (sessionWriteQueues.get(sessionId) === tail) {
       sessionWriteQueues.delete(sessionId);
+      sessionWriteLeadById.delete(sessionId);
     }
   });
   return run;
@@ -220,13 +381,58 @@ export async function upsertSession(
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
   }
-  const payload = sanitizeSessionForPersist(session);
+  const mono = !!session.monoTranscript || isMonoSession(session.id);
+  const snapshot = mono
+    ? session.blocks.filter((block) => monoPersistedBlock(block) !== null)
+    : session.blocks;
+  // Mono writes sanitize only the changed suffix inside the serialized queue.
+  const payload = mono
+    ? persistableMeta(session)
+    : sanitizeSessionForPersist(session);
+  if (session.orchestrationLeadId) {
+    sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
+  } else {
+    sessionWriteLeadById.delete(session.id);
+  }
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
+    if (mono) {
+      const previous = monoSavedBlocks.get(session.id);
+      let same = 0;
+      if (previous) {
+        while (
+          same < previous.length &&
+          same < snapshot.length &&
+          previous[same] === snapshot[same]
+        )
+          same++;
+      }
+      const changed =
+        !previous || same !== previous.length || same !== snapshot.length;
+      const summary = await invoke<SessionSummary>("mono_session_upsert", {
+        session: {
+          ...payload,
+          blocks: changed
+            ? snapshot.slice(same).map((block) => monoPersistedBlock(block)!)
+            : [],
+        },
+        afterBlockId: same > 0 ? snapshot[same - 1].id : null,
+        fromBlockId:
+          same === 0
+            ? previous !== undefined
+              ? (previous[0]?.id ?? null)
+              : (session.monoTranscript?.firstBlockId ?? null)
+            : null,
+        blocksChanged: changed,
+        appendOnly: previous?.length === 0,
+      });
+      monoSavedBlocks.set(session.id, snapshot);
+      return summary;
+    }
     return invoke<SessionSummary>("session_upsert", {
       session: {
         ...payload,
-        blocks: payload.blocks.map((block) =>
+        blocks: (payload as SessionUpsertPayload).blocks.map((block) =>
           block.orchestrationLeadId &&
           deletedSessionIds.has(block.orchestrationLeadId)
             ? { ...block, orchestrationLeadId: undefined }
@@ -246,7 +452,9 @@ export async function upsertSession(
  * `persistableMeta` so a new persisted column cannot be forgotten here.
  */
 const blockTokens = new WeakMap<Block, number>();
+const queuedMessageTokens = new WeakMap<QueuedMessage, number>();
 let lastBlockToken = 0;
+let lastQueuedMessageToken = 0;
 
 function blockToken(block: Block): number {
   const seen = blockTokens.get(block);
@@ -257,7 +465,17 @@ function blockToken(block: Block): number {
 }
 
 export function persistFingerprint(session: Session): string {
-  return `${JSON.stringify(persistableMeta(session))}|${session.orchestrationLeadId ?? ""}|${session.blocks
+  // Pasted image bytes can be megabytes. Like transcript blocks, queue rows
+  // are immutable, so their identity detects edits without serializing bytes.
+  const queue = (session.queuedMessages ?? []).map((message) => {
+    let token = queuedMessageTokens.get(message);
+    if (token === undefined) {
+      token = ++lastQueuedMessageToken;
+      queuedMessageTokens.set(message, token);
+    }
+    return token;
+  });
+  return `${JSON.stringify(persistableMeta(session, false))}|${queue.length ? (session.queueStatus ?? "active") : ""}:${queue.join(",")}|${session.orchestrationLeadId ?? ""}|${session.blocks
     .map(blockToken)
     .join(",")}`;
 }
@@ -306,6 +524,7 @@ export type SessionSearchResult = {
 
 export async function searchSessions(options: {
   query: string;
+  searchOwner: string;
   cwd?: string;
   includeArchived?: boolean;
 }): Promise<SessionSearchResult> {
@@ -314,6 +533,7 @@ export async function searchSessions(options: {
   const result = await invoke<SessionSearchResult>("session_search", {
     options: {
       query,
+      searchOwner: options.searchOwner,
       ...(options.cwd && options.cwd !== "~"
         ? { cwd: normalizeProjectPath(options.cwd) }
         : {}),
@@ -326,12 +546,96 @@ export async function searchSessions(options: {
   };
 }
 
-export async function getSession(sessionId: string): Promise<Session | null> {
-  const record = await invoke<SessionRecord | null>("session_get", {
+export function cancelSessionSearch(searchOwner: string): Promise<void> {
+  return invoke<void>("cancel_session_search", { searchOwner });
+}
+
+const monoSavedBlocks = new Map<string, Block[]>();
+const monoBlockPayloads = new WeakMap<Block, Block | null>();
+function monoPersistedBlock(block: Block): Block | null {
+  if (monoBlockPayloads.has(block)) return monoBlockPayloads.get(block)!;
+  const payload = sanitizeBlock(block);
+  monoBlockPayloads.set(block, payload);
+  return payload;
+}
+
+export const MONO_PAGE_TURNS = 10;
+export type MonoTranscriptPage = {
+  blocks: Block[];
+  before: number | null;
+  hasNewer: boolean;
+};
+
+export async function getMonoTranscriptPage(
+  sessionId: string,
+  options: {
+    before?: number;
+    beforeBlockId?: string;
+    aroundBlockId?: string;
+  } = {},
+): Promise<MonoTranscriptPage> {
+  const page = await invoke<MonoTranscriptPage>("mono_session_page", {
     sessionId,
+    before: options.before ?? null,
+    beforeBlockId: options.beforeBlockId ?? null,
+    aroundBlockId: options.aroundBlockId ?? null,
   });
+  return {
+    ...page,
+    blocks: page.blocks
+      .map((block) => sanitizeBlock(block, { hydrate: true }))
+      .filter((block): block is Block => !!block),
+  };
+}
+
+export function findMonoTranscript(
+  sessionId: string,
+  query: string,
+): Promise<string[]> {
+  return invoke("mono_session_find", { sessionId, query });
+}
+
+export async function getSession(sessionId: string): Promise<Session | null> {
+  const record = await invoke<SessionRecord | null>(
+    isMonoSession(sessionId) ? "mono_session_get" : "session_get",
+    {
+      sessionId,
+    },
+  );
   if (!record) return null;
   const session = recordToSession(record);
+  if (session.monoTranscript) monoSavedBlocks.set(sessionId, session.blocks);
+  if (session.harness === "claude" && session.providerSessionId) {
+    const toolIds = shellPlaceholderIds(session.blocks);
+    if (toolIds.length) {
+      try {
+        const commands = await claudeShellCommands(
+          session.providerSessionId,
+          session.providerAccountId,
+          toolIds,
+        );
+        const blocks = backfillClaudeShellCommands(session.blocks, commands);
+        if (blocks !== session.blocks) {
+          session.blocks = blocks;
+          await upsertSession(session);
+        }
+      } catch {
+        // A missing or unreadable Claude transcript must not block the session.
+      }
+    }
+  }
+  if (session.harness === "codex") {
+    // Relabel from the command already saved on the row. Codex sends it with
+    // the item and `shellCommandPreview` stores it as the preview title, so
+    // this needs no disk read at all.
+    const blocks = backfillCodexShellCommands(session.blocks);
+    if (blocks !== session.blocks) {
+      session.blocks = blocks;
+      // A failed write must not cost the reader the session. The repair stays
+      // in memory and the next load retries it.
+      await upsertSession(session).catch(() => undefined);
+    }
+  }
   if (session.harness !== "omp" || !session.providerSessionId) {
     return recoverCursorSubagents(session);
   }
@@ -356,15 +660,108 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   return session;
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
+export function backfillClaudeShellCommands(
+  blocks: Block[],
+  commands: Record<string, string>,
+): Block[] {
+  let changed = false;
+  const repaired = blocks.map((block) => {
+    const callId = block.tool?.callId;
+    const value = callId ? commands[callId] : undefined;
+    const command = typeof value === "string" ? value.trim() : undefined;
+    if (
+      block.role !== "tool" ||
+      block.tool?.kind !== "execute" ||
+      block.text.trim() !== "Shell" ||
+      !command
+    ) {
+      return block;
+    }
+    changed = true;
+    const title = titleFromToolInput("Bash", "execute", { command });
+    return {
+      ...block,
+      text: title,
+      tool: { ...block.tool, title },
+    };
+  });
+  return changed ? repaired : blocks;
+}
+
+/** Exec rows that were saved without their command, keyed by their tool call. */
+function shellPlaceholderIds(blocks: Block[]): string[] {
+  return blocks.flatMap((block) =>
+    block.role === "tool" &&
+    block.tool?.kind === "execute" &&
+    block.text.trim() === "Shell" &&
+    block.tool.callId
+      ? [block.tool.callId]
+      : [],
+  );
+}
+
+/**
+ * Relabel exec rows that were saved without their command.
+ *
+ * The command is already on the row: Codex sends it with the item, and
+ * `shellCommandPreview` stores it as the preview title. Reading it back from
+ * there keeps whatever Codex chose to show the user — including anything it
+ * redacted — and never re-reads a secret off disk into the transcript store. A
+ * row saved without a usable preview has no command left to recover, so it keeps
+ * its placeholder label.
+ */
+export function backfillCodexShellCommands(blocks: Block[]): Block[] {
+  let changed = false;
+  const repaired = blocks.map((block) => {
+    if (
+      block.role !== "tool" ||
+      block.tool?.kind !== "execute" ||
+      block.text.trim() !== "Shell"
+    ) {
+      return block;
+    }
+    const saved = block.tool.preview?.title?.trim();
+    if (!saved || isWeakToolTitle(saved)) return block;
+    changed = true;
+    const { title, preview } = codexCommandPresentation({}, saved);
+    return {
+      ...block,
+      text: title,
+      tool: {
+        ...block.tool,
+        title,
+        ...(preview ? { preview } : {}),
+      },
+    };
+  });
+  return changed ? repaired : blocks;
+}
+
+export async function deleteSession(
+  sessionId: string,
+  imagePaths: string[] = [],
+): Promise<void> {
   deletedSessionIds.add(sessionId);
   try {
-    // A lead's workers may still have writes in flight. Finish those before
+    // A lead with workers still has writes in flight. Finish those before
     // the deletion transaction strips their ownership metadata.
-    await Promise.all([...sessionWriteQueues.values()]);
+    const pendingWrites = [...sessionWriteQueues.entries()]
+      .filter(
+        ([queuedSessionId]) =>
+          queuedSessionId === sessionId ||
+          sessionWriteLeadById.get(queuedSessionId) === sessionId,
+      )
+      .map(([, pending]) => pending);
+    if (pendingWrites.length > 0) await Promise.all(pendingWrites);
     await enqueueSessionWrite(sessionId, () =>
-      invoke<void>("session_delete", { sessionId }),
+      invoke<void>("session_delete", { sessionId, imagePaths }),
     );
+    monoSavedBlocks.delete(sessionId);
+    const tombstone = setTimeout(
+      () => deletedSessionIds.delete(sessionId),
+      60_000,
+    );
+    if (typeof tombstone === "object") tombstone.unref();
   } catch (error) {
     deletedSessionIds.delete(sessionId);
     throw error;
@@ -376,8 +773,9 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId }),
+    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
+  monoSavedBlocks.delete(sessionId);
 }
 
 export async function setSessionArchived(
@@ -476,7 +874,10 @@ export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
   return raw ?? null;
 }
 
-function sanitizeBlock(block: Block): Block | null {
+function sanitizeBlock(
+  block: Block,
+  options?: { hydrate?: boolean },
+): Block | null {
   const next: Block = {
     id: block.id,
     role: block.role,
@@ -485,11 +886,43 @@ function sanitizeBlock(block: Block): Block | null {
   if (block.attachments?.length) {
     next.attachments = block.attachments.map(persistableAttachment);
   }
+  const image = sanitizeGeneratedImage(block.image);
+  if (block.role === "image" && !image) return null;
+  if (image) next.image = image;
   if (block.startedAt != null) next.startedAt = block.startedAt;
   if (block.durationMs != null) next.durationMs = block.durationMs;
+  if (
+    (block.role === "assistant" || block.role === "approval") &&
+    typeof block.monoHabit?.id === "string" &&
+    block.monoHabit.id.trim() &&
+    typeof block.monoHabit.name === "string" &&
+    block.monoHabit.name.trim() &&
+    typeof block.monoHabit.at === "number" &&
+    Number.isFinite(block.monoHabit.at)
+  ) {
+    next.monoHabit = {
+      id: block.monoHabit.id,
+      name: block.monoHabit.name,
+      at: block.monoHabit.at,
+    };
+  }
+  if (block.role === "user" && typeof block.sentAt === "number")
+    next.sentAt = block.sentAt;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.role === "user" && block.draft) next.draft = true;
+  if (block.role === "user" && block.monocode) next.monocode = true;
+  if (
+    block.role === "user" &&
+    (block.intent === "plan" || block.intent === "orchestrate")
+  )
+    next.intent = block.intent;
+  if (
+    block.role === "user" &&
+    typeof block.appRequestId === "string" &&
+    /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
+  )
+    next.appRequestId = block.appRequestId;
   if (
     block.role === "user" &&
     typeof block.providerTurnId === "string" &&
@@ -505,6 +938,12 @@ function sanitizeBlock(block: Block): Block | null {
   // Without this the transcript would show the app's orchestration turns as
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
+  const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
+  if (block.role === "user" && block.internal && completion)
+    next.monoSessionCompletion = completion;
+  const spawned = sanitizeMonoSpawnedSessions(block.monoSpawnedSessions);
+  if (block.role === "user" && spawned.length)
+    next.monoSpawnedSessions = spawned;
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
@@ -534,8 +973,46 @@ function sanitizeBlock(block: Block): Block | null {
   else if (block.role === "handoff") return null;
   const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
   if (secondOpinion) next.secondOpinion = secondOpinion;
+  if (block.role === "user") {
+    const btwThreads = sanitizeBtwThreads(
+      block.btwThreads,
+      options?.hydrate === true,
+    );
+    if (btwThreads) next.btwThreads = btwThreads;
+  }
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (Array.isArray(block.artifactCards)) {
+    const cards = block.artifactCards.flatMap((card) => {
+      if (
+        !card ||
+        card.kind !== "document" ||
+        typeof card.id !== "string" ||
+        !isPersistableId(card.id) ||
+        typeof card.title !== "string" ||
+        !card.title.trim()
+      )
+        return [];
+      return [
+        {
+          id: card.id,
+          kind: "document" as const,
+          title: card.title.slice(0, 200),
+          ...(typeof card.summary === "string" && card.summary.trim()
+            ? { summary: card.summary.slice(0, 280) }
+            : {}),
+        },
+      ];
+    });
+    if (cards.length) next.artifactCards = cards;
+  }
+  if (
+    block.role === "user" &&
+    typeof block.ciContext === "string" &&
+    block.ciContext
+  ) {
+    next.ciContext = block.ciContext;
+  }
   // Interjection chrome survives restarts only on system blocks; a malformed
   // payload keeps the ordinary system row rather than losing its body.
   if (block.role === "system") {
@@ -546,6 +1023,167 @@ function sanitizeBlock(block: Block): Block | null {
     }
   }
   return next;
+}
+
+function sanitizeNestedId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  if (!id || id.length > 256 || /[\u0000-\u001f]/.test(id)) return undefined;
+  return id;
+}
+function sanitizeStringRecord(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const safeKey = sanitizeNestedId(key);
+    const safeValue = sanitizeNestedId(raw);
+    if (safeKey && safeValue) next[safeKey] = safeValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function sanitizeTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function sanitizeBtwMessage(value: unknown): BtwMessage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const id = sanitizeNestedId(record.id);
+  const text = typeof record.text === "string" ? record.text : undefined;
+  const createdAt = sanitizeTimestamp(record.createdAt);
+  const role =
+    record.role === "user" || record.role === "assistant"
+      ? record.role
+      : undefined;
+  if (!id || text == null || createdAt == null || !role) return undefined;
+  const blocks = Array.isArray(record.blocks)
+    ? record.blocks.flatMap((block) => {
+        const next = sanitizeBlock(block as Block);
+        return next ? [next] : [];
+      })
+    : [];
+  return {
+    id,
+    role,
+    text,
+    createdAt,
+    ...(blocks.length > 0 ? { blocks } : {}),
+  };
+}
+
+function sanitizeBtwThreads(
+  value: unknown,
+  hydrate: boolean,
+): BtwThread[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const threads = value.flatMap((entry): BtwThread[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    const id = sanitizeNestedId(record.id);
+    const sourceEndBlockId = sanitizeNestedId(record.sourceEndBlockId);
+    const createdAt = sanitizeTimestamp(record.createdAt);
+    const updatedAt = sanitizeTimestamp(record.updatedAt);
+    const status =
+      record.status === "running" ||
+      record.status === "ready" ||
+      record.status === "error"
+        ? record.status
+        : undefined;
+    const messages = Array.isArray(record.messages)
+      ? record.messages.flatMap((message) => {
+          const next = sanitizeBtwMessage(message);
+          return next ? [next] : [];
+        })
+      : [];
+    if (
+      !id ||
+      !sourceEndBlockId ||
+      createdAt == null ||
+      updatedAt == null ||
+      !status ||
+      messages.length === 0
+    ) {
+      return [];
+    }
+    const error = typeof record.error === "string" ? record.error.trim() : "";
+    const model = typeof record.model === "string" ? record.model.trim() : "";
+    const harness =
+      typeof record.harness === "string" &&
+      record.harness.trim() &&
+      HARNESSES.includes(record.harness as HarnessId)
+        ? (record.harness as HarnessId)
+        : undefined;
+    const modelSettings = sanitizeStringRecord(record.modelSettings);
+    const providerThreadId = sanitizeNestedId(record.providerThreadId);
+    const interrupted = hydrate && status === "running";
+    return [
+      {
+        id,
+        sourceEndBlockId,
+        createdAt,
+        updatedAt,
+        status: interrupted ? "error" : status,
+        messages,
+        ...(harness ? { harness } : {}),
+        ...(model ? { model } : {}),
+        ...(modelSettings ? { modelSettings } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+        ...(interrupted
+          ? {
+              error:
+                error ||
+                "This by-the-way request was interrupted before reload.",
+            }
+          : error
+            ? { error }
+            : {}),
+      },
+    ];
+  });
+  return threads.length > 0 ? threads : undefined;
+}
+
+function sanitizeGeneratedImage(
+  value: unknown,
+): GeneratedImageMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  const mimeType =
+    typeof record.mimeType === "string" ? record.mimeType.trim() : "";
+  const size = record.size;
+  if (
+    !path ||
+    !name ||
+    !mimeType.startsWith("image/") ||
+    typeof size !== "number" ||
+    !Number.isSafeInteger(size) ||
+    size <= 0
+  ) {
+    return undefined;
+  }
+  const alt = typeof record.alt === "string" ? record.alt.trim() : "";
+  return {
+    path,
+    name,
+    mimeType,
+    size,
+    ...(alt ? { alt } : {}),
+  };
 }
 
 function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
@@ -676,6 +1314,7 @@ function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
         text,
         ...(typeof row.toolKind === "string" ? { toolKind: row.toolKind } : {}),
         ...(typeof row.status === "string" ? { status: row.status } : {}),
+        ...(typeof row.detail === "string" ? { detail: row.detail } : {}),
         ...(row.preview && typeof row.preview === "object"
           ? { preview: row.preview as AgentStep["preview"] }
           : {}),
@@ -726,10 +1365,15 @@ function sanitizeTaskList(value: unknown): TaskListMeta | null {
   });
   if (items.length === 0) return null;
   const key = typeof record.key === "string" ? record.key.trim() : "";
+  const providerSessionId =
+    typeof record.providerSessionId === "string"
+      ? record.providerSessionId.trim()
+      : "";
   const explanation =
     typeof record.explanation === "string" ? record.explanation.trim() : "";
   return {
     ...(key ? { key } : {}),
+    ...(providerSessionId ? { providerSessionId } : {}),
     ...(explanation ? { explanation } : {}),
     items,
   };
@@ -751,6 +1395,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     archived: summary.archived || undefined,
     pinned: summary.pinned || undefined,
     draft: summary.draft || undefined,
+    sidebarHidden: summary.sidebarHidden === true || undefined,
     linkedWorkItem,
     ...(typeof summary.automationId === "string" &&
     isPersistableId(summary.automationId)
@@ -762,12 +1407,14 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 function recordToSession(record: SessionRecord): Session {
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
-        .map(sanitizeBlock)
+        .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
+  const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
   return {
     id: record.id,
+    sidebarHidden: record.sidebarHidden === true || undefined,
     cwd: record.cwd,
     harness: asHarness(record.harness),
     model: record.model,
@@ -778,6 +1425,11 @@ function recordToSession(record: SessionRecord): Session {
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,
+    // A restart interrupted the active turn. Let the user resume pending work.
+    ...(queuedMessages.length
+      ? { queuedMessages, queueStatus: "paused" as const }
+      : {}),
+    ...(record.monoTranscript ? { monoTranscript: record.monoTranscript } : {}),
     busy: false,
     orchestrationLeadId:
       record.orchestrationLeadId ??

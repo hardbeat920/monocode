@@ -462,7 +462,14 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     // Binary resolution awaited above may have raced a stop/forget — re-check
     // before the child is ever spawned, not just after.
     if (retired()) throw new Error("Antigravity session stopped during startup");
-    await spawnChild(childKey, path, args, antigravitySpawnCwd(path, input.cwd));
+    await spawnChild(
+      childKey,
+      path,
+      args,
+      antigravitySpawnCwd(path, input.cwd),
+      undefined,
+      "antigravity",
+    );
     if (retired()) throw new Error("Antigravity session stopped during startup");
     try {
       await acp.request(

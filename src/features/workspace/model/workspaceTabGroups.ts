@@ -14,7 +14,10 @@ import {
 } from "./layout";
 import { projectName } from "../../../shared/lib/paths";
 import { sameProjectPath } from "../../projects/model/recents";
-import type { Session } from "../../sessions/model/session";
+import {
+  sessionWorkCwd,
+  type Session,
+} from "../../sessions/model/session";
 
 export function workspaceTabCwd(
   tab: WorkspaceTab,
@@ -30,6 +33,30 @@ export function workspaceTabCwd(
   if (cwd && cwd !== "~") return cwd;
 
   return null;
+}
+
+/** Working copy a tab runs in: its first session's worktree, else the folder
+ * its focused file was opened from. Null when the tab has neither. */
+export function workspaceTabWorktree(
+  tab: WorkspaceTab,
+  sessions: readonly Pick<Session, "id" | "cwd" | "worktreeCwd">[],
+): string | null {
+  for (const id of leafIds(tab.layout)) {
+    const session = sessions.find((entry) => entry.id === id);
+    if (session?.cwd && session.cwd !== "~") return sessionWorkCwd(session);
+  }
+  const cwd = focusedFileTab(tab)?.cwd;
+  return cwd && cwd !== "~" ? cwd : null;
+}
+
+/** Tabs without a working copy show in every worktree. */
+export function tabInWorktree(
+  tab: WorkspaceTab,
+  sessions: readonly Pick<Session, "id" | "cwd" | "worktreeCwd">[],
+  worktree: string,
+): boolean {
+  const cwd = workspaceTabWorktree(tab, sessions);
+  return !cwd || sameProjectPath(cwd, worktree);
 }
 
 export function focusedWorkspaceTabCwd(
@@ -166,11 +193,15 @@ export function planWorkspaceTabClose({
   sessions,
   closingTabId,
   scope,
+  worktreeOf,
 }: {
   tabs: WorkspaceTab[];
   sessions: Session[];
   closingTabId: string;
   scope: WorkspaceTabCloseScope;
+  /** When given, the next tab also has to share the closing tab's worktree,
+   * so closing a tab never leaves the worktree on screen. */
+  worktreeOf?: (tab: WorkspaceTab) => string | null;
 }): WorkspaceTabClosePlan {
   const closingIndex = tabs.findIndex((tab) => tab.id === closingTabId);
   if (closingIndex < 0) return { action: "keep" };
@@ -187,23 +218,28 @@ export function planWorkspaceTabClose({
   if (!closingCwd) {
     return { action: "close", nextActiveTabId: globalTarget?.id };
   }
+  const closingWorktree = worktreeOf?.(tabs[closingIndex]) ?? null;
+  const sameScope = (tab: WorkspaceTab) => {
+    const cwd = workspaceTabCwd(tab, sessions);
+    if (!cwd || !sameProjectPath(cwd, closingCwd)) return false;
+    const worktree = closingWorktree && worktreeOf?.(tab);
+    return !worktree || sameProjectPath(worktree, closingWorktree);
+  };
 
   for (let index = closingIndex - 1; index >= 0; index -= 1) {
-    const cwd = workspaceTabCwd(tabs[index], sessions);
-    if (cwd && sameProjectPath(cwd, closingCwd)) {
+    if (sameScope(tabs[index])) {
       return { action: "close", nextActiveTabId: tabs[index].id };
     }
   }
 
   for (let index = closingIndex + 1; index < tabs.length; index += 1) {
-    const cwd = workspaceTabCwd(tabs[index], sessions);
-    if (cwd && sameProjectPath(cwd, closingCwd)) {
+    if (sameScope(tabs[index])) {
       return { action: "close", nextActiveTabId: tabs[index].id };
     }
   }
 
-  // Deck mode is one project at a time. Closing the last tab there must not
-  // jump to another project's tab; the caller keeps this one instead.
+  // Deck mode is one project (and worktree) at a time. Closing the last tab
+  // there must not jump to another one's tab; the caller keeps this one.
   return { action: "keep" };
 }
 

@@ -14,8 +14,11 @@ import {
   buildPiPrompt,
   buildPiSpawnArgs,
   isAgentSettled,
+  isPiThinkingLevel,
 } from "./piProtocol";
+import { abortTextPromptRace } from "../../core/abortTextPrompt";
 import { mergeStream } from "../../core/streamText";
+import type { HarnessEvent } from "../../core/types";
 
 const INIT_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -23,12 +26,15 @@ const REQUEST_TIMEOUT_MS = 45_000;
 type LiveText = {
   rpc: PiRpc;
   cwd: string;
+  model?: string;
+  settingsKey: string;
   collecting: boolean;
   output: string;
   closed: boolean;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
   turnEndPending: boolean;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 type TextState = {
@@ -47,7 +53,12 @@ function stateFor(flavor: PiFlavor): TextState {
   return state;
 }
 
-function pickTextModel(flavor: PiFlavor): string | undefined {
+function pickTextModel(
+  flavor: PiFlavor,
+  requested?: string,
+): string | undefined {
+  const selected = requested?.trim();
+  if (selected?.includes("/")) return selected;
   const models = modelsFor(flavor.id).filter((model) =>
     Boolean(model.nativeId?.includes("/")),
   );
@@ -66,9 +77,11 @@ export async function stopTextPrompt(flavor: PiFlavor): Promise<void> {
 export function warmupText(flavor: PiFlavor, cwd: string): Promise<void> {
   if (!cwd || cwd === "~") return Promise.resolve();
   const state = stateFor(flavor);
-  const run = state.turns.catch(() => undefined).then(async () => {
-    await ensureLive(flavor, cwd);
-  });
+  const run = state.turns
+    .catch(() => undefined)
+    .then(async () => {
+      await ensureLive(flavor, cwd);
+    });
   state.turns = run.then(
     () => undefined,
     () => undefined,
@@ -80,8 +93,12 @@ export async function runTextPrompt(
   flavor: PiFlavor,
   input: {
     cwd: string;
+    model?: string;
+    modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: HarnessEvent) => void;
   },
 ): Promise<string> {
   const state = stateFor(flavor);
@@ -99,26 +116,49 @@ async function promptOnLive(
   flavor: PiFlavor,
   input: {
     cwd: string;
+    model?: string;
+    modelSettings?: Record<string, string>;
     prompt: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: HarnessEvent) => void;
   },
 ): Promise<string> {
-  const session = await ensureLive(flavor, input.cwd);
+  const session = await ensureLive(
+    flavor,
+    input.cwd,
+    input.model,
+    input.modelSettings,
+  );
   const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
-
   try {
     await session.rpc.request({ type: "new_session" }).catch(() => undefined);
+    const thinking = input.modelSettings?.thinking;
     await session.rpc
-      .request({ type: "set_thinking_level", level: "off" })
+      .request({
+        type: "set_thinking_level",
+        level: isPiThinkingLevel(thinking) ? thinking : "off",
+      })
       .catch(() => undefined);
-
+    const fast = input.modelSettings?.fast;
+    if (flavor.id === "omp" && (fast === "true" || fast === "false")) {
+      await session.rpc
+        .request({ type: "set_fast_mode", enabled: fast === "true" })
+        .catch(() => undefined);
+    }
     session.output = "";
     session.collecting = true;
+    session.onEvent = input.onEvent;
     session.turnEndPending = false;
 
     const turnPromise = new Promise<void>((resolve, reject) => {
       session.turnDone = resolve;
       session.turnFailed = reject;
+    });
+
+    const abort = abortTextPromptRace(input.signal, () => {
+      session.turnFailed?.(new Error("By-the-way request cancelled"));
+      void session.rpc.request({ type: "abort" }).catch(() => undefined);
     });
 
     await session.rpc.request(buildPiPrompt({ text: input.prompt }), timeoutMs);
@@ -135,8 +175,10 @@ async function promptOnLive(
             timeoutMs,
           );
         }),
+        ...(abort.promise ? [abort.promise] : []),
       ]);
     } finally {
+      abort.detach();
       if (timer) clearTimeout(timer);
     }
 
@@ -159,20 +201,41 @@ async function promptOnLive(
     throw error;
   } finally {
     session.collecting = false;
+    session.onEvent = undefined;
     session.turnDone = null;
     session.turnFailed = null;
   }
 }
 
-async function ensureLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
+async function ensureLive(
+  flavor: PiFlavor,
+  cwd: string,
+  requestedModel?: string,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
   const state = stateFor(flavor);
+  const model = pickTextModel(flavor, requestedModel);
+  const settingsKey = modelSettingsKey(modelSettings);
   const current = state.live;
-  if (current && !current.closed && current.cwd === cwd) return current;
+  if (
+    current &&
+    !current.closed &&
+    current.cwd === cwd &&
+    current.model === model &&
+    current.settingsKey === settingsKey
+  ) {
+    return current;
+  }
   await dropLive(flavor);
-  return startLive(flavor, cwd);
+  return startLive(flavor, cwd, model, modelSettings);
 }
 
-async function startLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
+async function startLive(
+  flavor: PiFlavor,
+  cwd: string,
+  model?: string,
+  modelSettings?: Record<string, string>,
+): Promise<LiveText> {
   const state = stateFor(flavor);
   const childId = flavor.textChildId;
   const { path } = await flavor.resolveBinary();
@@ -188,12 +251,15 @@ async function startLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
   const session: LiveText = {
     rpc,
     cwd,
+    model,
+    settingsKey: modelSettingsKey(modelSettings),
     collecting: false,
     output: "",
     closed: false,
     turnDone: null,
     turnFailed: null,
     turnEndPending: false,
+    onEvent: undefined,
   };
   liveRef.current = session;
 
@@ -217,9 +283,11 @@ async function startLive(flavor: PiFlavor, cwd: string): Promise<LiveText> {
       path,
       buildPiSpawnArgs(flavor, {
         isolated: true,
-        model: pickTextModel(flavor),
+        model,
       }),
       cwd,
+      undefined,
+      flavor.id,
     );
     await rpc.request({ type: "get_state" }, INIT_TIMEOUT_MS);
     state.live = session;
@@ -241,9 +309,7 @@ async function dropLive(flavor: PiFlavor): Promise<void> {
   if (current) {
     current.closed = true;
     current.rpc.close();
-    current.turnFailed?.(
-      new Error(`${flavor.label} text generator stopped`),
-    );
+    current.turnFailed?.(new Error(`${flavor.label} text generator stopped`));
     current.turnDone = null;
     current.turnFailed = null;
   }
@@ -256,6 +322,9 @@ function handleFrame(session: LiveText, rec: Record<string, unknown>) {
   const delta = assistantDeltaFromEvent(rec);
   if (delta?.kind === "text") {
     session.output = mergeStream(session.output, delta.text);
+    session.onEvent?.({ type: "message.delta", text: delta.text });
+  } else if (delta?.kind === "thinking") {
+    session.onEvent?.({ type: "reasoning.delta", text: delta.text });
   }
   if (isAgentSettled(rec) || agentEndWillRetry(rec) === false) {
     if (session.turnDone) finishTurn(session);
@@ -270,19 +339,33 @@ function finishTurn(session: LiveText) {
   session.turnFailed = null;
   done?.();
 }
+function modelSettingsKey(settings?: Record<string, string>): string {
+  return JSON.stringify({
+    thinking: settings?.thinking,
+    fast: settings?.fast,
+  });
+}
 
 export const stopPiTextPrompt = () => stopTextPrompt(PI_FLAVOR);
 export const warmupPiText = (cwd: string) => warmupText(PI_FLAVOR, cwd);
 export const runPiTextPrompt = (input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }) => runTextPrompt(PI_FLAVOR, input);
 
 export const stopOmpTextPrompt = () => stopTextPrompt(OMP_FLAVOR);
 export const warmupOmpText = (cwd: string) => warmupText(OMP_FLAVOR, cwd);
 export const runOmpTextPrompt = (input: {
   cwd: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 }) => runTextPrompt(OMP_FLAVOR, input);

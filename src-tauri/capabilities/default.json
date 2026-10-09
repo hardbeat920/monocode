@@ -16,6 +16,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-hide",
+    "core:window:allow-set-theme",
     "core:webview:allow-set-webview-zoom",
     "opener:default",
     "dialog:default",

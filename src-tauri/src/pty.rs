@@ -591,7 +591,7 @@ fn open_pty(cols: u16, rows: u16) -> Result<(i32, i32), String> {
 fn slave_name(master: i32) -> Result<std::ffi::CString, String> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        let mut buf = vec![0_i8; 64];
+        let mut buf = vec![0 as libc::c_char; 64];
         let ret = unsafe { libc::ptsname_r(master, buf.as_mut_ptr(), buf.len()) };
         if ret != 0 {
             return Err(os_err("Failed to resolve terminal name"));

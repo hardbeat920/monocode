@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::dirs_home;
 use crate::fs::expand_home;
 
-const MAX_SKILLS: usize = 300;
+const MAX_SKILLS: usize = 5_000;
 const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -157,6 +157,18 @@ pub(crate) fn list_skills_from(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
+        add_root(home.join(".config/devin/skills"), "user", "devin");
+        // Windows keeps Devin's user config under %APPDATA% instead.
+        #[cfg(windows)]
+        add_root(
+            std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData/Roaming"))
+                .join("devin/skills"),
+            "user",
+            "devin",
+        );
+        add_root(project.join(".devin/skills"), "project", "devin");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -659,6 +671,31 @@ mod tests {
     }
 
     #[test]
+    fn lists_large_catalogs_from_every_root() {
+        let project = tmp("proj");
+        let home = tmp("home");
+        for index in 0..1_400 {
+            let name = format!("shared-{index:04}");
+            write_skill(
+                &home.0.join(".agents/skills"),
+                &name,
+                &format!("---\nname: {name}\ndescription: Shared skill {index}\n---\n"),
+            );
+        }
+        write_skill(
+            &home.0.join(".codex/skills"),
+            "codex-only",
+            "---\nname: codex-only\ndescription: Codex native\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        assert_eq!(skills.len(), 1_401);
+        assert!(skills.iter().any(|s| s.name == "shared-1399"));
+        let codex = skills.iter().find(|s| s.name == "codex-only").unwrap();
+        assert_eq!(codex.source, "codex");
+    }
+
+    #[test]
     fn discovers_pi_project_and_user_skills() {
         let project = tmp("proj-pi");
         let home = tmp("home-pi");
@@ -751,6 +788,30 @@ mod tests {
         assert_eq!(project_skill.scope, "project");
         let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
         assert_eq!(user_skill.source, "hermes");
+        assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_devin_project_and_user_skills() {
+        let project = tmp("proj-devin");
+        let home = tmp("home-devin");
+        write_skill(
+            &project.0.join(".devin/skills"),
+            "devin-review",
+            "---\nname: devin-review\ndescription: Devin project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".config/devin/skills"),
+            "devin-global",
+            "---\nname: devin-global\ndescription: Devin user skill\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let project_skill = skills.iter().find(|s| s.name == "devin-review").unwrap();
+        assert_eq!(project_skill.source, "devin");
+        assert_eq!(project_skill.scope, "project");
+        let user_skill = skills.iter().find(|s| s.name == "devin-global").unwrap();
+        assert_eq!(user_skill.source, "devin");
         assert_eq!(user_skill.scope, "user");
     }
 

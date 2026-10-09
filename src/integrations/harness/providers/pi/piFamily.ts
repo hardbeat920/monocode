@@ -1,3 +1,4 @@
+import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import { normalizeProjectPath } from "../../../../features/projects/model/recents";
@@ -78,6 +79,8 @@ type InFlightTool = {
   input: Record<string, unknown>;
   partialJson: string;
   title: string;
+  /** Set on `tool_execution_end`; later progress updates are stale. */
+  finished?: boolean;
 };
 
 type Live = {
@@ -321,7 +324,7 @@ export async function steerTurn(
   input: SteerTurnInput,
 ): Promise<void> {
   const live = stateFor(flavor).liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new Error("No active turn to steer");
+  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
   const message = input.text.trim();
   const buildCommand =
     flavor.id === "omp" && message.startsWith("/")
@@ -562,6 +565,8 @@ async function startLive(
       plan: input.intent === "plan",
     }),
     input.cwd,
+    undefined,
+    flavor.id,
   );
 
   liveByThread.set(input.sessionId, live);
@@ -913,7 +918,9 @@ function handleFrame(
   const execUpdate = toolExecutionUpdateFromEvent(rec);
   if (execUpdate) {
     const tool = live.toolsById.get(execUpdate.id);
-    if (tool) {
+    // omp can deliver an update after the tool's end (omp#12875, steer during
+    // bash); replaying it would flip the finished card back to "running".
+    if (tool && !tool.finished) {
       if (Object.keys(execUpdate.input).length > 0) {
         tool.input = mergeToolInput(tool.input, execUpdate.input);
         tool.title = toolTitle(tool.name, tool.input);
@@ -928,7 +935,13 @@ function handleFrame(
         preview: previewFromTool(tool.name, tool.input, execUpdate.detail),
       });
       if (toolKindFromName(tool.name) === "agent") {
-        for (const event of piSubagentEvents(tool.id, tool.input, rec.partialResult, false)) live.onEvent(event);
+        for (const event of piSubagentEvents(
+          tool.id,
+          tool.input,
+          rec.partialResult,
+          false,
+        ))
+          live.onEvent(event);
       }
     }
   }
@@ -937,6 +950,7 @@ function handleFrame(
   if (execEnd) {
     const tool = live.toolsById.get(execEnd.id);
     if (tool) {
+      tool.finished = true;
       live.onEvent({
         type: "tool.updated",
         callId: tool.id,
@@ -947,7 +961,14 @@ function handleFrame(
         preview: previewFromTool(tool.name, tool.input, execEnd.detail),
       });
       if (toolKindFromName(tool.name) === "agent") {
-        for (const event of piSubagentEvents(tool.id, tool.input, rec.result, true, execEnd.isError)) live.onEvent(event);
+        for (const event of piSubagentEvents(
+          tool.id,
+          tool.input,
+          rec.result,
+          true,
+          execEnd.isError,
+        ))
+          live.onEvent(event);
       }
     }
   }
@@ -1010,7 +1031,9 @@ async function handleExtensionUi(
 ): Promise<void> {
   if (!needsExtensionUiReply(request)) {
     const text = request.title ? extensionUiTitle(request) : "";
-    if (text.trim()) live.onEvent({ type: "status", text });
+    if (request.method === "setStatus" && request.statusKey)
+      live.onEvent({ type: "status", key: request.statusKey, text });
+    else if (text.trim()) live.onEvent({ type: "status", text });
     return;
   }
 
@@ -1167,6 +1190,19 @@ async function applyModel(
       }
     }
   }
+
+  if (
+    flavor.id === "pi" &&
+    parsePiModelRef(live.nativeModel) &&
+    input.model !== `pi:${live.nativeModel}` &&
+    stateFor(flavor).liveByThread.get(input.sessionId) === live &&
+    !live.muteUpdates
+  ) {
+    live.onEvent({
+      type: "session.configChanged",
+      model: `pi:${live.nativeModel}`,
+    });
+  }
 }
 
 function bindState(
@@ -1188,7 +1224,7 @@ function bindState(
   const model = asRecord(asRecord(data)?.model);
   const provider = stringField(model, "provider");
   const modelId = stringField(model, "id");
-  if (provider && modelId && !live.nativeModel) {
+  if (provider && modelId && (flavor.id === "pi" || !live.nativeModel)) {
     live.nativeModel = piNativeId(provider, modelId);
   }
   const fastModeEnabled = asRecord(data)?.fastModeEnabled;

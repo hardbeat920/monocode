@@ -8,9 +8,11 @@ type Props = {
   diff: GithubPrDiff;
   /** When true, show the whole file (no fold rows). */
   fullFile?: boolean;
+  /** File to open and scroll to, such as one picked from the summary. */
+  focusPath?: string;
 };
 
-export function InboxPrDiff({ diff, fullFile = false }: Props) {
+export function InboxPrDiff({ diff, fullFile = false, focusPath }: Props) {
   const files = useMemo(() => {
     const parsed = mergePrDiff(diff.files, parsePrPatch(diff.patch));
     const context = fullFile ? Number.POSITIVE_INFINITY : undefined;
@@ -25,6 +27,7 @@ export function InboxPrDiff({ diff, fullFile = false }: Props) {
       fill={false}
       fileLayout="cards"
       initialExpansion="first"
+      focusPath={focusPath}
     />
   );
 }
