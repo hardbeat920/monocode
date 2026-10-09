@@ -27,14 +27,14 @@ type LoadedDiff = {
 
 const DIFF_LOAD_CONCURRENCY = 4;
 
-/** Read-only review of the exact before/after snapshots owned by one session. */
+/** Read-only review of the session's recorded before/after snapshots. */
 export function SessionChangesDiff({
   cwd,
   sessionId,
   focusPath,
   paths,
 }: Props) {
-  const scope = paths?.join("\n");
+  const scope = paths == null ? undefined : JSON.stringify(paths);
   // Only the load order uses the focus; moving it must not restart the load.
   const focusRef = useRef(focusPath);
   focusRef.current = focusPath;
@@ -58,7 +58,7 @@ export function SessionChangesDiff({
       void sessionCheckpointStatus(sessionId, cwd)
         .then(async (status) => {
           if (disposed || current !== generation) return;
-          const allowed = scope == null ? null : new Set(scope.split("\n"));
+          const allowed = scope == null ? null : new Set<string>(JSON.parse(scope));
           const scoped = allowed
             ? status.files.filter((file) => allowed.has(file.path))
             : status.files;
@@ -141,8 +141,8 @@ export function SessionChangesDiff({
                   !loaded.binary
                 ? "No textual diff"
                 : undefined,
-        additions: unified?.additions ?? file.additions,
-        deletions: unified?.deletions ?? file.deletions,
+        additions: file.additions,
+        deletions: file.deletions,
         blocks: unified?.blocks ?? [],
       };
     });

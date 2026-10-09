@@ -180,10 +180,14 @@ import { GithubStarPrompt } from "./GithubStarPrompt";
 import {
   isMonoSession,
   listMonos,
+  MONO_STATUS_LABEL,
   monoLook,
   monosSnapshot,
   subscribeMonos,
+  type MonoStatus,
 } from "../../features/monos/model/mono";
+import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
+import { useRailMonosPinned } from "../../features/settings/model/displayPrefs";
 import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
 import { isHabitRun } from "../../features/monos/model/monoHabits";
 import type { MonoRailProps } from "./MonoRailSection";
@@ -2529,20 +2533,26 @@ function CompactProjectRail({
   monoViewActive?: boolean;
 }) {
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const monosPinned = useRailMonosPinned();
+  const monoItems = useMemo(() => {
+    if (!monos) return [];
+    return listMonos().map((mono) => ({
+      id: mono.id,
+      ...monoLook(mono),
+      status: monos.states.get(mono.id)?.status ?? "idle",
+    }));
+    // The roster is read through its snapshot.
+  }, [monos, monosSnap]);
   const pickerMonos = useMemo((): PickerMonos | undefined => {
     if (!monos) return undefined;
     return {
-      items: listMonos().map((mono) => ({
-        id: mono.id,
-        ...monoLook(mono),
-        status: monos.states.get(mono.id)?.status ?? "idle",
-      })),
+      // Pinned Monos have their own buttons; the picker keeps "New mono".
+      items: monosPinned ? [] : monoItems,
       activeId: monos.activeId,
       onOpen: monos.onOpen,
       onCreate: monos.onCreate,
     };
-    // The roster is read through its snapshot.
-  }, [monos, monosSnap]);
+  }, [monos, monoItems, monosPinned]);
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -2588,6 +2598,37 @@ function CompactProjectRail({
           icon={PanelLeft}
           onClick={onTogglePanel}
         />
+        {monos && monosPinned && monoItems.length ? (
+          <>
+            <div
+              role="group"
+              aria-label="Monos"
+              data-compact-rail-monos
+              className="flex flex-col items-center gap-1.5"
+            >
+              {monoItems.map((mono) => (
+                <CompactRailMono
+                  key={mono.id}
+                  name={mono.name}
+                  mascot={mono.mascot}
+                  color={mono.color}
+                  status={mono.status}
+                  active={mono.id === monos.activeId}
+                  unseen={
+                    mono.id !== monos.activeId &&
+                    !!monos.unseenIds?.has(mono.id)
+                  }
+                  onClick={() => monos.onOpen(mono.id)}
+                />
+              ))}
+            </div>
+            <span
+              aria-hidden
+              data-compact-rail-monos-divider
+              className="h-px w-6 shrink-0 bg-stroke"
+            />
+          </>
+        ) : null}
         {onSelectProject ? (
           <SearchableProjectPickerWithMenu
             cwd={cwd}
@@ -2675,6 +2716,49 @@ function CompactProjectRail({
         />
       ) : null}
     </nav>
+  );
+}
+
+function CompactRailMono({
+  name,
+  mascot,
+  color,
+  status,
+  active,
+  unseen,
+  onClick,
+}: {
+  name: string;
+  mascot: string;
+  color: string;
+  status: MonoStatus;
+  active: boolean;
+  unseen: boolean;
+  onClick: () => void;
+}) {
+  const label = `${name}, ${MONO_STATUS_LABEL[status]}`;
+  return (
+    <button
+      type="button"
+      title={`${name}\n${MONO_STATUS_LABEL[status]}`}
+      aria-label={unseen ? `${label}, new` : label}
+      aria-current={active ? "true" : undefined}
+      data-compact-rail-mono
+      onClick={onClick}
+      className={`relative grid size-8 shrink-0 place-items-center rounded-md active:scale-[0.97] ${
+        active
+          ? "bg-selection"
+          : "opacity-65 hover:bg-content/10 hover:opacity-100"
+      }`}
+    >
+      <MonoRailMascot name={mascot} color={color} status={status} />
+      {unseen ? (
+        <span
+          aria-hidden
+          className="absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full bg-content/60"
+        />
+      ) : null}
+    </button>
   );
 }
 

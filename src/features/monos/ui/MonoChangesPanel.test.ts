@@ -1,281 +1,256 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
 }));
-
-vi.mock("../../../platform/tauri/fs", () => ({
-  basename: (path: string) => path.split("/").pop() ?? path,
-  gitLocateFiles: vi.fn(async (paths: string[]) =>
-    paths.map((path) => ({
-      root: "/repo",
-      relative: path.replace("/repo/", ""),
-    })),
-  ),
-  gitDiffIndex: vi.fn(),
-  gitPrStatus: vi.fn(async () => null),
-  gitCommit: vi.fn(async () => {}),
-  gitDiscardFile: vi.fn(async () => {}),
-  gitPrCreate: vi.fn(async () => ""),
-  gitPush: vi.fn(async () => {}),
-  gitStageFile: vi.fn(async () => {}),
-  gitSync: vi.fn(async () => {}),
-  gitBranches: vi.fn(async () => ({
-    current: "feature/mono",
-    detached: false,
-    branches: [
-      { name: "feature/mono", current: true, remote: null },
-      { name: "main", current: false, remote: null },
-    ],
-  })),
-  gitCheckout: vi.fn(async () => ""),
-  gitCreateBranch: vi.fn(async () => ""),
-  gitStageAll: vi.fn(async () => {}),
-  gitStash: vi.fn(async () => ""),
-  isCheckoutBlockedByChanges: () => false,
-  notifyGitChanged: vi.fn(),
-  subscribeGitChanged: () => () => {},
+vi.mock("./MonoSidebar", () => ({
+  MonoSidebar: ({ children }: { children: ReactNode }) => children,
+  MonoSidebarHeader: ({ heading }: { heading: ReactNode }) => heading,
 }));
-
-vi.mock("../../sessions/model/checkpoint", () => ({
-  sessionCheckpointStatus: vi.fn(async () => ({
-    files: [
-      {
-        path: "/repo/src/app.ts",
-        relative: "src/app.ts",
-        status: "modified",
-        additions: 1,
-        deletions: 0,
-        exact: true,
-        undoable: true,
-      },
-    ],
-  })),
-  subscribeReviewChanged: () => () => {},
-  keepSessionChanges: vi.fn(async () => {}),
-  notifyReviewChanged: vi.fn(),
-}));
-
 vi.mock("../../source-control/ui/SessionChangesDiff", () => ({
   SessionChangesDiff: () => null,
 }));
-
-vi.mock("../../../integrations/harness", () => ({
-  generateCommitMessage: vi.fn(async () => ""),
-  generatePrContent: vi.fn(async () => null),
+vi.mock("../../../platform/tauri/fs", () => ({
+  gitLocateFiles: vi.fn(),
+  gitDiffIndex: vi.fn(),
+  gitPrStatus: vi.fn(async () => null),
+  gitHistory: vi.fn(async () => []),
+  gitCommit: vi.fn(async () => {}),
+  gitPush: vi.fn(async () => {}),
+  gitSync: vi.fn(async () => {}),
+  gitPrCreate: vi.fn(),
+  gitStageFile: vi.fn(),
+  gitDiscardFile: vi.fn(),
+  notifyGitChanged: vi.fn(),
+  subscribeGitChanged: () => () => {},
+  basename: (path: string) => path.split("/").pop() ?? path,
 }));
-
+vi.mock("../../../integrations/harness", () => ({
+  generateCommitMessage: vi.fn(async () => "Generated message"),
+  generatePrContent: vi.fn(),
+}));
 vi.mock("../../files/model/fileWatch", () => ({
   invalidateWatchedFiles: vi.fn(),
-  nudgeWatchedFiles: vi.fn(),
 }));
-
 vi.mock("../../inbox/model/inboxSelfActivity", () => ({
   recordInboxSelfActivity: vi.fn(),
+}));
+vi.mock("../../sessions/model/checkpoint", () => ({
+  sessionCheckpointStatus: vi.fn(),
+  keepSessionChanges: vi.fn(async () => {}),
+  notifyReviewChanged: vi.fn(),
+  subscribeReviewChanged: () => () => {},
 }));
 
 import { MonoChangesPanel } from "./MonoChangesPanel";
 import {
-  gitCheckout,
   gitCommit,
   gitDiffIndex,
+  gitLocateFiles,
+  gitPush,
+  gitStageFile,
   type GitDiffIndex,
 } from "../../../platform/tauri/fs";
-
-const INDEX: GitDiffIndex = {
-  branch: "feature/mono",
-  head: "abc123",
-  files: [
-    {
-      path: "/repo/src/app.ts",
-      relative: "src/app.ts",
-      status: "modified",
-      additions: 1,
-      deletions: 0,
-      staged: false,
-      unstaged: true,
-    },
-  ],
-  additions: 1,
-  deletions: 0,
-  remote: "origin",
-  upstream: "origin/feature/mono",
-  defaultBranch: "main",
-  ahead: 0,
-  behind: 0,
-  aheadOfDefault: 0,
-  headPushed: true,
-};
+import { generateCommitMessage } from "../../../integrations/harness";
+import {
+  keepSessionChanges,
+  sessionCheckpointStatus,
+} from "../../sessions/model/checkpoint";
 
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.mocked(gitDiffIndex).mockResolvedValue(INDEX);
-  vi.mocked(gitCommit).mockReset().mockResolvedValue(undefined);
-  vi.mocked(gitCheckout).mockReset().mockResolvedValue("");
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.spyOn(window, "alert").mockImplementation(() => {});
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  const paths = [
+    "a/same.txt",
+    "a/extra.txt",
+    "b/same.txt",
+    "b/reverted.txt",
+    "outside.txt",
+  ];
+  vi.mocked(sessionCheckpointStatus).mockResolvedValue({
+    files: paths.map((relative) => ({
+      path: `/home/${relative}`,
+      relative,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      exact: true,
+      undoable: true,
+    })),
+  });
+  vi.mocked(gitLocateFiles).mockResolvedValue(
+    paths.map((path) =>
+      path.includes("/")
+        ? {
+            root: `/home/${path.split("/")[0]}`,
+            relative: path.split("/")[1],
+          }
+        : null,
+    ),
+  );
+  vi.mocked(gitDiffIndex).mockImplementation(
+    async (cwd) =>
+      ({
+        branch: "feature",
+        head: "abc",
+        additions: 2,
+        deletions: 0,
+        remote: "origin",
+        upstream: "origin/feature",
+        defaultBranch: "main",
+        ahead: 0,
+        behind: 0,
+        aheadOfDefault: 0,
+        headPushed: true,
+        files: (cwd.endsWith("/a")
+          ? ["same.txt", "extra.txt", "other.txt"]
+          : ["same.txt", "other.txt"]
+        ).map((relative) => ({
+          path: `${cwd}/${relative}`,
+          relative,
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          staged: relative === "other.txt",
+          unstaged: relative !== "other.txt",
+        })),
+      }) satisfies GitDiffIndex,
+  );
 });
 
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  document.body
-    .querySelectorAll("[data-popover-side]")
-    .forEach((element) => element.remove());
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-async function renderPanel() {
-  act(() =>
+async function render() {
+  await act(async () =>
     root.render(
       createElement(MonoChangesPanel, {
-        sessionId: "session-1",
-        cwd: "/repo",
+        sessionId: "mono",
+        cwd: "/home",
         request: { tab: "commit" },
-        color: "#888",
-        onClose: vi.fn(),
+        color: "blue",
+        onClose: () => {},
       }),
     ),
   );
-  await act(async () => {});
-  await act(async () => {});
 }
 
-function branchTrigger() {
-  return container.querySelector<HTMLButtonElement>(
-    'button[aria-label="Branch feature/mono"]',
+function active() {
+  return container.querySelector<HTMLDivElement>(
+    '[role="tabpanel"][aria-label="Commit"]:not([hidden])',
   )!;
 }
 
-function commitButton() {
-  const form = container.querySelector("[data-mono-commit]")!;
-  return [...form.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Commit",
-  )!;
+async function click(button: HTMLButtonElement | null) {
+  expect(button).not.toBeNull();
+  expect(button!.disabled).toBe(false);
+  await act(async () => button!.click());
 }
 
-function typeMessage(text: string) {
-  const textarea = container.querySelector("textarea")!;
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLTextAreaElement.prototype,
-    "value",
-  )!.set!;
-  act(() => {
-    setter.call(textarea, text);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+async function switchRepo(name: "a" | "b") {
+  await click(container.querySelector('button[aria-haspopup="menu"]'));
+  await click(
+    container.querySelector(`[role="menuitemradio"][title="/home/${name}"]`),
+  );
+}
+
+async function message(value: string) {
+  await act(async () => {
+    const field = active().querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
-describe("MonoChangesPanel branch picker", () => {
-  it("disables the branch picker while a commit runs", async () => {
-    let finish!: () => void;
-    vi.mocked(gitCommit).mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    await renderPanel();
-    expect(branchTrigger().disabled).toBe(false);
-
-    typeMessage("Fix the app");
-    await act(async () => commitButton().click());
-    expect(gitCommit).toHaveBeenCalled();
-    expect(branchTrigger().disabled).toBe(true);
-    await act(async () => branchTrigger().click());
-    expect(document.querySelector("[data-branch-picker]")).toBeNull();
-
-    await act(async () => finish());
-    expect(branchTrigger().disabled).toBe(false);
-  });
-
-  it("locks the Commit tab while a checkout runs", async () => {
-    let finish!: () => void;
-    vi.mocked(gitCheckout).mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          finish = () => resolve("");
-        }),
-    );
-    await renderPanel();
-    typeMessage("Fix the app");
-    expect(commitButton().disabled).toBe(false);
-
-    await act(async () => branchTrigger().click());
-    const main = [
-      ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-    ].find((option) => option.textContent?.includes("main"))!;
-    await act(async () => main.click());
-
-    expect(gitCheckout).toHaveBeenCalledWith("/repo", "main", null);
-    expect(commitButton().disabled).toBe(true);
-    expect(container.querySelector("textarea")!.disabled).toBe(true);
-    await act(async () => commitButton().click());
-    expect(gitCommit).not.toHaveBeenCalled();
-
-    await act(async () => finish());
-    expect(commitButton().disabled).toBe(false);
-  });
+it("preserves repo drafts and selections and commits and pushes only the chosen repo", async () => {
+  await render();
+  await message("Draft A");
+  const extra = active().querySelector('[title="extra.txt"]')!.closest("li")!;
+  await click(extra.querySelector('[title="Unstage Changes"]'));
+  await switchRepo("b");
+  await message("Draft B");
+  await switchRepo("a");
+  expect(active().querySelector("textarea")!.value).toBe("Draft A");
+  expect(
+    active()
+      .querySelector('[title="extra.txt"]')!
+      .closest("li")!
+      .querySelector('[title="Stage Changes"]'),
+  ).not.toBeNull();
+  await switchRepo("b");
+  expect(active().querySelector("textarea")!.value).toBe("Draft B");
+  await click(active().querySelector('[aria-label="Commit options"]'));
+  await click(
+    Array.from(
+      active().querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((button) => button.textContent === "Commit & Push")!,
+  );
+  expect(gitCommit).toHaveBeenCalledExactlyOnceWith(
+    "/home/b",
+    "Draft B",
+    false,
+    ["same.txt"],
+  );
+  expect(keepSessionChanges).toHaveBeenCalledExactlyOnceWith(
+    "mono",
+    "/home",
+    "b/same.txt",
+  );
+  expect(gitPush).toHaveBeenCalledExactlyOnceWith("/home/b");
+  expect(gitStageFile).not.toHaveBeenCalled();
+  await switchRepo("a");
+  expect(active().querySelector("textarea")!.value).toBe("Draft A");
 });
 
-type Dismissal = "Escape" | "outside click" | "trigger click";
-
-async function dismissPicker(how: Dismissal, trigger: HTMLButtonElement) {
-  await act(async () => {
-    if (how === "Escape") {
-      document.body.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-    } else if (how === "outside click") {
-      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    } else {
-      trigger.click();
-    }
-  });
-  expect(document.querySelector("[data-branch-picker]")).toBeNull();
-}
-
-const DISMISSALS: Dismissal[] = ["Escape", "outside click", "trigger click"];
-
-describe("MonoChangesPanel dismissed checkout", () => {
-  it.each(DISMISSALS)(
-    "keeps the Commit tab locked after %s until the checkout settles",
-    async (how) => {
-      let finish!: () => void;
-      vi.mocked(gitCheckout).mockImplementationOnce(
-        () =>
-          new Promise<string>((resolve) => {
-            finish = () => resolve("");
-          }),
-      );
-      await renderPanel();
-      typeMessage("Fix the app");
-      const trigger = branchTrigger();
-
-      await act(async () => trigger.click());
-      const main = [
-        ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-      ].find((option) => option.textContent?.includes("main"))!;
-      await act(async () => main.click());
-      await dismissPicker(how, trigger);
-
-      expect(commitButton().disabled).toBe(true);
-      await act(async () => commitButton().click());
-      expect(gitCommit).not.toHaveBeenCalled();
-      await act(async () => trigger.click());
-      expect(document.querySelector("[data-branch-picker]")).toBeNull();
-      expect(gitCheckout).toHaveBeenCalledTimes(1);
-
-      await act(async () => finish());
-      expect(commitButton().disabled).toBe(false);
-    },
+it("generates from only the active repo selection without staging files", async () => {
+  await render();
+  await switchRepo("b");
+  await click(active().querySelector('[aria-label="Generate commit message"]'));
+  expect(generateCommitMessage).toHaveBeenCalledExactlyOnceWith(
+    "/home/b",
+    undefined,
+    expect.any(AbortSignal),
+    ["same.txt"],
   );
+  expect(gitStageFile).not.toHaveBeenCalled();
+  expect(gitCommit).not.toHaveBeenCalled();
+  expect(active().querySelector("textarea")!.value).toBe("Generated message");
+  await switchRepo("a");
+  expect(active().querySelector("textarea")!.value).toBe("");
+});
+
+it("shows repository discovery failures", async () => {
+  vi.mocked(gitLocateFiles).mockRejectedValueOnce(
+    new Error("Discovery failed"),
+  );
+  await render();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Discovery failed",
+  );
+  expect(gitCommit).not.toHaveBeenCalled();
 });

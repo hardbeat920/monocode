@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  loadComposerAutocorrect,
   loadMaskEmails,
   loadShowRemainingUsage,
+  saveComposerAutocorrect,
   saveMaskEmails,
   saveShowRemainingUsage,
+  subscribeComposerAutocorrect,
   subscribeMaskEmails,
   subscribeShowRemainingUsage,
 } from "./displayPrefs";
@@ -25,6 +28,14 @@ const prefs = [
     load: loadMaskEmails,
     save: saveMaskEmails,
     subscribe: subscribeMaskEmails,
+  },
+  {
+    name: "composer autocorrect",
+    key: "monocode.composerAutocorrect",
+    defaultValue: true,
+    load: loadComposerAutocorrect,
+    save: saveComposerAutocorrect,
+    subscribe: subscribeComposerAutocorrect,
   },
 ];
 
