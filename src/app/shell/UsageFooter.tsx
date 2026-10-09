@@ -53,6 +53,7 @@ export type UsageFooterSession = {
   model?: string;
   authRequired?: boolean;
   providerAccountId?: string;
+  environmentId?: string;
 };
 
 export function UsageFooter({
@@ -83,9 +84,15 @@ export function UsageFooter({
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
 }) {
+  const environmentId = session?.environmentId ?? "local";
+  const droidAccountId =
+    session?.harness === "droid"
+      ? (session.providerAccountId ?? "default")
+      : "default";
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
+  const wantDroid = providers.includes("droid");
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [, setAccountsVersion] = useState(0);
@@ -105,9 +112,18 @@ export function UsageFooter({
     claudeAccountId,
   );
   const codexAccountAvailable = providerAccountExists("codex", codexAccountId);
-  const cachedClaude = useCachedRateLimits("claude", claudeAccountId);
-  const cachedCodex = useCachedRateLimits("codex", codexAccountId);
-  const opencode = useCachedRateLimits("opencode");
+  const cachedClaude = useCachedRateLimits(
+    "claude",
+    claudeAccountId,
+    environmentId,
+  );
+  const cachedCodex = useCachedRateLimits(
+    "codex",
+    codexAccountId,
+    environmentId,
+  );
+  const opencode = useCachedRateLimits("opencode", "default", environmentId);
+  const droid = useCachedRateLimits("droid", droidAccountId, environmentId);
   const claude = claudeAccountAvailable
     ? cachedClaude
     : unavailableRateLimits(
@@ -131,10 +147,13 @@ export function UsageFooter({
   // reads the shared snapshot without starting another provider request.
   useEffect(() => {
     if (wantClaude && claudeAccountAvailable)
-      void loadRateLimits("claude", claudeAccountId);
+      void loadRateLimits("claude", claudeAccountId, false, environmentId);
     if (wantCodex && codexAccountAvailable)
-      void loadRateLimits("codex", codexAccountId);
-    if (wantOpencode) void loadRateLimits("opencode");
+      void loadRateLimits("codex", codexAccountId, false, environmentId);
+    if (wantOpencode)
+      void loadRateLimits("opencode", "default", false, environmentId);
+    if (wantDroid)
+      void loadRateLimits("droid", droidAccountId, false, environmentId);
   }, [
     claudeAccountAvailable,
     claudeAccountId,
@@ -142,7 +161,10 @@ export function UsageFooter({
     codexAccountId,
     wantClaude,
     wantCodex,
+    wantDroid,
     wantOpencode,
+    environmentId,
+    droidAccountId,
   ]);
 
   const refresh = useCallback(() => {
@@ -150,10 +172,13 @@ export function UsageFooter({
     setRefreshing(true);
     const jobs: Promise<unknown>[] = [];
     if (wantClaude && claudeAccountAvailable)
-      jobs.push(loadRateLimits("claude", claudeAccountId, true));
+      jobs.push(loadRateLimits("claude", claudeAccountId, true, environmentId));
     if (wantCodex && codexAccountAvailable)
-      jobs.push(loadRateLimits("codex", codexAccountId, true));
-    if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
+      jobs.push(loadRateLimits("codex", codexAccountId, true, environmentId));
+    if (wantOpencode)
+      jobs.push(loadRateLimits("opencode", "default", true, environmentId));
+    if (wantDroid)
+      jobs.push(loadRateLimits("droid", droidAccountId, true, environmentId));
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
@@ -169,7 +194,10 @@ export function UsageFooter({
     codexAccountId,
     wantClaude,
     wantCodex,
+    wantDroid,
     wantOpencode,
+    environmentId,
+    droidAccountId,
   ]);
 
   useEffect(() => {
@@ -188,7 +216,7 @@ export function UsageFooter({
             creditId,
             codexAccountId,
           );
-          await loadRateLimits("codex", codexAccountId, true);
+          await loadRateLimits("codex", codexAccountId, true, environmentId);
         } catch (error) {
           const message =
             error instanceof Error
@@ -290,7 +318,7 @@ export function UsageFooter({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip;
+  const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDroid;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -299,13 +327,14 @@ export function UsageFooter({
   const onTerminalClick = projectTerminalActive
     ? (onShowTerminal ?? onNewTerminal)
     : (onNewTerminal ?? onShowTerminal);
-  const ariaLabel = showUsage || session?.harness === "pi"
-    ? "Provider usage"
-    : showTerminals || showTerminalButton
-      ? "Terminals"
-      : session
-        ? "Session"
-        : undefined;
+  const ariaLabel =
+    showUsage || session?.harness === "pi"
+      ? "Provider usage"
+      : showTerminals || showTerminalButton
+        ? "Terminals"
+        : session
+          ? "Session"
+          : undefined;
 
   return (
     <footer
@@ -313,7 +342,11 @@ export function UsageFooter({
       className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {session?.harness === "pi" ? (
-        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
+        <PiUsage
+          key={`${session.id}:${session.model}`}
+          model={session.model}
+          now={now}
+        />
       ) : showUsage ? (
         <>
           {wantClaude ? (
@@ -350,6 +383,9 @@ export function UsageFooter({
           ) : null}
           {showOpencodeChip ? (
             <UsageProviderChip limits={opencode} now={now} project={project} />
+          ) : null}
+          {wantDroid ? (
+            <UsageProviderChip limits={droid} now={now} project={project} />
           ) : null}
           <button
             type="button"

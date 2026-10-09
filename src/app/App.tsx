@@ -665,6 +665,7 @@ import {
 import { remoteSessionState } from "../features/connections/model/remoteSessionState";
 import { findRemoteSessionTab } from "../features/connections/model/remoteSessionTabs";
 import {
+  parseRemotePath,
   remotePath,
   remoteProjectFor,
 } from "../features/connections/model/remoteProjects";
@@ -1951,7 +1952,8 @@ function Workspace({
     if (
       active?.harness === "claude" ||
       active?.harness === "codex" ||
-      active?.harness === "opencode"
+      active?.harness === "opencode" ||
+      active?.harness === "droid"
     ) {
       return [active.harness];
     }
@@ -1963,6 +1965,7 @@ function Workspace({
       id: active.id,
       harness: active.harness,
       model: active.model,
+      environmentId: parseRemotePath(active.cwd)?.environmentId ?? "local",
       authRequired: latestTurnNeedsHarnessLogin(active.blocks),
       providerAccountId:
         active.providerAccountId ??
@@ -1976,6 +1979,7 @@ function Workspace({
     active?.model,
     active?.blocks,
     active?.providerAccountId,
+    active?.cwd,
   ]);
   const activeProviderSignInRequest = useMemo(() => {
     if (

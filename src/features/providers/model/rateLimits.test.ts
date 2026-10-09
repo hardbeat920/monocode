@@ -11,6 +11,7 @@ import {
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  parseDroidUsage,
   parseOpencodeGoUsage,
   parseResetTimestamp,
   rateLimitWindowTooltip,
@@ -360,4 +361,49 @@ describe("rateLimitWindowTooltip", () => {
       ).toBe(`${remaining} remaining · wk window`);
     },
   );
+});
+
+describe("parseDroidUsage", () => {
+  it("maps the standard pool and ignores the core pool", () => {
+    const limits = parseDroidUsage({
+      usesTokenRateLimitsBilling: true,
+      limits: {
+        standard: {
+          fiveHour: {
+            usedPercent: 100,
+            windowEnd: "2026-09-26T03:58:50.537Z",
+            secondsRemaining: 9651,
+          },
+          weekly: { usedPercent: 66, windowEnd: "2026-09-26T21:31:37.350Z" },
+          monthly: { usedPercent: 37, windowEnd: "2026-10-10T03:36:42.309Z" },
+        },
+        core: {
+          fiveHour: { usedPercent: 0, windowEnd: null },
+          weekly: { usedPercent: 100, windowEnd: "2026-09-29T02:14:45.325Z" },
+        },
+      },
+    });
+    expect(limits.provider).toBe("droid");
+    expect(limits.session).toEqual({
+      usedPercent: 100,
+      windowMinutes: 300,
+      resetsAt: Date.parse("2026-09-26T03:58:50.537Z"),
+    });
+    expect(limits.weekly?.usedPercent).toBe(66);
+    expect(limits.monthly?.usedPercent).toBe(37);
+    expect(limits.monthly?.windowMinutes).toBe(43_200);
+  });
+
+  it("keeps a window with no reset time and drops missing ones", () => {
+    const limits = parseDroidUsage({
+      limits: { standard: { fiveHour: { usedPercent: 0, windowEnd: null } } },
+    });
+    expect(limits.session).toEqual({
+      usedPercent: 0,
+      windowMinutes: 300,
+      resetsAt: null,
+    });
+    expect(limits.weekly).toBeNull();
+    expect(parseDroidUsage({}).session).toBeNull();
+  });
 });

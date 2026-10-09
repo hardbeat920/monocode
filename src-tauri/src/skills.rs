@@ -157,6 +157,8 @@ pub(crate) fn list_skills_from(
         if root.is_dir() {
             add_root(root, "user", "antigravity");
         }
+        add_root(project.join(".factory/skills"), "project", "droid");
+        add_root(home.join(".factory/skills"), "user", "droid");
         for (root, scope, namespace) in claude_plugin_skill_roots(home, project) {
             add_namespaced_root(
                 &mut by_name,
@@ -776,6 +778,30 @@ mod tests {
         assert_eq!(project_skill.scope, "project");
         let user_skill = skills.iter().find(|s| s.name == "hermes-global").unwrap();
         assert_eq!(user_skill.source, "hermes");
+        assert_eq!(user_skill.scope, "user");
+    }
+
+    #[test]
+    fn discovers_droid_project_and_user_skills() {
+        let project = tmp("proj-droid");
+        let home = tmp("home-droid");
+        write_skill(
+            &project.0.join(".factory/skills"),
+            "droid-review",
+            "---\nname: droid-review\ndescription: Droid project skill\n---\n",
+        );
+        write_skill(
+            &home.0.join(".factory/skills"),
+            "droid-global",
+            "---\nname: droid-global\ndescription: Droid user skill\n---\n",
+        );
+
+        let skills = list_skills_from(&project.0, Some(&home.0), None);
+        let project_skill = skills.iter().find(|s| s.name == "droid-review").unwrap();
+        assert_eq!(project_skill.source, "droid");
+        assert_eq!(project_skill.scope, "project");
+        let user_skill = skills.iter().find(|s| s.name == "droid-global").unwrap();
+        assert_eq!(user_skill.source, "droid");
         assert_eq!(user_skill.scope, "user");
     }
 

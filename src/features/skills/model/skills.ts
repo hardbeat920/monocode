@@ -73,6 +73,7 @@ export type SkillSource =
   | "fx"
   | "grok"
   | "hermes"
+  | "droid"
   | "antigravity"
   | "monocode";
 

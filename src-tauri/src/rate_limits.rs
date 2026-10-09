@@ -1,11 +1,12 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::harness::HarnessHost;
 use serde::Serialize;
 use serde_json::Value;
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 #[cfg(target_os = "macos")]
 use unicode_normalization::UnicodeNormalization;
 
@@ -377,6 +378,289 @@ pub(crate) fn extract_opencode_go_api_key(raw: &str) -> Option<String> {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DroidUsageFetch {
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub body: Option<String>,
+    pub error: Option<String>,
+}
+
+const DROID_USAGE_PATH: &str = "/api/billing/limits";
+const DROID_API_BASE_URL: &str = "https://api.factory.ai";
+const DROID_API_BASE_URL_EU: &str = "https://api.eu.factory.ai";
+#[cfg(target_os = "macos")]
+const DROID_KEYCHAIN_SERVICE: &str = "Factory CLI";
+#[cfg(target_os = "macos")]
+const DROID_KEYCHAIN_ACCOUNT: &str = "auth-encryption-key-security-cli";
+
+/// AES-256-GCM with the 16-byte IV that Droid uses for its credential files.
+type DroidCipher = aes_gcm::AesGcm<aes_gcm::aes::Aes256, aes_gcm::aead::consts::U16>;
+
+struct DroidCredentials {
+    access_token: String,
+    expires_at_ms: Option<i64>,
+    eu: bool,
+}
+
+/// Fetch Factory Droid 5-hour / weekly / monthly usage via the token the
+/// Droid CLI stores in `~/.factory`. The token never leaves the host process.
+#[tauri::command]
+pub async fn fetch_droid_usage(host: State<'_, HarnessHost>) -> Result<DroidUsageFetch, String> {
+    let binary_path = host.runtime_binary_path("droid");
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_droid_usage_for_binary(binary_path.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+pub fn fetch_droid_usage_for_binary(binary_path: Option<&str>) -> Result<DroidUsageFetch, String> {
+    if binary_path.is_some_and(|path| !path.trim().is_empty()) {
+        return Ok(droid_result("unavailable", None, None, Some("Droid usage is unavailable for a configured executable because its account home cannot be determined".into())));
+    }
+    fetch_droid_usage_sync()
+}
+
+fn droid_result(
+    status: &str,
+    http_status: Option<u16>,
+    body: Option<String>,
+    error: Option<String>,
+) -> DroidUsageFetch {
+    DroidUsageFetch {
+        status: status.into(),
+        http_status,
+        body,
+        error,
+    }
+}
+
+fn fetch_droid_usage_sync() -> Result<DroidUsageFetch, String> {
+    let Some(creds) = read_droid_credentials() else {
+        return Ok(droid_result(
+            "unavailable",
+            None,
+            None,
+            Some(
+                if factory_dir().is_some_and(|dir| {
+                    ["auth.v2.file", "auth.v2.loginkeychain", "auth.v2.keyring"]
+                        .iter()
+                        .any(|file| dir.join(file).exists())
+                }) {
+                    "Droid credentials could not be read from the current Factory home"
+                } else {
+                    "Droid not signed in"
+                }
+                .into(),
+            ),
+        ));
+    };
+    // Droid rotates its refresh token on use, so refreshing here could
+    // strand a running CLI. An expired token waits for Droid to refresh it.
+    if token_expired(creds.expires_at_ms, now_ms()) {
+        return Ok(droid_error(401));
+    }
+    let url = format!("{}{DROID_USAGE_PATH}", droid_api_base_url(creds.eu));
+    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+    let result = agent
+        .get(&url)
+        .set("Authorization", &format!("Bearer {}", creds.access_token))
+        .call();
+    match result {
+        Ok(response) => {
+            let http_status = response.status();
+            let body = response.into_string().unwrap_or_default();
+            if (200..300).contains(&http_status) {
+                Ok(droid_result("ok", Some(http_status), Some(body), None))
+            } else {
+                Ok(droid_error(http_status))
+            }
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let _ = response.into_string();
+            Ok(droid_error(status))
+        }
+        Err(error) => Ok(droid_result(
+            "error",
+            None,
+            None,
+            Some(format!("Droid usage request failed: {error}")),
+        )),
+    }
+}
+
+fn droid_error(status: u16) -> DroidUsageFetch {
+    let message = if status == 401 {
+        "Droid sign-in expired. Start a Droid session to refresh it.".into()
+    } else if status == 403 {
+        "Droid usage is unavailable for this account".into()
+    } else {
+        format!("Droid usage request failed ({status})")
+    };
+    droid_result("error", Some(status), None, Some(message))
+}
+
+fn droid_api_base_url(eu: bool) -> String {
+    let (var, fallback) = if eu {
+        ("FACTORY_API_BASE_URL_EU", DROID_API_BASE_URL_EU)
+    } else {
+        ("FACTORY_API_BASE_URL", DROID_API_BASE_URL)
+    };
+    env_var(var)
+        .unwrap_or_else(|| fallback.into())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn factory_dir() -> Option<PathBuf> {
+    factory_dir_from(
+        std::env::var_os("FACTORY_HOME_OVERRIDE"),
+        dirs_home(),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+fn factory_dir_from(
+    override_home: Option<std::ffi::OsString>,
+    home: Option<String>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let base = override_home
+        .filter(|value| !value.is_empty())
+        .or_else(|| home.map(Into::into))
+        .or(profile)?;
+    Some(PathBuf::from(base).join(".factory"))
+}
+
+/// Reads the key that decrypts one Droid credentials file.
+type DroidKeyReader = Box<dyn Fn() -> Option<Vec<u8>>>;
+
+/// Droid encrypts credentials with a macOS Keychain key, a platform keyring
+/// key, or `auth.v2.key`. The most recently written credentials file wins.
+fn read_droid_credentials() -> Option<DroidCredentials> {
+    read_droid_credentials_from(
+        &factory_dir()?,
+        Box::new(read_droid_keychain_key),
+        Box::new(read_droid_keyring_key),
+    )
+}
+
+fn read_droid_credentials_from(
+    dir: &Path,
+    _keychain: DroidKeyReader,
+    keyring: DroidKeyReader,
+) -> Option<DroidCredentials> {
+    let mut sources: Vec<(PathBuf, DroidKeyReader)> = Vec::new();
+    #[cfg(target_os = "macos")]
+    sources.push((dir.join("auth.v2.loginkeychain"), _keychain));
+    sources.push((dir.join("auth.v2.keyring"), keyring));
+    let key_path = dir.join("auth.v2.key");
+    sources.push((
+        dir.join("auth.v2.file"),
+        Box::new(move || read_droid_key_file(&key_path)),
+    ));
+    let mut existing: Vec<_> = sources
+        .into_iter()
+        .filter_map(|(path, key)| {
+            let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+            Some((modified, path, key))
+        })
+        .collect();
+    existing.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    // A newer unreadable file must not fall back to another account.
+    let (_, path, key) = existing.into_iter().next()?;
+    let blob = std::fs::read_to_string(&path).ok()?;
+    let plain = decrypt_droid_blob(&blob, &key()?)?;
+    droid_credentials_from_json(&plain)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_droid_keychain_key() -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn read_droid_keychain_key() -> Option<Vec<u8>> {
+    let args: Vec<String> = vec![
+        "find-generic-password".into(),
+        "-s".into(),
+        DROID_KEYCHAIN_SERVICE.into(),
+        "-a".into(),
+        DROID_KEYCHAIN_ACCOUNT.into(),
+        "-w".into(),
+    ];
+    decode_droid_key(&security_output(&args)?)
+}
+
+fn read_droid_key_file(path: &std::path::Path) -> Option<Vec<u8>> {
+    decode_droid_key(&std::fs::read_to_string(path).ok()?)
+}
+
+fn decode_droid_key(raw: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(raw.trim())
+        .ok()?;
+    (key.len() == 32).then_some(key)
+}
+
+/// Droid's format is `base64(iv):base64(tag):base64(ciphertext)`.
+pub fn decrypt_droid_blob(blob: &str, key: &[u8]) -> Option<String> {
+    use aes_gcm::aead::{Aead, KeyInit};
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut parts = blob.trim().split(':');
+    let iv = engine.decode(parts.next()?).ok()?;
+    let tag = engine.decode(parts.next()?).ok()?;
+    let mut payload = engine.decode(parts.next()?).ok()?;
+    if parts.next().is_some() || iv.len() != 16 || tag.len() != 16 {
+        return None;
+    }
+    payload.extend_from_slice(&tag);
+    let cipher = DroidCipher::new_from_slice(key).ok()?;
+    let plain = cipher
+        .decrypt(aes_gcm::Nonce::from_slice(&iv), payload.as_ref())
+        .ok()?;
+    String::from_utf8(plain).ok()
+}
+
+fn droid_credentials_from_json(raw: &str) -> Option<DroidCredentials> {
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    let access_token = value
+        .get("access_token")
+        .or_else(|| value.get("accessToken"))
+        .and_then(Value::as_str)?
+        .trim();
+    if access_token.is_empty() {
+        return None;
+    }
+    let eu = value
+        .get("whoami")
+        .and_then(|whoami| whoami.get("inferenceRegion"))
+        .and_then(Value::as_str)
+        == Some("eu");
+    Some(DroidCredentials {
+        access_token: access_token.to_string(),
+        expires_at_ms: jwt_expires_at_ms(access_token),
+        eu,
+    })
+}
+
+/// Read `exp` from a JWT without verifying it. The server still checks the
+/// signature; this only avoids sending a token that has already expired.
+fn jwt_expires_at_ms(token: &str) -> Option<i64> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    let exp = claims.get("exp")?.as_f64()?;
+    exp.is_finite().then_some((exp * 1000.0) as i64)
+}
+
 struct ClaudeCredentials {
     access_token: String,
     expires_at_ms: Option<i64>,
@@ -699,7 +983,7 @@ fn security_delete(args: &[String]) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_with_timeout(cmd: &mut std::process::Command, timeout: Duration) -> Option<String> {
     use std::io::Read;
     use std::time::Instant;
@@ -728,6 +1012,70 @@ fn run_with_timeout(cmd: &mut std::process::Command, timeout: Duration) -> Optio
             Ok(None) => std::thread::sleep(Duration::from_millis(40)),
             Err(_) => return None,
         }
+    }
+}
+
+fn read_droid_keyring_key() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        decode_droid_key(&security_output(&[
+            "find-generic-password".into(),
+            "-s".into(),
+            "Factory CLI".into(),
+            "-a".into(),
+            "auth-encryption-key".into(),
+            "-w".into(),
+        ])?)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::{Command, Stdio};
+        let mut command = Command::new("secret-tool");
+        command
+            .args([
+                "lookup",
+                "service",
+                "Factory CLI",
+                "account",
+                "auth-encryption-key",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        decode_droid_key(&run_with_timeout(&mut command, Duration::from_secs(3))?)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Security::Credentials::{
+            CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+        };
+        let target: Vec<u16> = "Factory CLI/auth-encryption-key"
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+        // Keytar writes a generic credential with an UTF-8 password blob.
+        unsafe {
+            if CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) == 0 {
+                return None;
+            }
+            let value = &*credential;
+            let key = if value.CredentialBlob.is_null() {
+                None
+            } else {
+                let bytes = std::slice::from_raw_parts(
+                    value.CredentialBlob,
+                    value.CredentialBlobSize as usize,
+                );
+                std::str::from_utf8(bytes).ok().and_then(decode_droid_key)
+            };
+            CredFree(credential.cast());
+            key
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        None
     }
 }
 
@@ -882,5 +1230,129 @@ mod tests {
             "Claude Code-credentials-902e721c"
         );
         assert_eq!(claude_keychain_service(None), "Claude Code-credentials");
+    }
+    #[test]
+    fn factory_home_override_is_a_home_root_and_preserves_spaces() {
+        assert_eq!(
+            factory_dir_from(
+                Some("/isolated home ".into()),
+                Some("/desktop".into()),
+                None
+            ),
+            Some(PathBuf::from("/isolated home /.factory"))
+        );
+        assert_eq!(
+            factory_dir_from(Some("".into()), Some("/desktop".into()), None),
+            Some(PathBuf::from("/desktop/.factory"))
+        );
+        assert_eq!(
+            factory_dir_from(None, None, Some("C:/Users/agent".into())),
+            Some(PathBuf::from("C:/Users/agent/.factory"))
+        );
+    }
+
+    #[test]
+    fn wrapper_usage_reports_unknown_identity_before_reading_credentials() {
+        let result = fetch_droid_usage_for_binary(Some("/configured/droid-wrapper")).unwrap();
+        assert_eq!(result.status, "unavailable");
+        assert!(result
+            .error
+            .unwrap()
+            .contains("account home cannot be determined"));
+    }
+
+    #[test]
+    fn reads_keyring_credentials_with_the_keyring_key() {
+        let dir =
+            std::env::temp_dir().join(format!("monocode-droid-keyring-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = [7u8; 32];
+        let blob = encrypt_droid_blob(
+            r#"{"access_token":"fixture-keyring-token"}"#,
+            &key,
+            &[3u8; 16],
+        );
+        std::fs::write(dir.join("auth.v2.keyring"), blob).unwrap();
+        let creds = read_droid_credentials_from(
+            &dir,
+            Box::new(|| panic!("wrong key source")),
+            Box::new(move || Some(key.to_vec())),
+        )
+        .unwrap();
+        assert_eq!(creds.access_token, "fixture-keyring-token");
+        assert!(read_droid_credentials_from(&dir, Box::new(|| None), Box::new(|| None)).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn encrypt_droid_blob(plain: &str, key: &[u8], iv: &[u8; 16]) -> String {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let cipher = DroidCipher::new_from_slice(key).unwrap();
+        let mut sealed = cipher
+            .encrypt(aes_gcm::Nonce::from_slice(iv), plain.as_bytes())
+            .unwrap();
+        let tag = sealed.split_off(sealed.len() - 16);
+        format!(
+            "{}:{}:{}",
+            engine.encode(iv),
+            engine.encode(tag),
+            engine.encode(sealed)
+        )
+    }
+
+    fn fake_jwt(exp: i64) -> String {
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!(
+            "{}.{}.sig",
+            engine.encode(r#"{"alg":"none"}"#),
+            engine.encode(format!(r#"{{"exp":{exp}}}"#))
+        )
+    }
+
+    #[test]
+    fn decrypt_droid_blob_round_trips_droid_format() {
+        let key = [7u8; 32];
+        let blob = encrypt_droid_blob(r#"{"access_token":"t"}"#, &key, &[3u8; 16]);
+        assert_eq!(
+            decrypt_droid_blob(&blob, &key).as_deref(),
+            Some(r#"{"access_token":"t"}"#)
+        );
+        assert_eq!(decrypt_droid_blob(&blob, &[8u8; 32]), None);
+        assert_eq!(decrypt_droid_blob("a:b", &key), None);
+    }
+
+    #[test]
+    fn droid_credentials_read_token_expiry_and_region() {
+        let token = fake_jwt(1_700_000_000);
+        let raw = format!(r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"eu"}}}}"#);
+        let creds = droid_credentials_from_json(&raw).unwrap();
+        assert_eq!(creds.access_token, token);
+        assert_eq!(creds.expires_at_ms, Some(1_700_000_000_000));
+        assert!(creds.eu);
+
+        let raw =
+            format!(r#"{{"access_token":"{token}","whoami":{{"inferenceRegion":"global"}}}}"#);
+        assert!(!droid_credentials_from_json(&raw).unwrap().eu);
+        assert!(droid_credentials_from_json(r#"{"access_token":" "}"#).is_none());
+    }
+
+    #[test]
+    fn decode_droid_key_requires_32_bytes() {
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        assert_eq!(
+            decode_droid_key(&engine.encode([1u8; 32])).map(|k| k.len()),
+            Some(32)
+        );
+        assert_eq!(decode_droid_key(&engine.encode([1u8; 16])), None);
+    }
+
+    #[test]
+    fn droid_expired_token_asks_for_a_droid_session() {
+        let fetch = droid_error(401);
+        assert_eq!(fetch.status, "error");
+        assert!(fetch.error.unwrap().contains("expired"));
     }
 }

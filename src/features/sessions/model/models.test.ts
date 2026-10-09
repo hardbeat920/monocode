@@ -717,3 +717,33 @@ describe("every bundled model resolves to its own native id", () => {
     expect(wrong).toEqual([]);
   });
 });
+
+describe("Droid catalog recovery", () => {
+  afterEach(() => resetHarnessModelOverlays());
+  it("preserves a saved model and effort before authoritative discovery", () => {
+    resetHarnessModelOverlays();
+    const saved = resolveModel("droid", "droid:gpt-6-luna");
+    expect(saved.id).toBe("droid:gpt-6-luna");
+    expect(nativeModelId(saved)).toBe("gpt-6-luna");
+    expect(mergeModelSettings(saved, { effort: "high" })).toEqual({
+      effort: "high",
+    });
+    setHarnessModels(
+      "droid",
+      [{ id: "droid:other", harness: "droid", name: "Other" }],
+      false,
+    );
+    expect(hasLiveCatalog("droid")).toBe(false);
+    expect(resolveModel("droid", saved.id).id).toBe(saved.id);
+    expect(mergeModelSettings(saved, { effort: "high" })).toEqual({
+      effort: "high",
+    });
+    setHarnessModels("droid", [
+      { id: "droid:other", harness: "droid", name: "Other" },
+    ]);
+    expect(hasLiveCatalog("droid")).toBe(true);
+    expect(
+      mergeModelSettings(resolveModel("droid", saved.id), { effort: "high" }),
+    ).toEqual({});
+  });
+});

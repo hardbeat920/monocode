@@ -49,6 +49,7 @@ import { discoverOpenCodeModels } from "../src/integrations/harness/providers/op
 import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness/providers/pi/piCatalog";
 import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
 import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
+import { discoverDroidModels } from "../src/integrations/harness/providers/droid/droidCatalog";
 import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
 import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
 import {
@@ -56,6 +57,7 @@ import {
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveCursorBinary,
+  resolveDroidBinary,
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
@@ -77,6 +79,7 @@ const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
   omp: () => resolveOmpBinary(),
   fx: () => resolveFxBinary(),
   hermes: () => resolveHermesBinary(),
+  droid: () => resolveDroidBinary(),
   antigravity: () => resolveAntigravityBinary(),
 };
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
@@ -92,6 +95,7 @@ const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel
   omp: discoverOmpModels,
   fx: discoverFxModels,
   hermes: discoverHermesModels,
+  droid: discoverDroidModels,
   antigravity: discoverAntigravityModels,
 };
 
