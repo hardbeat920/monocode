@@ -35,8 +35,9 @@ export function generateCommitMessage(
   cwd: string,
   preferred?: HarnessId,
   signal?: AbortSignal,
+  paths?: readonly string[],
 ): Promise<string> {
-  return generateHarnessCommitMessage(pickTextHarness(preferred), cwd, signal);
+  return generateHarnessCommitMessage(pickTextHarness(preferred), cwd, signal, paths);
 }
 
 export function generatePrContent(
