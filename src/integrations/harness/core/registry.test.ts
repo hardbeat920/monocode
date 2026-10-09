@@ -97,6 +97,23 @@ describe("harness registry", () => {
     await sending;
   });
 
+  it("sends the mode the model supports, not the saved one", async () => {
+    const sendTurn = vi.fn(async () => undefined);
+    registerHarness(stub("cursor", { sendTurn }));
+    await sendHarnessTurn({
+      harness: "cursor",
+      sessionId: "coerce",
+      cwd: "/tmp",
+      model: "cursor:default",
+      runtimeMode: "auto",
+      text: "Hello",
+      onEvent: vi.fn(),
+    });
+    expect(sendTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeMode: "auto-accept-edits" }),
+    );
+  });
+
   it("advertises isolated text prompt support by harness", () => {
     registerBuiltinHarnesses();
     const ids: HarnessId[] = [

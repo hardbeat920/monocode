@@ -7,7 +7,10 @@ import type {
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
-import { hasLiveCatalog } from "../../../features/sessions/model/models";
+import {
+  coerceRuntimeMode,
+  hasLiveCatalog,
+} from "../../../features/sessions/model/models";
 import type { UserQuestionReply } from "../../../features/sessions/model/userQuestion";
 import type { NativeCommandProvider } from "./nativeCommands";
 import type {
@@ -231,6 +234,12 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
     try {
       await adapter.sendTurn({
         ...input,
+        // The saved mode is the user's choice; send what this model supports.
+        runtimeMode: coerceRuntimeMode(
+          input.harness,
+          input.model,
+          input.runtimeMode,
+        ),
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
           input.onAccepted?.();

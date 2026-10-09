@@ -38,7 +38,7 @@ export type AgentModel = {
   settings?: ModelSetting[];
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
-  /** Whether Auto approval works with this model; unset means not reported. */
+  /** Whether Auto approval works with this model; unset means unconfirmed. */
   supportsAuto?: boolean;
 };
 
@@ -339,23 +339,50 @@ export function findModel(id: string): AgentModel | undefined {
   return indexById.get(id);
 }
 
-/**
- * Whether Auto approval is available for a model. Only Claude and Codex have
- * it, and Claude reports it per model; a model that doesn't say is assumed to
- * support it so a stale or fallback catalog doesn't hide the option.
- */
-export function modelSupportsAuto(harness: HarnessId, modelId: string) {
-  if (harness !== "claude" && harness !== "codex") return false;
-  return lookupModel(modelId)?.supportsAuto !== false;
-}
+/** Modes each harness honors; the rest are ignored by its adapter. */
+// Spelled out rather than built from `RUNTIME_MODES`, which isn't initialized
+// yet when this module loads inside the import cycle with `session`.
+const ALL_MODES: RuntimeMode[] = [
+  "supervised",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+];
+const EDIT_MODES: RuntimeMode[] = [
+  "supervised",
+  "auto-accept-edits",
+  "full-access",
+];
+const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
+  claude: ALL_MODES,
+  codex: ALL_MODES,
+  cursor: EDIT_MODES,
+  grok: ALL_MODES,
+  opencode: EDIT_MODES,
+  antigravity: EDIT_MODES,
+  hermes: EDIT_MODES,
+  // These run with no approval levels, so there is nothing to choose.
+  pi: [],
+  omp: [],
+  fx: [],
+};
 
-/** Access modes offered for a model. */
+/**
+ * Access modes offered for a model. Auto also needs the model: Claude only
+ * reports `supportsAutoMode` when it is true, so an unconfirmed model (no live
+ * catalog yet, or an older CLI) is treated as unsupported rather than risking a
+ * turn the CLI rejects. The saved mode is kept and applies once it's confirmed.
+ * Codex doesn't report per-model support, so it follows the harness.
+ */
 export function runtimeModesFor(
   harness: HarnessId,
   modelId: string,
 ): RuntimeMode[] {
-  return RUNTIME_MODES.filter(
-    (mode) => mode !== "auto" || modelSupportsAuto(harness, modelId),
+  const supported = lookupModel(modelId)?.supportsAuto;
+  const autoOk =
+    harness === "claude" ? supported === true : supported !== false;
+  return (HARNESS_RUNTIME_MODES[harness] ?? EDIT_MODES).filter(
+    (mode) => mode !== "auto" || autoOk,
   );
 }
 

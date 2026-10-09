@@ -59,15 +59,9 @@ export function AccessPicker({
   // Re-render when a late catalog discovery changes which modes a model offers.
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   const modes = runtimeModesFor(harness, model);
+  // The stored mode is the user's choice and is left alone; a model that can't
+  // do it just shows (and runs with) the closest preceding supported mode.
   const value = coerceRuntimeMode(harness, model, requested);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-
-  // A model that can't do the chosen mode (e.g. Auto) steps down to the closest
-  // preceding mode it supports.
-  useEffect(() => {
-    if (value !== requested) onChangeRef.current(value);
-  }, [value, requested]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() => Math.max(0, modes.indexOf(value)));
   const root = useRef<HTMLDivElement>(null);
@@ -111,6 +105,8 @@ export function AccessPicker({
       if (mode) pick(mode);
     }
   };
+
+  if (modes.length <= 1) return null;
 
   return (
     <div ref={root} className="relative">

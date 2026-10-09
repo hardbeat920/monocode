@@ -9,7 +9,7 @@ const row = (value: string, extra: Record<string, unknown> = {}) => ({
 });
 
 describe("modelsFromClaudeListModels supportsAutoMode", () => {
-  it("maps true, false and absent", () => {
+  it("maps true and false, and absent as unsupported", () => {
     const models = modelsFromClaudeListModels([
       row("opus-x", { supportsAutoMode: true }),
       row("haiku-x", { supportsAutoMode: false }),
@@ -19,7 +19,6 @@ describe("modelsFromClaudeListModels supportsAutoMode", () => {
       models.find((model) => model.name.toLowerCase().includes(name));
     expect(byName("opus")?.supportsAuto).toBe(true);
     expect(byName("haiku")?.supportsAuto).toBe(false);
-    expect(byName("sonnet")).toBeDefined();
-    expect(byName("sonnet")).not.toHaveProperty("supportsAuto");
+    expect(byName("sonnet")?.supportsAuto).toBe(false);
   });
 });

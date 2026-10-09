@@ -78,17 +78,13 @@ function press(key: string) {
   });
 }
 
-const claude = (supportsAuto?: boolean) => [
-  {
-    id: "claude:m",
-    harness: "claude" as const,
-    name: "M",
-    ...(supportsAuto === undefined ? {} : { supportsAuto }),
-  },
+const claude = (supportsAuto: boolean, id = "claude:m") => [
+  { id, harness: "claude" as const, name: "M", supportsAuto },
 ];
 
 describe("AccessPicker", () => {
   it("lists Auto only for models that support it", () => {
+    setHarnessModels("claude", claude(true, "claude:sonnet-5"));
     render("claude", "claude:sonnet-5", "supervised");
     open();
     expect(options()).toContain("Auto");
@@ -98,6 +94,7 @@ describe("AccessPicker", () => {
   });
 
   it("drops Auto when the model or harness changes", () => {
+    setHarnessModels("claude", claude(true, "claude:sonnet-5"));
     render("claude", "claude:sonnet-5", "supervised");
     open();
     expect(options()).toContain("Auto");
@@ -108,6 +105,7 @@ describe("AccessPicker", () => {
   });
 
   it("removes Auto when a late catalog reports no support", () => {
+    setHarnessModels("claude", claude(true));
     render("claude", "claude:m", "supervised");
     open();
     expect(options()).toContain("Auto");
@@ -115,14 +113,33 @@ describe("AccessPicker", () => {
     expect(options()).not.toContain("Auto");
   });
 
-  it("steps down to the previous mode through onChange", () => {
+  it("shows the previous mode without rewriting the stored one", () => {
     const onChange = vi.fn();
     render("cursor", "cursor:default", "auto", onChange);
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("auto-accept-edits");
+    expect(onChange).not.toHaveBeenCalled();
     expect(trigger().getAttribute("aria-label")).toBe("Auto-accept edits");
+    // Back on a model with Auto, the original choice is still in effect.
+    setHarnessModels("claude", claude(true, "claude:sonnet-5"));
+    render("claude", "claude:sonnet-5", "auto", onChange);
+    expect(trigger().getAttribute("aria-label")).toBe("Auto");
+  });
+
+  it("shows the fallback until Claude support is confirmed, then restores Auto", () => {
+    render("claude", "claude:m", "auto");
+    expect(trigger().getAttribute("aria-label")).toBe("Auto-accept edits");
+    act(() => setHarnessModels("claude", claude(true)));
+    expect(trigger().getAttribute("aria-label")).toBe("Auto");
+  });
+
+  it("renders no picker when a provider has nothing to choose", () => {
+    render("pi", "pi:x", "supervised");
+    expect(container.querySelector("[data-access-picker-trigger]")).toBeNull();
+    render("fx", "fx:x", "supervised");
+    expect(container.querySelector("[data-access-picker-trigger]")).toBeNull();
   });
 
   it("does not call onChange when the mode is offered", () => {
+    setHarnessModels("claude", claude(true, "claude:sonnet-5"));
     const onChange = vi.fn();
     render("claude", "claude:sonnet-5", "auto", onChange);
     expect(onChange).not.toHaveBeenCalled();
