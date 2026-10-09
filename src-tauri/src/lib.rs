@@ -218,8 +218,10 @@ fn set_trackpad_zoom_enabled(
     trackpad_zoom::set_enabled(&window, enabled);
 }
 
+// Async so the window is built off the main thread. Building it from a sync
+// command deadlocks WebView2 on Windows and leaves the new window blank.
 #[tauri::command]
-fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
     window::open_new_window(&app)
 }
 
