@@ -51,6 +51,7 @@ import { discoverPiModels, discoverOmpModels } from "../src/integrations/harness
 import { discoverFxModels } from "../src/integrations/harness/providers/fx/fxCatalog";
 import { discoverHermesModels } from "../src/integrations/harness/providers/hermes/hermesCatalog";
 import { discoverAntigravityModels } from "../src/integrations/harness/providers/antigravity/antigravityCatalog";
+import { discoverDevinModels } from "../src/integrations/harness/providers/devin/devinCatalog";
 import { setHarnessModels, type AgentModel } from "../src/features/sessions/model/models";
 import {
   resolveAntigravityBinary,
@@ -58,6 +59,7 @@ import {
   resolveCodexBinary,
   resolveCopilotBinary,
   resolveCursorBinary,
+  resolveDevinBinary,
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
@@ -81,6 +83,7 @@ const resolveBinary: Record<RemoteProvider, () => Promise<{ path: string }>> = {
   hermes: () => resolveHermesBinary(),
   copilot: () => resolveCopilotBinary(),
   antigravity: () => resolveAntigravityBinary(),
+  devin: () => resolveDevinBinary(),
 };
 // A 1 MiB text file can expand to 6 MiB when JSON escapes control characters.
 // Existing files.write sends both the original and replacement contents.
@@ -97,6 +100,7 @@ const discoverModels: Record<RemoteProvider, (cwd: string) => Promise<AgentModel
   hermes: discoverHermesModels,
   copilot: discoverCopilotModels,
   antigravity: discoverAntigravityModels,
+  devin: discoverDevinModels,
 };
 
 async function body(

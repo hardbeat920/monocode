@@ -22,6 +22,7 @@ const binaryNames: Record<RemoteProvider, string[]> = {
   hermes: ["hermes"],
   copilot: ["copilot"],
   antigravity: ["agy_acp_server.par"],
+  devin: ["devin"],
 };
 
 const providerDirectories = (provider: RemoteProvider): string[] => {
@@ -39,6 +40,16 @@ const providerDirectories = (provider: RemoteProvider): string[] => {
       join(home, ".hermes", "hermes-agent", ".venv", "bin"),
     ],
     antigravity: [join(home, ".local", "share", "agy-acp")],
+    devin: [
+      process.platform === "win32"
+        ? join(
+            process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"),
+            "devin",
+            "cli",
+            "bin",
+          )
+        : join(home, ".local", "bin"),
+    ],
   };
   return [
     ...new Set([

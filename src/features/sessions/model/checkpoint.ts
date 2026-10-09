@@ -6,7 +6,7 @@ export type CheckpointFile = {
   status: string;
   additions: number;
   deletions: number;
-  /** False when changes between this session's edits prevent an exact diff. */
+  /** True when an exact recorded before/after diff is available. */
   exact: boolean;
   /** False when restoring could overwrite a change made outside this session. */
   undoable: boolean;
@@ -33,6 +33,7 @@ export type CheckpointApplyResult = {
 
 const REVIEW_CHANGED = "monocode-review-changed";
 const checkpointQueues = new Map<string, Promise<void>>();
+const activeTurns = new Map<string, { id: string; cwd: string }>();
 
 function enqueueCheckpoint<T>(
   sessionId: string,
@@ -83,14 +84,49 @@ export function ensureSessionCheckpoint(
   );
 }
 
-/** Snapshot the worktree before a live turn so Keep/Undo can target this session. */
+/** Record the workspace before execution, including existing uncommitted files. */
 export async function beginSessionTurn(
   sessionId: string,
   cwd: string,
-): Promise<void> {
-  if (!cwd || cwd === "~") return;
-  await ensureSessionCheckpoint(sessionId, cwd);
+): Promise<string | undefined> {
+  if (!cwd || cwd === "~") return undefined;
+  const id = crypto.randomUUID();
+  activeTurns.set(sessionId, { id, cwd });
+  // Capture errors are also persisted by the backend and shown in the review.
+  await enqueueCheckpoint(sessionId, () =>
+    invoke<void>("session_checkpoint_begin_turn", {
+      sessionId,
+      cwd,
+      turnId: id,
+    }),
+  ).catch(console.error);
   notifyReviewChanged(sessionId);
+  return id;
+}
+
+/** Capture the settled workspace before exposing the turn's recorded diff. */
+export function finishSessionTurn(
+  sessionId: string,
+  cwd: string,
+  options?: { turnId?: string; after?: Promise<unknown> },
+): Promise<void> {
+  const active = activeTurns.get(sessionId);
+  const id = options?.turnId ?? (active?.cwd === cwd ? active.id : undefined);
+  if (!id) return Promise.resolve();
+  return enqueueCheckpoint(sessionId, async () => {
+    // Cancellation must stop the provider before its final snapshot is taken.
+    await options?.after;
+    await invoke<void>("session_checkpoint_finish_turn", {
+      sessionId,
+      cwd,
+      turnId: id,
+    });
+  })
+    .catch(console.error)
+    .finally(() => {
+      if (activeTurns.get(sessionId)?.id === id) activeTurns.delete(sessionId);
+      notifyReviewChanged(sessionId);
+    });
 }
 
 /** Capture a file immediately before a structured edit starts. */
@@ -162,12 +198,15 @@ export function sessionCheckpointCleanupSafe(
 }
 
 export function forgetSessionCheckpoint(sessionId: string): Promise<void> {
+  const activeId = activeTurns.get(sessionId)?.id;
   return enqueueCheckpoint(sessionId, () =>
     invoke<void>("session_checkpoint_forget", { sessionId }),
-  );
+  ).then(() => {
+    if (activeTurns.get(sessionId)?.id === activeId) activeTurns.delete(sessionId);
+  });
 }
 
-/** The exact before/after contents captured for one session-owned file. */
+/** The before/after contents saved in the session's recorded checkpoint. */
 export function sessionCheckpointFileDiff(
   sessionId: string,
   cwd: string,

@@ -3,6 +3,7 @@ import claude from "../../../assets/providers/claude.svg";
 import codex from "../../../assets/providers/codex.svg";
 import copilot from "../../../assets/providers/copilot.svg";
 import cursor from "../../../assets/providers/cursor.svg";
+import devin from "../../../assets/providers/devin.svg";
 import fx from "../../../assets/providers/fx.svg";
 import grok from "../../../assets/providers/grok.svg";
 import hermes from "../../../assets/providers/hermes.svg";
@@ -24,6 +25,7 @@ export const HARNESS_ICONS: Record<HarnessId, string> = {
   fx,
   hermes,
   antigravity,
+  devin,
 };
 
 /** White marks that must follow `currentColor` so they stay visible in light mode. */
@@ -35,9 +37,10 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "fx",
   "hermes",
   "copilot",
+  "devin",
 ]);
 
-const MASK_ICON_HARNESSES = new Set<HarnessId>(["hermes", "copilot"]);
+const MASK_ICON_HARNESSES = new Set<HarnessId>(["hermes", "copilot", "devin"]);
 
 function MonoIcon({
   className,
@@ -85,19 +88,21 @@ export function HarnessIcon({
     );
   }
   if (MASK_ICON_HARNESSES.has(harness)) {
+    const mark = HARNESS_ICONS[harness];
     return (
       <span
         aria-hidden
         className={`inline-flex items-center justify-center ${className}`}
       >
         <span
-          className="block size-[72%] bg-current"
+          className={`block ${harness === "devin" ? "size-[88%]" : "size-[72%]"} bg-current`}
           style={{
-            maskImage: `url("${HARNESS_ICONS[harness]}")`,
+            // Quoted: Vite inlines small SVGs as data URIs that contain spaces.
+            maskImage: `url("${mark}")`,
             maskPosition: "center",
             maskRepeat: "no-repeat",
             maskSize: "contain",
-            WebkitMaskImage: `url("${HARNESS_ICONS[harness]}")`,
+            WebkitMaskImage: `url("${mark}")`,
             WebkitMaskPosition: "center",
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskSize: "contain",

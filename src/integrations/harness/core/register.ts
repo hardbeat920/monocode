@@ -9,6 +9,7 @@ import { ensureOpenCodeRegistered } from "../providers/opencode/opencodeAdapter"
 import { ensureOmpRegistered } from "../providers/omp/ompAdapter";
 import { ensurePiRegistered } from "../providers/pi/piAdapter";
 import { ensureAntigravityRegistered } from "../providers/antigravity/antigravityAdapter";
+import { ensureDevinRegistered } from "../providers/devin/devinAdapter";
 
 /** Register all known live harness adapters. Idempotent. */
 export function registerBuiltinHarnesses(): void {
@@ -23,4 +24,5 @@ export function registerBuiltinHarnesses(): void {
   ensureHermesRegistered();
   ensureAntigravityRegistered();
   ensureCopilotRegistered();
+  ensureDevinRegistered();
 }

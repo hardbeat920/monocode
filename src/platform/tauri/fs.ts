@@ -155,6 +155,7 @@ export type DiscoveredSkill = {
     | "grok"
     | "hermes"
     | "antigravity"
+    | "devin"
     | "monocode";
 };
 
@@ -328,7 +329,9 @@ export function gitCommit(
   amend = false,
   paths?: string[],
 ): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message, amend, paths });
+  return invoke<void>("git_commit", {
+    cwd, message, amend, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitHeadMessage(cwd: string): Promise<string> {
@@ -341,8 +344,10 @@ export type GitStagedContext = {
   patch: string;
 };
 
-export function gitStagedContext(cwd: string): Promise<GitStagedContext> {
-  return invoke<GitStagedContext>("git_staged_context", { cwd });
+export function gitStagedContext(cwd: string, paths?: readonly string[]): Promise<GitStagedContext> {
+  return invoke<GitStagedContext>("git_staged_context", {
+    cwd, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitPush(cwd: string): Promise<void> {
