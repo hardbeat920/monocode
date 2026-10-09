@@ -19,9 +19,14 @@ import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
 } from "../model/monoMessaging";
-import { sessionWorkCwd, type Session } from "../../sessions/model/session";
+import {
+  sessionWorkCwd,
+  type PlanBuildTarget,
+  type Session,
+} from "../../sessions/model/session";
 import {
   FLOATING_MONO_CHANGED,
+  canChangeMonoPlanMode,
   floatingMonoAttachments,
   type FloatingMonoAction,
   type FloatingMonoEntry,
@@ -38,6 +43,7 @@ const EMPTY: FloatingMonoView = {
   session: null,
   error: null,
 };
+const BUILD_PENDING_ERROR = "Build is still pending;";
 const BUTTON =
   "grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content disabled:opacity-30";
 const SURFACE =
@@ -70,6 +76,9 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
         setArtifactId(null);
         setFocus((n) => n + 1);
       }
+      setError((current) =>
+        current?.startsWith(BUILD_PENDING_ERROR) ? next.error : current,
+      );
       setView(next);
       onShown();
     };
@@ -335,7 +344,9 @@ function MonoRail({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSwitch(mono.id)}
               className={`grid size-8 place-items-center rounded-lg transition-opacity ${
-                selected ? "" : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
+                selected
+                  ? ""
+                  : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <PixelMascot
@@ -445,6 +456,14 @@ function FloatingConversation({
           }
           onOpenFile={(path) => void action({ kind: "openFile", path })}
           onOpenArtifact={onOpenArtifact}
+          onOpenPlan={(blockId) => void action({ kind: "openPlan", blockId })}
+          onBuildPlan={(blockId, target?: PlanBuildTarget) =>
+            void action({
+              kind: "buildPlan",
+              blockId,
+              ...(target ? { target } : {}),
+            })
+          }
           onOpenDiff={() => void action({ kind: "reveal" })}
           onShowWork={() => void action({ kind: "reveal" })}
           onShowSessions={() => void action({ kind: "reveal" })}
@@ -488,6 +507,11 @@ function FloatingConversation({
           sessionId={`floating:${session.id}`}
           name={mono.name}
           enabled={!session.worktreeRemoved}
+          planMode={!!mono.planMode}
+          planModeDisabled={!canChangeMonoPlanMode(session)}
+          onPlanModeChange={(enabled) => {
+            void action({ kind: "planMode", enabled });
+          }}
           focusToken={focus}
           onSubmit={async (text, attachments) => {
             const accepted = await action({

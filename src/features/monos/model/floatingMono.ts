@@ -1,5 +1,9 @@
 import type { ApprovalDecision } from "../../../integrations/harness";
-import type { Attachment, Session } from "../../sessions/model/session";
+import type {
+  Attachment,
+  PlanBuildTarget,
+  Session,
+} from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
 import { listMonos, monoLook, monoState, type MonoStatus } from "./mono";
@@ -7,12 +11,14 @@ import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
 export const FLOATING_MONO_REQUEST = "mono_chat_request";
+export const FLOATING_MONO_CANCEL_BUILD = "mono_chat_cancel_build";
 export type FloatingMonoEntry = {
   id: string;
   name: string;
   mascot: string;
   color: string;
   sessionId: string | null;
+  planMode?: boolean;
   status: MonoStatus;
 };
 export type FloatingMonoView = {
@@ -24,6 +30,9 @@ export type FloatingMonoView = {
 export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
+  | { kind: "planMode"; enabled: boolean }
+  | { kind: "openPlan"; blockId: string }
+  | { kind: "buildPlan"; blockId: string; target?: PlanBuildTarget }
   | { kind: "stop" }
   | { kind: "create" }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
@@ -50,6 +59,7 @@ export function floatingMonoRoster(
           id: mono.id,
           ...monoLook(mono),
           sessionId: mono.sessionId ?? null,
+          planMode: mono.planMode === true,
           status: session ? monoState(session).status : "idle",
         };
       })
@@ -90,6 +100,18 @@ export function floatingMonoAttachments(
 
 export type FloatingMonoHost = {
   open(monoId: string): Promise<Session | undefined>;
+  setPlanMode(
+    monoId: string,
+    enabled: boolean,
+    sessionId: string,
+  ): boolean | void;
+  openPlan(sessionId: string, blockId: string): boolean | void;
+  buildPlan(
+    sessionId: string,
+    blockId: string,
+    target?: PlanBuildTarget,
+    signal?: AbortSignal,
+  ): boolean | Promise<boolean>;
   submit(
     sessionId: string,
     text: string,
@@ -115,11 +137,21 @@ export type FloatingMonoHost = {
   create?(fromMonoId: string): Promise<void>;
 };
 
+export function canChangeMonoPlanMode(session: Session | undefined): boolean {
+  return (
+    !!session &&
+    !session.busy &&
+    !session.backgroundTasks?.length &&
+    !session.queuedMessages?.length
+  );
+}
+
 /** Preparation may await disk; recheck the receipt before mutating a session. */
 export async function deliverFloatingMonoRequest(
   request: FloatingMonoRequest,
   host: FloatingMonoHost,
   accept: () => Promise<boolean>,
+  signal?: AbortSignal,
 ): Promise<Session | undefined> {
   const session = await host.open(request.monoId);
   if (!session) throw new Error("That Mono is no longer available.");
@@ -132,6 +164,35 @@ export async function deliverFloatingMonoRequest(
       if (host.submit(session.id, action.text, action.attachments) === false)
         throw new Error(
           "The message could not be sent. Try again in a moment.",
+        );
+      break;
+    case "planMode":
+      if (
+        host.setPlanMode(request.monoId, action.enabled, session.id) === false
+      )
+        throw new Error(
+          "Plan mode can only be changed while the Mono is idle.",
+        );
+      break;
+    case "openPlan":
+      if (host.openPlan(session.id, action.blockId) === false)
+        throw new Error("That plan is no longer available.");
+      break;
+    case "buildPlan":
+      if (signal?.aborted)
+        throw new Error("This Build was canceled before it could start.");
+      if (
+        !(await host.buildPlan(
+          session.id,
+          action.blockId,
+          action.target,
+          signal,
+        ))
+      )
+        throw new Error(
+          signal?.aborted
+            ? "This Build was canceled before it could start."
+            : "The plan could not be built. Check the main Mono for details.",
         );
       break;
     case "stop":

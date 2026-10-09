@@ -38,6 +38,9 @@ type Props = {
   quoteRequest?: QuoteRequest;
   onQuoteRequestConsumed?: (id: number) => void;
   onDraftChange?: (text: string) => void;
+  planMode?: boolean;
+  planModeDisabled?: boolean;
+  onPlanModeChange?: (enabled: boolean) => void;
   /** Returns false when the message wasn't taken, so the draft stays. */
   onSubmit: (
     text: string,
@@ -60,6 +63,9 @@ export function MonoComposer({
   quoteRequest,
   onQuoteRequestConsumed,
   onDraftChange,
+  planMode = false,
+  planModeDisabled = false,
+  onPlanModeChange,
   onSubmit,
   onFocus,
 }: Props) {
@@ -280,6 +286,21 @@ export function MonoComposer({
                 }}
               />
             ))}
+          </div>
+        ) : null}
+        {onPlanModeChange ? (
+          <div className="px-2 pt-1.5">
+            <button
+              type="button"
+              role="switch"
+              aria-label="Plan mode"
+              aria-checked={planMode}
+              disabled={!enabled || planModeDisabled || submitting}
+              onClick={() => onPlanModeChange(!planMode)}
+              className={`rounded-md px-2 py-1 text-[11px] ${planMode ? "bg-accent/15 text-accent" : "bg-content/5 text-content/50"} disabled:opacity-40`}
+            >
+              Plan mode {planMode ? "On" : "Off"}
+            </button>
           </div>
         ) : null}
         <div

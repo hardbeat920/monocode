@@ -1,5 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
+import type {
+  HarnessId,
+  RuntimeMode,
+  Session,
+} from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import type { MonoLook, MonoState } from "../model/mono";
@@ -22,6 +26,7 @@ import { MemoryPage, SoulPage } from "./MonoFilePages";
 import { PageHeader, Property } from "./monoPanelParts";
 import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
+import { canChangeMonoPlanMode } from "../model/floatingMono";
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
@@ -31,6 +36,7 @@ type Route =
 type Props = {
   open: boolean;
   monoId: string;
+  session: Session;
   /** Its conversation's folder, which the model picker reads settings from. */
   cwd: string;
   agent: MonoLook;
@@ -39,10 +45,12 @@ type Props = {
   model: string;
   modelSettings: Record<string, string>;
   runtimeMode: RuntimeMode;
+  planMode: boolean;
   busy?: boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onPlanModeChange: (mode: boolean) => void;
   onClose: () => void;
   onReset?: () => Promise<void>;
   windowControls?: ReactNode;
@@ -55,6 +63,7 @@ type Props = {
 export function MonoDetails({
   open,
   monoId,
+  session,
   cwd,
   agent,
   state,
@@ -62,10 +71,12 @@ export function MonoDetails({
   model,
   modelSettings,
   runtimeMode,
+  planMode,
   busy = false,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onPlanModeChange,
   onClose,
   onReset,
   windowControls,
@@ -229,6 +240,20 @@ export function MonoDetails({
                 side="bottom"
                 variant="plain"
               />
+            </Property>
+            <Property label="Plan mode">
+              <button
+                type="button"
+                role="switch"
+                aria-label="Plan mode"
+                aria-checked={planMode}
+                disabled={!canChangeMonoPlanMode(session)}
+                onClick={() => onPlanModeChange(!planMode)}
+                className={`rounded-md px-2 py-1 text-[11px] ${planMode ? "bg-accent/15 text-accent" : "bg-content/5 text-content/55"} disabled:opacity-50`}
+                title="Plan turns investigate and prepare a plan without implementing it."
+              >
+                {planMode ? "On" : "Off"}
+              </button>
             </Property>
             <Property label="Projects">
               <MonoProjects monoId={monoId} projects={agent.projects} />

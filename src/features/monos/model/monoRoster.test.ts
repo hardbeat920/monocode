@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   addMonoProject,
   createMono,
+  finishMonoPlanBuild,
   findMono,
   listMonos,
   monoLook,
@@ -11,9 +12,13 @@ import {
   removeMono,
   removeMonoProject,
   reorderMonos,
+  saveMonoPlanMode,
+  saveMonoSessionId,
 } from "./mono";
+import { submitAfterProjectSync } from "../../../app/model/submissionAcceptance";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
+import { monoSubmissionIntent } from "../../sessions/model/plan";
 
 beforeEach(() => {
   const stored = new Map<string, string>();
@@ -42,6 +47,109 @@ it("adds each project once and takes one away by its path", () => {
   expect(monoWorksOn(findMono(id)!, "/code/site/")).toBe(true);
   removeMonoProject(id, "/code/app/");
   expect(findMono(id)?.projects).toEqual(["/code/site"]);
+});
+
+it("persists Plan mode with the Mono across reloads", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  expect(findMono(id)?.planMode).toBe(true);
+  expect(listMonos()[0].planMode).toBe(true);
+  saveMonoSessionId(id, "rotated-session");
+  expect(findMono(id)?.planMode).toBe(true);
+  expect(findMono(id)?.sessionId).toBe("rotated-session");
+  saveMonoPlanMode(id, false);
+  expect(findMono(id)?.planMode).toBe(false);
+});
+
+it("leaves Plan mode on when Build is rejected and exits after acceptance", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const revision = findMono(id)!.planModeRevision ?? 0;
+  finishMonoPlanBuild(id, revision, false);
+  expect(findMono(id)?.planMode).toBe(true);
+  finishMonoPlanBuild(id, revision, true);
+  expect(findMono(id)?.planMode).toBe(false);
+});
+
+it("waits for async Build acceptance and preserves newer Plan choices", async () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const revision = findMono(id)!.planModeRevision ?? 0;
+  let accept!: (accepted: boolean) => void;
+  const result = finishMonoPlanBuild(
+    id,
+    revision,
+    new Promise<boolean>((resolve) => (accept = resolve)),
+  );
+  expect(findMono(id)?.planMode).toBe(true);
+
+  saveMonoPlanMode(id, false);
+  saveMonoPlanMode(id, true);
+  accept(true);
+
+  await expect(result).resolves.toBe(true);
+  expect(findMono(id)?.planMode).toBe(true);
+});
+
+it("keeps Plan mode when async Build acceptance rejects", async () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const result = finishMonoPlanBuild(
+    id,
+    findMono(id)!.planModeRevision ?? 0,
+    Promise.reject(new Error("dispatch failed")),
+  );
+
+  await expect(result).resolves.toBe(false);
+  expect(findMono(id)?.planMode).toBe(true);
+});
+
+it("keeps a newer Plan mode choice after deferred Build preparation", async () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const revision = findMono(id)!.planModeRevision ?? 0;
+  let finishSync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
+  const submit = vi.fn(() => {
+    finishMonoPlanBuild(id, revision, true);
+    return true;
+  });
+  const accepted = submitAfterProjectSync({
+    cwd: "/repo",
+    sync: new Promise((resolve) => (finishSync = resolve)),
+    applyLocationChange: vi.fn(async () => {}),
+    submit,
+    onError: vi.fn(),
+  });
+
+  saveMonoPlanMode(id, false);
+  saveMonoPlanMode(id, true);
+  finishSync({ path: "/repo", identity: "repo", moved: false });
+
+  await expect(accepted).resolves.toBe(true);
+  expect(submit).toHaveBeenCalledOnce();
+  expect(findMono(id)?.planMode).toBe(true);
+});
+
+it("keeps Plan mode when queued work rejects an explicit Build", () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const revision = findMono(id)!.planModeRevision ?? 0;
+  const intent = monoSubmissionIntent(true, "build", {
+    approvedPlanBuild: true,
+    hasApprovedPlan: true,
+    canStartBuild: false,
+  });
+  expect(intent).toBeNull();
+  finishMonoPlanBuild(id, revision, intent === "build");
+  expect(findMono(id)?.planMode).toBe(true);
+
+  // submitSession returns false for a disconnected-provider Build attempt.
+  finishMonoPlanBuild(id, revision, false);
+  expect(findMono(id)?.planMode).toBe(true);
 });
 
 it("keeps the rail's order and forgets a removed Mono", () => {

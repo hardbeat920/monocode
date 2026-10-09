@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import {
+  canChangeMonoPlanMode,
   deliverFloatingMonoRequest,
   floatingMonoSession,
   type FloatingMonoHost,
@@ -10,6 +11,9 @@ const session = newSession("codex", "/tmp", "default", "auto");
 function host(): FloatingMonoHost {
   return {
     open: vi.fn().mockResolvedValue(session),
+    setPlanMode: vi.fn(),
+    openPlan: vi.fn(),
+    buildPlan: vi.fn().mockReturnValue(true),
     submit: vi.fn().mockReturnValue(true),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -74,6 +78,115 @@ describe("floating Mono delivery", () => {
       accept,
     );
     expect(runtime.approval).toHaveBeenCalledWith(session.id, 7, "deny");
+  });
+
+  it("saves Plan mode changes from the floating chat", async () => {
+    const runtime = host();
+    await deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "planMode", enabled: true } },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.setPlanMode).toHaveBeenCalledWith("mono", true, session.id);
+  });
+
+  it("rejects a delayed Plan switch if its owner starts work while loading", async () => {
+    let resolveOpen!: (session: typeof session) => void;
+    let owner = session;
+    const runtime = host();
+    runtime.open = vi.fn(
+      () => new Promise((resolve) => (resolveOpen = resolve)),
+    );
+    runtime.setPlanMode = vi.fn((_monoId, _enabled, _sessionId) => {
+      if (!canChangeMonoPlanMode(owner)) return false;
+    });
+    const delivery = deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "planMode", enabled: true } },
+      runtime,
+      async () => true,
+    );
+    owner = { ...session, busy: true };
+    resolveOpen(session);
+    await expect(delivery).rejects.toThrow("while the Mono is idle");
+    expect(runtime.setPlanMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes floating plan actions to the main conversation", async () => {
+    const runtime = host();
+    await deliverFloatingMonoRequest(
+      { id: 1, monoId: "mono", action: { kind: "openPlan", blockId: "plan" } },
+      runtime,
+      async () => true,
+    );
+    await deliverFloatingMonoRequest(
+      { id: 2, monoId: "mono", action: { kind: "buildPlan", blockId: "plan" } },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.openPlan).toHaveBeenCalledWith(session.id, "plan");
+    expect(runtime.buildPlan).toHaveBeenCalledWith(
+      session.id,
+      "plan",
+      undefined,
+      undefined,
+    );
+  });
+
+  it("returns accepted Build outcomes from the floating owner", async () => {
+    const runtime = host();
+    runtime.buildPlan = vi.fn().mockResolvedValue(true);
+    await expect(
+      deliverFloatingMonoRequest(
+        {
+          id: 1,
+          monoId: "mono",
+          action: { kind: "buildPlan", blockId: "plan" },
+        },
+        runtime,
+        async () => true,
+      ),
+    ).resolves.toBe(session);
+    expect(runtime.buildPlan).toHaveBeenCalledWith(
+      session.id,
+      "plan",
+      undefined,
+      undefined,
+    );
+  });
+
+  it.each([false, Promise.resolve(false)])(
+    "reports a stale or busy floating Build rejection (%s)",
+    async (result) => {
+      const runtime = host();
+      runtime.buildPlan = vi.fn().mockReturnValue(result);
+      await expect(
+        deliverFloatingMonoRequest(
+          {
+            id: 1,
+            monoId: "mono",
+            action: { kind: "buildPlan", blockId: "plan" },
+          },
+          runtime,
+          async () => true,
+        ),
+      ).rejects.toThrow("could not be built");
+    },
+  );
+
+  it("rejects floating Open when its plan is stale", async () => {
+    const runtime = host();
+    runtime.openPlan = vi.fn(() => false);
+    await expect(
+      deliverFloatingMonoRequest(
+        {
+          id: 1,
+          monoId: "mono",
+          action: { kind: "openPlan", blockId: "stale-plan" },
+        },
+        runtime,
+        async () => true,
+      ),
+    ).rejects.toThrow("plan is no longer available");
   });
 
   it("does not deliver a request that expired while its Mono was loading", async () => {

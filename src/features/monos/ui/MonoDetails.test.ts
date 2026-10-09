@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   RUNTIME_MODE_LABEL,
   RUNTIME_MODES,
+  newSession,
   type RuntimeMode,
 } from "../../sessions/model/session";
 import { MonoDetails } from "./MonoDetails";
@@ -36,6 +37,7 @@ vi.mock("../model/monoHabits", async (original) => ({
 let container: HTMLDivElement;
 let root: Root;
 const onRuntimeModeChange = vi.fn();
+const onPlanModeChange = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -64,12 +66,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function render(runtimeMode: RuntimeMode, busy = false) {
+async function render(
+  runtimeMode: RuntimeMode,
+  busy = false,
+  planMode = false,
+  queued = false,
+) {
+  const session = {
+    ...newSession("codex", "/home"),
+    busy,
+    ...(queued
+      ? { queuedMessages: [{ id: "queued", text: "Later", attachments: [] }] }
+      : {}),
+  };
   await act(async () =>
     root.render(
       createElement(MonoDetails, {
         open: true,
         monoId: "mono-1",
+        session,
         cwd: "/home",
         agent: { name: "Broski", mascot: "cat", color: "#9c9", projects: [] },
         state: { status: busy ? "working" : "idle" },
@@ -77,10 +92,12 @@ async function render(runtimeMode: RuntimeMode, busy = false) {
         model: "codex:gpt-5.4",
         modelSettings: {},
         runtimeMode,
+        planMode,
         busy,
         onModelChange: vi.fn(),
         onModelSettingsChange: vi.fn(),
         onRuntimeModeChange,
+        onPlanModeChange,
         onClose: vi.fn(),
       }),
     ),
@@ -119,4 +136,28 @@ it("explains when permissions take effect while the Mono is working", async () =
   expect(document.querySelector("[data-access-picker]")?.textContent).toContain(
     "Access changes apply to the next turn. Stop and resend to apply them now.",
   );
+});
+
+it("shows and changes persistent Plan mode, disabling the switch while busy", async () => {
+  await render("auto", false, true);
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '[role="switch"][aria-label="Plan mode"]',
+  )!;
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  act(() => toggle.click());
+  expect(onPlanModeChange).toHaveBeenCalledWith(false);
+
+  await render("auto", true, true);
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+
+  await render("auto", false, true, true);
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
 });

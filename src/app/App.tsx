@@ -26,9 +26,11 @@ import {
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
+  getOrStartProjectLocationSync,
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
+import { openMonoPlan } from "./model/openMonoPlan";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
 import {
@@ -192,7 +194,6 @@ import {
   neighborLeafId,
   newEditorWorkspaceTab,
   newFileTab,
-  newPlanTab,
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
@@ -367,8 +368,10 @@ import {
 
 import {
   buildPlanPrompt,
+  canUseMonoDelegation,
+  hasActivePlanTurn,
   isProviderFailureText,
-  planTitle,
+  monoSubmissionIntent,
   planTurnKey,
   planTurnPrompt,
 } from "../features/sessions/model/plan";
@@ -552,6 +555,8 @@ import {
   monosSnapshot,
   monoState,
   removeMono,
+  finishMonoPlanBuild,
+  saveMonoPlanMode,
   subscribeMonos,
   type MonoState,
 } from "../features/monos/model/mono";
@@ -565,6 +570,7 @@ import {
   recordAgentContext,
   writeAgentFile,
 } from "../features/monos/model/monoFiles";
+import { canChangeMonoPlanMode } from "../features/monos/model/floatingMono";
 import { useMonoHabits } from "./hooks/useMonoHabits";
 import { useFloatingMono } from "./hooks/useFloatingMono";
 import {
@@ -829,6 +835,7 @@ type SubmitOptions = ComposerTurnOptions & {
   queuedMessageId?: string;
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
+  approvedPlanBuild?: boolean;
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
@@ -838,6 +845,8 @@ type SubmitOptions = ComposerTurnOptions & {
   refreshTitle?: boolean;
   /** Internal guard for the retry after resolving a renamed project. */
   projectLocationReady?: boolean;
+  /** Cancel a floating Build before project preparation submits its turn. */
+  abortSignal?: AbortSignal;
 };
 
 type Submit = (
@@ -6427,29 +6436,19 @@ function Workspace({
 
   const onOpenPlan = useCallback(
     (sessionId: string, blockId: string) => {
-      const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      const block = session?.blocks.find((entry) => entry.id === blockId);
-      if (!tab || !session || !block) return;
-      const file = {
-        ...newPlanTab(
-          session.id,
-          block.id,
-          planTitle(block.text),
-          sessionWorkCwd(session),
-        ),
-        ...(session.worktreeCwd ? { projectCwd: session.cwd } : {}),
-      };
-      setTabs((prev) =>
-        prev.map((entry) =>
-          entry.id === tab.id ? openEditorTab(entry, file) : entry,
-        ),
-      );
-      setComposerFocused(false);
+      return openMonoPlan({
+        tab: tabsRef.current.find((entry) => entry.id === activeTabId),
+        session,
+        blockId,
+        closeMonoView,
+        setTabs,
+        setComposerFocused,
+      });
     },
-    [activeTabId],
+    [activeTabId, closeMonoView],
   );
 
   const onPinFile = useCallback((fileId: string) => {
@@ -6676,6 +6675,7 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (options?.abortSignal?.aborted) return false;
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -6767,7 +6767,41 @@ function Workspace({
       if (editedResend) {
         current = { ...current, blocks: editedResend.blocks };
       }
-      const intent = options?.intent ?? "default";
+      const mono = isMonoSession(sessionId);
+      const monoPlanMode =
+        mono &&
+        (monoForSession(sessionId)?.planMode === true ||
+          hasActivePlanTurn(current));
+      const requestedIntent = options?.intent ?? "default";
+      const approvedPlan = options?.planBlockId
+        ? current.blocks.find(
+            (block) =>
+              block.id === options.planBlockId && block.role === "plan",
+          )
+        : undefined;
+      const canStartBuild =
+        !current.busy &&
+        !current.backgroundTasks?.length &&
+        !current.queuedMessages?.length;
+      const intent = monoSubmissionIntent(monoPlanMode, requestedIntent, {
+        approvedPlanBuild: options?.approvedPlanBuild,
+        hasApprovedPlan: !!approvedPlan?.text.trim(),
+        canStartBuild,
+        managed: options?.managed,
+        appRequest: !!options?.appRequestId,
+        queued: !!options?.queuedMessageId,
+      });
+      if (!intent) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text:
+            options?.approvedPlanBuild && !canStartBuild
+              ? "Wait for current, background, or queued work to finish before building this plan."
+              : "Turn off Plan mode before starting implementation or delegated work.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       if (intent === "orchestrate") {
         try {
           const run = orchestrator.forSession(sessionId);
@@ -6784,12 +6818,6 @@ function Workspace({
           return false;
         }
       }
-      const approvedPlan = options?.planBlockId
-        ? current.blocks.find(
-            (block) =>
-              block.id === options.planBlockId && block.role === "plan",
-          )
-        : undefined;
       if (intent === "build" && !approvedPlan?.text.trim()) return false;
       if (options?.queuedMessageId) {
         const mode =
@@ -6854,7 +6882,6 @@ function Workspace({
         return false;
       }
       // The Mono has app access in every turn, without the command.
-      const mono = isMonoSession(sessionId);
       const queuedMonoMessage =
         mono && options?.queuedMessageId
           ? current.queuedMessages?.find(
@@ -6875,6 +6902,14 @@ function Workspace({
       const rawCommand =
         !operatorCommand.matched &&
         isNativeCommandPrompt(submittedText, current.harness);
+      if (monoPlanMode && rawCommand) {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Native commands are unavailable in Mono Plan mode. Turn it off to run commands.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
       const harnessText =
         options?.ciRepair?.prompt ??
@@ -6913,7 +6948,7 @@ function Workspace({
         sessionsRef.current = next;
         setSessions(next);
         dismissNoticesForContinuedSession(sessionId);
-        return true;
+        return options?.approvedPlanBuild ? false : true;
       }
 
       if (mono && current.busy && options?.queuedMessageId) {
@@ -7122,18 +7157,16 @@ function Workspace({
         !current.worktreeCwd
       ) {
         const key = pathKey(current.cwd);
-        let sync = projectLocationSyncs.current.get(key);
-        if (!sync) {
-          sync = synchronizeProjectLocation(current.cwd);
-          projectLocationSyncs.current.set(key, sync);
-          void sync.then(
-            () => projectLocationSyncs.current.delete(key),
-            () => projectLocationSyncs.current.delete(key),
-          );
-        }
+        const sync = getOrStartProjectLocationSync(
+          projectLocationSyncs.current,
+          key,
+          () => synchronizeProjectLocation(current.cwd),
+          options?.abortSignal,
+        );
         return submitAfterProjectSync({
           cwd: current.cwd,
           sync,
+          signal: options?.abortSignal,
           applyLocationChange: applyProjectLocationChange,
           submit: async () => {
             const accepted = await submitAfterProjectSyncRef.current(
@@ -7299,7 +7332,7 @@ function Workspace({
             if (editedResend) {
               next = editedResend.replace(next);
             }
-            if (approvedPlan && intent === "build") {
+            if (live && approvedPlan && intent === "build") {
               next = {
                 ...next,
                 blocks: next.blocks.map((block) =>
@@ -7460,7 +7493,7 @@ function Workspace({
           text: "",
           error: "Harness is not connected",
         });
-        return true;
+        return options?.approvedPlanBuild ? false : true;
       }
       if (editedResend && canRewindHarnessLastTurn(current.harness)) {
         editedResends.start(sessionId);
@@ -7750,8 +7783,9 @@ function Workspace({
                 ephemeral: current.ephemeral === true,
                 codexStore: mono ? "mono" : undefined,
                 controlsAgents:
-                  operatorAccess ||
-                  orchestrator.run(sessionId)?.status === "active",
+                  intent !== "plan" &&
+                  (operatorAccess ||
+                    orchestrator.run(sessionId)?.status === "active"),
                 ...(editedProviderTurnId
                   ? { providerTurnId: editedProviderTurnId }
                   : {}),
@@ -7807,8 +7841,9 @@ function Workspace({
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
               controlsAgents:
-                operatorAccess ||
-                orchestrator.run(sessionId)?.status === "active",
+                intent !== "plan" &&
+                (operatorAccess ||
+                  orchestrator.run(sessionId)?.status === "active"),
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
@@ -7897,9 +7932,15 @@ function Workspace({
           }
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            appContext.push(
-              `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
-            );
+            if (intent === "plan") {
+              appContext.push(
+                `<monocode_app>\nPlan mode allows read-only app commands. Do not modify MonoCode data, start or send sessions, or delegate implementation. The app rejects writes and session launches in Plan mode. Run \`${cli} --help\` for the available read commands. The CLI uses a session credential already in your environment; never print it.\n</monocode_app>`,
+              );
+            } else {
+              appContext.push(
+                `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
+              );
+            }
           }
           // A Mono reads who it is ahead of the message, so it never takes it
           // for something the user pasted. A command must stay first.
@@ -8648,18 +8689,25 @@ function Workspace({
   );
 
   const onBuildPlan = useCallback(
-    (sessionId: string, blockId: string, target?: PlanBuildTarget) => {
+    (
+      sessionId: string,
+      blockId: string,
+      target?: PlanBuildTarget,
+      signal?: AbortSignal,
+    ) => {
+      if (signal?.aborted) return false;
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
+      const mono = monoForSession(sessionId);
+      const planModeRevision = mono?.planModeRevision ?? 0;
       if (session && remoteProjectFor(session.cwd)) {
-        buildRemotePlan(sessionId, blockId, target);
-        return;
+        const accepted = buildRemotePlan(sessionId, blockId, target);
+        return finishMonoPlanBuild(mono?.id, planModeRevision, accepted);
       }
       const block = session?.blocks.find((entry) => entry.id === blockId);
       if (
         !session ||
-        session.busy ||
         block?.role !== "plan" ||
         !!block.orchestration ||
         !block.text.trim() ||
@@ -8667,18 +8715,21 @@ function Workspace({
         block.plan?.status === "building" ||
         block.plan?.status === "built"
       ) {
-        return;
+        return false;
       }
       if (target && session.modelSettings) {
         saveLastModelSettings(session.modelSettings, "fill");
       }
-      onSubmit(sessionId, "Build approved plan", [], {
+      const accepted = submitSession(sessionId, "Build approved plan", [], {
         intent: "build",
         planBlockId: blockId,
         buildTarget: target,
+        approvedPlanBuild: true,
+        abortSignal: signal,
       });
+      return finishMonoPlanBuild(mono?.id, planModeRevision, accepted);
     },
-    [onSubmit],
+    [submitSession],
   );
 
   useEffect(() => {
@@ -10514,6 +10565,20 @@ function Workspace({
       input: Record<string, unknown>;
     }>("monocode-control-request", ({ payload }) => {
       const handle = async () => {
+        const requestSource = sessionsRef.current.find(
+          (session) => session.id === payload.sessionId,
+        );
+        const requestMono = requestSource
+          ? (monoForSession(requestSource.id) ??
+            findMono(habitRunMono(requestSource.id) ?? ""))
+          : undefined;
+        const planning =
+          requestMono?.planMode === true ||
+          (requestSource ? hasActivePlanTurn(requestSource) : false);
+        if (payload.namespace === "control" && !canUseMonoDelegation(planning))
+          throw new Error(
+            "Delegation is unavailable while Mono Plan mode is on",
+          );
         if (payload.namespace === "control") {
           return orchestrator.handle(
             payload.sessionId,
@@ -10906,6 +10971,9 @@ function Workspace({
             isMono: (id) => isMonoSession(id),
             isHabitRun: (id) => isHabitRun(id),
             monoOf: (id) => {
+              const session = sessionsRef.current.find(
+                (entry) => entry.id === id,
+              );
               const mono =
                 monoForSession(id) ?? findMono(habitRunMono(id) ?? "");
               return (
@@ -10914,6 +10982,9 @@ function Workspace({
                   projects: mono.projects,
                   showStartedSessionsInSidebar:
                     mono.showStartedSessionsInSidebar,
+                  planMode:
+                    mono.planMode ||
+                    (session ? hasActivePlanTurn(session) : false),
                   ...(mono.useSidebarFolders
                     ? {
                         folder: {
@@ -12248,6 +12319,18 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       }),
+    setPlanMode: (monoId, enabled, sessionId) => {
+      const mono = findMono(monoId);
+      const current =
+        mono?.sessionId === sessionId
+          ? sessionsRef.current.find((entry) => entry.id === sessionId)
+          : undefined;
+      if (!canChangeMonoPlanMode(current)) return false;
+      saveMonoPlanMode(monoId, enabled);
+      return true;
+    },
+    openPlan: onOpenPlan,
+    buildPlan: onBuildPlan,
     submit: onSubmit,
     stop: onStop,
     approval: onApproval,
@@ -12349,6 +12432,7 @@ function Workspace({
           monoChanges?.sessionId !== monoViewSession.id
         }
         monoId={monoViewMono.id}
+        session={monoViewSession}
         cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
         state={monoState(monoViewSession)}
@@ -12356,7 +12440,10 @@ function Workspace({
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
         runtimeMode={monoViewSession.runtimeMode}
-        busy={!!monoViewSession.busy}
+        planMode={!!monoViewMono.planMode}
+        busy={
+          !!monoViewSession.busy || !!monoViewSession.backgroundTasks?.length
+        }
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }
@@ -12366,6 +12453,7 @@ function Workspace({
         onRuntimeModeChange={(mode) =>
           onRuntimeModeChange(monoViewSession.id, mode)
         }
+        onPlanModeChange={(mode) => saveMonoPlanMode(monoViewMono.id, mode)}
         onClose={() => setMonoDetailsOpen(false)}
         onReset={() => onResetMono(monoViewSession.id)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}

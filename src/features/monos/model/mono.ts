@@ -43,6 +43,10 @@ export type Mono = {
   projects: string[];
   /** New sessions appear in the project sidebar unless explicitly disabled. */
   showStartedSessionsInSidebar?: boolean;
+  /** Keep turns in the Mono's conversation in read-only plan mode. */
+  planMode?: boolean;
+  /** User Plan mode choices since the last saved roster. */
+  planModeRevision?: number;
   /** Files the sessions it starts into a sidebar folder named after it. */
   useSidebarFolders?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
@@ -169,6 +173,14 @@ function parseMono(value: unknown): Mono | undefined {
       : [],
     ...(typeof entry.showStartedSessionsInSidebar === "boolean"
       ? { showStartedSessionsInSidebar: entry.showStartedSessionsInSidebar }
+      : {}),
+    ...(typeof entry.planMode === "boolean"
+      ? { planMode: entry.planMode }
+      : {}),
+    ...(typeof entry.planModeRevision === "number" &&
+    Number.isSafeInteger(entry.planModeRevision) &&
+    entry.planModeRevision >= 0
+      ? { planModeRevision: entry.planModeRevision }
       : {}),
     ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
     ...(instructions ? { instructions } : {}),
@@ -309,6 +321,42 @@ export function saveMonoSessionId(monoId: string, sessionId: string): void {
 
 export function saveMonoName(monoId: string, name: string): void {
   updateMono(monoId, (mono) => ({ ...mono, name }));
+}
+
+export function saveMonoPlanMode(monoId: string, planMode: boolean): void {
+  updateMono(monoId, (mono) =>
+    (mono.planMode === true) === planMode
+      ? mono
+      : {
+          ...mono,
+          planMode,
+          planModeRevision: (mono.planModeRevision ?? 0) + 1,
+        },
+  );
+}
+
+export function finishMonoPlanBuild(
+  monoId: string | undefined,
+  planModeRevision: number,
+  accepted: boolean | Promise<boolean> | undefined,
+): boolean | Promise<boolean> {
+  const finish = (didAccept: boolean) => {
+    if (didAccept && monoId)
+      updateMono(monoId, (mono) =>
+        mono.planMode === true &&
+        (mono.planModeRevision ?? 0) === planModeRevision
+          ? {
+              ...mono,
+              planMode: false,
+              planModeRevision: planModeRevision + 1,
+            }
+          : mono,
+      );
+    return didAccept;
+  };
+  if (accepted === undefined) return false;
+  if (typeof accepted === "boolean") return finish(accepted);
+  return accepted.then(finish, () => finish(false));
 }
 
 export function saveMonoMascot(monoId: string, mascot: string): void {

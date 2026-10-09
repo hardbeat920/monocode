@@ -26,9 +26,13 @@ vi.mock("../../sessions/ui/AgentTranscript", () => ({
   AgentTranscript: ({
     blocks,
     onOpenArtifact,
+    onOpenPlan,
+    onBuildPlan,
   }: {
     blocks: { text: string }[];
     onOpenArtifact: (id: string) => void;
+    onOpenPlan?: (id: string) => void;
+    onBuildPlan?: (id: string) => void;
   }) =>
     createElement(
       "div",
@@ -39,6 +43,18 @@ vi.mock("../../sessions/ui/AgentTranscript", () => ({
         { "data-open-doc": "", onClick: () => onOpenArtifact("doc-1") },
         "Open document",
       ),
+      onOpenPlan &&
+        createElement(
+          "button",
+          { "data-open-plan": "", onClick: () => onOpenPlan("plan-1") },
+          "Open plan",
+        ),
+      onBuildPlan &&
+        createElement(
+          "button",
+          { "data-build-plan": "", onClick: () => onBuildPlan("plan-1") },
+          "Build plan",
+        ),
     ),
 }));
 vi.mock("../hooks/useMonoTranscript", () => ({
@@ -137,6 +153,27 @@ it("shows this window's Mono with its status beneath the name", async () => {
   ).not.toBeNull();
 });
 
+it("disables Plan mode while a message is queued", async () => {
+  await render();
+  const current = snapshot(0).session!;
+  await act(async () =>
+    receive({
+      payload: {
+        ...snapshot(0),
+        session: {
+          ...current,
+          queuedMessages: [{ id: "queued", text: "Later", attachments: [] }],
+        },
+      },
+    }),
+  );
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+});
+
 it("lists every Mono beside the chat and switches or adds from there", async () => {
   await render();
   const rail = container.querySelector("[data-floating-mono-rail]")!;
@@ -174,6 +211,24 @@ it("switches Monos inside the same frame, loading only the conversation", async 
   ).toBe("Scout");
   act(() => receive({ payload: snapshot(1) }));
   expect(container.textContent).toContain("Scout's conversation");
+});
+
+it("routes the floating transcript plan controls through the owner", async () => {
+  await render();
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>("[data-open-plan]")!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "openPlan", blockId: "plan-1" },
+  });
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>("[data-build-plan]")!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "buildPlan", blockId: "plan-1" },
+  });
 });
 
 it("keeps one loading screen through initial lookup and roster updates until the conversation arrives", async () => {
@@ -277,6 +332,30 @@ it("keeps the draft when the workspace rejects delivery", async () => {
     "Workspace unavailable",
   );
 });
+
+it.each(["Provider rejected Build", null])(
+  "updates the floating Build warning to its late outcome (%s)",
+  async (outcome) => {
+    await render();
+    native.invoke.mockImplementation(async (command) => {
+      if (command === "mono_chat_action")
+        throw new Error("Build is still pending; its outcome is unknown.");
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-build-plan]")!.click();
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "outcome is unknown",
+    );
+
+    act(() => receive({ payload: { ...snapshot(0), error: outcome } }));
+    if (outcome)
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        outcome,
+      );
+    else expect(container.querySelector('[role="alert"]')).toBeNull();
+  },
+);
 
 it("ignores a stale initial snapshot after a newer update arrives", async () => {
   let initial!: (view: FloatingMonoView) => void;

@@ -106,9 +106,9 @@ describe("AttachmentChip image preview", () => {
       '[aria-label="Open generated-image full screen"]',
     )!;
     act(() => trigger.click());
-    expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(
-      "blob:generated-image",
-    );
+    expect(
+      document.querySelector('[role="dialog"] img')?.getAttribute("src"),
+    ).toBe("blob:generated-image");
   });
 
   it("removes an image without opening the preview", () => {

@@ -10,8 +10,16 @@ import type {
   FloatingMonoHost,
   FloatingMonoRequest,
 } from "../../features/monos/model/floatingMono";
+import {
+  FLOATING_MONO_CANCEL_BUILD,
+  FLOATING_MONO_REQUEST,
+} from "../../features/monos/model/floatingMono";
 import { useFloatingMono } from "./useFloatingMono";
 import { saveMonoMenuBarIcon } from "../../features/settings/model/settings";
+import {
+  getOrStartProjectLocationSync,
+  submitAfterProjectSync,
+} from "../model/submissionAcceptance";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -40,6 +48,8 @@ let root: Root;
 let requests: FloatingMonoRequest[];
 let sessions: Session[];
 let host: FloatingMonoHost;
+let cancelBuild: (event: { payload: number }) => void;
+let requestBuilds: () => void;
 
 function Harness({
   sessions,
@@ -66,6 +76,9 @@ beforeEach(() => {
   }));
   host = {
     open: vi.fn(async (id) => sessions.find((s) => s.id === `chat-${id}`)),
+    setPlanMode: vi.fn(),
+    openPlan: vi.fn(),
+    buildPlan: vi.fn().mockReturnValue(true),
     submit: vi.fn(),
     stop: vi.fn(),
     approval: vi.fn(),
@@ -75,7 +88,11 @@ beforeEach(() => {
     openFile: vi.fn(),
     resume: vi.fn(),
   };
-  native.listen.mockReset().mockResolvedValue(() => {});
+  native.listen.mockReset().mockImplementation(async (event, handler) => {
+    if (event === FLOATING_MONO_CANCEL_BUILD) cancelBuild = handler;
+    if (event === FLOATING_MONO_REQUEST) requestBuilds = handler;
+    return () => {};
+  });
   native.invoke.mockReset().mockImplementation(async (command) => {
     if (command === "mono_chat_take") {
       const queued = requests;
@@ -92,6 +109,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -161,6 +179,212 @@ it("stops publishing when Monos are disabled", async () => {
       ([command]) => command === "mono_chat_publish",
     ),
   ).toBe(false);
+});
+
+it("replies with an error when a floating Open plan is stale", async () => {
+  requests = [
+    {
+      id: 9,
+      monoId: "first",
+      action: { kind: "openPlan", blockId: "stale-plan" },
+    },
+  ];
+  host.openPlan = vi.fn(() => false);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 9,
+    error: "That plan is no longer available.",
+  });
+});
+
+it("returns a floating Build rejection to the native request", async () => {
+  requests = [
+    {
+      id: 10,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  host.buildPlan = vi.fn().mockResolvedValue(false);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 10,
+    error: expect.stringContaining("plan could not be built"),
+  });
+});
+
+it("acknowledges a floating Build only after the owner accepts it", async () => {
+  requests = [
+    {
+      id: 11,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  host.buildPlan = vi.fn().mockResolvedValue(true);
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 11,
+    error: null,
+  });
+});
+
+it.each(["success", "reject", "false"] as const)(
+  "keeps a slow floating Build pending until its %s outcome",
+  async (outcome) => {
+    vi.useFakeTimers();
+    requests = [
+      {
+        id: 12,
+        monoId: "first",
+        action: { kind: "buildPlan", blockId: "plan" },
+      },
+    ];
+    host.buildPlan = vi.fn(
+      () =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => {
+            if (outcome === "reject")
+              reject(new Error("Provider rejected Build"));
+            else resolve(outcome === "success");
+          }, 31_000);
+        }),
+    );
+
+    await act(async () => {
+      root.render(createElement(Harness, { sessions }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(host.buildPlan).toHaveBeenCalledTimes(1);
+    expect(native.invoke).toHaveBeenCalledWith("mono_chat_accept", { id: 12 });
+    expect(native.invoke).not.toHaveBeenCalledWith(
+      "mono_chat_reply",
+      expect.anything(),
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(31_000));
+
+    expect(host.buildPlan).toHaveBeenCalledTimes(1);
+    expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+      id: 12,
+      error:
+        outcome === "success"
+          ? null
+          : outcome === "reject"
+            ? "Provider rejected Build"
+            : expect.stringContaining("plan could not be built"),
+    });
+  },
+);
+
+it("recovers a timed-out preparation before retrying and ignores its late sync", async () => {
+  let finishFirstSync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
+  let finishRetrySync!: (location: {
+    path: string;
+    identity: string;
+    moved: boolean;
+  }) => void;
+  let buildCount = 0;
+  let syncCount = 0;
+  const projectLocationSyncs = new Map<
+    string,
+    Promise<{
+      path: string;
+      identity: string;
+      moved: boolean;
+    }>
+  >();
+  const startSync = vi.fn(() => {
+    syncCount += 1;
+    return new Promise<{
+      path: string;
+      identity: string;
+      moved: boolean;
+    }>((resolve) => {
+      if (syncCount === 1) finishFirstSync = resolve;
+      else finishRetrySync = resolve;
+    });
+  });
+  const submitted: string[] = [];
+  host.buildPlan = vi.fn((_session, _block, _target, signal) => {
+    buildCount += 1;
+    return submitAfterProjectSync({
+      cwd: "/tmp",
+      sync: getOrStartProjectLocationSync(
+        projectLocationSyncs,
+        "/tmp",
+        startSync,
+        signal,
+      ),
+      applyLocationChange: vi.fn(async () => {}),
+      submit: () => {
+        submitted.push(buildCount === 1 ? "original" : "retry");
+        return true;
+      },
+      onError: vi.fn(),
+      signal,
+    });
+  });
+  requests = [
+    {
+      id: 21,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  const flush = async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  };
+  await act(async () => {
+    root.render(createElement(Harness, { sessions }));
+    await flush();
+  });
+  expect(host.buildPlan).toHaveBeenCalledTimes(1);
+  expect(submitted).toEqual([]);
+
+  await act(async () => {
+    cancelBuild({ payload: 21 });
+    await flush();
+  });
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 21,
+    error: expect.stringContaining("Build was canceled"),
+  });
+
+  requests = [
+    {
+      id: 22,
+      monoId: "first",
+      action: { kind: "buildPlan", blockId: "plan" },
+    },
+  ];
+  await act(async () => {
+    requestBuilds();
+    await flush();
+  });
+  expect(submitted).toEqual([]);
+  expect(startSync).toHaveBeenCalledTimes(2);
+  const retrySync = projectLocationSyncs.get("/tmp");
+  expect(retrySync).toBeDefined();
+
+  finishFirstSync({ path: "/tmp", identity: "repo", moved: false });
+  await act(async () => flush());
+  expect(submitted).toEqual([]);
+  expect(projectLocationSyncs.get("/tmp")).toBe(retrySync);
+
+  finishRetrySync({ path: "/tmp", identity: "repo", moved: false });
+  await act(async () => flush());
+  expect(submitted).toEqual(["retry"]);
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_reply", {
+    id: 22,
+    error: null,
+  });
+  expect(host.buildPlan).toHaveBeenCalledTimes(2);
 });
 
 it("resyncs the roster with each Mono's status for the rail", async () => {

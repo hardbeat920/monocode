@@ -24,7 +24,10 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
  * Mounted blocks hold their tokens in component state, so eviction only means
  * a remounted block briefly shows plain text while it is highlighted again.
  */
-const DEFAULT_THEMES: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
+const DEFAULT_THEMES: [ThemeInput, ThemeInput] = [
+  "github-light",
+  "github-dark",
+];
 const MAX_ENTRIES = 100;
 const MAX_CACHED_CHARS = 500_000;
 
@@ -130,7 +133,10 @@ export function createBoundedCodePlugin(
       pending.set(key, new Set(callback ? [callback] : []));
       void highlighterFor(pair)
         .then(async (highlighter) => {
-          if (supported.has(lang) && !highlighter.getLoadedLanguages().includes(lang)) {
+          if (
+            supported.has(lang) &&
+            !highlighter.getLoadedLanguages().includes(lang)
+          ) {
             await highlighter.loadLanguage(lang as BundledLanguage);
           }
           const usable = highlighter.getLoadedLanguages().includes(lang)

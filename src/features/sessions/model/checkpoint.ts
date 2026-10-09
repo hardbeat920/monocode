@@ -202,7 +202,8 @@ export function forgetSessionCheckpoint(sessionId: string): Promise<void> {
   return enqueueCheckpoint(sessionId, () =>
     invoke<void>("session_checkpoint_forget", { sessionId }),
   ).then(() => {
-    if (activeTurns.get(sessionId)?.id === activeId) activeTurns.delete(sessionId);
+    if (activeTurns.get(sessionId)?.id === activeId)
+      activeTurns.delete(sessionId);
   });
 }
 

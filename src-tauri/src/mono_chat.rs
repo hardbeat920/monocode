@@ -24,6 +24,8 @@ const TRAY: &str = "mono-menu-bar";
 const SELECT: &str = "mono-chat:";
 const CHANGED: &str = "mono_chat_changed";
 const REQUEST: &str = "mono_chat_request";
+const CANCEL_BUILD: &str = "mono_chat_cancel_build";
+const BUILD_PENDING: &str = "Build is still pending; its outcome is unknown.";
 /// A 464pt conversation plus the 56pt Mono rail beside it.
 const WIDTH: f64 = 520.0;
 
@@ -68,7 +70,15 @@ struct Pending {
     owner: String,
     request: Request,
     reply: Option<mpsc::Sender<Result<(), String>>>,
+    completed: Option<Result<(), String>>,
     accepted: bool,
+}
+
+enum Timeout {
+    Accepted,
+    BuildPending,
+    Completed(Result<(), String>),
+    Unaccepted,
 }
 
 #[derive(Default)]
@@ -114,7 +124,9 @@ impl Inner {
             return false;
         };
         view.session = Some(session);
-        view.error = None;
+        if view.error.as_deref() != Some(BUILD_PENDING) {
+            view.error = None;
+        }
         true
     }
 
@@ -135,6 +147,7 @@ impl Inner {
                 action,
             },
             reply,
+            completed: None,
             accepted: false,
         });
         id
@@ -155,16 +168,83 @@ impl Inner {
         true
     }
 
+    fn has_pending_build(&self, mono_id: &str, block_id: &str) -> bool {
+        self.pending.iter().any(|pending| {
+            pending.request.mono_id == mono_id
+                && pending.request.action.get("kind").and_then(Value::as_str)
+                    == Some("buildPlan")
+                && pending
+                    .request
+                    .action
+                    .get("blockId")
+                    .and_then(Value::as_str)
+                    == Some(block_id)
+        })
+    }
+
+    fn timeout(&mut self, id: u32) -> Timeout {
+        let Some(index) = self.pending.iter().position(|p| p.request.id == id) else {
+            return Timeout::Unaccepted;
+        };
+        if let Some(result) = self.pending[index].completed.take() {
+            self.pending.remove(index);
+            return Timeout::Completed(result);
+        }
+        let build = self.pending[index]
+            .request
+            .action
+            .get("kind")
+            .and_then(Value::as_str)
+            == Some("buildPlan");
+        if self.pending[index].accepted && build {
+            // Keep the plan reserved until its owner reports the actual outcome.
+            self.pending[index].reply.take();
+            Timeout::BuildPending
+        } else if self.pending[index].accepted {
+            self.pending.remove(index);
+            Timeout::Accepted
+        } else {
+            self.pending.remove(index);
+            Timeout::Unaccepted
+        }
+    }
+
     fn finish(&mut self, id: u32, owner: &str, result: Result<(), String>) {
         if let Some(index) = self
             .pending
             .iter()
             .position(|p| p.request.id == id && p.owner == owner)
         {
-            if let Some(reply) = self.pending.remove(index).and_then(|p| p.reply) {
-                let _ = reply.send(result);
+            if self.pending[index].completed.is_some() {
+                return;
             }
+            if self.pending[index]
+                .request
+                .action
+                .get("kind")
+                .and_then(Value::as_str)
+                == Some("buildPlan")
+            {
+                if let Some(reply) = self.pending[index].reply.take() {
+                    self.pending[index].completed = Some(result.clone());
+                    let _ = reply.send(result);
+                } else {
+                    self.pending.remove(index);
+                }
+                return;
+            }
+            if let Some(reply) = self.pending[index].reply.take() {
+                if let Err(result) = reply.send(result) {
+                    self.pending[index].completed = Some(result.0);
+                    return;
+                }
+            }
+            self.pending.remove(index);
         }
+    }
+
+    fn acknowledge(&mut self, id: u32) {
+        self.pending.retain(|pending| pending.request.id != id);
     }
 }
 
@@ -202,6 +282,14 @@ fn menu_bar_hidden_marker(app: &AppHandle) -> Option<std::path::PathBuf> {
         .app_data_dir()
         .ok()
         .map(|dir| dir.join("menu-bar-icon-hidden"))
+}
+
+fn reply_reveals_workspace(success: bool, kind: Option<&str>) -> bool {
+    success
+        && matches!(
+            kind,
+            Some("reveal" | "openFile" | "openArtifact" | "openPlan")
+        )
 }
 
 /// Show or hide the menu bar icon, remembering the choice for next launch.
@@ -791,11 +879,10 @@ pub fn mono_chat_reply(
         if opening {
             inner.view(&request.mono_id).error = result.as_ref().err().cloned();
         }
-        let reveal = result.is_ok()
-            && matches!(
-                request.action.get("kind").and_then(Value::as_str),
-                Some("reveal" | "openFile" | "openArtifact")
-            );
+        let reveal = reply_reveals_workspace(
+            result.is_ok(),
+            request.action.get("kind").and_then(Value::as_str),
+        );
         inner.finish(id, window.label(), result);
         (request.mono_id, reveal)
     };
@@ -825,9 +912,13 @@ pub async fn mono_chat_action(
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let is_build = kind == "buildPlan";
     if !matches!(
         kind,
         "submit"
+            | "planMode"
+            | "openPlan"
+            | "buildPlan"
             | "create"
             | "stop"
             | "approval"
@@ -847,6 +938,16 @@ pub async fn mono_chat_action(
     let (id, owner) = {
         let state = app.state::<MonoChatState>();
         let mut inner = state.0.lock().unwrap();
+        if is_build
+            && action
+                .get("blockId")
+                .and_then(Value::as_str)
+                .is_some_and(|block_id| inner.has_pending_build(&mono_id, block_id))
+        {
+            return Err(format!(
+                "{BUILD_PENDING} Check the Mono conversation before trying again."
+            ));
+        }
         let owner = inner
             .owners
             .get(&mono_id)
@@ -862,21 +963,34 @@ pub async fn mono_chat_action(
     .await
     .map_err(|e| e.to_string())?;
     match result {
-        Ok(reply) => reply,
+        Ok(reply) => {
+            if is_build {
+                app.state::<MonoChatState>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .acknowledge(id);
+            }
+            reply
+        }
         Err(_) => {
             let state = app.state::<MonoChatState>();
             let mut inner = state.0.lock().unwrap();
-            let accepted = inner
-                .pending
-                .iter()
-                .find(|p| p.request.id == id)
-                .is_some_and(|p| p.accepted);
-            inner.pending.retain(|p| p.request.id != id);
-            // Once accepted, retrying could send the same message twice.
-            if accepted {
-                Ok(())
-            } else {
-                Err("The Mono did not respond. Your message is still in the composer.".into())
+            match inner.timeout(id) {
+                Timeout::Accepted => Ok(()),
+                Timeout::Completed(result) => result,
+                Timeout::BuildPending => {
+                    inner.view(&mono_id).error = Some(BUILD_PENDING.into());
+                    drop(inner);
+                    let _ = app.emit_to(EventTarget::webview_window(&owner), CANCEL_BUILD, id);
+                    changed(&app, &mono_id);
+                    Err(format!(
+                        "{BUILD_PENDING} Check the Mono conversation before trying again."
+                    ))
+                }
+                Timeout::Unaccepted => {
+                    Err("The Mono did not respond. Your message is still in the composer.".into())
+                }
             }
         }
     }
@@ -1011,5 +1125,97 @@ mod tests {
         );
         inner.pending.retain(|p| p.request.id != id);
         assert!(!inner.accept(id, "main"));
+    }
+
+    #[test]
+    fn a_timed_out_build_stays_reserved_until_owner_confirms_cancellation() {
+        let mut inner = Inner::default();
+        let (sender, receiver) = mpsc::channel();
+        let id = inner.enqueue(
+            "main".into(),
+            "mono".into(),
+            json!({"kind": "buildPlan", "blockId": "plan"}),
+            Some(sender),
+        );
+        assert!(inner.accept(id, "main"));
+
+        assert!(matches!(inner.timeout(id), Timeout::BuildPending));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(inner.has_pending_build("mono", "plan"));
+        assert!(!inner.accept(id, "main"));
+
+        inner.finish(id, "main", Err("This Build was canceled before start.".into()));
+        assert!(!inner.has_pending_build("mono", "plan"));
+    }
+
+    #[test]
+    fn a_finished_timed_out_build_allows_a_new_attempt() {
+        for outcome in [Ok(()), Err("Build rejected".into())] {
+            let mut inner = Inner::default();
+            let id = inner.enqueue(
+                "main".into(),
+                "mono".into(),
+                json!({"kind": "buildPlan", "blockId": "plan"}),
+                None,
+            );
+            assert!(inner.accept(id, "main"));
+            assert!(matches!(inner.timeout(id), Timeout::BuildPending));
+            inner.finish(id, "main", outcome);
+            assert!(!inner.has_pending_build("mono", "plan"));
+        }
+    }
+
+    #[test]
+    fn a_build_result_racing_the_timeout_is_not_lost() {
+        for expected in [Ok(()), Err("Build rejected".into())] {
+            let mut inner = Inner::default();
+            let (sender, receiver) = mpsc::channel();
+            let id = inner.enqueue(
+                "main".into(),
+                "mono".into(),
+                json!({"kind": "buildPlan", "blockId": "plan"}),
+                Some(sender),
+            );
+            assert!(inner.accept(id, "main"));
+            drop(receiver);
+            inner.finish(id, "main", expected.clone());
+
+            match inner.timeout(id) {
+                Timeout::Completed(actual) => assert_eq!(actual, expected),
+                _ => panic!("the completed Build outcome was not returned"),
+            }
+            assert!(!inner.has_pending_build("mono", "plan"));
+        }
+    }
+
+    #[test]
+    fn a_build_reply_stays_reserved_until_the_native_action_receives_it() {
+        let mut inner = Inner::default();
+        let (sender, receiver) = mpsc::channel();
+        let id = inner.enqueue(
+            "main".into(),
+            "mono".into(),
+            json!({"kind": "buildPlan", "blockId": "plan"}),
+            Some(sender),
+        );
+        assert!(inner.accept(id, "main"));
+
+        inner.finish(id, "main", Ok(()));
+        assert!(inner.has_pending_build("mono", "plan"));
+        assert!(receiver.recv().unwrap().is_ok());
+        inner.acknowledge(id);
+        assert!(!inner.has_pending_build("mono", "plan"));
+    }
+
+    #[test]
+    fn opening_a_plan_reveals_the_workspace() {
+        assert!(reply_reveals_workspace(true, Some("openPlan")));
+        assert!(!reply_reveals_workspace(false, Some("openPlan")));
+        assert!(!reply_reveals_workspace(true, Some("planMode")));
+        assert!(!reply_reveals_workspace(true, Some("unknown")));
+        assert!(!reply_reveals_workspace(true, None));
     }
 }

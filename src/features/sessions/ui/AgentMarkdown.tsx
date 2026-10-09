@@ -26,7 +26,10 @@ import {
   type Components,
 } from "streamdown";
 import type { PluggableList } from "unified";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { boundedCode } from "../../files/editor/codeHighlightPlugin";
@@ -43,7 +46,10 @@ import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
-import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import {
+  INBOX_MEDIA_PREFIXES,
+  isInboxMediaUrl,
+} from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
@@ -222,7 +228,9 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
 const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
 
 function highlightLanguageFor(language: string): string {
-  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase())
+    ? "js"
+    : language;
 }
 
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };

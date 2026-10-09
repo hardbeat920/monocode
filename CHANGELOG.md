@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Monos have a persistent **Plan mode** switch in Details and floating chat. Turns use the selected harness's read-only planning mode; the Mono app CLI and delegation stay read-only until Plan mode is turned off or a plan is built.
+
 ### Fixed
 
 - Markdown table columns keep a readable minimum width and top-aligned content; narrow panes scroll horizontally instead of squeezing file names into stacked text.
