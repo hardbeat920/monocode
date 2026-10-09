@@ -1,4 +1,6 @@
 import type { MonoGoal } from "./mono";
+import { monoSpawnedSessions } from "./monoSpawnedSessions";
+import type { Block } from "../../sessions/model/session";
 
 export const MONO_GOAL_MAX_TURNS = 24;
 export const MONO_GOAL_MAX_STALLED_TURNS = 3;
@@ -69,6 +71,24 @@ export function recordMonoGoalTurn(
   const updated = goalTurnResult(goal, reply);
   if (updated.status === "active") schedule(continueGoal, 50);
   return updated;
+}
+
+export function hasPendingMonoGoalReports(
+  blocks: readonly Block[],
+  isBusy: (sessionId: string) => boolean,
+  hasPendingBatch: boolean,
+): boolean {
+  if (hasPendingBatch) return true;
+  let turnStart = 0;
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    if (blocks[index].role === "user") {
+      turnStart = index;
+      break;
+    }
+  }
+  return monoSpawnedSessions(blocks.slice(turnStart)).some((worker) =>
+    isBusy(worker.sessionId),
+  );
 }
 
 export function submitMonoGoal(

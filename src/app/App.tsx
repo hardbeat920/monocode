@@ -562,6 +562,7 @@ import {
   failedMonoGoalSubmission,
   goalContext,
   goalTurnPrompt,
+  hasPendingMonoGoalReports,
   isActiveMonoGoal,
   isCurrentGoalTurn,
   MonoGoalSubmissionAttempts,
@@ -6726,6 +6727,7 @@ function Workspace({
             () =>
               submitSession(sessionId, goalCommand.objective, [], {
                 ...options,
+                managed: true,
                 monoGoalId: startedGoal.id,
                 monoGoalAttempt: attempt,
               }),
@@ -6775,10 +6777,18 @@ function Workspace({
             current.usageLimit ||
             current.worktreeRemoved ||
             current.queuedMessages?.length ||
-            current.queueStatus === "paused"
+            current.queueStatus === "paused" ||
+            orchestrator.run(sessionId) ||
+            hasPendingMonoGoalReports(
+              current.blocks,
+              (workerId) =>
+                sessionsRef.current.find((entry) => entry.id === workerId)
+                  ?.busy ?? false,
+              monoCompletionBatches.current?.hasPending(sessionId) ?? false,
+            )
           ) {
             report(
-              "Resolve the current turn, question, approval, usage limit or paused queue before resuming the goal.",
+              "Resolve the current turn, delegated work, question, approval, usage limit or paused queue before resuming the goal.",
             );
             return false;
           }
@@ -8274,20 +8284,6 @@ function Workspace({
             !currentSession
           )
             return;
-          let currentTurnStart = 0;
-          for (
-            let index = currentSession.blocks.length - 1;
-            index >= 0;
-            index--
-          ) {
-            if (currentSession.blocks[index].role === "user") {
-              currentTurnStart = index;
-              break;
-            }
-          }
-          const workers = monoSpawnedSessions(
-            currentSession.blocks.slice(Math.max(0, currentTurnStart)),
-          );
           const waiting = Boolean(
             currentSession.busy ||
             currentSession.pendingQuestion ||
@@ -8298,12 +8294,12 @@ function Workspace({
             currentSession.queuedMessages?.length ||
             currentSession.queueStatus === "paused" ||
             orchestrator.run(sessionId) ||
-            monoCompletionBatches.current?.hasPending(sessionId) ||
-            workers.some(
-              (worker) =>
-                sessionsRef.current.find(
-                  (entry) => entry.id === worker.sessionId,
-                )?.busy,
+            hasPendingMonoGoalReports(
+              currentSession.blocks,
+              (workerId) =>
+                sessionsRef.current.find((entry) => entry.id === workerId)
+                  ?.busy ?? false,
+              monoCompletionBatches.current?.hasPending(sessionId) ?? false,
             ),
           );
           if (waiting) return;

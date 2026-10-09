@@ -2,10 +2,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { submitAfterProjectSync } from "../../../app/model/submissionAcceptance";
 import type { MonoGoal } from "./mono";
+import type { Block, MonoSpawnedSession } from "../../sessions/model/session";
 import {
   canContinueMonoGoal,
   consumeMonoGoalCommand,
   failedMonoGoalSubmission,
+  hasPendingMonoGoalReports,
   goalTurnResult,
   isActiveMonoGoal,
   isCurrentGoalTurn,
@@ -30,11 +32,12 @@ const goal: MonoGoal = {
 };
 
 function projectBoundAttempt(
-  state: { goal: MonoGoal; busy: boolean },
+  state: { goal: MonoGoal; busy: boolean; queued?: number },
   attempts: MonoGoalSubmissionAttempts,
   attempt: number,
   sync: Promise<{ path: string; identity: string; moved: false }>,
   failureStatus: "paused" | "cancelled",
+  managed = false,
 ) {
   return submitMonoGoal(
     () =>
@@ -43,7 +46,12 @@ function projectBoundAttempt(
         sync,
         applyLocationChange: vi.fn(),
         submit: () => {
-          if (!attempts.owns("mono", attempt) || state.busy) return false;
+          if (!attempts.owns("mono", attempt)) return false;
+          if (state.busy) {
+            if (managed) return false;
+            state.queued = (state.queued ?? 0) + 1;
+            return true;
+          }
           state.busy = true;
           return true;
         },
@@ -128,6 +136,33 @@ it("continues only the same active completed turn when no work is waiting", () =
       false,
     ),
   ).toBe(false);
+});
+
+it("blocks goal continuation while current-turn workers or their reports remain pending", () => {
+  const worker: MonoSpawnedSession = {
+    sessionId: "worker",
+    cwd: "/repo",
+    title: "Review",
+    harness: "claude",
+    model: "model",
+  };
+  const earlier: Block = {
+    id: "earlier",
+    role: "user",
+    text: "Earlier turn",
+    monoSpawnedSessions: [worker],
+  };
+  const current: Block = { id: "current", role: "user", text: "Current turn" };
+  const isBusy = vi.fn((sessionId: string) => sessionId === "worker");
+
+  expect(hasPendingMonoGoalReports([earlier, current], isBusy, false)).toBe(
+    false,
+  );
+  const currentWithWorker = { ...current, monoSpawnedSessions: [worker] };
+  expect(
+    hasPendingMonoGoalReports([earlier, currentWithWorker], isBusy, false),
+  ).toBe(true);
+  expect(hasPendingMonoGoalReports([current], isBusy, true)).toBe(true);
 });
 
 it("ignores stale completions and stops repeated or unbounded continuation", () => {
@@ -312,6 +347,32 @@ it("does not submit a project-bound goal after it was cancelled during sync", as
 
   await expect(settled).resolves.toBe(false);
   expect(submit).not.toHaveBeenCalled();
+});
+
+it("cancels a deferred initial goal if its Mono becomes busy before sync finishes", async () => {
+  const attempts = new MonoGoalSubmissionAttempts();
+  const state = { goal, busy: false, queued: 0 };
+  let finishSync!: (location: {
+    path: string;
+    identity: string;
+    moved: false;
+  }) => void;
+  const attempt = attempts.begin("mono");
+  const submission = projectBoundAttempt(
+    state,
+    attempts,
+    attempt,
+    new Promise((resolve) => {
+      finishSync = resolve;
+    }),
+    "cancelled",
+    true,
+  );
+  state.busy = true;
+  finishSync({ path: "/repo", identity: "repo", moved: false });
+
+  await expect(submission).resolves.toBe(false);
+  expect(state).toMatchObject({ queued: 0, goal: { status: "cancelled" } });
 });
 
 it.each(["two resumes", "start followed by resume"] as const)(
