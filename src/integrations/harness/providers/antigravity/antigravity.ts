@@ -80,7 +80,7 @@ const PROMPT_TIMEOUT_MS = 30 * 60_000;
 // surface a status note instead of killing the turn.
 const STALL_NOTIFY_MS = 120_000;
 
-const AUTH_HELP = "Run `agy` once in Terminal to sign in.";
+const AUTH_HELP = "Use Sign in to Antigravity in MonoCode to authenticate the ACP server. Running `agy` alone does not select the ACP authentication method.";
 
 function antigravityError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
