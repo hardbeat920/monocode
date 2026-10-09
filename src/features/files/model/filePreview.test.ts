@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatFileSize, isImagePath, sniffImageMime } from "./filePreview";
+import {
+  formatFileSize,
+  isHtmlPath,
+  isImagePath,
+  isPdfPath,
+  isSafeExternalUrl,
+  sniffImageMime,
+  sniffPdf,
+} from "./filePreview";
 
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values);
@@ -18,6 +26,65 @@ describe("isImagePath", () => {
     expect(isImagePath("/w/spec.pdf")).toBe(false);
     expect(isImagePath("/w/LICENSE")).toBe(false);
     expect(isImagePath("/w/.png/notes.txt")).toBe(false);
+  });
+});
+
+describe("isPdfPath", () => {
+  it("recognizes .pdf extensions case-insensitively", () => {
+    expect(isPdfPath("/docs/manual.pdf")).toBe(true);
+    expect(isPdfPath("/docs/MANUAL.PDF")).toBe(true);
+    expect(isPdfPath("C:\\Users\\file.Pdf")).toBe(true);
+  });
+
+  it("rejects non-pdf files", () => {
+    expect(isPdfPath("/docs/manual.html")).toBe(false);
+    expect(isPdfPath("/docs/manual.pdf.bak")).toBe(false);
+    expect(isPdfPath("/docs/pdf")).toBe(false);
+  });
+});
+
+describe("isHtmlPath", () => {
+  it("recognizes .html and .htm extensions case-insensitively", () => {
+    expect(isHtmlPath("/site/index.html")).toBe(true);
+    expect(isHtmlPath("/site/about.HTM")).toBe(true);
+    expect(isHtmlPath("preview.Html")).toBe(true);
+  });
+
+  it("rejects other files", () => {
+    expect(isHtmlPath("/site/index.xhtml")).toBe(false);
+    expect(isHtmlPath("/site/index.php")).toBe(false);
+    expect(isHtmlPath("/site/index.html.txt")).toBe(false);
+  });
+});
+
+describe("sniffPdf", () => {
+  it("identifies PDF magic header %PDF-", () => {
+    expect(sniffPdf(new TextEncoder().encode("%PDF-1.7..."))).toBe(true);
+    expect(sniffPdf(new TextEncoder().encode("%PDF-2.0"))).toBe(true);
+  });
+
+  it("rejects non-PDF bytes", () => {
+    expect(sniffPdf(new TextEncoder().encode("<!DOCTYPE html>"))).toBe(false);
+    expect(sniffPdf(new TextEncoder().encode("%PD"))).toBe(false);
+    expect(sniffPdf(new Uint8Array())).toBe(false);
+  });
+});
+
+describe("isSafeExternalUrl", () => {
+  it("accepts valid http and https URLs", () => {
+    expect(isSafeExternalUrl("https://example.com")).toBe(true);
+    expect(isSafeExternalUrl("http://localhost:3000/docs")).toBe(true);
+    expect(isSafeExternalUrl("HTTPS://EXAMPLE.COM/PATH")).toBe(true);
+  });
+
+  it("rejects dangerous or disallowed protocols and malformed URLs", () => {
+    expect(isSafeExternalUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafeExternalUrl("data:text/html,<h1>hi</h1>")).toBe(false);
+    expect(isSafeExternalUrl("file:///etc/passwd")).toBe(false);
+    expect(isSafeExternalUrl("tauri://localhost")).toBe(false);
+    expect(isSafeExternalUrl("vbscript:msgbox(1)")).toBe(false);
+    expect(isSafeExternalUrl("/relative/path")).toBe(false);
+    expect(isSafeExternalUrl("not a url")).toBe(false);
   });
 });
 

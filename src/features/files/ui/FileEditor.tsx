@@ -30,6 +30,7 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
   RotateCcw,
 } from "../../../shared/ui/icons";
 import { formatInteger } from "../../../shared/lib/numbers";
@@ -50,11 +51,14 @@ import {
   gitFileDiff,
   gitStageContents,
   notifyGitChanged,
+  openPathWithDefaultApp,
   readTextFile,
   subscribeGitChanged,
   writeTextFile,
   type GitFileDiffKind,
 } from "../../../platform/tauri/fs";
+import { isHtmlPath } from "../model/filePreview";
+import { isRemoteProjectPath } from "../../projects/model/recents";
 import { syncWatchedMtime, watchFile } from "../model/fileWatch";
 import { displayPath } from "../../../shared/lib/paths";
 import type { EditorNavigation } from "../../search/model/search";
@@ -146,6 +150,7 @@ export function FileEditor({
   } | null>(null);
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
+  const html = isHtmlPath(path);
   // Diff tabs open as source: the git gutter only renders in the editor.
   const [mode, setMode] = useMarkdownMode(
     showDiff ? `review:${path}` : path,
@@ -155,13 +160,13 @@ export function FileEditor({
   useEffect(() => {
     if (
       !navigation ||
-      (!markdown && !svg) ||
+      (!markdown && !svg && !html) ||
       sourceNavigationToken.current === navigation.token
     )
       return;
     sourceNavigationToken.current = navigation.token;
     setMode("source");
-  }, [markdown, svg, navigation, setMode]);
+  }, [markdown, svg, html, navigation, setMode]);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
   const loadGeneration = useRef(0);
@@ -442,6 +447,13 @@ export function FileEditor({
             <RotateCcw className="size-3" strokeWidth={1.75} />
             Retry
           </button>
+          {!isRemoteProjectPath(path) && !isRemoteProjectPath(cwd) ? (
+            <button type="button" onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
+              className="mx-auto mt-2 flex h-7 items-center gap-1.5 rounded-md bg-content/10 px-2.5 text-[12px] text-content hover:bg-content/15">
+              <ExternalLink className="size-3" strokeWidth={1.75} />
+              Open externally
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -458,10 +470,24 @@ export function FileEditor({
           changes. Line breaks are normalized in this view.
         </p>
       )}
-      {markdown || svg ? (
+      {markdown || svg || html ? (
         <MarkdownViewShell
           mode={mode}
           onModeChange={setMode}
+          actions={
+            html && !isRemoteProjectPath(path) && !isRemoteProjectPath(cwd) ? (
+              <button
+                type="button"
+                title="Open in external browser"
+                aria-label="Open in external browser"
+                onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
+                className="flex items-center gap-1 rounded px-2 py-0.5 font-sans text-[11px] text-content/60 hover:bg-content/10 hover:text-content"
+              >
+                <ExternalLink className="size-3" strokeWidth={1.75} />
+                Open externally
+              </button>
+            ) : null
+          }
           preview={
             markdown ? (
               <FilePreviewSearch
@@ -475,8 +501,10 @@ export function FileEditor({
                   onOpenFile={onOpenFile}
                 />
               </FilePreviewSearch>
-            ) : (
+            ) : svg ? (
               <SvgPreview source={draft} />
+            ) : (
+              <SandboxedHtmlPreview source={draft} path={path} cwd={cwd} />
             )
           }
           source={
@@ -1308,4 +1336,32 @@ function isMarkdownPath(path: string): boolean {
   const name = basename(path).toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   return [".md", ".mdx", ".markdown"].includes(extension);
+}
+
+/**
+ * Sandboxed HTML preview rendered in an iframe with `sandbox=""`.
+ * Scripts and same-origin access are disabled, isolating the document from the host app,
+ * Tauri IPC, parent DOM, or localStorage. Relative assets cannot resolve and
+ * users are provided an external browser launcher.
+ */
+export function SandboxedHtmlPreview({
+  source,
+}: {
+  source: string;
+  path: string;
+  cwd: string;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <iframe
+        title="HTML Preview"
+        sandbox=""
+        srcDoc={source}
+        className="h-full w-full flex-1 border-0 bg-white"
+      />
+      <p className="shrink-0 border-t border-stroke px-3 py-1 text-[11px] text-content/60">
+        For scripts or linked files, use Open externally.
+      </p>
+    </div>
+  );
 }

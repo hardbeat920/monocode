@@ -11,6 +11,8 @@ const IMAGE_EXTENSIONS = new Set([
   ".ico",
 ]);
 
+const HTML_EXTENSIONS = new Set([".html", ".htm"]);
+
 /**
  * Whether a path belongs to the image viewer, decided before anything is read.
  *
@@ -21,6 +23,40 @@ export function isImagePath(path: string): boolean {
   const name = basename(path).toLowerCase();
   const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   return IMAGE_EXTENSIONS.has(extension);
+}
+
+/** Whether a path is a PDF document. */
+export function isPdfPath(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  return extension === ".pdf";
+}
+
+/** Whether a path is a local HTML/HTM document. */
+export function isHtmlPath(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  return HTML_EXTENSIONS.has(extension);
+}
+
+/**
+ * Sniff PDF magic bytes: `%PDF-` (0x25, 0x50, 0x44, 0x46, 0x2d).
+ */
+export function sniffPdf(bytes: Uint8Array): boolean {
+  return startsWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]);
+}
+
+/**
+ * Only allow http: and https: protocols for outbound external links.
+ * Blocks javascript:, data:, file:, vbscript:, and relative links.
+ */
+export function isSafeExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
