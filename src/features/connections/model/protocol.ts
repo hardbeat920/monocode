@@ -15,6 +15,7 @@ export const REMOTE_PROVIDERS = [
   "fx",
   "hermes",
   "antigravity",
+  "copilot",
 ] as const;
 export type RemoteProvider = (typeof REMOTE_PROVIDERS)[number];
 export type HostDescriptor = {

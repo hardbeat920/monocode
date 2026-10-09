@@ -6,6 +6,7 @@ import * as opencode from "../src/integrations/harness/providers/opencode/openco
 import * as pi from "../src/integrations/harness/providers/pi/pi";
 import * as omp from "../src/integrations/harness/providers/omp/omp";
 import * as fx from "../src/integrations/harness/providers/fx/fx";
+import * as copilot from "../src/integrations/harness/providers/copilot/copilot";
 import * as hermes from "../src/integrations/harness/providers/hermes/hermes";
 import * as antigravity from "../src/integrations/harness/providers/antigravity/antigravity";
 import type {
@@ -129,6 +130,15 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     stop: fx.forgetFxSession,
     bind: fx.bindFxSession,
     approve: fx.respondFxApproval,
+    answer: unsupportedQuestion,
+  },
+  copilot: {
+    send: copilot.sendCopilotTurn,
+    compact: copilot.compactCopilotContext,
+    cancel: copilot.cancelCopilotTurn,
+    stop: copilot.forgetCopilotSession,
+    bind: copilot.bindCopilotSession,
+    approve: copilot.respondCopilotApproval,
     answer: unsupportedQuestion,
   },
   hermes: {

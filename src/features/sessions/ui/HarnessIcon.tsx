@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import claude from "../../../assets/providers/claude.svg";
 import codex from "../../../assets/providers/codex.svg";
+import copilot from "../../../assets/providers/copilot.svg";
 import cursor from "../../../assets/providers/cursor.svg";
 import fx from "../../../assets/providers/fx.svg";
 import grok from "../../../assets/providers/grok.svg";
@@ -14,6 +15,7 @@ import type { HarnessId } from "../model/session";
 export const HARNESS_ICONS: Record<HarnessId, string> = {
   claude,
   codex,
+  copilot,
   cursor,
   grok,
   opencode,
@@ -32,7 +34,10 @@ export const MONOCHROME_HARNESSES = new Set<HarnessId>([
   "pi",
   "fx",
   "hermes",
+  "copilot",
 ]);
+
+const MASK_ICON_HARNESSES = new Set<HarnessId>(["hermes", "copilot"]);
 
 function MonoIcon({
   className,
@@ -79,7 +84,7 @@ export function HarnessIcon({
       </MonoIcon>
     );
   }
-  if (harness === "hermes") {
+  if (MASK_ICON_HARNESSES.has(harness)) {
     return (
       <span
         aria-hidden
@@ -88,11 +93,11 @@ export function HarnessIcon({
         <span
           className="block size-[72%] bg-current"
           style={{
-            maskImage: `url(${hermes})`,
+            maskImage: `url("${HARNESS_ICONS[harness]}")`,
             maskPosition: "center",
             maskRepeat: "no-repeat",
             maskSize: "contain",
-            WebkitMaskImage: `url(${hermes})`,
+            WebkitMaskImage: `url("${HARNESS_ICONS[harness]}")`,
             WebkitMaskPosition: "center",
             WebkitMaskRepeat: "no-repeat",
             WebkitMaskSize: "contain",
