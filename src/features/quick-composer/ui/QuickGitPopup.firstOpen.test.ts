@@ -11,10 +11,16 @@ const bridge = vi.hoisted(() => ({
   request: null as QuickGitRequest | null,
   receive: (_event: { payload: QuickGitRequest }) => {},
 }));
+const nativeHost = vi.hoisted(() => ({
+  activeTextJobs: new Set<string>(),
+}));
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (command: string) =>
-    command === "quick_git_state" ? bridge.request : undefined,
-  ),
+  invoke: vi.fn(async (command: string, args?: { sessionId?: string }) => {
+    if (command === "harness_kill" && args?.sessionId) {
+      nativeHost.activeTextJobs.delete(args.sessionId);
+    }
+    return command === "quick_git_state" ? bridge.request : undefined;
+  }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (name: string, callback: typeof bridge.receive) => {
@@ -60,6 +66,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  nativeHost.activeTextJobs.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -151,4 +158,27 @@ it("clears the popup request after native completion", async () => {
     expect.objectContaining({ id: "completed-project" }),
   );
   expect(container.querySelector('[role="option"]')).toBeNull();
+});
+
+it("keeps another window's text jobs alive when the branch picker closes", async () => {
+  nativeHost.activeTextJobs.add("monocode-text");
+  nativeHost.activeTextJobs.add("monocode-codex-text");
+  bridge.request = {
+    id: "unused-branch-picker",
+    kind: "branch",
+    choice: { cwd: "/repo", mode: "current" },
+    branches: snapshot,
+    anchor: { x: 0, y: 0, width: 100, height: 24 },
+  };
+  await act(async () => root.render(createElement(QuickGitPopup, { onShown })));
+
+  const current = document.querySelector<HTMLButtonElement>(
+    '[role="option"][aria-selected="true"]',
+  )!;
+  await act(async () => current.click());
+
+  expect(container.querySelector('[role="option"]')).toBeNull();
+  expect(nativeHost.activeTextJobs).toEqual(
+    new Set(["monocode-text", "monocode-codex-text"]),
+  );
 });

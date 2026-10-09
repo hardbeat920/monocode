@@ -15,16 +15,15 @@ import { validateOrchestrationSettings } from "./orchestrationPlan";
 export async function discoverOrchestrationSettings(project?: string) {
   await probeHarnessAvailability();
   // Worker sessions obey the same global and project visibility as the picker.
-  const installed = HARNESSES.filter(
-    (id) =>
-      isHarnessAvailable(id) &&
-      isPickerProviderVisible(id) &&
-      !isProviderHidden(project, id),
-  );
+  const isEligible = (id: (typeof HARNESSES)[number]) =>
+    isHarnessAvailable(id) &&
+    isPickerProviderVisible(id) &&
+    !isProviderHidden(project, id);
+  const installed = HARNESSES.filter(isEligible);
   await refreshHarnessCatalogs(installed);
   return validateOrchestrationSettings({
     maxWorkers: 2,
-    choices: installed.filter(isHarnessAvailable).flatMap((harness) =>
+    choices: installed.filter(isEligible).flatMap((harness) =>
       modelsFor(harness).map(({ id, name }) => ({
         harness,
         model: id,

@@ -11,7 +11,6 @@ import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import {
   registerBuiltinHarnesses,
   startHarnessBridge,
-  stopHarnessTextPrompts,
 } from "../../../integrations/harness";
 import { probeHarnessAvailability } from "../../../integrations/harness/core/availability";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
@@ -36,7 +35,6 @@ export function QuickGitPopup({ onShown }: { onShown: () => void }) {
     const stopBridge = startHarnessBridge();
     void probeHarnessAvailability();
     return () => {
-      void stopHarnessTextPrompts();
       stopBridge();
     };
   }, [request]);

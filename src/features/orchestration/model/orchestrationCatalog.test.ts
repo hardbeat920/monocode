@@ -122,6 +122,59 @@ describe("automatic orchestration catalog", () => {
       true,
     );
   });
+  it.each(["global", "project"] as const)(
+    "excludes a provider hidden %s while its catalog refresh is pending",
+    async (scope) => {
+      const data = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => data.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          data.set(key, value);
+        },
+        removeItem: (key: string) => {
+          data.delete(key);
+        },
+        clear: () => data.clear(),
+      });
+      vi.mocked(isHarnessAvailable).mockImplementation(
+        (id) => id === "codex" || id === "cursor",
+      );
+      setHarnessModels("codex", [
+        { id: "codex:live", harness: "codex", name: "Live Codex" },
+      ]);
+      setHarnessModels("cursor", [
+        { id: "cursor:live", harness: "cursor", name: "Live Cursor" },
+      ]);
+      let finishRefresh!: () => void;
+      vi.mocked(refreshHarnessCatalogs).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishRefresh = resolve;
+          }),
+      );
+
+      const discovery = discoverOrchestrationSettings("/repo");
+      await vi.waitFor(() =>
+        expect(refreshHarnessCatalogs).toHaveBeenCalledWith([
+          "codex",
+          "cursor",
+        ]),
+      );
+      if (scope === "global") savePickerProviderVisible("cursor", false);
+      else setProjectProviderHidden("/repo", "cursor", true);
+      finishRefresh();
+
+      const settings = await discovery;
+      expect(settings.choices).toContainEqual({
+        harness: "codex",
+        model: "codex:live",
+        name: "Live Codex",
+      });
+      expect(
+        settings.choices.some((choice) => choice.harness === "cursor"),
+      ).toBe(false);
+    },
+  );
   it("fails planning clearly when no harness is available", async () => {
     vi.mocked(isHarnessAvailable).mockReturnValue(false);
     await expect(discoverOrchestrationSettings()).rejects.toThrow(
