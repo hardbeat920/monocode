@@ -45,6 +45,8 @@ export type Mono = {
   showStartedSessionsInSidebar?: boolean;
   /** Keep turns in the Mono's conversation in read-only plan mode. */
   planMode?: boolean;
+  /** Files the sessions it starts into a sidebar folder named after it. */
+  useSidebarFolders?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
   instructions?: string;
   /**
@@ -173,6 +175,7 @@ function parseMono(value: unknown): Mono | undefined {
     ...(typeof entry.planMode === "boolean"
       ? { planMode: entry.planMode }
       : {}),
+    ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
   };

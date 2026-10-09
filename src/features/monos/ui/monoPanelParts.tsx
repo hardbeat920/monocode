@@ -17,6 +17,7 @@ import { normalizeHex } from "../../../shared/lib/colorUtils";
 import { Popover } from "../../../shared/ui/Popover";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { MarkdownSourceEditor } from "../../sessions/ui/MarkdownSourceEditor";
+import { playCue } from "../../settings/model/sounds";
 import {
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
@@ -91,6 +92,56 @@ export function Property({
       <dd className="flex min-h-7 min-w-0 items-center text-content/85">
         {children}
       </dd>
+    </div>
+  );
+}
+
+/** A setting that is on or off: its name and what it does, then a switch. */
+export function SwitchRow({
+  label,
+  description,
+  on,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  /** Clamped to one line under the label; the full text is its tooltip. */
+  description: string;
+  on: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      title={description}
+      className={`flex items-center gap-3 px-3 py-2 ${disabled ? "opacity-40" : ""}`}
+    >
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-[13px] leading-5 text-content/90">{label}</span>
+        <span className="line-clamp-1 text-[12px] leading-5 text-content/40">
+          {description}
+        </span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-label={label}
+        aria-checked={on}
+        disabled={disabled}
+        onClick={() => {
+          onChange(!on);
+          playCue("switch");
+        }}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed ${
+          on ? "bg-accent" : "bg-content/20"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 size-4 rounded-full bg-white transition-[left] ${
+            on ? "left-4.5" : "left-0.5"
+          }`}
+        />
+      </button>
     </div>
   );
 }
