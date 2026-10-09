@@ -233,7 +233,15 @@ pub fn run() {
     macos::register_spellcheck_default();
     #[cfg(windows)]
     windows::initialize().expect("Failed to initialize Windows process safety");
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Closing to the tray leaves the process running without a taskbar entry,
+    // so a second launch must reopen it instead of starting another instance.
+    // Registered first so the duplicate exits before any setup runs.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        let _ = window::show_hidden_or_open_new(app);
+    }));
+    let app = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
