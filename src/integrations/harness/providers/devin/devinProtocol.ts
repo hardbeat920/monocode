@@ -814,6 +814,8 @@ export function devinCommandsFromUpdate(params: unknown): NativeCommand[] | null
 }
 
 export function devinAgentMessageText(params: unknown): string {
+  // A subagent's reply is its own, never part of the answer being collected.
+  if (asRecord(updateOf(params)?._meta)?.["cognition.ai/subagent_context"]) return "";
   return devinEventsFromUpdate(params)
     .map((event) => (event.type === "message.delta" ? event.text : ""))
     .join("");

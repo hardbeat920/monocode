@@ -1,6 +1,7 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpSubagents } from "../../core/acpSubagents";
+import { DevinSubagents } from "./devinSubagents";
 import {
   killChild,
   resolveDevinBinary,
@@ -56,6 +57,7 @@ import {
 type Live = {
   threadId: string;
   subagents: AcpSubagents;
+  devinSubagents: DevinSubagents;
   rpc: JsonRpcClient;
   acpSessionId: string;
   cwd: string;
@@ -102,6 +104,9 @@ export const DEVIN_CLIENT_CAPABILITIES = {
   fs: { readTextFile: false, writeTextFile: false },
   terminal: false,
   session: { configOptions: { boolean: {} } },
+  // Streams each subagent's own thoughts and replies, tagged with its agent
+  // id, so they land on its row instead of only its tool calls.
+  _meta: { "cognition.ai/subagentSupport": true },
 };
 
 const liveByThread = new Map<string, Live>();
@@ -461,6 +466,7 @@ async function startLive(input: HarnessSessionInput, startup: Startup): Promise<
     const live: Live = {
       threadId: input.sessionId,
       subagents: new AcpSubagents(),
+      devinSubagents: new DevinSubagents(),
       rpc,
       acpSessionId,
       cwd: input.cwd,
@@ -669,7 +675,8 @@ function handleUpdate(
     });
   }
   if (muted || live.muteUpdates) return;
-  for (const event of live.subagents.route(params, devinEventsFromUpdate(params))) {
+  const routed = live.devinSubagents.translate(params, devinEventsFromUpdate(params));
+  for (const event of live.subagents.route(routed.params, routed.events)) {
     live.onEvent(event);
   }
 }
