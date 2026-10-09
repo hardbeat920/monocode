@@ -8726,12 +8726,7 @@ function Workspace({
         approvedPlanBuild: true,
         abortSignal: signal,
       });
-      const finish = (didAccept: boolean) => {
-        if (mono) finishMonoPlanBuild(mono.id, planModeRevision, didAccept);
-        return didAccept;
-      };
-      if (typeof accepted === "boolean") return finish(accepted);
-      return accepted.then(finish, () => false);
+      return finishMonoPlanBuild(mono?.id, planModeRevision, accepted);
     },
     [submitSession],
   );
