@@ -755,6 +755,7 @@ import {
   collectWorkspaceSnapshot,
   workspaceSnapshotKey,
 } from "../features/workspace/model/workspaceSnapshot";
+import { subscribeCliSessionsImported } from "../features/sessions/model/cliImport";
 import type { InstalledUpdate } from "./model/updateNotice";
 import {
   bindResumedSessions,
@@ -2258,6 +2259,15 @@ function Workspace({
   useEffect(() => {
     void refreshHistory(sidebarCwd);
   }, [sidebarCwd, refreshHistory]);
+
+  useEffect(
+    () =>
+      subscribeCliSessionsImported((cwd) => {
+        if (sameProjectPath(cwd, sidebarCwdRef.current))
+          void refreshHistory(sidebarCwdRef.current);
+      }),
+    [refreshHistory],
+  );
 
   useEffect(() => {
     if (!inboxViewOpen) return;

@@ -6,6 +6,7 @@ mod automations;
 mod azure_devops;
 mod chat_background;
 mod checkpoint;
+mod cli_sessions;
 mod codex_mono_store;
 mod control;
 pub mod control_cli;
@@ -469,6 +470,9 @@ pub fn run() {
             pty::pty_kill_all,
             session_store::session_upsert,
             session_store::session_list_by_project,
+            session_store::cli_sessions_list,
+            session_store::cli_session_read,
+            session_store::session_import,
             session_store::session_rebase_project,
             session_store::session_list_linked,
             session_store::session_search,

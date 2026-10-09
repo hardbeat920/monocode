@@ -9,6 +9,7 @@ import {
   Pin,
   PinOff,
   Settings,
+  Terminal,
   Trash2,
 } from "../../shared/ui/icons";
 import {
@@ -57,6 +58,7 @@ import {
 import { useTabGroupLogos } from "../../features/projects/hooks/useTabGroupLogos";
 import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { RemoveProjectDialog } from "../../features/projects/ui/RemoveProjectDialog";
+import { ImportCliSessionsDialog } from "../../features/sessions/ui/ImportCliSessionsDialog";
 import {
   TabGroupMenu,
   type TabGroupMenuExtraItem,
@@ -125,6 +127,11 @@ function projectMenuExtraItems(
       ? { id: "unpin", label: "Unpin project", icon: PinOff }
       : { id: "pin", label: "Pin project", icon: Pin },
     { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+    {
+      id: "import-cli-sessions",
+      label: "Import terminal sessions…",
+      icon: Terminal,
+    },
     {
       id: "external-editor",
       label: "Open in editor",
@@ -215,6 +222,10 @@ export function useProjectMenu({
   } | null>(null);
   const [backgroundProject, setBackgroundProject] = useState<{
     project: string;
+    name: string;
+  } | null>(null);
+  const [importingProject, setImportingProject] = useState<{
+    path: string;
     name: string;
   } | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
@@ -318,6 +329,7 @@ export function useProjectMenu({
     close();
     setRemoving(null);
     setBackgroundProject(null);
+    setImportingProject(null);
   };
 
   const groupLabels = projectMenu ? loadTabGroupLabels() : {};
@@ -378,6 +390,12 @@ export function useProjectMenu({
         name: resolveTabGroupLabel(key, groupLabels, basename(path)),
       });
     } else if (action === "reveal") void revealPath(path);
+    else if (action === "import-cli-sessions") {
+      setImportingProject({
+        path,
+        name: resolveTabGroupLabel(key, groupLabels, basename(path)),
+      });
+    }
     else if (action === "archive") {
       onRemoveProject?.(path, { purgeData: false });
     } else if (action === "delete") {
@@ -574,6 +592,16 @@ export function useProjectMenu({
           }}
         />
       ) : null}
+      {importingProject ? (
+        <ImportCliSessionsDialog
+          cwd={importingProject.path}
+          name={importingProject.name}
+          onClose={() => {
+            setImportingProject(null);
+            restoreFocus();
+          }}
+        />
+      ) : null}
       {backgroundProject ? (
         <ProjectBackgroundDialog
           project={backgroundProject.project}
@@ -600,7 +628,8 @@ export function useProjectMenu({
       groupMenu != null ||
       notificationMenu != null ||
       removing != null ||
-      backgroundProject != null,
+      backgroundProject != null ||
+      importingProject != null,
     element,
   };
 }

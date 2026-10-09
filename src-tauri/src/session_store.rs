@@ -218,6 +218,13 @@ pub fn session_upsert(
     store: State<'_, SessionStore>,
     session: SessionUpsert,
 ) -> Result<SessionSummary, String> {
+    validate_upsert(&session)?;
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    let summary = upsert_session(&conn, &session).map_err(|e| e.to_string())?;
+    Ok(summary)
+}
+
+fn validate_upsert(session: &SessionUpsert) -> Result<(), String> {
     validate_id(&session.id, "session")?;
     if session.cwd.trim().is_empty() {
         return Err("cwd is required".into());
@@ -243,10 +250,105 @@ pub fn session_upsert(
     if !session.blocks.is_array() {
         return Err("blocks must be an array".into());
     }
+    Ok(())
+}
 
+/// Sessions the provider CLIs recorded for `cwd` that MonoCode does not
+/// already have a row for.
+#[tauri::command(async)]
+pub fn cli_sessions_list(
+    store: State<'_, SessionStore>,
+    cwd: String,
+) -> Result<Vec<crate::cli_sessions::CliSession>, String> {
+    if cwd.trim().is_empty() {
+        return Err("cwd is required".into());
+    }
+    let mut sessions = crate::cli_sessions::list_sessions(&cli_roots(), &cwd);
+    let known = {
+        let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+        provider_session_keys(&conn).map_err(|e| e.to_string())?
+    };
+    sessions.retain(|session| {
+        !known.contains(&(session.harness.clone(), session.provider_session_id.clone()))
+    });
+    Ok(sessions)
+}
+
+#[tauri::command(async)]
+pub fn cli_session_read(
+    harness: String,
+    path: String,
+) -> Result<Vec<crate::cli_sessions::Entry>, String> {
+    crate::cli_sessions::read_session(&cli_roots(), &harness, &PathBuf::from(path))
+}
+
+/// Save a session imported from a CLI with the CLI's own timestamps, so it
+/// sorts by when the conversation happened rather than when it was imported.
+/// Returns `None` when a row for the same provider session already exists.
+#[tauri::command(async)]
+pub fn session_import(
+    store: State<'_, SessionStore>,
+    session: SessionUpsert,
+    created_at: i64,
+    updated_at: i64,
+) -> Result<Option<SessionSummary>, String> {
+    validate_upsert(&session)?;
+    let provider_session_id = session
+        .provider_session_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("An imported session needs its provider session id")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    let summary = upsert_session(&conn, &session).map_err(|e| e.to_string())?;
-    Ok(summary)
+    import_session(&conn, &session, provider_session_id, created_at, updated_at)
+        .map_err(|e| e.to_string())
+}
+
+fn import_session(
+    conn: &Connection,
+    session: &SessionUpsert,
+    provider_session_id: &str,
+    created_at: i64,
+    updated_at: i64,
+) -> rusqlite::Result<Option<SessionSummary>> {
+    // One transaction: a row left with import-time timestamps would hide
+    // the session from the next listing without a way to import it again.
+    // The existence check runs inside it so the check and insert agree.
+    let tx = conn.unchecked_transaction()?;
+    let exists: Option<String> = tx
+        .query_row(
+            "SELECT id FROM sessions WHERE harness = ?1 AND provider_session_id = ?2 LIMIT 1",
+            params![session.harness, provider_session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_some() {
+        return Ok(None);
+    }
+    let mut summary = upsert_session(&tx, session)?;
+    tx.execute(
+        "UPDATE sessions SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
+        params![session.id, created_at, updated_at],
+    )?;
+    tx.commit()?;
+    summary.created_at = created_at;
+    summary.updated_at = updated_at;
+    Ok(Some(summary))
+}
+
+fn provider_session_keys(
+    conn: &Connection,
+) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {
+    let mut statement = conn.prepare(
+        "SELECT harness, provider_session_id FROM sessions
+         WHERE provider_session_id IS NOT NULL AND provider_session_id != ''",
+    )?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect()
+}
+
+fn cli_roots() -> crate::cli_sessions::Roots {
+    let home = crate::dirs_home().map(PathBuf::from);
+    crate::cli_sessions::Roots::from_env(home.as_deref())
 }
 
 fn generated_image_paths(blocks: &Value) -> Vec<String> {
@@ -2186,6 +2288,30 @@ mod tests {
             linked_work_item: None,
             automation_id: None,
         }
+    }
+
+    #[test]
+    fn imported_sessions_keep_cli_timestamps_and_import_once() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut first = sample("imported", "/tmp/project", "From the terminal");
+        first.harness = "claude".into();
+        first.provider_session_id = Some("cli-session-1".into());
+        let summary = import_session(&conn, &first, "cli-session-1", 1_000, 2_000)
+            .unwrap()
+            .expect("first import saves a row");
+        assert_eq!((summary.created_at, summary.updated_at), (1_000, 2_000));
+        let rows = list_by_project(&conn, "/tmp/project").unwrap();
+        assert_eq!((rows[0].created_at, rows[0].updated_at), (1_000, 2_000));
+
+        let mut again = first.clone();
+        again.id = "imported-again".into();
+        assert!(import_session(&conn, &again, "cli-session-1", 1_000, 2_000)
+            .unwrap()
+            .is_none());
+        assert!(provider_session_keys(&conn)
+            .unwrap()
+            .contains(&("claude".to_owned(), "cli-session-1".to_owned())));
     }
 
     #[test]
