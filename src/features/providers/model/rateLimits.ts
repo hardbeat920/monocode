@@ -30,7 +30,32 @@ export type RateLimitResetCredits = {
   credits: RateLimitResetCredit[] | null;
 };
 
+/** Complete provider windows; the three legacy slots remain the footer view. */
+export type QuotaWindow = {
+  id: string;
+  scope: string;
+  usedPercent: number;
+  windowMinutes: number | null;
+  resetsAt: number | null;
+};
+
 export type ProviderRateLimits = {
+  windows?: QuotaWindow[];
+  extraUsage?: {
+    enabled: boolean | null;
+    monthlyLimit: number | null;
+    usedCredits: number | null;
+    usedPercent: number | null;
+    currency: string | null;
+  } | null;
+  credits?: {
+    scope: string;
+    hasCredits: boolean | null;
+    unlimited: boolean | null;
+    balance: number | null;
+  }[];
+  /** Last successful snapshot time, distinct from a failed attempt's updatedAt. */
+  fetchedAt?: number | null;
   provider: RateLimitProvider;
   session: RateLimitWindow | null;
   weekly: RateLimitWindow | null;
@@ -50,6 +75,7 @@ export const RATE_LIMIT_MIN_REFETCH_MS = 5 * 60_000;
 
 const WINDOW_DURATION_TOLERANCE_MINUTES = 1;
 
+/** Represent usage that has not been fetched, with no quota data or fetch timestamp. */
 export function idleRateLimits(
   provider: RateLimitProvider,
 ): ProviderRateLimits {
@@ -65,6 +91,7 @@ export function idleRateLimits(
   };
 }
 
+/** Mark a snapshot as fetching while retaining prior quota data and its timestamp. */
 export function fetchingRateLimits(
   provider: RateLimitProvider,
   previous?: ProviderRateLimits | null,
@@ -74,7 +101,10 @@ export function fetchingRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.windows?.length ||
+      previous.extraUsage ||
+      previous.credits?.length)
   ) {
     return { ...previous, status: "fetching" };
   }
@@ -90,6 +120,10 @@ export function fetchingRateLimits(
   };
 }
 
+/**
+ * Record an unavailable result with no quota data and the current attempt time.
+ * Retaining an older snapshot, when appropriate, is the shared cache's responsibility.
+ */
 export function unavailableRateLimits(
   provider: RateLimitProvider,
   error: string,
@@ -106,6 +140,10 @@ export function unavailableRateLimits(
   };
 }
 
+/**
+ * Record a failed attempt at the current time, retaining any previous quotas.
+ * The error text is internal provider detail; callers must sanitize external output.
+ */
 export function errorRateLimits(
   provider: RateLimitProvider,
   error: string,
@@ -116,7 +154,10 @@ export function errorRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.windows?.length ||
+      previous.extraUsage ||
+      previous.credits?.length)
   ) {
     return {
       ...previous,
@@ -275,6 +316,10 @@ function usedPercentFrom(rec: Record<string, unknown>): number | null {
   return value;
 }
 
+/**
+ * Project Claude OAuth JSON into known account/model windows and native extra usage.
+ * Invalid JSON or a non-object returns an error snapshot; absent fields stay unknown.
+ */
 export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   let parsed: unknown;
   try {
@@ -286,7 +331,51 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   if (!rec) {
     return errorRateLimits("claude", "Claude usage response was empty");
   }
+  const windows: QuotaWindow[] = [];
+  for (const [id, scope, minutes] of [
+    ["five_hour", "account", SESSION_WINDOW_MINUTES],
+    ["seven_day", "account", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_opus", "opus", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_sonnet", "sonnet", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_oauth_apps", "oauth_apps", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_cowork", "cowork", WEEKLY_WINDOW_MINUTES],
+    ["seven_day_overage_included", "overage_included", WEEKLY_WINDOW_MINUTES],
+  ] as const) {
+    const window = mapUsageWindow(rec[id], minutes);
+    if (window) windows.push({ id, scope, ...window });
+  }
+  // Newer Claude responses put per-model weekly buckets in limits[]. Keep
+  // only the known usage fields and the model label, never the raw scope.
+  if (Array.isArray(rec.limits)) {
+    for (const raw of rec.limits) {
+      const limit = asRecord(raw);
+      const model = asRecord(asRecord(limit?.scope)?.model);
+      const scope = model && stringField(model, "display_name");
+      if (limit?.kind !== "weekly_scoped" || !scope) continue;
+      const window = mapUsageWindow(
+        { utilization: limit.percent, resets_at: limit.resets_at },
+        WEEKLY_WINDOW_MINUTES,
+      );
+      if (window) windows.push({ id: "weekly_scoped", scope, ...window });
+    }
+  }
+  const extra = asRecord(rec.extra_usage);
   return {
+    windows,
+    extraUsage: extra
+      ? {
+          enabled:
+            typeof extra.is_enabled === "boolean" ? extra.is_enabled : null,
+          monthlyLimit: numberField(extra, "monthly_limit"),
+          usedCredits: numberField(extra, "used_credits"),
+          usedPercent: numberField(extra, "utilization"),
+          currency:
+            typeof extra.currency === "string" &&
+            /^[A-Z]{3}$/.test(extra.currency)
+              ? extra.currency
+              : null,
+        }
+      : null,
     provider: "claude",
     session: mapUsageWindow(rec.five_hour, SESSION_WINDOW_MINUTES),
     weekly: mapUsageWindow(rec.seven_day, WEEKLY_WINDOW_MINUTES),
@@ -304,6 +393,11 @@ type CodexWindowSnapshot = {
   resetsAt: unknown;
 };
 
+/**
+ * Normalize app-server's legacy and named quota buckets without dropping model scope.
+ * Missing default-bucket windows fall back to the legacy view; unknown data stays
+ * absent, and reset timestamps do not imply that an allowance has renewed.
+ */
 export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
   const rec = asRecord(result);
   const wrapper = asRecord(rec?.rateLimits) ?? rec;
@@ -311,7 +405,50 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     primary: snapshotFrom(asRecord(wrapper?.primary)),
     secondary: snapshotFrom(asRecord(wrapper?.secondary)),
   });
+  // app-server's single bucket is a compatibility view. Keep every named
+  // bucket, including model-specific quotas and nonstandard window durations.
+  const buckets = asRecord(rec?.rateLimitsByLimitId);
+  const entries = buckets
+    ? Object.entries(buckets).filter(([, value]) => asRecord(value))
+    : [];
+  const defaultScope = stringField(wrapper ?? {}, "limitId") ?? "account";
+  if (wrapper && !entries.some(([id]) => id === defaultScope)) {
+    entries.unshift([defaultScope, wrapper]);
+  }
+  const windows: QuotaWindow[] = [];
+  const credits: NonNullable<ProviderRateLimits["credits"]> = [];
+  for (const [scope, value] of entries) {
+    const bucket = asRecord(value);
+    if (!bucket) continue;
+    for (const id of ["primary", "secondary"] as const) {
+      // A named bucket may carry only credits. Recover missing windows from
+      // the compatibility view without losing other model-scoped buckets.
+      const window =
+        snapshotFrom(asRecord(bucket[id])) ??
+        (scope === defaultScope ? snapshotFrom(asRecord(wrapper?.[id])) : null);
+      if (window)
+        windows.push({
+          id,
+          scope,
+          usedPercent: clampUsedPercent(window.usedPercent),
+          windowMinutes: window.windowDurationMins,
+          resetsAt: parseResetTimestamp(window.resetsAt),
+        });
+    }
+    const credit = asRecord(bucket.credits);
+    if (credit)
+      credits.push({
+        scope,
+        hasCredits:
+          typeof credit.hasCredits === "boolean" ? credit.hasCredits : null,
+        unlimited:
+          typeof credit.unlimited === "boolean" ? credit.unlimited : null,
+        balance: numberField(credit, "balance"),
+      });
+  }
   return {
+    windows,
+    credits,
     provider: "codex",
     session: mapCodexSnapshot(classified.session, SESSION_WINDOW_MINUTES),
     weekly: mapCodexSnapshot(classified.weekly, WEEKLY_WINDOW_MINUTES),
@@ -489,6 +626,7 @@ function classifyWindowDuration(
   return null;
 }
 
+/** Map a legacy slot, using its fallback duration only when Codex omits one. */
 function mapCodexSnapshot(
   raw: CodexWindowSnapshot | null,
   windowMinutes: number,
@@ -496,7 +634,7 @@ function mapCodexSnapshot(
   if (!raw) return null;
   return {
     usedPercent: clampUsedPercent(raw.usedPercent),
-    windowMinutes,
+    windowMinutes: raw.windowDurationMins ?? windowMinutes,
     resetsAt: parseResetTimestamp(raw.resetsAt),
   };
 }

@@ -38,6 +38,7 @@ import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import { usageSnapshot } from "./usageSnapshot";
 import {
   CARD_FIELDS,
   parseCard,
@@ -171,6 +172,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
+  ["usage.list", ["provider", "accountId", "refresh"]],
   [
     "sessions.start",
     [
@@ -939,6 +941,8 @@ export async function handleAgentApp(
     };
   }
   switch (action) {
+    case "usage.list":
+      return usageSnapshot(source, input);
     case "models.list":
       return {
         runtimeModes: RUNTIME_MODES.map((id) => ({
