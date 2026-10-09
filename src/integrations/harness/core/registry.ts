@@ -1,6 +1,7 @@
 import type {
   Block,
   HarnessId,
+  RuntimeMode,
   TaskListMeta,
   TurnIntent,
 } from "../../../features/sessions/model/session";
@@ -17,6 +18,7 @@ import type {
   ApprovalDecision,
   CompactContextInput,
   HarnessEvent,
+  HarnessSessionInput,
   RewindLastTurnInput,
   RewindLastTurnResult,
   SendTurnInput,
@@ -216,6 +218,13 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
+/** The saved mode is the user's choice; adapters get what the model supports. */
+function supportedRuntimeMode(
+  input: HarnessSessionInput & { harness: HarnessId },
+): RuntimeMode {
+  return coerceRuntimeMode(input.harness, input.model, input.runtimeMode);
+}
+
 export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
   return queueSessionOperation(input.sessionId, async () => {
     const adapter = requireHarness(input.harness);
@@ -234,12 +243,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
     try {
       await adapter.sendTurn({
         ...input,
-        // The saved mode is the user's choice; send what this model supports.
-        runtimeMode: coerceRuntimeMode(
-          input.harness,
-          input.model,
-          input.runtimeMode,
-        ),
+        runtimeMode: supportedRuntimeMode(input),
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
           input.onAccepted?.();
@@ -272,7 +276,10 @@ export function compactHarnessContext(
     }
     cancelIdlePark(input.sessionId);
     try {
-      await adapter.compactContext(input);
+      await adapter.compactContext({
+        ...input,
+        runtimeMode: supportedRuntimeMode(input),
+      });
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }
@@ -302,7 +309,10 @@ export function rewindHarnessLastTurn(
     }
     cancelIdlePark(input.sessionId);
     try {
-      return await adapter.rewindLastTurn(input);
+      return await adapter.rewindLastTurn({
+        ...input,
+        runtimeMode: supportedRuntimeMode(input),
+      });
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }
