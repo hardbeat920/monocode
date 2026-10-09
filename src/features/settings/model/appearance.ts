@@ -179,6 +179,57 @@ function normalizeAccentColor(value: unknown): string | null {
     : ACCENT_COLOR_DEFAULT;
 }
 
+export const REPLY_COLOR_KINDS = ["bold", "italic", "heading", "code"] as const;
+export type ReplyColorKind = (typeof REPLY_COLOR_KINDS)[number];
+
+const replyColorKey = (scheme: ColorScheme, kind: ReplyColorKind) =>
+  `monocode.replyColor.${scheme}.${kind}`;
+const REPLY_COLORS_CHANGE_EVENT = "monocode:replycolorschange";
+
+export function subscribeReplyColors(listener: () => void) {
+  window.addEventListener(REPLY_COLORS_CHANGE_EVENT, listener);
+  return () => window.removeEventListener(REPLY_COLORS_CHANGE_EVENT, listener);
+}
+
+export function loadReplyColor(
+  scheme: ColorScheme,
+  kind: ReplyColorKind,
+): string | null {
+  try {
+    return normalizeAccentColor(
+      localStorage.getItem(replyColorKey(scheme, kind)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function saveReplyColor(
+  scheme: ColorScheme,
+  kind: ReplyColorKind,
+  value: string | null,
+) {
+  try {
+    const next = normalizeAccentColor(value);
+    if (next == null) localStorage.removeItem(replyColorKey(scheme, kind));
+    else localStorage.setItem(replyColorKey(scheme, kind), next);
+  } catch {
+    // private mode / quota
+  }
+  window.dispatchEvent(new Event(REPLY_COLORS_CHANGE_EVENT));
+}
+
+/** Each theme keeps its own colors; an unset one leaves the default styling. */
+export function applyReplyColors(scheme: ColorScheme) {
+  const root = document.documentElement;
+  for (const kind of REPLY_COLOR_KINDS) {
+    const color = loadReplyColor(scheme, kind);
+    root.classList.toggle(`reply-${kind}-color`, color != null);
+    if (color == null) root.style.removeProperty(`--reply-${kind}-color`);
+    else root.style.setProperty(`--reply-${kind}-color`, color);
+  }
+}
+
 function accentForeground(color: string): "#000000" | "#ffffff" {
   const channels = [1, 3, 5].map((offset) => {
     const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
@@ -381,6 +432,7 @@ export function isLightScheme(): boolean {
 export function applyThemePreference(value: ThemePreference): ColorScheme {
   const next = resolveColorScheme(value);
   document.documentElement.classList.toggle("theme-light", next === "light");
+  applyReplyColors(next);
   if (nativeGlassReady) syncNativeGlass(next);
   window.dispatchEvent(
     new CustomEvent<ColorScheme>(SCHEME_CHANGE_EVENT, { detail: next }),

@@ -133,6 +133,13 @@ import {
   NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
   type NewThreadBackgroundEffect,
   type TranscriptLayout,
+  REPLY_COLOR_KINDS,
+  applyReplyColors,
+  loadReplyColor,
+  saveReplyColor,
+  subscribeReplyColors,
+  type ColorScheme,
+  type ReplyColorKind,
 } from "../model/appearance";
 import {
   pickAndSaveChatBackground,
@@ -2031,6 +2038,8 @@ function useAppearanceSettings(
   );
 
   const restoreDefaults = useCallback(() => {
+    for (const scheme of ["dark", "light"] as const)
+      for (const kind of REPLY_COLOR_KINDS) saveReplyColor(scheme, kind, null);
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onAccentColor(ACCENT_COLOR_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
@@ -2112,9 +2121,78 @@ function useAppearanceSettings(
   };
 }
 
+const REPLY_COLOR_LABELS: Record<ReplyColorKind, string> = {
+  bold: "Bold",
+  italic: "Italic",
+  heading: "Headings",
+  code: "Inline code",
+};
+
+function ReplyColorPicker({
+  scheme,
+  kind,
+}: {
+  scheme: ColorScheme;
+  kind: ReplyColorKind;
+}) {
+  const value = useSyncExternalStore(subscribeReplyColors, () =>
+    loadReplyColor(scheme, kind),
+  );
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
+  const label = REPLY_COLOR_LABELS[kind].toLowerCase();
+  const onChange = (next: string | null) => {
+    saveReplyColor(scheme, kind, next);
+    applyReplyColors(scheme);
+  };
+  return (
+    <div ref={anchor} className="flex items-center gap-2">
+      <button
+        type="button"
+        aria-label={`Use default ${label} color`}
+        aria-pressed={value == null}
+        onClick={() => {
+          setOpen(false);
+          onChange(null);
+        }}
+        className={`rounded-md px-2 py-1 text-[12px] ${value == null ? "bg-content/10 text-content" : "text-content/50 hover:text-content"}`}
+      >
+        Use default
+      </button>
+      <SecondaryButton
+        aria-label={`Custom ${label} color`}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span
+          className="size-3 rounded-full border border-content/20"
+          style={{ background: value ?? "var(--color-content)" }}
+        />
+        {value ?? "Custom color"}
+      </SecondaryButton>
+      {open ? (
+        <Popover
+          anchor={anchor}
+          side="bottom"
+          align="end"
+          width={248}
+          onDismiss={() => setOpen(false)}
+          className="px-2 pb-2"
+        >
+          <ColorPickerPopover
+            value={value ?? (scheme === "dark" ? "#e0e0e0" : "#202020")}
+            onChange={onChange}
+          />
+        </Popover>
+      ) : null}
+    </div>
+  );
+}
+
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
-  const glassDisabled = useColorScheme() === "light";
+  const scheme = useColorScheme();
+  const glassDisabled = scheme === "light";
 
   return (
     <>
@@ -2164,6 +2242,21 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onDiffPalette}
           />
         </Row>
+      </Group>
+
+      <Group
+        title="Reply colors"
+        description={`Text colors in agent replies for the ${scheme} theme. Light and dark keep separate colors.`}
+      >
+        {REPLY_COLOR_KINDS.map((kind) => (
+          <Row
+            key={kind}
+            id={`reply-${kind}-color`}
+            label={REPLY_COLOR_LABELS[kind]}
+          >
+            <ReplyColorPicker key={scheme} scheme={scheme} kind={kind} />
+          </Row>
+        ))}
       </Group>
 
       <Group

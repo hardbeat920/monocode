@@ -7,6 +7,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 import {
   ACCENT_COLOR_DEFAULT,
+  applyReplyColors,
+  saveReplyColor,
   CHAT_BACKGROUND_OPACITY_DEFAULT,
   CHAT_BACKGROUND_SCOPE_DEFAULT,
   loadChatBackgroundOpacity,
@@ -102,6 +104,32 @@ describe("accent color setting", () => {
     saveAccentColor("tomato");
     expect(localStorage.getItem(ACCENT_COLOR_KEY)).toBeNull();
     expect(loadAccentColor()).toBeNull();
+  });
+});
+
+describe("reply colors", () => {
+  beforeEach(mockLocalStorage);
+
+  it("applies each theme's own colors and leaves unset ones alone", () => {
+    const root = document.documentElement;
+    saveReplyColor("dark", "bold", "#FF0000");
+    saveReplyColor("light", "heading", "#0000ff");
+
+    applyReplyColors("dark");
+    expect(root.classList.contains("reply-bold-color")).toBe(true);
+    expect(root.style.getPropertyValue("--reply-bold-color")).toBe("#ff0000");
+    expect(root.classList.contains("reply-heading-color")).toBe(false);
+
+    applyReplyColors("light");
+    expect(root.classList.contains("reply-bold-color")).toBe(false);
+    expect(root.style.getPropertyValue("--reply-bold-color")).toBe("");
+    expect(root.style.getPropertyValue("--reply-heading-color")).toBe(
+      "#0000ff",
+    );
+
+    saveReplyColor("light", "heading", null);
+    applyReplyColors("light");
+    expect(root.classList.contains("reply-heading-color")).toBe(false);
   });
 });
 
