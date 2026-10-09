@@ -207,8 +207,9 @@ it("checks out the highlighted matching branch when Enter is pressed", async () 
   });
 
   const picker = document.querySelector<HTMLElement>("[data-branch-picker]")!;
-  const highlighted =
-    picker.querySelector<HTMLButtonElement>('[role="option"]')!;
+  const highlighted = picker.querySelector<HTMLButtonElement>(
+    '[role="option"]',
+  )!;
   expect(highlighted.textContent).toContain("feature/picker");
   expect(
     [...picker.querySelectorAll<HTMLButtonElement>("button")].some(

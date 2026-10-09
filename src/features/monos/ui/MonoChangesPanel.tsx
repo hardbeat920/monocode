@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { lazySurface } from "../../../shared/ui/lazySurface";
 import { ChevronDown, Folder } from "../../../shared/ui/icons";
 import {
@@ -71,15 +64,9 @@ export function MonoChangesPanel({
         )
       : undefined) ??
     projects[0];
-  const [indexes, setIndexes] = useState<ReadonlyMap<string, GitDiffIndex | null>>(
-    new Map(),
-  );
+  const [indexes, setIndexes] = useState<ReadonlyMap<string, GitDiffIndex | null>>(new Map());
   const updateIndex = useCallback((root: string, index: GitDiffIndex | null) => {
-    setIndexes((previous) =>
-      previous.get(root) === index
-        ? previous
-        : new Map(previous).set(root, index),
-    );
+    setIndexes((previous) => previous.get(root) === index ? previous : new Map(previous).set(root, index));
   }, []);
   const index = project ? indexes.get(project.root) ?? null : null;
 
@@ -210,10 +197,7 @@ export function MonoChangesPanel({
 function ProjectCommit({
   onIndex,
   ...props
-}: Omit<
-  ComponentProps<typeof MonoProjectCommit>,
-  "index" | "reloadIndex" | "busy" | "acquire"
-> & {
+}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex" | "busy" | "acquire"> & {
   onIndex: (root: string, index: GitDiffIndex | null) => void;
 }) {
   const { index, reload } = useProjectIndex(props.root);
