@@ -11,6 +11,7 @@ import {
   saveProviderAccount,
   selectedProviderAccountId,
   selectProviderAccount,
+  supportsAccountProfiles,
 } from "./providerAccounts";
 
 beforeEach(() => {
@@ -27,6 +28,22 @@ describe("provider accounts", () => {
         isDefault: true,
       },
     ]);
+  });
+
+  it("lists Devin with only its CLI login and refuses named profiles", () => {
+    expect(supportsAccountProfiles("devin")).toBe(false);
+    expect(supportsAccountProfiles("codex")).toBe(true);
+    saveProviderAccount({ id: "account-work", provider: "devin", label: "Work" });
+    // Stale storage from elsewhere is ignored too.
+    localStorage.setItem(
+      "monocode.providerAccounts.v1",
+      JSON.stringify({ devin: [{ id: "account-old", provider: "devin", label: "Old" }] }),
+    );
+    expect(providerAccounts("devin").map((account) => account.id)).toEqual([
+      DEFAULT_PROVIDER_ACCOUNT_ID,
+    ]);
+    expect(renameProviderAccount("devin", "default", "Personal")?.label).toBe("Personal");
+    expect(providerAccountLabel("devin", "default")).toBe("Personal");
   });
 
   it("stores named profiles separately per provider", () => {

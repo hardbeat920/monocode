@@ -192,6 +192,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "mono agent rail hide",
   },
   {
+    id: "rail-monos-pinned",
+    section: "monos",
+    label: "Pin monos to the icon rail",
+    keywords: "mono rail compact collapsed icons top divider project picker",
+  },
+  {
     id: "mono-list",
     section: "monos",
     label: "Your monos",
@@ -371,6 +377,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       "effort thinking reasoning fast service tier model picker composer",
   },
   {
+    id: "composer-autocorrect",
+    section: "chat",
+    label: "Autocorrect",
+    keywords: "spelling spell check autocorrect typo macos composer",
+  },
+  {
     id: "composer-mascot",
     section: "chat",
     label: "Composer mascot",
@@ -399,7 +411,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "providers",
     label: "Agent CLIs",
     keywords:
-      "codex opencode cursor grok pi omp fx hermes antigravity binary path",
+      "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
   },
   {
     id: "provider-accounts",

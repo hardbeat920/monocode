@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
+import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
 
 const { pick } = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("../../sessions/model/attachments", async (original) => ({
@@ -173,4 +174,17 @@ it("waits for delivery and keeps a rejected message available to retry", async (
   });
   expect(field().value).toBe("");
   expect(onSubmit).toHaveBeenCalledTimes(2);
+});
+
+it("follows the composer autocorrect setting", () => {
+  render();
+  expect(field().getAttribute("spellcheck")).toBe("true");
+  expect(field().getAttribute("autocorrect")).toBe("on");
+
+  act(() => saveComposerAutocorrect(false));
+  expect(field().getAttribute("spellcheck")).toBe("false");
+  expect(field().getAttribute("autocorrect")).toBe("off");
+
+  act(() => saveComposerAutocorrect(true));
+  expect(field().getAttribute("spellcheck")).toBe("true");
 });
