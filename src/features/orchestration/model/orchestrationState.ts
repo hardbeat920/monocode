@@ -58,6 +58,10 @@ export type OrchestrationDispatch = {
   result?: string;
   error?: string;
   cleanupError?: string;
+  /** Changed files outside the write scope, left in the kept worktree. */
+  outsideAssignment?: string[];
+  /** Gitignored files the worker created, left in the kept worktree. */
+  ignoredCreated?: string[];
 };
 
 export type OrchestrationTask = {

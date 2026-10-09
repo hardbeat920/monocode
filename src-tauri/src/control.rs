@@ -453,8 +453,15 @@ pub fn window_closed(app: &AppHandle, label: &str) {
         let Ok(inner) = host.inner.lock() else { return };
         inner.window_sessions(label)
     };
-    for id in &ids {
-        let _ = crate::harness::harness_kill(app.state(), id.clone());
+    // `harness_kill` is async and waits for each process tree to exit, so run
+    // it off the event loop instead of dropping the unpolled future.
+    for id in ids.iter().cloned() {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = crate::harness::harness_kill(app.state(), id).await {
+                eprintln!("[control] window close cleanup failed: {error}");
+            }
+        });
     }
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);

@@ -45,8 +45,12 @@ Actions, with the JSON object each one takes:
             scopes. Use this only when the additional files are required.
   cancel    {"taskId":"..."}
             Cancel a task, whether it is running or still queued.
-  review    {"taskId":"..."}
-            Accept a completed task's result.
+  review    {"taskId":"...","discardOutside":false}
+            Accept a completed task's result. Changed files outside the task's
+            write scope, and gitignored files the worker created, are not
+            applied; they are listed and kept in the worker's worktree. Once
+            you have copied what you need, call review again with
+            "discardOutside": true to remove that worktree.
   finish    {}
             End the run, once every task is accepted or cancelled.
 

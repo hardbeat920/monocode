@@ -3,13 +3,18 @@ import type { ToolPreview } from "../../../../features/sessions/model/session";
 /**
  * fx tool metadata recovery.
  *
- * Unlike every other ACP harness we speak to, fx sends no `rawInput`, no
- * `locations` and no `diff` content on `tool_call` / `tool_call_update`. All we
- * get is a gerund title ("Reading"), a kind, a status, and — once the call
- * completes — a free-text result blob. Everything the transcript needs (path,
- * query, command) has to be mined back out of that text.
+ * fx sends no `locations` and no `diff` content on `tool_call` /
+ * `tool_call_update`. Through 0.0.7 it sent no `rawInput` either, so all we got
+ * was a gerund title ("Reading"), a kind, a status, and, once the call
+ * completed, a free-text result blob. This file mines the path, query and
+ * command back out of that text.
  *
- * The shapes below are taken from `fx acp` 0.0.5 wire captures.
+ * Since 0.0.8 the pending `tool_call` also carries `name` and `rawInput` (the
+ * tool arguments, e.g. `{ path, content }` for write_file). This file returns
+ * `resolved: false` for a call with no result yet, so the shared ACP extraction
+ * reads that path and edits are known before they run.
+ *
+ * The result shapes below are taken from `fx acp` 0.0.5 wire captures.
  */
 
 export type FxToolInfo = {

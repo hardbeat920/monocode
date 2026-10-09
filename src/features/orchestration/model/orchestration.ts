@@ -57,12 +57,21 @@ export type OrchestrationHost = {
   integrateWorker(
     run: OrchestrationRun,
     task: OrchestrationTask,
-  ): Promise<{ files: string[]; alreadyApplied: number }>;
-  /** Returns false when unreviewed changes require the worktree to be kept. */
+  ): Promise<{
+    files: string[];
+    alreadyApplied: number;
+    skipped?: string[];
+    ignored?: string[];
+  }>;
+  /**
+   * Returns false when unreviewed changes require the worktree to be kept.
+   * discardOutside removes it even while out-of-scope files remain.
+   */
   cleanupWorker(
     run: OrchestrationRun,
     task: OrchestrationTask,
     onlyIfUnchanged: boolean,
+    discardOutside?: boolean,
   ): Promise<boolean>;
   submit(
     id: string,
@@ -194,6 +203,35 @@ function strings(value: unknown, label: string, max = 64): string[] {
   return [...new Set(value.map((item) => text(item, label, 512)))];
 }
 /**
+ * Files an accepted task left unapplied in its kept worktree: changes outside
+ * its write scope, and gitignored files it created. They are gone once that
+ * worktree is cleaned up.
+ */
+function pendingOutside(
+  run: OrchestrationRun,
+  task: OrchestrationTask,
+): { outside: string[]; ignored: string[] } {
+  const dispatch = run.dispatches?.find(
+    (entry) => entry.id === task.acceptedDispatchId,
+  );
+  if (!dispatch || dispatch.stage === "cleaned")
+    return { outside: [], ignored: [] };
+  return {
+    outside: dispatch.outsideAssignment ?? [],
+    ignored: dispatch.ignoredCreated ?? [],
+  };
+}
+
+/**
+ * A dependency is met once it is accepted and the lead has resolved any
+ * out-of-scope files, so dependents start from the checkout it settled on.
+ */
+function dependencyMet(run: OrchestrationRun, task: OrchestrationTask) {
+  const { outside, ignored } = pendingOutside(run, task);
+  return task.accepted && outside.length === 0 && ignored.length === 0;
+}
+
+/**
  * A mistyped field must fail loudly rather than silently change the task. A
  * Map, so an action named after an Object member is still just unknown.
  */
@@ -205,7 +243,7 @@ const FIELDS = new Map<string, string[]>([
   ["retry", ["taskId", "text", "files"]],
   ["cancel", ["taskId"]],
   ["wait", ["timeoutSeconds"]],
-  ["review", ["taskId"]],
+  ["review", ["taskId", "discardOutside"]],
   ["finish", []],
   ["steer", ["taskId", "text"]],
   ["respond", ["taskId", "requestId", "decision"]],
@@ -935,9 +973,12 @@ export class Orchestrator {
   ): string | undefined {
     if (task.status !== "queued") return undefined;
     const dependency = run.tasks.find(
-      (entry) => task.dependsOn.includes(entry.id) && !entry.accepted,
+      (entry) => task.dependsOn.includes(entry.id) && !dependencyMet(run, entry),
     );
-    if (dependency) return `Waiting for review: ${dependency.title}`;
+    if (dependency)
+      return dependency.accepted
+        ? `Waiting for out-of-scope files to be resolved: ${dependency.title}`
+        : `Waiting for review: ${dependency.title}`;
     const owner = run.tasks.find(
       (entry) => activeTask(entry) && scopesOverlap(entry.scopes, task.scopes),
     );
@@ -1260,6 +1301,7 @@ export class Orchestrator {
         if (!dispatchId)
           throw new Error("This task has no completed dispatch to review");
         const isolated = target.workspacePolicy !== "shared";
+        const discardOutside = input.discardOutside === true;
         if (!target.accepted) {
           if (isolated) {
             if (!target.workspace)
@@ -1270,7 +1312,15 @@ export class Orchestrator {
               stage: "integration_started",
               cleanupError: undefined,
             });
-            await this.host!.integrateWorker(this.run(run.leadId)!, target);
+            const integration = await this.host!.integrateWorker(
+              this.run(run.leadId)!,
+              target,
+            );
+            if (integration.skipped?.length || integration.ignored?.length)
+              await this.patchDispatch(run.leadId, dispatchId, {
+                outsideAssignment: integration.skipped,
+                ignoredCreated: integration.ignored,
+              });
           }
           const current = this.run(run.leadId)!;
           await this.commit({
@@ -1307,6 +1357,7 @@ export class Orchestrator {
               this.run(run.leadId)!,
               target,
               false,
+              discardOutside,
             );
           } catch (error) {
             cleanupError = messageOf(error);
@@ -1331,11 +1382,27 @@ export class Orchestrator {
             ),
           });
         }
-        return record(this.run(run.leadId)!, {
+        const final = this.run(run.leadId)!;
+        const { outside, ignored } = pendingOutside(
+          final,
+          final.tasks.find((entry) => entry.id === target.id)!,
+        );
+        const kept = [
+          ...(outside.length ? ["changed outside the task's write scope"] : []),
+          ...(ignored.length ? ["are gitignored files the worker created"] : []),
+        ];
+        return record(final, {
           accepted: true,
           integrated: isolated,
           cleaned,
           ...(cleanupError ? { cleanupError } : {}),
+          ...(outside.length ? { outsideAssignment: outside } : {}),
+          ...(ignored.length ? { ignoredCreated: ignored } : {}),
+          ...(kept.length
+            ? {
+                note: `These files ${kept.join(" or ")}, so they were not applied. They are still in ${target.workspace?.checkoutCwd}, which was kept. Tasks that depend on this one wait until it is removed. Copy any you need into the lead checkout, then call review again with "discardOutside": true to remove the worktree and its branch.`,
+              }
+            : {}),
         });
       }
       case "finish": {
@@ -1474,9 +1541,10 @@ export class Orchestrator {
           if (
             !task ||
             task.status !== "queued" ||
-            task.dependsOn.some(
-              (id) => !run.tasks.find((entry) => entry.id === id)?.accepted,
-            )
+            task.dependsOn.some((id) => {
+              const dependency = run.tasks.find((entry) => entry.id === id);
+              return !dependency || !dependencyMet(run, dependency);
+            })
           )
             continue;
           if (
