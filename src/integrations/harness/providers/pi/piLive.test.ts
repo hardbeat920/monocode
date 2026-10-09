@@ -158,9 +158,40 @@ describe("Pi live session", () => {
       statusText: "\u001b[0m",
     });
     expect(events.filter((event) => event.type === "status")).toEqual([
-      { type: "status", text: "○ ponytail: ⚡ FULL" },
+      { type: "status", key: "ponytail", text: "○ ponytail: ⚡ FULL" },
       { type: "status", text: "Plugin ready" },
     ]);
     await stopPiSession("pi-ansi");
+  });
+
+  it("publishes animated extension status as one keyed slot", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-caveman",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    const frame = mocks.frames[0]!;
+    for (const [id, statusText] of [
+      ["frame-1", "⠋ \u001b[2mcaveman level: \u001b[0mULTRA"],
+      ["frame-2", "⠙ \u001b[2mcaveman level: \u001b[0mULTRA"],
+      ["clear", ""],
+    ]) {
+      frame({
+        type: "extension_ui_request",
+        id,
+        method: "setStatus",
+        statusKey: "caveman",
+        statusText,
+      });
+    }
+    expect(events.filter((event) => event.type === "status")).toEqual([
+      { type: "status", key: "caveman", text: "⠋ caveman level: ULTRA" },
+      { type: "status", key: "caveman", text: "⠙ caveman level: ULTRA" },
+      { type: "status", key: "caveman", text: "" },
+    ]);
+    await stopPiSession("pi-caveman");
   });
 });

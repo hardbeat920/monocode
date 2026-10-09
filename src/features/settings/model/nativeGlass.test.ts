@@ -2,13 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { syncNativeGlass } from "./appearance";
 
-const platform = vi.hoisted(() => ({ isLinux: false }));
+const platform = vi.hoisted(() => ({ isLinux: false, isMac: false }));
 vi.mock("../../../platform/tauri/platform", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../../platform/tauri/platform")
   >()),
   get IS_LINUX() {
     return platform.isLinux;
+  },
+  get IS_MAC() {
+    return platform.isMac;
   },
 }));
 
@@ -28,6 +31,7 @@ beforeEach(() => {
   invoke.mockReset();
   invoke.mockResolvedValue(undefined);
   platform.isLinux = false;
+  platform.isMac = false;
   localStorage.clear();
   document.documentElement.className = "";
   document.documentElement.style.cssText = "";
@@ -37,6 +41,168 @@ beforeEach(() => {
     "--motion-feedback-duration",
     "120ms",
   );
+});
+
+describe("macOS native tint", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    platform.isMac = true;
+    document.documentElement.classList.add("is-mac");
+    invoke.mockResolvedValue(true);
+  });
+
+  const hasNativeTint = () =>
+    document.documentElement.classList.contains("has-native-glass-tint");
+
+  it("hands the current tint and opacity to AppKit before clearing the CSS tint", async () => {
+    const { applySidebarOpacity, applyThemeTint, syncNativeGlass } =
+      await import("./appearance");
+    applyThemeTint(0, 100);
+    applySidebarOpacity(0.6);
+    let settle = (_value: boolean) => {};
+    invoke.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    syncNativeGlass("dark");
+    expect(invoke).toHaveBeenCalledWith("set_window_glass_enabled", {
+      enabled: true,
+      background: { r: 46, g: 0, b: 0 },
+      opacity: 0.76,
+    });
+    expect(hasNativeTint()).toBe(false);
+    settle(true);
+    await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+    expect(hasGlass()).toBe(true);
+  });
+
+  it.each([undefined, false])(
+    "keeps CSS tint when the host does not acknowledge native tint (%s)",
+    async (result) => {
+      const { syncNativeGlass } = await import("./appearance");
+      invoke.mockResolvedValue(result);
+      syncNativeGlass("dark");
+      await vi.waitFor(() => expect(hasGlass()).toBe(true));
+      expect(hasNativeTint()).toBe(false);
+    },
+  );
+
+  it.each([
+    { base: "0.2", opacity: 0.68 },
+    { base: "0", opacity: 0.6 },
+  ])(
+    "composes the shell's $base tint into the native opacity",
+    async ({ base, opacity }) => {
+      const { applySidebarOpacity, syncNativeGlass } =
+        await import("./appearance");
+      document.documentElement.style.setProperty(
+        "--window-background-opacity",
+        base,
+      );
+      applySidebarOpacity(0.6);
+      syncNativeGlass("dark");
+      expect(invoke).toHaveBeenCalledWith("set_window_glass_enabled", {
+        enabled: true,
+        background: { r: 23, g: 23, b: 23 },
+        opacity: expect.closeTo(opacity, 6),
+      });
+      await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+    },
+  );
+
+  it("keeps CSS tint when the native call fails", async () => {
+    const { syncNativeGlass } = await import("./appearance");
+    invoke.mockRejectedValue(new Error("no native host"));
+    syncNativeGlass("dark");
+    await vi.waitFor(() => expect(hasGlass()).toBe(true));
+    expect(hasNativeTint()).toBe(false);
+  });
+
+  it("updates the native tint when appearance settings change after launch", async () => {
+    const {
+      activateWindowAppearance,
+      applySidebarOpacity,
+      applyThemeTint,
+      applyThemeDarkLightness,
+    } = await import("./appearance");
+    document.documentElement.style.setProperty(
+      "--background-lightness",
+      "var(--theme-dark-lightness)",
+    );
+    applyThemeTint(0, 100);
+    applyThemeDarkLightness(10);
+    applySidebarOpacity(0.6);
+    expect(invoke).not.toHaveBeenCalled();
+
+    activateWindowAppearance();
+    await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+    invoke.mockClear();
+    applySidebarOpacity(0.4);
+    expect(invoke).toHaveBeenLastCalledWith("set_window_glass_enabled", {
+      enabled: true,
+      background: { r: 51, g: 0, b: 0 },
+      opacity: 0.64,
+    });
+    applyThemeTint(120, 100);
+    expect(invoke).toHaveBeenLastCalledWith("set_window_glass_enabled", {
+      enabled: true,
+      background: { r: 0, g: 51, b: 0 },
+      opacity: 0.64,
+    });
+    applyThemeDarkLightness(20);
+    expect(invoke).toHaveBeenLastCalledWith("set_window_glass_enabled", {
+      enabled: true,
+      background: { r: 0, g: 102, b: 0 },
+      opacity: 0.64,
+    });
+    await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+  });
+
+  it("retains an existing native tint if a later update fails", async () => {
+    const { syncNativeGlass } = await import("./appearance");
+    syncNativeGlass("dark");
+    await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+    invoke.mockRejectedValue(new Error("update failed"));
+    syncNativeGlass("dark");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hasNativeTint()).toBe(true);
+  });
+
+  it("restores opaque CSS before disabling native glass", async () => {
+    const { syncNativeGlass } = await import("./appearance");
+    syncNativeGlass("dark");
+    await vi.waitFor(() => expect(hasNativeTint()).toBe(true));
+    invoke.mockClear();
+    syncNativeGlass("light");
+    expect(hasNativeTint()).toBe(false);
+    expect(hasGlass()).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "set_window_glass_enabled",
+        expect.objectContaining({ enabled: false }),
+      ),
+    );
+  });
+
+  it("ignores a native-tint acknowledgement overtaken by light mode", async () => {
+    const { syncNativeGlass } = await import("./appearance");
+    let settle = (_value: boolean) => {};
+    invoke.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    syncNativeGlass("dark");
+    syncNativeGlass("light");
+    settle(true);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(hasNativeTint()).toBe(false);
+    expect(hasGlass()).toBe(false);
+  });
 });
 
 describe("native glass", () => {

@@ -11,10 +11,40 @@ import {
   mapUsageWindow,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
+  formatExtraUsageBalance,
+  parseDevinUsage,
   parseOpencodeGoUsage,
   parseResetTimestamp,
   rateLimitWindowTooltip,
 } from "./rateLimits";
+
+describe("parseDevinUsage", () => {
+  it("turns remaining daily and weekly quota into used windows", () => {
+    const limits = parseDevinUsage({
+      plan: "Pro",
+      dailyRemainingPercent: 0,
+      dailyResetsAt: 1_791_273_600,
+      weeklyRemainingPercent: 42,
+      weeklyResetsAt: 1_791_705_600,
+      extraUsageBalanceMicros: -1_673_099,
+    });
+    expect(formatExtraUsageBalance(limits.extraUsageBalance!)).toBe("$-1.67");
+    expect(limits).toMatchObject({
+      provider: "devin",
+      status: "ok",
+      session: { usedPercent: 100, windowMinutes: 1_440, resetsAt: 1_791_273_600_000 },
+      weekly: { usedPercent: 58, windowMinutes: 10_080, resetsAt: 1_791_705_600_000 },
+      monthly: null,
+    });
+  });
+
+  it("leaves out windows the plan hides", () => {
+    const limits = parseDevinUsage({ weeklyRemainingPercent: 80, weeklyResetsAt: null });
+    expect(limits.session).toBeNull();
+    expect(limits.weekly).toEqual({ usedPercent: 20, windowMinutes: 10_080, resetsAt: null });
+    expect(limits.extraUsageBalance).toBeNull();
+  });
+});
 
 describe("formatWindowLabel", () => {
   it("uses the compact 5h / wk labels", () => {
@@ -327,4 +357,37 @@ describe("rateLimitWindowTooltip", () => {
       ),
     ).toBe("42% used · Resets in 2h 33m");
   });
+
+  it("shows remaining percent with a reset countdown", () => {
+    const now = Date.parse("2026-08-27T08:00:00Z");
+    expect(
+      rateLimitWindowTooltip(
+        {
+          usedPercent: 42.4,
+          windowMinutes: 300,
+          resetsAt: now + 2 * 3_600_000,
+        },
+        now,
+        true,
+      ),
+    ).toBe("58% remaining · Resets in 2h");
+  });
+
+  it.each([
+    [0, "100%"],
+    [100, "0%"],
+    [-10, "100%"],
+    [110, "0%"],
+  ])(
+    "clamps %s used before showing remaining usage",
+    (usedPercent, remaining) => {
+      expect(
+        rateLimitWindowTooltip(
+          { usedPercent, windowMinutes: 10_080, resetsAt: null },
+          0,
+          true,
+        ),
+      ).toBe(`${remaining} remaining · wk window`);
+    },
+  );
 });

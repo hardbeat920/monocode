@@ -63,6 +63,7 @@ import {
   newAutomationDraft,
   nextAutomationRunAt,
   nextRunPreview,
+  peekAutomations,
   saveAutomation,
   setAutomationEnabled,
   subscribeAutomations,
@@ -181,13 +182,15 @@ function AutomationsContent({
   onLaunch,
   onOpenSession,
 }: Pick<Props, "cwd" | "recents" | "onLaunch" | "onOpenSession">) {
-  const [automations, setAutomations] = useState<Automation[]>([]);
+  const [automations, setAutomations] = useState<Automation[]>(
+    () => peekAutomations() ?? [],
+  );
   const [runs, setRuns] = useState<AutomationRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(
     rememberedAutomationId,
   );
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => peekAutomations() === null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AutomationDraft | null>(null);
   const [pickerOpen, setPickerOpen] = useState(true);

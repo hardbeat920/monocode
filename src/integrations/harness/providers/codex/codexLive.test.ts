@@ -13,10 +13,27 @@ const saveGeneratedImage = vi.hoisted(() =>
   })),
 );
 const deleteGeneratedImages = vi.hoisted(() => vi.fn(async () => undefined));
+const spawnChild = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => undefined),
+);
+const restoreMonoCodexAgentState = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => undefined),
+);
+const prepareCodexMonoContext = vi.hoisted(() =>
+  vi.fn(async (_input: unknown) => ({
+    config: {
+      sqlite_home: "/private/mono",
+      instructions: "Account instructions",
+    },
+    hasThread: true,
+  })),
+);
+vi.mock("./codexStore", () => ({ prepareCodexMonoContext }));
 
 vi.mock("../../core/child", () => ({
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
-  spawnChild: async () => undefined,
+  spawnChild,
+  restoreMonoCodexAgentState,
   killChild: async () => undefined,
   unwatchChild: () => undefined,
   watchChild: (_id: string, line: (l: string) => void) => {
@@ -33,6 +50,7 @@ vi.mock("../../../../platform/tauri/fs", () => ({
 const {
   compactCodexContext,
   bindCodexSession,
+  hasLiveCodexSession,
   cancelCodexTurn,
   keepCodexQuestionOpen,
   respondCodexApproval,
@@ -43,7 +61,11 @@ const {
   __codexTestReset,
 } = await import("./codex");
 import type { HarnessEvent } from "../../core/types";
-import { newSession, type RuntimeMode, type TurnIntent } from "../../../../features/sessions/model/session";
+import {
+  newSession,
+  type RuntimeMode,
+  type TurnIntent,
+} from "../../../../features/sessions/model/session";
 import { applyHarnessEvent } from "../../core/apply";
 
 function parse() {
@@ -56,6 +78,19 @@ function reply(id: number, result: unknown) {
 
 function notify(method: string, params: unknown) {
   onLine!(JSON.stringify({ method, params }));
+}
+function notifyAsyncQuestion(id: string, turnId = "turn_1") {
+  notify("item/completed", {
+    threadId: "thr_1",
+    turnId,
+    item: {
+      type: "agentMessage",
+      id,
+      text: "Which source?\n- Local\n- Remote",
+      delivery: "async",
+      questions: [{ title: "Which source?", options: ["Local", "Remote"] }],
+    },
+  });
 }
 function withoutTurnIdentity(events: HarnessEvent[]) {
   return events.filter((event) => event.type !== "turn.started");
@@ -83,6 +118,8 @@ async function startTurn(
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
     controlsAgents?: boolean;
+    ephemeral?: boolean;
+    codexStore?: "mono";
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -102,6 +139,8 @@ async function startTurn(
     providerAccountId: options.providerAccountId,
     runtimeMode: options.runtimeMode ?? "supervised",
     controlsAgents: options.controlsAgents,
+    ephemeral: options.ephemeral,
+    codexStore: options.codexStore,
     intent: options.intent,
     text: "summarize the changelog",
     attachments: [],
@@ -143,6 +182,9 @@ describe("codex live turn sequence", () => {
     writeChild.mockClear();
     saveGeneratedImage.mockClear();
     deleteGeneratedImages.mockClear();
+    spawnChild.mockClear();
+    restoreMonoCodexAgentState.mockClear();
+    prepareCodexMonoContext.mockClear();
   });
 
   afterEach(async () => {
@@ -162,6 +204,200 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
+  it("keeps ephemeral helper threads out of saved Codex history", async () => {
+    const first = await startTurn("codex-live", { ephemeral: true });
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    expect(hasLiveCodexSession("codex-live", true)).toBe(true);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+
+    await stopCodexSession("codex-live");
+    expect(hasLiveCodexSession("codex-live", true)).toBe(false);
+    sent.length = 0;
+    const next = await startTurn("codex-live", { ephemeral: true });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
+  it("starts a fresh ephemeral helper instead of resuming a saved rollout", async () => {
+    const { turn } = await startTurn("codex-live", {
+      resume: true,
+      ephemeral: true,
+      expectResume: false,
+    });
+    expect(parse().some((message) => message.method === "thread/resume")).toBe(
+      false,
+    );
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("retains an ephemeral helper's in-memory context for consecutive turns", async () => {
+    const first = await startTurn("codex-live", { ephemeral: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const next = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      ephemeral: true,
+      text: "Follow up on the previous answer",
+      onEvent: () => undefined,
+    });
+    await waitFor(
+      () => parse().some((message) => message.method === "turn/start"),
+      "follow-up turn/start",
+    );
+    expect(parse().some((message) => message.method === "initialize")).toBe(
+      false,
+    );
+    expect(parse().some((message) => message.method === "thread/start")).toBe(
+      false,
+    );
+    reply(
+      parse().find((message) => message.method === "turn/start")!.id as number,
+      {
+        turn: { id: "turn_2", status: "inProgress" },
+      },
+    );
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await next;
+  });
+
+  it("leaves regular Codex chats persistent", async () => {
+    const { turn } = await startTurn("codex-live");
+    expect(
+      parse().find((message) => message.method === "thread/start")?.params,
+    ).not.toHaveProperty("ephemeral");
+    expect(hasLiveCodexSession("codex-live", false)).toBe(true);
+    expect(hasLiveCodexSession("codex-live", true)).toBe(false);
+    expect(prepareCodexMonoContext).not.toHaveBeenCalled();
+    expect(spawnChild.mock.calls[0][6]).toBeUndefined();
+    expect(restoreMonoCodexAgentState).not.toHaveBeenCalled();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("persists Monos privately and resumes the same native thread after parking", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono" });
+    expect(spawnChild.mock.calls[0][6]).toBe("mono");
+    const params = parse().find((m) => m.method === "thread/start")?.params;
+    expect(params).not.toHaveProperty("ephemeral");
+    expect(params).toMatchObject({
+      config: {
+        sqlite_home: "/private/mono",
+        instructions: "Account instructions",
+      },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    await stopCodexSession("codex-live");
+    sent.length = 0;
+    const next = await startTurn("codex-live", {
+      codexStore: "mono",
+      expectResume: true,
+    });
+    expect(
+      parse().find((m) => m.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thr_1",
+      config: { sqlite_home: "/private/mono" },
+    });
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: "thr_1" }),
+    );
+    expect(restoreMonoCodexAgentState).toHaveBeenCalledWith(undefined, "thr_1");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
+  it("resumes a saved Mono after restart without rebuilding its context", async () => {
+    const { turn } = await startTurn("codex-live", {
+      codexStore: "mono",
+      resume: true,
+      providerAccountId: "work",
+      resumeProviderAccountId: "work",
+    });
+    expect(
+      parse().find((m) => m.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thr_1",
+      config: { sqlite_home: "/private/mono" },
+    });
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+    expect(restoreMonoCodexAgentState).toHaveBeenCalledWith("work", "thr_1");
+    expect(prepareCodexMonoContext).toHaveBeenCalledWith(
+      expect.objectContaining({ providerAccountId: "work", threadId: "thr_1" }),
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("does not discard a retained private Mono when resume fails", async () => {
+    bindCodexSession("codex-live", "thr_1", "/repo");
+    const turn = sendCodexTurn({
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      codexStore: "mono",
+      text: "Continue",
+      onEvent: () => undefined,
+    });
+    const rejected = expect(turn).rejects.toThrow(
+      "saved Mono Codex context could not be resumed",
+    );
+    await waitFor(
+      () => parse().some((m) => m.method === "initialize"),
+      "initialize",
+    );
+    reply(parse().find((m) => m.method === "initialize")!.id as number, {});
+    await waitFor(
+      () => parse().some((m) => m.method === "thread/resume"),
+      "resume",
+    );
+    onLine!(
+      JSON.stringify({
+        id: parse().find((m) => m.method === "thread/resume")!.id,
+        error: { message: "thread not found" },
+      }),
+    );
+    await rejected;
+    expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+  });
+
+  it("does not reopen a parked ephemeral helper just to rewind or compact it", async () => {
+    const input = {
+      sessionId: "codex-live",
+      cwd: "/repo",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised" as const,
+      ephemeral: true,
+      onEvent: () => undefined,
+    };
+    await expect(rewindCodexLastTurn(input)).resolves.toEqual({
+      submitted: false,
+    });
+    await expect(compactCodexContext(input)).rejects.toThrow(
+      "Send a message before compacting this chat",
+    );
+    expect(sent).toEqual([]);
+  });
+
   it("reopens a thread when app access changes its network policy", async () => {
     const first = await startTurn("codex-live", { runtimeMode: "auto" });
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
@@ -173,10 +409,12 @@ describe("codex live turn sequence", () => {
       controlsAgents: true,
       expectResume: true,
     });
-    expect(parse().find((message) => message.method === "thread/resume")?.params)
-      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
-    expect(parse().find((message) => message.method === "turn/start")?.params)
-      .toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    expect(
+      parse().find((message) => message.method === "thread/resume")?.params,
+    ).toMatchObject({ sandboxPolicy: { networkAccess: true } });
+    expect(
+      parse().find((message) => message.method === "turn/start")?.params,
+    ).toMatchObject({ sandboxPolicy: { networkAccess: true } });
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await appTurn.turn;
 
@@ -185,12 +423,16 @@ describe("codex live turn sequence", () => {
       runtimeMode: "auto",
       expectResume: true,
     });
-    expect(parse().find((message) => message.method === "thread/resume")?.params)
-      .toMatchObject({ sandboxPolicy: { type: "workspaceWrite" } });
     expect(
-      (parse().find((message) => message.method === "thread/resume")?.params as {
-        sandboxPolicy: Record<string, unknown>;
-      }).sandboxPolicy,
+      parse().find((message) => message.method === "thread/resume")?.params,
+    ).toMatchObject({ sandboxPolicy: { type: "workspaceWrite" } });
+    expect(
+      (
+        parse().find((message) => message.method === "thread/resume")
+          ?.params as {
+          sandboxPolicy: Record<string, unknown>;
+        }
+      ).sandboxPolicy,
     ).not.toHaveProperty("networkAccess");
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await ordinaryTurn.turn;
@@ -253,19 +495,26 @@ describe("codex live turn sequence", () => {
     notify("item/completed", {
       item: { id: "image_1", type: "imageGeneration", result: "aW1hZ2U=" },
     });
-    notify("item/agentMessage/delta", { itemId: "after_image", delta: "after image" });
+    notify("item/agentMessage/delta", {
+      itemId: "after_image",
+      delta: "after image",
+    });
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await Promise.resolve();
 
     expect(
       events.some(
-        (event) => event.type === "message.delta" && event.text === "after image",
+        (event) =>
+          event.type === "message.delta" && event.text === "after image",
       ),
     ).toBe(false);
     release?.();
     await turn;
     await Promise.resolve();
-    notify("item/agentMessage/delta", { itemId: "post_turn", delta: "post turn" });
+    notify("item/agentMessage/delta", {
+      itemId: "post_turn",
+      delta: "post turn",
+    });
 
     expect(
       events.some(
@@ -297,7 +546,8 @@ describe("codex live turn sequence", () => {
       "interrupt",
     );
     reply(
-      parse().find((message) => message.method === "turn/interrupt")!.id as number,
+      parse().find((message) => message.method === "turn/interrupt")!
+        .id as number,
       {},
     );
     await cancelling;
@@ -338,10 +588,13 @@ describe("codex live turn sequence", () => {
 
     expect(
       events.some(
-        (event) => event.type === "message.delta" && event.text === "after image",
+        (event) =>
+          event.type === "message.delta" && event.text === "after image",
       ),
     ).toBe(false);
-    expect(events.some((event) => event.type === "image.generated")).toBe(false);
+    expect(events.some((event) => event.type === "image.generated")).toBe(
+      false,
+    );
     expect(deleteGeneratedImages).toHaveBeenCalledWith([
       "/app-data/generated-images/image.png",
     ]);
@@ -607,6 +860,225 @@ describe("codex live turn sequence", () => {
       expect(events.some((e) => e.type === "session.error")).toBe(false);
     },
   );
+
+  it("shows async questions without blocking later messages and steers with the answer", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    notifyAsyncQuestion("async_question");
+    const question = events.find((event) => event.type === "question.asked")!;
+    expect(question).toMatchObject({
+      callId: "async_question",
+      questions: [{ id: "q1", prompt: "Which source?", allowCustom: true }],
+    });
+    expect(question.autoResolveAt).toBeGreaterThan(Date.now());
+    notify("item/agentMessage/delta", {
+      itemId: "next",
+      delta: "Still working",
+    });
+    expect(events).toContainEqual({
+      type: "message.delta",
+      text: "Still working",
+    });
+    expect(parse().some((message) => message.method === "turn/steer")).toBe(
+      false,
+    );
+    respondCodexQuestion("codex-live", question.requestId, {
+      kind: "answered",
+      answers: { q1: ["Remote"] },
+    });
+    respondCodexQuestion("codex-live", question.requestId, {
+      kind: "answered",
+      answers: { q1: ["Remote"] },
+    });
+    const steer = parse().find((message) => message.method === "turn/steer")!;
+    expect(steer.params).toEqual({
+      threadId: "thr_1",
+      expectedTurnId: "turn_1",
+      input: [{ type: "text", text: "Which source?\nRemote" }],
+    });
+    expect(
+      parse().filter((message) => message.method === "turn/steer"),
+    ).toHaveLength(1);
+    expect(events.some((event) => event.type === "question.resolved")).toBe(
+      false,
+    );
+    reply(steer.id as number, {});
+    await waitFor(
+      () => events.some((event) => event.type === "question.resolved"),
+      "async answer acceptance",
+    );
+    expect(events).toContainEqual({
+      type: "question.resolved",
+      requestId: question.requestId,
+      decision: "answered",
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("queues async and server-request questions together and ignores repeated snapshots", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    notifyAsyncQuestion("async_first");
+    notifyAsyncQuestion("async_first");
+    onLine!(
+      JSON.stringify({
+        id: "legacy_question",
+        method: "item/tool/requestUserInput",
+        params: {
+          questions: [{ id: "legacy", question: "Continue?", options: null }],
+        },
+      }),
+    );
+    notifyAsyncQuestion("async_last");
+    const asked = () =>
+      events.filter((event) => event.type === "question.asked");
+    expect(asked()).toHaveLength(1);
+    respondCodexQuestion("codex-live", asked()[0].requestId, {
+      kind: "skipped",
+    });
+    await waitFor(() => asked().length === 2, "queued server question");
+    expect(asked()[1].questions[0].id).toBe("legacy");
+    respondCodexQuestion("codex-live", asked()[1].requestId, {
+      kind: "skipped",
+    });
+    await waitFor(() => asked().length === 3, "queued async question");
+    expect(
+      parse().find((message) => message.id === "legacy_question")?.result,
+    ).toEqual({ answers: {} });
+    expect(asked()[2].callId).toBe("async_last");
+    respondCodexQuestion("codex-live", asked()[2].requestId, {
+      kind: "skipped",
+    });
+    await waitFor(
+      () =>
+        events.filter((event) => event.type === "question.resolved").length ===
+        3,
+      "question queue cleanup",
+    );
+    notifyAsyncQuestion("async_first");
+    expect(asked()).toHaveLength(3);
+    expect(parse().some((message) => message.method === "turn/steer")).toBe(
+      false,
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("keeps an async question available when sending its answer fails", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    notifyAsyncQuestion("async_question");
+    const question = events.find((event) => event.type === "question.asked")!;
+    const answer = {
+      kind: "answered" as const,
+      answers: {},
+      custom: { q1: "Another source" },
+    };
+    respondCodexQuestion("codex-live", question.requestId, answer);
+    const steer = parse().find((message) => message.method === "turn/steer")!;
+    onLine!(
+      JSON.stringify({
+        id: steer.id,
+        error: { code: -32602, message: "Try again" },
+      }),
+    );
+    await waitFor(
+      () => events.some((event) => event.type === "status"),
+      "failed async answer delivery",
+    );
+    expect(events.some((event) => event.type === "question.resolved")).toBe(
+      false,
+    );
+    expect(events).toContainEqual({
+      type: "status",
+      text: "Could not send your answer to Codex: Try again",
+    });
+    respondCodexQuestion("codex-live", question.requestId, answer);
+    const retry = parse().filter(
+      (message) => message.method === "turn/steer",
+    )[1];
+    expect(retry.params).toMatchObject({
+      input: [{ type: "text", text: "Which source?\nAnother source" }],
+    });
+    reply(retry.id as number, {});
+    await waitFor(
+      () => events.some((event) => event.type === "question.resolved"),
+      "retried async answer",
+    );
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each([false, true])(
+    "optional async questions honor interaction=%s",
+    async (interact) => {
+      const { events, turn } = await startTurn("codex-live");
+      vi.useFakeTimers();
+      notifyAsyncQuestion("async_question");
+      const question = events.find((event) => event.type === "question.asked")!;
+      await vi.advanceTimersByTimeAsync(60_000);
+      if (interact) keepCodexQuestionOpen("codex-live", question.requestId);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(events.some((event) => event.type === "question.resolved")).toBe(
+        !interact,
+      );
+      if (!interact)
+        expect(events).toContainEqual({
+          type: "question.resolved",
+          requestId: question.requestId,
+          decision: "skipped",
+        });
+      expect(parse().some((message) => message.method === "turn/steer")).toBe(
+        false,
+      );
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
+
+  it.each(["complete", "cancel", "stop"])(
+    "clears async questions on %s without sending a stale answer",
+    async (action) => {
+      const { events, turn } = await startTurn("codex-live");
+      notifyAsyncQuestion("async_question");
+      const question = events.find((event) => event.type === "question.asked")!;
+      if (action === "cancel") {
+        const cancel = cancelCodexTurn("codex-live");
+        const interrupt = parse().find(
+          (message) => message.method === "turn/interrupt",
+        )!;
+        reply(interrupt.id as number, {});
+        await cancel;
+      } else if (action === "stop") await stopCodexSession("codex-live");
+      else
+        notify("turn/completed", {
+          turn: { id: "turn_1", status: "completed" },
+        });
+      await turn;
+      await waitFor(
+        () => events.some((event) => event.type === "question.resolved"),
+        "async question cancellation",
+      );
+      respondCodexQuestion("codex-live", question.requestId, {
+        kind: "answered",
+        answers: { q1: ["Local"] },
+      });
+      expect(events).toContainEqual({
+        type: "question.resolved",
+        requestId: question.requestId,
+        decision: "cancelled",
+      });
+      expect(parse().some((message) => message.method === "turn/steer")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("ignores async questions from a different turn", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    notifyAsyncQuestion("old_question", "turn_old");
+    expect(events.some((event) => event.type === "question.asked")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
 
   it.each([undefined, "plan"] as const)(
     "answers fresh clock reads without interrupting a pending question, intent=%s",

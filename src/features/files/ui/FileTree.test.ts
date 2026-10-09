@@ -147,6 +147,13 @@ describe("FileTree render isolation", () => {
     ).toBe("mc/update-readme-tests files");
   });
 
+  it("keeps room for descenders in truncated file names", async () => {
+    await act(async () => render());
+    expect(row("first.ts").lastElementChild?.className).toContain(
+      "leading-label",
+    );
+  });
+
   it.each([false, true])(
     "skips unchanged rows on parent updates (hidden=%s)",
     async (hidden) => {
@@ -467,5 +474,76 @@ describe("FileTree starts Explorer file drags", () => {
     expect(events).toEqual([]);
 
     window.removeEventListener(EXPLORER_FILE_POINTER_DRAG_EVENT, onDrag);
+  });
+});
+
+describe("FileTree keyboard navigation", () => {
+  const selected = () =>
+    container.querySelector<HTMLButtonElement>('[role="treeitem"].bg-selection')
+      ?.title;
+
+  beforeEach(async () => {
+    directories.set(cwd, [folder("src"), file("first.ts"), file("second.ts")]);
+    directories.set(`${cwd}/src`, [
+      { name: "a.ts", path: `${cwd}/src/a.ts`, isDir: false, ignored: false },
+    ]);
+    await refreshDir(cwd);
+    saveSelected(cwd, `${cwd}/src`);
+    await act(async () => render());
+  });
+
+  it("moves the selection with the arrow keys and Home/End", async () => {
+    await press(row("src"), { key: "ArrowDown" });
+    expect(selected()).toBe(`${cwd}/first.ts`);
+    await press(row("first.ts"), { key: "End" });
+    expect(selected()).toBe(`${cwd}/second.ts`);
+    await press(row("second.ts"), { key: "ArrowUp" });
+    expect(selected()).toBe(`${cwd}/first.ts`);
+    await press(row("first.ts"), { key: "Home" });
+    expect(
+      container
+        .querySelector("[data-explorer-root]")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(selected()).toBeUndefined();
+  });
+
+  it("expands with Right, enters the folder, and walks back out with Left", async () => {
+    await press(row("src"), { key: "ArrowRight" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("true");
+    expect(row("src/a.ts")).not.toBeNull();
+    await press(row("src"), { key: "ArrowRight" });
+    expect(selected()).toBe(`${cwd}/src/a.ts`);
+    await press(row("src/a.ts"), { key: "ArrowLeft" });
+    expect(selected()).toBe(`${cwd}/src`);
+    await press(row("src"), { key: "ArrowLeft" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("opens files with Enter and toggles folders", async () => {
+    await press(row("src"), { key: "Enter" });
+    expect(row("src").getAttribute("aria-expanded")).toBe("true");
+    await press(row("src"), { key: "End" });
+    await press(row("second.ts"), { key: "Enter" });
+    expect(props.onOpenFile).toHaveBeenCalledWith(
+      `${cwd}/second.ts`,
+      undefined,
+      { exact: true },
+    );
+  });
+
+  it("jumps to a row by typing its name", async () => {
+    await press(row("src"), { key: "s" });
+    expect(selected()).toBe(`${cwd}/second.ts`);
+    await press(row("second.ts"), { key: "s" });
+    expect(selected()).toBe(`${cwd}/src`);
+    await press(row("src"), { key: "f" });
+    expect(selected()).toBe(`${cwd}/src`);
+  });
+
+  it("narrows the match as more of the name is typed", async () => {
+    await press(row("src"), { key: "s" });
+    await press(row("second.ts"), { key: "r" });
+    expect(selected()).toBe(`${cwd}/src`);
   });
 });

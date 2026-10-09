@@ -33,6 +33,9 @@ export type TextPromptInput = {
   providerAccountId?: string;
   model?: string;
   modelSettings?: Record<string, string>;
+  /** Codex defaults to unsaved threads; false allows resumable side questions. */
+  ephemeral?: boolean;
+  codexStore?: "mono";
   threadId?: string;
   onThreadId?: (threadId: string) => void;
   intent?: TurnIntent;
@@ -90,7 +93,7 @@ export type HarnessAdapter = {
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
-  generateCommitMessage?(cwd: string, signal?: AbortSignal): Promise<string>;
+  generateCommitMessage?(cwd: string, signal?: AbortSignal, paths?: readonly string[]): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
   generatePrContent?(
     cwd: string,
@@ -226,7 +229,13 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       });
     activeTurnSessions.add(input.sessionId);
     try {
-      await adapter.sendTurn(input);
+      await adapter.sendTurn({
+        ...input,
+        onAccepted: () => {
+          input.onEvent({ type: "turn.ready" });
+          input.onAccepted?.();
+        },
+      });
     } finally {
       activeTurnSessions.delete(input.sessionId);
       if (controlled)
@@ -396,6 +405,8 @@ export async function refreshHarnessCatalogs(
       .filter((adapter) => wanted.has(adapter.id))
       .map(async (adapter) => {
         if (!adapter.refreshCatalog) return;
+        // `force` marks an explicit user action (opening the model dropdown);
+        // routine refreshes keep skipping adapters with a live catalog.
         if (!options?.force && hasLiveCatalog(adapter.id)) return;
         await adapter.refreshCatalog().catch((error: unknown) => {
           console.debug(`[monocode] ${adapter.id} catalog`, error);
@@ -417,13 +428,16 @@ export async function generateHarnessCommitMessage(
   harness: HarnessId,
   cwd: string,
   signal?: AbortSignal,
+  paths?: readonly string[],
 ): Promise<string> {
   const adapter = requireHarness(harness);
   if (!adapter.generateCommitMessage) {
     throw new Error(`${harness} does not support commit message generation`);
   }
   signal?.throwIfAborted();
-  return adapter.generateCommitMessage(cwd, signal);
+  return paths === undefined
+    ? adapter.generateCommitMessage(cwd, signal)
+    : adapter.generateCommitMessage(cwd, signal, paths);
 }
 
 export async function generateHarnessPrContent(

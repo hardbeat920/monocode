@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Check,
@@ -21,9 +27,21 @@ import {
 } from "../../../platform/tauri/fs";
 import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { claimTrackpadMagnify } from "../../../platform/tauri/trackpadZoom";
+import { resolveZoomKeybinding } from "../../settings/model/zoomKeybinding";
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 16;
+const ZOOM_STEP = 1.5;
+
+type Zoom = number | "fit";
+/** An image point that must stay under a client point after a zoom renders. */
+type ZoomAnchor = {
+  imageX: number;
+  imageY: number;
+  clientX: number;
+  clientY: number;
+};
 
 type Props = { path: string; cwd: string };
 
@@ -152,10 +170,122 @@ function ImageView({
   mime: string;
 }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
-  const [zoom, setZoom] = useState<number | "fit">("fit");
+  const [zoom, setZoomState] = useState<Zoom>("fit");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const copiedTimer = useRef<number | null>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const zoomRef = useRef<Zoom>(zoom);
+  const anchorRef = useRef<ZoomAnchor | null>(null);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  const setZoom = useCallback((next: Zoom) => {
+    anchorRef.current = null;
+    zoomRef.current = next;
+    setZoomState(next);
+  }, []);
+
+  /** The rendered scale, including what "fit" works out to right now. */
+  const currentScale = useCallback(() => {
+    const value = zoomRef.current;
+    if (value !== "fit") return value;
+    const image = imageRef.current;
+    if (!image?.naturalWidth) return 1;
+    return image.getBoundingClientRect().width / image.naturalWidth;
+  }, []);
+
+  // Zooms so the image point under (clientX, clientY) stays there.
+  const zoomAt = useCallback(
+    (next: number, clientX: number, clientY: number) => {
+      const image = imageRef.current;
+      if (!image) return;
+      const scale = currentScale();
+      const rect = image.getBoundingClientRect();
+      setZoom(clampZoom(next));
+      anchorRef.current = {
+        imageX: (clientX - rect.left) / scale,
+        imageY: (clientY - rect.top) / scale,
+        clientX,
+        clientY,
+      };
+    },
+    [currentScale, setZoom],
+  );
+
+  const zoomAtCenter = useCallback(
+    (next: number) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      const rect = scroller.getBoundingClientRect();
+      zoomAt(next, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    },
+    [zoomAt],
+  );
+
+  // A pinch carries no position, so it zooms toward the last pointer spot.
+  const zoomAtPointer = useCallback(
+    (next: number) => {
+      const pointer = pointerRef.current;
+      if (pointer) zoomAt(next, pointer.x, pointer.y);
+      else zoomAtCenter(next);
+    },
+    [zoomAt, zoomAtCenter],
+  );
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const image = imageRef.current;
+    const scroller = scrollerRef.current;
+    anchorRef.current = null;
+    if (!anchor || !image || !scroller || zoom === "fit") return;
+    const rect = image.getBoundingClientRect();
+    scroller.scrollLeft += rect.left + anchor.imageX * zoom - anchor.clientX;
+    scroller.scrollTop += rect.top + anchor.imageY * zoom - anchor.clientY;
+  }, [zoom]);
+
+  // Cmd/Ctrl+scroll zooms; a plain scroll still pans the scroller.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+      const factor = Math.exp(-event.deltaY * unit * 0.01);
+      zoomAt(currentScale() * factor, event.clientX, event.clientY);
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, [currentScale, zoomAt]);
+
+  // While the pointer is over the preview, pinches and the zoom keys act on
+  // the image instead of the app.
+  useEffect(() => {
+    if (!hovered) return;
+    const release = claimTrackpadMagnify((delta) =>
+      zoomAtPointer(currentScale() * (1 + delta)),
+    );
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = resolveZoomKeybinding(event);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "zoom-reset") setZoom("fit");
+      else
+        zoomAtCenter(
+          action === "zoom-in"
+            ? currentScale() * ZOOM_STEP
+            : currentScale() / ZOOM_STEP,
+        );
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      release();
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [hovered, currentScale, setZoom, zoomAtCenter, zoomAtPointer]);
 
   useEffect(
     () => () => {
@@ -181,8 +311,20 @@ function ImageView({
   }, [path]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-image-zoom={hovered ? "" : undefined}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => {
+        setHovered(false);
+        pointerRef.current = null;
+      }}
+      onPointerMove={(event) => {
+        pointerRef.current = { x: event.clientX, y: event.clientY };
+      }}
+    >
       <div
+        ref={scrollerRef}
         className="grid min-h-0 flex-1 place-items-center overflow-auto overscroll-contain p-4"
         style={{
           // A checkerboard so transparent PNGs read as transparent rather than
@@ -194,6 +336,7 @@ function ImageView({
         }}
       >
         <img
+          ref={imageRef}
           src={url}
           alt=""
           draggable={false}
@@ -203,7 +346,11 @@ function ImageView({
               h: event.currentTarget.naturalHeight,
             })
           }
-          onClick={() => setZoom((value) => (value === "fit" ? 1 : "fit"))}
+          onClick={(event) => {
+            if (zoomRef.current === "fit")
+              zoomAt(1, event.clientX, event.clientY);
+            else setZoom("fit");
+          }}
           onContextMenu={
             IS_MAC
               ? (event) => {
@@ -246,9 +393,7 @@ function ImageView({
         ) : null}
         <ZoomButton
           label="Zoom out"
-          onClick={() =>
-            setZoom((value) => clampZoom((value === "fit" ? 1 : value) / 1.5))
-          }
+          onClick={() => zoomAtCenter(currentScale() / ZOOM_STEP)}
         >
           <Minus className="size-3" strokeWidth={1.75} />
         </ZoomButton>
@@ -262,9 +407,7 @@ function ImageView({
         </button>
         <ZoomButton
           label="Zoom in"
-          onClick={() =>
-            setZoom((value) => clampZoom((value === "fit" ? 1 : value) * 1.5))
-          }
+          onClick={() => zoomAtCenter(currentScale() * ZOOM_STEP)}
         >
           <Plus className="size-3" strokeWidth={1.75} />
         </ZoomButton>

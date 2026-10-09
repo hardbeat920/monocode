@@ -23,7 +23,12 @@ export const INBOX_MEDIA_PREFIXES = [
 export type InboxMediaKind = "image" | "video";
 export type InboxMediaType = { kind: InboxMediaKind; mime: string };
 
-const mediaCache = new Map<string, Promise<Uint8Array>>();
+// Each file can be up to 25 MB, so keep recent bytes under a total budget
+// instead of every image and video ever shown. Requests in flight are shared.
+const MEDIA_CACHE_BYTES = 32 * 1024 * 1024;
+const mediaCache = new Map<string, Uint8Array>();
+const mediaRequests = new Map<string, Promise<Uint8Array>>();
+let mediaCacheBytes = 0;
 
 /** Remote image/video URLs GitHub and Linear actually put in issue bodies. */
 export function isInboxMediaUrl(value: string): boolean {
@@ -66,15 +71,42 @@ export function sniffInboxMedia(bytes: Uint8Array): InboxMediaType | null {
 export function fetchInboxMedia(url: string): Promise<Uint8Array> {
   const key = url.trim();
   const cached = mediaCache.get(key);
-  if (cached) return cached;
-  const pending = invoke<ArrayBuffer>("fetch_inbox_media", { url: key }).then(
-    (buffer) => new Uint8Array(buffer),
-  );
-  mediaCache.set(key, pending);
-  pending.catch(() => {
+  if (cached) {
     mediaCache.delete(key);
-  });
+    mediaCache.set(key, cached);
+    return Promise.resolve(cached);
+  }
+  const inFlight = mediaRequests.get(key);
+  if (inFlight) return inFlight;
+  const pending = invoke<ArrayBuffer>("fetch_inbox_media", { url: key }).then(
+    (buffer) => {
+      const bytes = new Uint8Array(buffer);
+      rememberMedia(key, bytes);
+      return bytes;
+    },
+  );
+  mediaRequests.set(key, pending);
+  const settle = () => {
+    mediaRequests.delete(key);
+  };
+  pending.then(settle, settle);
   return pending;
+}
+
+function rememberMedia(key: string, bytes: Uint8Array) {
+  if (bytes.byteLength > MEDIA_CACHE_BYTES) return;
+  const previous = mediaCache.get(key);
+  if (previous) {
+    mediaCache.delete(key);
+    mediaCacheBytes -= previous.byteLength;
+  }
+  mediaCache.set(key, bytes);
+  mediaCacheBytes += bytes.byteLength;
+  for (const [oldest, old] of mediaCache) {
+    if (mediaCacheBytes <= MEDIA_CACHE_BYTES) break;
+    mediaCache.delete(oldest);
+    mediaCacheBytes -= old.byteLength;
+  }
 }
 
 function sniffVideoType(bytes: Uint8Array): InboxMediaType | null {
