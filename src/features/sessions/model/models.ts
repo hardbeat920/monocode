@@ -373,9 +373,36 @@ const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
  */
 export type ModelCatalog = {
   find(id: string): AgentModel | undefined;
+  modelsFor(harness: HarnessId): AgentModel[];
 };
 
-const LOCAL_CATALOG: ModelCatalog = { find: (id) => lookupModel(id) };
+// Only live entries carry capabilities, so the bundled list is left out: an
+// exact bundled hit would hide an equivalent discovered entry.
+const LOCAL_CATALOG: ModelCatalog = {
+  find: (id) => findModel(id),
+  modelsFor: (harness) => modelsFor(harness),
+};
+
+/**
+ * The catalog entry whose capabilities apply to a saved model: the exact
+ * picker id first, then the same native model within the provider. Saved ids
+ * can differ from discovered ones (`claude:opus-4.7` and `claude:opus-4-7`
+ * both launch `claude-opus-4-7`), and an exact-only match would lose what the
+ * discovered entry confirms.
+ */
+function capabilityModel(
+  harness: HarnessId,
+  modelId: string,
+  catalog: ModelCatalog,
+): AgentModel | undefined {
+  const exact = catalog.find(modelId);
+  if (exact?.harness === harness) return exact;
+  const native = nativeModelId(modelId);
+  if (!native) return undefined;
+  return catalog
+    .modelsFor(harness)
+    .find((model) => nativeModelId(model) === native);
+}
 
 /**
  * Access modes offered for a model. Auto also needs the model: Claude only
@@ -389,7 +416,7 @@ export function runtimeModesFor(
   modelId: string,
   catalog: ModelCatalog = LOCAL_CATALOG,
 ): RuntimeMode[] {
-  const supported = catalog.find(modelId)?.supportsAuto;
+  const supported = capabilityModel(harness, modelId, catalog)?.supportsAuto;
   const autoOk =
     harness === "claude" ? supported === true : supported !== false;
   return (HARNESS_RUNTIME_MODES[harness] ?? EDIT_MODES).filter(

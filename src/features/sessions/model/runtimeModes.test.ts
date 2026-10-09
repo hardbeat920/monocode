@@ -83,3 +83,65 @@ describe("runtimeModesFor", () => {
     );
   });
 });
+
+describe("saved model ids that differ from discovered ones", () => {
+  const discover = (id: string, supportsAuto: boolean) =>
+    setHarnessModels("claude", [
+      {
+        id,
+        harness: "claude",
+        name: "Opus 4.7",
+        nativeId: "claude-opus-4-7",
+        supportsAuto,
+      },
+    ]);
+
+  it("picks up confirmed Auto once discovery arrives", () => {
+    // Saved before discovery, with the picker's dotted id.
+    expect(runtimeModesFor("claude", "claude:opus-4.7")).not.toContain("auto");
+    expect(coerceRuntimeMode("claude", "claude:opus-4.7", "auto")).toBe(
+      "auto-accept-edits",
+    );
+    discover("claude:opus-4-7", true);
+    expect(runtimeModesFor("claude", "claude:opus-4.7")).toContain("auto");
+    expect(coerceRuntimeMode("claude", "claude:opus-4.7", "auto")).toBe("auto");
+  });
+
+  it("follows a discovered entry over a bundled one with the saved id", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-4-6",
+        harness: "claude",
+        name: "Opus 4.6",
+        nativeId: "claude-opus-4-6",
+        supportsAuto: true,
+      },
+    ]);
+    expect(runtimeModesFor("claude", "claude:opus-4.6")).toContain("auto");
+  });
+
+  it("prefers the exact picker id", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus-4.7",
+        harness: "claude",
+        name: "Opus 4.7",
+        nativeId: "claude-opus-4-7",
+        supportsAuto: false,
+      },
+      {
+        id: "claude:opus-4-7",
+        harness: "claude",
+        name: "Opus 4.7",
+        nativeId: "claude-opus-4-7",
+        supportsAuto: true,
+      },
+    ]);
+    expect(runtimeModesFor("claude", "claude:opus-4.7")).not.toContain("auto");
+  });
+
+  it("does not borrow support from another version", () => {
+    discover("claude:opus-4-7", true);
+    expect(runtimeModesFor("claude", "claude:opus-4.6")).not.toContain("auto");
+  });
+});
