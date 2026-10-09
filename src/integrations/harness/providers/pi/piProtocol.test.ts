@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   agentEndWillRetry,
+  compactionEventFromPiEvent,
+  compactionSummaryFromPiEvent,
   assistantDeltaFromEvent,
   buildPiPrompt,
   buildPiSpawnArgs,
@@ -599,5 +601,107 @@ describe("turnErrorFromEvent", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("compactionEventFromPiEvent", () => {
+  it("shows a compacting status while compaction runs", () => {
+    expect(
+      compactionEventFromPiEvent({
+        type: "compaction_start",
+        reason: "threshold",
+      }),
+    ).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+  });
+
+  it("marks the boundary with what Pi kept", () => {
+    expect(
+      compactionEventFromPiEvent({
+        type: "compaction_end",
+        reason: "threshold",
+        result: {
+          summary: "Summary of conversation...",
+          firstKeptEntryId: "abc123",
+          tokensBefore: 150_000,
+          estimatedTokensAfter: 32_000,
+        },
+        aborted: false,
+        willRetry: false,
+      }),
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "recent",
+      preTokens: 150_000,
+    });
+    expect(
+      compactionEventFromPiEvent({
+        type: "compaction_end",
+        reason: "manual",
+        result: { summary: "…" },
+      }),
+      // No cut point reported: we cannot tell what Pi kept, so claim nothing.
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "unknown",
+    });
+  });
+
+  it("clears the status when compaction is aborted or fails", () => {
+    const cleared = { type: "status", key: "compaction", text: "" };
+    expect(
+      compactionEventFromPiEvent({
+        type: "compaction_end",
+        result: null,
+        aborted: true,
+      }),
+    ).toEqual(cleared);
+    expect(
+      compactionEventFromPiEvent({
+        type: "compaction_end",
+        result: null,
+        aborted: false,
+        errorMessage: "quota exceeded",
+      }),
+    ).toEqual(cleared);
+  });
+
+  it("ignores other events", () => {
+    expect(compactionEventFromPiEvent({ type: "agent_end" })).toBeNull();
+  });
+});
+
+describe("compactionSummaryFromPiEvent", () => {
+  it("reads the summary Pi compacted into", () => {
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "compaction_end",
+        result: {
+          summary: "  Summary of conversation...  ",
+          firstKeptEntryId: "a",
+        },
+      }),
+    ).toBe("Summary of conversation...");
+  });
+
+  it("has none for an aborted pass or another event", () => {
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "compaction_end",
+        result: null,
+        aborted: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      compactionSummaryFromPiEvent({
+        type: "agent_end",
+        result: { summary: "x" },
+      }),
+    ).toBeUndefined();
   });
 });

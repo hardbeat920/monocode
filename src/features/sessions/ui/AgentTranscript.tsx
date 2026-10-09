@@ -7,6 +7,7 @@ import {
   Copy,
   FilePlusCorner,
   ListBullet,
+  MessageSquarePlus,
   Minus,
   Pencil,
   PenLine,
@@ -81,6 +82,7 @@ import {
   HARNESS_TITLE,
   type AgentStep,
   type Block,
+  type ContextKept,
   type HarnessId,
   type InterjectionMeta,
   type ModelTarget,
@@ -142,6 +144,8 @@ import {
   type TurnItem,
 } from "../model/transcriptActivity";
 import { lastUserTurnBlock } from "../model/editLastTurn";
+import { outOfContextIds, resendableIds } from "../model/contextBoundary";
+import { formatTokens } from "../model/contextUsage";
 import {
   monoCodeToolCall,
   monoCodeWorkSummary,
@@ -321,6 +325,11 @@ function AgentTranscriptComponent({
       ? sourceBlocks
       : visibleBlocks;
   }, [harness, sourceBlocks]);
+  const outOfContext = useMemo(() => outOfContextIds(blocks), [blocks]);
+  const resendable = useMemo(
+    () => (onAddToChat ? resendableIds(blocks) : new Set<string>()),
+    [blocks, onAddToChat],
+  );
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -1133,6 +1142,28 @@ function AgentTranscriptComponent({
             item.type === "block"
               ? item.block.id === searchCurrent
               : item.blocks.some((block) => block.id === searchCurrent);
+          // The turn's answer, outside the folded work, if the agent may have
+          // lost it; the footer offers it back.
+          const lostReply = items
+            .filter(
+              (item, index) =>
+                !(fold && index >= fold.start && index <= fold.end) &&
+                item.type === "block" &&
+                item.block.role === "assistant" &&
+                resendable.has(item.block.id),
+            )
+            .map((item) => (item.type === "block" ? item.block.text : ""))
+            .join("\n\n");
+          // Dimmed rows stay readable; hover brings them back to full.
+          const dim = (entries: TurnItem[]) =>
+            entries.length > 0 &&
+            entries.every((entry) =>
+              entry.type === "block"
+                ? outOfContext.has(entry.block.id)
+                : entry.blocks.every((block) => outOfContext.has(block.id)),
+            )
+              ? " opacity-55 transition-opacity hover:opacity-100"
+              : "";
           const isCompactFollowUp = (item: TurnItem, index: number) => {
             const next = items[index + 1];
             return (
@@ -1143,7 +1174,12 @@ function AgentTranscriptComponent({
               next.block.role === "user"
             );
           };
-          const renderItem = (item: TurnItem, itemIndex: number) =>
+          // Work the fold holds is narration, not something to hand back.
+          const renderItem = (
+            item: TurnItem,
+            itemIndex: number,
+            inFold = false,
+          ) =>
             item.type === "subagents" && !inlineWork ? (
               <SubagentStack
                 key={item.blocks[0].id}
@@ -1198,6 +1234,13 @@ function AgentTranscriptComponent({
                 bubbleTail={!!agentMascot}
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
                 delivery={messageDeliveries?.get(item.block.id)}
+                onAddToChat={
+                  !inFold &&
+                  item.block.role === "user" &&
+                  resendable.has(item.block.id)
+                    ? onAddToChat
+                    : undefined
+                }
                 onRetryMessage={onRetryMessage}
                 visible={item.block.role === "user" ? visible : undefined}
                 stickyIndex={firstVisibleTurn + turnIndex + 1}
@@ -1340,7 +1383,7 @@ function AgentTranscriptComponent({
                                 offset === foldWork.length - 1
                                   ? "zen-fold-tail"
                                   : ""
-                              }${
+                              }${dim([entry])}${
                                 // Prose the trail holds is the agent talking
                                 // while it works; the marker lets it read as
                                 // process, not result.
@@ -1350,7 +1393,7 @@ function AgentTranscriptComponent({
                                   : ""
                               }`}
                             >
-                              {renderItem(entry, index)}
+                              {renderItem(entry, index, true)}
                             </div>
                           ))
                         }
@@ -1366,7 +1409,7 @@ function AgentTranscriptComponent({
                           data-transcript-search-current={
                             isCurrentItem(entry) || undefined
                           }
-                          className="flow-root pb-1"
+                          className={`flow-root pb-1${dim([entry])}`}
                         >
                           {renderItem(entry, index)}
                         </div>
@@ -1380,7 +1423,7 @@ function AgentTranscriptComponent({
                       data-transcript-search-current={
                         isCurrentItem(item) || undefined
                       }
-                      className={`flow-root ${isCompactFollowUp(item, itemIndex) ? "pb-0" : "pb-1"}`}
+                      className={`flow-root ${isCompactFollowUp(item, itemIndex) ? "pb-0" : "pb-1"}${dim([item])}`}
                     >
                       {renderItem(item, itemIndex)}
                     </div>
@@ -1447,6 +1490,11 @@ function AgentTranscriptComponent({
                         )
                       : turn,
                   )}
+                  onAddToChat={
+                    onAddToChat && lostReply
+                      ? () => onAddToChat(lostReply)
+                      : undefined
+                  }
                   onSaveNote={onSaveNote}
                   onShowWork={
                     inlineWork && onShowWork
@@ -1648,6 +1696,7 @@ function TurnDuration({
   onShowSessions,
   sessionsExpanded,
   sessionCount,
+  onAddToChat,
   fromHarness,
   fromModel,
   onSecondOpinion,
@@ -1668,6 +1717,8 @@ function TurnDuration({
   onShowSessions?: () => void;
   sessionsExpanded?: boolean;
   sessionCount?: number;
+  /** Offered when the agent may no longer hold this turn's reply. */
+  onAddToChat?: () => void;
   fromHarness?: HarnessId;
   /** The turn's own model, so a same-harness second opinion can hide it. */
   fromModel?: string;
@@ -1695,6 +1746,7 @@ function TurnDuration({
             {onSaveNote ? (
               <SaveNoteButton text={output} onSave={onSaveNote} />
             ) : null}
+            {onAddToChat ? <AddToChatButton onAdd={onAddToChat} /> : null}
           </>
         ) : (
           <Check className="size-3.5" strokeWidth={1.75} />
@@ -1991,6 +2043,24 @@ function SaveNoteButton({
   );
 }
 
+/** Quote a message the agent may have lost into the composer, to send again. */
+function AddToChatButton({ onAdd }: { onAdd: () => void }) {
+  return (
+    <button
+      type="button"
+      title="Add to chat: the agent may no longer have this message"
+      aria-label="Add to chat"
+      onClick={(event) => {
+        event.stopPropagation();
+        onAdd();
+      }}
+      className="rounded-md p-1 text-content/40 transition-[background-color,color] duration-150 hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
+    >
+      <MessageSquarePlus className="size-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
 function EditLastTurnButton({
   onEdit,
   editing = false,
@@ -2047,6 +2117,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings,
   onEditLastTurn,
   editing = false,
+  onAddToChat,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -2076,10 +2147,13 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModelSettings?: Record<string, string>;
   onEditLastTurn?: () => void;
   editing?: boolean;
+  /** Offered on a user message the agent may no longer hold. */
+  onAddToChat?: (text: string) => void;
 }) {
   if (block.role === "user") {
     return (
       <UserMessageBlock
+        onAddToChat={onAddToChat}
         block={block}
         layout={layout}
         bubbleTail={bubbleTail}
@@ -2178,6 +2252,15 @@ const TranscriptBlock = memo(function TranscriptBlock({
   }
 
   if (block.role === "system") {
+    if (block.contextBoundary) {
+      return (
+        <ContextBoundaryDivider
+          block={block}
+          cwd={cwd}
+          onOpenFile={onOpenFile}
+        />
+      );
+    }
     if (block.interjection) {
       return <InterjectionDivider block={block} />;
     }
@@ -2225,6 +2308,7 @@ function UserMessageBlock({
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
+  onAddToChat,
 }: {
   block: Block;
   layout: TranscriptLayout;
@@ -2234,6 +2318,7 @@ function UserMessageBlock({
   onRetryMessage?: (blockId: string) => void;
   visible: boolean;
   stickyIndex: number;
+  onAddToChat?: (text: string) => void;
   onEdit?: () => void;
   editing?: boolean;
   cwd?: string;
@@ -2587,6 +2672,9 @@ function UserMessageBlock({
             ) : null}
             {onEdit ? (
               <EditLastTurnButton onEdit={onEdit} editing={editing} />
+            ) : null}
+            {text && onAddToChat ? (
+              <AddToChatButton onAdd={() => onAddToChat(text)} />
             ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />
@@ -4695,6 +4783,103 @@ function ApprovalControls({
       >
         Deny
       </button>
+    </div>
+  );
+}
+
+/** Why a Mono moved to a fresh provider session. */
+const ROTATION_REASON = {
+  context: "context grew",
+  idle: "after a break",
+} as const;
+
+/** What survived, in the reader's terms; silent when the harness never said. */
+const CONTEXT_KEPT_NOTE: Record<ContextKept, string | undefined> = {
+  none: "Earlier messages were summarized",
+  "user-messages":
+    "Your recent prompts were kept; earlier replies were summarized",
+  recent: "Older messages were summarized; recent ones were kept",
+  unknown: undefined,
+};
+
+/**
+ * Where the harness compacted its context. Everything above it stays in the
+ * transcript, but the agent may now hold only a summary of it. Where the
+ * harness shares that summary, it folds out from under the divider.
+ */
+function ContextBoundaryDivider({
+  block,
+  cwd,
+  onOpenFile,
+}: {
+  block: Block;
+  cwd?: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const meta = block.contextBoundary;
+  if (!meta) return null;
+  const tokens =
+    meta.preTokens != null
+      ? meta.postTokens != null
+        ? `${formatTokens(meta.preTokens)} → ${formatTokens(meta.postTokens)} tokens`
+        : `${formatTokens(meta.preTokens)} tokens`
+      : undefined;
+  const rotation = meta.kind === "rotation";
+  const label = [
+    block.text,
+    rotation
+      ? meta.reason && ROTATION_REASON[meta.reason]
+      : meta.trigger === "auto"
+        ? "automatic"
+        : undefined,
+    tokens,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const note = rotation
+    ? meta.kept === "none"
+      ? "Earlier exchanges carried as one line each"
+      : "Earlier exchanges carried as one line each; the latest word for word"
+    : CONTEXT_KEPT_NOTE[meta.kept];
+
+  return (
+    <div className="px-4 py-5" data-context-boundary>
+      <div className="flex items-center gap-3">
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+        <div
+          role="separator"
+          aria-label={note ? `${label}. ${note}` : label}
+          className="max-w-[min(100%,28rem)] px-1.5 text-center font-sans text-[12px] text-content/55"
+        >
+          <div>{label}</div>
+          {note ? (
+            <div className="text-[11px] text-content/40">{note}</div>
+          ) : null}
+        </div>
+        <div className="h-px min-w-4 flex-1 bg-content/12" />
+      </div>
+      {meta.summary ? (
+        <div className="mt-1 text-center">
+          <button
+            type="button"
+            aria-expanded={summaryOpen}
+            onClick={() => setSummaryOpen((open) => !open)}
+            className="py-1 font-sans text-xs text-content/55 hover:text-content"
+          >
+            {summaryOpen ? "Hide summary" : "Show summary"}
+          </button>
+          {summaryOpen ? (
+            <div className="mt-1 rounded-md border border-content/10 px-3 py-2 text-left text-[13px] text-content/75">
+              <AgentMarkdown
+                text={meta.summary}
+                cwd={cwd}
+                onOpenFile={onOpenFile}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

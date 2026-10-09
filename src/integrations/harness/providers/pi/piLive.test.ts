@@ -127,6 +127,73 @@ describe("Pi live session", () => {
     await stopPiSession("pi-compact");
   });
 
+  it("marks a manual compaction from the RPC result when Pi sends no event", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") {
+        return { data: { sessionId: "pi_session", model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === "compact") {
+        return {
+          data: {
+            summary: "…",
+            firstKeptEntryId: "abc",
+            tokensBefore: 150_000,
+            estimatedTokensAfter: 32_000,
+          },
+        };
+      }
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-compact-result",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.filter((event) => event.type.startsWith("context."))).toEqual([
+      {
+        type: "context.compacted",
+        trigger: "manual",
+        kept: "recent",
+        preTokens: 150_000,
+      },
+      { type: "context.summarized", summary: "…" },
+    ]);
+    await stopPiSession("pi-compact-result");
+  });
+
+  it("marks a manual compaction once when Pi also streams its end", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") {
+        return { data: { sessionId: "pi_session", model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === "compact") {
+        const result = { summary: "…", firstKeptEntryId: "abc" };
+        mocks.frames[0]!({ type: "compaction_start", reason: "manual" });
+        mocks.frames[0]!({ type: "compaction_end", reason: "manual", result });
+        return { data: result };
+      }
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-compact-event",
+      cwd: "/repo",
+      model: "pi:default",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(
+      events.filter((event) => event.type === "context.compacted"),
+    ).toHaveLength(1);
+    expect(events.filter((event) => event.type === "context.summarized")).toEqual([
+      { type: "context.summarized", summary: "…" },
+    ]);
+    await stopPiSession("pi-compact-event");
+  });
+
   it("publishes readable Ponytail status and extension notifications", async () => {
     const events: HarnessEvent[] = [];
     await compactPiContext({

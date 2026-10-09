@@ -30,6 +30,7 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import type { HostProvider } from "./providers";
+import { runManualCompaction } from "../src/integrations/harness/core/compaction";
 import { HostStore } from "./store";
 import { parseRemoteAttachments, resolveAttachments } from "./attachments";
 
@@ -800,7 +801,10 @@ export class HostEngine {
               intent,
               onEvent: (event) => this.event(session.id, runId!, event),
             };
-            if (prompt === null) await provider.compact!(input);
+            if (prompt === null)
+              await runManualCompaction(input, (next) =>
+                provider.compact!(next),
+              );
             else
               await provider.send({
                 ...input,

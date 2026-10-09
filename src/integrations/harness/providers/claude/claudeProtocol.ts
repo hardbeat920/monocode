@@ -11,6 +11,10 @@ import {
 } from "../../../../features/sessions/model/attachments";
 import { parseResetTimestamp } from "../../../../features/providers/model/rateLimits";
 import {
+  compactingStatus,
+  compactingStatusCleared,
+} from "../../../../features/sessions/model/contextBoundary";
+import {
   isTaskListToolName,
   normalizeTaskListStatus,
   taskListFromToolInput,
@@ -466,15 +470,100 @@ export function statusTextFromSystem(
 ): string | undefined {
   if (stringField(rec, "type") !== "system") return undefined;
   const subtype = stringField(rec, "subtype") ?? "";
-  const compact = subtype.startsWith("compact");
-  if (subtype !== "status" && !compact) return undefined;
+  // The boundary gets its own row; see `compactionEventFromSystem`.
+  if (subtype === "compact_boundary") return undefined;
+  if (subtype !== "status" && !subtype.startsWith("compact")) return undefined;
   // Prose lives in `message`; `status` carries the bare lifecycle token.
   const text = (stringField(rec, "message") ?? "").trim();
   const notable =
     text && !LIFECYCLE_STATUSES.has(text.toLowerCase().replace(/[\s.…]+$/, ""));
-  if (notable) return text;
-  // Compaction is worth one row even when the CLI sends no prose with it.
-  return compact ? "Compacted context" : undefined;
+  return notable ? text : undefined;
+}
+
+const SUMMARY_PREAMBLE = /^This session is being continued[\s\S]*?\nSummary:\n/;
+// What follows the summary is for the model: a pointer to the saved transcript
+// (only when the session is persisted) and the instruction to resume.
+const SUMMARY_TRAILER =
+  /\n+(?:If you need specific details from before compaction|Continue the conversation from where it left off)[\s\S]*$/;
+
+/**
+ * The summary Claude Code carries past a compaction. It streams as a synthetic
+ * user message right after `compact_boundary`, wrapped in a preamble and a
+ * resume instruction meant for the model; both are stripped when they match,
+ * and the text is kept whole when they don't. The replayed "Compacted" command
+ * output is also synthetic-looking but marked `isReplay`.
+ */
+export function compactSummaryFromUser(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "user") return undefined;
+  if (rec.isSynthetic !== true || rec.isReplay === true) return undefined;
+  const content = asRecord(rec.message)?.content;
+  const text = (
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) => stringField(asRecord(part), "text") ?? "")
+            .join("\n")
+        : ""
+  ).trim();
+  if (!text) return undefined;
+  const body = text.replace(SUMMARY_PREAMBLE, "").replace(SUMMARY_TRAILER, "");
+  return body.trim() || text;
+}
+
+/**
+ * Why Claude Code gave up on a compaction, from the status that ends it with
+ * `compact_result: "failed"` (for example "Not enough messages to compact.").
+ */
+export function compactionErrorFromSystem(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  if (stringField(rec, "subtype") !== "status") return undefined;
+  if (stringField(rec, "compact_result") !== "failed") return undefined;
+  return (
+    stringField(rec, "compact_error")?.trim() ||
+    "Claude Code could not compact this context"
+  );
+}
+
+/**
+ * Compaction as Claude Code streams it: `status: "compacting"` while it runs,
+ * then a `compact_boundary`, or a status with `compact_result: "failed"`. The stream writes its metadata in snake_case and
+ * the session file in camelCase, so both are read. A preserved segment means
+ * Claude kept a recent tail alongside its summary.
+ */
+export function compactionEventFromSystem(
+  rec: Record<string, unknown>,
+): HarnessEvent | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  const subtype = stringField(rec, "subtype");
+  if (subtype === "status") {
+    if (compactionErrorFromSystem(rec)) return compactingStatusCleared();
+    return stringField(rec, "status") === "compacting"
+      ? compactingStatus()
+      : undefined;
+  }
+  if (subtype !== "compact_boundary") return undefined;
+  const meta = asRecord(rec.compact_metadata) ?? asRecord(rec.compactMetadata);
+  if (!meta) return { type: "context.compacted", trigger: "auto", kept: "unknown" };
+  const read = (snake: string, camel: string) => meta[snake] ?? meta[camel];
+  const tokens = (snake: string, camel: string) => {
+    const value = read(snake, camel);
+    return typeof value === "number" && value > 0 ? value : undefined;
+  };
+  const preserved = read("preserved_segment", "preservedSegment");
+  const preTokens = tokens("pre_tokens", "preTokens");
+  const postTokens = tokens("post_tokens", "postTokens");
+  return {
+    type: "context.compacted",
+    trigger: stringField(meta, "trigger") === "manual" ? "manual" : "auto",
+    kept: preserved != null ? "recent" : "none",
+    ...(preTokens != null ? { preTokens } : {}),
+    ...(postTokens != null ? { postTokens } : {}),
+  };
 }
 
 export function turnStatusFromResult(rec: Record<string, unknown>): {

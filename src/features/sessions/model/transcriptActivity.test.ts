@@ -1399,6 +1399,36 @@ describe("the settled work trail", () => {
     expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual(["t1"]);
   });
 
+  it("keeps a context boundary outside the trail, live or settled", () => {
+    const boundary: Block = {
+      id: "b1",
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: { kind: "compaction", trigger: "auto", at: 1, kept: "none" },
+    };
+    const turn: Block[] = [
+      { id: "u", role: "user", text: "go" },
+      shell("t1"),
+      boundary,
+      shell("t2"),
+      { id: "done", role: "assistant", text: "Done." },
+    ];
+    for (const options of [{ settled: false }, { settled: true }]) {
+      const items = groupTurnItems(turn, options);
+      expect(items.map((item) => item.type)).toEqual([
+        "block",
+        "activity",
+        "block",
+        "activity",
+        "block",
+      ]);
+      expect(items[2]).toMatchObject({ type: "block", block: { id: "b1" } });
+    }
+    expect(
+      groupMonoTurnItems(turn.slice(1, 4)).map((item) => item.type),
+    ).toEqual(["activity", "block", "activity"]);
+  });
+
   it("keeps a persisted interrupt outside the trail even without the tag", () => {
     const items = groupTurnItems(
       [
@@ -1864,5 +1894,43 @@ describe("subagent model labels", () => {
     expect(subagentModelName(row("custom-model-v2"))).toBe("custom-model-v2");
     for (const model of [undefined, "", "auto", "inherit", "default"])
       expect(subagentModelName(row(model))).toBeUndefined();
+  });
+});
+
+describe("context boundaries between turns", () => {
+  const compacted = (trigger: "manual" | "auto"): Block => ({
+    id: `b-${trigger}`,
+    role: "system",
+    text: "Context compacted",
+    contextBoundary: { kind: "compaction", trigger, at: 1, kept: "recent" },
+  });
+  const turnOf = (id: string): Block[] => [
+    { id: `${id}-u`, role: "user", text: id },
+    { id: `${id}-a`, role: "assistant", text: `${id} reply` },
+  ];
+  const ids = (turns: Block[][]) => turns.map((turn) => turn.map((b) => b.id));
+
+  it("stands alone when the next turn starts right after it", () => {
+    expect(
+      ids(groupTurns([...turnOf("one"), compacted("auto"), ...turnOf("two")])),
+    ).toEqual([["one-u", "one-a"], ["b-auto"], ["two-u", "two-a"]]);
+  });
+
+  it("stands alone after the last turn when it was asked for", () => {
+    expect(ids(groupTurns([...turnOf("one"), compacted("manual")]))).toEqual([
+      ["one-u", "one-a"],
+      ["b-manual"],
+    ]);
+  });
+
+  it("stays inside the turn it interrupted", () => {
+    const [user, reply] = turnOf("one");
+    expect(ids(groupTurns([user, compacted("auto"), reply]))).toEqual([
+      ["one-u", "b-auto", "one-a"],
+    ]);
+    // Still running: the reply has not arrived yet.
+    expect(ids(groupTurns([user, compacted("auto")]))).toEqual([
+      ["one-u", "b-auto"],
+    ]);
   });
 });

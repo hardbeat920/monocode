@@ -20,7 +20,7 @@ import {
   sendHarnessTurn,
   type HarnessAdapter,
 } from "./registry";
-import type { SendTurnInput, SteerTurnInput } from "./types";
+import type { HarnessEvent, SendTurnInput, SteerTurnInput } from "./types";
 import { registerBuiltinHarnesses } from "./register";
 
 function stub(
@@ -185,6 +185,117 @@ describe("harness registry", () => {
       }),
     ).rejects.toThrow("does not support manual compaction");
   });
+  it("shows compaction progress until the harness marks the boundary", async () => {
+    const boundary = {
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "none",
+    } as const;
+    registerHarness(
+      stub("codex", {
+        compactContext: async (input) => input.onEvent(boundary),
+      }),
+    );
+    const events: HarnessEvent[] = [];
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-progress",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events).toEqual([
+      { type: "status", key: "compaction", text: "Compacting context…" },
+      boundary,
+    ]);
+  });
+
+  it("marks the boundary of a compaction it asked for as manual", async () => {
+    // Codex and OpenCode report the boundary without saying who started it.
+    registerHarness(
+      stub("codex", {
+        compactContext: async (input) =>
+          input.onEvent({
+            type: "context.compacted",
+            trigger: "auto",
+            kept: "user-messages",
+          }),
+      }),
+    );
+    const events: HarnessEvent[] = [];
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-manual",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.filter((event) => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "user-messages" },
+    ]);
+  });
+
+  it("passes the harness's summary through after the boundary", async () => {
+    registerHarness(
+      stub("codex", {
+        compactContext: async (input) => {
+          input.onEvent({ type: "context.compacted", trigger: "auto", kept: "none" });
+          input.onEvent({ type: "context.summarized", summary: "Earlier work." });
+        },
+      }),
+    );
+    const events: HarnessEvent[] = [];
+    await compactHarnessContext({
+      harness: "codex",
+      sessionId: "compact-summary",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    expect(events.slice(1)).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "none" },
+      { type: "context.summarized", summary: "Earlier work." },
+    ]);
+  });
+
+  it("clears compaction progress when no boundary lands", async () => {
+    // A cancelled compaction resolves quietly; a failed one rejects.
+    registerHarness(stub("codex", { compactContext: async () => undefined }));
+    const events: HarnessEvent[] = [];
+    const input = {
+      harness: "codex" as const,
+      sessionId: "compact-quiet",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised" as const,
+      onEvent: (event: HarnessEvent) => events.push(event),
+    };
+    await compactHarnessContext(input);
+    expect(events.at(-1)).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "",
+    });
+
+    events.length = 0;
+    registerHarness(
+      stub("codex", {
+        compactContext: async () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    await expect(compactHarnessContext(input)).rejects.toThrow("boom");
+    expect(events.at(-1)).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "",
+    });
+  });
+
   it("cancels an isolated text prompt through the adapter lifecycle", async () => {
     const runTextPrompt = vi.fn(() => new Promise<string>(() => undefined));
     const stopTextPrompt = vi.fn(async () => undefined);

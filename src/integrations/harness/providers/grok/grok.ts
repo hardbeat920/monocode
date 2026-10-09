@@ -138,6 +138,14 @@ export async function compactGrokContext(
           { sessionId: live.acpSessionId },
           PROMPT_TIMEOUT_MS,
         );
+        // Grok streams nothing about the pass or what it kept.
+        if (!live.cancelled) {
+          live.onEvent({
+            type: "context.compacted",
+            trigger: "manual",
+            kept: "unknown",
+          });
+        }
       } catch (error) {
         if (live.cancelled) return;
         throw error;

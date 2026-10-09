@@ -252,12 +252,13 @@ describe("grok live turn sequence", () => {
     await turn;
     sent.length = 0;
 
+    const events: HarnessEvent[] = [];
     const compact = compactGrokContext({
       sessionId: "t4",
       cwd: "/repo",
       model: "grok:grok-4.6",
       runtimeMode: "supervised",
-      onEvent: () => undefined,
+      onEvent: (event) => events.push(event),
     });
     await waitFor(
       () =>
@@ -273,8 +274,17 @@ describe("grok live turn sequence", () => {
     expect(parse().some((message) => message.method === "session/prompt")).toBe(
       false,
     );
+    expect(events.some((event) => event.type === "context.compacted")).toBe(
+      false,
+    );
     reply(request.id, {});
     await compact;
+    // Grok reports nothing about what it kept.
+    expect(
+      events.filter((event) => event.type === "context.compacted"),
+    ).toEqual([
+      { type: "context.compacted", trigger: "manual", kept: "unknown" },
+    ]);
     await stopGrokSession("t4");
   });
 });

@@ -26,6 +26,7 @@ import type {
   AgentRunMeta,
   AgentStep,
   Block,
+  ContextBoundaryMeta,
   BtwMessage,
   BtwThread,
   GeneratedImageMeta,
@@ -1021,6 +1022,8 @@ function sanitizeBlock(
     if (block.notice === "error" || block.notice === "interrupt") {
       next.notice = block.notice;
     }
+    const contextBoundary = sanitizeContextBoundary(block.contextBoundary);
+    if (contextBoundary) next.contextBoundary = contextBoundary;
   }
   return next;
 }
@@ -1254,6 +1257,52 @@ function sanitizeInterjection(
     ...(severity === "nit" || severity === "concern" || severity === "blocker"
       ? { severity }
       : {}),
+  };
+}
+
+/** Harness summaries run a few KB; anything far past that is not one. */
+const CONTEXT_SUMMARY_LIMIT = 64 * 1024;
+
+function sanitizeContextBoundary(
+  value: unknown,
+): ContextBoundaryMeta | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const { kind, trigger, kept, at, reason } = record;
+  if (kind !== "compaction" && kind !== "rotation") return undefined;
+  if (trigger !== "manual" && trigger !== "auto") return undefined;
+  if (
+    kept !== "none" &&
+    kept !== "user-messages" &&
+    kept !== "recent" &&
+    kept !== "unknown"
+  ) {
+    return undefined;
+  }
+  if (typeof at !== "number" || !Number.isFinite(at)) return undefined;
+  const tokens = (count: unknown) =>
+    typeof count === "number" && Number.isFinite(count) && count > 0
+      ? count
+      : undefined;
+  const preTokens = tokens(record.preTokens);
+  const postTokens = tokens(record.postTokens);
+  const summary =
+    typeof record.summary === "string"
+      ? record.summary.trim().slice(0, CONTEXT_SUMMARY_LIMIT)
+      : "";
+  const keptFromBlockId = sanitizeNestedId(record.keptFromBlockId);
+  return {
+    kind,
+    trigger,
+    ...(reason === "context" || reason === "idle" ? { reason } : {}),
+    at,
+    kept,
+    ...(keptFromBlockId ? { keptFromBlockId } : {}),
+    ...(preTokens ? { preTokens } : {}),
+    ...(postTokens ? { postTokens } : {}),
+    ...(summary ? { summary } : {}),
   };
 }
 

@@ -15,6 +15,7 @@ import {
 } from "../../../../features/sessions/model/attachments";
 import { displayPath } from "../../../../shared/lib/paths";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
+import { compactingStatus } from "../../../../features/sessions/model/contextBoundary";
 import {
   composeToolTitle,
   extractToolPreview,
@@ -518,11 +519,7 @@ export function mapCodexNotification(
 }
 
 /** Codex thread items MonoCode already renders elsewhere or that are internal metadata. */
-const SILENT_ITEM_TYPES = new Set([
-  "userMessage",
-  "contextCompaction",
-  "enteredReviewMode",
-]);
+const SILENT_ITEM_TYPES = new Set(["userMessage", "enteredReviewMode"]);
 
 /**
  * Codex reports both `last` (the most recent request) and `total` (cumulative
@@ -625,6 +622,19 @@ function mapItemLifecycle(
 
   if (SILENT_ITEM_TYPES.has(itemType)) {
     return { events: [] };
+  }
+
+  // The item carries no trigger, so this reads as automatic; a compaction the
+  // user asked for is marked manual by `runManualCompaction`. Codex rebuilds
+  // history from your recent prompts, word for word, plus its summary.
+  if (itemType === "contextCompaction") {
+    return {
+      events: [
+        completed
+          ? { type: "context.compacted", trigger: "auto", kept: "user-messages" }
+          : compactingStatus(),
+      ],
+    };
   }
 
   if (itemType === "exitedReviewMode" && completed) {

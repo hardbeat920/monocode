@@ -31,6 +31,9 @@ import {
   runtimeModeToPermission,
   sessionIdFromMessage,
   statusTextFromSystem,
+  compactionEventFromSystem,
+  compactionErrorFromSystem,
+  compactSummaryFromUser,
   streamDeltaFromEvent,
   toClaudePermissionResult,
   toolKindFromName,
@@ -723,14 +726,14 @@ describe("helpers", () => {
     ).toBe("Compacted context to 40k tokens");
   });
 
-  it("still marks a compact boundary that carries no prose", () => {
+  it("leaves the compact boundary to the context boundary row", () => {
     expect(
       statusTextFromSystem({
         type: "system",
         subtype: "compact_boundary",
         compact_metadata: { trigger: "auto" },
       }),
-    ).toBe("Compacted context");
+    ).toBeUndefined();
   });
 
   it("ignores system messages that are not status or compact", () => {
@@ -983,5 +986,185 @@ describe("applyClaudeTaskTool", () => {
     expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
     expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
     expect(tasks.size).toBe(0);
+  });
+});
+
+// Recorded from Claude Code 2.1.292 on `/compact` in a near-empty session.
+const REFUSED = {
+  type: "system",
+  subtype: "status",
+  status: null,
+  compact_result: "failed",
+  compact_error: "Not enough messages to compact.",
+};
+
+describe("compactionErrorFromSystem", () => {
+  it("reads why Claude refused to compact", () => {
+    expect(compactionErrorFromSystem(REFUSED)).toBe(
+      "Not enough messages to compact.",
+    );
+  });
+
+  it("still reports a failure that gives no reason", () => {
+    expect(
+      compactionErrorFromSystem({ ...REFUSED, compact_error: undefined }),
+    ).toBe("Claude Code could not compact this context");
+  });
+
+  it("ignores a status that is not a failed compaction", () => {
+    expect(
+      compactionErrorFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("compactionEventFromSystem", () => {
+  it("reads the boundary the stream reports", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 204_481,
+          post_tokens: 15_071,
+        },
+      }),
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "none",
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
+  });
+
+  it("knows a preserved segment keeps recent messages, in either casing", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: {
+          trigger: "manual",
+          preTokens: 107_731,
+          preservedSegment: { headUuid: "a", anchorUuid: "b", tailUuid: "c" },
+        },
+      }),
+    ).toEqual({
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "recent",
+      preTokens: 107_731,
+    });
+  });
+
+  it("still marks a boundary that arrives without metadata", () => {
+    expect(
+      compactionEventFromSystem({ type: "system", subtype: "compact_boundary" }),
+    ).toEqual({ type: "context.compacted", trigger: "auto", kept: "unknown" });
+  });
+
+  it("shows a compacting status while Claude works on it", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+      }),
+    ).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+  });
+
+  it("clears the compacting status when Claude reports a failure", () => {
+    expect(compactionEventFromSystem(REFUSED)).toEqual({
+      type: "status",
+      key: "compaction",
+      text: "",
+    });
+  });
+
+  it("ignores everything else", () => {
+    expect(
+      compactionEventFromSystem({
+        type: "system",
+        subtype: "status",
+        status: "requesting",
+      }),
+    ).toBeUndefined();
+    expect(
+      compactionEventFromSystem({ type: "system", subtype: "init" }),
+    ).toBeUndefined();
+  });
+});
+
+// Recorded from Claude Code 2.1.292 right after a manual compact_boundary.
+const SUMMARY_BODY =
+  "1. Primary Request and Intent:\n   The user asked how DNS resolution works.\n\n9. Optional Next Step:\n   None.";
+const SUMMARY_RECORD = {
+  type: "user",
+  isSynthetic: true,
+  isReplay: false,
+  message: {
+    role: "user",
+    content:
+      "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+      SUMMARY_BODY +
+      '\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.',
+  },
+};
+
+describe("compactSummaryFromUser", () => {
+  it("reads the summary out of Claude's continuation message", () => {
+    expect(compactSummaryFromUser(SUMMARY_RECORD)).toBe(SUMMARY_BODY);
+  });
+
+  it("drops the transcript pointer Claude adds when the session is saved", () => {
+    // Recorded from a host session, where Claude persists its transcript.
+    const content =
+      "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+      SUMMARY_BODY +
+      "\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/u/.claude/projects/-repo/7a6b5128.jsonl" +
+      "\nContinue the conversation from where it left off without asking the user any further questions.";
+    expect(
+      compactSummaryFromUser({
+        ...SUMMARY_RECORD,
+        message: { role: "user", content },
+      }),
+    ).toBe(SUMMARY_BODY);
+  });
+
+  it("keeps the whole text when the wrapper is not the one it knows", () => {
+    expect(
+      compactSummaryFromUser({
+        ...SUMMARY_RECORD,
+        message: { role: "user", content: [{ type: "text", text: "Different shape." }] },
+      }),
+    ).toBe("Different shape.");
+  });
+
+  it("skips the replayed command output and real user messages", () => {
+    expect(
+      compactSummaryFromUser({
+        type: "user",
+        isReplay: true,
+        message: {
+          role: "user",
+          content: "<local-command-stdout>Compacted </local-command-stdout>",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      compactSummaryFromUser({
+        type: "user",
+        message: { role: "user", content: "hello" },
+      }),
+    ).toBeUndefined();
   });
 });

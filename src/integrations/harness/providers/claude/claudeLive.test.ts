@@ -1968,10 +1968,209 @@ describe("claude manual compaction", () => {
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await compact;
 
-    expect(events).toContainEqual({
-      type: "status",
-      text: "Compacted context",
-    });
+    // With no metadata, what Claude kept is unknown.
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" || event.type === "status",
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: "context.compacted", kept: "unknown" }),
+    ]);
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+
+  it("carries Claude's summary onto the boundary of a manual compaction", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "manual", pre_tokens: 31_356 },
+    });
+    emit({
+      type: "user",
+      isSynthetic: true,
+      isReplay: false,
+      session_id: "sess_1",
+      message: {
+        role: "user",
+        content:
+          "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nThe user asked about DNS.\nContinue the conversation from where it left off without asking the user any further questions.",
+      },
+    });
+    emit({
+      type: "user",
+      isReplay: true,
+      session_id: "sess_1",
+      message: {
+        role: "user",
+        content: "<local-command-stdout>Compacted </local-command-stdout>",
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await compact;
+
+    expect(
+      events.filter((event) => event.type.startsWith("context.")),
+    ).toEqual([
+      expect.objectContaining({ type: "context.compacted" }),
+      { type: "context.summarized", summary: "The user asked about DNS." },
+    ]);
+  });
+
+  it("takes the summary only from the record right after the boundary", async () => {
+    const { turn, events } = await startTurn("s1");
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto" },
+    });
+    // Something else lands first; a later synthetic note is not the summary.
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] },
+    });
+    emit({
+      type: "user",
+      isSynthetic: true,
+      session_id: "sess_1",
+      message: { role: "user", content: "<task-notification>done</task-notification>" },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(events.some((event) => event.type === "context.summarized")).toBe(
+      false,
+    );
+  });
+
+  it("takes only the message that follows a boundary as its summary", async () => {
+    const { turn, events } = await startTurn("s1");
+    // A synthetic user message with no compaction before it is not a summary.
+    emit({
+      type: "user",
+      isSynthetic: true,
+      session_id: "sess_1",
+      message: { role: "user", content: "Unrelated synthetic note" },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(events.some((event) => event.type === "context.summarized")).toBe(
+      false,
+    );
+  });
+
+  it("fails a refused manual compaction with Claude's reason", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+    emit({
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      session_id: "sess_1",
+    });
+    emit({
+      type: "system",
+      subtype: "status",
+      status: null,
+      compact_result: "failed",
+      compact_error: "Not enough messages to compact.",
+      session_id: "sess_1",
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+
+    await expect(compact).rejects.toThrow("Not enough messages to compact.");
+    expect(events.some((event) => event.type === "context.compacted")).toBe(
+      false,
+    );
+  });
+
+  it("never marks the parent when a subagent compacts", async () => {
+    const { turn, events } = await startTurn("s1");
+    for (const record of [
+      { type: "system", subtype: "status", status: "compacting" },
+      {
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 90_000 },
+      },
+    ]) {
+      emit({ ...record, session_id: "sess_1", parent_tool_use_id: "toolu_agent" });
+    }
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" ||
+          (event.type === "status" && event.key === "compaction"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("marks one boundary when Claude compacts mid-turn", async () => {
+    const { turn, events } = await startTurn("s1");
+    emit({
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      session_id: "sess_1",
+    });
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: { trigger: "auto", pre_tokens: 180_000 },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "context.compacted" || event.type === "status",
+      ),
+    ).toEqual([
+      { type: "status", key: "compaction", text: "Compacting context…" },
+      {
+        type: "context.compacted",
+        trigger: "auto",
+        kept: "none",
+        preTokens: 180_000,
+      },
+    ]);
   });
 });

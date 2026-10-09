@@ -3,11 +3,17 @@ import type {
   AgentStep,
   Attachment,
   Block,
+  ContextBoundaryMeta,
   Session,
   TaskListItem,
   ToolPreview,
 } from "../../../features/sessions/model/session";
 import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import {
+  COMPACTED_TEXT,
+  COMPACTION_STATUS_KEY,
+  ROTATED_TEXT,
+} from "../../../features/sessions/model/contextBoundary";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -139,6 +145,10 @@ export function applyHarnessEvent(
           window: event.window,
         }),
       };
+    case "context.compacted":
+      return appendContextBoundary(session, event);
+    case "context.summarized":
+      return attachContextSummary(session, event.summary);
     case "turn.metrics":
       return mergeTurnMetrics(session, event);
     case "tasks.updated":
@@ -531,7 +541,13 @@ export function stopStreaming(session: Session, endedAt = Date.now()): Session {
     busy: false,
     turnReady: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
+    blocks: stampTurnDuration(
+      settled.blocks
+        // A compaction still "in progress" when the turn ends never landed.
+        .filter((block) => block.statusKey !== COMPACTION_STATUS_KEY)
+        .map(stopBlockProgress),
+      endedAt,
+    ),
   };
 }
 
@@ -737,13 +753,9 @@ function appendStatus(session: Session, text: string): Session {
   });
 }
 
-function upsertKeyedStatus(
-  session: Session,
-  key: string,
-  text: string,
-): Session {
-  const trimmed = text.trim();
-  const turnStart = lastMatchingBlock(
+/** The user block that started the current turn, or -1. */
+function turnStartIndex(session: Session): number {
+  return lastMatchingBlock(
     session.blocks,
     // Mono outbox bubbles and mid-turn follow-ups do not start a new turn.
     (block) =>
@@ -751,10 +763,24 @@ function upsertKeyedStatus(
       (block.sentAt == null || block.startedAt != null) &&
       !session.queuedMessages?.some((message) => message.blockId === block.id),
   );
-  const index = lastMatchingBlock(
+}
+
+/** The current turn's status row for `key`, or -1. */
+function keyedStatusIndex(session: Session, key: string): number {
+  const turnStart = turnStartIndex(session);
+  return lastMatchingBlock(
     session.blocks,
     (block, at) => at > turnStart && block.statusKey === key,
   );
+}
+
+function upsertKeyedStatus(
+  session: Session,
+  key: string,
+  text: string,
+): Session {
+  const trimmed = text.trim();
+  const index = keyedStatusIndex(session, key);
   if (index < 0) {
     if (!trimmed) return session;
     return appendBlock(session, {
@@ -768,6 +794,87 @@ function upsertKeyedStatus(
   const blocks = session.blocks.slice();
   if (trimmed) blocks[index] = { ...blocks[index], text: trimmed };
   else blocks.splice(index, 1);
+  return { ...session, blocks };
+}
+
+/**
+ * Mark a context boundary the app made itself, such as a Mono moving to a
+ * fresh provider session: it lands just before the user block of the turn
+ * that starts there, since that turn is the first the new context sees. The
+ * caller picks the id, so applying it to several copies of the session (state,
+ * ref, updater) lands one boundary, the same in each.
+ */
+export function insertContextBoundaryBeforeTurn(
+  session: Session,
+  meta: ContextBoundaryMeta,
+  id: string,
+): Session {
+  if (session.blocks.some((block) => block.id === id)) return session;
+  const block: Block = {
+    id,
+    role: "system",
+    text: meta.kind === "rotation" ? ROTATED_TEXT : COMPACTED_TEXT,
+    contextBoundary: meta,
+  };
+  const index = turnStartIndex(session);
+  if (index < 0) return { ...session, blocks: [...session.blocks, block] };
+  const blocks = session.blocks.slice();
+  blocks.splice(index, 0, block);
+  return { ...session, blocks };
+}
+
+/**
+ * A boundary is a row the reader must find again, so unlike a status it never
+ * deduplicates. It takes over the turn's "Compacting context…" row, which then
+ * stops being keyed so a later compaction starts its own.
+ */
+function appendContextBoundary(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "context.compacted" }>,
+): Session {
+  const block: Block = {
+    id: crypto.randomUUID(),
+    role: "system",
+    text: COMPACTED_TEXT,
+    contextBoundary: {
+      kind: "compaction",
+      trigger: event.trigger,
+      at: Date.now(),
+      kept: event.kept,
+      ...(event.preTokens != null ? { preTokens: event.preTokens } : {}),
+      ...(event.postTokens != null ? { postTokens: event.postTokens } : {}),
+    },
+  };
+  const next =
+    event.postTokens != null
+      ? {
+          ...session,
+          context: mergeContextUsage(session.context, {
+            used: event.postTokens,
+          }),
+        }
+      : session;
+  const index = keyedStatusIndex(next, COMPACTION_STATUS_KEY);
+  if (index < 0) return appendBlock(next, block);
+  const blocks = next.blocks.slice();
+  blocks[index] = { ...block, id: blocks[index].id };
+  return { ...next, blocks };
+}
+
+/** The summary belongs to the boundary it followed: the latest one. */
+function attachContextSummary(session: Session, summary: string): Session {
+  const text = summary.trim();
+  const index = lastMatchingBlock(
+    session.blocks,
+    (block) => !!block.contextBoundary,
+  );
+  const boundary = session.blocks[index]?.contextBoundary;
+  if (!text || !boundary) return session;
+  const blocks = session.blocks.slice();
+  blocks[index] = {
+    ...blocks[index],
+    contextBoundary: { ...boundary, summary: text },
+  };
   return { ...session, blocks };
 }
 
@@ -793,7 +900,7 @@ function appendBlock(session: Session, block: Block): Session {
   return {
     ...session,
     blocks: [
-      ...(block.role === "system" && !block.interjection
+      ...(block.role === "system" && !isHardDivider(block)
         ? session.blocks
         : sealLastStream(session.blocks)),
       block,
@@ -817,7 +924,7 @@ function patchStreaming(
   while (
     index >= 0 &&
     session.blocks[index].role === "system" &&
-    !session.blocks[index].interjection
+    !isHardDivider(session.blocks[index])
   )
     index--;
   const last = session.blocks[index];
@@ -1207,12 +1314,20 @@ function findToolIndex(
   });
 }
 
+/**
+ * Prose continues through a status row, but never across an interjection or a
+ * context boundary: what follows one is a new message.
+ */
+function isHardDivider(block: Block): boolean {
+  return !!block.interjection || !!block.contextBoundary;
+}
+
 function sealLastStream(blocks: Block[]): Block[] {
   let index = blocks.length - 1;
   while (
     index >= 0 &&
     blocks[index].role === "system" &&
-    !blocks[index].interjection
+    !isHardDivider(blocks[index])
   )
     index--;
   const last = blocks[index];

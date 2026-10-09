@@ -268,6 +268,7 @@ import {
   appendUser,
   appendSteerUser,
   bindHarnessSession,
+  insertContextBoundaryBeforeTurn,
   cancelHarnessTurn,
   canCompactHarnessContext,
   canRewindHarnessLastTurn,
@@ -478,6 +479,7 @@ import {
 } from "../features/providers/model/rateLimitsFetch";
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
+import { compactingStatus } from "../features/sessions/model/contextBoundary";
 import {
   discardDraftSessionRecord,
   deleteSession,
@@ -7827,13 +7829,19 @@ function Workspace({
               });
             }
             await forgetHarnessSession(current.harness, sessionId);
+            // The chat marks where the fresh session starts, before this turn.
+            const boundaryId = crypto.randomUUID();
             const fresh = (session: Session) =>
               session.id === sessionId
-                ? {
-                    ...session,
-                    providerSessionId: undefined,
-                    context: undefined,
-                  }
+                ? insertContextBoundaryBeforeTurn(
+                    {
+                      ...session,
+                      providerSessionId: undefined,
+                      context: undefined,
+                    },
+                    monoRotation.boundary,
+                    boundaryId,
+                  )
                 : session;
             current = fresh(current);
             sessionsRef.current = sessionsRef.current.map(fresh);
@@ -9848,7 +9856,9 @@ function Workspace({
         session.id === sessionId
           ? applyHarnessEvent(
               { ...session, busy: true },
-              { type: "status", text: "Compacting context…" },
+              // Shown before the queued compaction starts; it keeps the key
+              // the harness's boundary replaces.
+              compactingStatus(),
             )
           : session,
       );
@@ -9879,11 +9889,6 @@ function Workspace({
               if (turnGen.current.get(sessionId) !== gen) return;
               enqueueHarnessEvent(sessionId, event);
             },
-          });
-          if (turnGen.current.get(sessionId) !== gen) return;
-          enqueueHarnessEvent(sessionId, {
-            type: "status",
-            text: "Compacted context",
           });
         } catch (error: unknown) {
           if (turnGen.current.get(sessionId) !== gen) return;

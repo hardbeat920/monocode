@@ -13,6 +13,7 @@ import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
   applyHarnessEvent,
+  insertContextBoundaryBeforeTurn,
   appendSteerUser,
   promoteLastAssistantToPlan,
   stopStreaming,
@@ -1580,5 +1581,264 @@ describe("subagent steps", () => {
 
     expect(session.blocks[0].tool?.status).toBe("completed");
     expect(session.blocks[0].agentRun?.steps).toHaveLength(1);
+  });
+});
+
+describe("context boundaries", () => {
+  it("marks where the harness compacted its context", () => {
+    now = 5_000;
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+    });
+    expect(session.blocks[1]).toMatchObject({
+      role: "system",
+      text: "Context compacted",
+      contextBoundary: {
+        kind: "compaction",
+        trigger: "auto",
+        at: 5_000,
+        kept: "user-messages",
+      },
+    });
+  });
+
+  it("keeps back-to-back compactions as separate boundaries", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    for (let i = 0; i < 2; i++) {
+      session = applyHarnessEvent(session, {
+        type: "context.compacted",
+        trigger: "manual",
+        kept: "none",
+      });
+    }
+    expect(
+      session.blocks.filter((block) => block.contextBoundary),
+    ).toHaveLength(2);
+  });
+
+  it("replaces the turn's compacting status with the boundary", () => {
+    let session = appendUser(newSession("pi", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+    const id = session.blocks[1].id;
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "recent",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+    ]);
+    expect(session.blocks[1]).toMatchObject({ id, contextBoundary: { kept: "recent" } });
+    expect(session.blocks[1].statusKey).toBeUndefined();
+
+    // A later compaction in the same turn starts its own status row.
+    session = applyHarnessEvent(session, {
+      type: "status",
+      key: "compaction",
+      text: "Compacting context…",
+    });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+      "Compacting context…",
+    ]);
+  });
+
+  it("seals open prose so text after the boundary starts its own message", () => {
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Before." });
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "none",
+    });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "After." });
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "Before.",
+      "Context compacted",
+      "After.",
+    ]);
+    expect(session.blocks[0].streaming).toBe(false);
+  });
+
+  it("drops a compacting row the turn ended without resolving", () => {
+    // An automatic compaction that failed or was aborted never sends a boundary.
+    const compacting = (session: Session) =>
+      applyHarnessEvent(session, {
+        type: "status",
+        key: "compaction",
+        text: "Compacting context…",
+      });
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(compacting(session), {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+    });
+    session = compacting(session);
+    expect(stopStreaming(session).blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Context compacted",
+    ]);
+
+    const failed = applyHarnessEvent(compacting(appendUser(newSession("claude", "/tmp"), "go")), {
+      type: "session.error",
+      message: "Claude Code could not compact this context",
+    });
+    expect(failed.blocks.map((block) => block.text)).toEqual([
+      "go",
+      "Claude Code could not compact this context",
+    ]);
+  });
+
+  it("attaches the harness's summary to the latest boundary", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    for (const summary of ["First summary", "Second summary"]) {
+      session = applyHarnessEvent(session, {
+        type: "context.compacted",
+        trigger: "auto",
+        kept: "recent",
+      });
+      session = applyHarnessEvent(session, { type: "context.summarized", summary });
+    }
+    expect(
+      session.blocks.map((block) => block.contextBoundary?.summary),
+    ).toEqual([undefined, "First summary", "Second summary"]);
+  });
+
+  it("never makes a boundary out of a summary alone", () => {
+    const session = appendUser(newSession("claude", "/tmp"), "go");
+    expect(
+      applyHarnessEvent(session, { type: "context.summarized", summary: "Stray" }),
+    ).toBe(session);
+  });
+
+  it("puts a rotation boundary just before the turn it starts", () => {
+    const rotation = {
+      kind: "rotation",
+      trigger: "auto",
+      reason: "context",
+      at: 9,
+      kept: "recent",
+    } as const;
+    let session = appendUser(newSession("claude", "/tmp"), "first");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "One." });
+    session = stopStreaming(session);
+    session = appendUser(session, "second");
+    // A follow-up queued behind this turn does not start it.
+    session = enqueueMonoMessage(session, {
+      id: "later",
+      text: "and then this",
+      attachments: [],
+    });
+    session = insertContextBoundaryBeforeTurn(session, rotation, "rotated");
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "first",
+      "One.",
+      "Fresh session started",
+      "second",
+      "and then this",
+    ]);
+    expect(session.blocks[2].contextBoundary).toEqual(rotation);
+  });
+
+  it("appends a rotation boundary when no turn has started", () => {
+    const session = insertContextBoundaryBeforeTurn(
+      newSession("claude", "/tmp"),
+      { kind: "rotation", trigger: "auto", at: 9, kept: "none" },
+      "rotated",
+    );
+    expect(session.blocks.map((block) => block.text)).toEqual([
+      "Fresh session started",
+    ]);
+  });
+
+  it("inserts a given rotation boundary once however often it is applied", () => {
+    const rotation = { kind: "rotation", trigger: "auto", at: 9, kept: "none" } as const;
+    const once = insertContextBoundaryBeforeTurn(
+      appendUser(newSession("claude", "/tmp"), "go"),
+      rotation,
+      "rotated",
+    );
+    const twice = insertContextBoundaryBeforeTurn(once, rotation, "rotated");
+    expect(twice).toBe(once);
+    expect(once.blocks.filter((block) => block.contextBoundary)).toEqual([
+      expect.objectContaining({ id: "rotated" }),
+    ]);
+  });
+
+  it("keeps a Mono rotation boundary through a save", () => {
+    const session = {
+      ...appendUser(newSession("claude", "/tmp"), "go"),
+    };
+    session.blocks = [
+      ...session.blocks,
+      {
+        id: "rotated",
+        role: "system",
+        text: "Started a fresh session",
+        contextBoundary: {
+          kind: "rotation",
+          trigger: "auto",
+          reason: "idle",
+          at: 7,
+          kept: "recent",
+          keptFromBlockId: session.blocks[0].id,
+          summary: "- User: hi → You: hello",
+        },
+      },
+    ];
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[1].contextBoundary).toEqual(
+      session.blocks[1].contextBoundary,
+    );
+  });
+
+  it("survives a save", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "auto",
+      kept: "user-messages",
+      preTokens: 180_000,
+    });
+    session = applyHarnessEvent(session, {
+      type: "context.summarized",
+      summary: "What came before.",
+    });
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[1].contextBoundary).toEqual(
+      session.blocks[1].contextBoundary,
+    );
+    expect(saved.blocks[1].contextBoundary?.summary).toBe("What came before.");
+  });
+
+  it("drops the context meter to the post-compaction level when known", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "go");
+    session = applyHarnessEvent(session, {
+      type: "context",
+      used: 204_481,
+      window: 1_000_000,
+    });
+    session = applyHarnessEvent(session, {
+      type: "context.compacted",
+      trigger: "manual",
+      kept: "recent",
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
+    expect(session.context).toEqual({ used: 15_071, window: 1_000_000 });
+    expect(session.blocks[1].contextBoundary).toMatchObject({
+      preTokens: 204_481,
+      postTokens: 15_071,
+    });
   });
 });

@@ -56,6 +56,9 @@ import {
   runtimeModeToPermission,
   sessionIdFromMessage,
   statusTextFromSystem,
+  compactionEventFromSystem,
+  compactionErrorFromSystem,
+  compactSummaryFromUser,
   streamDeltaFromEvent,
   stringField,
   summarizeToolRequest,
@@ -175,6 +178,10 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** Claude's reason for refusing the running compaction, if it did. */
+  compactionError?: string;
+  /** A boundary landed; the next synthetic user message is its summary. */
+  awaitingCompactSummary: boolean;
 };
 
 type Resume = {
@@ -261,6 +268,7 @@ export async function compactClaudeContext(
       live.muteUpdates = false;
       live.manualCompaction = true;
       live.compactionConfirmed = false;
+      live.compactionError = undefined;
       try {
         await runTurn(live, {
           ...input,
@@ -269,7 +277,10 @@ export async function compactClaudeContext(
           attachments: [],
         });
         if (!live.compactionConfirmed) {
-          throw new Error("Claude Code did not confirm context compaction");
+          throw new Error(
+            live.compactionError ??
+              "Claude Code did not confirm context compaction",
+          );
         }
       } catch (error) {
         if (live.cancelled) return;
@@ -512,6 +523,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    awaitingCompactSummary: false,
   };
   liveRef.current = live;
 
@@ -698,6 +710,22 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
 
+  // The summary is the main session's first user record after a boundary.
+  // Read it before the manual-compaction filter below, which drops user
+  // records; whatever that record is, nothing later is taken for it.
+  if (
+    live.awaitingCompactSummary &&
+    (type === "user" || type === "result") &&
+    !isSubagentMessage(rec)
+  ) {
+    live.awaitingCompactSummary = false;
+    const summary = compactSummaryFromUser(rec);
+    if (summary) {
+      live.onEvent({ type: "context.summarized", summary });
+      return;
+    }
+  }
+
   if (live.manualCompaction && type !== "system" && type !== "result") {
     return;
   }
@@ -730,13 +758,20 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
-    const text = statusTextFromSystem(rec);
-    if (text) {
-      if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {
-        live.compactionConfirmed = true;
-      }
-      live.onEvent({ type: "status", text });
+    // A subagent compacts its own context, not the one this transcript holds.
+    const main = !isSubagentMessage(rec);
+    const compaction = main ? compactionEventFromSystem(rec) : undefined;
+    if (compaction?.type === "context.compacted") {
+      live.compactionConfirmed = true;
+      live.awaitingCompactSummary = true;
     }
+    if (main) {
+      live.compactionError =
+        compactionErrorFromSystem(rec) ?? live.compactionError;
+    }
+    if (compaction) live.onEvent(compaction);
+    const text = statusTextFromSystem(rec);
+    if (text) live.onEvent({ type: "status", text });
   }
 }
 
