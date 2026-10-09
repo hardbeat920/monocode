@@ -41,6 +41,7 @@ mod rate_limits;
 mod reminders;
 mod remote;
 mod remote_ssh;
+mod remote_tls;
 mod search;
 mod session_store;
 mod skills;
@@ -265,8 +266,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             remote::remote_machines,
-            remote::remote_connect,
+            remote::remote_pair,
             remote::remote_disconnect,
+            remote::remote_retry,
             remote::remote_request,
             remote::remote_ssh_begin,
             remote::remote_ssh_reconnect,

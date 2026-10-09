@@ -2512,6 +2512,7 @@ dependencies = [
  "portable-pty",
  "raw-window-handle",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

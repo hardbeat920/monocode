@@ -7,7 +7,10 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node24",
+  // The npm package supports Node 22.13+, the first release with an
+  // unflagged node:sqlite.
+  target: "node22",
+  banner: { js: "#!/usr/bin/env node" },
   loader: { ".ps1": "text" },
   define: { "import.meta.hot": "undefined" },
   sourcemap: true,

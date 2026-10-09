@@ -163,6 +163,19 @@ jobs:
           name: host-packages
           path: build/host-packages
 
+      - name: Download the host npm package
+        uses: actions/download-artifact@v4
+        with:
+          name: host-npm
+          path: build/host-npm-package
+
+      # Every released desktop displays an npm command for its exact version.
+      # Gate all desktop publication on the matching public npm package.
+      - name: Publish and verify monocode-host on npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bash scripts/publish-host-npm.sh "${GITHUB_REF_NAME#v}"
+
       - name: Upload updater packages to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -350,7 +363,12 @@ jobs:
             echo "Expected six host archives" >&2
             exit 1
           fi
-          HOST_FILES=("${HOST_ARCHIVES[@]}")
+          HOST_NPM=(build/host-npm-package/monocode-host-*.tgz)
+          if (( ${#HOST_NPM[@]} != 1 )); then
+            echo "Expected one host npm package" >&2
+            exit 1
+          fi
+          HOST_FILES=("${HOST_ARCHIVES[@]}" "${HOST_NPM[0]}")
           for archive in "${HOST_ARCHIVES[@]}"; do
             if [[ ! -f "$archive.sha256" ]]; then
               echo "Missing host checksum: $archive.sha256" >&2
@@ -442,6 +460,7 @@ jobs:
         if: runner.os == 'Linux'
       - run: npm run host:package
         if: runner.os != 'Linux'
+      - run: npm run host:npm
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
@@ -450,6 +469,12 @@ jobs:
             build/host-packages/*.tar.gz
             build/host-packages/*.zip
             build/host-packages/*.sha256
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: host-npm
+          path: build/monocode-host-*.tgz
           if-no-files-found: error
 
   linux:
