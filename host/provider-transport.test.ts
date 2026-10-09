@@ -273,7 +273,7 @@ describe("existing providers over headless process I/O", () => {
           efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
         else {
           const args: string[] = calls.find(
-            (call) => call.claudeArgs,
+            (call) => call.claudeArgs && !call.claudeArgs.includes("--no-session-persistence"),
           ).claudeArgs;
           efforts.push(args[args.indexOf("--effort") + 1] ?? null);
         }

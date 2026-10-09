@@ -303,3 +303,42 @@ describe("child bridge", () => {
     release();
   });
 });
+
+it("filters late stdout by process id when a session key is reused", async () => {
+  installResolvedListeners();
+  const child = await loadChild();
+  const release = await child.acquireHarnessBridge();
+  const lines: string[] = [];
+  mocks.invoke.mockResolvedValueOnce(41);
+  child.watchChild("same", (line) => lines.push(line));
+  await child.spawnChild("same", "agent", [], "/tmp");
+  mocks.handlers.get("harness-stdout")?.({
+    payload: { sessionId: "same", pid: 41, line: "first" } as never,
+  });
+  mocks.invoke.mockResolvedValueOnce(undefined);
+  await child.killChild("same");
+  child.watchChild("same", (line) => lines.push(line));
+  const spawned = deferred<number>();
+  mocks.invoke.mockReturnValueOnce(spawned.promise);
+  const next = child.spawnChild("same", "agent", [], "/tmp");
+  for (const [pid, line] of [
+    [41, "old buffered result"],
+    [42, "early initialization"],
+  ] as const) {
+    mocks.handlers.get("harness-stdout")?.({
+      payload: { sessionId: "same", pid, line } as never,
+    });
+  }
+  spawned.resolve(42);
+  await next;
+  for (const [pid, line] of [
+    [41, "late old result"],
+    [42, "new result"],
+  ] as const) {
+    mocks.handlers.get("harness-stdout")?.({
+      payload: { sessionId: "same", pid, line } as never,
+    });
+  }
+  expect(lines).toEqual(["first", "early initialization", "new result"]);
+  release();
+});

@@ -60,10 +60,7 @@ fn capitalize(value: &str) -> String {
 }
 
 fn claude_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
-    let path = match dir {
-        Some(dir) => dir.join(".claude.json"),
-        None => home()?.join(".claude.json"),
-    };
+    let path = crate::harness::claude_config_path(dir.as_deref())?;
     parse_claude_identity(&read_json(&path)?)
 }
 

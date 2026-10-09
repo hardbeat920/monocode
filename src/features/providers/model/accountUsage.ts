@@ -4,6 +4,7 @@ import {
   exhaustedWindowResetAt,
   formatResetDuration,
   type ProviderRateLimits,
+  relevantRateLimitWindows,
 } from "./rateLimits";
 import {
   getAllRateLimits,
@@ -42,10 +43,9 @@ export type AccountStatus = {
 export function accountHeadroom(
   limits: ProviderRateLimits | undefined,
   now: number,
+  model?: string,
 ): number | null {
-  const windows = [limits?.session, limits?.weekly, limits?.monthly].filter(
-    (window) => window != null,
-  );
+  const windows = limits ? relevantRateLimitWindows(limits, model) : [];
   if (windows.length === 0) return null;
   return Math.min(
     ...windows.map((window) =>
@@ -60,8 +60,9 @@ export function accountHeadroom(
 export function accountStatus(
   limits: ProviderRateLimits | undefined,
   now: number,
+  model?: string,
 ): AccountStatus {
-  const headroom = accountHeadroom(limits, now);
+  const headroom = accountHeadroom(limits, now, model);
   if (!limits || headroom == null) {
     if (!limits || limits.status === "idle" || limits.status === "fetching") {
       return { tone: "checking", label: "Checking…", detail: null };
@@ -79,7 +80,7 @@ export function accountStatus(
     return {
       tone: "exhausted",
       label: "Exhausted",
-      detail: backIn(limits, now),
+      detail: backIn(limits, now, model),
     };
   }
   if (headroom <= LOW_HEADROOM_PERCENT) {
@@ -93,8 +94,12 @@ export function accountStatus(
 }
 
 /** "back in 31m" for the used-up window that stays blocked longest. */
-function backIn(limits: ProviderRateLimits, now: number): string | null {
-  const resetAt = exhaustedWindowResetAt(limits);
+function backIn(
+  limits: ProviderRateLimits,
+  now: number,
+  model?: string,
+): string | null {
+  const resetAt = exhaustedWindowResetAt(limits, model);
   if (resetAt == null || resetAt <= now) return null;
   return `back in ${formatResetDuration(resetAt - now)}`;
 }
@@ -104,10 +109,11 @@ export function bestAlternativeAccount(
   accounts: ProviderAccount[],
   usageFor: (account: ProviderAccount) => ProviderRateLimits | undefined,
   now: number,
+  model?: string,
 ): ProviderAccount | null {
   let best: { account: ProviderAccount; headroom: number } | null = null;
   for (const account of accounts) {
-    const headroom = accountHeadroom(usageFor(account), now);
+    const headroom = accountHeadroom(usageFor(account), now, model);
     if (headroom == null || headroom <= LOW_HEADROOM_PERCENT) continue;
     if (!best || headroom > best.headroom) best = { account, headroom };
   }

@@ -348,7 +348,7 @@ export class HostChildBackend implements ChildBackend {
           void this.kill(id);
           return;
         }
-        this.emit(`harness-${stream}`, { sessionId: id, line });
+        this.emit(`harness-${stream}`, { sessionId: id, line, pid: child.pid });
       }
       if (buffer.length > 8 * 1024 * 1024) {
         buffer = "";
@@ -357,7 +357,11 @@ export class HostChildBackend implements ChildBackend {
     });
     child[stream].on("end", () => {
       if (buffer)
-        this.emit(`harness-${stream}`, { sessionId: id, line: buffer });
+        this.emit(`harness-${stream}`, {
+          sessionId: id,
+          line: buffer,
+          pid: child.pid,
+        });
     });
   }
 

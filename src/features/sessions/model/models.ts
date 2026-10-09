@@ -278,6 +278,16 @@ export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
   emit();
 }
 
+/** Drop a live catalog so the harness shows its built-in fallback list. */
+export function clearHarnessModels(harness: HarnessId) {
+  if (overlays[harness] == null) return;
+  const { [harness]: _models, ...restModels } = overlays;
+  const { [harness]: _default, ...restDefaults } = overlayDefaults;
+  overlays = restModels;
+  overlayDefaults = restDefaults;
+  emit();
+}
+
 /** True after a live CLI catalog has replaced the built-in fallback list. */
 export function hasLiveCatalog(harness: HarnessId): boolean {
   return overlays[harness] != null;
@@ -406,10 +416,14 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     const bundled = bundledById.get(id);
     if (bundled && bundled.harness === harness) return bundled;
 
-    // A saved concrete Claude version may be absent from both catalogs.
+    // A saved Claude model may belong to another profile or gateway catalog.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
-    if (harness === "claude" && /^claude:[a-z][a-z0-9-]*-\d/.test(requested)) {
+    if (
+      harness === "claude" &&
+      requested.startsWith("claude:") &&
+      nativeIdFrom(requested).trim()
+    ) {
       const nativeId = nativeIdForUnknownKey(requested);
       return { id: requested, harness, name: nativeId, nativeId };
     }
@@ -481,7 +495,12 @@ function nativeIdForUnknownKey(id: string): string {
   // Picker keys can use dotted versions (`opus-4.8`), while Claude's CLI
   // expects hyphenated native ids (`claude-opus-4-8`).
   return harness === "claude"
-    ? claudeNativeId("claude", slug.replace(/\.(?=\d)/g, "-"))
+    ? claudeNativeId(
+        "claude",
+        /^(claude-)?(opus|sonnet|haiku|fable)-\d/i.test(slug)
+          ? slug.replace(/\.(?=\d)/g, "-")
+          : slug,
+      )
     : slug;
 }
 
@@ -494,7 +513,9 @@ function claudeNativeId(harness: HarnessId, native: string): string {
   if (harness !== "claude" || !native || native.startsWith("claude-")) {
     return native;
   }
-  return /\d/.test(native) ? `claude-${native}` : native;
+  return /^(opus|sonnet|haiku|fable)-\d/i.test(native)
+    ? `claude-${native}`
+    : native;
 }
 
 export function defaultModelSettings(

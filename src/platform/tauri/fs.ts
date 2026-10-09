@@ -25,13 +25,19 @@ const PATH_ARGS = ["path", "cwd", "parent", "from", "destParent", "paths"];
 
 /** Runs a command on the machine that owns its paths, so the same file and
  * Git UI works for a local project and one on a connected machine. */
-export function invokeWorkspace<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+export function invokeWorkspace<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   const options = args?.options;
   const remoteOptions =
     options && typeof options === "object" && !Array.isArray(options)
       ? isRemotePath((options as Record<string, unknown>).cwd)
       : false;
-  if (args && (PATH_ARGS.some((key) => isRemotePath(args[key])) || remoteOptions)) {
+  if (
+    args &&
+    (PATH_ARGS.some((key) => isRemotePath(args[key])) || remoteOptions)
+  ) {
     if (!remoteRunner)
       return Promise.reject(
         new Error("Connect this project’s machine to open its files."),
@@ -73,8 +79,12 @@ export interface OmpAssistantText {
   concat: string;
 }
 
-export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpAssistantText[]> {
-  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
+export function ompActiveAssistantTexts(
+  providerSessionId: string,
+): Promise<OmpAssistantText[]> {
+  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", {
+    providerSessionId,
+  });
 }
 
 export function claudeShellCommands(
@@ -161,10 +171,12 @@ export type DiscoveredSkill = {
 export function listSkills(
   cwd: string,
   disabledPaths?: readonly string[] | null,
+  account?: { provider: string; accountId?: string },
 ): Promise<DiscoveredSkill[]> {
   return invoke<DiscoveredSkill[]>("list_skills", {
     cwd,
     disabledPaths: disabledPaths ?? null,
+    ...(account ?? {}),
   });
 }
 
@@ -513,7 +525,9 @@ export async function pickFolders(title = "Open projects"): Promise<string[]> {
   return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
-export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
+export async function pickFiles(
+  title = "Attach files",
+): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
     directory: false,
@@ -562,7 +576,9 @@ export function statFiles(paths: string[]): Promise<FileMtime[]> {
     groups.set(machine, group);
   }
   return Promise.all(
-    [...groups.values()].map((group) => invoke<FileMtime[]>("stat_files", { paths: group })),
+    [...groups.values()].map((group) =>
+      invoke<FileMtime[]>("stat_files", { paths: group }),
+    ),
   ).then((results) => {
     const byPath = new Map(results.flat().map((entry) => [entry.path, entry]));
     return paths.map((path) => byPath.get(path) ?? { path, mtimeMs: null });

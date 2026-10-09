@@ -184,7 +184,10 @@ describe("provider-aware skill catalog", () => {
   it("keeps filesystem discovery and the built-in row for non-Pi providers", async () => {
     const catalog = await loadSkills({ harness: "claude", cwd: "/repo" });
 
-    expect(mocks.listSkills).toHaveBeenCalledWith("/repo", []);
+    expect(mocks.listSkills).toHaveBeenCalledWith("/repo", [], {
+      provider: "claude",
+      accountId: "default",
+    });
     expect(catalog).toContainEqual(BUILTIN_CREATE_SKILL);
     expect(mocks.discoverPiSkills).not.toHaveBeenCalled();
   });

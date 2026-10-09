@@ -14,6 +14,7 @@ import {
   parseOpencodeGoUsage,
   parseResetTimestamp,
   rateLimitWindowTooltip,
+  relevantRateLimitWindows,
 } from "./rateLimits";
 
 describe("formatWindowLabel", () => {
@@ -24,6 +25,28 @@ describe("formatWindowLabel", () => {
     expect(formatWindowLabel(45)).toBe("45m");
     expect(formatWindowLabel(1_440)).toBe("1d");
   });
+});
+
+it.each([
+  ["5.1", "claude:sonnet-5", true],
+  ["opus", "claude:octopus-5", false],
+  ["claude-4-opus", "claude:claude-opus-4", true],
+  ["us.anthropic.claude-opus-4", "claude:opus-4", true],
+  ["Fable 5.1", "claude:fable-5-1", true],
+  ["opus", "claude:sonnet-5", false],
+])("matches scoped quota %s against %s", (scope, model, relevant) => {
+  const limits = idleRateLimits("claude");
+  const window = {
+    model: scope,
+    label: scope,
+    usedPercent: 100,
+    windowMinutes: 10_080,
+    resetsAt: null,
+  };
+  limits.scopedWeekly = [window];
+  expect(relevantRateLimitWindows(limits, model).includes(window)).toBe(
+    relevant,
+  );
 });
 
 describe("formatResetDuration", () => {
@@ -360,4 +383,45 @@ describe("rateLimitWindowTooltip", () => {
       ).toBe(`${remaining} remaining · wk window`);
     },
   );
+});
+
+it("retains legacy and reported model-scoped Claude quotas and usage credits", () => {
+  const parsed = parseClaudeOAuthUsage(
+    JSON.stringify({
+      five_hour: { utilization: 10 },
+      seven_day: { utilization: 20 },
+      seven_day_opus: { utilization: 60 },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          scope: { model: { display_name: "Fable 5.1" } },
+          percent: 100,
+          resets_at: "2026-10-05T00:00:00Z",
+        },
+        { kind: "unknown", percent: 90 },
+      ],
+      extra_usage: {
+        is_enabled: true,
+        used_credits: 25,
+        monthly_limit: 100,
+        utilization: 25,
+      },
+    }),
+  );
+  expect(
+    parsed.scopedWeekly?.map((row) => [row.label, row.usedPercent]),
+  ).toEqual([
+    ["Opus", 60],
+    ["Fable 5.1", 100],
+  ]);
+  expect(parsed.extraUsage).toEqual({
+    enabled: true,
+    usedCredits: 25,
+    monthlyLimit: 100,
+    usedPercent: 25,
+  });
+  expect(exhaustedWindowResetAt(parsed, "claude:fable-5-1")).toBe(
+    Date.parse("2026-10-05T00:00:00Z"),
+  );
+  expect(exhaustedWindowResetAt(parsed, "claude:sonnet-5")).toBeNull();
 });

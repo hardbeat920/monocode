@@ -72,7 +72,7 @@ type RowState =
  */
 async function runUpdate(update: HarnessUpdate): Promise<RowState> {
   try {
-    await updateHarnessCli(update.harness);
+    const instructions = await updateHarnessCli(update.harness);
     const after = await inspectHarnessBinary(update.harness);
     const version = parseOpenCodeVersion(after.version ?? "");
     if (version && compareSemver(version, update.latest) >= 0) {
@@ -82,7 +82,9 @@ async function runUpdate(update: HarnessUpdate): Promise<RowState> {
     }
     return {
       status: "failed",
-      error: `Still on ${version ?? update.installed} after updating.`,
+      error:
+        instructions?.trim() ||
+        `Still on ${version ?? update.installed} after updating.`,
     };
   } catch (error) {
     return {

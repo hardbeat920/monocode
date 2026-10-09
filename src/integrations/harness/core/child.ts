@@ -81,7 +81,7 @@ function listen<T>(
   return backend ? backend.listen(event, handler) : tauriListen(event, handler);
 }
 
-type LinePayload = { sessionId: string; line: string };
+type LinePayload = { sessionId: string; line: string; pid?: number };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
 type SsePayload = { sessionId: string; data: string };
 type SseEndPayload = { sessionId: string; error?: string | null };
@@ -104,6 +104,11 @@ const sseBuffer = new Map<string, string[]>();
 const ownedChildren = new Set<string>();
 const ownedSse = new Set<string>();
 const livePid = new Map<string, number>();
+const spawningChildren = new Set<string>();
+const pendingLines = new Map<
+  string,
+  Array<LinePayload & { stream: "stdout" | "stderr" }>
+>();
 const pendingExit = new Map<
   string,
   Array<{ code: number | null; pid: number }>
@@ -138,6 +143,27 @@ function pushBounded(
   map.set(sessionId, queued);
 }
 
+function deliverChildLine(payload: LinePayload, stream: "stdout" | "stderr") {
+  const { sessionId, line, pid } = payload;
+  if (pid != null) {
+    if (spawningChildren.has(sessionId)) {
+      const pending = pendingLines.get(sessionId) ?? [];
+      pending.push({ ...payload, stream });
+      if (pending.length > MAX_BUFFERED) pending.shift();
+      pendingLines.set(sessionId, pending);
+      return;
+    }
+    if (!isCurrentChildExit(livePid.get(sessionId), pid)) return;
+  }
+  const handler =
+    stream === "stdout"
+      ? lineHandlers.get(sessionId)
+      : stderrHandlers.get(sessionId);
+  if (handler) handler(line);
+  else if (stream === "stdout" && ownedChildren.has(sessionId))
+    pushBounded(lineBuffer, sessionId, line);
+}
+
 function ensureBridge() {
   if (bridge) return;
   let failed = false;
@@ -156,21 +182,12 @@ function ensureBridge() {
   const installation = Promise.all([
     register(
       listen<LinePayload>("harness-stdout", (event) => {
-        const { sessionId, line } = event.payload;
-        const handler = lineHandlers.get(sessionId);
-        if (handler) {
-          handler(line);
-          return;
-        }
-        if (ownedChildren.has(sessionId)) {
-          pushBounded(lineBuffer, sessionId, line);
-        }
+        deliverChildLine(event.payload, "stdout");
       }),
     ),
     register(
       listen<LinePayload>("harness-stderr", (event) => {
-        const { sessionId, line } = event.payload;
-        stderrHandlers.get(sessionId)?.(line);
+        deliverChildLine(event.payload, "stderr");
       }),
     ),
     register(
@@ -235,6 +252,8 @@ function teardownBridge() {
   ownedChildren.clear();
   ownedSse.clear();
   livePid.clear();
+  spawningChildren.clear();
+  pendingLines.clear();
   pendingExit.clear();
   void pending?.then((fns) => fns.forEach((fn) => fn())).catch(() => undefined);
 }
@@ -334,21 +353,37 @@ export async function spawnChild(
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
   ownedChildren.add(sessionId);
+  spawningChildren.add(sessionId);
+  pendingLines.delete(sessionId);
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
-  const pid = await invoke<number>("harness_spawn", {
-    sessionId,
-    command,
-    args,
-    cwd,
-    account,
-    binaryProvider,
-    binaryPath,
-    ...(codexStore ? { codexStore } : {}),
-  });
-  if (typeof pid !== "number" || pid <= 0) return;
+  let pid: number;
+  try {
+    pid = await invoke<number>("harness_spawn", {
+      sessionId,
+      command,
+      args,
+      cwd,
+      account,
+      binaryProvider,
+      binaryPath,
+      ...(codexStore ? { codexStore } : {}),
+    });
+  } catch (error) {
+    pendingLines.delete(sessionId);
+    throw error;
+  } finally {
+    spawningChildren.delete(sessionId);
+  }
+  if (typeof pid !== "number" || pid <= 0) {
+    pendingLines.delete(sessionId);
+    return;
+  }
   livePid.set(sessionId, pid);
+  const lines = pendingLines.get(sessionId) ?? [];
+  pendingLines.delete(sessionId);
+  for (const line of lines) deliverChildLine(line, line.stream);
   const exits = pendingExit.get(sessionId);
   pendingExit.delete(sessionId);
   const exited = exits?.find((event) => event.pid === pid);
@@ -362,6 +397,7 @@ export function writeChild(sessionId: string, line: string): Promise<void> {
 }
 
 export function killChild(sessionId: string): Promise<void> {
+  pendingLines.delete(sessionId);
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
   unwatchChild(sessionId);
@@ -379,6 +415,8 @@ export function killAllChildren(): Promise<void> {
   ownedChildren.clear();
   ownedSse.clear();
   livePid.clear();
+  spawningChildren.clear();
+  pendingLines.clear();
   pendingExit.clear();
   return invoke("harness_kill_all");
 }
@@ -544,9 +582,9 @@ export function inspectHarnessBinary(
 /** Runs the CLI's own self-update against the binary MonoCode uses. */
 export async function updateHarnessCli(
   provider: ConfigurableBinaryProvider,
-): Promise<void> {
+): Promise<string> {
   const resolved = await resolveHarnessBinary(provider);
-  await invoke("harness_update", {
+  return invoke<string>("harness_update", {
     command: resolved.path,
     binaryProvider: provider,
     binaryPath: runtimeProviderBinaryPath(provider),

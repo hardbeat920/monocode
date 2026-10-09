@@ -404,13 +404,21 @@ pub async fn fetch_claude_usage(
     account_id: Option<String>,
 ) -> Result<ClaudeUsageFetch, String> {
     let config_dir = crate::harness::provider_account_dir(&app, "claude", account_id.as_deref())?;
-    tauri::async_runtime::spawn_blocking(move || fetch_claude_usage_sync(config_dir))
+    let secure_dir = if account_id.as_deref().is_some_and(|id| id != "default") {
+        config_dir.clone()
+    } else {
+        crate::harness::configured_claude_secure_storage_dir().or_else(|| config_dir.clone())
+    };
+    tauri::async_runtime::spawn_blocking(move || fetch_claude_usage_sync(config_dir, secure_dir))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFetch, String> {
-    let Some(creds) = read_claude_credentials(config_dir.as_deref()) else {
+fn fetch_claude_usage_sync(
+    config_dir: Option<PathBuf>,
+    secure_dir: Option<PathBuf>,
+) -> Result<ClaudeUsageFetch, String> {
+    let Some(creds) = read_claude_credentials(config_dir.as_deref(), secure_dir.as_deref()) else {
         return Ok(usage_result(
             "unavailable",
             None,
@@ -473,10 +481,13 @@ fn usage_error(status: u16) -> ClaudeUsageFetch {
     usage_result("error", Some(status), None, Some(message))
 }
 
-fn read_claude_credentials(config_dir: Option<&std::path::Path>) -> Option<ClaudeCredentials> {
+fn read_claude_credentials(
+    config_dir: Option<&std::path::Path>,
+    _secure_dir: Option<&std::path::Path>,
+) -> Option<ClaudeCredentials> {
     #[cfg(target_os = "macos")]
     {
-        let service = claude_keychain_service(config_dir);
+        let service = claude_keychain_service(_secure_dir);
         if let Some(creds) = read_macos_keychain_credentials(&service) {
             return Some(creds);
         }

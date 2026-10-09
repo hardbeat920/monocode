@@ -1,3 +1,7 @@
+import {
+  selectedProviderAccountId,
+  subscribeProviderAccounts,
+} from "../../providers/model/providerAccounts";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -189,6 +193,10 @@ function AddServerModal({
       await invoke("mcp_add", {
         cwd,
         provider,
+        ...(provider === "claude" &&
+        selectedProviderAccountId("claude", cwd) !== "default"
+          ? { accountId: selectedProviderAccountId("claude", cwd) }
+          : {}),
         scope,
         name: name.trim(),
         config,
@@ -330,6 +338,12 @@ function McpConnections({
   cwd: string;
   projectPicker: ReactNode;
 }) {
+  const [accountVersion, setAccountVersion] = useState(0);
+  useEffect(
+    () =>
+      subscribeProviderAccounts(() => setAccountVersion((value) => value + 1)),
+    [],
+  );
   const cached = getCachedMcpSettings(cwd);
   const [servers, setServers] = useState<ServerRow[]>(cached?.servers ?? []);
   const [filter, setFilter] = useState<Filter>("all");
@@ -351,7 +365,7 @@ function McpConnections({
 
   useEffect(
     () => subscribeMcpSettings(cwd, applySnapshot),
-    [cwd, applySnapshot],
+    [cwd, applySnapshot, accountVersion],
   );
 
   const refresh = useCallback(
@@ -369,7 +383,7 @@ function McpConnections({
         applySnapshot(getCachedMcpSettings(cwd) ?? snapshot);
       }
     },
-    [cwd, applySnapshot],
+    [cwd, applySnapshot, accountVersion],
   );
 
   useEffect(() => {
@@ -403,6 +417,10 @@ function McpConnections({
       await invoke("mcp_provider_login", {
         cwd,
         provider: server.provider,
+        ...(server.provider === "claude" &&
+        selectedProviderAccountId("claude", cwd) !== "default"
+          ? { accountId: selectedProviderAccountId("claude", cwd) }
+          : {}),
         name: server.name,
       });
       await refresh();
@@ -428,6 +446,9 @@ function McpConnections({
     try {
       await invoke("claude_mcp_remove", {
         cwd,
+        ...(selectedProviderAccountId("claude", cwd) !== "default"
+          ? { accountId: selectedProviderAccountId("claude", cwd) }
+          : {}),
         name: server.name,
         scope: selectedScope,
       });

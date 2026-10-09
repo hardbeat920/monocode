@@ -216,6 +216,7 @@ type Props = {
   cwd?: string;
   executionCwd: string;
   sessionId?: string;
+  providerAccountId?: string;
   branch?: string;
   recents?: RecentProject[];
   hideProjectPicker?: boolean;
@@ -342,6 +343,7 @@ export function Composer({
   cwd = "~",
   executionCwd,
   sessionId,
+  providerAccountId,
   branch,
   recents = [],
   hideProjectPicker = false,
@@ -533,6 +535,7 @@ export function Composer({
     harness,
     executionCwd: localCwd,
     sessionId,
+    providerAccountId,
     pickerOpen: pickerOpen && !remote,
   });
   const skills = skillCatalog.skills;
@@ -673,14 +676,15 @@ export function Composer({
       setMcpError(snapshot.error);
       setMcpLoading(false);
     };
-    const stop = subscribeMcpSettings(executionCwd, apply);
-    const cached = getCachedMcpSettings(executionCwd);
+    const stop = subscribeMcpSettings(executionCwd, apply, providerAccountId);
+    const cached = getCachedMcpSettings(executionCwd, providerAccountId);
     if (cached) apply(cached);
     void loadMcpSettings(executionCwd, false, {
       claudeHealth: harness === "claude",
+      accountId: providerAccountId,
     });
     return stop;
-  }, [executionCwd, harness, mcpPickerOpen]);
+  }, [executionCwd, harness, mcpPickerOpen, providerAccountId]);
 
   useEffect(() => {
     setMcpPickerOpen(false);

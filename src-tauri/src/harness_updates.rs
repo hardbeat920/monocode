@@ -75,7 +75,7 @@ pub async fn harness_update(
     command: String,
     binary_provider: String,
     binary_path: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let args: Vec<String> = update_args(&binary_provider)
         .ok_or_else(|| format!("No updater for harness: {binary_provider}"))?
         .iter()
@@ -87,7 +87,13 @@ pub async fn harness_update(
         }
         let output = exec_output(&command, &args, None, UPDATE_TIMEOUT)?;
         if output.status.success() {
-            return Ok(());
+            return Ok([
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            ]
+            .join("\n")
+            .trim()
+            .to_owned());
         }
         Err(update_failure(&output.stdout, &output.stderr))
     })

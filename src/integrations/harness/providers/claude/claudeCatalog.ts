@@ -1,5 +1,6 @@
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
+  clearHarnessModels,
   setHarnessModels,
   type AgentModel,
   type ModelSetting,
@@ -216,38 +217,69 @@ const EFFORT_LABELS: Record<string, string> = {
   max: "Max",
 };
 
-let inflight: Promise<void> | null = null;
+type CatalogScope = {
+  cwd?: string;
+  providerAccountId?: string;
+  force?: boolean;
+};
+const inflight = new Map<string, Promise<void>>();
+let catalogGeneration = 0;
+/** Scope key of the refresh that produced the current Claude overlay. */
+let publishedKey: string | null = null;
 
-export function refreshClaudeCatalog(): Promise<void> {
-  if (inflight) return inflight;
-  inflight = discoverClaudeModels()
-    .then((models) => {
-      if (models.length > 0) setHarnessModels("claude", models);
-    })
+export function refreshClaudeCatalog(scope: CatalogScope = {}): Promise<void> {
+  const key = JSON.stringify([
+    scope.cwd ?? "",
+    scope.providerAccountId ?? "default",
+  ]);
+  const pending = inflight.get(key);
+  if (pending)
+    return scope.force
+      ? pending.then(() => refreshClaudeCatalog({ ...scope, force: false }))
+      : pending;
+  const generation = ++catalogGeneration;
+  const run = discoverClaudeModels(scope.cwd, scope.providerAccountId)
     .catch((error: unknown) => {
       console.debug("[monocode] claude catalog", error);
+      return [];
+    })
+    .then((models) => {
+      if (generation !== catalogGeneration) return;
+      if (models.length > 0) {
+        setHarnessModels("claude", models);
+        publishedKey = key;
+      } else if (publishedKey !== key) {
+        // A failed refresh keeps its own scope's list, but must not leave
+        // another account's or folder's models listed.
+        clearHarnessModels("claude");
+        publishedKey = null;
+      }
     })
     .finally(() => {
-      inflight = null;
+      if (inflight.get(key) === run) inflight.delete(key);
     });
-  return inflight;
+  inflight.set(key, run);
+  return run;
 }
 
 export async function discoverClaudeModels(
   workingDirectory?: string,
+  providerAccountId?: string,
 ): Promise<AgentModel[]> {
-  const listed = await discoverViaListModels(workingDirectory).catch(
-    (error: unknown) => {
-      console.debug("[monocode] claude list_models catalog failed", error);
-      return [];
-    },
-  );
+  const listed = await discoverViaListModels(
+    workingDirectory,
+    providerAccountId,
+  ).catch((error: unknown) => {
+    console.debug("[monocode] claude list_models catalog failed", error);
+    return [];
+  });
   if (listed.length > 0) return listed;
   return discoverViaVersion(workingDirectory);
 }
 
 async function discoverViaListModels(
   workingDirectory?: string,
+  providerAccountId?: string,
 ): Promise<AgentModel[]> {
   const { path } = await resolveClaudeBinary();
   const cwd = workingDirectory ?? (await homeDir());
@@ -300,7 +332,7 @@ async function discoverViaListModels(
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
-      undefined,
+      { provider: "claude", id: providerAccountId ?? "default" },
       "claude",
     );
     await writeChild(
@@ -354,7 +386,20 @@ export function modelsFromClaudeListModels(raw: unknown): AgentModel[] {
     const model = modelFromListRow(item);
     if (!model) continue;
     const key = model.nativeId ?? model.id;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      const existing = models.find((row) => (row.nativeId ?? row.id) === key)!;
+      for (const setting of model.settings ?? []) {
+        const prior = existing.settings?.find((row) => row.id === setting.id);
+        if (!prior) {
+          existing.settings = [...(existing.settings ?? []), setting];
+          continue;
+        }
+        for (const option of setting.options)
+          if (!prior.options.some((row) => row.value === option.value))
+            prior.options.push(option);
+      }
+      continue;
+    }
     seen.add(key);
     models.push(model);
   }
@@ -537,7 +582,7 @@ function claudeCatalogId(nativeId: string): string {
 function claudeLaunchId(valueId: string, resolvedId: string): string {
   const nativeId = valueId || resolvedId;
   if (!nativeId) return "";
-  if (nativeId.startsWith("claude-") || !/\d/.test(nativeId)) return nativeId;
+  if (!/^(opus|sonnet|haiku|fable)-\d/i.test(nativeId)) return nativeId;
   return resolvedId.startsWith("claude-") ? resolvedId : `claude-${nativeId}`;
 }
 

@@ -1,3 +1,7 @@
+import {
+  selectedProviderAccountId,
+  supportsProviderAccounts,
+} from "../../../features/providers/model/providerAccounts";
 import type {
   Block,
   HarnessId,
@@ -77,6 +81,7 @@ export type HarnessAdapter = {
   keepQuestionOpen?(sessionId: string, requestId: number): void;
   /** Kill the child but keep resume state for later rebind. */
   stopSession(sessionId: string): Promise<void>;
+  needsProcess?(sessionId: string): boolean;
   /** Drop resume state and kill the child (delete, harness switch, idle detach). */
   forgetSession(sessionId: string): Promise<void>;
   /** Seed resume state from a restored MonoCode session. */
@@ -89,17 +94,30 @@ export type HarnessAdapter = {
   /** Seed provider task state from a restored session's persisted panels. */
   restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
   /** Refresh the model catalog overlay when supported. */
-  refreshCatalog?(): Promise<void>;
+  refreshCatalog?(scope?: {
+    cwd?: string;
+    providerAccountId?: string;
+    force?: boolean;
+  }): Promise<void>;
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
-  generateCommitMessage?(cwd: string, signal?: AbortSignal): Promise<string>;
+  generateCommitMessage?(
+    cwd: string,
+    signal?: AbortSignal,
+    providerAccountId?: string,
+  ): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
   generatePrContent?(
     cwd: string,
+    providerAccountId?: string,
   ): Promise<(PrContent & { base: string; head: string }) | null>;
   /** Optional LLM branch name from a user message. */
-  generateBranchName?(cwd: string, message: string): Promise<string | null>;
+  generateBranchName?(
+    cwd: string,
+    message: string,
+    providerAccountId?: string,
+  ): Promise<string | null>;
   /** Optional warmup for text-generation backends. */
   warmupText?(cwd: string): Promise<void>;
   /** Run an isolated, read-only prompt without mutating the main session. */
@@ -178,6 +196,10 @@ function scheduleIdlePark(harness: HarnessId, sessionId: string): void {
     sessionId,
     setTimeout(() => {
       idleParkTimers.delete(sessionId);
+      if (getHarness(harness)?.needsProcess?.(sessionId)) {
+        scheduleIdlePark(harness, sessionId);
+        return;
+      }
       void stopHarnessSession(harness, sessionId);
     }, HARNESS_IDLE_PARK_MS),
   );
@@ -396,7 +418,7 @@ export function bindHarnessSession(
 /** `force` re-reads a catalog that already loaded, e.g. after a CLI update. */
 export async function refreshHarnessCatalogs(
   ids: Iterable<HarnessId>,
-  options?: { force?: boolean },
+  options?: { force?: boolean; cwd?: string; providerAccountId?: string },
 ): Promise<void> {
   const wanted = new Set(ids);
   if (wanted.size === 0) return;
@@ -407,8 +429,23 @@ export async function refreshHarnessCatalogs(
         if (!adapter.refreshCatalog) return;
         // `force` marks an explicit user action (opening the model dropdown);
         // routine refreshes keep skipping adapters with a live catalog.
-        if (!options?.force && hasLiveCatalog(adapter.id)) return;
-        await adapter.refreshCatalog().catch((error: unknown) => {
+        // Claude's catalog depends on the folder and account, so it always
+        // reruns and dedupes by scope itself.
+        if (
+          adapter.id !== "claude" &&
+          !options?.force &&
+          hasLiveCatalog(adapter.id)
+        )
+          return;
+        const scope = {
+          ...options,
+          providerAccountId:
+            options?.providerAccountId ??
+            (supportsProviderAccounts(adapter.id)
+              ? selectedProviderAccountId(adapter.id, options?.cwd ?? "")
+              : undefined),
+        };
+        await adapter.refreshCatalog(scope).catch((error: unknown) => {
           console.debug(`[monocode] ${adapter.id} catalog`, error);
         });
       }),
@@ -428,32 +465,55 @@ export async function generateHarnessCommitMessage(
   harness: HarnessId,
   cwd: string,
   signal?: AbortSignal,
+  providerAccountId?: string,
 ): Promise<string> {
   const adapter = requireHarness(harness);
   if (!adapter.generateCommitMessage) {
     throw new Error(`${harness} does not support commit message generation`);
   }
   signal?.throwIfAborted();
-  return adapter.generateCommitMessage(cwd, signal);
+  return adapter.generateCommitMessage(
+    cwd,
+    signal,
+    providerAccountId ??
+      (supportsProviderAccounts(harness)
+        ? selectedProviderAccountId(harness, cwd)
+        : undefined),
+  );
 }
 
 export async function generateHarnessPrContent(
   harness: HarnessId,
   cwd: string,
+  providerAccountId?: string,
 ): Promise<(PrContent & { base: string; head: string }) | null> {
   const adapter = getHarness(harness);
   if (!adapter?.generatePrContent) return null;
-  return adapter.generatePrContent(cwd);
+  return adapter.generatePrContent(
+    cwd,
+    providerAccountId ??
+      (supportsProviderAccounts(harness)
+        ? selectedProviderAccountId(harness, cwd)
+        : undefined),
+  );
 }
 
 export async function generateHarnessBranchName(
   harness: HarnessId,
   cwd: string,
   message: string,
+  providerAccountId?: string,
 ): Promise<string | null> {
   const adapter = getHarness(harness);
   if (!adapter?.generateBranchName) return null;
-  return adapter.generateBranchName(cwd, message);
+  return adapter.generateBranchName(
+    cwd,
+    message,
+    providerAccountId ??
+      (supportsProviderAccounts(harness)
+        ? selectedProviderAccountId(harness, cwd)
+        : undefined),
+  );
 }
 
 export async function warmupHarnessText(
