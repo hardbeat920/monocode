@@ -105,6 +105,7 @@ function fixture() {
     ),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
+    btwAsk: vi.fn(() => true),
     stop: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     worktrees: vi.fn(async () => ({
@@ -124,6 +125,171 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("asks a side question on a busy session without steering its main turn" /** The BTW callback receives the completed turn while the target remains busy. */, async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.busy = true;
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Inspect the implementation",
+        durationMs: 50,
+        turnModel: { harness: "codex", id: "codex:test", name: "Test" },
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.btw",
+        { sessionId: "other", question: "Why this design?" },
+        host,
+      ),
+    ).resolves.toEqual({
+      sessionId: "other",
+      threadId: "app-lead-btw-ask-1",
+      status: "running",
+    });
+    expect(host.btwAsk).toHaveBeenCalledWith(
+      target,
+      target.blocks,
+      "app-lead-btw-ask-1",
+      "app-lead-btw-ask-1",
+      "Why this design?",
+    );
+    expect(host.send).not.toHaveBeenCalled();
+    expect(target.busy).toBe(true);
+  });
+
+  it("deduplicates a retried side question by request ID" /** Retrying reuses the thread and rejects changed question text. */, async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Inspect the implementation",
+        durationMs: 50,
+        btwThreads: [
+          {
+            id: "app-lead-btw-ask-1",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 2,
+            status: "running",
+            harness: "codex",
+            messages: [{ id: "m1", role: "user", text: "Why?", createdAt: 2 }],
+          },
+        ],
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    const first = await handleAgentApp(
+      source,
+      "ask-1",
+      "sessions.btw",
+      { sessionId: "other", question: "Why?" },
+      host,
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.btw",
+        { sessionId: "other", question: "Why?" },
+        host,
+      ),
+    ).resolves.toEqual(first);
+    expect(host.btwAsk).not.toHaveBeenCalled();
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.btw",
+        { sessionId: "other", question: "Different question" },
+        host,
+      ),
+    ).rejects.toThrow("already used with another question");
+  });
+
+  it("returns BTW messages and reports deleted threads as closed" /** Expose only saved user and assistant messages to the CLI. */, async () => {
+    const { source, host } = fixture();
+    const target = newSession("codex", source.cwd, "codex:test");
+    target.id = "other";
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Review",
+        btwThreads: [
+          {
+            id: "done",
+            sourceEndBlockId: "answer-1",
+            createdAt: 1,
+            updatedAt: 3,
+            status: "ready",
+            messages: [
+              { id: "q1", role: "user", text: "Why?", createdAt: 2 },
+              { id: "a1", role: "assistant", text: "Because.", createdAt: 3 },
+            ],
+          },
+        ],
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    await expect(
+      handleAgentApp(
+        source,
+        "get-done",
+        "btw.get",
+        { sessionId: "other", threadId: "done" },
+        host,
+      ),
+    ).resolves.toMatchObject({
+      sessionId: "other",
+      threadId: "done",
+      status: "completed",
+      messages: [{ text: "Why?" }, { text: "Because." }],
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "get-missing",
+        "btw.get",
+        { sessionId: "other", threadId: "deleted" },
+        host,
+      ),
+    ).resolves.toMatchObject({ status: "closed" });
+  });
+
+  it("rejects unsupported turn providers before starting a BTW request" /** Only turns supported by the existing BTW lifecycle can be queried. */, async () => {
+    const { source, host } = fixture();
+    const target = newSession("fx", source.cwd, "fx:test");
+    target.id = "other";
+    target.blocks = [
+      { id: "user-1", role: "user", text: "Review", durationMs: 20 },
+      { id: "answer-1", role: "assistant", text: "Done." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+    await expect(
+      handleAgentApp(
+        source,
+        "unsupported",
+        "sessions.btw",
+        { sessionId: "other", question: "Why?" },
+        host,
+      ),
+    ).rejects.toThrow("provider does not support /btw");
+    expect(host.btwAsk).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {

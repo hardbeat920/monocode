@@ -7886,7 +7886,7 @@ function Workspace({
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
             appContext.push(
-              `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
+              `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, ask isolated read-only side questions about completed turns with sessions.btw, poll btw.get for answers, organize session folders, and read or write saved notes through its local CLI. A side question does not steer the target session's main agent. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
             );
           }
           // A Mono reads who it is ahead of the message, so it never takes it
@@ -9561,6 +9561,8 @@ function Workspace({
     },
     [runBtwRequest, updateBtwThread],
   );
+  const onBtwSubmitRef = useRef(onBtwSubmit);
+  onBtwSubmitRef.current = onBtwSubmit;
 
   const onBtwModelChange = useCallback(
     (
@@ -10704,6 +10706,19 @@ function Workspace({
               isMonoSession(target.id)
                 ? readMonoConversation(target, options)
                 : sessionConversationPage(target, options),
+            /** Restore the target, then use the existing BTW submission callback. */
+            async btwAsk(target, turn, threadId, messageId, question) {
+              const open = await ensureOpenSessionRef.current(target.id);
+              if (!open || !sameProjectPath(open.cwd, target.cwd))
+                throw new Error("Session is unavailable in this project");
+              return onBtwSubmitRef.current(
+                target.id,
+                turn,
+                threadId,
+                messageId,
+                question,
+              );
+            },
             send: async (id, prompt, requestId, notifyMonoId) => {
               const target = await ensureOpenSessionRef.current(id);
               if (

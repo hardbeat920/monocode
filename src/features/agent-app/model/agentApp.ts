@@ -14,6 +14,8 @@ import {
   RUNTIME_MODES,
   type HarnessId,
   type Session,
+  type Block,
+  type BtwMessage,
 } from "../../sessions/model/session";
 import {
   loadSessionFolders,
@@ -38,6 +40,8 @@ import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
 import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import { btwOpenTargetTurnId, btwTurnHarness } from "../../sessions/model/btw";
+import { groupTurns } from "../../sessions/model/transcriptActivity";
 import {
   CARD_FIELDS,
   parseCard,
@@ -108,6 +112,14 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  /** Start the existing BTW lifecycle for a selected turn; false means rejection. */
+  btwAsk(
+    target: Session,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    question: string,
+  ): boolean | Promise<boolean>;
   stop(id: string): Promise<void>;
   remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
@@ -168,6 +180,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
+  ["sessions.btw", ["sessionId", "question", "project"]],
+  ["btw.get", ["sessionId", "threadId", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
@@ -230,6 +244,11 @@ function requiredString(value: unknown, name: string, max = 30_000): string {
       `${name} must be a non-empty string under ${max} characters`,
     );
   return value.trim();
+}
+
+/** Omit provider activity blocks from the message shape returned to the CLI. */
+function btwCliMessage({ id, role, text, createdAt }: BtwMessage) {
+  return { id, role, text, createdAt };
 }
 
 function agentPrompt(value: unknown): string {
@@ -1009,6 +1028,83 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.btw": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const question = requiredString(input.question, "question");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (target.worktreeRemoved)
+        throw new Error("Session working copy is unavailable");
+      const threadId = `app-${source.id}-btw-${requestId}`;
+      const previous = target.blocks
+        .flatMap((block) => block.btwThreads ?? [])
+        .find((thread) => thread.id === threadId);
+      if (previous) {
+        if (previous.messages[0]?.text !== question)
+          throw new Error("Request ID was already used with another question");
+        return {
+          sessionId: id,
+          threadId,
+          status:
+            previous.status === "running"
+              ? "running"
+              : previous.status === "ready"
+                ? "completed"
+                : "failed",
+        };
+      }
+      const turns = groupTurns(target.blocks);
+      const targetId = btwOpenTargetTurnId(
+        turns,
+        target.blocks,
+        target.harness,
+      );
+      if (!targetId) {
+        const latestCompleted = [...turns]
+          .reverse()
+          .find((turn) =>
+            turn.some(
+              (block) => block.role === "user" && block.durationMs != null,
+            ),
+          );
+        if (
+          latestCompleted &&
+          !btwTurnHarness(target.blocks, latestCompleted, target.harness)
+        )
+          throw new Error("The completed turn's provider does not support /btw");
+        throw new Error("No completed turn with /btw context is available");
+      }
+      const turn = turns.find((entry) => entry[0]?.id === targetId);
+      if (!turn) throw new Error("The completed turn context is unavailable");
+      if (!(await host.btwAsk(target, turn, threadId, threadId, question)))
+        throw new Error("MonoCode could not start this side question");
+      return { sessionId: id, threadId, status: "running" };
+    }
+    case "btw.get": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const threadId = requiredString(input.threadId, "threadId", 512);
+      const target = await projectSession(source, id, input, host);
+      const block = target.blocks.find(
+        (entry) =>
+          entry.role === "user" &&
+          entry.btwThreads?.some((thread) => thread.id === threadId),
+      );
+      const thread = block?.btwThreads?.find((entry) => entry.id === threadId);
+      if (!thread) return { sessionId: id, threadId, status: "closed" };
+      return {
+        sessionId: id,
+        threadId,
+        status:
+          thread.status === "running"
+            ? "running"
+            : thread.status === "ready"
+              ? "completed"
+              : "failed",
+        messages: thread.messages.map(btwCliMessage),
+        ...(thread.error ? { error: thread.error } : {}),
+      };
     }
     case "sessions.stop":
     case "sessions.archive":
