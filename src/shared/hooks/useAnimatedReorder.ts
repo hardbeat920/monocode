@@ -222,6 +222,16 @@ export function useAnimatedReorder<T extends string>(
 
       function onMove(ev: globalThis.PointerEvent) {
         if (ev.pointerId !== pointerId || settling) return;
+        // The button is already up but its pointerup never reached us: drop
+        // the drag instead of leaving the item stuck to the cursor.
+        if (
+          ev.type === "pointermove" &&
+          ev.pointerType === "mouse" &&
+          ev.buttons === 0
+        ) {
+          stop(false);
+          return;
+        }
         pointerPosition = ev[coordinate];
         if (!active) {
           if (Math.abs(pointerPosition - startPosition) < 5) return;
