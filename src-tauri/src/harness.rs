@@ -2063,6 +2063,8 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
 
 fn is_supported_harness_version(version: &str) -> bool {
     version.split_whitespace().any(|token| {
+        // Human-readable CLI output can end the version sentence with a period.
+        let token = token.strip_suffix('.').unwrap_or(token);
         let token = token
             .strip_prefix('v')
             .or_else(|| token.strip_prefix('V'))
@@ -3468,7 +3470,10 @@ mod tests {
         let copilot = dir.join("copilot");
         for (path, version) in [
             (&decoy, "unrelated-cli 1.0.94"),
-            (&copilot, "GitHub Copilot CLI 1.0.94"),
+            (
+                &copilot,
+                "GitHub Copilot CLI 1.0.94.\nRun 'copilot update' to check for updates.",
+            ),
         ] {
             std::fs::write(path, format!("#!/bin/sh\necho '{version}'\n")).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -3480,6 +3485,17 @@ mod tests {
             Some(copilot)
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn harness_versions_accept_sentence_punctuation_without_accepting_invalid_versions() {
+        assert!(is_supported_harness_version(
+            "GitHub Copilot CLI 1.0.94.\nRun 'copilot update' to check for updates."
+        ));
+        assert!(is_supported_harness_version("codex-cli 0.156.1"));
+        for version in ["1.0", "1.0.94.1", "1.0.94..", "1.0.94-invalid!", "latest"] {
+            assert!(!is_supported_harness_version(version), "{version}");
+        }
     }
 
     #[cfg(unix)]
@@ -3515,7 +3531,7 @@ mod tests {
                 } else if path == &codex {
                     b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
                 } else if path == &copilot {
-                    b"#!/bin/sh\necho 'GitHub Copilot CLI 1.0.94'\n"
+                    b"#!/bin/sh\necho 'GitHub Copilot CLI 1.0.94.'\n"
                 } else if path == &cursor_agent {
                     b"#!/bin/sh\necho '2026.09.23-86fc751'\n"
                 } else {
