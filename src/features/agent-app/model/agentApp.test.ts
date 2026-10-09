@@ -229,10 +229,16 @@ describe("agent app commands", () => {
       folder: { name: "Captain Jack", color: "#5b8def" },
     });
     for (const request of ["first", "second"])
-      await handleAgentApp(source, request, "sessions.start", {
-        prompt: "Review the project",
-        notifyOnComplete: false,
-      }, host);
+      await handleAgentApp(
+        source,
+        request,
+        "sessions.start",
+        {
+          prompt: "Review the project",
+          notifyOnComplete: false,
+        },
+        host,
+      );
     expect(loadSessionFolders(source.cwd)).toEqual([
       expect.objectContaining({
         name: "Captain Jack",
@@ -251,10 +257,16 @@ describe("agent app commands", () => {
       showStartedSessionsInSidebar: false,
       folder: { name: "Captain Jack", color: "#5b8def" },
     });
-    await handleAgentApp(source, "hidden", "sessions.start", {
-      prompt: "Review the project",
-      notifyOnComplete: false,
-    }, host);
+    await handleAgentApp(
+      source,
+      "hidden",
+      "sessions.start",
+      {
+        prompt: "Review the project",
+        notifyOnComplete: false,
+      },
+      host,
+    );
     expect(loadSessionFolders(source.cwd)).toEqual([]);
   });
 

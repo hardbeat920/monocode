@@ -153,6 +153,27 @@ it("shows this window's Mono with its status beneath the name", async () => {
   ).not.toBeNull();
 });
 
+it("disables Plan mode while a message is queued", async () => {
+  await render();
+  const current = snapshot(0).session!;
+  await act(async () =>
+    receive({
+      payload: {
+        ...snapshot(0),
+        session: {
+          ...current,
+          queuedMessages: [{ id: "queued", text: "Later", attachments: [] }],
+        },
+      },
+    }),
+  );
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+});
+
 it("lists every Mono beside the chat and switches or adds from there", async () => {
   await render();
   const rail = container.querySelector("[data-floating-mono-rail]")!;

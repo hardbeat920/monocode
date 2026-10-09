@@ -26,6 +26,7 @@ import {
 } from "../../sessions/model/session";
 import {
   FLOATING_MONO_CHANGED,
+  canChangeMonoPlanMode,
   floatingMonoAttachments,
   type FloatingMonoAction,
   type FloatingMonoEntry,
@@ -501,7 +502,7 @@ function FloatingConversation({
           name={mono.name}
           enabled={!session.worktreeRemoved}
           planMode={!!mono.planMode}
-          planModeDisabled={!!session.busy || !!session.backgroundTasks?.length}
+          planModeDisabled={!canChangeMonoPlanMode(session)}
           onPlanModeChange={(enabled) => {
             void action({ kind: "planMode", enabled });
           }}

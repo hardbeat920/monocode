@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   RUNTIME_MODE_LABEL,
   RUNTIME_MODES,
+  newSession,
   type RuntimeMode,
 } from "../../sessions/model/session";
 import { MonoDetails } from "./MonoDetails";
@@ -69,12 +70,21 @@ async function render(
   runtimeMode: RuntimeMode,
   busy = false,
   planMode = false,
+  queued = false,
 ) {
+  const session = {
+    ...newSession("codex", "/home"),
+    busy,
+    ...(queued
+      ? { queuedMessages: [{ id: "queued", text: "Later", attachments: [] }] }
+      : {}),
+  };
   await act(async () =>
     root.render(
       createElement(MonoDetails, {
         open: true,
         monoId: "mono-1",
+        session,
         cwd: "/home",
         agent: { name: "Broski", mascot: "cat", color: "#9c9", projects: [] },
         state: { status: busy ? "working" : "idle" },
@@ -138,6 +148,13 @@ it("shows and changes persistent Plan mode, disabling the switch while busy", as
   expect(onPlanModeChange).toHaveBeenCalledWith(false);
 
   await render("auto", true, true);
+  expect(
+    container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Plan mode"]',
+    )!.disabled,
+  ).toBe(true);
+
+  await render("auto", false, true, true);
   expect(
     container.querySelector<HTMLButtonElement>(
       '[role="switch"][aria-label="Plan mode"]',
