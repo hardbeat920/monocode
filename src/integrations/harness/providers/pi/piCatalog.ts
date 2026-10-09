@@ -54,10 +54,9 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, {
-        noSession: true,
-        noExtensions: flavor.id !== "pi",
-      }),
+      // Extensions stay loaded: plugin-registered providers contribute models
+      // to the catalog, and the probe must see exactly what a live session sees.
+      buildPiSpawnArgs(flavor, { noSession: true }),
       cwd,
       undefined,
       flavor.id,
