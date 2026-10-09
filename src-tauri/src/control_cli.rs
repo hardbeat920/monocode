@@ -82,8 +82,9 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
+    "usage.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
@@ -126,6 +127,13 @@ left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
+  usage.list     {"provider":"claude","accountId":"default","refresh":false}
+                  All fields optional. Read cached limits for all providers and
+                  accounts, independently of this session's harness. Filters
+                  narrow rows; unsupported providers stay explicit.
+                  refresh:true starts a shared deduplicated refresh with
+                  cooldown and backoff. Cached reads never probe; stale data is
+                  not renewed quota. No account switch.
   sessions.list  {}  Project sessions with IDs, busy status, hasDraft and archived.
   sessions.read  {"sessionId":"...","before":"<turnId>","limit":3,"maxChars":1200}
                   Read up to 3 recent user/assistant exchanges. Tools and
@@ -657,6 +665,7 @@ mod tests {
         for action in [
             "worktrees.list",
             "worktrees.create",
+            "usage.list",
             "artifacts.list",
             "artifacts.read",
             "artifacts.write",
