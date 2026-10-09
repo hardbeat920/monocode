@@ -54,7 +54,7 @@ keyring = { version = "3.6", default-features = false, features = ["apple-native
 tauri = { version = "2", features = ["tray-icon"] }
 block2 = "0.6.2"
 objc2 = { version = "0.6", features = ["exception"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAttributedString", "NSBezierPath", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSGraphics", "NSImage", "NSImageRep", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "block2", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAttributedString", "NSBezierPath", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSDockTile", "NSEvent", "NSGraphics", "NSImage", "NSImageRep", "NSLayoutAnchor", "NSLayoutConstraint", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSUserInterfaceItemIdentification", "NSView", "NSVisualEffectView", "NSWindow", "block2", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", features = ["NSAttributedString", "NSData", "NSDictionary", "NSGeometry", "NSError", "NSString"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit"] }

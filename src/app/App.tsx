@@ -337,6 +337,7 @@ import {
 } from "../features/sessions/model/editLastTurn";
 import {
   beginSessionTurn,
+  finishSessionTurn,
   applySessionCheckpoint,
   captureSessionCheckpoint,
   forgetSessionCheckpoint,
@@ -415,6 +416,7 @@ import {
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
+import { newWorkspaceSession } from "./model/newWorkspaceSession";
 import {
   ADD_TO_CHAT_EVENT,
   type AddToChatRequest,
@@ -615,6 +617,10 @@ import {
   removeArtifactCard,
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
+import {
+  MonoChangesPanel,
+  type MonoChangesRequest,
+} from "../features/monos/ui/MonoChangesPanel";
 import { ArtifactPanel } from "../features/artifacts/ui/ArtifactPanel";
 import {
   claimDueAutomations,
@@ -1096,11 +1102,22 @@ function Workspace({
     setMonoDetailsOpen(false);
     setMonoActivity(null);
     setMonoSessions(null);
+    setMonoChanges(null);
     setMonoArtifact({ sessionId, id });
   }, []);
   const onCloseMonoArtifact = useCallback(() => {
     setMonoArtifact(null);
     monoArtifactOpener.current?.focus();
+  }, []);
+  const [monoChanges, setMonoChanges] = useState<{
+    sessionId: string;
+    cwd: string;
+    request: MonoChangesRequest;
+  } | null>(null);
+  const monoChangesOpener = useRef<HTMLElement | null>(null);
+  const onCloseMonoChanges = useCallback(() => {
+    setMonoChanges(null);
+    monoChangesOpener.current?.focus();
   }, []);
   useEffect(() => {
     const listening = listen<string>(
@@ -1129,6 +1146,7 @@ function Workspace({
     (sessionId: string, turnId: string, blocks: Block[]) => {
       setMonoDetailsOpen(false);
       setMonoArtifact(null);
+      setMonoChanges(null);
       setMonoSessions(null);
       setMonoActivity((previous) =>
         previous?.sessionId === sessionId && previous.turnId === turnId
@@ -1142,6 +1160,7 @@ function Workspace({
     (sessionId: string, turnId: string, blocks: Block[]) => {
       setMonoDetailsOpen(false);
       setMonoArtifact(null);
+      setMonoChanges(null);
       setMonoActivity(null);
       setMonoSessions((previous) =>
         previous?.sessionId === sessionId && previous.turnId === turnId
@@ -1161,6 +1180,7 @@ function Workspace({
     setMonoActivity(null);
     setMonoSessions(null);
     setMonoArtifact(null);
+    setMonoChanges(null);
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
     if (windowTransfer) return true;
@@ -1638,10 +1658,12 @@ function Workspace({
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
       flushHarnessEvents();
       await Promise.all(
-        sessionChildHarnesses(open).map((harness) =>
-          cancelHarnessTurn(harness, sessionId).catch(() => undefined),
-        ),
+        sessionChildHarnesses(open).map(async (harness) => {
+          await cancelHarnessTurn(harness, sessionId).catch(() => undefined);
+          await stopHarnessSession(harness, sessionId);
+        }),
       );
+      await finishSessionTurn(sessionId, sessionWorkCwd(open));
       flushHarnessEvents();
       return sessionsRef.current.find((session) => session.id === sessionId);
     },
@@ -1937,7 +1959,8 @@ function Workspace({
     if (
       active?.harness === "claude" ||
       active?.harness === "codex" ||
-      active?.harness === "opencode"
+      active?.harness === "opencode" ||
+      active?.harness === "devin"
     ) {
       return [active.harness];
     }
@@ -2635,14 +2658,8 @@ function Workspace({
     setInboxViewOpen(false);
     setNotesViewOpen(false);
     setAutomationsViewOpen(false);
-    const cwd = active?.cwd ?? sessionDefaults?.cwd ?? projectCwd;
-    const focus = worktreeFocus(cwd);
-    const session = {
-      ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
-      ...(focus && pathKey(focus.path) !== pathKey(cwd)
-        ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined }
-        : {}),
-    };
+    const cwd = sidebarCwd;
+    const session = newWorkspaceSession(cwd, sessionDefaults?.runtimeMode);
     const tab = newTab(session.id);
     setSessions((prev) => [...prev, session]);
     appendTab(tab, cwd);
@@ -2650,11 +2667,9 @@ function Workspace({
     setComposerFocused(true);
     return session.id;
   }, [
-    active?.cwd,
     appendTab,
-    sessionDefaults?.cwd,
     sessionDefaults?.runtimeMode,
-    projectCwd,
+    sidebarCwd,
   ]);
 
   const onSelectRemoteSession = useCallback(
@@ -4042,6 +4057,41 @@ function Workspace({
       })();
     },
     [activeTabId],
+  );
+
+  // A Mono view covers the workspace, so its session changes open beside the
+  // chat instead of in a project tab hidden behind it.
+  const openMonoChanges = useCallback(
+    (
+      session: { sessionId: string; cwd: string },
+      request: MonoChangesRequest,
+    ) => {
+      monoChangesOpener.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      setMonoDetailsOpen(false);
+      setMonoActivity(null);
+      setMonoSessions(null);
+      setMonoArtifact(null);
+      setMonoChanges({ ...session, request });
+    },
+    [],
+  );
+  const onOpenMonoDiff = useCallback(
+    (path?: string, session?: { sessionId: string; cwd: string }) => {
+      if (!session) {
+        onOpenDiff(path);
+        return;
+      }
+      openMonoChanges(session, { path, tab: "changes" });
+    },
+    [onOpenDiff, openMonoChanges],
+  );
+  const onCommitMonoChanges = useCallback(
+    (session: { sessionId: string; cwd: string }) =>
+      openMonoChanges(session, { tab: "commit" }),
+    [openMonoChanges],
   );
 
   const onOpenWorkingTreeDiff = useCallback(
@@ -7620,10 +7670,18 @@ function Workspace({
           });
         };
 
-        if (!current.inboxAsk && !orchestrator.forSession(sessionId)) {
-          await beginSessionTurn(sessionId, workCwd).catch(() => undefined);
+        const checkpointTurnId =
+          !current.inboxAsk && !orchestrator.forSession(sessionId)
+            ? await beginSessionTurn(sessionId, workCwd)
+            : undefined;
+        if (turnGen.current.get(sessionId) !== gen) {
+          if (checkpointTurnId) {
+            await finishSessionTurn(sessionId, workCwd, {
+              turnId: checkpointTurnId,
+            });
+          }
+          return;
         }
-        if (turnGen.current.get(sessionId) !== gen) return;
         let buildSucceeded = false;
         try {
           const prepared = await prepareAttachments(attachments);
@@ -7883,6 +7941,18 @@ function Workspace({
           }
           providerFailureSeen = true;
         } finally {
+          // A failed provider can leave its process writing after the event
+          // stream ends. Stop it before recording the final workspace state.
+          if (providerFailureSeen && turnGen.current.get(sessionId) === gen) {
+            await stopHarnessSession(current.harness, sessionId).catch(
+              () => undefined,
+            );
+          }
+          if (checkpointTurnId) {
+            await finishSessionTurn(sessionId, workCwd, {
+              turnId: checkpointTurnId,
+            });
+          }
           if (turnGen.current.get(sessionId) !== gen) return;
           flushHarnessEvents();
           controlOutcome = {
@@ -7895,14 +7965,6 @@ function Workspace({
             text: controlText.trim(),
             ...(providerFailureSeen ? { error: controlOutcome.error } : {}),
           };
-          // A failed provider can leave its process alive with a dead event
-          // stream or poisoned turn state. Park it now; the next prompt will
-          // reconnect and resume through a fresh transport.
-          if (providerFailureSeen) {
-            await stopHarnessSession(current.harness, sessionId).catch(
-              () => undefined,
-            );
-          }
           await flushSessionCheckpoint(sessionId);
           setSessions((prev) =>
             prev.map((s) => {
@@ -9856,10 +9918,19 @@ function Workspace({
       turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
       flushHarnessEvents();
       const cancelling = Promise.all(
-        (session ? sessionChildHarnesses(session) : []).map((id) =>
-          cancelHarnessTurn(id, sessionId),
-        ),
+        (session ? sessionChildHarnesses(session) : []).map(async (id) => {
+          try {
+            await cancelHarnessTurn(id, sessionId);
+          } finally {
+            await stopHarnessSession(id, sessionId);
+          }
+        }),
       );
+      const checkpointFinished = session
+        ? finishSessionTurn(sessionId, sessionWorkCwd(session), {
+            after: cancelling.catch(() => undefined),
+          })
+        : Promise.resolve();
       void cancelling.catch(console.error);
       setSessions((prev) =>
         prev.map((s) => {
@@ -9883,7 +9954,7 @@ function Workspace({
       } else {
         notifyReviewChanged(sessionId);
       }
-      return cancelling;
+      return Promise.all([cancelling, checkpointFinished]);
     },
     [flushHarnessEvents],
   );
@@ -10830,6 +10901,14 @@ function Workspace({
                   projects: mono.projects,
                   showStartedSessionsInSidebar:
                     mono.showStartedSessionsInSidebar,
+                  ...(mono.useSidebarFolders
+                    ? {
+                        folder: {
+                          name: monoLook(mono).name,
+                          color: mono.color,
+                        },
+                      }
+                    : {}),
                 }
               );
             },
@@ -11778,6 +11857,9 @@ function Workspace({
       // A rebound zoom chord may be Option-only, so it is resolved outside the
       // Cmd/Ctrl guard that only the browser-standard defaults need.
       const zoom = resolveZoomKeybinding(e);
+      // An image preview under the pointer zooms the image instead; its own
+      // listener runs next.
+      if (zoom && document.querySelector("[data-image-zoom]")) return;
       if (zoom) {
         e.preventDefault();
         e.stopPropagation();
@@ -12240,7 +12322,8 @@ function Workspace({
     monoDetailsOpen ||
     !!selectedMonoActivity ||
     !!selectedMonoSessions ||
-    (monoArtifact?.sessionId === monoViewSession?.id && !!monoArtifact);
+    (monoArtifact?.sessionId === monoViewSession?.id && !!monoArtifact) ||
+    (monoChanges?.sessionId === monoViewSession?.id && !!monoChanges);
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
@@ -12249,7 +12332,8 @@ function Workspace({
           monoDetailsOpen &&
           !selectedMonoActivity &&
           !selectedMonoSessions &&
-          monoArtifact?.sessionId !== monoViewSession.id
+          monoArtifact?.sessionId !== monoViewSession.id &&
+          monoChanges?.sessionId !== monoViewSession.id
         }
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}
@@ -12349,6 +12433,7 @@ function Workspace({
               setMonoSessions(null);
               setMonoDetailsOpen(true);
               setMonoArtifact(null);
+              setMonoChanges(null);
             }
           : undefined
       }
@@ -12745,6 +12830,8 @@ function Workspace({
                                       composerFocusToken={composerFocusToken}
                                       onShowMonoActivity={onShowMonoActivity}
                                       onOpenArtifact={onOpenMonoArtifact}
+                                      onOpenDiff={onOpenMonoDiff}
+                                      onCommitChanges={onCommitMonoChanges}
                                       monoActivityTurnId={
                                         selectedMonoActivity?.turnId
                                       }
@@ -12801,6 +12888,21 @@ function Workspace({
                       color={monoViewMono.color}
                       onClose={onCloseMonoArtifact}
                       onOpenFile={onOpenFile}
+                      windowControls={
+                        monoCovers && !IS_MAC ? <WindowControls /> : undefined
+                      }
+                    />
+                  ) : null}
+                  {monoViewMono &&
+                  monoChanges &&
+                  monoChanges.sessionId === monoViewSession?.id ? (
+                    <MonoChangesPanel
+                      sessionId={monoChanges.sessionId}
+                      cwd={monoChanges.cwd}
+                      request={monoChanges.request}
+                      color={monoViewMono.color}
+                      textHarness={monoViewSession?.harness}
+                      onClose={onCloseMonoChanges}
                       windowControls={
                         monoCovers && !IS_MAC ? <WindowControls /> : undefined
                       }

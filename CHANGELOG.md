@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-09
+
+### Added
+
+- **Devin CLI** is available as a provider for local and remote sessions on macOS, Windows, and Linux through ACP. It uses the CLI's existing sign-in on the machine running the session and supports model selection, per-model effort and fast controls, planning, resuming, cancellation, compaction, slash commands, and Devin skills. In #748 by @noursh26.
+- Devin **subagents** appear in the existing agent cards and activity hierarchy, including nested work and child replies. Devin can generate session titles and answer `/btw` side questions; temporary side-question sessions are cleaned up after completion, failure, or cancellation. In #748.
+- Devin account details show the signed-in identity, plan, daily and weekly usage limits and reset times, and extra usage balance. Usage requests keep credentials in the backend and use HTTPS. In #748.
+- Mono chats have a **Changes** panel beside the conversation for reviewing edited files with the existing diff viewer. The **Commit** tab supports selecting files, editing or generating a commit message, committing, pushing, and creating a pull request.
+- Mono reviews group files by their own **Git repository or worktree**, including nested repositories. Each checkout has its own file selection and commit draft, so work across multiple repositories can be reviewed and committed separately. Files outside Git remain available for review.
+- **Turn checkpoints** capture changes before and after a turn in Git workspaces, including edits made through shell commands. Settled turns show their actual diff with keep and undo controls, while preserving changes that were present before the turn.
+- A Mono's **Details → Settings** page controls whether its launched sessions appear in the sidebar and whether they are grouped in a color-coded folder named after the Mono. Resetting the conversation keeps its soul, memory, and habits.
+- Settings → Monos → **Pin monos to the icon rail** places Mono icons above the project picker when the rail is collapsed. The floating Mono rail also shows whether each Mono is working, idle, or waiting for input.
+- Image previews and the image lightbox support **cursor-centered zoom**, modifier-wheel gestures, zoom keyboard shortcuts, and native macOS trackpad pinch gestures. The lightbox also supports dragging to pan and double-clicking to zoom or reset.
+- Settings → Chat → **Autocorrect** controls native spelling and correction behavior in both regular session and Mono composers. The preference persists across restarts and is enabled by default.
+
+### Changed
+
+- Mono commits include only the selected files' current working-copy contents and preserve unrelated staged work, including partial staging. Other existing repository changes are excluded by default, even when already staged. Generated commit context uses a temporary Git index without changing the real staging area or including unselected changes.
+- Mono artifact and changes panels use a wider reader layout. Switching repositories preserves each checkout's selection and draft, and a completed commit clears only its selected files from the Mono review.
+- Large streamed Markdown code blocks reuse highlighted lines and rendered content, reducing rendering work and stalls as output grows. Regression coverage checks correctness and layout in Chromium and WebKit. In #863 by @nwoolls.
+- Regression coverage now includes Devin transport, permissions, model catalogs, usage and subagents; Mono checkpoints and multi-repository commits; literal Git paths and staging preservation; sidebar preferences; image zoom; source-navigation cancellation; and composer autocorrect on the supported platforms. File-navigation fixtures keep mocked file contents stable across watcher IPC calls on slower runners.
+
+### Fixed
+
+- Opening a new session from a full-screen file preview keeps the visible project selected instead of falling back to another project's session. The plus button and new-session shortcut preserve the project's provider defaults and selected worktree. In #896 by @404khai.
+- macOS Finder file-reference URLs resolve to the file's current path, fixing Explorer paste and composer attachments for copied files and images, including files renamed after copying. Both URL parsers reject non-local hosts before resolving a reference. In #635 by @404khai.
+- Mono undo refuses to overwrite later edits, restore across a changed Git `HEAD`, or interfere with an overlapping active session. Checkpoint failures show an error instead of a stale review, and live changes are presented after the turn settles. Windows overlap checks normalize separators and canonical path prefixes while keeping sibling checkouts independent.
+- Selected-file Git actions validate paths against the chosen checkout, reject directory and symlink escapes, and treat filenames literally, including wildcard, colon, and option-like names. Native and remote-host commands use the same selection rules, and repository-discovery failures remain visible.
+- Commit messages remain editable before files are selected or staged.
+- Devin approval responses preserve the selected permission mode instead of escalating a one-time approval to unrestricted access. **Devin's supervised mode accepts file edits automatically and requests command approval**, following the CLI's native behavior; planning denies writes. Cancellation and timeout cleanup reject leftover permission requests, and supervised configuration preserves existing comments and settings. In #748.
+- Devin effort choices follow each model's supported thought levels, and saved model-family selections and unsupported effort values resolve to valid current choices. Background catalog refreshes do not open a sign-in browser, and usage refreshes handle expired credentials and temporary network failures. In #748.
+- Codex discovery prefers the executable resolved by the user's login shell, fixing stale versions and update banners caused by an older fixed-path installation taking precedence. In #878 by @zcy22606.
+- Opening a thought row no longer repeats its first paragraph in both the row header and expanded body. Collapsed rows retain their preview. In #882 by @zcy22606.
+- Tab and project-card reorder drags cancel when a mouse release was missed and the next pointer movement reports no held buttons, preventing a stuck drag. In #879 by @zcy22606.
+- Markdown table columns keep a readable minimum width and top-aligned content; narrow panes scroll horizontally instead of squeezing file names into stacked text. In #876 by @S-loan.
+- Image zoom subscriptions handle setup failures and clean up reliably when previews close or lose their zoom scope.
+- Windows checks handle native temporary-directory paths consistently. Temporary Git-context directories retain private permissions on Unix without introducing a Windows compiler warning.
+
 ## [0.10.0] - 2026-10-08
 
 ### Added
