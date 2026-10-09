@@ -367,6 +367,8 @@ function ChangedFiles({
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
   const generateReleaseRef = useRef<(() => void) | null>(null);
   // Only the mount that started generation can cancel it; another panel on
   // the same repository just sees the repository busy.
@@ -493,20 +495,22 @@ function ChangedFiles({
     action: "stage" | "unstage" | "discard",
   ) => {
     if (busy) return;
-    if (action === "discard") {
-      const name = basename(file.relative);
-      const untracked = file.status === "untracked";
-      const ok = await confirmNative(
-        untracked
-          ? `Delete untracked file ${name}?`
-          : `Discard changes in ${name}? This cannot be undone.`,
-        untracked ? "Delete" : "Discard",
-      );
-      if (!ok) return;
-    }
+    // Hold the lock across the confirmation so no checkout or commit can
+    // change what is being discarded while it's up.
     const release = acquire(file.relative);
     if (!release) return;
     try {
+      if (action === "discard") {
+        const name = basename(file.relative);
+        const untracked = file.status === "untracked";
+        const ok = await confirmNative(
+          untracked
+            ? `Delete untracked file ${name}?`
+            : `Discard changes in ${name}? This cannot be undone.`,
+          untracked ? "Delete" : "Discard",
+        );
+        if (!ok) return;
+      }
       if (action === "stage") await gitStageFile(cwd, file.relative);
       else if (action === "unstage") await gitUnstageFile(cwd, file.relative);
       else await gitDiscardFile(cwd, file.relative);
@@ -520,24 +524,24 @@ function ChangedFiles({
 
   const runAll = async (action: "stage" | "unstage" | "discard") => {
     if (busy) return;
-    if (action === "discard") {
-      const n = unstaged.length;
-      if (n === 0) return;
-      const only = unstaged[0];
-      const untrackedOnly = n === 1 && only?.status === "untracked";
-      const ok = await confirmNative(
-        untrackedOnly
-          ? `Delete untracked file ${basename(only.relative)}?`
-          : n === 1 && only
-            ? `Discard changes in ${basename(only.relative)}? This cannot be undone.`
-            : `Discard all unstaged changes in ${n} files? This cannot be undone.`,
-        untrackedOnly ? "Delete" : "Discard",
-      );
-      if (!ok) return;
-    }
+    if (action === "discard" && unstaged.length === 0) return;
     const release = acquire(action);
     if (!release) return;
     try {
+      if (action === "discard") {
+        const n = unstaged.length;
+        const only = unstaged[0];
+        const untrackedOnly = n === 1 && only?.status === "untracked";
+        const ok = await confirmNative(
+          untrackedOnly
+            ? `Delete untracked file ${basename(only.relative)}?`
+            : n === 1 && only
+              ? `Discard changes in ${basename(only.relative)}? This cannot be undone.`
+              : `Discard all unstaged changes in ${n} files? This cannot be undone.`,
+          untrackedOnly ? "Delete" : "Discard",
+        );
+        if (!ok) return;
+      }
       if (action === "stage") await gitStageAll(cwd);
       else if (action === "unstage") await gitUnstageAll(cwd);
       else await gitDiscardAll(cwd);
@@ -633,24 +637,30 @@ function ChangedFiles({
 
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
-    if (
-      (push || createPr) &&
-      !(await confirmDefault(createPr ? "pr" : "push"))
-    ) {
-      return;
-    }
-    if (!(await confirmAmend())) return;
+    // Hold the lock across the confirmations so the branch and HEAD they
+    // describe are still the ones committed to or amended.
     const release = acquire(createPr ? "pr" : "commit");
     if (!release) return;
-    setMenuOpen(false);
     try {
+      if (
+        (push || createPr) &&
+        !(await confirmDefault(createPr ? "pr" : "push"))
+      ) {
+        return;
+      }
+      if (!(await confirmAmend())) return;
+      setMenuOpen(false);
       await gitCommit(cwd, message, amend);
       if (push || createPr) {
         await gitPush(cwd);
         recordPrActivity();
       }
-      setMessage("");
-      setAmendTarget(null);
+      // The panel may have moved to another repository meanwhile; keep the
+      // draft written there.
+      if (cwdRef.current === cwd) {
+        setMessage("");
+        setAmendTarget(null);
+      }
       onMutated();
       if (createPr) {
         await openCreatedPr();
@@ -701,10 +711,10 @@ function ChangedFiles({
 
   const createPr = async () => {
     if (!canCreatePr) return;
-    if (!(await confirmDefault("pr"))) return;
     const release = acquire("pr");
     if (!release) return;
     try {
+      if (!(await confirmDefault("pr"))) return;
       if ((index?.ahead ?? 0) > 0) await gitPush(cwd);
       await openCreatedPr();
       onMutated();

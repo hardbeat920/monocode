@@ -228,22 +228,24 @@ export function MonoProjectCommit({
 
   const discard = async (file: GitChangedFile) => {
     if (busy) return;
-    const name = basename(file.relative);
-    const untracked = file.status === "untracked";
-    const ok = await ask(
-      untracked
-        ? `Delete untracked file ${name}?`
-        : `Discard changes in ${name}? This cannot be undone.`,
-      {
-        title: "MonoCode",
-        kind: "warning",
-        okLabel: untracked ? "Delete" : "Discard",
-      },
-    );
-    if (!ok) return;
+    // Hold the lock across the confirmation so no checkout or commit can
+    // change what is being discarded while it's up.
     const release = acquire(file.relative);
     if (!release) return;
     try {
+      const name = basename(file.relative);
+      const untracked = file.status === "untracked";
+      const ok = await ask(
+        untracked
+          ? `Delete untracked file ${name}?`
+          : `Discard changes in ${name}? This cannot be undone.`,
+        {
+          title: "MonoCode",
+          kind: "warning",
+          okLabel: untracked ? "Delete" : "Discard",
+        },
+      );
+      if (!ok) return;
       await gitDiscardFile(root, file.relative);
       invalidateWatchedFiles([file.path]);
       notifyReviewChanged(sessionId);
@@ -362,16 +364,18 @@ export function MonoProjectCommit({
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
     setMenuOpen(false);
-    if (
-      (push || createPr) &&
-      !(await confirmDefault(createPr ? "pr" : "push"))
-    ) {
-      return;
-    }
+    // Hold the lock across the confirmation so the branch it names is still
+    // the one committed to.
     const release = acquire(createPr ? "pr" : "commit");
     if (!release) return;
     const committed = files.filter((entry) => selected.includes(entry.relative));
     try {
+      if (
+        (push || createPr) &&
+        !(await confirmDefault(createPr ? "pr" : "push"))
+      ) {
+        return;
+      }
       await gitCommit(root, message, false, selected);
       // Committed work is accepted work: clear it from the session's review.
       for (const entry of committed) {
@@ -418,10 +422,11 @@ export function MonoProjectCommit({
   };
 
   const createPr = async () => {
-    if (!canCreatePr || !(await confirmDefault("pr"))) return;
+    if (!canCreatePr) return;
     const release = acquire("pr");
     if (!release) return;
     try {
+      if (!(await confirmDefault("pr"))) return;
       if ((index?.ahead ?? 0) > 0) await gitPush(root);
       await openCreatedPr();
     } catch (error) {

@@ -65,6 +65,7 @@ import { GitChangesPanel } from "./GitChangesPanel";
 import { SourceControl } from "./SourceControl";
 import {
   gitCheckout,
+  gitCommit,
   gitDiffIndex,
   gitPrCreate,
   gitPull,
@@ -827,7 +828,7 @@ describe("GitChangesPanel checkout across remounts", () => {
 });
 
 describe("GitChangesPanel lock acquisition", () => {
-  it("skips a confirmed discard when the repository was locked meanwhile", async () => {
+  it("holds the repository lock while a discard confirmation is up", async () => {
     vi.mocked(gitDiffIndex).mockResolvedValue(
       index({ files: [changedFile("src/app.ts")] }),
     );
@@ -846,18 +847,67 @@ describe("GitChangesPanel lock acquisition", () => {
     await act(async () => discard.click());
     expect(ask).toHaveBeenCalled();
 
-    // Another panel or the composer takes the repository while the
-    // confirmation is up; this handler's `busy` snapshot is now stale.
-    let release!: () => void;
-    act(() => {
-      release = acquireRepoLock("/repo-confirm", "checkout")!;
-    });
+    // No checkout or commit can slip in while the user is deciding.
+    expect(repoLock("/repo-confirm")?.kind).toBe("src/app.ts");
+    expect(acquireRepoLock("/repo-confirm", "checkout")).toBeNull();
+
     await act(async () => confirm(true));
+    expect(gitDiscardFile).toHaveBeenCalledWith("/repo-confirm", "src/app.ts");
+    expect(repoLock("/repo-confirm")).toBeNull();
+  });
+
+  it("releases the lock when a discard is declined", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    vi.mocked(ask).mockResolvedValueOnce(false);
+    vi.mocked(gitDiscardFile).mockClear();
+    await renderPanel("/repo-decline");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[title="Discard Changes"]')!
+        .click(),
+    );
 
     expect(gitDiscardFile).not.toHaveBeenCalled();
-    expect(repoLock("/repo-confirm")?.kind).toBe("checkout");
-    act(() => release());
-    expect(repoLock("/repo-confirm")).toBeNull();
+    expect(repoLock("/repo-decline")).toBeNull();
+  });
+
+  it("keeps the next repository's draft when an earlier commit finishes", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts", { staged: true })] }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitCommit).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel("/repo-commit-a");
+    const textarea = () => container.querySelector("textarea")!;
+    const type = (value: string) =>
+      act(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!;
+        setter.call(textarea(), value);
+        textarea().dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    type("Commit A");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Commit")!
+        .click(),
+    );
+    expect(gitCommit).toHaveBeenCalledWith("/repo-commit-a", "Commit A", false);
+
+    await renderPanel("/repo-commit-b");
+    type("Draft for B");
+    await act(async () => finish());
+
+    expect(textarea().value).toBe("Draft for B");
   });
 });
 

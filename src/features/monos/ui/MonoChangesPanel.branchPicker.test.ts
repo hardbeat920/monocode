@@ -402,7 +402,7 @@ describe("MonoChangesPanel beside the composer's branch picker", () => {
 });
 
 describe("MonoChangesPanel lock acquisition", () => {
-  it("skips a confirmed discard when the repository was locked meanwhile", async () => {
+  it("holds the repository lock while a discard confirmation is up", async () => {
     let confirm!: (ok: boolean) => void;
     vi.mocked(ask).mockImplementationOnce(
       () =>
@@ -426,15 +426,12 @@ describe("MonoChangesPanel lock acquisition", () => {
     await act(async () => discard.click());
     expect(ask).toHaveBeenCalled();
 
-    let release!: () => void;
-    act(() => {
-      release = acquireRepoLock("/repo", "checkout")!;
-    });
-    await act(async () => confirm(true));
+    // No checkout or commit can slip in while the user is deciding.
+    expect(repoLock("/repo")?.kind).toBe("notes.md");
+    expect(acquireRepoLock("/repo", "checkout")).toBeNull();
 
-    expect(gitDiscardFile).not.toHaveBeenCalled();
-    expect(repoLock("/repo")?.kind).toBe("checkout");
-    act(() => release());
+    await act(async () => confirm(true));
+    expect(gitDiscardFile).toHaveBeenCalledWith("/repo", "notes.md");
     expect(repoLock("/repo")).toBeNull();
   });
 });
