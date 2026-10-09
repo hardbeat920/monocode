@@ -976,7 +976,12 @@ function handleNotification(
     }
     live.onEvent(event);
   }
-  if (method === "thread/tokenUsage/updated") {
+  // A resumed thread can replay an earlier turn's reading; count only this turn's.
+  const usageTurnId = stringField(rec, "turnId");
+  if (
+    method === "thread/tokenUsage/updated" &&
+    (!usageTurnId || usageTurnId === live.activeTurnId)
+  ) {
     const metrics = addCodexTurnUsage(live.turnUsage, params);
     if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
   }

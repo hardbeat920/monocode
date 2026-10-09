@@ -206,12 +206,22 @@ describe("codex live turn sequence", () => {
 
   it("reports the whole turn's tokens, not just its last request", async () => {
     const { events, turn } = await startTurn("codex-live");
-    const usage = (last: Record<string, number>, totalTokens: number) =>
+    const usage = (
+      last: Record<string, number>,
+      totalTokens: number,
+      turnId = "turn_1",
+    ) =>
       notify("thread/tokenUsage/updated", {
         threadId: "thr_1",
-        turnId: "turn_1",
+        turnId,
         tokenUsage: { last, total: { totalTokens }, modelContextWindow: null },
       });
+    // A reading replayed from an earlier turn stays out of this one.
+    usage(
+      { totalTokens: 550, inputTokens: 500, outputTokens: 50 },
+      550,
+      "turn_0",
+    );
     usage({ totalTokens: 1_100, inputTokens: 1_000, outputTokens: 100 }, 1_100);
     usage({ totalTokens: 2_200, inputTokens: 2_000, outputTokens: 200 }, 3_300);
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
