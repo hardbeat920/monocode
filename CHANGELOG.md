@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Settings → Providers can configure a credential-less HTTP(S) proxy for new local agent CLI processes and catalog probes, preserving inherited networking when unset and existing `NO_PROXY` entries plus loopback bypasses.
+
 ## [0.10.0] - 2026-10-08
 
 ### Added

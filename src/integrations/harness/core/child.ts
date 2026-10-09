@@ -4,6 +4,7 @@ import {
   runtimeProviderBinaryPath,
   type ConfigurableBinaryProvider,
 } from "../../../features/providers/model/providerBinaryPaths";
+import { loadAgentProxyUrl } from "../../../features/providers/model/agentProxy";
 
 /** Process I/O is supplied by the desktop or a headless host. Provider
  * protocols never need to know which process owns their children. */
@@ -337,6 +338,7 @@ export async function spawnChild(
   const binaryPath = binaryProvider
     ? runtimeProviderBinaryPath(binaryProvider)
     : undefined;
+  const proxyUrl = loadAgentProxyUrl();
   const pid = await invoke<number>("harness_spawn", {
     sessionId,
     command,
@@ -346,6 +348,7 @@ export async function spawnChild(
     binaryProvider,
     binaryPath,
     ...(codexStore ? { codexStore } : {}),
+    ...(proxyUrl ? { proxyUrl } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
@@ -564,11 +567,13 @@ export function execChild(
     binaryPathOverride === undefined && binaryProvider
       ? runtimeProviderBinaryPath(binaryProvider)
       : binaryPathOverride;
+  const proxyUrl = loadAgentProxyUrl();
   return invoke("harness_exec", {
     command,
     args,
     cwd,
     binaryProvider,
     binaryPath,
+    ...(proxyUrl ? { proxyUrl } : {}),
   });
 }
