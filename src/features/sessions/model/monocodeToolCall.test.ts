@@ -52,6 +52,12 @@ describe("MonoCode CLI tool calls", () => {
       monoCodeToolCall(shell("monocode app notes.write --input -"))?.label,
     ).toBe("Write a note");
     expect(
+      monoCodeToolCall(shell("monocode app links.read --json '{}'"))?.label,
+    ).toBe("Read a linked session");
+    expect(
+      monoCodeToolCall(shell("monocode app links.send --input -"))?.label,
+    ).toBe("Message a linked session");
+    expect(
       monoCodeToolCall({
         id: "generic",
         role: "tool",

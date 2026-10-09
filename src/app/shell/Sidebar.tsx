@@ -78,6 +78,11 @@ import {
 import type { PaneEdge } from "../../features/workspace/model/layout";
 import { suppressTextSelection } from "../../shared/lib/drag";
 import {
+  sessionComposerDropFromPoint,
+  setSessionComposerHover,
+} from "../../features/sessions/model/sessionComposerDrop";
+import { requestSessionComposerDrop } from "../../features/sessions/model/sessionContext";
+import {
   compareSessionSummaries,
   filterSessionsByArchive,
   filterSessionsByQuery,
@@ -3338,6 +3343,22 @@ const SessionCard = memo(function SessionCard({
           });
         }
       }
+      // Over another session's composer, the drop adds context or links the
+      // two sessions instead of splitting the pane.
+      const composer = sessionComposerDropFromPoint(
+        ev.clientX,
+        ev.clientY,
+        session.id,
+      );
+      setSessionComposerHover(
+        composer ? { fromId: session.id, ...composer } : null,
+      );
+      if (composer) {
+        setListTarget(null);
+        if (onPlaceOnPane)
+          setExternalPaneDrop({ fromId: session.id, overId: null, edge: "left" });
+        return;
+      }
       setListTarget(
         onListDrop
           ? sessionListDropFromPoint(ev.clientX, ev.clientY, session.id)
@@ -3375,6 +3396,7 @@ const SessionCard = memo(function SessionCard({
       restoreSelection();
       setDragging(false);
       setExternalPaneDrop(null);
+      setSessionComposerHover(null);
       setListTarget(null);
       try {
         handle.releasePointerCapture(pointerId);
@@ -3384,6 +3406,11 @@ const SessionCard = memo(function SessionCard({
       if (!active) return;
       skipClickUntil.current = performance.now() + 400;
       if (!commit) return;
+      const composer = sessionComposerDropFromPoint(lastX, lastY, session.id);
+      if (composer) {
+        requestSessionComposerDrop({ fromId: session.id, ...composer });
+        return;
+      }
       const listOver = onListDrop
         ? sessionListDropFromPoint(lastX, lastY, session.id)
         : null;

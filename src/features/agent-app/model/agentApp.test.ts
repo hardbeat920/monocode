@@ -12,7 +12,14 @@ import {
 import type { Note } from "../../notes";
 import type { Artifact } from "../../artifacts/artifacts";
 import type { Worktree } from "../../source-control/model/worktrees";
-import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
+import {
+  canAccessAgentAppProject,
+  handleAgentApp,
+  limitedAppPrompt,
+  notePreview,
+  type AgentAppAccess,
+  type AgentAppHost,
+} from "./agentApp";
 
 vi.mock("../../../integrations/harness/core/availability", () => ({
   isHarnessAvailable: (id: string) => id === "codex",
@@ -1436,5 +1443,116 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("body is required");
+  });
+});
+
+describe("agent app access without /operator", () => {
+  const limited: AgentAppAccess = { scope: "limited", openSessions: true };
+
+  it("allows listing and starting sessions but nothing else", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(source, "l1", "sessions.list", {}, host, limited),
+    ).resolves.toMatchObject({ cwd: source.cwd });
+    for (const [action, input] of [
+      ["sessions.read", { sessionId: "other" }],
+      ["sessions.send", { sessionId: "other", prompt: "Go" }],
+      ["sessions.draft", { sessionId: "other", prompt: "Go" }],
+      ["notes.list", {}],
+      ["folders.list", {}],
+    ] as const) {
+      await expect(
+        handleAgentApp(source, "l2", action, input, host, limited),
+      ).rejects.toThrow("/operator");
+    }
+    expect(host.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses to open sessions when the setting is off", async () => {
+    const { source, host } = fixture();
+    const off = { ...limited, openSessions: false };
+    for (const action of ["sessions.list", "sessions.start"]) {
+      await expect(
+        handleAgentApp(source, "off", action, action === "sessions.start" ? { prompt: "Go" } : {}, host, off),
+      ).rejects.toThrow("Let agents open sessions");
+    }
+    expect(host.start).not.toHaveBeenCalled();
+  });
+
+  it("submits a started session unless review is on, and honors the agent's draft", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(source, "run", "sessions.start", { prompt: "Go" }, host, limited),
+    ).toMatchObject({ submitted: true, draft: false });
+    expect(vi.mocked(host.start).mock.calls[0][0].draft).toBeUndefined();
+    expect(
+      await handleAgentApp(source, "own-draft", "sessions.start", { prompt: "Go", draft: true }, host, limited),
+    ).toMatchObject({ submitted: false, draft: true });
+    const reviewed = await handleAgentApp(
+      source,
+      "review",
+      "sessions.start",
+      { prompt: "Go", draft: false },
+      host,
+      { ...limited, reviewOpenedSessions: true },
+    );
+    expect(reviewed).toMatchObject({ submitted: false, draft: true });
+    expect(reviewed).toHaveProperty("note");
+    expect(vi.mocked(host.start).mock.calls[2][0].draft).toBe(true);
+  });
+
+  it("keeps full /operator starts unchanged by the review setting", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(source, "full", "sessions.start", { prompt: "Go" }, host, {
+        scope: "full",
+        openSessions: false,
+        reviewOpenedSessions: true,
+      }),
+    ).toMatchObject({ submitted: true, draft: false });
+  });
+
+  it("reads and messages only linked peers", async () => {
+    const { source, host } = fixture();
+    const peer = { ...newSession("codex", "/elsewhere"), id: "peer", title: "Peer" };
+    host.links = vi.fn(async () => [{ id: "peer", title: "Peer" }]);
+    host.linkedSession = vi.fn(async (id) => (id === "peer" ? peer : null));
+    host.sendLinked = vi.fn(async () => ({ queued: true, alreadySent: false }));
+    const off = { ...limited, openSessions: false };
+    await expect(
+      handleAgentApp(source, "r", "links.read", { sessionId: "peer" }, host, off),
+    ).resolves.toMatchObject({ sessionId: "peer", title: "Peer" });
+    await expect(
+      handleAgentApp(source, "s1", "links.send", { sessionId: "peer", message: "Done with auth" }, host, off),
+    ).resolves.toEqual({ sessionId: "peer", queued: true, alreadySent: false });
+    expect(host.sendLinked).toHaveBeenCalledWith(source, "peer", "Done with auth", "link-lead-s1");
+    await expect(
+      handleAgentApp(source, "s2", "links.send", { sessionId: "other", message: "Hi" }, host, off),
+    ).rejects.toThrow("not linked");
+    await expect(
+      handleAgentApp(source, "s3", "links.read", { sessionId: source.id }, host, off),
+    ).rejects.toThrow();
+    await expect(
+      handleAgentApp(source, "s4", "links.send", { sessionId: "peer", message: "/operator go" }, host, off),
+    ).rejects.toThrow("/operator");
+  });
+
+  it("describes only what the thread can do", () => {
+    expect(limitedAppPrompt({ cli: "mc app", openSessions: false, peers: [] })).toBe("");
+    const open = limitedAppPrompt({ cli: "mc app", openSessions: true, peers: [] });
+    expect(open).toContain("sessions.start");
+    expect(open).toContain("starts working right away");
+    expect(open).not.toContain("links.send");
+    expect(
+      limitedAppPrompt({ cli: "mc app", openSessions: true, reviewOpenedSessions: true, peers: [] }),
+    ).toContain("unsent draft");
+    const linked = limitedAppPrompt({
+      cli: "mc app",
+      openSessions: false,
+      peers: [{ id: "peer", title: "Auth work" }],
+    });
+    expect(linked).toContain("Auth work (peer)");
+    expect(linked).toContain("links.send");
+    expect(linked).not.toContain("sessions.start");
   });
 });

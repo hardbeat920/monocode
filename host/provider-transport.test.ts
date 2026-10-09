@@ -24,6 +24,7 @@ import {
 // through the existing production adapters without contacting a paid model.
 const fixture = `#!/usr/bin/env node
 const readline = require('node:readline');
+let codexClient;
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // Records what each turn actually received, so tests can prove that settings
 // applied between turns reach the provider.
@@ -41,12 +42,15 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     }
     return;
   }
-  if (request.method === 'initialize') send({id: request.id, result: {}});
+  if (request.method === 'initialize') {
+    codexClient = request.params.clientInfo.name;
+    send({id: request.id, result: {}});
+  }
   if (request.method === 'account/read') send({id: request.id, result: {account: {type: 'fixture'}, requiresOpenaiAuth: false}});
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
-    record({codexEffort: request.params.effort ?? null});
+    record({codexEffort: request.params.effort ?? null, codexClient});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
@@ -58,10 +62,29 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id}});
   }
   if (request.type === 'control_request' && request.request.subtype === 'list_models') send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id, response: {models: [{value: 'claude-fixture-model', resolvedModel: 'claude-fixture-model', displayName: 'Fixture Claude'}]}}});
-  if (request.type === 'user') setTimeout(() => {
-    send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
-    send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
-  }, 30);
+  if (request.type === 'user') {
+    const replay = (uuid, parentToolUseId = null) => send({type: 'user', isReplay: true, uuid, parent_tool_use_id: parentToolUseId, session_id: 'fixture-claude', message: request.message});
+    const complete = () => {
+      send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
+      send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
+    };
+    if (JSON.stringify(request.message).includes('wait-for-current-user-echo')) {
+      record({claudeUserUuid: request.uuid});
+      replay('11111111-1111-4111-8111-111111111111');
+      replay(request.uuid, 'stale-child-tool');
+      send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Stale buffered Claude answer'}]}});
+      const gate = require('node:path').join(__dirname, 'accept-current-claude-user');
+      const timer = setInterval(() => {
+        if (!require('node:fs').existsSync(gate)) return;
+        clearInterval(timer);
+        if (process.argv.includes('--replay-user-messages')) replay(request.uuid);
+        complete();
+      }, 10);
+    } else {
+      if (process.argv.includes('--replay-user-messages')) replay(request.uuid);
+      setTimeout(complete, 30);
+    }
+  }
   if (request.type === 'get_state') send({type: 'response', id: request.id, command: 'get_state', success: true, data: {sessionId: 'fixture_pi', model: {provider: 'openai', id: 'fixture-model', contextWindow: 100000}}});
   if (request.type === 'get_session_stats') send({type: 'response', id: request.id, command: 'get_session_stats', success: true, data: {contextWindow: 100000}});
   if (request.type === 'get_available_models') send({type: 'response', id: request.id, command: 'get_available_models', success: true, data: {models: [{provider: 'openai', id: 'fixture-model', name: 'Fixture model'}]}});
@@ -198,6 +221,95 @@ describe("existing providers over headless process I/O", () => {
     },
   );
 
+  it("accepts shared history only after the current Claude user UUID is replayed by the parent", async () => {
+    const project = await engine.openProject(directory);
+    const { sessionId } = engine.command({
+      type: "create", commandId: "echo-create", projectId: project.id,
+      harness: "codex", model: "codex:test", runtimeMode: "supervised",
+    });
+    engine.command({ type: "send", commandId: "echo-source", sessionId, text: "Source requirement" });
+    await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+    engine.command({
+      type: "switchProvider", commandId: "echo-switch", sessionId,
+      expectedRevision: store.session(sessionId).revision,
+      harness: "claude", model: "claude:test", modelSettings: {}, runtimeMode: "supervised",
+    });
+    const beforeSend = store.session(sessionId).revision;
+    engine.command({ type: "send", commandId: "echo-target", sessionId, text: "wait-for-current-user-echo" });
+    const gate = join(directory, "accept-current-claude-user");
+    try {
+      await vi.waitFor(() => expect(store.session(sessionId).session.blocks.some((block) =>
+        block.text.includes("Stale buffered Claude answer"))).toBe(true), { timeout: 4_000 });
+      const waiting = store.session(sessionId).session;
+      expect(waiting.providerContext?.delivery?.status).toBe("preparing");
+      expect(waiting.pendingSwitch?.fromProviderSessionId).toBe("fixture-thread");
+      const waitingEvents = store.events(sessionId, beforeSend).events as Array<{ event: { type: string } }>;
+      expect(waitingEvents.filter(({ event }) => event.type === "providerContext.accepted" || event.type === "providerContext.delivered"))
+        .toHaveLength(0);
+      const calls = readFileSync(join(directory, "calls.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      const request = calls.find((call) => call.claudeUserUuid);
+      expect(request.claudeUserUuid).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i);
+      expect(calls.some((call) => call.claudeArgs?.includes("--replay-user-messages"))).toBe(true);
+
+      writeFileSync(gate, "replay the current parent user");
+      await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+      expect(store.session(sessionId).session.providerContext?.delivery).toMatchObject({ status: "accepted", mode: "inline" });
+      expect(store.session(sessionId).session.pendingSwitch).toBeUndefined();
+      const acceptedEvents = store.events(sessionId, beforeSend).events as Array<{ event: { type: string } }>;
+      expect(acceptedEvents.filter(({ event }) => event.type === "providerContext.accepted")).toHaveLength(1);
+      expect(acceptedEvents.filter(({ event }) => event.type === "providerContext.delivered")).toHaveLength(1);
+    } finally {
+      // Release the fixture even when a receipt assertion fails.
+      writeFileSync(gate, "release fixture");
+      await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+      rmSync(gate, { force: true });
+    }
+  });
+
+  it.each(["providerContext.delivered", "providerContext.accepted"])(
+    "contains a %s storage failure in the real Claude stdout callback", async (failedEvent) => {
+      const project = await engine.openProject(directory);
+      const key = failedEvent.replaceAll(".", "-");
+      const { sessionId } = engine.command({
+        type: "create", commandId: `${key}-create`, projectId: project.id,
+        harness: "codex", model: "codex:test", runtimeMode: "supervised",
+      });
+      engine.command({ type: "send", commandId: `${key}-source`, sessionId, text: "Preserve this source requirement" });
+      await vi.waitFor(() => expect(store.session(sessionId).status).toBe("idle"), { timeout: 4_000 });
+      engine.command({
+        type: "switchProvider", commandId: `${key}-switch`, sessionId,
+        expectedRevision: store.session(sessionId).revision,
+        harness: "claude", model: "claude:test", modelSettings: {}, runtimeMode: "supervised",
+      });
+      const targetCommandId = `${key}-target`;
+      const save = store.save.bind(store);
+      let failed = false;
+      const write = vi.spyOn(store, "save").mockImplementation((value, event) => {
+        const receipt = event as { type?: string; switchId?: string };
+        if (!failed && receipt.type === failedEvent && receipt.switchId === targetCommandId) {
+          failed = true;
+          throw new Error("Injected receipt storage failure");
+        }
+        return save(value, event);
+      });
+      try {
+        engine.command({ type: "send", commandId: targetCommandId, sessionId, text: "Current request was submitted exactly once" });
+        await vi.waitFor(() => expect(store.session(sessionId).status).toBe("interrupted"), { timeout: 4_000 });
+        const recovered = store.session(sessionId).session;
+        expect(failed).toBe(true);
+        expect(recovered.providerContext?.delivery).toMatchObject({ status: "accepted", mode: "inline", requestSubmitted: true });
+        expect(recovered.providerSessionId).toBe("fixture-claude");
+        expect(recovered.providerContext?.bindings.map((binding) => binding.providerSessionId)).toEqual(["fixture-thread", "fixture-claude"]);
+        const requests = recovered.blocks.filter((block) => block.id === targetCommandId);
+        expect(requests).toHaveLength(1);
+        expect(requests[0].draft).not.toBe(true);
+        expect(recovered.pendingSwitch).toBeUndefined();
+      } finally {
+        write.mockRestore();
+      }
+    },
+  );
+
   it.each(["cursor", "grok", "fx", "hermes", "antigravity"] as const)(
     "completes a %s turn over the headless ACP transport",
     async (harness) => {
@@ -269,9 +381,11 @@ describe("existing providers over headless process I/O", () => {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        if (harness === "codex")
-          efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
-        else {
+        if (harness === "codex") {
+          const mainTurns = calls.filter((call) => call.codexClient === "monocode");
+          expect(mainTurns).toHaveLength(1);
+          efforts.push(mainTurns[0].codexEffort);
+        } else {
           const args: string[] = calls.find(
             (call) => call.claudeArgs,
           ).claudeArgs;

@@ -46,6 +46,8 @@ import { TaskListPreview } from "./TaskListPreview";
 import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
 import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+import { SessionContextChips } from "./SessionContextChips";
+import { parseAttachedContext } from "../model/sessionContext";
 import { ArtifactCard } from "../../artifacts/ui/ArtifactCard";
 import { artifactCards } from "../../artifacts/artifacts";
 
@@ -2248,10 +2250,18 @@ function UserMessageBlock({
   const card = block.secondOpinion;
   const note = block.noteCard;
   const monocode = isOperatorUserTurn(block);
-  const text =
+  // A prompt replayed from provider history may still carry the expanded
+  // block, so read the attached sessions back out of it.
+  const attached = parseAttachedContext(
     card && card.kind !== "handoff"
       ? ""
-      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
+      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text),
+  );
+  const text = attached.text;
+  const sessionCards = block.sessionContext?.length
+    ? block.sessionContext
+    : attached.sessions;
+  const linkedFrom = block.linkedFrom;
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -2280,6 +2290,8 @@ function UserMessageBlock({
     !bubbleAttachments?.length &&
     !card &&
     !note &&
+    !sessionCards.length &&
+    !linkedFrom &&
     !block.ciContext;
   // Images sent on their own need no bubble beneath them.
   const bubbleEmpty =
@@ -2288,6 +2300,8 @@ function UserMessageBlock({
     !bubbleAttachments?.length &&
     !card &&
     !note &&
+    !sessionCards.length &&
+    !linkedFrom &&
     !block.ciContext;
 
   // Only the chat layout rounds a single line; the document layout always uses
@@ -2464,10 +2478,27 @@ function UserMessageBlock({
                   ))}
                 </div>
               ) : null}
+              {linkedFrom ? (
+                <div
+                  data-linked-from={linkedFrom.id}
+                  className="mb-1 text-[11px] text-content/50"
+                >
+                  From linked session{" "}
+                  <span className="text-content/75">
+                    {linkedFrom.title.trim() || "Untitled session"}
+                  </span>
+                </div>
+              ) : null}
               {note ? (
                 <div className={text || card ? "mb-2" : ""}>
                   <NoteMiniCard card={note} embedded />
                 </div>
+              ) : null}
+              {sessionCards.length ? (
+                <SessionContextChips
+                  cards={sessionCards}
+                  className={text || card ? "mb-2" : ""}
+                />
               ) : null}
               {card ? (
                 <div className={text ? "mb-1.5" : undefined}>
@@ -4702,8 +4733,26 @@ function HandoffDivider({ block }: { block: Block }) {
   const meta = block.handoff;
   if (!meta) return null;
 
-  const preparing = meta.status === "preparing";
-  const label = preparing ? "Preparing a handoff" : HARNESS_TITLE[meta.to];
+  const transfer = meta.transfer;
+  const uncertain = transfer?.status === "uncertain";
+  const needsInspection = transfer?.needsInspection;
+  const inspected = transfer?.inspectionConfirmed;
+  const preparing = meta.status === "preparing" && !uncertain;
+  const label = needsInspection
+    ? transfer?.status === "accepted"
+      ? "Acceptance needs saving"
+      : "Execution needs inspection"
+    : inspected
+      ? "Execution inspected"
+      : preparing
+    ? "Preparing shared history"
+    : uncertain
+      ? "Handoff needs retry"
+      : transfer?.status === "accepted"
+        ? `Continued with ${HARNESS_TITLE[meta.to]}`
+        : transfer
+          ? `Starting ${HARNESS_TITLE[meta.to]}`
+          : HARNESS_TITLE[meta.to];
 
   return (
     <div className="px-4 py-5">
@@ -4714,7 +4763,7 @@ function HandoffDivider({ block }: { block: Block }) {
           aria-label={
             preparing
               ? `Preparing a handoff to ${HARNESS_TITLE[meta.to]}`
-              : `Continued with ${label}`
+              : transfer ? label : `Continued with ${label}`
           }
           className="flex max-w-[min(100%,20rem)] items-center gap-1.5 px-1.5 font-sans text-[12px] text-content/55"
         >
@@ -4726,11 +4775,36 @@ function HandoffDivider({ block }: { block: Block }) {
           ) : (
             <>
               <HarnessIcon harness={meta.to} className="size-3.5 shrink-0" />
+              <span>{label}</span>
             </>
           )}
         </div>
         <div className="h-px min-w-4 flex-1 bg-content/12" />
       </div>
+      {transfer && (
+        <details className="mx-auto mt-2 max-w-xl text-[12px] text-content/55">
+          <summary className="cursor-pointer text-center">Transfer details</summary>
+          <div className="mt-2 space-y-1 break-words">
+            <p>{transfer.included} conversation items selected. {transfer.omitted} items omitted.</p>
+            <p>{transfer.mode === "native"
+              ? "The provider received historical user and assistant messages."
+              : transfer.mode === "inline"
+                ? "The provider received attributed history with the current request."
+                : "History delivery is pending."}</p>
+            {transfer.historicalAttachments > 0 && (
+              <p>{transfer.historicalAttachments} historical attachments are file references.</p>
+            )}
+            {transfer.retrievalPath && (
+              <p>The saved history is available at <code>{transfer.retrievalPath}</code>.</p>
+            )}
+            {needsInspection && <p>{transfer.status === "accepted"
+              ? "The provider acknowledged this request, but MonoCode could not save its receipt. Restore saving before continuing."
+              : "The request may have run. Inspect the provider conversation and changed files before continuing. MonoCode will not resend it automatically."}</p>}
+            {inspected && <p>You confirmed inspection of this request. MonoCode did not resend it.</p>}
+            {uncertain && !needsInspection && !inspected && <p>The request was not confirmed. Retry the unsent message to continue.</p>}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -8,6 +8,13 @@ import {
 import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
+import {
+  failProviderDelivery,
+  failUnstartedProviderRequest,
+  recoverSubmittedProviderDelivery,
+  sanitizeProviderContext,
+  type ProviderContextState,
+} from "../model/providerContext";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   isRemoteProjectPath,
@@ -39,8 +46,10 @@ import type {
   Session,
   TaskListMeta,
   PlanBlockMeta,
+  PendingHarnessSwitch,
   QueuedMessage,
   MessageQueueStatus,
+  ModelTarget,
   TurnModel,
   TurnMetrics,
 } from "../model/session";
@@ -90,6 +99,7 @@ type SessionRecord = {
   title: string;
   providerSessionId?: string | null;
   providerAccountId?: string | null;
+  providerContext?: unknown;
   blocks: Block[];
   queuedMessages?: QueuedMessage[];
   queueStatus?: MessageQueueStatus;
@@ -115,6 +125,7 @@ type SessionUpsertPayload = {
   title: string;
   providerSessionId?: string;
   providerAccountId?: string;
+  providerContext?: StoredProviderContext;
   blocks: Block[];
   queuedMessages?: QueuedMessage[];
   queueStatus?: MessageQueueStatus;
@@ -126,6 +137,52 @@ type SessionUpsertPayload = {
   linkedWorkItem?: LinkedWorkItem;
   automationId?: string;
 };
+
+type StoredProviderContext = {
+  version: 1;
+  state?: ProviderContextState;
+  pendingSwitch?: PendingHarnessSwitch;
+};
+
+function sanitizePendingSwitch(value: unknown): PendingHarnessSwitch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const candidate = value as Partial<PendingHarnessSwitch>;
+  if (
+    !HARNESSES.includes(candidate.from as HarnessId) ||
+    typeof candidate.fromModel !== "string" ||
+    !candidate.fromSettings ||
+    typeof candidate.fromSettings !== "object" ||
+    Array.isArray(candidate.fromSettings)
+  ) return;
+  const fromSettings = Object.fromEntries(
+    Object.entries(candidate.fromSettings).filter(([, setting]) => typeof setting === "string"),
+  );
+  return {
+    from: candidate.from as HarnessId,
+    fromModel: candidate.fromModel,
+    fromSettings,
+    ...(typeof candidate.fromProviderSessionId === "string" && isPersistableId(candidate.fromProviderSessionId)
+      ? { fromProviderSessionId: candidate.fromProviderSessionId } : {}),
+    ...(typeof candidate.fromProviderAccountId === "string" && isPersistableId(candidate.fromProviderAccountId)
+      ? { fromProviderAccountId: candidate.fromProviderAccountId } : {}),
+  };
+}
+
+function storedProviderContext(session: Session): StoredProviderContext | undefined {
+  const state = sanitizeProviderContext(session.providerContext);
+  const pendingSwitch = sanitizePendingSwitch(session.pendingSwitch);
+  if (!state && !pendingSwitch) return;
+  return { version: 1, ...(state ? { state } : {}), ...(pendingSwitch ? { pendingSwitch } : {}) };
+}
+
+function restoreProviderContext(value: unknown): Pick<Session, "providerContext" | "pendingSwitch"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const stored = value as Partial<StoredProviderContext>;
+  if (stored.version !== 1) return {};
+  const state = sanitizeProviderContext(stored.state);
+  const pendingSwitch = sanitizePendingSwitch(stored.pendingSwitch);
+  return { ...(state ? { providerContext: state } : {}), ...(pendingSwitch ? { pendingSwitch } : {}) };
+}
 
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
@@ -150,6 +207,7 @@ function persistableMeta(
   includeQueue = true,
 ): Omit<SessionUpsertPayload, "blocks"> {
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
+  const providerContext = storedProviderContext(session);
   const queuedMessages = includeQueue
     ? sanitizeQueuedMessages(session.queuedMessages)
     : [];
@@ -159,6 +217,7 @@ function persistableMeta(
     harness: session.harness,
     model: session.model,
     modelSettings: session.modelSettings,
+    ...(providerContext ? { providerContext } : {}),
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.sidebarHidden === true ? { sidebarHidden: true } : {}),
@@ -213,6 +272,33 @@ function sanitizeMonoSessionCompletion(
 }
 
 /** Pending images need their bytes until delivery; object URLs never survive reloads. */
+/** The provider choice a queued request was captured with. */
+function sanitizeQueuedSelection(value: unknown): ModelTarget | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const selection = value as Partial<ModelTarget>;
+  if (
+    !HARNESSES.includes(selection.harness as HarnessId) ||
+    typeof selection.model !== "string" ||
+    !selection.model
+  )
+    return;
+  const settings =
+    selection.modelSettings &&
+    typeof selection.modelSettings === "object" &&
+    !Array.isArray(selection.modelSettings)
+      ? Object.fromEntries(
+          Object.entries(selection.modelSettings).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : {};
+  return {
+    harness: selection.harness as HarnessId,
+    model: selection.model,
+    modelSettings: settings,
+  };
+}
+
 function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -253,6 +339,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         })
       : [];
     const noteMeta = sanitizeNoteCard(message.noteCard);
+    const selection = sanitizeQueuedSelection(message.selection);
     const completion = sanitizeMonoSessionCompletion(
       message.monoSessionCompletion,
     );
@@ -277,6 +364,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
       return [];
     return [
       {
+        ...(selection ? { selection } : {}),
         id: message.id,
         ...(typeof message.blockId === "string" &&
         isPersistableId(message.blockId)
@@ -339,6 +427,7 @@ export function sanitizeSessionForPersist(
           index === firstUser && session.orchestrationLeadId
             ? { ...block, orchestrationLeadId: session.orchestrationLeadId }
             : block,
+          { preserveHandoffPreparing: !!session.pendingSwitch },
         ),
       )
       .filter((block): block is Block => block != null),
@@ -660,6 +749,14 @@ export async function getSession(sessionId: string): Promise<Session | null> {
   return session;
 }
 
+export function saveProviderContextSnapshot(
+  sessionId: string,
+  switchId: string,
+  content: string,
+): Promise<string> {
+  return invoke<string>("session_context_snapshot", { sessionId, switchId, content });
+}
+
 export function backfillClaudeShellCommands(
   blocks: Block[],
   commands: Record<string, string>,
@@ -773,7 +870,7 @@ export async function discardDraftSessionRecord(
   sessionId: string,
 ): Promise<void> {
   await enqueueSessionWrite(sessionId, () =>
-    invoke<void>("session_delete", { sessionId, imagePaths: [] }),
+    invoke<void>("session_discard_draft", { sessionId }),
   );
   monoSavedBlocks.delete(sessionId);
 }
@@ -876,7 +973,7 @@ export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
 
 function sanitizeBlock(
   block: Block,
-  options?: { hydrate?: boolean },
+  options?: { hydrate?: boolean; preserveHandoffPreparing?: boolean },
 ): Block | null {
   const next: Block = {
     id: block.id,
@@ -968,7 +1065,7 @@ function sanitizeBlock(
   else if (block.role === "plan") {
     next.plan = { status: "ready", originalText: block.text };
   }
-  const handoff = sanitizeHandoff(block.handoff);
+  const handoff = sanitizeHandoff(block.handoff, options?.preserveHandoffPreparing);
   if (handoff) next.handoff = handoff;
   else if (block.role === "handoff") return null;
   const secondOpinion = sanitizeSecondOpinion(block.secondOpinion);
@@ -982,6 +1079,14 @@ function sanitizeBlock(
   }
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (block.role === "user") {
+    const sessionContext = sanitizeSessionCards(block.sessionContext);
+    if (sessionContext?.length) next.sessionContext = sessionContext;
+    const linkedFrom = sanitizeSessionCards(
+      block.linkedFrom ? [block.linkedFrom] : undefined,
+    )?.[0];
+    if (linkedFrom) next.linkedFrom = linkedFrom;
+  }
   if (Array.isArray(block.artifactCards)) {
     const cards = block.artifactCards.flatMap((card) => {
       if (
@@ -1405,6 +1510,9 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
+  const preparingHandoffId = Array.isArray(record.blocks)
+    ? [...record.blocks].reverse().find((block) => block.role === "handoff" && block.handoff?.status === "preparing")?.id
+    : undefined;
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
@@ -1412,7 +1520,7 @@ function recordToSession(record: SessionRecord): Session {
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
-  return {
+  const session: Session = {
     id: record.id,
     sidebarHidden: record.sidebarHidden === true || undefined,
     cwd: record.cwd,
@@ -1431,6 +1539,7 @@ function recordToSession(record: SessionRecord): Session {
       : {}),
     ...(record.monoTranscript ? { monoTranscript: record.monoTranscript } : {}),
     busy: false,
+    ...restoreProviderContext(record.providerContext),
     orchestrationLeadId:
       record.orchestrationLeadId ??
       blocks.find(
@@ -1452,6 +1561,13 @@ function recordToSession(record: SessionRecord): Session {
       : {}),
     ...(contextFromRecord(record) ?? {}),
   };
+  const delivery = session.providerContext?.delivery;
+  if (delivery?.needsInspection) return session;
+  return delivery && (delivery.status === "preparing" || delivery.status === "imported")
+    ? delivery.requestSubmitted
+      ? recoverSubmittedProviderDelivery(session, delivery.switchId)
+      : failProviderDelivery(session, delivery.switchId)
+    : failUnstartedProviderRequest(session, preparingHandoffId);
 }
 
 /**
@@ -1482,17 +1598,39 @@ function asHarness(value: string): HarnessId {
 
 const HANDOFF_STATUSES: HandoffStatus[] = ["preparing", "ready"];
 
-function sanitizeHandoff(value: Block["handoff"]): HandoffMeta | undefined {
+function sanitizeHandoff(value: Block["handoff"], preservePreparing = false): HandoffMeta | undefined {
   if (!value) return undefined;
   if (!(HARNESSES as string[]).includes(value.from)) return undefined;
   if (!(HARNESSES as string[]).includes(value.to)) return undefined;
   if (!HANDOFF_STATUSES.includes(value.status)) return undefined;
   const interrupted = value.status === "preparing";
+  const transfer = value.transfer;
+  const validTransfer = transfer &&
+    typeof transfer.switchId === "string" && isPersistableId(transfer.switchId) &&
+    ["preparing", "imported", "accepted", "uncertain"].includes(transfer.status) &&
+    ["pending", "native", "inline"].includes(transfer.mode) &&
+    [transfer.included, transfer.omitted, transfer.historicalAttachments].every(
+      (count) => Number.isSafeInteger(count) && count >= 0,
+    );
   return {
     from: value.from,
     to: value.to,
-    status: "ready",
+    status: preservePreparing ? value.status : "ready",
     pending: interrupted || !!value.pending,
+    ...(validTransfer ? { transfer: {
+      switchId: transfer.switchId,
+      status: transfer.status,
+      mode: transfer.mode,
+      included: transfer.included,
+      omitted: transfer.omitted,
+      historicalAttachments: transfer.historicalAttachments,
+      ...(typeof transfer.retrievalPath === "string" && !transfer.retrievalPath.includes("\0")
+        ? { retrievalPath: transfer.retrievalPath } : {}),
+      ...(transfer.requestSubmitted === true ? { requestSubmitted: true } : {}),
+      ...(transfer.failedBeforeSubmission === true ? { failedBeforeSubmission: true } : {}),
+      ...(transfer.needsInspection === true ? { needsInspection: true } : {}),
+      ...(transfer.inspectionConfirmed === true ? { inspectionConfirmed: true } : {}),
+    } } : {}),
   };
 }
 
@@ -1515,6 +1653,23 @@ function sanitizeSecondOpinion(
     ...(files > 0 ? { files } : {}),
     ...(value.kind === "handoff" ? { kind: "handoff" as const } : {}),
   };
+}
+
+function sanitizeSessionCards(
+  value: unknown,
+): { id: string; title: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cards: { id: string; title: string }[] = [];
+  for (const entry of value.slice(0, 8)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, title } = entry as { id?: unknown; title?: unknown };
+    if (typeof id !== "string" || !isPersistableId(id)) continue;
+    cards.push({
+      id,
+      title: typeof title === "string" ? title.trim().slice(0, 300) : "",
+    });
+  }
+  return cards;
 }
 
 function sanitizeNoteCard(value: Block["noteCard"]): Block["noteCard"] {

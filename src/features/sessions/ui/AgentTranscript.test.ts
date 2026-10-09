@@ -25,6 +25,54 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it.each(["ready", "preparing"] as const)("requires inspection without advertising an unsent retry for a %s handoff", (status) => {
+    const transfer = {
+      switchId: "switch-1", status: "uncertain" as const, mode: "inline" as const,
+      included: 2, omitted: 0, historicalAttachments: 0,
+      requestSubmitted: true as const, needsInspection: true as const,
+    };
+    const markup = render([{ id: "switch", role: "handoff", text: "Shared history", handoff: {
+      from: "claude", to: "codex", status, pending: true, transfer,
+    } }]);
+    expect(markup).toContain("Execution needs inspection");
+    expect(markup).toContain("The request may have run");
+    expect(markup).toContain("MonoCode will not resend it automatically");
+    expect(markup).not.toContain("Handoff needs retry");
+    expect(markup).not.toContain("unsent");
+  });
+
+  it("keeps an inspected unknown execution distinct from provider acceptance", () => {
+    const markup = render([{ id: "switch", role: "handoff", text: "Shared history", handoff: {
+      from: "claude", to: "codex", status: "ready", transfer: {
+        switchId: "switch-1", status: "uncertain", mode: "native", included: 2,
+        omitted: 0, historicalAttachments: 0, requestSubmitted: true, inspectionConfirmed: true,
+      },
+    } }]);
+    expect(markup).toContain("Execution inspected");
+    expect(markup).toContain("MonoCode did not resend it");
+    expect(markup).not.toContain("Continued with Codex");
+    expect(markup).not.toContain("Retry the unsent message");
+  });
+
+  it.each(["ready", "preparing"] as const)("shows an uncertain retry when the handoff row remains %s", (status) => {
+    const transfer = {
+      switchId: "switch-1", status: "uncertain" as const, mode: "native" as const,
+      included: 12, omitted: 3, historicalAttachments: 2,
+      retrievalPath: "/data/history/switch-1.md",
+    };
+    const markup = render([
+      { id: "u", role: "user", text: "Continue" },
+      { id: "switch", role: "handoff", text: "Shared history", handoff: { from: "claude", to: "codex", status, pending: true, transfer } },
+    ]);
+    expect(markup).toContain("Handoff needs retry");
+    expect(markup).not.toContain("Preparing shared history");
+    expect(markup).toContain("12 conversation items selected");
+    expect(markup).toContain("3 items omitted");
+    expect(markup).toContain("2 historical attachments are file references");
+    expect(markup).toContain("historical user and assistant messages");
+    expect(markup).toContain("Retry the unsent message");
+    expect(markup).toContain("/data/history/switch-1.md");
+  });
   it("keeps the completed time beside actions when a turn has no BTW control", () => {
     const markup = render([
       {

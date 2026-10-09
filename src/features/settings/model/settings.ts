@@ -239,6 +239,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       ]
     : []),
   {
+    id: "agents-open-sessions",
+    section: "general",
+    label: "Let agents open sessions",
+    keywords: "operator app cli draft start new session agent tab",
+  },
+  {
+    id: "review-agent-sessions",
+    section: "general",
+    label: "Review agent-opened sessions before they run",
+    keywords: "operator app cli draft approve start new session agent",
+  },
+  {
     id: "working-agents",
     section: "general",
     label: "Working agents",
@@ -752,6 +764,38 @@ export function saveComposerRunner(value: boolean) {
   window.dispatchEvent(
     new CustomEvent<boolean>(COMPOSER_RUNNER_CHANGE_EVENT, { detail: value }),
   );
+}
+
+const AGENTS_OPEN_SESSIONS_KEY = "monocode.agentsOpenSessions";
+
+export const AGENTS_OPEN_SESSIONS_DEFAULT = true;
+
+/**
+ * Lets every thread list sessions and start new ones through the app CLI,
+ * without /operator.
+ */
+export function loadAgentsOpenSessions(): boolean {
+  return readFlag(AGENTS_OPEN_SESSIONS_KEY) ?? AGENTS_OPEN_SESSIONS_DEFAULT;
+}
+
+export function saveAgentsOpenSessions(value: boolean) {
+  writeFlag(AGENTS_OPEN_SESSIONS_KEY, value);
+}
+
+const REVIEW_AGENT_SESSIONS_KEY = "monocode.reviewAgentSessions";
+
+export const REVIEW_AGENT_SESSIONS_DEFAULT = false;
+
+/**
+ * Sessions an agent opens without /operator keep their prompt as an unsent
+ * draft until the user sends it.
+ */
+export function loadReviewAgentSessions(): boolean {
+  return readFlag(REVIEW_AGENT_SESSIONS_KEY) ?? REVIEW_AGENT_SESSIONS_DEFAULT;
+}
+
+export function saveReviewAgentSessions(value: boolean) {
+  writeFlag(REVIEW_AGENT_SESSIONS_KEY, value);
 }
 
 const NOTES_ENABLED_KEY = "monocode.notesEnabled";

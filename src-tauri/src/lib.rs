@@ -7,6 +7,7 @@ mod azure_devops;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
+mod context_assets;
 mod control;
 pub mod control_cli;
 mod cursor_store;
@@ -42,6 +43,7 @@ mod reminders;
 mod remote;
 mod remote_ssh;
 mod search;
+mod session_links;
 mod session_store;
 mod skills;
 pub mod ssh_askpass;
@@ -467,6 +469,12 @@ pub fn run() {
             pty::pty_status,
             pty::pty_kill,
             pty::pty_kill_all,
+            session_links::session_links_list,
+            session_links::session_link,
+            session_links::session_unlink,
+            session_links::session_link_record_message,
+            session_links::session_link_release_message,
+            session_links::session_links_reset,
             session_store::session_upsert,
             session_store::session_list_by_project,
             session_store::session_rebase_project,
@@ -474,11 +482,14 @@ pub fn run() {
             session_store::session_search,
             session_store::cancel_session_search,
             session_store::session_get,
+            session_store::session_context_snapshot,
+            context_assets::session_context_assets,
             mono_transcript::mono_session_get,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,
             session_store::session_delete,
+            session_store::session_discard_draft,
             session_store::session_set_archived,
             session_store::session_set_pinned,
             session_store::session_set_linked_work_item,

@@ -175,7 +175,14 @@ export function canEditLastTurn(session: Session): boolean {
   const block = lastUserTurnBlock(session.blocks);
   if (!block || block.draft) return false;
   if (session.harness === "codex" && !block.providerTurnId) return false;
-  if (block.secondOpinion || block.noteCard || block.ciContext) return false;
+  if (
+    block.secondOpinion ||
+    block.noteCard ||
+    block.sessionContext?.length ||
+    block.linkedFrom ||
+    block.ciContext
+  )
+    return false;
   if (session.blocks.some((entry) => entry.role === "handoff")) return false;
   return true;
 }

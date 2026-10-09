@@ -1,9 +1,12 @@
 import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
+import type { ProviderContextState } from "./providerContext";
 import type { InboxComposerCard } from "../../inbox/model/githubTasks";
 import type { InboxAskContext } from "../../inbox/model/inboxAsk";
 import type { NoteCardMeta, NoteComposerCard } from "../../notes";
+import type { SessionContextCard } from "./sessionContext";
+import type { LinkedPeer } from "./sessionLinks";
 import type { OrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 import type { LinkedWorkItemUpdateCard } from "../../inbox/model/linkedWorkItemActivity";
 import {
@@ -124,6 +127,19 @@ export type HandoffMeta = {
   status: HandoffStatus;
   /** Inject this brief into prompts to `to` until that harness accepts a turn. */
   pending?: boolean;
+  transfer?: {
+    switchId: string;
+    status: "preparing" | "imported" | "accepted" | "uncertain";
+    mode: "pending" | "native" | "inline";
+    included: number;
+    omitted: number;
+    historicalAttachments: number;
+    retrievalPath?: string;
+    requestSubmitted?: true;
+    failedBeforeSubmission?: true;
+    needsInspection?: true;
+    inspectionConfirmed?: true;
+  };
 };
 
 /** One persisted question/answer in a completed turn's side conversation. */
@@ -268,6 +284,8 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  /** Provider choice captured when this request entered the queue. */
+  selection?: ModelTarget;
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
   blockId?: string;
@@ -275,6 +293,11 @@ export type QueuedMessage = {
   attachments: Attachment[];
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
+  sessionContext?: SessionContextCard[];
+  /** Sent by the agent in a linked session, not typed by the user. */
+  linkedFrom?: LinkedPeer;
+  /** App CLI request that queued this message, kept so a retry is not sent twice. */
+  appRequestId?: string;
   intent?: TurnIntent;
   /** An app notification that must wait for an idle Mono, never steer its work. */
   monoSessionCompletion?: MonoSessionCompletion;
@@ -372,6 +395,10 @@ export type Block = {
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Other sessions attached to this user turn as context. */
+  sessionContext?: SessionContextCard[];
+  /** The agent in this linked session sent the turn. */
+  linkedFrom?: LinkedPeer;
   /** Saved artifacts attached to this turn; their bodies live outside chat. */
   artifactCards?: import("../../artifacts/artifacts").ArtifactCard[];
   /** Exact CI repair instructions and evidence supplied with this user turn. */
@@ -482,6 +509,8 @@ export type Session = {
    * Handoff runs on the next send, not on picker change.
    */
   pendingSwitch?: PendingHarnessSwitch;
+  /** Native provider bindings and receipts for shared conversation history. */
+  providerContext?: ProviderContextState;
   /** Last known branch in the session's working copy. */
   branch?: string;
   /** Selected working copy; cwd remains the project identity. */
@@ -508,6 +537,8 @@ export type Session = {
   noteCard?: NoteComposerCard;
   /** Handoff chip shown above the composer. In-memory, one-shot. */
   handoffCard?: HandoffComposerCard;
+  /** Sessions dropped on the composer as context. In-memory, one-shot. */
+  sessionContext?: SessionContextCard[];
   /**
    * Live clarifying questions from AskUserQuestion / ask_question / etc.
    * In-memory; request ids do not survive restarts.

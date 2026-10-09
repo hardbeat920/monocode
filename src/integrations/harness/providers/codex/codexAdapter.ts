@@ -32,6 +32,7 @@ import {
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
   live: true,
+  contextTransferCapabilities: { nativeMessages: true, resumedAppend: true },
   sendTurn: sendCodexTurn,
   compactContext: compactCodexContext,
   rewindLastTurn: rewindCodexLastTurn,

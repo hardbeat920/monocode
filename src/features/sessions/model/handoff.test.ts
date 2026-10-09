@@ -19,6 +19,12 @@ import {
   wrapHandoffPrompt,
 } from "./handoff";
 import { newSession, type Block, type Session } from "./session";
+import {
+  beginProviderDelivery,
+  confirmProviderDeliveryInspection,
+  markProviderRequestSubmitted,
+  recoverSubmittedProviderDelivery,
+} from "./providerContext";
 
 function sessionWith(
   blocks: Block[],
@@ -32,6 +38,40 @@ function sessionWith(
 }
 
 describe("planComposerSwitch", () => {
+  function unknownTargetHistory(confirmInspection = true): Session {
+    const selected = appendReadyHandoff(sessionWith([
+      { id: "u1", role: "user", text: "Original source instruction" },
+      { id: "a1", role: "assistant", text: "Source response" },
+    ], {
+      harness: "fx",
+      model: "fx:target-model",
+      modelSettings: { effort: "high" },
+      pendingSwitch: {
+        from: "cursor",
+        fromModel: "cursor:composer-2",
+        fromSettings: {},
+        fromProviderSessionId: "acp-1",
+      },
+    }), "cursor", "fx", "Portable history");
+    const submitted = markProviderRequestSubmitted(beginProviderDelivery({
+      ...selected,
+      blocks: [...selected.blocks, {
+        id: "u2", role: "user", text: "Possibly executed target request",
+      }],
+    }, {
+      switchId: "inspected-switch",
+      from: "cursor",
+      to: "fx",
+      cwd: selected.cwd,
+      currentUserBlockId: "u2",
+      sourceThroughBlockId: "a1",
+      includedBlockIds: ["u1", "a1"],
+      omittedBlockIds: [],
+    }), "inspected-switch");
+    const recovered = recoverSubmittedProviderDelivery(submitted, "inspected-switch");
+    return confirmInspection ? confirmProviderDeliveryInspection(recovered) : recovered;
+  }
+
   it("only updates the composer on an empty session", () => {
     expect(planComposerSwitch(newSession("cursor", "/tmp"), "claude")).toEqual({
       kind: "empty",
@@ -85,6 +125,42 @@ describe("planComposerSwitch", () => {
     expect(planComposerSwitch(session, "cursor")).toEqual({
       kind: "revert",
       restoreProviderSessionId: "acp-1",
+    });
+  });
+
+  it.each(["cursor", "claude"] as const)(
+    "arms a new transfer to %s after inspecting a possibly executed request",
+    (next) => {
+      const inspected = unknownTargetHistory();
+      expect(inspected.pendingSwitch?.from).toBe("cursor");
+      expect(planComposerSwitch(inspected, next)).toEqual({
+        kind: "arm",
+        pending: {
+          from: "fx",
+          fromModel: "fx:target-model",
+          fromSettings: { effort: "high" },
+        },
+      });
+      expect(inspected.blocks.find((block) => block.id === "u2")?.draft).toBeUndefined();
+    },
+  );
+
+  it("retains reconstruction intent for a model change after inspection", () => {
+    const inspected = unknownTargetHistory();
+    expect(planComposerSwitch(inspected, "fx")).toEqual({ kind: "model" });
+    expect(inspected.pendingSwitch?.from).toBe("cursor");
+  });
+
+  it("arms a new source transfer before inspection acknowledgment", () => {
+    const recovered = unknownTargetHistory(false);
+    expect(recovered.providerContext?.delivery?.needsInspection).toBe(true);
+    expect(planComposerSwitch(recovered, "cursor")).toEqual({
+      kind: "arm",
+      pending: {
+        from: "fx",
+        fromModel: "fx:target-model",
+        fromSettings: { effort: "high" },
+      },
     });
   });
 });
@@ -211,6 +287,13 @@ describe("deterministic handoff", () => {
 });
 
 describe("handoff block lifecycle", () => {
+  it("does not deliver a failed target handoff to the restored source", () => {
+    const session = sessionWith([{ id: "handoff", role: "handoff", text: "Prepared shared history", handoff: {
+      from: "cursor", to: "claude", status: "ready", pending: true,
+      transfer: { switchId: "failed-target", status: "uncertain", mode: "native", included: 1, omitted: 0, historicalAttachments: 0 },
+    } }]);
+    expect(pendingHandoff(session)).toBeNull();
+  });
   it("keeps the inject pending until the incoming harness accepts a turn", () => {
     let session = appendPreparingHandoff(
       sessionWith([{ id: "u1", role: "user", text: "go" }]),

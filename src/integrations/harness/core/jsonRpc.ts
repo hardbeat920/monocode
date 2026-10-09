@@ -16,6 +16,14 @@ export type JsonRpcMessage = {
   error?: { code?: number; message?: string; data?: unknown };
 };
 
+/** Remote error codes distinguish unsupported methods from uncertain writes. */
+export class JsonRpcRemoteError extends Error {
+  constructor(message: string, readonly code?: number, readonly data?: unknown) {
+    super(message);
+    this.name = "JsonRpcRemoteError";
+  }
+}
+
 // A child wedged hard enough to block stdin writes is unrecoverable; the
 // write deadline fails the request so the caller can recycle the generation.
 const WRITE_TIMEOUT_MS = 15_000;
@@ -199,8 +207,10 @@ export class JsonRpcClient {
       this.pending.delete(key);
       if (msg.error) {
         pending.reject(
-          new Error(
+          new JsonRpcRemoteError(
             msg.error.message || `${this.label} error ${msg.error.code ?? ""}`,
+            msg.error.code,
+            msg.error.data,
           ),
         );
         return;
