@@ -186,14 +186,15 @@ export function TabGroupMenu({
     setSubmenu(next);
   };
   const leaveRow = (event: ReactMouseEvent) => {
+    const point = { x: event.clientX, y: event.clientY };
+    // Leaving a row crossed on the way keeps the original, wider triangle.
+    if (grace.current && inGrace(point, grace.current)) return;
     hoveredRow.current = null;
     const el = document.querySelector<HTMLElement>(
       `[data-menu-owner="${CSS.escape(menuId)}"][data-explorer-menu]`,
     );
     const rect = el?.getBoundingClientRect();
-    grace.current = rect
-      ? graceArea({ x: event.clientX, y: event.clientY }, rect)
-      : null;
+    grace.current = rect ? graceArea(point, rect) : null;
   };
   const pickExtra = (id: string) => {
     if (onExtraPick?.(id) !== false) onClose();

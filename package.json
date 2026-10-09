@@ -4,9 +4,9 @@
   "version": "0.10.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node api.js && vite",
     "dev:stable": "vite --mode stable",
-    "build": "tsc && vite build",
+    "build": "node api.js && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

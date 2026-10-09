@@ -146,6 +146,22 @@ it("keeps the mute submenu open while the pointer cuts across Resume toward it",
     document.querySelector('[role="menu"][aria-label="Mute notifications"]'),
   ).not.toBeNull();
 
+  // Leaving the crossed row must not shrink the triangle to a new apex:
+  // (200,85) is inside the original (80,120) triangle only.
+  act(() =>
+    resume.dispatchEvent(
+      new MouseEvent("mouseout", { bubbles: true, clientX: 160, clientY: 110 }),
+    ),
+  );
+  act(() =>
+    resume.dispatchEvent(
+      new MouseEvent("mouseover", { bubbles: true, clientX: 200, clientY: 85 }),
+    ),
+  );
+  expect(
+    document.querySelector('[role="menu"][aria-label="Mute notifications"]'),
+  ).not.toBeNull();
+
   act(() =>
     resume.dispatchEvent(
       new MouseEvent("mousemove", { bubbles: true, clientX: 50, clientY: 40 }),

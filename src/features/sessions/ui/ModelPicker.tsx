@@ -639,11 +639,12 @@ export function ModelPicker({
   };
 
   const leaveEntry = (event: ReactMouseEvent) => {
+    const point = { x: event.clientX, y: event.clientY };
+    // Leaving a row crossed on the way keeps the original, wider triangle.
+    if (grace.current && inGrace(point, grace.current)) return;
     hoveredRow.current = null;
     const rect = submenuEl.current?.getBoundingClientRect();
-    grace.current = rect
-      ? graceArea({ x: event.clientX, y: event.clientY }, rect)
-      : null;
+    grace.current = rect ? graceArea(point, rect) : null;
   };
 
   const enterSubmenu = () => {
