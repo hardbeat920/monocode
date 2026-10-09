@@ -87,6 +87,7 @@ export type FileSkill = SkillCommon & {
   path: string;
   scope: Exclude<SkillScope, "builtin">;
   source: SkillSource;
+  origin?: DiscoveredSkill["origin"];
 };
 
 export type BuiltinSkill = SkillCommon & {
@@ -342,6 +343,7 @@ function asSkill(skill: DiscoveredSkill): FileSkill {
     path: skill.path,
     scope: skill.scope === "user" ? "user" : "project",
     source: skill.source === "monocode" ? "monocode" : skill.source,
+    ...(skill.origin ? { origin: skill.origin } : {}),
   };
 }
 

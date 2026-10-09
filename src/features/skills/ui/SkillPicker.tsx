@@ -343,10 +343,9 @@ function ScopeButton({
 }
 
 function scopeLabel(skill: Skill): string {
-  if (skill.kind === "native") {
-    return skill.origin ? `${skill.source} · ${skill.origin}` : skill.source;
-  }
   if (skill.kind === "builtin") return "monocode";
+  if (skill.origin) return `${skill.source} · ${skill.origin}`;
+  if (skill.kind === "native") return skill.source;
   if (skill.scope === "user") return "personal";
   if (skill.source !== "agents" && skill.source !== "monocode") return skill.source;
   return "project";

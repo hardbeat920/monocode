@@ -331,11 +331,7 @@ export function SkillsPage({
                             {skill.name}
                           </button>
                           <span className="shrink-0 rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
-                            {skill.scope === "user"
-                              ? "Personal"
-                              : skill.scope === "builtin"
-                                ? "MonoCode"
-                                : "Project"}
+                            {skillBadge(skill)}
                           </span>
                           <span className="w-20 shrink-0 truncate text-right font-sans text-[11px] text-content/40">
                             {skill.source}
@@ -481,4 +477,11 @@ export function SkillsPage({
       </div>
     </div>
   );
+}
+
+function skillBadge(skill: DiscoveredSkill): string {
+  if (skill.origin === "plugin") return "Plugin";
+  if (skill.origin === "synced") return "Synced";
+  if (skill.scope === "user") return "Personal";
+  return skill.scope === "builtin" ? "MonoCode" : "Project";
 }
