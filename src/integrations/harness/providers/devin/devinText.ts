@@ -10,12 +10,14 @@ import {
   devinModelChoices,
   devinModelFamilies,
   devinModelValue,
+  devinNearestEffort,
   devinThoughtLevel,
 } from "./devinProtocol";
 
 const TEXT_CHILD_PREFIX = "monocode-devin-text-";
 const REQUEST_TIMEOUT_MS = 30_000;
 const PROMPT_TIMEOUT_MS = 5 * 60_000;
+const DELETE_TIMEOUT_MS = 5_000;
 
 const activeChildren = new Set<string>();
 let turns: Promise<void> = Promise.resolve();
@@ -124,24 +126,28 @@ async function promptOnce(input: TextPromptInput): Promise<string> {
       const advertised =
         Array.isArray(options) &&
         options.some((option) => asRecord(option)?.id === "model");
+      // Efforts belong to the model: read them after switching to it.
+      let config: unknown = created;
       if (model && model !== "default" && advertised) {
-        await rpc
+        const switched = await rpc
           .request(
             "session/set_config_option",
             { sessionId, configId: "model", value: model },
             REQUEST_TIMEOUT_MS,
           )
           .catch(() => undefined);
+        if (Array.isArray(asRecord(switched)?.configOptions)) config = switched;
       }
       // Newer CLIs take effort as the session-wide `thought_level` select.
-      const thought = devinThoughtLevel(created);
-      const effort = input.modelSettings?.effort;
-      if (
-        thought &&
-        effort &&
-        effort !== thought.current &&
-        thought.choices.some((choice) => choice.value === effort)
-      ) {
+      const thought = devinThoughtLevel(config);
+      const effort =
+        thought && input.modelSettings?.effort
+          ? devinNearestEffort(
+              input.modelSettings.effort,
+              thought.choices.map((choice) => choice.value),
+            )
+          : null;
+      if (thought && effort && effort !== thought.current) {
         await rpc
           .request(
             "session/set_config_option",
@@ -157,14 +163,18 @@ async function promptOnce(input: TextPromptInput): Promise<string> {
         input.timeoutMs ?? PROMPT_TIMEOUT_MS,
       );
       collecting = false;
-      await rpc
-        .request("session/delete", { sessionId }, REQUEST_TIMEOUT_MS)
-        .catch(() => undefined);
       return output;
     };
     return await Promise.race([run(), ...(abort.promise ? [abort.promise] : [])]);
   } finally {
     collecting = false;
+    // Failed and aborted prompts must not leave their session in `devin list`.
+    const created = sessionId;
+    if (created && !rpc.isClosed) {
+      await rpc
+        .request("session/delete", { sessionId: created }, DELETE_TIMEOUT_MS)
+        .catch(() => undefined);
+    }
     abort.detach();
     activeChildren.delete(childId);
     rpc.close();

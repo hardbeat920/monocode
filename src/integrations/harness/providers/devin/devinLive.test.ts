@@ -269,12 +269,36 @@ describe("Devin live ACP sequence", () => {
     await turn;
   });
 
-  it("ignores a saved effort the CLI no longer offers", async () => {
+  it("maps a saved effort the model lacks to its nearest level", async () => {
     const turn = sendDevinTurn({
       sessionId: "devin-thread",
       cwd: "/repo",
       model: "devin:glm-5-2",
-      modelSettings: { effort: "low" },
+      modelSettings: { effort: "minimal" },
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => {},
+    });
+    await startSession();
+    await answer("session/set_config_option", { configOptions: CONFIG });
+    // GLM-5.2 offers none/high/max: minimal becomes none, not a failed turn.
+    expect(request("session/set_config_option")!.params).toEqual({
+      sessionId: "devin-1",
+      configId: "thought_level",
+      value: "none",
+    });
+    expect(parse().filter((m) => m.method === "session/set_config_option")).toHaveLength(1);
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("ignores an effort that is not a level at all", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      modelSettings: { effort: "turbo" },
       runtimeMode: "auto",
       text: "hello",
       onEvent: () => {},
@@ -283,8 +307,62 @@ describe("Devin live ACP sequence", () => {
     await answer("session/set_mode", {});
     await answer("session/prompt", { stopReason: "end_turn" });
     await turn;
-    // "low" is not a thought_level choice; nothing is sent.
     expect(request("session/set_config_option")).toBeUndefined();
+  });
+
+  it("applies effort against the levels of the model it switched to", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:swe-2-medium",
+      modelSettings: { effort: "none" },
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => {},
+    });
+    await startSession();
+    // Switching to SWE-2 swaps the thought levels to medium/high/max.
+    const swe2 = CONFIG.map((option) =>
+      option.id === "model"
+        ? { ...option, currentValue: "swe-2-medium" }
+        : option.id === "thought_level"
+          ? {
+              ...option,
+              currentValue: "medium",
+              options: [
+                { value: "medium", name: "Medium" },
+                { value: "high", name: "High" },
+                { value: "max", name: "Max" },
+              ],
+            }
+          : option,
+    );
+    await answer("session/set_config_option", { configOptions: swe2 });
+    expect(request("session/set_config_option")!.params.value).toBe("swe-2-medium");
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+    // "none" maps to medium, which is already current: nothing more is sent.
+    expect(parse().filter((m) => m.method === "session/set_config_option")).toHaveLength(1);
+  });
+
+  it("restores a model saved under an older catalog's family key", async () => {
+    const events: HarnessEvent[] = [];
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:swe-2",
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: (event) => events.push(event),
+    });
+    await startSession();
+    await answer("session/set_config_option", { configOptions: CONFIG });
+    expect(request("session/set_config_option")!.params.value).toBe("swe-2-medium");
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+    expect(events.some((event) => event.type === "status")).toBe(false);
   });
 
   it("resolves the fusion picker's lead and sidekick into one model id", async () => {

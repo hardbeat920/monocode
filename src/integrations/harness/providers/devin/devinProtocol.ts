@@ -360,11 +360,6 @@ export function devinModelFamilies(
     const effort = fusion
       ? undefined
       : (parsed.effort ?? EFFORT_ID_SUFFIX.exec(value)?.[1]?.toLowerCase());
-    // Show the id's effort in the name the way Devin's own picker does.
-    const name =
-      fusion || parsed.effort || !effort || effort === "none"
-        ? label
-        : `${label} ${EFFORT_LABELS[effort] ?? effort}`;
     const key = fusion ? "fusion" : familyKey(parsed.base) || value;
     const family = families.get(key) ?? {
       key,
@@ -373,7 +368,7 @@ export function devinModelFamilies(
     };
     family.variants.push({
       value,
-      name,
+      name: label,
       effort,
       fast: parsed.fast,
       ...(fusion ? { fusion } : {}),
@@ -419,24 +414,48 @@ function thoughtLevelSetting(thought: DevinThoughtLevel): ModelSetting {
   };
 }
 
+/**
+ * A single model's picker name. With an Effort select the effort is shown
+ * there, so a default baked into Devin's label ("GLM-5.2 High") is dropped;
+ * without one the id's fixed effort is named the way Devin's picker does.
+ */
+function singleModelName(
+  family: DevinModelFamily,
+  variant: DevinModelVariant,
+  thought: DevinThoughtLevel | null,
+): string {
+  const parsed = parseDevinVariant(variant.name);
+  if (thought) {
+    // Split ambiguous families keep Devin's exact label.
+    return parsed.effort && familyKey(parsed.base) === family.key
+      ? `${parsed.base}${parsed.fast ? " Fast" : ""}`
+      : variant.name;
+  }
+  return !parsed.effort && variant.effort && variant.effort !== "none"
+    ? `${variant.name} ${EFFORT_LABELS[variant.effort] ?? variant.effort}`
+    : variant.name;
+}
+
 function familyModel(
   family: DevinModelFamily,
-  thought?: DevinThoughtLevel | null,
+  thoughtFor: (value: string) => DevinThoughtLevel | null,
 ): AgentModel {
   if (family.variants.length > 1 && family.variants[0]?.fusion) {
     return fusionModel(family);
   }
   if (family.variants.length === 1) {
     const [only] = family.variants;
+    const thought = only.fusion ? null : thoughtFor(only.value);
     return {
       id: `devin:${only.value}`,
       harness: "devin",
-      name: only.name,
+      name: singleModelName(family, only, thought),
       nativeId: only.value,
       ...(thought ? { settings: [thoughtLevelSetting(thought)] } : {}),
     };
   }
   const fallback = defaultVariant(family);
+  const thought = thoughtFor(fallback.value);
   const efforts = EFFORT_ORDER.filter((effort) =>
     family.variants.some((variant) => variant.effort === effort),
   );
@@ -489,6 +508,15 @@ function fusionModel(family: DevinModelFamily): AgentModel {
   const efforts = EFFORT_ORDER.filter((effort) =>
     variants.some((variant) => variant.fusion!.leadEffort === effort),
   );
+  // Devin pairs most leads at a single effort ("Claude Opus 5 High"); a
+  // select is only meaningful when some lead really offers a choice.
+  const leadEfforts = new Map<string, Set<string>>();
+  for (const variant of variants) {
+    const { lead, leadEffort } = variant.fusion!;
+    if (!leadEffort) continue;
+    leadEfforts.set(lead, (leadEfforts.get(lead) ?? new Set()).add(leadEffort));
+  }
+  const effortChoice = [...leadEfforts.values()].some((set) => set.size > 1);
   const settings: ModelSetting[] = [
     {
       id: "lead",
@@ -498,7 +526,7 @@ function fusionModel(family: DevinModelFamily): AgentModel {
       options: [...leads].map(([value, label]) => ({ value, label })),
     },
   ];
-  if (efforts.length > 1) {
+  if (effortChoice && efforts.length > 1) {
     settings.push({
       id: "effort",
       label: "Effort",
@@ -540,7 +568,9 @@ export function devinModelValue(
   if (family.variants.some((variant) => variant.fusion)) {
     return fusionModelValue(family, settings);
   }
-  if (family.variants.length < 2) return nativeId;
+  // A family key saved by an older catalog ("swe-2") names a model Devin now
+  // lists under its full id ("swe-2-high").
+  if (family.variants.length < 2) return family.variants[0]?.value ?? nativeId;
   const fallback = defaultVariant(family);
   const effort = settings.effort ?? fallback.effort;
   const fast = settings.fast != null ? settings.fast === "true" : fallback.fast;
@@ -574,8 +604,45 @@ function fusionModelValue(
   ).value;
 }
 
-/** Models come from the `model` select in Devin's session config options. */
-export function modelsFromDevinSession(raw: unknown): AgentModel[] {
+/**
+ * Each model's own `thought_level` choices, keyed by model value: Devin's
+ * efforts differ per model (SWE-2: medium/high/max, Claude Opus 4.6: none).
+ * Null when the model has no effort select.
+ */
+export type DevinThoughtLevels = ReadonlyMap<string, DevinThoughtLevel | null>;
+
+/**
+ * The offered effort closest to `value`, preferring the lower level on a tie,
+ * so a saved effort still means something on a model with other levels.
+ */
+export function devinNearestEffort(
+  value: string,
+  choices: readonly string[],
+): string | null {
+  if (choices.includes(value)) return value;
+  const rank = EFFORT_ORDER.indexOf(value);
+  if (rank < 0) return null;
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  // Ascending, so the first of two equally close levels is the lower one.
+  for (const choice of EFFORT_ORDER.filter((effort) => choices.includes(effort))) {
+    const distance = Math.abs(EFFORT_ORDER.indexOf(choice) - rank);
+    if (distance >= bestDistance) continue;
+    best = choice;
+    bestDistance = distance;
+  }
+  return best;
+}
+
+/**
+ * Models come from the `model` select in Devin's session config options.
+ * `levels` holds per-model efforts; without it (or for a model it misses)
+ * the session's own `thought_level` stands in.
+ */
+export function modelsFromDevinSession(
+  raw: unknown,
+  levels?: DevinThoughtLevels,
+): AgentModel[] {
   const rec = asRecord(raw);
   const options = Array.isArray(rec?.configOptions) ? rec.configOptions : [];
   const option = options
@@ -591,7 +658,9 @@ export function modelsFromDevinSession(raw: unknown): AgentModel[] {
     family.variants.some((variant) => variant.value === current),
   );
   if (index > 0) families.unshift(...families.splice(index, 1));
-  return families.map((family) => familyModel(family, thought));
+  const thoughtFor = (value: string) =>
+    levels?.has(value) ? (levels.get(value) ?? null) : thought;
+  return families.map((family) => familyModel(family, thoughtFor));
 }
 
 function flattenChoices(raw: unknown): Array<{ value: string; label: string }> {

@@ -14,6 +14,7 @@ import {
   devinModeId,
   devinModelFamilies,
   devinModelValue,
+  devinNearestEffort,
   devinPermissionCommand,
   devinRestoreError,
   devinSessionMissing,
@@ -319,7 +320,10 @@ describe("devin catalog", () => {
   it("surfaces thought_level as the effort select on every model", () => {
     const models = modelsFromDevinSession(NEW_CATALOG);
     const swe2 = models.find((model) => model.nativeId === "swe-2-high")!;
-    expect(swe2.name).toBe("SWE-2 High");
+    // Effort lives in its own select, so the name carries none ("SWE-2 High
+    // · Max" read as two efforts).
+    expect(swe2.name).toBe("SWE-2");
+    expect(models.find((model) => model.nativeId === "glm-5-2")!.name).toBe("GLM-5.2");
     expect(swe2.settings).toEqual([
       {
         id: "effort",
@@ -343,19 +347,71 @@ describe("devin catalog", () => {
     ]);
   });
 
-  it("collapses fusion ids into one model with lead, effort, and sidekick", () => {
+  it("uses each model's own effort levels when the probe read them", () => {
+    const level = (values: string[], current: string) => ({
+      id: "thought_level",
+      current,
+      choices: values.map((value) => ({ value, label: value })),
+    });
+    const models = modelsFromDevinSession(
+      NEW_CATALOG,
+      new Map([
+        ["swe-2-high", level(["medium", "high", "max"], "high")],
+        ["adaptive", null],
+        ["swe-1-6", null],
+      ]),
+    );
+    const byId = (id: string) => models.find((model) => model.nativeId === id)!;
+    expect(byId("swe-2-high").settings?.[0]).toMatchObject({
+      id: "effort",
+      value: "high",
+      options: [
+        { value: "medium", label: "medium" },
+        { value: "high", label: "high" },
+        { value: "max", label: "max" },
+      ],
+    });
+    // No levels for this model: no Effort select at all.
+    expect(byId("adaptive").settings).toBeUndefined();
+    expect(byId("swe-1-6").settings?.map((setting) => setting.id)).toEqual(["fast"]);
+    // A model the probe missed falls back to the session's levels.
+    expect(byId("glm-5-2").settings?.[0]?.options).toHaveLength(3);
+  });
+
+  it("names a fixed id effort only when there is no Effort select", () => {
+    const models = modelsFromDevinSession(NEW_CATALOG, new Map([["swe-2-high", null]]));
+    expect(models.find((model) => model.nativeId === "swe-2-high")!.name).toBe("SWE-2 High");
+  });
+
+  it("maps a saved effort onto the nearest level a model offers", () => {
+    expect(devinNearestEffort("max", ["low", "medium", "high", "xhigh", "max"])).toBe("max");
+    expect(devinNearestEffort("none", ["medium", "high", "max"])).toBe("medium");
+    expect(devinNearestEffort("medium", ["none", "high", "max"])).toBe("high");
+    // Equally close: the lower level.
+    expect(devinNearestEffort("low", ["none", "high", "max"])).toBe("none");
+    expect(devinNearestEffort("max", ["low", "medium", "high"])).toBe("high");
+    expect(devinNearestEffort("turbo", ["high"])).toBeNull();
+    expect(devinNearestEffort("high", [])).toBeNull();
+  });
+
+  it("resolves a family key saved by an older catalog to the listed id", () => {
+    const families = devinModelFamilies([{ value: "swe-2-high", label: "SWE-2" }]);
+    expect(devinModelValue(families, "swe-2")).toBe("swe-2-high");
+  });
+
+  it("collapses fusion ids into one model with lead and sidekick", () => {
     const models = modelsFromDevinSession(NEW_CATALOG);
     const fusions = models.filter((model) => model.name.startsWith("Fusion"));
     expect(fusions).toHaveLength(1);
     const [fusion] = fusions;
     expect(fusion.nativeId).toBe("fusion");
     expect(fusion.name).toBe("Fusion");
+    // Each lead is paired at one effort, so there is nothing to choose.
     expect(fusion.settings?.map((setting) => setting.id)).toEqual([
       "lead",
-      "effort",
       "sidekick",
     ]);
-    const [lead, , sidekick] = fusion.settings!;
+    const [lead, sidekick] = fusion.settings!;
     expect(lead.options).toEqual([
       { value: "claude-fable-5-1", label: "Claude Fable 5.1" },
       { value: "gpt-6-sol", label: "GPT-6 Sol" },
@@ -365,6 +421,25 @@ describe("devin catalog", () => {
       { value: "glm-5-2", label: "GLM-5.2 High" },
       { value: "swe-2-high", label: "SWE-2 High" },
     ]);
+  });
+
+  it("offers a fusion effort only when a lead has more than one", () => {
+    const families = devinModelFamilies([
+      { value: "fusion-gpt-6-sol-high-sidekick-swe-2-medium", label: "Fusion (GPT-6 Sol High Thinking + SWE-2 Medium)" },
+      { value: "fusion-gpt-6-sol-max-sidekick-swe-2-medium", label: "Fusion (GPT-6 Sol Max Thinking + SWE-2 Medium)" },
+    ]);
+    const models = modelsFromDevinSession({
+      configOptions: [
+        {
+          id: "model",
+          options: families[0].variants.map((variant) => ({ value: variant.value, name: variant.name })),
+        },
+      ],
+    });
+    expect(models[0].settings?.map((setting) => setting.id)).toEqual(["lead", "effort", "sidekick"]);
+    expect(devinModelValue(families, "fusion", { effort: "max" })).toBe(
+      "fusion-gpt-6-sol-max-sidekick-swe-2-medium",
+    );
   });
 
   it("maps fusion settings back to the exact catalog id", () => {

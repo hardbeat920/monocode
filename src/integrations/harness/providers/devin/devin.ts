@@ -39,6 +39,7 @@ import {
   devinModelFamilies,
   devinModelValue,
   devinModeId,
+  devinNearestEffort,
   devinPermissionCommand,
   devinPromptBlocks,
   devinRestoreError,
@@ -544,11 +545,17 @@ async function applyModelSelection(
     }
     const configId = resolveSettingConfigId(live.configOptions, settingId);
     if (!configId || configId === "model" || configId === "mode") continue;
-    // A saved value Devin no longer offers (e.g. an old effort level) would
-    // fail every turn with Invalid params; keep the session's value instead.
+    // A value this model does not offer would fail every turn with Invalid
+    // params. Efforts differ per model, so a saved one maps to the nearest
+    // level the model has; anything else keeps the session's value.
     const option = live.configOptions.find((entry) => entry.id === configId);
-    if (option?.choices && !option.choices.includes(value)) continue;
-    await setConfigOption(live, configId, value);
+    const next =
+      option?.choices && !option.choices.includes(value)
+        ? settingId === "effort"
+          ? devinNearestEffort(value, option.choices)
+          : null
+        : value;
+    if (next) await setConfigOption(live, configId, next);
   }
 }
 
