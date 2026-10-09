@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod antigravity_store;
 mod artifacts;
 mod automations;
 mod azure_devops;
@@ -44,6 +45,7 @@ mod remote_ssh;
 mod search;
 mod session_store;
 mod skills;
+mod sqlite_readonly;
 pub mod ssh_askpass;
 #[cfg(target_os = "macos")]
 mod trackpad_zoom;
@@ -434,6 +436,7 @@ pub fn run() {
             search::cancel_project_search,
             cursor_store::cursor_tool_calls,
             cursor_store::cursor_subagent_runs,
+            antigravity_store::antigravity_subagents,
             harness::harness_resolve_cursor,
             harness::harness_resolve_codex,
             harness::harness_resolve_opencode,

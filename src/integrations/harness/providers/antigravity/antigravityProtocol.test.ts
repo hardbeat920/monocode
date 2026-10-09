@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { harnessSupportsAttachments, RUNTIME_MODES } from "../../../../features/sessions/model/session";
 import { ATTACHMENT_ONLY_PROMPT } from "../../../../features/sessions/model/attachments";
 import * as antigravity from "./antigravityProtocol";
+import { AcpSubagents } from "../../core/acpSubagents";
 
 const providers = [
   { id: "antigravity", protocol: antigravity, mode: antigravity.antigravityModeId,
@@ -115,5 +116,118 @@ describe.each(providers)("$id ACP protocol", ({ id, protocol, mode, blocks, mode
     expect(parse({ sessionUpdate: "plan", entries: [{ content: "Check code", status: "pending" }] }))
       .toMatchObject([{ type: "tasks.updated", items: [{ text: "Check code" }] }]);
     expect(parse({ sessionUpdate: "available_commands_update", availableCommands: [] })).toEqual([]);
+  });
+});
+
+describe("Antigravity subagents", () => {
+  it("gives each child conversation its own row until the turn ends", () => {
+    const session = "b9f875bb-f007-41cc-b084-54110d90e953";
+    const spawns = new antigravity.AntigravitySubagents();
+    const router = new AcpSubagents();
+    const feed = (update: Record<string, unknown>) => {
+      const params = { sessionId: session, update };
+      const child = spawns.child(params, session);
+      return [
+        ...(child?.opened ? router.route({}, [child.opened]) : []),
+        ...spawns.label(router.route(params, antigravity.eventsFromAcpUpdate(params), child?.parent)),
+      ];
+    };
+    const a = "bea70cf1-72ab-404f-9ab3-8ae15730f544";
+    const b = "d0a25b38-114b-4cb4-a214-a35fac299080";
+
+    // Recorded from agy_acp_server 1.3.0.
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: `${session}:2`, title: "Running start_subagent", kind: "other", status: "in_progress", rawInput: {} }))
+      .toMatchObject([{ type: "tool.updated", callId: `${session}:2`, kind: "other", title: "Launch subagents" }]);
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: `${a}:1`, title: "ls -la", kind: "execute", status: "in_progress", rawInput: { command_line: "ls -la" } }))
+      .toMatchObject([
+        { type: "tool.updated", callId: `subagent:${a}`, kind: "agent", title: "Subagent", status: "in_progress" },
+        { type: "agent.step", callId: `subagent:${a}`, stepId: `tool:${a}:1`, kind: "tool", status: "in_progress" },
+      ]);
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: `${b}:1`, title: "Running list_directory", kind: "search", status: "in_progress" }))
+      .toMatchObject([
+        { type: "tool.updated", callId: `subagent:${b}`, title: "Subagent" },
+        { type: "agent.step", callId: `subagent:${b}`, stepId: `tool:${b}:1` },
+      ]);
+    expect(feed({ sessionUpdate: "tool_call_update", toolCallId: `${a}:1`, status: "completed" }))
+      .toEqual([expect.objectContaining({ type: "agent.step", callId: `subagent:${a}`, status: "completed" })]);
+    // Bare ids carry no conversation, and the parent's own calls stay top-level.
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: "call_713448", title: "Running view_file", kind: "read" }))
+      .toMatchObject([{ type: "tool.updated", callId: "call_713448" }]);
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: `${session}:3`, title: "pwd", kind: "execute" }))
+      .toMatchObject([{ type: "tool.updated", callId: `${session}:3` }]);
+
+    // A role read after its row opened renames it, through its latest step too:
+    // a run that already has steps keeps the name they carry.
+    expect(spawns.learn([
+      { conversationId: a, role: "Directory Lister", typeName: "research" },
+      { conversationId: a, role: "Ignored duplicate" },
+    ])).toMatchObject([
+      { type: "tool.updated", callId: `subagent:${a}`, title: "Directory Lister" },
+      { type: "agent.step", callId: `subagent:${a}`, stepId: `tool:${a}:1`, status: "completed", agentName: "Directory Lister", agentType: "research" },
+    ]);
+    expect(feed({ sessionUpdate: "tool_call", toolCallId: `${a}:2`, title: "pwd", kind: "execute" }))
+      .toMatchObject([{ type: "agent.step", callId: `subagent:${a}`, agentName: "Directory Lister", agentType: "research" }]);
+
+    expect(spawns.settle()).toEqual([
+      { type: "tool.updated", callId: `subagent:${a}`, status: "completed" },
+      { type: "tool.updated", callId: `subagent:${b}`, status: "completed" },
+    ]);
+    expect(spawns.settle()).toEqual([]);
+  });
+
+  it("relabels only the delegation tool, not a command naming it", () => {
+    const title = (update: Record<string, unknown>) =>
+      antigravity.eventsFromAcpUpdate({ update: { sessionUpdate: "tool_call", toolCallId: "call_1", ...update } })[0];
+    expect(title({ title: "Running invoke_subagent", kind: "other" })).toMatchObject({ title: "Launch subagents" });
+    const search = title({ title: "rg invoke_subagent src/", kind: "execute", rawInput: { command_line: "rg invoke_subagent src/" } });
+    expect(search).toMatchObject({ kind: "execute" });
+    expect(search).not.toMatchObject({ title: "Launch subagents" });
+  });
+
+  it("attributes only lowercase conversation ids, as the store does", () => {
+    const spawns = new antigravity.AntigravitySubagents();
+    const session = "639c8fd4-acaa-451e-acbf-db8dffbce7cb";
+    expect(spawns.child({ update: { toolCallId: "C8D11A3C-960B-4B7E-B7BF-1684938D2F31:1" } }, session)).toBeUndefined();
+    expect(spawns.child({ update: { toolCallId: "c8d11a3c-960b-4b7e-b7bf-1684938d2f31:1" } }, session)).toBeDefined();
+  });
+
+  it("spaces store reads and gives up on a child the store never names", () => {
+    const session = "639c8fd4-acaa-451e-acbf-db8dffbce7cb";
+    const a = "bea70cf1-72ab-404f-9ab3-8ae15730f544";
+    const b = "d0a25b38-114b-4cb4-a214-a35fac299080";
+    const spawns = new antigravity.AntigravitySubagents();
+    expect(spawns.nextLookup(0)).toBeUndefined();
+
+    spawns.child({ update: { toolCallId: `${a}:1` } }, session);
+    expect(spawns.nextLookup(0)).toBe(0);
+    spawns.lookedUp(0);
+    expect(spawns.nextLookup(400)).toBe(600);
+    expect(spawns.nextLookup(1_000)).toBe(0);
+    for (const now of [1_000, 2_000, 3_000, 4_000]) spawns.lookedUp(now);
+    // Five reads spent: an update from `a` no longer costs one.
+    expect(spawns.nextLookup(60_000)).toBeUndefined();
+
+    // A later sibling brings its own reads, and still waits out the gap.
+    spawns.child({ update: { toolCallId: `${b}:1` } }, session);
+    expect(spawns.nextLookup(4_500)).toBe(500);
+    spawns.learn([{ conversationId: b, role: "Tester" }]);
+    expect(spawns.nextLookup(9_000)).toBeUndefined();
+
+    // The next turn's children start afresh.
+    spawns.settle();
+    spawns.child({ update: { toolCallId: `${a}:2` } }, session);
+    expect(spawns.nextLookup(9_000)).toBe(0);
+  });
+
+  it("opens a child already named under its role", () => {
+    const session = "639c8fd4-acaa-451e-acbf-db8dffbce7cb";
+    const child = "c8d11a3c-960b-4b7e-b7bf-1684938d2f31";
+    const spawns = new antigravity.AntigravitySubagents();
+    expect(spawns.learn([{ conversationId: child, role: "Frontend App Researcher" }])).toEqual([]);
+    const opened = spawns.child({ update: { toolCallId: `${child}:1` } }, session);
+    expect(opened).toMatchObject({
+      opened: { callId: `subagent:${child}`, kind: "agent", title: "Frontend App Researcher" },
+    });
+    expect(opened).not.toHaveProperty("unnamed");
   });
 });

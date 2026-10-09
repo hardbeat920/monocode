@@ -24,8 +24,13 @@ export class AcpSubagents {
     return !!this.parent(params);
   }
 
-  route(params: unknown, events: HarnessEvent[]): HarnessEvent[] {
-    const parent = this.parent(params);
+  /** `hint` names the parent for servers that attribute children some other way. */
+  route(
+    params: unknown,
+    events: HarnessEvent[],
+    hint?: string,
+  ): HarnessEvent[] {
+    const parent = this.parent(params, hint);
     if (!parent) {
       return events.flatMap<HarnessEvent>((event) => {
         if (event.type !== "tool.started" && event.type !== "tool.updated")
@@ -107,7 +112,7 @@ export class AcpSubagents {
     return [];
   }
 
-  private parent(params: unknown): string | undefined {
+  private parent(params: unknown, hint?: string): string | undefined {
     const envelope = record(params);
     const update = record(envelope?.update) ?? envelope;
     const tool = record(update?.toolCall) ?? record(update?.tool_call);
@@ -134,7 +139,7 @@ export class AcpSubagents {
       }
       if (parent) break;
     }
-    parent ??= id ? this.owners.get(id) : undefined;
+    parent ??= hint ?? (id ? this.owners.get(id) : undefined);
     if (!parent || parent === id) return undefined;
     const seen = new Set<string>();
     while (this.owners.has(parent) && !seen.has(parent)) {
